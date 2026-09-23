@@ -54,6 +54,29 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 #     in the FUTURE direction it would read an expired lease as live), and
 #     `lease` falls in the day after `issued`. `desired` must equal the
 #     `desired-<channel>` line, which spec §9 defines it to be.
+#   - THE EPOCH BOUND (D-3279, found reviewing this task). `_upd_intent_state`
+#     (`ccd/ccrc:12757-12758`, plan D-3265) refuses any epoch/issued/lease
+#     wider than 18 digits — `^(0|[1-9][0-9]{0,17})$` — because its own
+#     arithmetic is bash's, which wraps past 2^63-1. The grammar above never
+#     bounded `epoch`'s width (only `issued`/`lease` carried a digit cap, for
+#     the seconds rule), so a wide `epoch` installed cleanly over a good
+#     in-lease projection and the READER then refused every subsequent read
+#     as `malformed` — with a remedy (re-run this puller) that reinstalled
+#     the same unreadable document. The puller must never install what the
+#     reader refuses, so it now shares the reader's own 18-digit bound.
+#   - THE BODY IS A FILE, NEVER A BASH VARIABLE (D-3280, found reviewing this
+#     task). Bash's `$( )` SILENTLY DROPS a NUL byte from a captured command's
+#     stdout (measured: `ep\0och 8…` arrived at the validator as `epoch 8…`)
+#     — a malformed answer was REPAIRED and installed rather than refused.
+#     curl now writes the response straight to a bounded temp file beside the
+#     staging path (`--max-filesize 65536`, curl's own cap, refusing with its
+#     rc 63 on overflow so an oversized transfer never finishes downloading),
+#     and python reads that file as BYTES — checking for a NUL byte and the
+#     65536-byte cap BEFORE it ever decodes UTF-8 or runs pass 1 — so nothing
+#     the shell would mangle reaches the validator's text-processing passes
+#     at all. `ccd-pool-sync` shares both shapes (the `$( )` capture and the
+#     unbounded read); it is out of scope for this task and named here only
+#     so it is not rediscovered as a fresh finding.
 #
 # THE FOURTH HAND COPY of ccrc-api's URL+token dance (ccd-account-health,
 # ccrc-api, ccd-pool-sync, this file) — deliberately not a shared helper, for
@@ -61,11 +84,6 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 # standalone executable installed as a copy, and a sourced helper would be a
 # new file under the same "cannot source a sibling" constraint. A fix to one
 # copy's URL or token handling is owed to all four.
-#
-# KNOWN, AND SHARED WITH `ccd-pool-sync`: the response is captured through
-# bash's `$( )`, which drops a NUL byte (warning on stderr) before the
-# validator sees it. The server's renderer never emits one, and the reader's
-# bounded `read -d ''` answers `malformed` for a NUL in the FILE either way.
 set -uo pipefail
 umask 077
 export LC_ALL=C
@@ -107,10 +125,25 @@ IFS= read -r nid < "$NODE_ID_FILE" || true
 tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
 [[ -n "$tok" ]] || { say "the box token file has no value line"; exit 1; }
 
-# Body and status in ONE capture, so there is no response file on disk.
-# `-K -` reads the header from stdin: never argv, never environ.
-out="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
-  | curl -sS -K - -o - -w '\n%{http_code}' \
+# D-3280: `dir` and the two temp paths land HERE, before the request, so the
+# body can go straight to a FILE — never a bash variable — the moment curl
+# has it. `body_tmp` is cleaned up on every exit via the trap below, whatever
+# arm this script leaves through; `tmp` (the staged, VALIDATED projection)
+# keeps its own explicit `rm -f` on every failure arm, exactly as before.
+dir="${DEST%/*}"
+mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
+body_tmp="$dir/.update-intent.$$.body.tmp"
+tmp="$dir/.update-intent.$$.tmp"
+trap 'rm -f -- "$body_tmp"' EXIT
+rm -f -- "$body_tmp" "$tmp"
+
+# `-K -` reads the header from stdin: never argv, never environ. The BODY now
+# goes straight to `$body_tmp` via `-o`, never through this script's own
+# variables — D-3280. `--max-filesize 65536` is curl's own bound, matching
+# the reader's cap: an oversized transfer never finishes downloading, and
+# curl exits 63 rather than handing this script a half-sized body to judge.
+status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+  | curl -sS -K - -o "$body_tmp" -w '%{http_code}' --max-filesize 65536 \
     --max-time "$TIMEOUT" "$url/api/updates/intent/$nid" 2>/dev/null)"; rc=$?
 tok=""
 if [ "$rc" -ne 0 ]; then
@@ -119,29 +152,34 @@ if [ "$rc" -ne 0 ]; then
     6)  say "unmeasured — curl exited 6 (could not resolve host in $url)" ;;
     7)  say "unmeasured — curl exited 7 (could not connect)" ;;
     28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
+    63) say "unmeasured — curl exited 63 (response exceeded the 65536-byte cap)" ;;
     *)  say "unmeasured — curl exited $rc" ;;
   esac
   exit 1
 fi
-status="${out##*$'\n'}"
-body="${out%$'\n'*}"
 [ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
 
-# THREE PASSES, EACH WITH ITS OWN JOB, and the split is what makes the second
-# one measurable rather than a disclosed survivor:
+# FOUR PASSES, EACH WITH ITS OWN JOB — pass 0 is D-3280's, ahead of the other
+# three, which are unchanged in shape from the original three-pass split:
+#   0. THE BYTES, before any decoding: a NUL byte or a body at or over the
+#      65536-byte cap is refused here, on the RAW bytes read from
+#      `$body_tmp` — never on text `$( )` may have already mangled.
 #   1. PER LINE, for the diagnostic: every line that is PRESENT must match the
 #      grammar of the key its position names. `zip` stops at the shorter side
 #      on purpose — pass 1 never counts lines and never looks for `end`, so
 #      a document torn at a line boundary passes it.
-#   2. THE WHOLE DOCUMENT: the 65536-byte cap, then ONE `DOC.fullmatch` over
-#      the text — nine lines, in order, `end` last, exactly one newline after
-#      each. This is the torn-write detector, and the only one: delete it and
-#      a document cut just before its `end` line is installed.
-#   3. THE VALUES pass 2 cannot see: the seconds rule and `desired`'s
-#      agreement with its own channel (the header above).
-# The document reaches stdout only when all three pass — the RAW bytes, never
-# a re-encoding of them.
-validated=$(printf '%s' "$body" | LC_ALL=C.UTF-8 python3 -c '
+#   2. THE WHOLE DOCUMENT: ONE `DOC.fullmatch` over the text — nine lines, in
+#      order, `end` last, exactly one newline after each. This is the
+#      torn-write detector, and the only one: delete it and a document cut
+#      just before its `end` line is installed.
+#   3. THE VALUES passes 1-2 cannot see: the epoch bound (D-3279), the
+#      seconds rule and `desired`'s agreement with its own channel.
+# On success python writes the validated RAW bytes straight to `$tmp` — never
+# back through this script's own variables — so nothing bash captures can
+# mangle the installed bytes either. A VALIDATION failure (exit 1) and a
+# WRITE failure (exit 2) are told apart, exactly as the two distinct refusal
+# sentences below name them.
+LC_ALL=C.UTF-8 python3 -c '
 import re, sys, time
 NUM = r"(?:0|[1-9][0-9]*)"
 TAG = r"(?:v[0-9]+\.[0-9]+\.[0-9]+|none)"
@@ -161,6 +199,7 @@ DOC = re.compile("".join(pat + "\n" for _, pat in LINES))
 CAP = 65536
 DAY = 86400
 SECONDS_DIGITS = 11
+EPOCH_DIGITS_MAX = 18  # D-3265: `_upd_intent_state` refuses epoch/issued/lease wider than 18 digits
 
 def trunc(v, cap=200):
     r = repr(v)
@@ -173,8 +212,15 @@ def seconds(name, s):
         raise ValueError("%s carries %d digits: unix seconds carry at most %d until the year 5138, a millisecond value carries 13" % (name, len(s), SECONDS_DIGITS))
     return int(s)
 
+body_path, dest_path = sys.argv[1], sys.argv[2]
 try:
-    raw = sys.stdin.buffer.read()
+    with open(body_path, "rb") as f:
+        raw = f.read()
+    # PASS 0 — the raw bytes, before any decoding (D-3280).
+    if b"\x00" in raw:
+        raise ValueError("the document contains a NUL byte")
+    if len(raw) >= CAP:
+        raise ValueError("the document is %d bytes, at or over the 65536-byte cap" % len(raw))
     text = raw.decode("utf-8")
     # PASS 1 — per line, for the diagnostic.
     v = {}
@@ -185,11 +231,11 @@ try:
             raise ValueError("line %d (%s) is off-grammar: %s" % (n, key, trunc(ln)))
         v[key] = m.group(1) if rx.groups else None
     # PASS 2 — the whole document.
-    if len(raw) >= CAP:
-        raise ValueError("the document is %d bytes, at or over the 65536-byte cap" % len(raw))
     if DOC.fullmatch(text) is None:
         raise ValueError("the document is not exactly nine lines, epoch through end, each ending in one newline (torn, truncated, reordered or extended)")
     # PASS 3 — the values.
+    if len(v["epoch"]) > EPOCH_DIGITS_MAX:
+        raise ValueError("epoch carries %d digits: the reader refuses anything wider than %d digits (D-3265)" % (len(v["epoch"]), EPOCH_DIGITS_MAX))
     issued = seconds("issued", v["issued"])
     lease = seconds("lease", v["lease"])
     now = int(time.time())
@@ -200,22 +246,21 @@ try:
     want = v["desired-stable"] if v["channel"] == "stable" else v["desired-dev"]
     if v["desired"] != want:
         raise ValueError("desired %s disagrees with desired-%s %s" % (v["desired"], v["channel"], want))
-    sys.stdout.buffer.write(raw)
 except Exception as ex:
     sys.stderr.write(str(ex) + "\n"); sys.exit(1)
-') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
+try:
+    with open(dest_path, "wb") as f:
+        f.write(raw)
+except OSError as ex:
+    sys.stderr.write(str(ex) + "\n"); sys.exit(2)
+' "$body_tmp" "$tmp"
+prc=$?
+if [ "$prc" -eq 2 ]; then
+  rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1
+elif [ "$prc" -ne 0 ]; then
+  rm -f -- "$tmp"; say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1
+fi
 
-dir="${DEST%/*}"
-mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
-# Tmp then rename. A SIGKILL between the two leaks one dot-leading tmp, the
-# price `ccd-pool-sync` discloses too. `2>/dev/null` BEFORE `>` so the OPEN's
-# own failure is caught as well as printf's. `'%s\n'`: `$( )` above stripped
-# the one trailing newline pass 2 proved the document ends in, and it is put
-# back so the file is the validated bytes exactly.
-tmp="$dir/.update-intent.$$.tmp"
-rm -f -- "$tmp"
-printf '%s\n' "$validated" 2>/dev/null > "$tmp" \
-  || { rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1; }
 if [ ! -L "$DEST" ] && [ -d "$DEST" ]; then
   rm -f -- "$tmp"; say "a directory sits at ~/.ccrc/update-intent"; exit 1
 fi

@@ -23,7 +23,7 @@
 // with it (Task 8's derives `lease` from an overridden `issued`).
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -84,9 +84,22 @@ const box = (prefix: string, o: { url?: string; nodeId?: string | null } = {}): 
     'cat > "$HOME/curl.stdin"',
     'env > "$HOME/curl.env"',
     'if [ -f "$HOME/fixture-curl-rc" ]; then IFS= read -r rc < "$HOME/fixture-curl-rc"; exit "$rc"; fi',
-    'cat "$HOME/fixture-body"',
+    // D-3280 (fix round 1): the real script's body now lands via `-o
+    // <file>`, never on stdout combined with the status — so the stub honors
+    // that flag, the way a real `curl` would, rather than always writing the
+    // body to its own stdout.
+    'outfile=""; prev=""',
+    'for a in "$@"; do',
+    '  if [ "$prev" = "-o" ]; then outfile="$a"; fi',
+    '  prev="$a"',
+    'done',
+    'if [ -z "$outfile" ] || [ "$outfile" = "-" ]; then',
+    '  cat "$HOME/fixture-body"',
+    'else',
+    '  cat "$HOME/fixture-body" > "$outfile"',
+    'fi',
     'status=200; [ -f "$HOME/fixture-status" ] && IFS= read -r status < "$HOME/fixture-status"',
-    'printf \'\\n%s\' "$status"',
+    'printf \'%s\' "$status"',
     '',
   ].join('\n'), { mode: 0o755 });
   return home;
@@ -170,6 +183,9 @@ describe('ccd-update-sync: one GET of the node\'s own route, installed by rename
     expect(argv).not.toContain('//api');
     expect(argv).toContain('--max-time 5');
     expect(argv).toContain('-K -');
+    // F2 (fix round 1, D-3280): curl's own bound, matching the reader's cap —
+    // an oversized transfer never finishes downloading in the first place.
+    expect(argv).toContain('--max-filesize 65536');
     const wss = box('upd-sync-wss-', { url: 'wss://example.invalid' });
     answer(wss, intentDoc());
     expect(sync(wss).code).toBe(0);
@@ -208,6 +224,46 @@ describe('ccd-update-sync: no node id, no request', () => {
     expect(existsSync(join(home, 'curl.argv'))).toBe(false);
     expect(existsSync(dest(home))).toBe(false);
   });
+
+  // F3 (fix round 1): the third node-id arm — present, but not a readable
+  // REGULAR file. A directory is the cleanest way to make `-e` true and `-f`
+  // false without touching filesystem permissions the harness's own user may
+  // not be able to revoke.
+  it('refuses a node id that exists but is not a readable regular file — curl never runs', () => {
+    const home = box('upd-sync-nid-dir-', { nodeId: null });
+    mkdirSync(join(home, '.ccrc', 'node-id'));
+    answer(home, intentDoc());
+    const r = sync(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccd-update-sync: ~/.ccrc/node-id is not a readable file — nothing was synced');
+    expect(existsSync(join(home, 'curl.argv')), 'a request went out with an unreadable node id').toBe(false);
+    expect(existsSync(dest(home))).toBe(false);
+  });
+});
+
+describe('ccd-update-sync: no usable box token, no request (F3, fix round 1)', () => {
+  it('refuses when the token file exists but is not readable — curl never runs', () => {
+    const home = box('upd-sync-token-unreadable-');
+    chmodSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 0o000);
+    answer(home, intentDoc());
+    const r = sync(home);
+    chmodSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 0o600);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccd-update-sync: no readable box token at $HOME/.cc-secrets/ccrc-mail.token');
+    expect(existsSync(join(home, 'curl.argv')), 'a request went out with an unreadable token').toBe(false);
+    expect(existsSync(dest(home))).toBe(false);
+  });
+
+  it('refuses when the token file has no value line — curl never runs', () => {
+    const home = box('upd-sync-token-empty-');
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'), '# just a comment\n\n');
+    answer(home, intentDoc());
+    const r = sync(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('ccd-update-sync: the box token file has no value line');
+    expect(existsSync(join(home, 'curl.argv')), 'a request went out with an empty token').toBe(false);
+    expect(existsSync(dest(home))).toBe(false);
+  });
 });
 
 describe('ccd-update-sync: a transport failure writes nothing', () => {
@@ -221,6 +277,10 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
       ['7', /unmeasured — curl exited 7 \(could not connect\)/],
       ['28', /unmeasured — curl exited 28 \(timed out after 20s\)/],
       ['6', /unmeasured — curl exited 6 \(could not resolve host in https:\/\/example\.invalid\)/],
+      // F2 (fix round 1, D-3280): curl's own `--max-filesize` overflow, rc
+      // 63 — named with its own cap-naming sentence rather than the generic
+      // `curl exited 63` fallback.
+      ['63', /unmeasured — curl exited 63 \(response exceeded the 65536-byte cap\)/],
     ] as const) {
       writeFileSync(join(home, 'fixture-curl-rc'), `${rc}\n`);
       const r = sync(home);
@@ -267,6 +327,18 @@ describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () =
   });
 });
 
+describe('ccd-update-sync: a NUL byte in the body is refused, never repaired (D-3280, fix round 1)', () => {
+  // The measured defect: bash's `$( )` silently drops a NUL byte from a
+  // captured command's stdout, so `ep\0och 8` arrived at the (old) validator
+  // as `epoch 8` — a malformed answer REPAIRED and installed rather than
+  // refused. The body now reaches the validator as bytes read straight from
+  // a file curl wrote, so the NUL survives to be refused on its own terms.
+  it('a NUL byte inside a line is refused, and the installed projection is unchanged', () => {
+    const body = intentDoc({ epoch: '8' }).replace('epoch 8', 'ep\0och 8');
+    refusesAndKeeps('upd-sync-nul-', body, /the document contains a NUL byte/);
+  });
+});
+
 describe('ccd-update-sync: seconds stay seconds (the C1 lesson, server.ts:2679-2688)', () => {
   // A 13-digit value is GRAMMATICAL, and a seconds reader reads a millisecond
   // lease as ~56,700 years away: `ok`, never `stale`. The reader cannot see
@@ -297,6 +369,30 @@ describe('ccd-update-sync: seconds stay seconds (the C1 lesson, server.ts:2679-2
   it('`desired` must be the document\'s own channel\'s resolution (spec §9)', () => {
     refusesAndKeeps('upd-sync-desired-', intentDoc({ desired: 'v0.0.12' }),
       /desired v0\.0\.12 disagrees with desired-stable v0\.0\.11/);
+  });
+});
+
+describe('ccd-update-sync: the epoch bound matches the reader\'s own (D-3279, fix round 1)', () => {
+  // The measured defect: the reader (`_upd_intent_state`, plan D-3265)
+  // refuses any epoch/issued/lease wider than 18 digits — its own bash
+  // arithmetic wraps past 2^63-1 above that — but the puller's grammar left
+  // `epoch` unbounded, so a wide `epoch` installed cleanly over a good
+  // in-lease projection and the reader then refused every subsequent read as
+  // `malformed`, with a remedy (re-run the puller) that reinstalled the same
+  // unreadable document.
+  it('a 19-digit epoch is refused, and the installed projection is unchanged', () => {
+    refusesAndKeeps('upd-sync-epoch19-', intentDoc({ epoch: `1${'0'.repeat(18)}` }),
+      /epoch carries 19 digits: the reader refuses anything wider than 18 digits \(D-3265\)/);
+  });
+
+  itLinux('an 18-digit epoch installs cleanly, and the reader never calls it malformed', () => {
+    const home = box('upd-sync-epoch18-');
+    answer(home, intentDoc({ epoch: `1${'0'.repeat(17)}` }));
+    expect(sync(home).code).toBe(0);
+    const r = readBack(home);
+    expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout.split('\n')[0]).toMatch(/^channel: state=ok /);
+    expect(r.stdout).not.toContain('malformed');
   });
 });
 
