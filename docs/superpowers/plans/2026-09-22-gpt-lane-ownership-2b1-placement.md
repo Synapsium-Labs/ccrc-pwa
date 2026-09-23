@@ -493,12 +493,18 @@ cd server && ./node_modules/.bin/vitest run test/ccrc-install.test.ts test/insta
   test/ccrc-models.test.ts test/ccgpt-usage.test.ts --reporter=verbose | tail -5
 ```
 
-| Suite | Before | After |
+| Suite | Before (`4dca80f8`) | After |
 |---|---|---|
-| `ccrc-install.test.ts` | _fill_ | _fill_ |
-| `install-census.test.ts` | 0 | _fill_ |
-| `ccrc-models.test.ts` | _fill_ | _fill_ |
-| `ccgpt-usage.test.ts` | 31 | _fill_ |
+| `ccrc-install.test.ts` | 124 | 132 |
+| `install-census.test.ts` | 0 | 11 |
+| `ccrc-uninstall.test.ts` | 29 | 30 |
+| `models-op.test.ts` | 97 | 106 |
+| `ccrc-models.test.ts` | 105 | 106 |
+| `ccgpt-usage.test.ts` | 31 | 34 |
+
+Measured 2026-09-23 with `vitest list` against the file at the branch point and at HEAD: cases collected on a
+Linux box, so `ccrc-install.test.ts`'s 18 macOS-only cases are skipped here both before and after. 39 new cases in
+all. The plan's pre-filled "31" for `ccgpt-usage.test.ts` was right.
 
 - [ ] **Step 2: Record, in the commit body,** whether the Task 3 scope boundary (install the templates, enable nothing) survived review unchanged.
 
@@ -546,6 +552,66 @@ git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviat
 
 **One risk this plan cannot resolve.** Task 1 creates fixture *stubs* for `ccgpt` and `ccgpt-runtime` because Plan 2b-2 writes the real files. Every placement assertion in Tasks 2–5 therefore proves the spine places *a file at that path*, not that it places a working launcher. That is the honest limit of testing placement before the thing placed exists, and Plan 2b-2's first task must delete those stubs and re-run these suites — if it does not, they keep passing against stubs forever. **Say so in 2b-2's Task 1.**
 
+## Carry-forward to Plan 2b-2 and Plan 3
+
+Every obligation this plan hands on, collected by the final review from the SDD ledger (which is not tracked)
+so that it reaches a place the next author reads. Each names its source; nothing here is done in 2b-1.
+
+**Plan 2b-2 — the lane runs**
+
+1. **Placing `ccgpt` IS the cutover.** On the operator's fleet box `~/.local/bin/ccgpt` is OpenClaw's LIVE
+   launcher (beside its `ccgpt-proxy` and `ccgpt-usage`, both without `.py`). 2b-2 must not overwrite it silently:
+   an ownership check, a distinct name, or an explicitly authorised swap (D-3172 is the same class, measured).
+2. Write `ccd/ccgpt` and `ccd/ccgpt-runtime`, and IN THE SAME COMMIT add them to `_inst_bins` (behind spec §11's
+   `!= server` gate, as the two `.py` files now are) and both of its echo lines; both bin-directory `toEqual` arrays
+   in `ccrc-install.test.ts` and its placement tests; `_uninst_tree_bins`' `rm -f`, prose and echo; and `deploy.sh`'s
+   `install_atomic` — BELOW the lines `ccd/ccrc-doctor-checks` cites (D-3170). The census guard and the "every
+   installer source is tracked" guard enforce the rest (D-3165).
+3. Add both dotless names to `_uninst_wrappers`' exclusion `case` (spec §5.1), implement spec §5 Pin 4's three-list
+   derivation in BOTH directions, and correct `TOOLCHAIN_EXECUTABLES` accordingly (D-3173). Add spec §5 Pin 3's
+   witness-index pin.
+4. The two real bash files join `macos-platform.test.ts`' GNU-spelling corpus automatically: carry no un-shimmed
+   GNU call, or add an `unowned` entry naming what they spell.
+5. Give `ccgpt-usage@.service` the isolated runtime's interpreter — not a `PATH` line and not the `readlink`
+   idiom; the fleet box's `env python3` silently imports a third-party litellm fork (D-3164).
+6. `ccgpt` reads `units`, ports and `authDir` from `lane.json` and never re-derives them (spec §5.4).
+7. `lane.json`'s trigger set is incomplete: `ccrc models <id> init codex` on an EXISTING registry does not
+   materialise, `ccrc wrappers` and `ccrc models litellm` never do, and a hand edit of ports or `authDir` leaves it
+   stale until the next registry mutation. `ccgpt` must render `lane.json` itself or refuse naming a verb that works.
+   A lane with no class registry gets none until `init codex`.
+8. The codex arm of `_acct_remove` must reap `lane.json` (and `runtime.env`); otherwise a re-added id inherits the
+   old lane's `authDir` and ports — the wrong-lane-OAuth class. `models-op.mjs`' `rm` comment names this owner.
+9. `runtime.env` lands in `~/.ccrc/codex/<id>/`, which the materialiser creates 0700 only when it first makes it; a
+   later `mkdir` cannot tighten an existing directory. Write `runtime.env` 0600 itself.
+10. `_models_summary` in `ccd/ccrc` never prints `.remedy`, so every `ccrc models` remedy — this plan's
+    haiku-unassigned warning and `init`'s — reaches only `--json` callers.
+11. The §7 lifecycle: `_svc_run_supervised`, `_inst_enable`'s restart-after-update, the `nohup` fallback; replace the
+    OpenClaw suite's stale `nohup` pins rather than copying them (Plan 2a).
+
+**Plan 3 — lifecycle, doctor, cutover**
+
+12. The usage timer's cutover: take over (or rename past) the `ccgpt-usage@` template OpenClaw owns, retire its fixed
+    `ccgpt-usage.timer`, and only then place the pair and enable `ccgpt-usage@<id>.timer` per adopted lane with
+    `_check_codex` — after `ExecStart` resolves the runtime interpreter (D-3172, D-3164).
+13. At cutover, rewrite deliberately — never delete — the install argv census that asserts no `ccgpt-usage` enable,
+    and the fixture that proves a foreign `ccgpt-usage@` pair survives install and uninstall.
+14. Decide whether uninstall sweeps `ccgpt-usage@<id>` INSTANCES, against the `claude-session@` precedent (D-3167).
+15. Amend spec §4.2, give `doctor --fix` a `lane.json` arm, and only then fix the publisher's absent-file remedy,
+    which still says `ccrc doctor --fix`.
+16. `_check_codex` must catch: a stale `lane.json` after a codex→external flip; a non-codex registry on a codex-kind
+    lane; a retired haiku still written as `probeModel`; roster-edit staleness.
+17. Per-lane `litellm.yaml`; the probe's `authDir` (Plan 2a); whether macOS gets a launchd equivalent for the timer.
+
+**Unowned, or the operator's**
+
+18. `models-op.mjs` opens its predictable tmp names without `O_EXCL` and writes its files in an order a failure can
+    leave out of step — a pre-existing idiom shared with `writeRegistry`.
+19. `ccrc-uninstall.test.ts` (~:360-371) is a hand-written absence list that omits the `ccd-usage-sweep` pair.
+20. `agent/test/deploy-verify.test.ts` already RUNS `deploy.sh`'s unit chain in a fixture HOME, but its landed list is
+    hand-typed and omits the GPT-lane files; deriving it from `_inst_units` is the stronger, execution-level check.
+21. `deploy.sh` places `ccrc-api` and `ccrc-models-probe`, which `ccrc install` never places.
+22. `ccd/ccrc-doctor-checks` carries two `deploy.sh` line citations that main's #168 had already made stale.
+
 ## Deviations found
 
 - **D-3164 — `ccgpt-usage@.service` ships an `ExecStart` that cannot import `litellm`, and the
@@ -554,7 +620,9 @@ git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviat
 `ccd/ccgpt-usage.py:229` does `from litellm.llms.chatgpt.authenticator import Authenticator`.
 Its shebang is `#!/usr/bin/env python3`, so the interpreter comes from whatever PATH systemd's
 user manager supplies — and `litellm` lives in a venv, not in system site-packages, on the
-fleet host. As written, an armed instance would `ImportError`.
+fleet host. On a box whose `python3` cannot see litellm, an armed instance would `ImportError`. **Corrected by the final
+review:** on the operator's fleet box `python3` DOES import a litellm — a third-party fork in user site-packages —
+so the failure there is silent, not loud, which is worse.
 
 The remedy is NOT a `Environment=PATH=…` line. Measured: this tree's established idiom for
 "python that can import litellm" is `ccd/ccrc-models-probe:159-161`, which derives the venv
@@ -575,12 +643,16 @@ runtime, which is precisely where "which interpreter has litellm" is answered. W
 interpreter resolution now would hard-code an assumption that deliverable is about to define,
 and would have to be rewritten by the task that defines it.
 
-**Why it is safe to ship.** Nothing in Plan 2b-1 enables, starts or `daemon-reload`s an
-instance of this template — the guard for that is an argv census over the recorded `systemctl`
+**Why it is safe to ship — as corrected by D-3172.** The first version of this paragraph said the unit was
+"inert until Plan 3 arms a lane"; that was false, because an instance of the same NAME was already enabled on
+the fleet box (OpenClaw's). Under D-3172 Plan 2b-1 places this pair nowhere, so the unit file is now genuinely
+inert: it ships in the tree, referenced by no installer. The original argument was that nothing in Plan 2b-1
+enables, starts or `daemon-reload`s an instance of this template — the guard for that is an argv census over the recorded `systemctl`
 calls, measured red under mutation. The unit is an inert file until Plan 3 arms a lane.
 
-**Binding on the plan that arms it:** `ExecStart` must resolve the venv interpreter before any
-instance is enabled. The service file carries this as a comment so the reader who arms it
+**Binding, and the owner is split:** Plan 2b-2 builds the isolated runtime and so decides the interpreter;
+Plan 3 arms the unit and must not enable any instance before `ExecStart` resolves it. `ExecStart` must resolve
+the runtime's interpreter before any instance is enabled. The service file carries this as a comment so the reader who arms it
 cannot miss it. Found by the Task 3 review.
 
 - **D-3165 — Task 2 places TWO executables, not the plan's four; the plan's four would have aborted every
@@ -593,20 +665,32 @@ cannot miss it. Found by the Task 3 review.
   working launcher") understated it by a category. Shipped in `56cfdafe`: only the two `.py` files are
   placed; `ccgpt` and `ccgpt-runtime` join `_inst_bins`, both echoes, both census arrays and both uninstall
   censuses in Plan 2b-2, IN THE SAME COMMIT that writes the files. Invariant: every commit on `main` must be
-  installable. Also shipped: the echo line's derived guard lost its blanket `.py` filter for a named
+  installable. This REVERSES Plan 2a's "Placement is indivisible" rule ("all four placements live in one plan"),
+  and says so: that rule assumed all four sources exist, and an installer that aborts outranks a reviewable diff.
+  The final review found the invariant pinned by nothing and the two stubs that hid the defect still planted:
+  `13b10598` deletes them and adds a DERIVED guard — every `"$tree/<path>"` source the installers read (and every
+  source `deploy.sh` places) must be tracked — measured red under a premature `ccgpt` placement that every other
+  suite let through. `b55f82dc` gates the two files `!= server`, which spec §11 requires in terms ("The gate is
+  `!= server` … a departure and the plan says so") and this plan never said. Three details of Task 2's text were
+  also wrong: the `install: bins:` echoes are guarded by a DERIVED case, not by `toEqual` (the `toEqual` is over the
+  bin directory); its mutation assumed a second platform arm that does not exist; and `ccgpt-usage.py` IS
+  timer-run, which is why the echo's `.py` filter became a named list. Also shipped: the echo line's derived guard lost its blanket `.py` filter for a named
   exemption list, because `ccgpt-usage.py` has no non-`.py` sibling to carry it. Found by the Task 2 review.
 
 - **D-3166 — Task 3's timer anchors on `OnActiveSec=`, the pair is role-gated, and the plan's "enables
-  nothing" assertion was vacuous by construction.** The plan specified `OnBootSec=2min`; both sibling timers
-  use `OnActiveSec=` for a stated reason (a unit first armed on a box up for days), which binds harder for a
+  nothing" assertion was vacuous by construction.** The plan specified `OnBootSec=2min`; three of the eight pre-existing
+  timers (`ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-usage-sweep`) use `OnActiveSec=`, the last two for a
+  stated reason (a unit first armed on a box up for days), which binds harder for a
   lane armed at adoption — shipped `OnActiveSec=5min` (`22e40836`). The plan was silent on role; every
   account-bearing pair in `_inst_units` is gated `!= server`, and so is this one, tested in both directions.
   The plan's `timers.target.wants` readdir assertion could not fail: the fixture's `systemctl` stub answers
   `enable` with `exit 0` and writes no symlink, so it was deleted (`1b1d9fcc`) and the argv census over the
   recorded `systemctl` calls is the guard. The plan's literal `Unit=ccgpt-usage@%i.service` was omitted: the
   timer's default target carries the instance (`man 5 systemd.timer`; shipped precedent
-  `mdadm-last-resort@.timer`). The plan's scope boundary — install the templates, enable no instance —
-  SURVIVED review unchanged. Found by the Task 3 implementer and review.
+  `mdadm-last-resort@.timer`). The plan's `After=network-online.target` was removed: that target is absent from the user manager's search
+  path, so the line was inert. The plan's scope boundary — install the templates, enable no instance — survived
+  every per-task review and was then SUPERSEDED by D-3172: the final review found the templates' name occupied by a
+  live, enabled unit on the fleet box, so Plan 2b-1 now installs neither. Found by the Task 3 implementer and review.
 
 - **D-3167 — Task 4 updates THREE copies of the bin census, and removes the template pair by `rm -f` only.**
   The plan named `_uninst_tree_bins`' `rm -f` census alone; the function also carries a prose paragraph
@@ -615,7 +699,10 @@ cannot miss it. Found by the Task 3 review.
   `rm -f` and deliberately kept OUT of `_uninst_units`' `disable --now` loop. The first comment gave a false
   mechanism ("nothing to disable"); measured on systemd 255, `disable` of a never-enabled unit returns 0
   silently — the failure is `--now`'s stop, which the manager refuses for a bare template name — and the
-  shipped comment says so. Sweeping template INSTANCES was left to Plan 3, which writes the `enable`.
+  shipped comment says so. Sweeping template INSTANCES was left to Plan 3, which writes the `enable`. Under D-3172 the pair is no longer
+  removed at all (`090187f8`) — removing it would delete another repository's live unit — so what this entry
+  describes for the pair now applies to Plan 3's cutover. The plan's install-then-uninstall snippet also guessed a
+  `runUninstall(home, ['--yes'])` harness; the suite's real one is `runVerb(home, 'uninstall', ['--force'])`.
   Found by the Task 4 review.
 
 - **D-3168 — Task 5's census guard resolves variables and fails on any word it cannot read ("no silent
@@ -628,7 +715,10 @@ cannot miss it. Found by the Task 3 review.
   principle — every word under a scope prefix resolves to a name or FAILS the suite by name — and its header
   lists the shapes it declares out of scope. Its regression control is a 177-row mutation union whose
   verdicts at `d7cc9559` were reproduced by an independent verifier with zero disagreements.
-  Commits `5895add7`, `e5f0afd1`, `fbfb4eac`, `d7cc9559`.
+  Commits `5895add7`, `e5f0afd1`, `fbfb4eac`, `d7cc9559`, then `bbeb9998` (the close-check's residuals) and
+  `0c46b822`, `13b10598`, `d214684c` (the final fix). One justification in the plan's text is overstated: of the
+  three incidents it cites as "gone stale three separate times", D-1347 was list drift, while D-2594 and the
+  routing slice were PROSE staleness — the guard's header now says so.
 
 - **D-3169 — Task 6 derives `probeModel` from the lane's class registry, writes `lane.json` 0600 in a 0700
   directory, and gates it on `exec.kind === 'codex'` — three departures from the plan's text.** The plan said
@@ -640,7 +730,7 @@ cannot miss it. Found by the Task 3 review.
   reads the roster raw, so only a `codex`-kind row gets a manifest — pinned against a LIVE-SHAPED external
   row, because a fixture with the wrong shape let a telemetry- or provider-based gate pass all 240 cases.
   The plan's Step 1 verb (`litellm --account`) never reaches the materialiser. Commits `6345fcd3`,
-  `b945daee`. Found by controller pre-flight and the Task 6 review.
+  `b945daee`, then `bbeb9998` (prose) and `a544ac42` (the publisher's docstrings and its authDir remedy). Found by controller pre-flight and the Task 6 review.
 
 - **D-3170 — Task 7's premise was wrong in shape: `deploy.sh` ships whole trees, and the real gap was its own
   placement census.** The plan asked for a test that `deploy.sh`'s "pushed pathspec" includes the new files.
@@ -649,7 +739,11 @@ cannot miss it. Found by the Task 3 review.
   third hand-kept census of the class this plan exists to end. Shipped (`23711f34`): the two `.py` bins and
   the unit pair placed, NOTHING added to its enable chain, and the test in `install-census.test.ts` (not
   `deploy-coordinates.test.ts`) as a derived install-subset-of-deploy case over the union of `deploy.sh`'s
-  lanes, red first on exactly the four GPT-lane names. The reverse direction is deliberately not asserted:
+  lanes, red first on exactly the four GPT-lane names. `bbeb9998` moved every insert below the lines two
+  `ccd/ccrc-doctor-checks` citations point at (that file is under this plan's cut, so position was the decision), and
+  proved every tracked `deploy.sh:<N>` citation that was accurate still is. Under D-3172, `090187f8` then took the
+  unit pair back out of `deploy.sh`'s chain, and `d214684c` keeps its enable rule covering every template the repo
+  SHIPS, so an instance enable of `ccgpt-usage@` still reds. The reverse direction is deliberately not asserted:
   `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which `ccrc install` never places — a
   pre-existing divergence between the two installers, outside this plan.
 
@@ -658,7 +752,36 @@ cannot miss it. Found by the Task 3 review.
   → 0); only `ccd/ccd` does, and `ownership.test.ts` reads only `ccd/ccd`. Tasks 2, 3 and 4 each carried a
   "re-stamp `ccd/ccrc`" step; running `markGenerated` on it would have inserted a provenance line into a
   hand-maintained file that nothing scans. No task re-stamped it; each still ran `ownership.test.ts`. The
-  sentence was inherited from the repository's `CLAUDE.md`, which says the same and is equally wrong about
-  `ccd/ccrc`. Correcting it there is owed separately, outside this plan's cut; it is NOT done here.
+  sentence ORIGINATED IN THIS PLAN: the controller wrote it from a context summary that labelled it "verbatim,
+  from CLAUDE.md". `CLAUDE.md` contains no such sentence (measured by the final review, `git grep`), so an earlier
+  version of this entry — which blamed `CLAUDE.md` and recorded a correction owed there — was itself false. No
+  `CLAUDE.md` change is owed.
+
+- **D-3172 — the `ccgpt-usage@` unit pair is NOT placed by Plan 2b-1; its placement is deferred to the plan
+  that owns cutover.** Tasks 3, 4 and 7 placed, removed and deployed the pair under the Architecture sentence
+  "installs but does not enable … installed and inert". That was true of the installer and false in effect: on the
+  operator's fleet box the name is occupied — `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` belong to
+  the OpenClaw repository, and `ccgpt-usage@gpt2.timer` is ENABLED against that template (measured read-only by the
+  controller, 2026-09-23). The next rollout would have replaced a live, enabled timer's definition, and
+  `ccrc uninstall` would have deleted another repository's live unit — against the standing ruling that ccrc writes
+  only what it owns. Every fixture HOME is empty, so no suite and no per-task review could see it; the final
+  review's security and fidelity lenses found it independently. Shipped (`090187f8`): `_inst_units`,
+  `_uninst_units` and `deploy.sh`'s chain name no `ccgpt-usage@` unit; `deploy/systemd/ccgpt-usage@.{service,timer}`
+  still ship, referenced by no installer (Plan 2a's precedent for its `.py` files); a fixture test plants a foreign
+  pair plus an enabled-instance link and proves install AND uninstall leave all three byte-identical. Replacing that
+  unit IS the cutover (spec §15 step 3, separately authorised): Plan 3 designs it — an ownership check, or a
+  rename that makes the swap explicit. The same class, larger: `~/.local/bin/ccgpt` on that box is OpenClaw's live
+  launcher, so Plan 2b-2 placing ccrc's `ccgpt` is ALSO the cutover (see the carry-forward section). This entry
+  supersedes the placement parts of D-3166, D-3167 and D-3170.
+
+- **D-3173 — the self-review's "the `TOOLCHAIN_EXECUTABLES`/`_inst_bins` agreement is already green (Plan 1, and
+  `gen-wrappers.test.ts` derives it both directions)" is false.** Spec §5's Pin 4 asks that `TOOLCHAIN_EXECUTABLES`,
+  `_uninst_wrappers`' exclusion `case` and `_inst_bins` agree on the dotless names, derived both directions.
+  Measured by the final review: `gen-wrappers.test.ts` (~:394-410) derives ONE direction (every dotless name
+  `_inst_bins` places is in `TOOLCHAIN_EXECUTABLES`); `TOOLCHAIN_EXECUTABLES` names `ccgpt` and `ccgpt-runtime`, which
+  `_inst_bins` does not place (D-3165); and `_uninst_wrappers`' `case` names neither. The pin comes due when the
+  dotless names are placed — Plan 2b-2's first commit, which must implement the three-list derivation in both
+  directions. Spec §5's Pin 3 (the witness index still counts a box whose only launchers are Codex lanes) likewise
+  has no test and no owner in this plan: Plan 2b-2.
 
 _(Numbers are API-issued — `POST /api/ledger/deviations` — and defined in the same act. D-3150–D-3163 are already defined in Plan 2a; never reuse or guess one.)_
