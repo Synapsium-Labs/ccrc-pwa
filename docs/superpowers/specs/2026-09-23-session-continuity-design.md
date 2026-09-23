@@ -1,7 +1,9 @@
 # Session continuity — delegated work, swaps, background processes and operator state survive a restart — design
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
-adversarial review (all surviving findings applied) and a rev-3 verification pass; written spec awaiting operator review · **Date:** 2026-09-23 ·
+adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
+rulings on the written spec (C9, C10) and the measurements behind the three decisions still open (§11 items 3–5) ·
+**Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
 spec's stage 5 appends its skill clauses after that spec's stage 1 (§10).
@@ -42,13 +44,19 @@ session's transcript (`landing-baseline/delegation`, `reaper`, `instruments`); �
 | Output tokens produced by the rate-limit-stopped agents | 6.46M |
 | Output tokens of agents lost to any cause (rate limit, mid-turn interrupt, other API error), on a 1,029-run base by earliest journal time | 11.8M |
 
-When one account hits its window, every in-flight agent dies within about two minutes; the Workflow runtime marks
-each failed and the script usually completes with holes. Claude Code's own in-process wait, which pauses
-rate-limited agents until the reset, engaged in 18 runs.
+Until 2026-09-16, when one account hit its window every in-flight agent died within about two minutes; the
+Workflow runtime marked each failed and the script usually completed with holes. **Claude Code changed during the
+window.** From 2026-09-15, with the build the fleet installed that day, a Workflow run pauses agents that hit a
+five-hour limit and re-runs them after the reset: 18 runs to 2026-09-23 18:26, and 91 of 91 re-run agents returned
+a result. Runs with an agent failed on a session limit and no pause: 45 on 09-08..09-16, 0 on 09-17..09-23. A
+weekly limit is still "too far out to wait for" (7 runs). Most of the deaths above are therefore the earlier
+behaviour. What remains is a paused run killed with its process by a rescue swap (no paused run has yet been seen
+under a parent that was itself blocked: 0 of 18), weekly limits, and background Agent-tool subagents (unmeasured).
+§9's stage-3 baselines are re-cut at 2026-09-16 before a plan uses them.
 
 ### 1.2 The swap
 
-| Swaps, 2026-09-08..09-23 | Value |
+| Swaps, 2026-09-08..2026-09-23, cut at 08:49 (the rescue-timing table below re-cuts to 18:26: 248 rescues) | Value |
 |---|---|
 | Swaps: auto-home / auto-rescue / manual | 604 / 244 / 128 |
 | Rescues preceded by the parent's own `rate_limit` within 30 min | 211 of 244 |
@@ -63,7 +71,20 @@ rate-limited agents until the reset, engaged in 18 runs.
 | Sessions with 3+ auto-rescues in any 60 min | 7 (max 4) |
 | Unread failed-agent notices at a rescue not referenced within 60 min | 96 of 100 |
 
-Five mechanisms, read off the source at `bbb5e714`:
+| Rescue timing, 2026-09-08..2026-09-23 18:26 | Value |
+|---|---|
+| Auto-rescues, every one on a `(blocked)` verdict | 248 |
+| … on the session's own five-hour banner: minutes to that account's reset, median / p25 | 129 / about 54 (n=150) |
+| … of those within 10 / 15 / 30 minutes of the reset | 2 / 3 / 14 |
+| … adding the 18 on a monthly-spend banner, which also carries a five-hour reset (168 in all) | 3 / 7 / 18 |
+| … on a banner the session carried in from the previous account | 32 (20 with no turn on the target) |
+| Rescue to the first real turn on the target | median 1.6 min, p90 5.4 (n=201) |
+| Targets themselves blocked before the source account's reset | at least 123 |
+| Next move back to the source after its reset (a round trip) | 47 |
+
+Pools run dry about two hours before they reset, not just before it, and a swap is fast.
+
+Six mechanisms, read off the source at `bbb5e714`:
 
 1. **The carry drops work.** `_swap_carry_sidecars` (`ccd/ccd:21492`) copies a session's sidecar directory
    (`<root>/projects/<project>/<uuid>/`: subagent transcripts, tool results, workflow journals) only when the
@@ -88,16 +109,24 @@ Five mechanisms, read off the source at `bbb5e714`:
 5. **The rescue kills the in-process wait.** Post-swap-redrive R1 (D-2236) made the rescue ignore Claude Code's
    armed auto-continue, which is right for a stalled session and costs the wait for one whose reset is minutes
    away.
+6. **The blocked verdict trusts a banner the session brought with it.** A resumed session re-renders its
+   conversation, the previous account's limit banner included, and until a new turn runs that banner is also the
+   transcript's newest real row. `_session_hard_blocked` (`ccd/ccd:16612`) does not ask which account wrote it, so
+   a session that lands and does not turn is rescued again once `SWAP_COOLDOWN` passes: 32 of the 248 rescues,
+   mostly 15 minutes apart. The same verdict parses the reset time and discards it
+   (`_transcript_limit_banner "$f" >/dev/null`, `:16693`); no rescue decision reads a reset.
 
 ### 1.3 Background processes
 
 | Background processes | Value |
 |---|---|
-| Unique background tasks Claude Code stopped "because the system is running low on memory", since 2026-09-04 | 186 in 44 sessions |
+| Unique background tasks Claude Code stopped "because the system is running low on memory", since 2026-09-04 | 186 in 44 sessions (9 since 2026-09-18) |
 | … mapped to a command (186 minus 53 unmapped; `reaper/classify_kills.py`) | 133 |
 | … of those: CI, PR, deploy or limit watchers / test suites | 76 / 25 |
-| Pane scopes whose tmux pane is gone, 2026-09-23 | 13, holding 33 processes and 1.3 GB |
+| Pane scopes whose tmux pane is gone, 2026-09-23 18:28 | 12, holding 32 processes and 1.32 GB; none from the 325 panes started since 2026-09-17 21:02 |
 | … of which one DynamoDB Local server a pane started 27 days earlier | 1.27 GB |
+| … still used by a live session (that server; a limits logger) / test and probe leaks / forgotten servers / idle fleet infrastructure | 2 / 7 / 2 / 1 |
+| Pane scopes ended by the kernel's OOM killer, each ending its session, 2026-09-16..23 | 16 session deaths in 10 sessions, all with the pressure reap on |
 
 The "aggressive reaper" is Claude Code's background-shell pressure reap. Its full rule, from the installed
 bundle: interactive sessions only; the runtime reports critical memory pressure AND host memory reads scarce; no
@@ -110,6 +139,13 @@ Meanwhile nothing collects processes left in the scopes of panes that no longer 
 found there were left by test and mutation runs of the limit-banner FIFO case, whose timeout does not kill the
 child's process group, not by the live detector (`_transcript_limit_banner`, `ccd/ccd:20156`, refuses
 non-regular files and reads synchronously).
+
+The reap and the kernel's OOM killer read different gauges. The reap needs host `MemAvailable` under 10% and
+4 GiB, about 3 GiB here; the session slice meets its 24G `MemoryMax` with about 13 GB of host memory still free
+(slice at 22.6 GiB on 2026-09-23 18:28). 8 of the 10 OOM stops since 2026-09-20 had no reap near them. Every pane
+scope carries `OOMPolicy=stop`, so the OOM kill of any process in it, a background test worker included, ends the
+session, which its supervisor restarts. The DynamoDB Local server runs at `oom_score_adj` −900 and every Claude Code
+at 200, so the kernel takes a session before it.
 
 ### 1.4 Operator state
 
@@ -147,14 +183,18 @@ auto-home at 04:17 UTC the next day.
 | C3 | Reaper: "is there no more elegant way?" — no heuristic sweep (operator). | Stage 6: one variable plus the scope boundary the kernel enforces. |
 | C4 | Headroom estimation dropped (operator). | No fan-out gate. Target choice keeps using the limits files it already reads. |
 | C5 | "Enhance recovery during account swap similar to how Claude Code itself does it" (operator). | Stage 2 spike decides stage 3's mechanism. |
-| C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue holds instead of swapping when the reset is near or no target has room. | Stage 4. Slug for minting at plan time: `rescue-holds-near-reset`. |
+| C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue waits instead of swapping when the reset is near or no target has room. | Stage 4. Slug for minting at plan time: `rescue-waits-near-reset`. |
 | C7 | AMENDS routing §5.3 "a keystroke not accompanied by a field write is transient": the operator's own `/model`/`/effort` is written to the record before a restart. | Stage 7. Slug: `operator-model-survives-restart`. |
 | C8 | REVERSES the carry's "an existing destination is LEFT ALONE rather than merged". | Stage 1. Slug: `sidecar-carry-merges`. |
+| C9 | No backfill of the historical backlog unless a programme needs one (operator, 2026-09-23, on the written spec). | §11 item 1. |
+| C10 | Re-seed the route records seeded under the pre-#169 default: yes, one-off (operator, 2026-09-23, on the written spec). | §11 item 2: executed by hand the same day; no code. |
+| C11 | **Proposed, awaiting the operator (§11 item 4).** AMENDS C3: beside the variable and the scope boundary, a sweep stops dead ccd scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
+| C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). | Stage 4 rule 1. Slug: `carried-in-banner-is-not-a-block`. |
 
 ## 4. Roles and authority
 
-- **ccd** carries, stops gracefully, writes the manifest, spreads rescues, reports and stops dead scopes of its
-  own panes, honours the route record. It never resumes anything itself and never types beyond the existing
+- **ccd** carries, stops gracefully, writes the manifest, spreads rescues, reports dead scopes of its own panes
+  and, if C11 is ruled in, stops the inert ones, honours the route record. It never resumes anything itself and never types beyond the existing
   redrive fallback's constant text.
 - **The session (the model)** decides whether to resume. It is told what was in flight and the literal call that
   resumes it; that is a request, and §9 measures whether it is honoured.
@@ -162,7 +202,7 @@ auto-home at 04:17 UTC the next day.
 - **The server** reads what ccd wrote and shows it; it never parses Claude Code's journal formats, never mails a
   resume list, and runs nothing but `tmux` and `ccd`.
 - **The operator** sees counts on the phone and on the run, overrides a refused swap with the counts in view,
-  activates the scope stop after its report-only week, and rules on §11.
+  stops, or moves into a unit, the services doctor reports in dead scopes, and rules on §11.
 
 ## 5. The design, in stages
 
@@ -223,7 +263,9 @@ and a plain background agent running:
 4. observe whether Claude Code's own background-revival supervisor or daemon engages, and whether it restarts
    anything ccd did not;
 5. resume a workflow by run id after the swap with a current-root script path, to explain the five scriptPath
-   refusals.
+   refusals;
+6. with the two-agent workflow paused on a five-hour limit, let the parent itself hit the limit, and observe whether
+   the paused run survives a stage-4 wait, and whether it survives a swap followed by a resume by run id.
 
 **Decision rule.** Native handoff is primary for stage 3 only if it fires with both gates set, the next wake
 adopts across the account change, and no second restart authority engages (or it can be switched off). Otherwise
@@ -282,18 +324,56 @@ stop on the limit again, stop and leave it listed.
 
 **The rescue policy (C2, C6).** A rate-limited turn is lost either way — Claude Code's wait re-runs it after the
 reset, and a resume after a swap re-runs it too — so waiting saves only the swap and the risk that the model does
-not resume, and stage 3 removes most of that risk.
+not resume, and stage 3 removes most of that risk. Measured (§1.2): a swap reaches its first real turn in a median
+1.6 minutes, and rescues fire a median 129 minutes before the reset, so a wait never saves wall clock; what it saves
+is the move, the carry and a round trip.
 
-1. **Swap at once** when a placeable target with room exists.
-2. **Hold** — leave Claude Code's armed auto-continue alone, on the session's CURRENT account — only when that
-   account's reset is within a bound (10 minutes, a knob) or no placeable target has room. The hold ends at the
-   reset, when Claude Code's own armed timer continues the turn, or in a swap when a target gains room.
+1. **A carried-in banner is not a block.** ccd stamps `$REG/<id>.landed` (epoch, wrapper) when a spawn lands the
+   session on a new wrapper; absent means never swapped, and every row is current. `lastswap` cannot serve: it is
+   stamped at dispatch, up to `SWAP_JITTER` (120 s) before the swap runs, and deleted on a refused swap. A
+   rate-limit row older than the landing is not evidence of a block, from the transcript or the pane: a pane-arm
+   positive is dated by the transcript, and one whose newest rate-limit row is older than the landing is not a
+   block; with no rate-limit row at all, the pane's verdict stands as today. A transcript it cannot read
+   (`_transcript_limit_banner` rc 2) cannot date a pane positive, and the pane's verdict stands; the transcript
+   arm's cache keeps unreadable distinct from no row. The dating read is uncached. An auth failure, which the pane
+   arm also matches, keeps today's path and never reads a reset (C12).
+2. **Wait near the current account's own reset; otherwise swap at once.** On a rate-limit verdict ccd keeps the
+   `resetsAt` and `rateLimitType` that `_transcript_limit_banner` already prints, from the banner row that
+   postdates the landing. It waits — leaves Claude Code's armed auto-continue alone and types nothing — when the
+   type is `five_hour` and the reset is within `RESCUE_WAIT_BOUND` (600 s, a knob; 0 turns the wait off). A
+   `seven_day` or Codex-lane block, or no postdating row carrying both values, swaps as today; `~/.cc-limits` is
+   not a fallback, because it cannot say which window blocked. It also waits when no placeable target has room
+   (today's `stranded`). A wait is recorded once on entry and once on exit, in `$REG/<id>.rescuewait` and the swap
+   log, never under the word `hold`, which is the workspace-reap hold. It ends:
+   - at the reset, when Claude Code's own timer or the stale-phase Enter (D-2360) continues the turn;
+   - `RESCUE_WAIT_GRACE` (120 s, its own constant, not `STALE_PRESS_COOLDOWN`) after the reset: in a swap if a
+     rate-limit row newer than the reset exists; otherwise the window turned with nothing re-sent, and the
+     existing redrive fallback runs in place — never a swap away from an account that has just reset;
+   - for the no-room wait, also in a swap when a target gains room; it too ends at the reset under the first two
+     conditions.
+
+   A longer bound for a session with delegated work in flight is not specified: no paused run has been seen under
+   a blocked parent (§1.1), and the stage-2 spike measures whether one survives a wait (§11 item 3).
 3. **Spread and do not bounce.** Target choice skips an account the session just left blocked and prefers a target
    that has not received a rescue within the last few minutes when another placeable target exists. A session
-   already rescued three times in the last hour is not rescued a fourth time at once: it takes a **chain hold**
-   on its current account for at most 30 minutes (a knob), then swaps to a target with room that is not the
-   account it just left blocked. The chain hold is distinct from rule 2's near-reset hold and has its own end.
-   Both sit inside, not instead of, `SWAP_COOLDOWN` and `SWAPBLOCK_COOLDOWN`.
+   already rescued three times in the last hour is not rescued a fourth time at once: it takes a **chain wait**
+   on its current account for at most 30 minutes (a knob), recorded in `.rescuewait` with `kind=chain`, then swaps
+   to a target with room that is not the account it just left blocked. A chain wait ends early at its account's
+   reset under rule 2's first two end conditions and never swaps away from an account that has just reset; at 30
+   minutes with no target that has room it becomes the no-room wait. Both waits sit inside, not instead of,
+   `SWAP_COOLDOWN` and `SWAPBLOCK_COOLDOWN`.
+
+Tests under `makeCcdHarness` with fixture homes, every fixture past `SWAP_COOLDOWN`, each red when its guard is
+removed: a transcript banner row older than `.landed` produces no rescue; a pane positive whose newest rate-limit
+row predates `.landed` produces no rescue; no `.landed` with an old row rescues; an unreadable transcript under a
+pane positive rescues; a `five_hour` row whose reset is 300 s out produces no dispatch, and deleting the bound check
+makes it dispatch; a `seven_day` row 300 s out dispatches; a bound of 0 dispatches; after the reset with no new row
+the fallback runs in place and nothing dispatches, and with a new row a dispatch follows; an auth-failure pane with
+an old rate-limit row carrying a near reset dispatches; a target set with no room gives no dispatch and a stranded
+record; a target just left blocked is skipped; a fourth rescue within the hour takes the chain wait; a chain wait
+whose account resets inside it does not swap. `.landed` and `.rescuewait` join the per-session registry field list
+and purge with the row; `.rescuewait` is read by ccd's own entry/exit dedupe and by doctor, and §9's instrument
+reads the swap log.
 
 **Swaps that are not rescues do not cut work.** Auto-home, affinity and manual swaps refuse while the session's
 on-demand manifest scan finds `in-flight` or `stopped-agent` items younger than two hours. Other classes do not
@@ -327,29 +407,60 @@ accepting transcript loss.
 ### 5.6 Stage 6 — background processes: stop the wrong kills, collect the real orphans (ccd)
 
 1. **Stop the wrong kills.** ccd sets `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in every spawn environment,
-   beside the resume variables, once the scope stop of item 2 is active (§10). Watchers can already opt out today
-   by using the Monitor tool instead of Bash `run_in_background`; stage 5's worker clause says so.
-2. **Report dead scopes, then collect them by ownership.** Every ccd pane runs in its own transient scope under
-   the session slice, and its processes stay there unless something deliberately moves them to another unit
-   (`systemd-run --user --scope`), which is how a declared service should leave.
-   - `ccd-cap-scopes` already enumerates pane scopes every minute. It reports each scope that belongs to ccd's own
-     tmux server under the session slice, whose pane no longer exists, and whose processes no live handoff record
-     names: scope, processes, age, memory. Scopes of any other tmux server are never touched; pinned by a test.
-   - For one week that report is all it does, surfaced by doctor. Then the operator activates the stop, and it
-     stops those scopes. The DynamoDB Local server in §1.3 is exactly what the week is for: a service a session
-     started on purpose belongs in a unit, and doctor lists every pane-scope process older than a day.
+   beside the resume variables, from stage 6's first deploy; it does not wait for item 2. The reap stops only
+   background shells of a live, idle Claude Code, and every process in a dead scope has already lost its Claude
+   Code, so no collector frees memory the reap would have freed (§1.3). Watchers can already opt out today by using
+   the Monitor tool instead of Bash `run_in_background`; stage 5's worker clause says so.
+2. **Report every dead scope; stop only the inert ones** (C11, awaiting the operator, §11 item 4). Every ccd pane
+   runs in its own transient scope under the session slice, and its processes stay there unless something
+   deliberately moves them to another unit (`systemd-run --user --unit …`), which is how a service a session wants
+   to outlive its pane must leave.
+   - A sweep of its own — `ccd-scope-sweep`, a oneshot on a one-minute timer beside `ccd-cap-scopes`, so a slow
+     stop or a sweep fault never delays capping a new scope — reads only the `tmux-spawn-*.scope` units in the
+     session slice whose `Description` parses as `tmux child pane <pid> launched by process <pid>`. Any other scope,
+     ccd's own `ccrc-tmux-server.scope` first among them, is outside the sweep, never reported and never stopped
+     (pinned by a test with a server scope in the fixture slice); a `Description` that does not parse is
+     unmeasurable. A pane scope is **dead** when none of its processes is a live pane of the tmux server its
+     `Description` names, and **ccd's** when that server is ccd's current server or a tmux server that no longer
+     runs, checked by pid, `comm` and a start time earlier than the scope's, against pid reuse. A scope of any other
+     live tmux server is never touched. Values come from `systemctl --user show` (`ControlGroup`, `CPUUsageNSec`),
+     never from a string-built cgroup path.
+   - It keeps one verdict record per scope — dead or live, inert or not and why, first seen dead — in
+     `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`. Doctor reads that record and never re-derives it; a reboot resets
+     the clock, which is the safe direction.
+   - It **stops** a dead ccd scope (`--no-block`) at the first tick at least six hours after first seeing it dead,
+     when its CPU usage has not moved since then, no process in it started in the last six hours, no process holds
+     a TCP or UDP socket or a listening Unix socket, no process is the parent of one in another cgroup, no live
+     handoff record names one of its processes, and `$REG/scope-sweep-paused` is absent. A **handoff record** is
+     Claude Code's native adopt record, naming a background shell handed "to the next wake", if the stage-2 spike
+     makes native handoff primary; the stage-3 launch record carries run and agent ids, never a pid, so under
+     manifest-primary, and before stage 3, no record exists and that predicate is satisfied. A predicate it cannot
+     measure skips that scope for the tick and records nothing; a scope seen live drops its entry.
+   - Every other dead scope is **reported**, never stopped: doctor lists scope, processes, age, sockets and memory,
+     and the operator stops it or moves the service into a unit. Doctor also lists every process older than a day
+     in a live pane scope, other than the pane's own process and its Claude Code's MCP servers.
+   - Under report-only (§11 item 4), the same record and report ship and nothing is stopped.
+   - Measured against the 12 dead scopes of 2026-09-23: 5 stop (22 processes, 20 MB, all test and probe leaks, no
+     CPU over 42 minutes); 7 are reported, among them both services a live session still used, which listen or
+     poll. The named cost: a process that waits more than six hours with no CPU and no inet or listening socket — a
+     lone long `sleep`, a blocking waiter on a connected Unix socket or inotify — in a pane that is gone.
    - When ccd itself ends a pane (stop, swap, archive), it stops that pane's scope after the stage-3 handoff,
      unless a live handoff record names any process in it; then it reports the scope instead of stopping it,
      because a scope stop ends every process in the scope.
+   - Tests run under a fixture root — `PROC_ROOT` and `CGROUP_ROOT` overrides and a stubbed `systemctl` on `PATH`,
+     so they run on the macOS leg — with a red row per predicate, plus: a scope of a live non-ccd server is never
+     touched; an unmeasurable predicate skips; a scope seen live resets its clock.
 3. **Fix the test leak** at its source: the limit-banner test harness kills its child's whole process group on
    timeout.
 
 Named trade: with the pressure reap disabled, a pane's background children share its scope with the live Claude
 Code process. At the pane scope's `MemoryHigh` (8G, set by `ccd-cap-scopes`) the whole scope is throttled, the
-session included; at its `MemoryMax` (12G) or the slice ceiling the kernel's OOM choice can take the Claude Code
-process — a mid-turn session death. Hence the order in §10: the variable ships only once the stop is active, and
-Claude Code's reap stays on through the report-only week. §9 measures `memory.events` high and oom_kill per pane
-scope and the supervisor revivals they cause. An aggregate `MemoryHigh` must never return to the slice.
+session included. At its `MemoryMax` (12G), the slice's 24G or `user@`'s 26G, the kernel's OOM killer chooses the
+victim, and under `OOMPolicy=stop` the kill of any process in a pane scope ends that session. That is already how
+sessions die with the reap on (§1.3), because the slice fills while the host still reads plenty free. §9 counts OOM
+stops of scopes whose session had been idle 30 minutes or more with a live background shell — the reap's own class
+— for a week with the reap still on, before the variable ships (baseline B); the variable is removed when that
+class exceeds B + 2 in any week after it ships, and the removal takes effect at each session's next start. An aggregate `MemoryHigh` must never return to the slice.
 
 ### 5.7 Stage 7 — the operator's choice survives a restart (ccd)
 
@@ -372,9 +483,11 @@ a swap; an operator `/model opus` survives an auto-home.
 
 - **No revival.** Nothing starts, restarts or swaps a session ccd would not already restart. The one new stop
   behaviour is a graceful signal before the existing kill; the typed fallback text is unchanged.
-- **A new, named process-stop authority, bounded.** Stage 6 stops scopes of ccd's own dead panes, after a
-  report-only week the operator ends, never scopes of another tmux server.
-- **ccd is the authority** on files and sessions; nobody touches `~/.cc-sessions`, tmux or a unit outside ccd.
+- **A new, named process-stop authority, bounded.** Stage 6 stops the scopes of panes ccd itself ends and, if C11
+  is ruled in, dead ccd pane scopes that have done nothing for six hours and serve nothing; never a scope of
+  another live tmux server, and never a scope that is not a pane's.
+- **ccd is the authority** on files and sessions; nobody but the operator, acting on doctor's report, touches
+  `~/.cc-sessions`, tmux or a unit outside ccd, and doctor's next run records what the operator stopped.
 - **The server never runs git or Claude Code** and never parses journal formats.
 - **Additive wire**, one reader per field per mode, absence means unknown, `FLEET_PROTO` unchanged.
 - **Mutation-table discipline** for every guard named above.
@@ -385,8 +498,10 @@ a swap; an operator `/model opus` survives an auto-home.
 
 | Area | Change |
 |---|---|
-| `ccd/ccd` | carry merge; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; rescue hold, spread, no-bounce; in-flight refusal and its refusal word; `--cut-delegated`; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
-| `ccd/ccd-cap-scopes` | dead-scope report, then stop, own tmux server only |
+| `ccd/ccd` | carry merge; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; `.landed` stamp and the carried-in-banner check; rescue wait near reset, spread, no-bounce; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
+| `ccd/ccd-scope-sweep` (new) | per-scope verdict record `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`; inert stop (C11, pending); report. `ccd/ccd-cap-scopes` is unchanged |
+| `deploy/systemd/ccd-scope-sweep.{service,timer}`, `deploy/deploy.sh`, `ccd/ccrc` install spine, `agent/test/deploy-verify.test.ts` | the unit and timer, their install and uninstall, and the pins that enumerate each ccd timer |
+| `ccd/ccrc-doctor-checks` | reads the sweep's verdict record; lists dead scopes and long-lived pane processes; records operator stops |
 | `ccd/session-hook.sh`, `server/test/session-hook.test.ts` | PostToolUse launch record with validation; SessionStart manifest subject with its own ceiling, re-pinned under the 10,000-character spill |
 | `ccd/worker-skill`, `ccd/coordinator-skill`, `ccd/reviewer-skill`, `references/review-panel.md`, `README.md`, `CLAUDE.md` | clauses, paragraph, count words; pins |
 | `server/src/server.ts` (swap route), `server/src/ccdargv.ts` | `--cut-delegated` mint site and body field; the refusal's own 409 |
@@ -404,16 +519,25 @@ a swap; an operator `/model opus` survives an auto-home.
   spawn path; §9 measures `(kept: busy)`, `(kept: budget)` and the `unmeasured` rate.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text
   that measures no change.
-- **A near-reset hold lasts longer than the reset promised:** bounded by the reset and ends in a swap.
-- **A chain hold on an account with a far reset:** bounded at 30 minutes, then a swap that skips the account just
-  left blocked.
-- **The slice ceiling kills a live session** once the pressure reap is off: named in §5.6, measured in §9.
-- **A dead-scope stop kills a wanted service:** a report-only week first, own tmux server only, doctor's list of
-  long-lived pane processes.
+- **A carried-in banner rescues a session that is not blocked:** the `.landed` stamp dates the banner.
+- **A real block on the target reads as carried-in** while the transcript lags the pane (the kind of lag D-2443 stands down for):
+  the dating read is uncached and the next tick asks again; §9 counts pane positives rule 1 suppressed that became
+  a rescue within five minutes.
+- **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in a
+  swap only if the account wrote a new limit row, otherwise in the redrive fallback in place.
+- **A chain wait on an account with a far reset:** bounded at 30 minutes, then a swap that skips the account just
+  left blocked, or the no-room wait when no target has room.
+- **The slice ceiling kills a live session** once the pressure reap is off: named in §5.6, measured in §9 by the
+  reap's own class, undone by removing the variable.
+- **A dead-scope stop kills a wanted service:** only a scope inert for six hours, with no inet or listening socket
+  and no child elsewhere, is stopped (C11, pending; under report-only nothing is); everything else is reported.
+- **The sweep mistakes a server scope for a dead pane:** only `tmux-spawn-*.scope` units with a pane `Description`
+  are read; ccd's `ccrc-tmux-server.scope` sits in the same slice.
 
 ## 9. Measurement, targets and the kill rule
 
-Baseline frozen at 2026-09-08..2026-09-23. Committed with the plan: the carry counter over the swap log, the journal
+Baseline frozen at 2026-09-08..2026-09-23; the rescue-timing rows run to 2026-09-23 18:26, the scope census to 18:28,
+and the OOM row covers 2026-09-16..23. Committed with the plan: the carry counter over the swap log, the journal
 census deduplicated by run id, the post-swap outcome classifier, the pressure-kill scan, the dead-scope census.
 
 | Stage | Metric | Baseline | Target |
@@ -421,9 +545,9 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 1 | `(kept)` carries by reason; journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
-| 4 | sessions with 4 or more auto-rescues in an hour; chain holds that end without a swap; non-rescue swaps that cut delegated work | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work | 0; 0; 0 |
+| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; — | 0; 0; 0; 0; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
-| 6 | pressure kills of background shells; dead ccd-pane scopes after the stop activates; pane-scope `memory.events` high and oom_kill, and the revivals they cause | 186 since 2026-09-04; 13; measured from the report week | 0; 0; no rise over the report week |
+| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day (C11 only); OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0 (under report-only: reported, no target); at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
 
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
@@ -431,23 +555,59 @@ redesigned.
 
 ## 10. Sequencing
 
-1 → 2 → 3 → {4, 5}. Stage 6's report and the harness fix can ship any time; its stop activates after stage 3 and
-the report-only week; its variable ships only with or after the stop's activation, so Claude Code's reap stays on
-until orphans have a collector. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
+1 → 2 → 3 → {4, 5}. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
+the dead-scope report, the inert stop if C11 is ruled in, and the harness fix — needs nothing from stages 1–5 and
+can ship any time. Before stage 3 no handoff record exists, so a handed-over waiter with no CPU and no socket can be
+stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
+3 and the stage-2 decision on native handoff, whose record it reads. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
 stage 1. The landing spec's stage 5 needs this spec's stage 1.
 
-## 11. Operator decisions left open
+## 11. Operator decisions
 
-1. **Backfill the historical backlog?** Workflow journals and agent transcripts stranded on source accounts by past
-   `(kept)` carries. A first pass counted about 850 run directories; a second pass could not reproduce the count,
-   so the committed instrument re-derives it before any decision. Recommended: no backfill unless a programme needs
-   one.
-2. **Re-seed route records seeded under the pre-#169 default?** Records whose only class write is the spawn default
-   still say Fable. Recommended: yes, one-off, through `cmd_route` with its own actor, for records with no operator
-   write.
-3. **The hold bound.** Ten minutes to reset is the proposed default for holding instead of swapping.
-4. **Activating the scope stop** after the report-only week, and moving the long-lived pane services it lists into
-   units.
+Decided on the written spec, 2026-09-23:
+
+1. **No backfill of the historical backlog** (C9) unless a programme needs one. Workflow journals and agent
+   transcripts stranded on source accounts by past `(kept)` carries stay where they are; a first pass counted about
+   850 run directories and a second could not reproduce the count, so the committed instrument re-derives it if a
+   programme asks.
+2. **Re-seed the route records seeded under the pre-#169 default** (C10). Executed the same day: of the 41 sessions
+   with a registry row, one record's only class write was the pre-#169 spawn default — this spec's authoring
+   session — and it was reset through `cmd_route` with `actor=operator-ruling`. The one other record saying Fable,
+   claude-rp-llm, was set by the operator from the PWA and is untouched. No code ships for it.
+
+Left open, with the measurements behind them:
+
+3. **The rescue-wait bound** (§5.4 rule 2). Against the 168 rescues of §1.2 on a five-hour window (150 on a session
+   banner, 18 on a monthly-spend banner), of 248:
+
+   | `RESCUE_WAIT_BOUND` | Rescues that would have waited | Minutes waited, total | Swaps avoided / round trips avoided | Live delegated work kept |
+   |---|---|---|---|---|
+   | 0 (today) | 0 | 0 | 0 / 0 | — |
+   | 5 min | 2 | 6 | 2 / 0 | 0 |
+   | 10 min | 3 | 13 | 3 / 0 | 0 |
+   | 15 min | 7 | 60 | 9 / 2 | 0 |
+   | 30 min | 18 | 300 | 25 / 7 | 0 (1 swap that had resumed fine) |
+   | every five-hour block | 168 | 18,024 | 215 / 47 | unmeasured (19 had live work at the rescue) |
+
+   No bound at or under 30 minutes avoids a bounce, and the one near-reset rescue recorded as dropping live work
+   was an agent that had already died on the limit four seconds before the rescue. A wait almost never saves wall
+   clock: one rescue in 248 fired closer to its reset than its swap took. Recommended: 10 minutes. It costs almost
+   nothing — 13 minutes of waiting across the window — and avoids 3 swaps and their carries; no bound under 15
+   minutes avoids a round trip. The carried-in-banner check (rule 1) touches ten times as many rescues. A longer
+   bound for delegated work waits on stage 2's sixth measurement.
+4. **The inert-scope sweep (C11), which amends C3.** Either stage 6 stops dead ccd scopes that have done nothing for
+   six hours and serve nothing, and reports the rest (§5.6 item 2 as written), or it only reports and the operator
+   stops each scope. On 2026-09-23 the first stops 5 scopes, 22 processes, 20 MB, all test and probe leaks; both
+   reports list the other 7, including the two services live sessions still use. Recommended: the sweep, because it
+   collects the orphaned and zombied without ever touching anything that runs, serves or forks. Either way the
+   pressure-reap variable ships first (§10), and the operator decides on the 7 reported scopes: the DynamoDB Local
+   server listens on every interface and belongs in its own unit bound to 127.0.0.1, or stopped.
+5. **The slice ceiling.** 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on, while
+   the host had memory to spare (§1.3). Whether to raise the slice's `MemoryMax` toward the host's, or to give pane
+   scopes `OOMPolicy=continue` so a background worker's kill no longer ends the session, is unmeasured: neither
+   setting has been tried on a transient scope here. Recommended: measure both in the stage-2 spike's scratch
+   session. Stage 6 does not wait for it: the reap fires below about 3 GiB of host memory, after the slice has
+   already reached its ceiling, so the variable barely moves this risk; its own kill rule (§5.6) guards the rest.
 
 ## 12. Out of scope, named
 

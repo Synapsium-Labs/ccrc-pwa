@@ -1,7 +1,8 @@
 # Landing order and main churn — design
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
-adversarial review (61 findings survived, all applied) and a rev-3 verification pass; written spec awaiting operator review · **Date:**
+adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
+written spec's break-glass question recorded 2026-09-23 (R9); strict-protection removal still open (§11) · **Date:**
 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -111,6 +112,7 @@ repositories are on plans that exclude it.
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
+| R9 | Break-glass: the repository-admin role stays the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). | Stage 2; §4's operator row; §11. |
 
 ## 4. Roles and authority
 
@@ -124,7 +126,7 @@ is none.
 | **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds; pause the line | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
 | **ccd** | the read-only probe on a timer; compose a candidate; delete its own candidate refs; lineage | move a worker's branch; merge; push or delete anything outside `refs/heads/ccrc/land/*` (pinned) |
 | **Server** | hold the line; mail "next to land"; re-measure what ccd wrote; refuse bad transitions | run git or `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`); take a run to `working` on its own; choose a successor |
-| **Operator** | pause, withdraw, declare order; merge by hand (recorded as an inversion when out of order); break-glass by editing the ruleset in GitHub's UI | — |
+| **Operator** | pause, withdraw, declare order; merge by hand (recorded as an inversion when out of order); break-glass through the admin bypass from their own shell or GitHub's UI (R9) | — |
 
 The PWA cannot reach a merge: `gh` stays unwhitelisted, no ccd verb merges, and the session-gated landing routes
 can pause or remove, never choose a successor (stage 5).
@@ -194,16 +196,20 @@ and the class of act that opened the livelock window.
   group) becomes a feed event and a mail to the coordinator, which re-enqueues or sends a fix round.
 - **The merge gate becomes a mechanism.** Setting the approval count to zero means any session holding the
   fleet's login could land with a plain `gh pr merge`. So `session-hook.sh`'s PreToolUse arm DENIES `gh pr merge`
-  in any session whose hold names a worker wave, and denies `--admin` in every fleet session. Mutation rows: a
-  worker's merge is refused; a coordinator's plain enqueue passes; any session's `--admin` is refused; each red
-  when its arm is deleted. The operator's own shell, outside Claude Code, is unaffected.
+  in any session whose hold names a worker wave, and denies `--admin` in every fleet session, together with a
+  `gh api` call to the pulls merge endpoint, the other spelling that reaches the same merge. Mutation rows: a
+  worker's merge is refused; a coordinator's plain enqueue passes; any session's `--admin` is refused; a session's
+  `gh api` merge call is refused; each red when its arm is deleted. The operator's own shell, outside Claude Code,
+  is unaffected. The hook is a contract the fleet honours, not an access boundary.
 - Coordinator clause 15 says: on a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which
   enqueues.
 
 **Operator configuration** (settings, not ccrc code): a ruleset requiring the merge queue on `main` — squash,
 group size 1, build concurrency 1 — and `required_approving_review_count` 1 → 0 in the existing main ruleset.
-Break-glass is decided in §11: keep the repository-admin role as the ruleset's only bypass actor, or zero bypass
-actors with the operator editing the ruleset in GitHub's UI. Either way a hand merge is recorded as an inversion.
+Break-glass (R9): the repository-admin role stays the ruleset's only bypass actor. The fleet's single login holds
+that role, so the bypass is reachable from any session; the hook denies the spellings it can parse, which makes the
+bypass the operator's by convention, not by credential. The operator uses it from their own shell or GitHub's UI.
+A hand merge out of order is recorded as an inversion.
 
 **Rollout order inside stage 2**, because each step needs the one before it:
 1. `ci.yml` gains `merge_group` (repository code, merged the ordinary way);
@@ -366,7 +372,7 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | Area | Change |
 |---|---|
 | `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, step 6, land-sync and ejection vocabulary; pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
-| `ccd/session-hook.sh` | PreToolUse advisory on main syncs; deny on `gh pr merge` for workers and `--admin` for all sessions |
+| `ccd/session-hook.sh` | PreToolUse advisory on main syncs; deny on `gh pr merge` for workers, and on `--admin` and `gh api` merge calls for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
@@ -438,11 +444,16 @@ fleet committer identities. Stage 2's proof run is stage 2's own gate, not a pre
 A stage whose metric has not moved two weeks after rollout is retired or redesigned; stage 1's prose parts
 (clauses, the advisory) are explicitly subject to this rule.
 
-## 11. Operator decisions left open
+## 11. Operator decisions
 
-1. **Break-glass on this repository's queue.** Keep the repository-admin role as the ruleset's only bypass actor
-   (recommended: the hook stops fleet sessions using `--admin`, the operator keeps a direct door for a broken CI or
-   release lane), or zero bypass actors with the operator editing the ruleset in GitHub's UI.
+Decided on the written spec, 2026-09-23:
+
+1. **Break-glass on this repository's queue** — R9: the repository-admin role stays the ruleset's only bypass
+   actor. The hook stops fleet sessions using `--admin`; the operator keeps a direct door for a broken CI or
+   release lane.
+
+Left open:
+
 2. **Strict-protection removal** on intake-platform and data-internal after a week of coordinator landings there.
 
 ## 12. Failure modes named
