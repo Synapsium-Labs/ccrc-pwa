@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **numbering round** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); wave-done at `e67c2df0` re-measured clean |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **in review** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); tip `e5238719`; review run 141 on `ccrc-pwa-swift-cove` |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -49,6 +49,10 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
 ## Carried constraints
 
 - `tmp-sweep.test.ts`'s "FAILS CLOSED" case reds on the fleet box on untouched main and passes in CI.
+- Inside a MARKED child (every session dispatched since v0.0.19), `session-hook.test.ts`'s "skips a scratch
+  slug" case reds, because `os.tmpdir()` is the child's `~/.cc-tmp/<id>`. That is a wave-1 gap of
+  child-reclamation, carried into its wave 3. It is not this programme's red: run that suite with
+  `TMPDIR=/tmp`.
 - The README anchors and the census move whenever another branch's `ccd/ccd` merges first; the second to
   merge re-points and re-measures.
 
