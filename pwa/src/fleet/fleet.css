@@ -1419,7 +1419,7 @@
 /* The spawn chip (§1.6b) — how the LAST spawn attempt ended, beside the state
    word rather than folded into it. Two inks, both already minted, so no new
    contrast pair: --status-dead-text for the verdicts that mean "this will not
-   fix itself" (blocked / login / vanished / unstarted) and --ink-tertiary for
+   fix itself" (blocked / login / vanished / narrow / unstarted) and --ink-tertiary for
    the two that mean "we do not know" (unconfirmed / unknown). `flex: none`
    is load-bearing: .sess-held is the only shrinkable cell in .sess-meta and
    §2.4 lengthens what it holds. */

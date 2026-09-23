@@ -1581,9 +1581,16 @@ export function isSessionLifecycle(v: unknown): v is SessionLifecycle {
  *  never `ready`. Orthogonal to `SessionLifecycle`: this says how the LAST
  *  SPAWN ATTEMPT ended, not what the row IS. A row can be `running` today after
  *  a failed spawn yesterday, and collapsing one into the other would be an
- *  adapter narrowing a distinction it received. */
+ *  adapter narrowing a distinction it received.
+ *
+ *  `narrow` is rc 6: the pane was LIVE but under ccd's READER_MIN_COLS, so
+ *  `_accept_first_run_prompts` stood every startup gate down before reading
+ *  the pane at all. It used to reach this table as `unrecognised`, which said
+ *  "ccd told us something we cannot name" about an rc ccd names in its own
+ *  message. The word is ccd's ("pane is under 120 columns"), and it folds what
+ *  `_pane_measurable` folds: a width it could not read also answers rc 6. */
 export type SpawnVerdict =
-  | 'ready' | 'login' | 'vanished' | 'expired' | 'blocked' | 'unrecognised';
+  | 'ready' | 'login' | 'vanished' | 'expired' | 'blocked' | 'narrow' | 'unrecognised';
 
 /** Same derived-enumeration discipline as `SESSION_LIFECYCLE_MAP` above:
  *  `Record<SpawnVerdict, true>` fails LOUDLY (TS2739) on a member added to the
@@ -1591,7 +1598,7 @@ export type SpawnVerdict =
  *  not have. */
 const SPAWN_VERDICT_MAP: Record<SpawnVerdict, true> = {
   ready: true, login: true, vanished: true, expired: true,
-  blocked: true, unrecognised: true,
+  blocked: true, narrow: true, unrecognised: true,
 };
 export const SPAWN_VERDICTS: readonly SpawnVerdict[] =
   Object.keys(SPAWN_VERDICT_MAP) as SpawnVerdict[];
@@ -2094,7 +2101,8 @@ export const SPAWN_NOT_RECORDED = 'not-recorded';
 /** ccd's rc table, in one place. `null` in -> `null` out, and `null` means NOT
  *  RECORDED (`$REG/<id>.spawn` absent, or its rc unparseable — `registry.ts`
  *  collapses both to `spawn: null` deliberately). rc 5 is `_spawn_settle`'s
- *  hard-block verdict (`_pane_hard_blocked`); 3 and 4 are NOT renumbered,
+ *  hard-block verdict (`_pane_hard_blocked`); rc 6 is its reader stand-down on
+ *  a pane under READER_MIN_COLS; 3 and 4 are NOT renumbered,
  *  because four ccd call sites plus `_supervised_start` branch on
  *  `[[ "$rc" -eq 3 || "$rc" -eq 4 ]]`. */
 export function spawnVerdict(rc: number | null): SpawnVerdict | null {
@@ -2105,6 +2113,7 @@ export function spawnVerdict(rc: number | null): SpawnVerdict | null {
     case 3: return 'vanished';
     case 4: return 'expired';
     case 5: return 'blocked';
+    case 6: return 'narrow';
     default: return 'unrecognised';
   }
 }
@@ -8097,11 +8106,11 @@ export type PaneHistoryReply =
  * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down — a narrow
  * pane is UNMEASURED, not idle.
  *
- * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer: run
- * `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts` and the
- * only hits inside those four trees are this declaration and this sentence's
- * own quotation of the command — no other file in server/src, pwa/src or
- * agent/src references the constant. In particular the server's mail
+ * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only code that GATES on it.
+ * The one other code reference in server/src, pwa/src or agent/src is the
+ * PWA's actions sheet, which prints it in the `narrow` spawn note — it names
+ * the floor, it enforces none; every other hit in those trees is prose. In
+ * particular the server's mail
  * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
  * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
  * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —

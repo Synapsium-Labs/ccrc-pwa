@@ -45,11 +45,13 @@ const NO_CTX_PANE = '  👤 claude │ 🤖 Sonnet 5 · high │ ⎇ ws/ctx-pres
  *  row, `parseStatusline`'s own "empties" fixture shape. */
 const DIALOG_PANE = '❯ 1. Yes\n  2. No, exit\nEnter to select';
 
-/** The ctx segment ALONE — no 🤖, no ⎇. Both are independently conditional
- *  in ccd/statusline-command.sh:134-149 (model on `.model.display_name`,
- *  branch on being inside a repo), so this is a real, measured pane shape,
- *  not a contrived one. */
-const CTX_ONLY_PANE = (pct: number): string => `  ▓ ctx ████░░░░ ${pct}%`;
+/** The ctx segment with no identity beside it — no 🤖, no ⎇. Both are
+ *  independently conditional in ccd/statusline-command.sh:134-149 (model on
+ *  `.model.display_name`, branch on being inside a repo), so this is a real
+ *  pane shape, not a contrived one. The `👤` account segment is NOT
+ *  conditional — the script writes it first on every row — and the parser
+ *  reads ctx only from the row that `👤` leads, so the fixture carries it. */
+const CTX_ONLY_PANE = (pct: number): string => `  👤 claude │ ▓ ctx ████░░░░ ${pct}%`;
 
 describe('ctx pressure survives only the tick that measured it (D-2012)', () => {
   let paneOut = FULL_PANE(82);
@@ -101,6 +103,13 @@ describe('ctx pressure survives only the tick that measured it (D-2012)', () => 
     expect(afterDialog?.ctxPct, 'a stale ctxPct rode a tick that measured nothing at all').toBeUndefined();
     expect(afterDialog?.model, 'model must still survive a one-tick overlay miss, unlike ctxPct').toBe('Sonnet 5');
     expect(afterDialog?.branch).toBe('ws/ctx-pressure');
+    // …marked as KEPT, not measured, so the fleet ranks this branch below the
+    // worktree's measured HEAD (fleet.ts) — the map still holds it.
+    expect(afterDialog?.retained, 'a kept entry must say it was kept').toBe(true);
+    // And a tick that measures the row again clears the mark.
+    paneOut = FULL_PANE(82);
+    await w.tick();
+    expect(w.currentStatuslines().get(ID)?.retained).toBeUndefined();
   });
 
   it('a tick that measures ONLY the ctx segment merges the fresh reading onto retained identity, never blanking model/branch (Finding 3)', async () => {
@@ -124,6 +133,7 @@ describe('ctx pressure survives only the tick that measured it (D-2012)', () => 
     expect(afterCtxOnly?.ctxPct, 'the fresh ctx-only reading must still land').toBe(91);
     expect(afterCtxOnly?.model, 'model must survive a tick where only the ctx segment rendered').toBe('Sonnet 5');
     expect(afterCtxOnly?.branch).toBe('ws/ctx-pressure');
+    expect(afterCtxOnly?.retained, 'identity this tick did not measure is marked kept').toBe(true);
   });
 
   it('a dead pane deletes the WHOLE entry, not just ctxPct — distinguishable from the two misses above', async () => {

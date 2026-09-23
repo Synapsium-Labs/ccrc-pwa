@@ -285,6 +285,56 @@ describe('branch precedence', () => {
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
   });
 
+  // The worktree's own HEAD, as the divergence sweep measured it, comes between
+  // the two: a narrow pane cuts the `⎇` segment (so the statusline gives no
+  // branch), and the registry's `.branch` still names the branch ws-add
+  // created, whatever was checked out since. Measured 2026-09-23 on three of
+  // the four narrow rows: registry `ws/…`, HEAD `docs/…`/`feat/…`.
+  const headOnly = (branch: string | null) =>
+    new Map<string, string | null>([['demo-quiet-mesa', branch]]);
+  const withHead = (run: Runner, home: string, heads: Map<string, string | null>, sl?: Map<string, Statusline>) =>
+    assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
+      undefined, sl, undefined, undefined, undefined, undefined, undefined, undefined, heads);
+
+  it('uses the worktree\'s measured HEAD when the pane gave no full branch', async () => {
+    const { home, run } = setup();
+    // The pane measured identity (model) but no branch — a cut `⎇` segment.
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/checked-out-by-hand'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-by-hand');
+  });
+
+  it('still lets a full statusline branch outrank the measured HEAD — the pane is the fresher read', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/actually-here', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/older-sweep'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
+  });
+
+  // A pane branch the watcher KEPT across a tick that measured nothing (an
+  // overlay, or a row cut inside its 🤖 segment) is not a live reading: it
+  // loses to the HEAD measured since, and still beats the registry.
+  it('ranks a RETAINED pane branch below the measured HEAD, and above the registry', async () => {
+    const { home, run } = setup();
+    const kept = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/before-the-checkout', ultracode: false, workflowActive: false, retained: true }],
+    ]);
+    const withNewerHead = await withHead(run, home, headOnly('docs/checked-out-since'), kept);
+    expect(withNewerHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-since');
+    const noHead = await withHead(run, home, new Map(), kept);
+    expect(noHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/before-the-checkout');
+  });
+
+  it('falls through a detached or unreadable HEAD (null) to the registry', async () => {
+    const { home, run } = setup();
+    const fleet = await withHead(run, home, headOnly(null));
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('ws/quiet-mesa');
+  });
+
   it('is null when neither source has one', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);

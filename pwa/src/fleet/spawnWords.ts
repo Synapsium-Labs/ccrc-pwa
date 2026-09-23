@@ -32,13 +32,19 @@ import type { FleetSession, SpawnVerdict } from '../../../shared/api';
  *  because a healthy row has nothing to qualify — and it is a MEMBER with a
  *  null word rather than a case handled before the lookup, so "a healthy spawn
  *  says nothing" is stated in the table that holds every other verdict's word
- *  instead of in a condition beside it. */
+ *  instead of in a condition beside it.
+ *
+ *  `narrow` keeps the LOUD ink (fleet.css gives it no variant): unlike
+ *  `expired`, it does not settle on its own — the window stays narrow after
+ *  whatever narrowed it leaves, and the startup gates ccd skipped are never
+ *  revisited. */
 const SPAWN_WORD: Record<SpawnVerdict, string | null> = {
   ready: null,
   login: 'login',
   vanished: 'vanished',
   expired: 'unconfirmed',
   blocked: 'blocked',
+  narrow: 'narrow',
   unrecognised: 'unknown',
 };
 
