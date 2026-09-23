@@ -3,7 +3,7 @@
 Spec: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`
 Plans: `docs/superpowers/plans/2026-09-22-child-reclamation-wave{1,2,3,4,5}-*.md`
 Contract: `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings)
-Home project: `ccrc-pwa`   Coordinator: not yet placed   Workspace: **a fresh one per wave**
+Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: **a fresh one per wave**
 Ticket: CCR-15
 
 **What this program is.** A workspace the coordinator dispatches is a *child*: declared as one by the server
@@ -33,10 +33,13 @@ the coordinator opens wave N+1 without `sessionId`. Nothing enforces that until 
 coordinator does it anyway, because a programme that builds one-PR-per-child while reusing one workspace
 across five PRs would be arguing against itself.
 
-**Deviation block: not yet allocated.** The coordinator allocates one block at run-open and every wave draws
-from it. A worker never calls the allocator (worker clause 11): it names a departure in its wave-done mail
-and the coordinator assigns a number from the block. A number is named in this file only once it is
-assigned and defined in a plan.
+**Deviation block: forty numbers, the first of them 3330** (allocated once at run-open, 2026-09-23; floor now
+3370). No number of the block is spelled as a `D-` token here until a plan DEFINES it: `deviation-refs.test.ts`
+reds on any tracked `D-` ref above the highest defined one, so an issued-but-undefined number in this file
+would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
+clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
+
+Run ids: wave 1 = **131**.
 
 ## Decisions & deviations
 
@@ -76,6 +79,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   README and the frozen compaction-card corpus cite by line) pays S6-R11 in the same task, and edit length
   above the frozen corpus's highest `ccd/ccd` anchor is a decision: prose there stays length-neutral, long
   comments go below it.
+- **Another programme holds claims on files waves 2–5 edit.** At run-open (2026-09-23) the
+  centralised-update-management workers (runs 128, 129) held claims covering `shared/api.ts`,
+  `server/src/coord/schema.ts`, `ccd/ccrc` and `ccd/ccrc-doctor-checks`. Wave 1 touches none of them. From
+  wave 2 a worker's `POST /api/claims` may answer 409 naming that holder; the claim protocol (worker clause 11)
+  is the answer — mail the holder, work what is uncontested — and a long stall is reported, never forced.
 - **A journal line with no `at` is invisible to the generation fence and the attention list** (contract §8
   R22′, D8: the ingest time is never an event time). Two consequences are accepted, not fixed: a terminal
   refusal journaled without `at` keeps its child out of the sweep but off the attention list, and a clockless
