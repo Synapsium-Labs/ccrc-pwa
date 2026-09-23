@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | — | **dispatched** 2026-09-23 to `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40) |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **numbering round** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); wave-done at `e67c2df0` re-measured clean |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -29,6 +29,22 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
 - **2026-09-23 — opened.** The fix does not widen `_ws_slug_free`. That function's contract (every refusal is
   one `_ws_slug_residue` can name) and its `ws-gc` caller are registry-only; the git and disk judgement is
   its own helper with three answers, so an unreadable repository is never read as a free slug or as a taken one.
+
+- **2026-09-23 — wave-done at `e67c2df0` (PR #177); three numbers assigned before review.**
+  - **The claim.** The frozen boundary measured at `ccd/ccd:19131`. The helper sits at 19276+, and every hunk
+    above the boundary is line-neutral. S6-R11: README re-pointed; census unmoved (147/195/53/35,
+    stated = base = tree). Ten mutation rows, each red.
+  - **First full suite red, none of it the wave's:** the carried `tmp-sweep` case, plus load reds that were
+    green alone.
+  - **Departures ruled.** Three accepted and numbered from the block:
+    - the README re-point under run 128's held claim (its coordinator agreed the second merger re-points);
+    - two existing slug tests now plant a repo;
+    - a toplevel proof, because git discovering an outer repository past a broken `.git` would read a taken
+      slug as free.
+
+    An empty directory at the worktree path now counts as taken. The plan's table specified that, so it is
+    not a departure.
+  - **Next.** One docs-only commit defines the numbers; then the held-out review.
 
 ## Carried constraints
 
