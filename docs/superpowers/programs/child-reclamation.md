@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **in review** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 at `31c11916`; review run 135 on `ccrc-pwa-amber-summit` |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **last fix round** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175; review run 135 (six minors, no behaviour defect) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -43,6 +43,19 @@ Run ids: wave 1 = **131** (review **135**).
 
 ## Decisions & deviations
 
+- **2026-09-23 — review run 135 on `31c11916`: six minors, no shipped-behaviour defect; one last fix round.**
+  Six Opus lenses (the held-out panel plus the plan's three), 51 agents, none died, nothing unexamined;
+  whole-branch points (a)–(e) hold; suites green but for the carried `tmp-sweep` case and a `boot.test.ts`
+  load flake green alone. Rulings: (F1) mutation row 4, stale since the marker ruling, is re-spelled against
+  the shipped line inside that ruling's number; (F2) `wave-lifecycle.md` §2 gains one sentence naming the
+  no-evidence cause of `child-omitted` (a server holding no caps list), a new number; (F3) the run-id census is
+  a literal-absence pin, accepted as that — its title narrowed, a new number — and wave 3's review reads every
+  new run-id parse for a call to `_child_runid_valid`; (F4) no second `-L` after the `chmod`: a path can be
+  swapped at any later moment, so it moves the window rather than closing it, and wave 3's tail, which never
+  follows a link leaf, is the defence; (F5) a count corrected 18 → 19; (F6) a commit message's false
+  "already", recorded only. **Named in advance as wave 1's last fix round:** its review is scoped to the
+  round's commits, and anything it finds that is not a shipped-behaviour defect is carried forward and the
+  wave accepted with it recorded.
 - **2026-09-23 — wave 1's fix round done; review dispatched.** Tip `31c11916` (the marker ruling line-neutral,
   its new case red 5/5 on the old test; the eight numbers defined; `origin/main`'s #174 merged in, no
   rebase, citation corpus re-measured unchanged). Suite red only on the carried `tmp-sweep` case. Review
@@ -122,6 +135,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   wave 1's report). Wave 4's plan gains that task before its dispatch. And from wave 1's deploy until
   wave 3's, NO child's temp root is collected, live or finished: they accumulate, still marked, and wave 3's
   reclaim and wave 4's sweep take them.
+- **Wave 3 inherits two readings from wave 1's review.** Every run-id parse wave 3 adds calls
+  `_child_runid_valid` — the census only catches a verbatim second copy, so the reviewers check it by
+  reading. And `_child_tmpdir` checks the leaf for a symlink once, before `chmod` (contract R1, check-once
+  under the single-user trust model): wave 3's tail must re-judge the leaf at removal time and never follow
+  a link.
 - **`tmp-sweep.test.ts`'s "FAILS CLOSED" case reds on the fleet box on an untouched main** (wave 1,
   2026-09-23) and passes in CI. A reviewer who meets it measures it against the base before calling it a
   wave's.
