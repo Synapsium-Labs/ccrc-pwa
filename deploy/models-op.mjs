@@ -319,9 +319,9 @@ function laneManifest(account, registry) {
 /** The answer a MUTATION gives when it leaves a codex-kind lane's haiku class
  *  null — `set-class haiku none`, or `set-class <other> <haiku's model>` under
  *  one-model-one-class, which moves haiku to null with nothing but
- *  `moved: ['haiku']` to show for it. Either way the lane has just stopped
- *  publishing usage (`laneManifest` above), and a bare `ok` would let the
- *  operator find out from a stale limits row instead. */
+ *  `moved: ['haiku']` to show for it — or haiku was null already. Either way
+ *  the lane publishes no usage while it stays so (`laneManifest` above), and
+ *  a bare `ok` would let the operator find out from a stale limits row. */
 const HAIKU_UNASSIGNED_REMEDY = (id) =>
   `account "${id}" routes haiku to nothing, so its lane.json carries no probeModel and its `
   + 'usage publisher refuses to publish until haiku is assigned. Run '

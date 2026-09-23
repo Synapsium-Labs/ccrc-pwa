@@ -1422,7 +1422,7 @@ describe('rm (§4.1 Lifecycle, §10, §11) — reap, not a mutation', () => {
   // reporting ok:true. Measured before the fix: this removed
   // $HOME/.claude/settings.json (via `cataloguePath`'s plain `${id}.json`
   // suffix) and answered ok:true. The account-id guard now runs at op entry,
-  // before any of the four paths are built, on every op — not just `rm`.
+  // before any of its paths are built, on every op — not just `rm`.
   it('refuses a bad account id before any path is built, and deletes nothing (C6)', () => {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"marker":true}\n');

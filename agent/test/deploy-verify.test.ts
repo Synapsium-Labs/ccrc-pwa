@@ -780,8 +780,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
 
   it('the unit files install ATOMICALLY — a copy that dies mid-write cannot leave a truncated unit live (D-1982)', () => {
     // THE GAP THIS CLOSES. Every executable on the agent lane went through
-    // `install_atomic`; the thirteen systemd unit files and drop-ins did not —
-    // they were a chain of plain `cp` into `~/.config/systemd/user/`. `cp`
+    // `install_atomic`; the systemd unit files and drop-ins did not — they
+    // were a chain of plain `cp` into `~/.config/systemd/user/`. `cp`
     // opens its destination `O_TRUNC` and then writes, so a copy killed
     // mid-write (ENOSPC — the condition `ccd` carries CCD_DISK_FLOOR_GB for —
     // or a dropped ssh) leaves a TRUNCATED unit at its live name.

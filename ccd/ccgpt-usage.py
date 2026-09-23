@@ -271,8 +271,8 @@ def _probe_model(lane: dict) -> str:
     The remedy names `ccrc models <id> set-class haiku <modelId>`, not
     `ccrc doctor --fix` (Plan 2b-1 Task 6 fix round 1, T2): the manifest's
     writer (`deploy/models-op.mjs`'s `laneManifest`) takes `probeModel` from
-    the lane's haiku class and OMITS it when that class is unassigned, so a
-    re-render — doctor's or any other — reproduces the same manifest, and
+    the lane's haiku class and OMITS it when that class is unassigned, so any
+    re-render (`ccrc models`' own; doctor has no lane.json arm yet) reproduces it, and
     assigning haiku is the one act that cures it (that verb re-renders
     lane.json as it goes). The ABSENT-file refusal in `_read_lane` keeps its
     own remedy.

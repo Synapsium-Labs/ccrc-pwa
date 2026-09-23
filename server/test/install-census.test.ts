@@ -37,12 +37,18 @@
 // this extractor") is the right trade against growing one. Two exclusions are
 // rules rather than accidents, stated where they apply in `census` below: a
 // name spelled with `$$` is a per-process staging name, and a path with a `/`
-// below the census directory is a drop-in inside a subdirectory.
+// below the census directory is a drop-in inside a subdirectory. They are not
+// the only drops: every bullet under STATED SCOPE below (and under READING
+// `deploy/deploy.sh`) is a further one this file makes on purpose — a verb,
+// body, quoting or spelling it does not read — named there rather than hidden.
 //
 // HOW A WORD IS READ. Comments are cut first, by one quote-aware pass per line
 // (`scanLine`): an unquoted trailing comment goes, and a whole-line comment
 // becomes a BLANK line — commenting a line out is the commonest way to
-// disable it, and a commented-out removal must not count as a removal.
+// disable it, and a commented-out removal must not count as a removal. A
+// comment opens where bash opens one, at a WORD-INITIAL `#`: at line start, or
+// after whitespace or one of `;&|(<>` (measured, bash 5: `true;# x` and
+// `a|# x` are comments; `$(echo a)#b` and `{#` are not, so `)` and `{` stay out).
 // Backslash continuations are then joined, and a join never crosses a second
 // newline, so a continuation into a comment or a blank line ends the command
 // exactly where bash ends it. A command is recognised by its name standing as a
@@ -114,9 +120,10 @@
 //   - Directories. Drop-in directories (removed by `rm -rf`) and the files
 //     inside them are excluded by the `/` rule, so a new drop-in directory that
 //     is placed and never removed is not caught.
-//   - Slicing. A function body ends at its first column-0 `}`. A column-0 `}`
-//     inside a function is already forbidden in writing, for this same reason,
-//     by the paragraph above `_inst_shim` in `ccd/ccrc`.
+//   - Slicing. A function body ends at the first line after its signature that
+//     is exactly `}` — not at a `}` that merely starts a longer line. Such a
+//     line inside a function is already forbidden in writing, for this same
+//     reason, by the paragraph above `_inst_shim` in `ccd/ccrc`.
 //   - Darwin. `_inst_units_darwin`'s plist and `_uninst_units`' Darwin arm are
 //     out of scope (that arm's names are computed by `_svc_label` at run time),
 //     and so is the literal target `_uninst_tree_bins` checks the graphify link
@@ -149,6 +156,9 @@
 // READING `deploy/deploy.sh`. The same machinery — `scanLine`, `calls`,
 // `argAt`, `census` and its normalisation — and where that file's shape makes
 // a rule above inapplicable, the rule it gets instead:
+//   - Read lazily. The deploy.sh cases read the file on first use
+//     (`deployText`), never at import, so a tree without it reds those cases
+//     alone and the ccd/ccrc describe still reports its own verdicts.
 //   - Remote scripts. Its unit chain and its enables live inside single-quoted
 //     assignments (`AGENT_BUILD_CMD='…'` and its siblings) that span lines and
 //     are run on the box by ssh. Read a line at a time, as above, such a string
@@ -157,15 +167,29 @@
 //     assignment whose single quote is still open at the end of its line is
 //     UNWRAPPED: its `NAME='` goes, and its lines up to the next `'` are read as
 //     code, which on the box they are. The rest of the closing line is the
-//     assignment's local tail (the server lane's health URL) and is not read,
-//     and a remote command passed inline as a double-quoted ssh argument is not
-//     unwrapped.
+//     assignment's local tail (the server lane's health URL) and is not read.
+//     Unwrapping is for those `NAME='…'` assignments only: an INLINE ssh
+//     argument — double-quoted, or single-quoted on one line
+//     (`"${SSH[@]}" "$BOX" '…'`) — is read under the per-line model, where its
+//     commands sit inside quotes and are not read as calls.
 //   - No silent drops, AT THE VERB. Those limits could lose a call without a
 //     word, so every mention of `install_atomic` and `_unit_atomic` (their
-//     definitions aside) and of the word `enable` in the file's code, comments
-//     cut, must be one this reader reads as a call, or the suite fails with
-//     both counts. Measured when written: every `enable` in the file's code is
-//     a `systemctl` operand.
+//     definitions aside) and of the words `enable` and `reenable` in the file's
+//     code, comments cut, must be one this reader reads as a call, or the suite
+//     fails naming each line where the two disagree. So a verb in an inline ssh
+//     argument reds BY DESIGN — a declared FALSE red for a legitimate call
+//     there (move it into a remote-script assignment), the intended red for a
+//     hidden one — and so does the bare word in prose inside a quoted string
+//     (an echo message, a remedy). The count is compared line group by line
+//     group, not only in total, so an unread mention cannot be balanced by a
+//     read call spelled so the count misses it (`en""able`). Measured when
+//     written: every `enable` in the file's code is a `systemctl` operand, and
+//     no `reenable` appears.
+//   - Known FALSE reds, each loud and each by design rather than modelled: a
+//     `systemctl` spelled by absolute path (`/usr/bin/systemctl`) is not read
+//     as the command; a remote-script assignment spelled `export NAME='…'` is
+//     not unwrapped; a placement or enable through a loop variable or any
+//     other `$` throws (Resolution, below).
 //   - Resolution: NONE. Its placements sit at the top level of its two lanes,
 //     not in functions (the launcher's, inside the helper both lanes call, is
 //     spelled literally), so the enclosing-function rule has no function to
@@ -187,14 +211,24 @@
 //     server lane, so a reading of the agent lane alone reds on both. The union
 //     cannot see a ROLE mismatch: a unit `ccrc install` places only on the fleet
 //     role and `deploy.sh` only in its server lane would pass.
+//   - Destinations only, and text rather than execution. A placement's SOURCE
+//     and MODE are not read (`install_atomic ccd/<other> .local/bin/<name> 644`
+//     passes), and the STATED SCOPE rules above hold here too: a call behind a
+//     gate that never fires, after an `exit` or a `return`, in a helper nothing
+//     calls, or inside a heredoc used as a block comment still counts as made.
 //   - graphify. `_inst_graphify_engine` is not on the install side of this
 //     comparison, by function rather than by name: `deploy.sh` never builds the
 //     venv that function's link points into — it leaves the whole engine step
 //     to `ccrc install`, and runs its graphify skill installer only where
 //     `~/.ccrc/graphify.pin` already exists — so a fallback that placed the
 //     link would place a dangling one.
-//   - Enables: every operand after `enable` in a `systemctl` call, `--user` or
-//     not; one carrying a `$` throws.
+//   - Enables: every operand after `enable` or `reenable` (the same effect) in
+//     a `systemctl` call, `--user` or not; one carrying a `$` throws. NOT read,
+//     and so not refused: operands fed through `xargs`, `systemctl add-wants`,
+//     a hand-made `*.wants/` symlink, `systemctl start` (which runs an instance
+//     for this boot without enabling it), an operand after a mid-command
+//     redirect (`enable --now 2>/dev/null x@y.timer`: argument reading stops at
+//     the redirect), and an escaped `@` (`x\@y.timer`, read with its backslash).
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -204,7 +238,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc');
 const CCRC = readFileSync(CCRC_PATH, 'utf8');
 const DEPLOY_PATH = path.resolve(here, '..', '..', 'deploy', 'deploy.sh');
-const DEPLOY = readFileSync(DEPLOY_PATH, 'utf8');
+let deployCache: string | undefined;
+/** deploy.sh's text, read on FIRST USE and then kept — never at import, so a
+ *  tree without the file reds the deploy.sh cases alone, by their own ENOENT,
+ *  and the ccd/ccrc describe above them still reports its own verdicts. */
+function deployText(): string {
+  deployCache ??= readFileSync(DEPLOY_PATH, 'utf8');
+  return deployCache;
+}
 
 /** The bin census's directory, as `ccd/ccrc` spells it. `$HOME` is never
  *  substituted, so this stays a literal root. */
@@ -237,7 +278,7 @@ type Local = Map<string, Set<string>>;
 
 // ── reading `ccd/ccrc` ────────────────────────────────────────────────────
 
-/** One top-level function's body: `name() {` to the first `}` in column 0,
+/** One top-level function's body: `name() {` to the first line that is exactly `}`,
  *  with COMMENTS CUT before anything reads it — each line through `scanLine`,
  *  so an unquoted trailing comment goes, and a whole-line comment becomes a
  *  BLANK line rather than vanishing: removing the line would let a backslash
@@ -269,8 +310,9 @@ function logicalLines(body: string): string[] {
 /**
  * THE ONE QUOTE-AWARE PASS over a line. It tracks single- and double-quote
  * state and returns (a) the line with an UNQUOTED trailing comment cut — a `#`
- * at the start or after whitespace, outside quotes — and (b) for each offset
- * of what is left, whether it sits outside quotes. `fnBody` uses (a); command
+ * that starts a word (line start, or after whitespace or one of `;&|(<>`),
+ * outside quotes, as bash has it (header) — and (b) for each offset of what is
+ * left, whether it sits outside quotes. `fnBody` uses (a); command
  * recognition and `assignments` use (b), so a diagnostic `echo "dir=$dir"` is
  * not a second binding. One line at a time: a string spanning lines, a heredoc
  * body and an `echo`'s arguments are not modelled (header).
@@ -282,7 +324,7 @@ function scanLine(line: string): { code: string; outside: boolean[] } {
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
     const top = !dq && !sq;
-    if (top && c === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return { code: line.slice(0, i), outside };
+    if (top && c === '#' && (i === 0 || /[\s;&|(<>]/.test(line[i - 1]!))) return { code: line.slice(0, i), outside };
     outside.push(top);
     if (sq) { if (c === "'") sq = false; continue; }
     if (c === '\\') { outside.push(top); i++; } else if (c === '"') dq = !dq; else if (c === "'" && !dq) sq = true;
@@ -323,8 +365,10 @@ function arrayElements(name: string): string[] {
   const all = [...CCRC.matchAll(new RegExp(`^${name}=\\(([^)]*)\\)`, 'gm'))];
   if (all.length === 0) {
     throw new Error(
-      `install-census.test.ts: \${${name}[…]} is not a file-scope array — this census resolves only `
-      + 'file-scope `NAME=(…)` arrays. Spell the elements literally.',
+      `install-census.test.ts: \${${name}[…]} names no file-scope \`${name}=(…)\` array in ${CCRC_PATH}. `
+      + 'One of two: it is a FUNCTION-LOCAL array, which this census does not resolve (it reads only '
+      + 'file-scope `NAME=(…)` arrays) — spell the elements literally; or the file-scope array it names '
+      + 'was RENAMED or REMOVED — re-point the reference (or this extractor) at wherever it now lives.',
     );
   }
   if (all.length !== 1) {
@@ -658,6 +702,16 @@ function disabledUnits(): Set<string> {
           + `"${r}". Spell it literally, or teach this extractor.`,
         );
       }
+      // A resolved value with whitespace in it is SEVERAL units to bash, which
+      // word-splits an unquoted `$x` — and one opaque name to this reader,
+      // which would hide a template among them from the case that forbids one.
+      if (/\s/.test(r)) {
+        throw new Error(
+          `install-census.test.ts: disable operand "${word}" (${from}) in ${fn} resolves to "${r}", which `
+          + 'bash word-splits into several units and this reader would read as one. Spell each unit '
+          + 'literally in the loop.',
+        );
+      }
       out.add(r);
     }
   };
@@ -710,7 +764,7 @@ const DEPLOY_UNIT_DIRS = ['~/.config/systemd/user', '$HOME/.config/systemd/user'
 function deployCode(): string {
   const out: string[] = [];
   let open = false;
-  for (const raw of DEPLOY.split('\n')) {
+  for (const raw of deployText().split('\n')) {
     if (open) {
       const close = raw.indexOf("'");
       if (close >= 0) open = false;
@@ -730,21 +784,73 @@ function deployCode(): string {
 }
 
 /**
+ * `deployCode`'s lines grouped the way `logicalLines` joins them — a line that
+ * ends in `\` runs on into the next — each group with its first line's number
+ * (1-based; `deployCode` keeps one line per line of the file), so a count taken
+ * per group can be traced back to the lines it came from.
+ */
+function deployGroups(): { first: number; lines: number; text: string }[] {
+  const out: { first: number; lines: number; text: string }[] = [];
+  let buf: string[] = [];
+  let first = 0;
+  deployCode().split('\n').forEach((l, i) => {
+    if (buf.length === 0) first = i + 1;
+    buf.push(l);
+    if (!l.endsWith('\\')) { out.push({ first, lines: buf.length, text: buf.join('\n') }); buf = []; }
+  });
+  if (buf.length > 0) out.push({ first, lines: buf.length, text: buf.join('\n') });
+  return out;
+}
+
+/**
  * THE NO-SILENT-DROPS RULE, AT THE VERB (header). The mentions of `word` in
  * deploy.sh's code — comments cut a line at a time, nothing unwrapped and
- * nothing dropped, `word()` definitions aside — must number exactly `read`,
- * what this reader took out of `deployCode`. A mention it did not read is a
- * call inside a string it does not unwrap, or past a remote script's close.
+ * nothing dropped, `word()` definitions aside — must be exactly what `readIn`
+ * says this reader takes out of the same lines of `deployCode`, group by
+ * group. Where they differ, the refusal NAMES each line carrying an unread
+ * mention: a call inside a string this reader does not unwrap, a call past a
+ * remote script's closing quote, or the word in prose inside a quoted string.
  */
-function everyMentionRead(word: string, read: number, as: string): void {
-  const code = DEPLOY.split('\n').map((l) => scanLine(l).code).join('\n');
-  const said = [...code.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${word}(?![A-Za-z0-9_(-])`, 'g'))].length;
-  if (said !== read) {
+function everyMentionRead(word: string, readIn: (group: string) => number, as: string): void {
+  const raw = deployText().split('\n').map((l) => scanLine(l).code);
+  const re = new RegExp(`(?<![A-Za-z0-9_-])${word}(?![A-Za-z0-9_(-])`, 'g');
+  const said = raw.map((l) => [...l.matchAll(re)].length);
+  const groups = deployGroups();
+  // The per-group comparison below covers every line only while `deployCode`
+  // keeps one line per line of the file; a reader that lost lines would leave
+  // the mentions on them compared against nothing.
+  const covered = groups.reduce((n, g) => n + g.lines, 0);
+  if (covered !== raw.length) {
     throw new Error(
-      `install-census.test.ts: ${DEPLOY_PATH} names \`${word}\` ${said} time(s) outside comments and definitions, `
-      + `and this reader reads ${read} ${as}. A mention it does not read — inside a string it does not unwrap, `
-      + 'or after a remote script\'s closing quote — would lose what it places or enables without a word. '
-      + 'Teach this reader, or move the call where it reads.',
+      `install-census.test.ts: deployCode() yields ${covered} line(s) for the ${raw.length} of ${DEPLOY_PATH} — `
+      + 'it must keep one line per line, or this count cannot say where a mention went. This reader has gone stale.',
+    );
+  }
+  let total = 0;
+  let read = 0;
+  const unread: number[] = [];
+  for (const g of groups) {
+    const at = Array.from({ length: g.lines }, (_, k) => g.first + k);
+    const here = at.reduce((n, ln) => n + said[ln - 1]!, 0);
+    const took = readIn(g.text);
+    total += here;
+    read += took;
+    if (here !== took) {
+      const carrying = at.filter((ln) => said[ln - 1]! > 0);
+      unread.push(...(carrying.length > 0 ? carrying : [g.first]));
+    }
+  }
+  if (unread.length > 0) {
+    throw new Error(
+      `install-census.test.ts: ${DEPLOY_PATH} names \`${word}\` ${total} time(s) outside comments and definitions, `
+      + `and this reader reads ${read} ${as} — and line by line the two disagree at: `
+      + unread.map((ln) => `line ${ln} ${JSON.stringify(raw[ln - 1]!.trim().slice(0, 120))}`).join('; ')
+      + '. (Equal totals can still disagree there: a call this reader reads under a spelling the count '
+      + 'cannot see, such as `en""able`, offsets a mention it does not read.) A CALL there sits inside a '
+      + 'string this reader does not unwrap, or past a remote script\'s closing '
+      + 'quote, and would lose what it places or enables without a word: teach this reader, or move the call '
+      + 'into a remote-script assignment where it reads. PROSE there (the word in an echo message or a remedy, '
+      + `inside a quoted string) is read as a mention too: reword it so the bare word \`${word}\` does not appear.`,
     );
   }
 }
@@ -753,7 +859,7 @@ function everyMentionRead(word: string, read: number, as: string): void {
  *  one of `dirs` — through `census`, resolving nothing (header: Resolution). */
 function deployPlaced(cmd: 'install_atomic' | '_unit_atomic', dirs: string[]): Set<string> {
   const all = calls(deployCode(), cmd);
-  everyMentionRead(cmd, all.length, 'call(s) of it');
+  everyMentionRead(cmd, (g) => calls(g, cmd).length, 'call(s) of it');
   const dests = argAt(DEPLOY_WHERE, cmd, all, 1);
   const array = dests.find((d) => /\$\{[A-Za-z_][A-Za-z0-9_]*\[/.test(d));
   if (array !== undefined) {
@@ -766,16 +872,25 @@ function deployPlaced(cmd: 'install_atomic' | '_unit_atomic', dirs: string[]): S
   return census(DEPLOY_WHERE, 'placement', dests, dirs, new Map());
 }
 
-/** Every operand after `enable` in a `systemctl` call in deploy.sh, `--user`
- *  or not. Each must be a literal unit name, or this throws: an operand it
- *  cannot read could be a template. */
+/** The `systemctl` verbs that enable a unit: `reenable` is disable-then-enable,
+ *  the same effect. The ones that arm a unit another way are declared, not read
+ *  (header: Enables). */
+const ENABLE_VERBS = ['enable', 'reenable'];
+
+/** Every operand after an `ENABLE_VERBS` verb in a `systemctl` call in
+ *  deploy.sh, `--user` or not. Each must be a literal unit name, or this
+ *  throws: an operand it cannot read could be a template. */
 function deployEnabled(): Set<string> {
-  const all = calls(deployCode(), 'systemctl').filter((args) => args.includes('enable'));
-  everyMentionRead('enable', all.reduce((n, args) => n + args.filter((a) => a === 'enable').length, 0),
-    '`systemctl … enable` call(s)');
+  const verbAt = (args: string[]): number => args.findIndex((a) => ENABLE_VERBS.includes(a));
+  const all = calls(deployCode(), 'systemctl').filter((args) => verbAt(args) >= 0);
+  for (const verb of ENABLE_VERBS) {
+    everyMentionRead(verb,
+      (g) => calls(g, 'systemctl').reduce((n, args) => n + args.filter((a) => a === verb).length, 0),
+      `\`systemctl … ${verb}\` call(s)`);
+  }
   const out = new Set<string>();
   for (const args of all) {
-    for (const op of args.slice(args.indexOf('enable') + 1).filter((a) => !a.startsWith('-'))) {
+    for (const op of args.slice(verbAt(args) + 1).filter((a) => !a.startsWith('-'))) {
       if (op === '' || op.includes('$')) {
         throw new Error(
           `install-census.test.ts: unresolvable enable operand "${op}" in ${DEPLOY_WHERE}: this reader resolves `
