@@ -85,14 +85,19 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  *     the highest-numbered one. A same-branch row whose repository could not
  *     be established (`isCrossRepository` absent) is not guessed into either
  *     bucket — it answers `unmeasured` unless a genuine same-repo row also
- *     exists. Only when no SAME-REPOSITORY same-branch row exists — none at
- *     all, or every same-branch row is a stranger's fork — does gh's measured
- *     phase decide: `none`/`no-commits` answers `unspent`; every other
- *     answer — `branch-drift` (the lookup provably did not look for this
- *     branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
- *     foreign line — answers `unmeasured`, with the reason in `detail`. A
- *     recycled slug inherits its head name's PR history and reads spent; wave
- *     3 separates incarnations.
+ *     exists. Neither is a row this wave cannot even COMPARE: a line with no
+ *     string `branch`, or a non-fork row whose `headRefName` is not a string,
+ *     answers `unmeasured` the same way (D-3351) — a fork's unreadable head is
+ *     ignored, since forks never count regardless. Only when no
+ *     SAME-REPOSITORY same-branch row exists — none at all, or every
+ *     same-branch row is a stranger's fork — and `line.tip` is a string (a
+ *     null or absent `tip` is ccd's own "I did not measure that", D-3351,
+ *     never a fact about the branch's PRs) does gh's measured phase decide:
+ *     `none`/`no-commits` answers `unspent`; every other answer — `branch-drift`
+ *     (the lookup provably did not look for this branch's PR), a whole-repo
+ *     failure, a failed ccd call, an unparseable or foreign line — answers
+ *     `unmeasured`, with the reason in `detail`. A recycled slug inherits its
+ *     head name's PR history and reads spent; wave 3 separates incarnations.
  *
  * COST, measured rather than assumed: steps 1–2 are file reads; step 3 is one
  * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
@@ -122,6 +127,13 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
       ? 'pr-state answered no line for this session'
       : `pr-state answered ${failure.reason ?? 'unknown'}` };
   }
+  // D-3351: a line with no string `branch` cannot be compared to any row's
+  // `headRefName` at all — it is exactly as unplaced as a same-branch row this
+  // wave cannot place (below), so it is refused the same way rather than
+  // guessed into `unspent` by an `undefined === undefined` accident.
+  if (typeof line.branch !== 'string') {
+    return { kind: 'unmeasured', detail: 'pr-state named no branch for this session' };
+  }
   // D-3347: a PR opened from the child's branch spends it, whatever its base
   // and whether or not it binds — `boundRow`'s base/`ours` conjuncts decide
   // which PR a workspace's CONTROL renders, not whether the branch is spent.
@@ -137,6 +149,13 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
   // did not establish which repository this row's PR lives in, and a row this
   // wave cannot place is not spent by guess.
   const unestablished = sameBranch.filter((r) => r.isCrossRepository !== false && r.isCrossRepository !== true);
+  // D-3351: a row whose `headRefName` is not a string can never equal the
+  // string `line.branch` above, so it never reaches `sameBranch` (or
+  // `unestablished`) though it is exactly as unplaced as they are — this reads
+  // `line.rows` directly rather than filtering `sameBranch`. A FORK
+  // (`isCrossRepository === true`) is excluded here: forks never count,
+  // readable head or not, so an unreadable one is simply ignored.
+  const unplaceable = line.rows.filter((r) => r.isCrossRepository !== true && typeof r.headRefName !== 'string');
   if (sameRepo.length > 0) {
     const named = sameRepo.filter((r): r is CcdPrRow & { number: number } => typeof r.number === 'number');
     if (named.length === 0) {
@@ -146,20 +165,34 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
     const highest = named.reduce((a, b) => (b.number > a.number ? b : a));
     return { kind: 'spent', pr: highest.number, source: 'live' };
   }
+  if (unplaceable.length > 0) {
+    return { kind: 'unmeasured',
+      detail: 'pr-state named a PR whose head branch could not be read' };
+  }
   if (unestablished.length > 0) {
     return { kind: 'unmeasured',
       detail: 'pr-state named a same-branch PR whose repository could not be established' };
   }
+  // D-3351: `tip` null OR absent already means "not measured" on both sides —
+  // `ccd/ccd`'s branch-drift comment and `CcdPrLine`'s own docstring both say
+  // so — for the branch the registry named not resolving for ccd, most often a
+  // hand rename or delete. Falling through to `phaseFor` on a line that never
+  // looked at this branch's history would read "I did not look" as "there is
+  // nothing to find".
+  if (typeof line.tip !== 'string') {
+    return { kind: 'unmeasured',
+      detail: "pr-state could not resolve this session's branch (tip unmeasured)" };
+  }
 
-  // Reached only when `sameRepo` and `unestablished` are both empty, which
-  // means `boundRow(line.rows, …)` inside `phaseFor` can only ever return
-  // `null` here (see `LIVE_PHASE`'s own doc for why) — so `measured.phase` can
-  // only be `none` or `no-commits` in practice, and `proves` can only be
-  // `unspent`. The `spent` and `unmeasured` arms below are dead code from this
-  // call site today, kept for the same totality/defence reason `LIVE_PHASE`
-  // itself is kept total: `phaseFor` is shared, and a future change to it or
-  // to the filters above must not silently start reading one of these arms as
-  // if it had always been live.
+  // Reached only when `sameRepo`, `unplaceable` and `unestablished` are all
+  // empty and `line.tip` is a string, which means `boundRow(line.rows, …)`
+  // inside `phaseFor` can only ever return `null` here (see `LIVE_PHASE`'s own
+  // doc for why) — so `measured.phase` can only be `none` or `no-commits` in
+  // practice, and `proves` can only be `unspent`. The `spent` and `unmeasured`
+  // arms below are dead code from this call site today, kept for the same
+  // totality/defence reason `LIVE_PHASE` itself is kept total: `phaseFor` is
+  // shared, and a future change to it or to the filters above must not
+  // silently start reading one of these arms as if it had always been live.
   const measured = phaseFor(line);
   const proves = LIVE_PHASE[measured.phase];
   if (proves === 'spent' && measured.number !== null) return { kind: 'spent', pr: measured.number, source: 'live' };

@@ -27,13 +27,21 @@ beforeEach(() => {
   })) writeFileSync(path.join(reg, `${ID}.${k}`), v);
 });
 const put = (field: string, content: string): void => writeFileSync(path.join(reg, `${ID}.${field}`), content);
-const noPrLine = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: `ws/${ID}`, ahead: 1, checkedAt: 1 });
+// `tip` is a real-looking sha, never absent — an absent/null tip is D-3351's
+// own "not measured" and would answer `spent-unmeasured`, not `ok`, which
+// would falsely pin every "unspent child" case below to the WRONG rung.
+const noPrLine = JSON.stringify(
+  { id: ID, rows: [], baseShort: 'main', branch: `ws/${ID}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
+// Review 145 F1 (D-3351): the rename shape — registered branch `ws/a`, ccd's
+// `--head ws/a` finds no PR and the branch itself no longer resolves.
+const renameShapeLine = JSON.stringify(
+  { id: ID, rows: [], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
 
-const harness = (io: FleetIO = localIO) => {
+const harness = (io: FleetIO = localIO, prStateOut = `${noPrLine}\n`) => {
   const verbs: string[] = [];
   const run: Runner = async (_cmd, args) => {
     verbs.push(args[0] ?? '');
-    return args[0] === 'pr-state' ? { code: 0, stdout: `${noPrLine}\n`, stderr: '' } : { code: 0, stdout: '', stderr: '' };
+    return args[0] === 'pr-state' ? { code: 0, stdout: prStateOut, stderr: '' } : { code: 0, stdout: '', stderr: '' };
   };
   const base = testDeps(home, run);
   const deps: ChildSpentDeps = { io, cfg: base.cfg, runCcd: base.runCcd };
@@ -111,5 +119,13 @@ describe('childBindGate', () => {
   it('an UNMARKED row the registry cannot build binds as today — non-children are untouched', async () => {
     put('wrapper', '');
     expect(await childBindGate(harness().deps, ID)).toEqual({ ok: true });
+  });
+
+  it('a marked child whose registered branch was hand-renamed (tip unmeasured) → spent-unmeasured, never a bind (D-3351)', async () => {
+    put('child', '5');
+    const h = harness(localIO, `${renameShapeLine}\n`);
+    const v = await childBindGate(h.deps, ID);
+    expect(v).toMatchObject({ ok: false, code: 'spent-unmeasured' });
+    expect((v as { detail: string }).detail).toContain('tip');
   });
 });

@@ -44,11 +44,14 @@ const seed = (home: string, id: string, over: Record<string, string> = {}): void
 };
 const spend = (home: string, id: string, pr: number): void =>
   writeFileSync(path.join(home, '.cc-sessions', `${id}.prnumber`), String(pr));
+// `tip` is a real-looking sha, never absent: an absent/null tip is D-3351's
+// own "not measured" (`childSpent.ts`) and would answer `spent-unmeasured`
+// rather than the `unspent`/`spent` these two lines exist to drive.
 const noPrLine = (id: string): string =>
-  JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, checkedAt: 1 });
+  JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 const openPrLine = (id: string): string => JSON.stringify({ id, rows: [{
   number: 7, state: 'OPEN', headRefName: `ws/${id}`, baseRefName: 'main', isCrossRepository: false, ours: true, isDraft: false,
-}], baseShort: 'main', branch: `ws/${id}`, ahead: 1, checkedAt: 1 });
+}], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 
 interface RunnerCfg { prStdout?: string; fail?: ReadonlySet<string>; wsAddCreates?: string[] }
 /** One recording runner for both vocabularies — ccd verbs and the tmux calls
@@ -381,6 +384,12 @@ describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
     const before = calls.length;
     const res = await postDispatch(app, b);
     expect(res.json()).toMatchObject({ ok: false, refused: 'workspace-spent', pr: 42, unbound: false });
+    // F6 (review 145): the sibling-read detail is asserted by no other test —
+    // rewording `dispatch.ts`'s `the other runs naming this workspace could
+    // not be read: …` (e.g. to "were unreadable") would silently move this
+    // PERMANENT cause into the RETRYABLE reading nothing here catches.
+    expect((res.json() as { detail: string }).detail)
+      .toContain('the other runs naming this workspace could not be read');
     expect(verbsOf(calls.slice(before))).not.toContain('ws-release');
     expect(verbsOf(calls.slice(before))).not.toContain('ws-hold');
     expect(okRun(w.coord.run(b))!.sessionId).toBe(CHILD);

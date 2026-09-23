@@ -41,9 +41,14 @@ const prRow = (state: 'OPEN' | 'CLOSED' | 'MERGED', extra: Record<string, unknow
   ...(state === 'MERGED' ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
   ...extra,
 });
-/** One full `pr-state --session` line — `run-routes.test.ts`'s `ccdLine` shape. */
-const fullLine = (rows: unknown[], ahead: number | null = 1, id = ID): string =>
-  JSON.stringify({ id, rows, baseShort: 'main', branch: BRANCH, ahead, checkedAt: 1 });
+/** One full `pr-state --session` line — `run-routes.test.ts`'s `ccdLine` shape.
+ *  `tip` defaults to a real-looking sha: a null/absent `tip` is ccd's own
+ *  "I did not measure that" (D-3351) and answers `unmeasured` before
+ *  `phaseFor` is ever reached, so every case here that expects `phaseFor` to
+ *  decide needs a MEASURED tip — the rename shape below overrides it to
+ *  `null` deliberately. */
+const fullLine = (rows: unknown[], ahead: number | null = 1, id = ID, tip: string | null = 'f'.repeat(40)): string =>
+  JSON.stringify({ id, rows, baseShort: 'main', branch: BRANCH, ahead, tip, checkedAt: 1 });
 
 /** Real `testDeps` wiring over a recording runner that answers `pr-state`
  *  with `answer` — no real ccd, no real gh. */
@@ -187,10 +192,71 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('could not be established');
   });
 
-  it('(vi) two same-repo same-branch rows → spent/live names the HIGHEST number, not the first', async () => {
-    // Order matters: the lower number comes FIRST, so a mutant that picked
-    // `rows[0]` instead of the highest would answer 7, not 9.
-    const rows = [prRow('OPEN', { number: 7 }), prRow('CLOSED', { number: 9 })];
+  // Review 145 F1 (D-3351): a line's `branch` was assumed to be a string —
+  // reachable only through a cast, never validated — so a malformed line
+  // fell straight through the (empty) same-branch filters to `phaseFor`.
+  it('(vii) a line with no branch key at all → unmeasured', async () => {
+    const stdout = JSON.stringify(
+      { id: ID, rows: [], baseShort: 'main', ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
+    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
+  });
+
+  // Review 145 F7 (D-3351): the same-branch comparison (`r.headRefName ===
+  // line.branch`) answers `false` for a row whose `headRefName` cannot even
+  // be compared, so it never reaches `sameBranch`/`unestablished` though it is
+  // exactly as unplaced as they are. Widened alongside the `unestablished`
+  // rung, checked after `sameRepo` so a genuine same-repo row still wins.
+  it.each([
+    ['isCrossRepository:false, headRefName DELETED', (() => {
+      const row = prRow('OPEN', { number: 42 }) as Record<string, unknown>;
+      delete row.headRefName;
+      return row;
+    })()],
+    ['isCrossRepository:false, headRefName:null', prRow('OPEN', { number: 42, headRefName: null })],
+  ] as const)('(viii) a non-fork row whose head branch cannot be read — %s → unmeasured', async (_what, row) => {
+    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('head branch could not be read');
+  });
+
+  it('(ix) a FORK row with an unreadable head, alone → unspent — forks never count', async () => {
+    const row = prRow('OPEN', { number: 42, isCrossRepository: true, headRefName: null });
+    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    expect(await verdict(h)).toEqual({ kind: 'unspent' });
+  });
+
+  // Review 145 F1 (D-3351): the rename shape. The registry's `.branch` is
+  // `ws/a`; inside the worktree the branch was renamed, so ccd's `--head ws/a`
+  // finds no PR and `rev-parse refs/heads/ws/a` fails — `tip:null`. Both sides
+  // already call a null tip "not measured" (`ccd/ccd:10450-10452`,
+  // `CcdPrLine`'s docstring); falling through to `phaseFor` here would read
+  // "I did not look" as "there is nothing to find" and permit a spent bind.
+  it("(x) a line whose branch tip never resolved (a hand rename) → unmeasured, never unspent", async () => {
+    const stdout = JSON.stringify(
+      { id: ID, rows: [], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
+    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
+  });
+
+  it('(xi) tip unresolved BUT a same-repo same-branch row exists → spent, naming it — positive evidence still wins', async () => {
+    const row = prRow('OPEN', { number: 5, headRefName: 'ws/a' });
+    const stdout = JSON.stringify(
+      { id: ID, rows: [row], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
+    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live' });
+  });
+
+  it('(vi) three same-repo same-branch rows → spent/live names the HIGHEST number, not the first or the last', async () => {
+    // Neither the first row (7) nor the last row (8) is the highest (9) — a
+    // mutant that picked `rows[0]` OR `rows[rows.length - 1]` instead of the
+    // true highest would both answer wrong (F5, review 145).
+    const rows = [prRow('OPEN', { number: 7 }), prRow('CLOSED', { number: 9 }), prRow('CLOSED', { number: 8 })];
     const h = harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'live' });
   });
