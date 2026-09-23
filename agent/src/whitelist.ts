@@ -1,5 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { CCRC_DIR_NAME, NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 
 /**
  * Everything a connection needs to evaluate the path/exec whitelists — the
@@ -55,8 +56,40 @@ function underClaudeGlob(canonicalHome: string, canonicalTarget: string): boolea
 export type PathMode = 'read' | 'write';
 
 /**
+ * The eight `~/.ccrc` NODE FILES (design 2026-09-20 §8) — the one read grant
+ * in this file that is not a prefix. `~/.ccrc` also holds `agent.env` (this
+ * agent's own bearer), `auth.scrypt`, `coord.db`, `deploy.env` and every other
+ * secret-bearing file `ccd/ccrc` writes, so an `isUnder(…/.ccrc)` arm would
+ * hand every one of them to the wire. The grant is canonical-path EQUALITY
+ * against the names `NODE_FILES` declares (`shared/agent-protocol.ts`), in a
+ * Set built once per check.
+ *
+ * TWO conditions, and the second is what keeps the `lstat` op honest
+ * (D-3195).
+ * `canonicalTarget` must BE one of the eight, AND it must be the path the
+ * caller literally named. `~/.ccrc/floor` as a live symlink to
+ * `~/.ccrc/installed` canonicalises onto a member; admitting it would let
+ * `lstat` answer `regular` for a link, because `lstat`'s subject falls back
+ * to the canonical path when the parent is not itself readable (the `lstat`
+ * arm in `server.ts`) — and `~/.ccrc` is not. Requiring
+ * canonical === `<canonical ~/.ccrc>/<the literal basename>` refuses every
+ * live symlink carrying one of the eight names, wherever it points. A
+ * DANGLING one canonicalises onto its own literal path and is admitted;
+ * `lstat` then reports it as `symlink`, which the server's sweep refuses.
+ *
+ * `canonicalCcrc` is `canonicalize(<home>/.ccrc)`, not `<canonical home>/.ccrc`,
+ * so a `~/.ccrc` that is itself a symlink admits its own eight and nothing else.
+ */
+function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
+  const admitted = new Set(NODE_FILE_BASENAMES.map((b) => path.join(canonicalCcrc, b)));
+  return admitted.has(canonicalTarget)
+    && canonicalTarget === path.join(canonicalCcrc, path.basename(path.resolve(targetPath)));
+}
+
+/**
  * Whitelist check for ALL file ops. Reads: `.cc-sessions/`, `.cc-limits/`,
- * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root.
+ * `.cc-clips/`, `.claude*` (glob) under $HOME, plus the fleet projects root,
+ * plus exactly the eight `~/.ccrc` node files by name (`isCcrcNodeFile`).
  * Writes: `.cc-clips/` under $HOME only. Returns the canonical path to operate on when
  * allowed, `null` otherwise — canonicalizing here means every downstream fs
  * call in fileops.ts/tail.ts already has symlink-escapes resolved.
@@ -70,10 +103,11 @@ export async function checkPath(
   // missing/wrong-typed `path` field reach a node:path call unchecked.
   if (typeof targetPath !== 'string' || targetPath.length === 0) return null;
 
-  const [canonicalHome, canonicalRoot, canonicalTarget] = await Promise.all([
+  const [canonicalHome, canonicalRoot, canonicalTarget, canonicalCcrc] = await Promise.all([
     canonicalize(cfg.home),
     canonicalize(cfg.projectsRoot),
     canonicalize(targetPath),
+    canonicalize(path.join(cfg.home, CCRC_DIR_NAME)),
   ]);
 
   if (mode === 'write') {
@@ -85,7 +119,8 @@ export async function checkPath(
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-limits')) ||
     isUnder(canonicalTarget, path.join(canonicalHome, '.cc-clips')) ||
     isUnder(canonicalTarget, canonicalRoot) ||
-    underClaudeGlob(canonicalHome, canonicalTarget);
+    underClaudeGlob(canonicalHome, canonicalTarget) ||
+    isCcrcNodeFile(canonicalCcrc, targetPath, canonicalTarget);
 
   return readAllowed ? canonicalTarget : null;
 }

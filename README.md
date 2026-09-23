@@ -1509,14 +1509,14 @@ general remote-shell:
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
-  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), and the
-  fleet's projects root. Writes: `$HOME/.cc-clips/` only. **This list did not
-  widen for the transcript resolver or the supervisor heartbeat**, and both
-  are worth saying out loud: the resolver's uuid search (rungs 5 and 6 of
-  its ladder) rides the existing `$HOME/.claude*` grant — no new read
-  permission — and the supervisor heartbeat exists specifically so the
-  server never has to ask systemd anything; nothing under
-  `~/.config/systemd` was added to reach it.
+  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
+  fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
+  name (`NODE_FILES`, `shared/agent-protocol.ts`) — never a symlink carrying
+  one, never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
+  list did not widen for the transcript resolver or the supervisor
+  heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
+  rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
+  server never asks systemd anything — nothing under `~/.config/systemd`.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
 

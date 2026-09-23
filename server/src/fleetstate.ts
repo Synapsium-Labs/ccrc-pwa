@@ -114,6 +114,27 @@ export interface FleetState {
    *  `null` is — worth knowing before treating local mode's silence here as
    *  a decision. */
   observedEpoch?: number | null;
+  /** The ops the fleet host's agent says it answers (`AgentReady.ops`, design
+   *  2026-09-20 §8/§10), validated by `remote/client.ts`'s `readReadyOps` —
+   *  the one reader. THREE answers, and the inventory keeps two of them apart:
+   *  `undefined` = no evidence gathered (local mode, or no `ready` yet — the
+   *  server row's `NULL` is the sweep's decision, never read from here); `[]`
+   *  = a `ready` arrived and named no op this server may send (an older agent
+   *  that omits the field — every agent before W4 — or a list `validCapWords`
+   *  refused whole), stored as `''`; a non-empty list = the words.
+   *
+   *  Handshake cadence is correct for THIS field, unlike `build` and
+   *  `observedEpoch` above: the ops a process answers cannot change without
+   *  that process restarting, which produces a new `ready` (spec §8). It keeps
+   *  the last `ready`'s answer across a drop, so read it only while
+   *  `connected`.
+   *
+   *  OPTIONAL for `observedEpoch`'s measured reason: required would break every
+   *  `FleetState` fixture in server/test with no relation to ops, and an
+   *  omitted key reads `undefined` — the honest "no evidence" for each of them.
+   *  The runtime substitute for the compile error is the same whole-object
+   *  `toEqual` in `remote-connect.test.ts`. */
+  agentOps?: readonly string[];
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }

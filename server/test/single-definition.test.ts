@@ -3498,3 +3498,35 @@ describe('the update ring — nothing under server/src/update holds the handle (
     ]);
   });
 });
+
+// — design 2026-09-20 §8: the ~/.ccrc node-file names, declared once —
+// APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
+// file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
+describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
+  it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export const NODE_FILES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it('the three names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
+    // `build.json`, `installed`, `floor` and `previous` are ordinary words older
+    // code already spells (`config.ts`'s `buildInfoPath`, the agent's own stamp
+    // reader), and `node-id` is also a W1 CAP word (`ccd/ccrc`'s
+    // `CCRC_CAP_WORDS`) a later task may test for; these three are new with the
+    // control plane, so a second quoted copy is a second definition.
+    const QUOTED = /'(?:ccrc-caps|update\.json|update-intent)'/;
+    const holders = ALL.filter((f) => QUOTED.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it("the agent's read grant derives from it, never re-lists it", () => {
+    const wl = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    expect(wl).toMatch(/import\s*\{[^}]*\bNODE_FILE_BASENAMES\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
+  it("the ready frame's ops field has ONE reader in server/src", () => {
+    const hits = ALL.filter((f) => rel(f).startsWith('server/src/'))
+      .flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/\bframe\.ops\b/g)].map(() => rel(f)));
+    expect(hits).toEqual(['server/src/remote/client.ts']);
+  });
+});

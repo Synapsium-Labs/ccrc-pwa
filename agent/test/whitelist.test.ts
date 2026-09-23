@@ -3,6 +3,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { canonicalize, checkPath, isExecAllowed } from '../src/whitelist.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX } from '../../shared/api.js';
+import { NODE_FILE_BASENAMES } from '../../shared/agent-protocol.js';
 // critic2, gates 3 related sub-item: the three `rmSync` calls this replaces sat
 // AFTER their assertions, so a failing assertion threw past them and the
 // directory leaked — on precisely the runs a mutation sweep produces. `mkTmp`
@@ -142,6 +143,113 @@ describe('whitelist.checkPath', () => {
     // ... and unwritable, because a projection the wire could write would let a
     // compromised channel forge membership instead of merely observing it.
     expect(await checkPath(proj, cfg, 'write')).toBeNull();
+  });
+
+  // ── design 2026-09-20 §8: the eight ~/.ccrc node files ──────────────────
+  // D-3176 — the spec put these in whitelist-structural.test.ts,
+  // which pins only the EXEC whitelist (tsc-spawned compile errors, no checkPath
+  // case at all); every other checkPath case is in this describe, so these are.
+  describe('the ~/.ccrc node files — exact basenames, READ mode only', () => {
+    const EIGHT = ['build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous', 'update-intent', 'update.json'];
+    // Every other name ccd/ccrc writes (or could) beside them — the secrets first.
+    const REFUSED = ['agent.env', 'auth.scrypt', 'coord.db', 'deploy.env', 'ccrc.env', 'exposure.env',
+      'mail.token', 'accounts.json', 'accounts.sh', 'build.json.bak', '.build.json.tmp', path.join('logs', 'x')];
+
+    function seedCcrc(): string {
+      seed();
+      const ccrc = path.join(home, '.ccrc');
+      mkdirSync(path.join(ccrc, 'logs'), { recursive: true });
+      return ccrc;
+    }
+
+    it('the set is exactly the eight §8 names — a ninth is a design change, not an edit', () => {
+      // The grant DERIVES from NODE_FILE_BASENAMES, so a name added to
+      // NODE_FILES is a read grant; this is the line that makes that visible.
+      expect([...NODE_FILE_BASENAMES].sort()).toEqual(EIGHT);
+    });
+
+    it('admits each of the eight for read, absent or present, at its canonical path', async () => {
+      const ccrc = seedCcrc();
+      const cfg = { home, projectsRoot };
+      const canonicalCcrc = await canonicalize(ccrc);
+      for (const b of EIGHT) {
+        const p = path.join(ccrc, b);
+        // Absent first: a node whose writer has not run yet must read `absent`
+        // over the wire, not `forbidden` → `unreadable`.
+        expect(await checkPath(p, cfg, 'read'), `${b} (absent) must be readable`).toBe(path.join(canonicalCcrc, b));
+        writeFileSync(p, 'x\n');
+        expect(await checkPath(p, cfg, 'read'), `${b} (present) must be readable`).toBe(path.join(canonicalCcrc, b));
+      }
+    });
+
+    it('refuses every other name in ~/.ccrc, ~/.ccrc itself, a path below a node file, and look-alikes elsewhere', async () => {
+      const ccrc = seedCcrc();
+      const cfg = { home, projectsRoot };
+      for (const r of REFUSED) {
+        writeFileSync(path.join(ccrc, r), 'secret\n');
+        expect(await checkPath(path.join(ccrc, r), cfg, 'read'), `${r} must NOT be readable`).toBeNull();
+      }
+      // The directory itself: admitting it would let `readdir` list agent.env's
+      // existence and `lstat`'s parent probe widen past the eight.
+      expect(await checkPath(ccrc, cfg, 'read'), '~/.ccrc itself must NOT be readable').toBeNull();
+      expect(await checkPath(path.join(ccrc, 'build.json', 'x'), cfg, 'read')).toBeNull();
+      mkdirSync(path.join(home, '.ccrc-evil'), { recursive: true });
+      expect(await checkPath(path.join(home, '.ccrc-evil', 'build.json'), cfg, 'read')).toBeNull();
+      expect(await checkPath(path.join(home, 'build.json'), cfg, 'read')).toBeNull();
+      expect(await checkPath(path.join(outside, 'build.json'), cfg, 'read')).toBeNull();
+    });
+
+    it('write mode admits none of the eight — the agent never writes a node file', async () => {
+      const ccrc = seedCcrc();
+      const cfg = { home, projectsRoot };
+      for (const b of EIGHT) {
+        expect(await checkPath(path.join(ccrc, b), cfg, 'write'), `${b} must NOT be writable`).toBeNull();
+      }
+    });
+
+    it('a live SYMLINK carrying a node-file name is refused — at a secret, at another of the eight, or outside', async () => {
+      const ccrc = seedCcrc();
+      const cfg = { home, projectsRoot };
+      writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+      writeFileSync(path.join(ccrc, 'installed'), 'abc\n');
+      writeFileSync(path.join(outside, 'node-id'), 'x\n');
+      symlinkSync(path.join(ccrc, 'agent.env'), path.join(ccrc, 'build.json'));
+      // The case canonical-path membership ALONE admits: `floor` resolves onto
+      // `installed`, a member — only the literal-basename rule refuses it
+      // (D-3195).
+      symlinkSync(path.join(ccrc, 'installed'), path.join(ccrc, 'floor'));
+      symlinkSync(path.join(outside, 'node-id'), path.join(ccrc, 'node-id'));
+      for (const b of ['build.json', 'floor', 'node-id']) {
+        expect(await checkPath(path.join(ccrc, b), cfg, 'read'), `${b} (a symlink) must NOT be readable`).toBeNull();
+      }
+      expect(await checkPath(path.join(ccrc, 'installed'), cfg, 'read'), 'the real file keeps its own grant').not.toBeNull();
+    });
+
+    it("lstat's parent probe finds ~/.ccrc refused, so its subject for a node file is the admitted path itself", async () => {
+      // agent/src/server.ts's `lstat` arm answers about `<checkPath(dirname)>/<basename>`
+      // and falls back to the CANONICAL path when the parent is refused.
+      // `~/.ccrc` IS refused (above), so for the eight the subject is the
+      // canonical path — and the literal-basename rule is what makes that the
+      // path the caller named rather than a link's target.
+      const ccrc = seedCcrc();
+      const cfg = { home, projectsRoot };
+      expect(await checkPath(path.dirname(path.join(ccrc, 'build.json')), cfg, 'read')).toBeNull();
+    });
+
+    it('a ~/.ccrc that is itself a symlink admits its own eight and nothing else', async () => {
+      seed();
+      const cfg = { home, projectsRoot };
+      const real = mkTmp('ccrc-wl-ccrc-real-');
+      symlinkSync(real, path.join(home, '.ccrc'));
+      writeFileSync(path.join(real, 'build.json'), '{}\n');
+      writeFileSync(path.join(real, 'agent.env'), 'CCRC_AGENT_TOKEN=x\n');
+      const canonicalReal = await canonicalize(real);
+      expect(await checkPath(path.join(home, '.ccrc', 'build.json'), cfg, 'read'))
+        .toBe(path.join(canonicalReal, 'build.json'));
+      expect(await checkPath(path.join(home, '.ccrc', 'update-intent'), cfg, 'read'))
+        .toBe(path.join(canonicalReal, 'update-intent'));
+      expect(await checkPath(path.join(home, '.ccrc', 'agent.env'), cfg, 'read')).toBeNull();
+    });
   });
 });
 
