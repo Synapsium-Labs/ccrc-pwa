@@ -25,7 +25,7 @@ import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
-  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS,
+  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -645,6 +645,33 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
     // The run-event trail, documented the way `adopted` documents its own.
     expect(flat(wl), 'the run-event detail for the preflight is undocumented')
       .toContain('skill-preflight:');
+  });
+
+  it('names every spawnState member in the dispatch-response table, and says what `narrow` needs', () => {
+    // The table's list is prose, so nothing kept it in step with the union:
+    // `narrow` (ccd's rc 6) shipped to the fleet row before it reached this
+    // table. DERIVED from SPAWN_VERDICTS, so the next member reds here too.
+    const wl = refs('wave-lifecycle.md');
+    const row = wl.split('\n').find((l) => l.startsWith('| `spawnState` |'));
+    expect(row, 'the dispatch-response table has no spawnState row').toBeDefined();
+    for (const v of SPAWN_VERDICTS) {
+      expect(row, `the spawnState row omits \`${v}\``).toContain(`\`${v}\``);
+    }
+
+    // The bullet is what a coordinator ACTS on, so it is pinned on its own,
+    // scoped to itself: the table row above would satisfy a file-wide match.
+    const start = wl.indexOf('#### An `ok:true` dispatch is no longer proof');
+    const block = flat(wl.slice(start, wl.indexOf('\n## ', start)));
+    const guide = block.slice(block.indexOf('**What to do with them.**'));
+    const at = guide.indexOf("`spawnState: 'narrow'`");
+    expect(at, 'no operator guidance for spawnState: narrow').toBeGreaterThan(-1);
+    const next = guide.indexOf(' - `', at + 1);
+    const bullet = guide.slice(at, next === -1 ? undefined : next);
+    expect(bullet, 'the narrow bullet does not say waiting will not fix it').toMatch(/waiting does not fix it/i);
+    expect(bullet, 'the narrow bullet does not name the drawer as the way to widen it').toMatch(/terminal drawer/);
+    expect(bullet, 'the narrow bullet does not send the operator to the startup prompt').toMatch(/startup prompt/);
+    expect(bullet, 'the narrow bullet claims mail is held — the mail lane is not width-aware')
+      .toMatch(/not width-aware/);
   });
 });
 

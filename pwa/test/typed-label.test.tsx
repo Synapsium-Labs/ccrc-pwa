@@ -240,7 +240,7 @@ describe('the session header crumb', () => {
 //
 // AND THE MIRROR IS NOT PERFECT, which is the part worth knowing: the label
 // follows `FleetSession.branch`, and `server/src/fleet.ts` assembles that as
-// `sl?.branch ?? r.branch` — THE STATUSLINE WINS. §3.1 froze the registry's
+// the pane's branch, else the worktree HEAD's, else the registry's — THE STATUSLINE WINS. §3.1 froze the registry's
 // `.branch` and the verb that writes it; a human running `git checkout -b`
 // inside the worktree still moves this label mid-claim, because that is a live
 // pane capture and no hold is consulted. `watch.ts`'s sweep guards against
