@@ -3,7 +3,7 @@
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
 rulings on the written spec (C9–C11, C13, C14; every §11 decision ruled 2026-09-23) and the measurements behind
-them ·
+them; rev 5 reconciles it with its first wave plans, 2026-09-24 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -92,7 +92,9 @@ Six mechanisms, read off the source at `bbb5e714`:
    destination does not exist. On a return visit it logs `(kept)` and skips the tree, so everything created
    since the session last left that account stays behind. The rule is an anti-nesting guard (copying a directory
    onto an existing one nests it) and avoids a half-merged tree; its own comment records that a partially built
-   destination makes the skip permanent.
+   destination makes the skip permanent. Journals and agent logs are appended in place (§5.1).
+   Every account root is its own bind mount of one volume, and `link(2)` across two mounts answers `EXDEV`, so
+   every first carry since 2026-09-22 is `(copy)`, never `(link)`.
 2. **The restarted session is told nothing specific.** The redrive prompt is one constant (`RESUME_PROMPT`,
    `ccd/ccd:1208`): background work "is gone: re-check their journals". Resuming by run id works across accounts
    when the journal is present; the eight journal-missing refusals are the carry, and the five scriptPath
@@ -166,7 +168,7 @@ auto-home at 04:17 UTC the next day.
 - **Limit park and wake:** no revival; unattended keystrokes are a default-off capability; its R4 designs a
   box-wide `$REG/.release.lock` on `_dispatch_swap` because concurrent restart-time scans once stalled the box
   for 9.7 h. That lock is not in ccd yet, and it covers only `_dispatch_swap`; stage 1 takes a non-blocking
-  slot inside the carry itself so every restart path is covered (§5.1).
+  slot inside the carry itself so every path that carries is covered (§5.1).
 - **Effort/model routing:** the route record is the authority at spawn, and its §5.3 rules that a keystroke not
   accompanied by a field write is transient by design. Stage 7 amends that for the operator's own choice (C7).
 - **Compaction card:** the session-start context is an n-subject join whose standing subjects are clipped
@@ -184,13 +186,13 @@ auto-home at 04:17 UTC the next day.
 | C3 | Reaper: "is there no more elegant way?" — no heuristic sweep (operator). | Stage 6: one variable plus the scope boundary the kernel enforces. Amended by C11. |
 | C4 | Headroom estimation dropped (operator). | No fan-out gate. Target choice keeps using the limits files it already reads. |
 | C5 | "Enhance recovery during account swap similar to how Claude Code itself does it" (operator). | Stage 2 spike decides stage 3's mechanism. |
-| C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue waits instead of swapping when the reset is near or no target has room. | Stage 4. Slug for minting at plan time: `rescue-waits-near-reset`. |
+| C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue waits instead of swapping when the reset is near and Claude Code's auto-continue is armed, or when no target has room. | Stage 4. Slug `rescue-waits-near-reset`, D-3498. |
 | C7 | AMENDS routing §5.3 "a keystroke not accompanied by a field write is transient": the operator's own `/model`/`/effort` is written to the record before a restart. | Stage 7. Slug: `operator-model-survives-restart`. |
-| C8 | REVERSES the carry's "an existing destination is LEFT ALONE rather than merged". | Stage 1. Slug: `sidecar-carry-merges`. |
+| C8 | REVERSES the carry's "an existing destination is LEFT ALONE rather than merged". | Stage 1. Slug `sidecar-carry-merges`, D-3496. |
 | C9 | No backfill of the historical backlog unless a programme needs one (operator, 2026-09-23, on the written spec). | §11 item 1. |
 | C10 | Re-seed the route records seeded under the pre-#169 default: yes, one-off (operator, 2026-09-23, on the written spec). | §11 item 2: executed by hand the same day; no code. |
 | C11 | AMENDS C3 (operator, 2026-09-23, on §11 item 4's measurements): beside the variable and the scope boundary, a sweep stops dead ccd pane scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
-| C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). | Stage 4 rule 1. Slug: `carried-in-banner-is-not-a-block`. |
+| C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). | Stage 4 rule 1. Slug `carried-in-banner-is-not-a-block`, D-3497. |
 | C13 | The rescue-wait bound is 10 minutes (operator, 2026-09-23). | Stage 4 rule 2; §11 item 3. |
 | C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. |
 
@@ -213,39 +215,60 @@ Stage N is §5.N.
 
 ### 5.1 Stage 1 — the carry merges instead of skipping (ccd only)
 
-**Prerequisite measurements, before code:** stat inode and size of one live `journal.jsonl` and one
-`agent-*.jsonl` before and after an agent writes, and of a `workflows/<runId>.json` write, to confirm which files
-are appended in place and which are replaced; explain the 389 `(copy)` fallbacks on a box where every root is on
-one device. The rules below are written for append-in-place logs and rewritten records; if the measurement says
-otherwise, the rules change before the code.
+**The write model, measured.** A live `agent-*.jsonl` keeps one inode while it grows. Over the 128 workflow runs
+that finished on their own root in three days, `journal.jsonl` is appended in place in 128 of 128, `agent-*.jsonl`
+in 4,447 files, and `workflows/<runId>.json` is written whole at the run's end in 128 of 128. The 389 `(copy)`
+fallbacks come from the mounts, not the device: every account root is its own bind mount of one volume, `link(2)`
+across two mounts answers `EXDEV`, every dated `(copy)` involved a root that was already a mount (262 of 262), and
+every dated `(link)` ran while both roots were plain directories (163 of 163). Since 2026-09-22 every first carry is
+`(copy)`, so a file carried since then never shares an inode with its source. The rules below are written for
+append-in-place logs and rewritten records.
 
 In `_swap_carry_sidecars`, the branch taken when the destination exists walks the source tree file by file and
-decides on content and size, never on inode identity:
+decides on size, modification time and content; a shared inode can answer only "equal":
 
 | Source vs destination | Action | Counted |
 |---|---|---|
 | absent at destination | hardlink, or copy when linking fails | `+N` |
-| equal size and equal bytes | nothing | no |
+| the same inode; or equal size and equal nanosecond mtime; or equal bytes | nothing | no |
 | append-only log (`*.jsonl`), destination a strict byte-prefix of a larger source | replace by temp file and rename | `~R` |
 | append-only log, destination longer than source and source its prefix | keep destination (it is further along) | no |
-| append-only log, neither a prefix of the other | keep destination | `!D`, named in the manifest with the longer copy's path |
+| append-only log, neither a prefix of the other | keep destination | `!D` |
 | rewritten record (`workflows/<runId>.json`, `agent-*.meta.json`, `workflows/scripts/*`), source newer | replace | `~R` |
+| any other file whose bytes differ (a tool result is written once) | keep destination | `!D` |
+| a destination entry of another type where the source has a regular file | keep destination | `!D` |
+| a non-regular source entry (a symlink, a fifo) | never followed, never copied | no |
+
+Equality is never decided on size alone. The size-and-mtime quick check reads no bytes; its named cost is that two
+different files of identical size and identical nanosecond mtime read as equal. Over the 673 return-visit pairs on
+the fleet box it takes the walk's read from p50 80 MiB / p90 764 MiB (bytes compared) to p50 5.6 MiB / p90
+208 MiB, the bytes that are actually new.
 
 Nothing is deleted. The first carry to an account keeps today's path unchanged, including the anti-nesting guard
 and the clear-then-copy fallback. A destination left partial by an earlier failure is repaired by the walk rather
-than kept forever. The log line becomes `sidecar <uuid> -> <dst> (merged +N ~R !D)`.
+than kept forever. The log line becomes `sidecar <uuid> -> <dst> (merged +N ~R !D)`, and each `!D` adds a line
+`sidecar <uuid> diverged <kept> longer <longer>` naming the longer copy's path, which stage 3's manifest reads.
 
 **Bounded.** The walk reads both copies, where `(kept)` read nothing. It takes a box-wide non-blocking slot of
-its own, inside the carry itself, so every path is covered — rescue, auto-home, manual swap, revival — not only
-the ones that pass through `_dispatch_swap`. When the slot is busy, or the walk exceeds its byte budget, the
-carry falls back to today's `(kept)`, logged as `(kept: busy)` or `(kept: budget)`; it never waits, because the
-unit is already stopped. The slot is the one park-and-wake R4 designed if that has shipped, otherwise its own.
+its own, `$REG/.carry.lock`, inside the carry itself; park-and-wake R4's lock has not shipped. `_swap_carry_sidecars`
+has one caller, `cmd_swap`, so the slot covers every path that carries — rescue, auto-home, manual or PWA swap,
+`swap-self` — not only the ones that pass through `_dispatch_swap`; a supervisor revival never changes account and
+never carries. The byte budget, `CARRY_MERGE_BUDGET` (512 MiB per sidecar directory), is charged by a dry `lstat`
+pass over the whole walk — every byte it would read to compare and every byte it would copy — before anything
+moves: all or nothing. When the slot is busy, or the walk is over budget, the carry falls back to today's `(kept)`,
+logged as `(kept: busy)` or `(kept: budget)`, and the destination is exactly as it was. A walk that cannot run —
+no `flock`, the lock file unopenable, no `python3`, a destination that is not a real directory, the walker's own
+failure — is `(kept: error)`, its own word because its remedy differs. It never waits, because the unit is already
+stopped. At 512 MiB, 43 of the 673 return-visit pairs on the box fall back to `(kept: budget)` on their first merge
+(87 without the quick check); they are the stranded backlog C9 does not backfill.
 
 Tests under `makeCcdHarness` with fixture homes, each red when its rule is removed: a return visit carries new
-journals; an equal file is untouched and uncounted; a prefix journal is extended; a longer destination is kept; a
-diverged journal is kept and counted; a newer record replaces; nothing is deleted; no nesting on an existing
-destination; a partial destination is repaired; the budget falls back. The `ccd/ccd` edit re-stamps the generated
-header and follows the compaction-card citation-corpus procedure.
+journals; an equal file is untouched and uncounted; equality is never decided on size alone; a prefix journal is
+extended; a longer destination is kept; a diverged journal is kept and counted; a newer record replaces; a
+differing unclassified file is kept and counted; a non-regular source entry is not followed; nothing is deleted; no
+nesting on an existing destination; a partial destination is repaired; the budget falls back before any byte
+moves; a walk that cannot run is `(kept: error)`. The `ccd/ccd` edit re-stamps the generated header and follows
+the compaction-card citation-corpus procedure.
 
 The historical backlog on source accounts is not recovered (§11).
 
@@ -302,7 +325,7 @@ come from the launch record joined with sidecar files changed in the last day:
 | `in-flight` | started, no result |
 | `holed` | the run completed but some agents' last row is a rate-limit error |
 | `stopped-agent` | an agent whose transcript ends on a rate-limit error or without a finished turn |
-| `diverged` | from stage 1, naming the longer copy |
+| `diverged` | from stage 1's `diverged` lines in the swap log, naming the longer copy |
 | `deferred-until-reset` | its resume already failed on the limit once (below) |
 | `abandoned` | older than the window, no terminal record: counted, never dropped silently |
 
@@ -335,23 +358,28 @@ not resume, and stage 3 removes most of that risk. Measured (§1.2): a swap reac
 1.6 minutes, and rescues fire a median 129 minutes before the reset, so a wait never saves wall clock; what it saves
 is the move, the carry and a round trip.
 
-1. **A carried-in banner is not a block.** ccd stamps `$REG/<id>.landed` (epoch, wrapper) when a spawn lands the
-   session on a new wrapper; absent means never swapped, and every row is current. `lastswap` cannot serve: it is
-   stamped at dispatch, up to `SWAP_JITTER` (120 s) before the swap runs, and deleted on a refused swap. A
-   rate-limit row older than the landing is not evidence of a block, from the transcript or the pane: a pane-arm
-   positive is dated by the transcript, and one whose newest rate-limit row is older than the landing is not a
-   block; with no rate-limit row at all, the pane's verdict stands as today. A transcript it cannot read
-   (`_transcript_limit_banner` rc 2) cannot date a pane positive, and the pane's verdict stands; the transcript
-   arm's cache keeps unreadable distinct from no row. The dating read is uncached. An auth failure, which the pane
-   arm also matches, keeps today's path and never reads a reset (C12).
+1. **A carried-in banner is not a block.** `cmd_swap`, the one verb that moves a session between accounts, stamps
+   `$REG/<id>.landed` (epoch, wrapper) after the carry and the wrapper flip, before `_svc_start` starts the unit;
+   absent means never swapped, and every row is current. `lastswap` cannot serve: it is stamped at dispatch, up to
+   `SWAP_JITTER` (120 s) before the swap runs, and deleted on a refused swap. A rate-limit row older than the
+   landing is not evidence of a block, from the transcript or the pane: a pane-arm positive is dated by the
+   transcript, and one whose newest rate-limit row is older than the landing is not a block; with no rate-limit row
+   at all, the pane's verdict stands as today. A transcript it cannot read (`_transcript_limit_banner` rc 2), or
+   whose path does not resolve, is unread, never "no row": it cannot date a pane positive, and the pane's verdict
+   stands. The transcript arm's cache (`$REG/<id>.tscan`) records unread as `2`, distinct from a read with no row
+   (`0`). The dating read is uncached. A suppressed positive is logged once per landing (`carried-in <id>: …` in the
+   swap log), floored by `$REG/<id>.carriednote`. An auth failure, which the pane arm also matches, keeps today's
+   path and never reads a reset (C12).
 2. **Wait near the current account's own reset; otherwise swap at once.** On a rate-limit verdict ccd keeps the
    `resetsAt` and `rateLimitType` that `_transcript_limit_banner` already prints, from the banner row that
    postdates the landing. It waits — leaves Claude Code's armed auto-continue alone and types nothing — when the
-   type is `five_hour` and the reset is within `RESCUE_WAIT_BOUND` (600 s, a knob; 0 turns the wait off). A
-   `seven_day` or Codex-lane block, or no postdating row carrying both values, swaps as today; `~/.cc-limits` is
-   not a fallback, because it cannot say which window blocked. It also waits when no placeable target has room
-   (today's `stranded`). A wait is recorded once on entry and once on exit, in `$REG/<id>.rescuewait` and the swap
-   log, never under the word `hold`, which is the workspace-reap hold. It ends:
+   type is `five_hour`, the reset is within `RESCUE_WAIT_BOUND` (600 s, a knob; 0 turns the wait off), the backend
+   is Anthropic's (`_is_anthropic_backend`), and Claude Code's auto-continue is armed on the pane
+   (`_pane_auto_continue_armed`). A stalled session near its reset, a `seven_day` block, a block on any
+   non-Anthropic backend (the Codex lane among them), or no postdating row carrying both values swaps as today;
+   `~/.cc-limits` is not a fallback, because it cannot say which window blocked. It also waits when no placeable
+   target has room (today's `stranded`). A wait is recorded once on entry and once on exit, in
+   `$REG/<id>.rescuewait` and the swap log, never under the word `hold`, which is the workspace-reap hold. It ends:
    - at the reset, when Claude Code's own timer or the stale-phase Enter (D-2360) continues the turn;
    - `RESCUE_WAIT_GRACE` (120 s, its own constant, not `STALE_PRESS_COOLDOWN`) after the reset: in a swap if a
      rate-limit row newer than the reset exists; otherwise the window turned with nothing re-sent, and the
@@ -361,8 +389,11 @@ is the move, the carry and a round trip.
 
    A longer bound for a session with delegated work in flight is not specified: no paused run has been seen under
    a blocked parent (§1.1), and the stage-2 spike measures whether one survives a wait (§11 item 3).
-3. **Spread and do not bounce.** Target choice skips an account the session just left blocked and prefers a target
-   that has not received a rescue within the last few minutes when another placeable target exists. A session
+3. **Spread and do not bounce.** Target choice skips an account the session just left blocked — the source account
+   of any of this session's auto-rescues within `RESCUE_CHAIN_WINDOW` (3600 s), until that rescue's logged reset
+   passes — and prefers a target that has not received any session's rescue within `RESCUE_SPREAD_WINDOW` (600 s)
+   when another placeable target exists. The history is read from the swap log's tail (`RESCUE_LOG_TAIL_BYTES`,
+   1 MiB), whose `auto-rescue` line carries the dated row as appended `reset=`, `type=` and `row=` tokens. A session
    already rescued three times in the last hour is not rescued a fourth time at once: it takes a **chain wait**
    on its current account for at most 30 minutes (a knob), recorded in `.rescuewait` with `kind=chain`, then swaps
    to a target with room that is not the account it just left blocked. A chain wait ends early at its account's
@@ -372,15 +403,19 @@ is the move, the carry and a round trip.
 
 Tests under `makeCcdHarness` with fixture homes, every fixture past `SWAP_COOLDOWN`, each red when its guard is
 removed: a transcript banner row older than `.landed` produces no rescue; a pane positive whose newest rate-limit
-row predates `.landed` produces no rescue; no `.landed` with an old row rescues; an unreadable transcript under a
-pane positive rescues; a `five_hour` row whose reset is 300 s out produces no dispatch, and deleting the bound check
-makes it dispatch; a `seven_day` row 300 s out dispatches; a bound of 0 dispatches; after the reset with no new row
+row predates `.landed` produces no rescue; no `.landed` with an old row rescues; an unreadable or unresolvable
+transcript under a pane positive rescues; a `five_hour` row whose reset is 300 s out, with auto-continue armed,
+produces no dispatch, and deleting the bound check makes it dispatch; the same row on a stalled session
+dispatches; the same row on a non-Anthropic backend dispatches; a `seven_day` row 300 s out dispatches; a bound of
+0 dispatches; after the reset with no new row
 the fallback runs in place and nothing dispatches, and with a new row a dispatch follows; an auth-failure pane with
 an old rate-limit row carrying a near reset dispatches; a target set with no room gives no dispatch and a stranded
 record; a target just left blocked is skipped; a fourth rescue within the hour takes the chain wait; a chain wait
-whose account resets inside it does not swap. `.landed` and `.rescuewait` join the per-session registry field list
-and purge with the row; `.rescuewait` is read by ccd's own entry/exit dedupe and by doctor, and §9's instrument
-reads the swap log.
+whose account resets inside it does not swap. The two caching pins in `ccd-limit-banner.test.ts` that cached an
+absent or unreadable transcript as a negative verdict now expect unread (`2`). `.landed`, `.rescuewait` and
+`.carriednote` join the per-session registry field list and purge with the row; `.rescuewait` is read by ccd's own
+entry/exit dedupe and by doctor, whose reader ships with stage 6's first part and its doctor checks; §9's
+instrument reads the swap log.
 
 **Swaps that are not rescues do not cut work.** Auto-home, affinity and manual swaps refuse while the session's
 on-demand manifest scan finds `in-flight` or `stopped-agent` items younger than two hours. Other classes do not
@@ -504,16 +539,16 @@ a swap; an operator `/model opus` survives an auto-home.
 
 | Area | Change |
 |---|---|
-| `ccd/ccd` | carry merge; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; `.landed` stamp and the carried-in-banner check; rescue wait near reset, spread, no-bounce; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
+| `ccd/ccd` | carry merge and its `diverged` lines; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; `.landed` stamp in `cmd_swap`, `.carriednote` and the carried-in-banner check; rescue wait near reset, spread, no-bounce, the `auto-rescue` line's `reset=`/`type=`/`row=` tokens; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
 | `ccd/ccd-scope-sweep` (new) | per-scope verdict record `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`; inert stop (C11); report. `ccd/ccd-cap-scopes` is unchanged |
 | `deploy/systemd/ccd-scope-sweep.{service,timer}`, `deploy/deploy.sh`, `ccd/ccrc` install spine, `agent/test/deploy-verify.test.ts` | the unit and timer, their install and uninstall, and the pins that enumerate each ccd timer |
-| `ccd/ccrc-doctor-checks` | reads the sweep's verdict record; lists dead scopes and long-lived pane processes; records operator stops |
+| `ccd/ccrc-doctor-checks` | reads the sweep's verdict record and `$REG/<id>.rescuewait`; lists dead scopes and long-lived pane processes; records operator stops |
 | `ccd/session-hook.sh`, `server/test/session-hook.test.ts` | PostToolUse launch record with validation; SessionStart manifest subject with its own ceiling, re-pinned under the 10,000-character spill |
 | `ccd/worker-skill`, `ccd/coordinator-skill`, `ccd/reviewer-skill`, `references/review-panel.md`, `README.md`, `CLAUDE.md` | clauses, paragraph, count words; pins |
 | `server/src/server.ts` (swap route), `server/src/ccdargv.ts` | `--cut-delegated` mint site and body field; the refusal's own 409 |
 | `agent/src`, `server/src` (`watch.ts`, `fleet.ts`, `coord/routes.ts` signals), `shared/api.ts` | the `delegations` field, readers per mode, run signals |
 | `pwa/src` | session-card chip; swap-sheet on-demand counts and override |
-| `server/test` (limit-banner harness) | process-group kill on timeout |
+| `server/test` (limit-banner harness; `ccd-limit-banner.test.ts`) | process-group kill on timeout; the two caching pins expect unread (`2`) |
 | `deploy/measure-continuity.py` (new, read-only) | the instruments of §9 |
 
 ## 8. Failure modes named
@@ -522,7 +557,9 @@ a swap; an operator `/model opus` survives an auto-home.
   spike measures the job directory's root.
 - **Mass rescue I/O:** the carry walk and the manifest scan take a non-blocking slot on every path and run under
   byte budgets, falling back to `(kept)` or `unmeasured` rather than waiting; the swap body is the place, never the
-  spawn path; §9 measures `(kept: busy)`, `(kept: budget)` and the `unmeasured` rate.
+  spawn path; §9 measures `(kept: busy)`, `(kept: budget)`, `(kept: error)` and the `unmeasured` rate.
+- **Two different files of equal size and equal nanosecond mtime read as equal:** the quick check's named cost;
+  equality is never decided on size alone, pinned.
 - **The model ignores the manifest:** counts reach the operator and the coordinator anyway; §9 retires prompt text
   that measures no change.
 - **A carried-in banner rescues a session that is not blocked:** the `.landed` stamp dates the banner.
@@ -548,13 +585,17 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 
 | Stage | Metric | Baseline | Target |
 |---|---|---|---|
-| 1 | `(kept)` carries by reason; journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%; 0 |
+| 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
 | 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; — | 0; 0; 0; 0; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
+
+Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
+`CARRY_MERGE_BUDGET` and fall back to `(kept: budget)`. Its row is therefore reported over all carries and over
+carries whose pair was not stranded before its deploy.
 
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
 redesigned.
@@ -595,6 +636,8 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    | 30 min | 18 | 300 | 25 / 7 | 0 (1 swap that had resumed fine) |
    | every five-hour block | 168 | 18,024 | 215 / 47 | unmeasured (19 had live work at the rescue) |
 
+   Each count is an upper bound: the wait also needs Claude Code's auto-continue armed on the pane (§5.4 rule 2),
+   which no log recorded at rescue time; §9's stage-4 instrument counts the waits from the first deploy.
    No bound at or under 30 minutes avoids a bounce, and the one near-reset rescue recorded as dropping live work
    was an agent that had already died on the limit four seconds before the rescue. A wait almost never saves wall
    clock: one rescue in 248 fired closer to its reset than its swap took. Ten minutes costs almost nothing — 13

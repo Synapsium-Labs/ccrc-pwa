@@ -2,8 +2,8 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
-written spec's two open decisions recorded 2026-09-23 (R9, R10) · **Date:**
-2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
+written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24 ·
+**Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
 skill clauses after this spec's stage 1.
@@ -112,7 +112,7 @@ repositories are on plans that exclude it.
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
-| R9 | Break-glass: the repository-admin role stays the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). | Stage 2; §4's operator row; §11. |
+| R9 | Break-glass: the repository-admin role is the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). The main ruleset also names the Maintain role as a bypass actor today; that entry comes off with the queue rule. | Stage 2; §4's operator row; §11. |
 | R10 | Strict protection comes off intake-platform and data-internal after a week of coordinator landings with composition tests there (operator, 2026-09-23, on the written spec). | Stage 5; §11. |
 
 ## 4. Roles and authority
@@ -123,7 +123,7 @@ is none.
 
 | Actor | May | May not, and what holds it |
 |---|---|---|
-| **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a worker wave**, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
+| **Worker** (a run's session in a child workspace) | commit and push its own branch; absorb main under clause 16's triggers; re-gate; report wave-done | merge (**the PreToolUse hook denies `gh pr merge` in a session whose hold names a programme wave**, a reviewer's included, stage 2); rebase, force-push, `update-branch`, settings writes (clause 16, prose; `update-branch` absent from executable source, pinned) |
 | **Coordinator** | declare order; run the composition; enqueue or merge at the pinned head; send fix rounds; pause the line | use the admin bypass (**the hook denies `gh pr merge --admin` in every fleet session**, stage 2); `update-branch`; settings writes (clause 15) |
 | **ccd** | the read-only probe on a timer; compose a candidate; delete its own candidate refs; lineage | move a worker's branch; merge; push or delete anything outside `refs/heads/ccrc/land/*` (pinned) |
 | **Server** | hold the line; mail "next to land"; re-measure what ccd wrote; refuse bad transitions | run git or `gh` (`EXEC_COMMANDS` stays `['tmux','ccd']`); take a run to `working` on its own; choose a successor |
@@ -138,8 +138,10 @@ can pause or remove, never choose a successor (stage 5).
 
 **Worker clause 16** (the pin moves from 15 to 16). A worker absorbs `origin/main` only on one of three triggers:
 
-1. its own probe says the branch conflicts (`git merge-tree --write-tree` against a freshly fetched
-   `origin/HEAD` exits 1; the fleet box runs git 2.43);
+1. its own probe says the branch conflicts: `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD`,
+   after one fetch, exits 1 with a 40-hex tree id on stdout's first line. Exit 0 is clean; any other answer is
+   unmeasured and licenses nothing, including exit 1 with an empty stdout, which git 2.43 on the fleet box
+   returns for an unresolvable ref;
 2. a required check on the PR is red while main's latest push run of the same required job is green;
 3. the PR was ejected from the landing line with a base sha, or, in a strict-protection repository, the
    coordinator names it next to land (a land-sync). Both arrive on the `merging → working` edge as a fix-round
@@ -160,26 +162,30 @@ own, and commits programme-ledger documents on its own ledger PR, never inside a
 the hottest overlap file in three repositories).
 
 **Step 6 of the wave lifecycle.** Once the predecessor's PR measures merged, wave N+1's run opens WITHOUT
-`sessionId`, so dispatch mints a fresh child from current main. A wave that must overlap its predecessor is a
-deliberate stacked child, named in the brief, and pays one absorb knowingly. Open-before-close is unchanged.
+`sessionId`, so dispatch mints a fresh child from current main, and the same-project predecessor closes as the
+cross-project arm closes a producer: `final:true`, requiring `released:true`. A wave that must overlap its
+predecessor is a deliberate stacked child, named in the brief, and pays one absorb knowingly. Open-before-close is
+unchanged.
 This step goes live only with CCR-15's reclaim-on-close wave (§9); before that, every wave leaves a live child
 the operator archives by hand.
 
 **The hook reaches sessions the skills do not.** `ccd/session-hook.sh`'s PreToolUse arm (matcher `*`) sees every
-Bash call. On a command that merges, pulls or rebases `main` into the current branch it emits `additionalContext`
-naming the three triggers and the probe command. It never denies. This covers the 27% of sync episodes in
-sessions with no skill.
+Bash call. On a command that merges, pulls or rebases `main` into the current branch, or asks GitHub to with
+`update-branch`, it emits `additionalContext` naming the three triggers and the probe command. It never denies.
+This covers the 27% of sync episodes in sessions with no skill.
 
 **The regenerator gets a CLI.** `ccd/ccd`'s line 2 carries a digest of the file's body with the marker line
 stripped; the regenerator exists as `markGenerated` in `shared/mark.mjs`, and `server/test/ownership.test.ts`
 is already red on an unstamped file. Stage 1 adds a one-line CLI around it (`ccrc restamp <file>`) and clause 16
 names it; 17 of 25 hand resolutions on that file were the stamp alone.
 
-**Pins.** `update-branch` is pinned ABSENT from executable source (`server/src`, `agent/src`, `ccd/ccd`,
-`ccd/ccd-*`). In the skill corpora it is counted, not absent: the clauses name it once each to forbid it, and a
-count pin in the style of `coordinator-skill.test.ts`'s existing literal counts holds that number. The two skill
-pins move in the same commit as the clauses, together with the clause-count words in `README.md` and `CLAUDE.md`
-that both pins read.
+**Pins.** `update-branch` is pinned ABSENT from executable source (`server/src`, `agent/src`, `shared/`,
+`deploy/`, `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh`), with two allowed spellings, pinned as the
+only ones, neither of which calls it: the advisory's detector in `ccd/session-hook.sh`, and the classifier in the
+read-only instrument `deploy/measure-landing.py`, which counts past `update-branch` commits. In the skill corpora it is counted, not absent: the
+clauses name it once each to forbid it, and a count pin in the style of `coordinator-skill.test.ts`'s existing
+literal counts holds that number. The two skill pins move in the same commit as the clauses, together with the
+clause-count words in `README.md` and `CLAUDE.md` that both pins read.
 
 Removes: pure-ritual syncs outside strict repositories, every fleet `update-branch`, the repeat-absorption share,
 and the class of act that opened the livelock window.
@@ -189,15 +195,26 @@ and the class of act that opened the livelock window.
 **Repository code.**
 - `.github/workflows/ci.yml` gains `merge_group:` beside `pull_request:`; the non-required macOS legs get
   `if: github.event_name != 'merge_group'`; a `concurrency` group with `cancel-in-progress` for `pull_request`,
-  so a superseded head stops occupying runners.
+  so a superseded head stops occupying runners. Every other event gets a run-unique group (`github.run_id`), and
+  a `merge_group` run keeps one whatever else reshapes the workflow (§9): GitHub keeps one pending run per group
+  and cancels the older one even without `cancel-in-progress`, so a shared group would drop a queue entry's checks.
 - `ccd pr-state` gains one GraphQL query per repository per sweep (`pullRequest.mergeQueueEntry` and the last
-  `REMOVED_FROM_MERGE_QUEUE_EVENT` in `timelineItems`), separate from its `gh pr list --json` call, under its own
-  bounded timeout, answering `queued | dequeued | landed | none | unmeasured` in an additive `queue` field; the
-  pr-state header's gh-call budget is updated to say so. A dequeue (GitHub does not re-enqueue after a failed
-  group) becomes a feed event and a mail to the coordinator, which re-enqueues or sends a fix round.
+  queue act of either kind, `ADDED_TO_MERGE_QUEUE_EVENT` or `REMOVED_FROM_MERGE_QUEUE_EVENT`, in `timelineItems`:
+  a removal alone cannot tell a merged PR the queue landed after a re-enqueue from one merged by hand after a
+  dequeue), separate from its `gh pr list --json` call, under its own bounded timeout (`PR_GH_QUEUE_TIMEOUT`, 4 s;
+  the query measured 0.72–1.39 s), answering `queued | dequeued | landed | none | unmeasured` in an additive
+  `queue` field; the pr-state header's gh-call budget is updated to say so. The server's outer bound on
+  `pr-state` (`CCD_VERB_TIMEOUT_MS`) rises from 20 s to 25 s, so the three calls' timeouts (8 + 5 + 4 s) stay
+  within the 70% of it that `pr-timeout-budget.test.ts` allows across the two languages.
+- A dequeue (GitHub does not re-enqueue after a failed group) becomes a feed event of a new `NotifyEvent` kind,
+  `queue` (added in place in `shared/api.ts`, line-neutral; the PWA's total `KIND_WORD` and `KIND_GLYPH` records
+  name it), and, when an open run names the PR's workspace, a `status` mail to that run's coordinator, sent as
+  `operator`: raised by the watcher on the operator's behalf, the ask nudge's precedent. The coordinator
+  re-enqueues or sends a fix round. A dequeued PR that no open run names gets the feed event and no mail.
 - **The merge gate becomes a mechanism.** Setting the approval count to zero means any session holding the
   fleet's login could land with a plain `gh pr merge`. So `session-hook.sh`'s PreToolUse arm DENIES `gh pr merge`
-  in any session whose hold names a worker wave, and denies `--admin` in every fleet session, together with a
+  in any session whose hold names a programme wave, a worker's or a reviewer's (`CCRC_HOLD_WAVE_RE`, the hook's
+  one spelling of that grammar), and denies `--admin` in every fleet session, together with a
   `gh api` call to the pulls merge endpoint, the other spelling that reaches the same merge. Mutation rows: a
   worker's merge is refused; a coordinator's plain enqueue passes; any session's `--admin` is refused; a session's
   `gh api` merge call is refused; each red when its arm is deleted. The operator's own shell, outside Claude Code,
@@ -207,8 +224,9 @@ and the class of act that opened the livelock window.
 
 **Operator configuration** (settings, not ccrc code): a ruleset requiring the merge queue on `main` — squash,
 group size 1, build concurrency 1 — and `required_approving_review_count` 1 → 0 in the existing main ruleset.
-Break-glass (R9): the repository-admin role stays the ruleset's only bypass actor. The fleet's single login holds
-that role, so the bypass is reachable from any session; the hook denies the spellings it can parse, which makes the
+Break-glass (R9): the repository-admin role is the ruleset's only bypass actor; the same change removes the Maintain
+role, the main ruleset's second bypass actor today. The fleet's single login holds the admin role, so the bypass is
+reachable from any session; the hook denies the spellings it can parse, which makes the
 bypass the operator's by convention, not by credential. The operator uses it from their own shell or GitHub's UI.
 A hand merge out of order is recorded as an inversion.
 
@@ -219,12 +237,13 @@ A hand merge out of order is recorded as an inversion.
 3. **the proof run**, which is stage 2's own gate: enqueue two or three trivial PRs at once and check one push
    event and one prerelease per merge; if a group lands several commits in one push, keep group size and
    concurrency at 1 or make release-main tag every commit in the pushed range; confirm `is_ours` still binds
-   after a queue merge;
+   after a queue merge; measure whether GitHub records a removal event on a successful queue merge (if it does,
+   a queue-merged PR reads `none`, not `landed`);
 4. only then does the hook's deny on `--admin` go live. Until approvals are 0, every merge here still needs
    `--admin`, so the deny shipping first would stop every fleet merge on this repository.
 
 Removes: the operator-as-queue wait (median 33 min, p90 18 h), landing an untested tree here, and this
-repository's fleet inversions (5 pairs in the window).
+repository's fleet inversions (14 fleet-on-fleet pairs in the window, §10).
 
 ### 5.3 Stage 3 — the conflict radar (ccd, read-only)
 
@@ -316,8 +335,8 @@ landing entry per sweep. A reader walks entries with it, separate from `sweepMer
 no-run entries and hand merges are seen. The coordinator's own merge step also reports the result.
 
 **Next to land.** The radar names the head whose composition against the current base is clean; the server mails
-the coordinator once. Mail is idle-gated: the delivery-to-turn latency is a plan prerequisite (§10), not a
-figure this spec asserts.
+the coordinator once. Mail is idle-gated: its latency to the coordinator's first nudge-started turn is a plan
+prerequisite (§10), not a figure this spec asserts.
 
 **The coordinator lands**, from its own shell, never from a timer or the PWA:
 
@@ -373,8 +392,11 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 | Area | Change |
 |---|---|
 | `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, step 6, land-sync and ejection vocabulary; pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
-| `ccd/session-hook.sh` | PreToolUse advisory on main syncs; deny on `gh pr merge` for workers, and on `--admin` and `gh api` merge calls for all sessions |
+| `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`), and on `--admin` and `gh api` merge calls for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
+| `server/src/remote/runner.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts |
+| `server/src/prstate.ts`, `server/src/watch.ts`, `server/src/coord/rundefs.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` | the one reader of `queue`; the dequeue feed event and mail; the `operator` sender's gloss; `NotifyEvent` kind `queue` |
+| `deploy/measure-landing.py` (new, read-only) | §10's instrument |
 | `ccd/ccd-land-probe`, `deploy/systemd/ccd-land-probe.{service,timer}` | the radar and the `$REG/landing/<p>/enabled` marker; install spine, uninstall, doctor |
 | `ccd/ccrc` | `ccrc restamp` |
 | `server/src/coord/fingerprint.ts`, `shared/api.ts` | opted-in lineage path, `lineage-unmeasured`, `measured.via` |
@@ -422,25 +444,33 @@ headlines in the last 40 merged PRs). Stage 1's `ccrc restamp` is its first deli
   at merge; the pins derive nothing, so the later PR renumbers).
 - Rollout inside each stage follows AGENT-FIRST: ccd and the skills reach every home through `ccrc update` before
   the server and PWA read what they write.
+- CI test selection reshapes `ci.yml` and puts pushes to `main` in one shared refresh group. Whichever programme
+  lands second merges the other's shape and keeps every `merge_group` run in a run-unique group (§5.2).
 
 ## 10. Measurement, targets and the kill rule
 
 Baseline frozen at 2026-09-08..2026-09-22. `deploy/measure-landing.py` (read-only, run by hand on the fleet box)
-is committed with the plan together with the archived instruments it wraps (the `--remerge-diff` classifier, the
-committer classifier, the transcript episode scan deduplicated by tool-use id, the red-main scan, the
-green-to-merge and inversion scans).
+is committed with the plan. It ports the archived instruments (the `--remerge-diff` classifier, the committer
+classifier, the transcript episode scan deduplicated by tool-use id, the red-main scan, the green-to-merge and
+inversion scans), with the paths, organisation names and login they hard-coded taken as arguments. Its inversion
+scan dates a PR's readiness from commits alone; the archived scan's figures, which also read force-pushes from each
+PR's timeline, are retired, and every inversion baseline below is the committed scan's.
 
 **Prerequisites the plan measures before its first stage ships:** red-main from required contexts only, with its
-PR-failure overlap; mail delivery-to-turn latency for coordinators; the repeat-absorption share restricted to
-fleet committer identities. Stage 2's proof run is stage 2's own gate, not a prerequisite.
+PR-failure overlap; coordinator mail latency, measured on the fleet box from a mail's creation to the first turn a
+delivery nudge starts in the coordinator's transcripts, with a mail whose transcripts cannot be found reported as
+unmatched, never as zero; the repeat-absorption share over the fleet's committer identities — the fleet's gh login
+and the placeholder identity fleet worktrees committed under before the 2026-09-23 identity rule, both passed to
+the instrument as arguments — reported per PR and per merge. Stage 2's proof run is stage 2's own gate, not a
+prerequisite.
 
 | Stage | Metric | Baseline | Target |
 |---|---|---|---|
-| 1 | fleet `update-branch` commits; fleet repeat absorptions per PR; pure-ritual episodes per week | 8; prerequisite; about 76 | 0; under a third; halved |
-| 2 | this repository's green-to-merge wait; required-leg red hours on main; this repository's fleet inversions | 33 min median, 18 h p90; prerequisite (whole-workflow red hours in the intervals with a required failure: 75.2 h); 5 pairs | under 10 min median; halved; 0 |
+| 1 | fleet `update-branch` commits; fleet repeat absorptions, per PR and per merge; pure-ritual episodes per week | 8; prerequisite; about 76 | 0; under a third, each; halved |
+| 2 | this repository's green-to-merge wait; required-leg red hours on main; this repository's fleet inversions | 33 min median, 18 h p90; prerequisite (whole-workflow red hours in the intervals with a required failure: 75.2 h); 14 fleet-on-fleet pairs (19 for all actors) | under 10 min median; halved; 0 |
 | 3 | coordinator sync/order mails without a measured conflict | about 14 of 629 feed rows | near 0 |
 | 4 | done/review refusals caused by a clean main sync | at least 6 of 11 | 0 |
-| 5 | fleet-on-fleet landing inversions on `lander:coordinator` repositories; duplicate-intent closed PRs | expoAI 14 pairs, custom-tools 2, intake-platform 0, data-internal 0 in 14 d (all actors, expoAI: 79); 28 in 120 d | under 3; under 5 |
+| 5 | fleet-on-fleet landing inversions on `lander:coordinator` repositories; duplicate-intent closed PRs | per repository, from the committed inversion scan before stage 5 ships; 28 in 120 d | under 3; under 5 |
 
 A stage whose metric has not moved two weeks after rollout is retired or redesigned; stage 1's prose parts
 (clauses, the advisory) are explicitly subject to this rule.
@@ -449,9 +479,9 @@ A stage whose metric has not moved two weeks after rollout is retired or redesig
 
 Decided on the written spec, 2026-09-23:
 
-1. **Break-glass on this repository's queue** — R9: the repository-admin role stays the ruleset's only bypass
-   actor. The hook stops fleet sessions using `--admin`; the operator keeps a direct door for a broken CI or
-   release lane.
+1. **Break-glass on this repository's queue** — R9: the repository-admin role is the ruleset's only bypass
+   actor; the Maintain role's bypass on the main ruleset comes off with the queue rule. The hook stops fleet
+   sessions using `--admin`; the operator keeps a direct door for a broken CI or release lane.
 
 2. **Strict-protection removal** — R10: on intake-platform and data-internal, after a week of coordinator landings
    with composition tests there.
