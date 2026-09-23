@@ -40,6 +40,7 @@
 - **Mutation-table discipline**: every guard ships with a test that goes red when the guard is removed or mutated, measured before/after; each task names the §18 rows it pins. TDD red-first.
 - **Commit on the workspace branch only** — at least one commit per task, `feat(update): …` / `test(update): …`, never a separate feature branch.
 - **A rollback target's channel can be stale** (carried from W2's D-3215, ruling R21): an OLDER off-page stable release that is demoted while a newer stable is GitHub's latest is never re-read, so `coord.db` still reads it channel `stable`; a rollback target is chosen from `releases` rows, so its channel badge can be stale; the dispatcher never relies on a rollback target's channel (of the target's releases row, `moveRefusal`'s rollback arm asks only that it exists — yanked permitted — and that this node has not refused the tag).
+- **A known limitation carried from W2 (its review run 143, X1).** A read-fine but non-tag `~/.ccrc/floor` maps to `floorRead: 'absent'` on the server (W2's D-3213 fold, deliberate), while the node's own `_upd_floor_check` refuses a malformed floor by name. So the server can resolve, and this wave's dispatcher can send, a desired tag the node refuses. That fails safe: the node refuses, its row goes `failed` with the refusal as the detail, and the fleet halts until an operator acks. Do not "fix" it here; it needs a new read-state word, which is a W2 schema change.
 
 ## Review Focus
 
@@ -9017,6 +9018,68 @@ git commit -m "feat(update): the five move controls go live — one UpdateMoveSh
 
 (`topology-clean.test.ts` reads `git ls-files` — the index — so it runs AFTER `git add`, when the two new sources and two new tests are tracked; a red there is residue in a new file: fix it, re-add, re-run, then commit.)
 
+### Task 8A: W2's carried residue — catalogue pins and prose
+
+Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by the rule its coordinator announced before its third review: a shipped-behaviour defect went back as a narrow fix, while a guard that could not red or a sentence that was false was recorded and carried. This wave carries them because it is the next server-side wave. Nothing here changes what the catalogue DOES; every item is a pin that must red, or a sentence that must become true.
+
+**First step, before any item:** re-measure each item on `main`. W2's narrow round 3 (B1–B3) touched `catalogue.ts`, `routes.ts` and D-3215/D-3218 after these items were written, and may have closed some (P3, P4, C-a and C-b are the likely ones). An item already closed on arrival is reported as such in the wave-done mail and gets no commit. Anchor every item by symbol or quoted text, never by the line numbers review 146 used (`1258a57a`).
+
+**Files:**
+- Modify: `server/test/update-catalogue.test.ts`, `server/test/update-resolve.test.ts`, `server/test/update-routes.test.ts` — pins.
+- Modify: `server/src/update/catalogue.ts` — comments only, except C-d, a warning re-arm.
+- Modify: `docs/superpowers/plans/2026-09-22-centralised-update-w2-control-plane.md` — W2's plan prose. It is on `main`, so this wave's PR corrects it in place.
+- One departure number for P2's placement move, taken from this run's reserve (the next unspent number), defined in THIS plan's `## Deviations found`.
+
+**Items** (the first ten from review run 146 of W2; the last four from W2's own fix-round-2 review):
+
+- **P1: ruling A case (b) must see its dev rows.** In `update-catalogue.test.ts`'s ruling-A case (b), assert after poll 2 that no dev release other than K is yanked.
+  - Mutation: `applyWithdrawn`'s demote upsert, changed from `'single'` to `'newest-page'`, must RED. It was measured green under that mutant, 85/85.
+  - Correct the three texts that claim this mutant is already caught: the mutation list's note, case (b)'s own comment, and D-3215's sentence in W2's plan.
+- **P2: W2's plan prose made stale by D-3218.**
+  - D-3203 still describes a one-minute refresh door. Amend it to name D-3218's derived interval.
+  - Task 10's Files bullet and step body tell a worker to type `const UPDATE_CATALOGUE_MS = 30 * 60_000;` into `watch.ts`, but the shipped `watch.ts` imports `CATALOGUE_POLL_INTERVAL_MS` from `catalogue.ts`. That departs from spec §7's placement of the literal in `watch.ts`, and no D-entry records it. Ledger it under this task's reserve number and correct the two texts.
+  - Task 13's route skeleton still ships `REFRESH_MIN_INTERVAL_MS = 60_000` with a "one request a minute" docstring. Correct both.
+  - The step bodies that still name the deleted `tagLineFrom` are corrected to `tagStateFrom`.
+- **P3: D-3215's text.** It must name R8's identity check (a `tags/K` answer naming another tag is a failed check, retried) and S1's failure arm for a throwing `newestUnyankedStable()`. Skip this if round 3's amendment already did it.
+- **P4: the budget clock's other stamp sites.** Round 3's B3 makes each send stamp its own time. If a pin now reds when the listing's or the tag check's stamp is deleted, P4 is closed. If not, add one.
+- **P5: R3's prose residue.** The mutation list's item (2) and D-3215's "(the pin that actually reds …)" claim the off-page pin's dev assertion reds the `'single'` → `'complete'` and `'newest-page'` mutants. It does not; the R3 case does. Correct both texts.
+- **P6: R15's prose residue.** D-3215's mutation list says reordering `pollListing` ahead of `pollLatest` reds N1(a), N1(b) and N1(c). It reds the four cases the test comment names. Correct D-3215.
+- **P7: the tag-cap mutation texts.**
+  - The catalogue note says removing `RELEASE_TAG_COMPONENT_MAX_DIGITS` flips a skipped count, and it points at a mutation note in `update-resolve.test.ts` that does not exist. Correct it: the digit cap is pinned in `update-resolve.test.ts`, and that note is removed.
+  - `update-resolve.test.ts`'s "This pins the byte cap" is false. Under the 18-digit component cap a three-component tag is at most 57 bytes, so the 64-byte cap is UNREACHABLE for any tag `RELEASE_TAG` admits, and no pin can red it.
+  - Say so in the test's title and comment. Keep the byte cap as defence in depth, with a one-line comment naming why it cannot fire.
+- **P8.** `update-routes.test.ts`'s mutation comment for `REFRESH_MIN_INTERVAL_MS = 60_000` points at the case above it. Since the C2 real-poller case was inserted between them, the case that reds is the door case. Re-point the comment.
+- **P9.** `safeSchemeHost` prints `URL.hostname`, never `.host`. Pin it with a refused base that carries a port. The `.host` mutant must red.
+- **P10.** `applyWithdrawn`'s `withdrawnAnswered()` re-arm is unpinned. Add a case: a tag-check failure, then a recovery, then the same failure again, which warns again. Deleting the re-arm must red.
+- **P11.** Narrow `safeDownloadUrl`'s docstring. Storing `u.href` closes backslash and userinfo differentials only. `href` keeps curl URL-glob characters (`{}`, `[]`) unencoded. No W2 reader consumes `tarballUrl`, so a consumer that ever hands it to curl must pass `-g`. Say that, and change nothing in behaviour.
+- **C-a.** The tag check's own clock stamp. Closed if P4 closes it; otherwise pin it.
+- **C-b.** The second `measuredCurrentK()` call site, after a `/latest` 200. Round 3's B1 adds a c6 pin for exactly this; closed if that pin reds under a bare `currentK()`.
+- **C-d.** The `currentK` warning is deduped but never re-armed after the store recovers. Re-arm it on the next successful read, as the module's other warnings are, and pin it: throw, recover, throw again, and the warning appears twice.
+- **Nits in W2's plan.**
+  - `UPDATE_STORE_REFUSE_CODES`' word order in the plan differs from the array. Match the array.
+  - Task 13's formula writes `3_600_000` inline. Name the constant the code uses.
+  - Task 10's Consumes line omits `isIngestibleReleaseTag`. Add it.
+
+**Steps:**
+
+- [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
+- [ ] **Step 2: Pins first, red first.** For every open pin item (P1, P4, P9, P10, C-a, C-d), write the case, run it against the unmutated tree and see it green, then apply the item's mutation to a scratch copy of the file (`cp`, never `git checkout --`) and see it red. Restore with `cp` and `cmp` it byte-identical. Record each measurement in the mutation table below.
+- [ ] **Step 3: Prose.** Correct every open prose item (P2, P3, P5, P6, P7, P8, P11, the nits) in place. Where W2's plan is corrected, change only the named sentence. Its historical Interfaces snapshots stay as they are.
+- [ ] **Step 4: The number.** Define P2's placement departure in this plan's `## Deviations found` with the reserve number, in the same commit that first cites it.
+- [ ] **Step 5: Suites.** `cd server && ./node_modules/.bin/vitest run test/update-catalogue.test.ts test/update-resolve.test.ts test/update-routes.test.ts`. Expected: PASS. Task 9's full gate follows.
+- [ ] **Step 6: Commit.** `git add` the files above, then `git commit -m "test(update): W2's carried residue — catalogue pins and prose"`.
+
+**Mutation table** (filled in by Step 2 with measured results; a row without a measured red is not done):
+
+| Item | Mutation | Expected red |
+|---|---|---|
+| P1 | `applyWithdrawn` demote upsert `'single'` → `'newest-page'` | ruling A case (b), dev rows yanked |
+| P9 | `safeSchemeHost` `u.hostname` → `u.host` | the port-bearing refused base case |
+| P10 | delete `withdrawnAnswered()` in `applyWithdrawn` | the fail-recover-fail case |
+| C-d | delete the `currentK` warning re-arm | the throw-recover-throw case |
+| P4/C-a | delete a non-probe `stampRequest` | the send-time stamp case (if round 3 did not already) |
+
+
 ### Task 9: Docs, the gate, the PR
 
 **Files:**
@@ -9025,7 +9088,7 @@ git commit -m "feat(update): the five move controls go live — one UpdateMoveSh
 - Modify: `CLAUDE.md` — the Deploy bullet gains ONE sentence after W2's `GET /api/updates` sentence (W2 Task 15 Step 2's inserted line, quoted: ``  `/api/fleet/health`'s `builds` is a view of it. A``): the PWA's one tap ends in the same `ccrc update --to <tag>` on the node (`--detach --from pwa`), the fleet node over the agent's `update` op and the server node spawned locally, and `ccrc rollout` stays the path when the console is down; the README size claim (`CLAUDE.md:10`) re-measured by `echo $(( ($(wc -l < README.md) + 50) / 100 * 100 ))` and set only if it moves. The box-token bullet is Task 6's and is not edited here
 - Guard files READ by this task's edits, run and none edited (Step 5): every suite that reads `README.md` or `CLAUDE.md` whole or by passage — wave 4 Task 16's measured census (`git grep -nE "README\.md'|'CLAUDE\.md'" -- server/test agent/test pwa/test`, less the fixtures that only write a file of that name): `pools-prose`, `oss-metadata`, `session-hook`, `box-token-census`, `coord-pause-route`, `crossrepo-prose`, `readme-holds`, `readme-roster-mirror`, `ccrc-update`, `ccrc-install-graphify`, `coordinator-skill`, `worker-skill`, `reviewer-skill`, `license`, `ledger-instruction`, `mail-hardening`, `topology-clean` *(correction: the skeleton's Run line named seven of these; a guard list that omits a reader of an edited file is not the census it claims to be)*
 - NOT edited by this task: `docs/superpowers/plans/2026-09-23-centralised-update-w5-convergence.md` — ruling R12: the coordinator replaces every «dev:…» placeholder, in prose AND inside code-block comments, with an allocator-issued number in one pass before dispatch; Step 6 only verifies it happened and never types a number
-- Run: the whole server suite, sharded, foreground: `cd server && ./node_modules/.bin/vitest run --shard=<i>/4` for `i` in 1..4 (the known load flakes re-run in isolation before a red is called real), then `./node_modules/.bin/tsc --noEmit`; `cd agent && npm ci && ./node_modules/.bin/vitest run && ./node_modules/.bin/tsc --noEmit`; `cd pwa && npm ci && npm run build && ./node_modules/.bin/vitest run`; `cd pwa && node design/contrast-check.mjs` and its `--uncovered` census; `server/test/session-hook.test.ts`, `server/test/pools-prose.test.ts`, `server/test/oss-metadata.test.ts`, `server/test/box-token-census.test.ts`, `server/test/topology-clean.test.ts`, `server/test/dtbd.test.ts`, `server/test/deviation-refs.test.ts` (after `git fetch origin main`) individually after the doc edits *(correction: the skeleton ran `npm run build` in `agent/`, which is plain `tsc` and EMITS `agent/dist`; the gate is CI's own `Typecheck` step, `tsc --noEmit`, `.github/workflows/ci.yml:127` at `d759c914`, run in all three packages — the skeleton had no server typecheck, and `server/tsconfig.json` includes `src` and `../shared` only, so it is the one check that sees a type error in Tasks 1–6's `server/src` and `shared/` edits under the server's settings)*
+- Run: the whole server suite, sharded, foreground: `cd server && ./node_modules/.bin/vitest run --shard=<i>/6` for `i` in 1..6 (six, not four: measured on W2, a coarser split can leave a file out at this file count) (the known load flakes re-run in isolation before a red is called real), then `./node_modules/.bin/tsc --noEmit`; `cd agent && npm ci && ./node_modules/.bin/vitest run && ./node_modules/.bin/tsc --noEmit`; `cd pwa && npm ci && npm run build && ./node_modules/.bin/vitest run`; `cd pwa && node design/contrast-check.mjs` and its `--uncovered` census; `server/test/session-hook.test.ts`, `server/test/pools-prose.test.ts`, `server/test/oss-metadata.test.ts`, `server/test/box-token-census.test.ts`, `server/test/topology-clean.test.ts`, `server/test/dtbd.test.ts`, `server/test/deviation-refs.test.ts` (after `git fetch origin main`) individually after the doc edits *(correction: the skeleton ran `npm run build` in `agent/`, which is plain `tsc` and EMITS `agent/dist`; the gate is CI's own `Typecheck` step, `tsc --noEmit`, `.github/workflows/ci.yml:127` at `d759c914`, run in all three packages — the skeleton had no server typecheck, and `server/tsconfig.json` includes `src` and `../shared` only, so it is the one check that sees a type error in Tasks 1–6's `server/src` and `shared/` edits under the server's settings)*
 - PR: `gh pr create` from the workspace branch; the body ends with the session's attribution line, lists every departure by the number the coordinator's pass gave it (*correction: the skeleton said "every «dev:<slug>»"; by R12 no placeholder survives to this task — Step 6 STOPS on one*), and names the live exit criterion as the coordinator's
 
 **Interfaces:**
@@ -9287,10 +9350,12 @@ test -d pwa/node_modules || (cd pwa && npm ci)
 Then each in the FOREGROUND with the tool's maximum timeout (600000 ms), one command per call, every log kept in `$SCRATCH` so the PR body quotes the run and never a retyped count:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run --shard=1/4 2>&1 | tee "$SCRATCH/w5-server-1.log"; echo "exit ${PIPESTATUS[0]}"
-cd server && ./node_modules/.bin/vitest run --shard=2/4 2>&1 | tee "$SCRATCH/w5-server-2.log"; echo "exit ${PIPESTATUS[0]}"
-cd server && ./node_modules/.bin/vitest run --shard=3/4 2>&1 | tee "$SCRATCH/w5-server-3.log"; echo "exit ${PIPESTATUS[0]}"
-cd server && ./node_modules/.bin/vitest run --shard=4/4 2>&1 | tee "$SCRATCH/w5-server-4.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=1/6 2>&1 | tee "$SCRATCH/w5-server-1.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=2/6 2>&1 | tee "$SCRATCH/w5-server-2.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=3/6 2>&1 | tee "$SCRATCH/w5-server-3.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=4/6 2>&1 | tee "$SCRATCH/w5-server-4.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=5/6 2>&1 | tee "$SCRATCH/w5-server-5.log"; echo "exit ${PIPESTATUS[0]}"
+cd server && ./node_modules/.bin/vitest run --shard=6/6 2>&1 | tee "$SCRATCH/w5-server-6.log"; echo "exit ${PIPESTATUS[0]}"
 cd server && ./node_modules/.bin/tsc --noEmit; echo "exit $?"
 cd agent && ./node_modules/.bin/vitest run 2>&1 | tee "$SCRATCH/w5-agent.log"; echo "exit ${PIPESTATUS[0]}"
 cd agent && ./node_modules/.bin/tsc --noEmit; echo "exit $?"
@@ -9302,8 +9367,8 @@ Expected: every `exit 0`. `echo "exit ${PIPESTATUS[0]}"` reports vitest's status
 The counts, from the logs:
 
 ```bash
-grep -hE '^ *(Test Files|Tests) ' "$SCRATCH"/w5-server-[1-4].log
-grep -hE '^ *Tests ' "$SCRATCH"/w5-server-[1-4].log | sed -nE 's/.*\(([0-9]+)\)[[:space:]]*$/\1/p' | awk '{ s += $1 } END { print "server cases:", s }'
+grep -hE '^ *(Test Files|Tests) ' "$SCRATCH"/w5-server-[1-6].log
+grep -hE '^ *Tests ' "$SCRATCH"/w5-server-[1-6].log | sed -nE 's/.*\(([0-9]+)\)[[:space:]]*$/\1/p' | awk '{ s += $1 } END { print "server cases:", s }'
 grep -hE '^ *(Test Files|Tests) ' "$SCRATCH/w5-agent.log" "$SCRATCH/w5-pwa.log"
 gh run list -b main -w ci --limit 1
 ```
@@ -9374,8 +9439,8 @@ SPEC=docs/superpowers/specs/2026-09-20-centralised-update-management-design.md
   echo
   echo "CLAUDE.md: the box-token bullet names the two new session-only doors (Task 6); the Deploy bullet names the one tap's path (Task 9)."
   echo
-  echo "Test plan: server (four shards), agent and pwa suites and all three typechecks green locally; CI is the arbiter."
-  grep -hE '^ *(Test Files|Tests) ' "$SCRATCH"/w5-server-[1-4].log | sed 's/^ */server: /'
+  echo "Test plan: server (six shards), agent and pwa suites and all three typechecks green locally; CI is the arbiter."
+  grep -hE '^ *(Test Files|Tests) ' "$SCRATCH"/w5-server-[1-6].log | sed 's/^ */server: /'
   grep -hE '^ *(Test Files|Tests) ' "$SCRATCH/w5-agent.log" | sed 's/^ */agent: /'
   grep -hE '^ *(Test Files|Tests) ' "$SCRATCH/w5-pwa.log" | sed 's/^ */pwa: /'
   echo
