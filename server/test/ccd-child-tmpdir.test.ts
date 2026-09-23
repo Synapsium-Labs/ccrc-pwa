@@ -96,6 +96,20 @@ describe('_child_tmpdir — three answers, told apart', () => {
     expect(fs.existsSync(tmpRoot()), 'a non-child must not even create the parent').toBe(false);
   });
 
+  it.each([['0'], ['abc'], ['٣'], ['07'], ['1²']])(
+    'rc 1 for a marker that is not a run id (%j) — creates nothing, and _spawn_start exports no TMPDIR',
+    (child) => {
+      seed('demo-quiet-mesa', child);
+      const r = shStatus('_child_tmpdir demo-quiet-mesa; echo "[rc=$?]"');
+      expect(r.out).toBe('[rc=1]\n');
+      expect(fs.existsSync(tmpRoot()), 'a marker that is not a run id must not even create the parent').toBe(false);
+      h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start demo-quiet-mesa new`);
+      const news = newSessions();
+      expect(news).toHaveLength(1);
+      expect(news[0]).not.toContain('TMPDIR=');
+    },
+  );
+
   it('rc 0 for a child: prints the path, and both directories exist at 0700', () => {
     seed('demo-quiet-mesa', '7');
     const r = shStatus('_child_tmpdir demo-quiet-mesa; echo "[rc=$?]"');

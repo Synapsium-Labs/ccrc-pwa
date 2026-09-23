@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2915e850403202ed96f6b7128ae97991e539a3a1396dcac674aadbf2b198c857
+# ccrc:generated 1 sha256=7451f533da92e59504be894e6957bd963ea1faabb8921d9fdf538ab7c7350cd3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19458,7 +19458,7 @@ _resume_env() {   # -> one line of KEY=value assignments for `env`, switching on
 # THREE ANSWERS, NOT TWO, because the caller acts on two of them differently
 # and must be able to tell the third apart:
 #   0  a child, and its leaf is a real directory, ours, at 0700 — path on stdout;
-#   1  not a child (no marker) — spawn exactly as before this existed;
+#   1  not a child (no marker, or one that is not a run id) — spawn exactly as before this existed;
 #   2  a child whose leaf is not that — warned on stderr, and the caller spawns
 #      WITHOUT TMPDIR rather than refusing (spec §5.2, a ruled arm): a refusal
 #      would leave a swap or a supervisor restart with no session at all.
@@ -19469,7 +19469,7 @@ _resume_env() {   # -> one line of KEY=value assignments for `env`, switching on
 # volume, `$HOME/projects`'s shape) — the root is followed, only the leaf refused.
 _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, leaf unusable (warned)
   local id="$1" root="$HOME/.cc-tmp" dir
-  [[ -n "$(_reg_get "$id" child)" ]] || return 1
+  _child_runid_valid "$(_reg_get "$id" child)" || return 1
   dir="$root/$id"
   if [[ -L "$dir" ]] || ! mkdir -p -m 0700 -- "$root" "$dir" 2>/dev/null \
      || [[ ! -d "$dir" ]] || ! chmod 0700 -- "$dir" 2>/dev/null; then
