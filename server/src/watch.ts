@@ -59,6 +59,7 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
+import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
@@ -195,6 +196,11 @@ const CAPS_REFRESH_MS = 60_000;
  *  so every 30 minutes is 2 an hour, leaving the rest to
  *  `POST /api/updates/refresh` (one a minute at most). */
 const UPDATE_CATALOGUE_MS = 30 * 60_000;
+
+/** The inventory lane (design 2026-09-20 §8): seven small ~/.ccrc reads per
+ *  node, lstat-gated and budget-bounded, once a minute — and at once after a
+ *  `ready` frame (`triggerInventory`, wired in `index.ts`). */
+const UPDATE_INVENTORY_MS = 60_000;
 
 /** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
  *  against a 5000/hr budget with ~4900 free — about 5%. Measured latency
@@ -480,6 +486,11 @@ export class FleetWatcher {
    *  (D-3182), and a restarted server should read
    *  "never checked" for one tick, not for half an hour. */
   private lastCatalogueAt = 0;
+  /** The inventory lane's clock, and its ONE run in flight. Starts at 0 so
+   *  the first tick after a start sweeps. `inventoryNow()` sets the clock, so
+   *  a `ready`-triggered sweep also defers the minute gate's next one. */
+  private lastInventoryAt = 0;
+  private inventoryRun: Promise<SweepOutcome[]> | null = null;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -719,6 +730,43 @@ export class FleetWatcher {
   }
 
   /**
+   * The inventory lane's ONE run (design 2026-09-20 §8). The minute gate in
+   * `tick()`, the `ready` trigger in `index.ts` and `GET /api/updates`
+   * (Task 13, before the first sweep) all JOIN the run in flight rather than
+   * start a second: at boot the first tick and the first `ready` routinely
+   * coincide, and a second sweep would re-read fourteen files to learn
+   * nothing. Resolves `[]` on a server with no coord store.
+   */
+  inventoryNow(): Promise<SweepOutcome[]> {
+    if (this.inventoryRun !== null) return this.inventoryRun;
+    this.lastInventoryAt = Date.now();
+    const run = this.runInventory().finally(() => { this.inventoryRun = null; });
+    this.inventoryRun = run;
+    return run;
+  }
+
+  /** For a caller that must not wait: the `ready` hook runs inside the
+   *  client's handshake handler. */
+  triggerInventory(): void {
+    void this.inventoryNow().catch(() => { /* one bad sweep must not kill the caller */ });
+  }
+
+  /** Builds the sweep's deps and holds this file's one call to sweepInventory
+   *  (Task 12 swaps that callee for the sweep-then-project step). The server's
+   *  own row is read through `localIO` in both modes — `deps.io` is the FLEET
+   *  box's io in remote mode. */
+  private async runInventory(): Promise<SweepOutcome[]> {
+    const coord = this.deps.coord;
+    if (coord === undefined) return [];
+    const { cfg, fleetState } = this.deps;
+    const inv: InventoryDeps = {
+      store: coord, localIo: localIO, ccrcDir: cfg.ccrcDir, role: cfg.role,
+      fleet: cfg.fleetMode === 'remote' && fleetState !== undefined ? { io: this.deps.io, state: fleetState } : null,
+    };
+    return sweepInventory(inv, Date.now());
+  }
+
+  /**
    * The set of session ids that currently have a pending menu dialog. Exposed
    * so a one-shot fleet assembly (the /api/fleet REST + the initial /ws/fleet
    * push on connect) can reflect an ALREADY-pending dialog. Without this, a
@@ -818,6 +866,20 @@ export class FleetWatcher {
           console.warn('ccrc-server: the catalogue poller rejected — this is a bug, poll() should ' +
             `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
         });
+      }
+
+      // The inventory lane (design 2026-09-20 §8) is gated HERE, beside the
+      // catalogue lane and above the registry read and its fail-shut return
+      // (`:828`), because it is not registry-sourced — it reads ~/.ccrc — and
+      // the one state it exists to record on the sweep it happens, a fleet
+      // link that is down, is exactly the state in which
+      // `readRegistryMeasured` answers `listed: false` and that return skips
+      // every lane below it (D-3198, which covers
+      // both update lanes).
+      // NEVER awaited: seven reads per node over the agent must not stall the
+      // dialog detector or the busy->idle push.
+      if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
+        void this.inventoryNow().catch(() => { /* one bad sweep must not kill the poll */ });
       }
 
       // Read once, share with the two lanes that would otherwise each read it

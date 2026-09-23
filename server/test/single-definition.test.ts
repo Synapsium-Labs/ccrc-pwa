@@ -3448,7 +3448,7 @@ describe('the update ring — nothing under server/src/update holds the handle (
    *  routes.ts). A FLOOR, not a count: a new file raises it rather than
    *  breaking it, and a listed file that is gone — a moved or renamed
    *  directory — reds instead of disarming the scan. */
-  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts'];   // Tasks 11–13 append 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts'
+  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts'];   // Tasks 12–13 append 'resolve.ts', 'project.ts', 'routes.ts'
   // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
   // too — the coord ring's `from\s+'node:sqlite'` sees neither.
   const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;

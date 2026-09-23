@@ -7,7 +7,7 @@ import { localIO } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
-import { connectFleet } from './remote/client.js';
+import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
@@ -101,6 +101,9 @@ if (releaseApiUrlProblem !== null) {
 // call only against itself.
 const queue = new KeyedQueue();
 
+// The one agent connection, hoisted out of the remote arm so the `ready`
+// hook below can reach it once the watcher exists. Null in local mode.
+let fleetClient: FleetClient | null = null;
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
   if (!cfg.agentUrl || !cfg.agentToken) {
@@ -108,6 +111,7 @@ if (cfg.fleetMode === 'remote') {
     process.exit(1);
   }
   const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
+  fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
@@ -187,6 +191,14 @@ await notifyLog.load();
 
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
+
+// Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
+// handshake is when an agent that just restarted — a self-update among the
+// reasons — becomes measurable, and a minute is too long to show the old
+// build. A `ready` that fired before this line (the client connects while
+// `notifyLog.load()` is awaited above) is covered by the first tick: the
+// inventory lane's clock starts at 0.
+fleetClient?.onConnected(() => watcher.triggerInventory());
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
