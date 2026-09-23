@@ -114,9 +114,12 @@ describe('the per-session call asks about one branch', () => {
   // consumer of these rows conjoins `headRefName == branch`, so a head-filtered
   // answer is a strict SUPERSET of what anything reads. `_pr_py`'s `bound()`,
   // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
-  // the ccd side; `boundRow()` and `isMergedRow()` on the server's, and
-  // `line.rows` has exactly ONE server-side reader — `phaseFor`'s
-  // `boundRow(line.rows, …)`. Nothing iterates the rows for another branch.
+  // the ccd side; `boundRow()` and `isMergedRow()` on the server's. `line.rows`
+  // now has TWO server-side readers — `phaseFor`'s `boundRow(line.rows, …)` and
+  // `childSpent`'s own same-branch scan (D-3347, fix round A) — and the
+  // superset argument still holds for both: `childSpent` conjoins
+  // `headRefName === line.branch` exactly as `boundRow` does, so neither reader
+  // ever needs a row this filter would have dropped.
   //
   // `--project` is a different question — every workspace of the repo at once,
   // from one call — and keeps the wide window; the second test is that guard.

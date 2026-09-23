@@ -166,6 +166,35 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no number');
   });
 
+  // Fix round 1, IMPORTANT #1: the `unestablished` arm had no test. A
+  // same-branch row whose `isCrossRepository` cannot be read as a boolean —
+  // absent, or a stringly-typed `"false"` gh/ccd never actually sends but the
+  // reader must not misclassify — must not be guessed into `spent` (it is not
+  // a same-repo row) or into `unspent` (falling through to `phaseFor` would
+  // answer `none`, since `boundRow` also requires the same boolean and would
+  // reject it too). It must answer `unmeasured`.
+  it.each([
+    ['isCrossRepository REMOVED entirely', (() => {
+      const row = prRow('OPEN', { number: 42 }) as Record<string, unknown>;
+      delete row.isCrossRepository;
+      return row;
+    })()],
+    ['isCrossRepository a non-boolean string "false"', prRow('OPEN', { number: 42, isCrossRepository: 'false' })],
+  ] as const)('(v) a same-branch row whose repository cannot be established — %s → unmeasured', async (_what, row) => {
+    const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('could not be established');
+  });
+
+  it('(vi) two same-repo same-branch rows → spent/live names the HIGHEST number, not the first', async () => {
+    // Order matters: the lower number comes FIRST, so a mutant that picked
+    // `rows[0]` instead of the highest would answer 7, not 9.
+    const rows = [prRow('OPEN', { number: 7 }), prRow('CLOSED', { number: 9 })];
+    const h = harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'live' });
+  });
+
   // Departure from the plan text's "keep every existing case green": the
   // pre-existing 'a merge ccd could not prove' case below asserted
   // `unmeasured` under the OLD rule, because that row was BOUND (matched

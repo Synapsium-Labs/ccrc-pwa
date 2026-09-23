@@ -28,12 +28,27 @@ export interface ChildSpentDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['ru
 /**
  * The FALLBACK mapping, reached only when no row of `line.rows` names the
  * child's branch as its head in the same repository (the any-same-branch-row
- * check above `childSpent` runs first). What a LIVE lookup's measured phase
- * proves. Total over `PrPhase`, so a phase added to the vocabulary is a
- * compile error here until someone decides what it proves. `none` and
- * `no-commits` are gh's positive answer that no PR is bound to this branch;
- * `unknown` (including `merge-unproven`, where gh said MERGED and a conjunct
- * failed) and `unchecked` prove nothing.
+ * check above `childSpent` runs first).
+ *
+ * WHICH ARMS ARE STILL REACHABLE FROM THAT CALL SITE, AND WHY THE OTHERS STAY.
+ * `childSpent` only ever calls `phaseFor(line)` here after establishing that
+ * `line.rows` holds no row with `isCrossRepository === false` and
+ * `headRefName === line.branch` — which is exactly the pair of conjuncts
+ * `boundRow` requires before it can return a non-null row. So `boundRow`
+ * inside this call always returns `null`, and `phaseFor` can only answer
+ * `none` (has commits past base) or `no-commits` (level with base) — the two
+ * arms this mapping sends to `unspent`. The four `spent` arms (`open`,
+ * `draft`, `merged`, `closed`) and the `unknown`/`unchecked` arms are
+ * therefore UNREACHABLE from this call site today: any row that could produce
+ * one of them is, by construction, a same-repository same-branch row the
+ * `sameRepo` check above would already have answered from. They stay in the
+ * table anyway for two reasons — TOTALITY (`Record<PrPhase, …>` is a compile
+ * error the day `PrPhase` grows a member nobody has classified) and DEFENCE
+ * (`phaseFor` is a shared helper with other call sites; a future change to
+ * `boundRow` or to this file's own filtering must not silently start reading
+ * one of the unreachable arms as if it still meant what it used to). No
+ * behaviour change rides on this comment — only which of the six entries a
+ * test can actually exercise from `childSpent` changed, not the mapping.
  */
 const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> = {
   open: 'spent', draft: 'spent', merged: 'spent', closed: 'spent',
@@ -64,16 +79,20 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  *     about whether the branch has been spent. So this rung reads every row of
  *     `line.rows` — measured 2026-09-23 to survive ccd's own `--head` filter
  *     unfiltered, base and `ours` included — for one whose `isCrossRepository`
- *     is exactly `false` (the same field ccd itself annotates) and whose
+ *     is exactly `false` (passed through from gh's own JSON unchanged; `ours`,
+ *     not this field, is what ccd itself computes and annotates) and whose
  *     `headRefName` names `line.branch`; ANY such row answers `spent`, naming
  *     the highest-numbered one. A same-branch row whose repository could not
  *     be established (`isCrossRepository` absent) is not guessed into either
  *     bucket — it answers `unmeasured` unless a genuine same-repo row also
- *     exists. Only when NO same-branch row exists at all does gh's measured
+ *     exists. Only when no SAME-REPOSITORY same-branch row exists — none at
+ *     all, or every same-branch row is a stranger's fork — does gh's measured
  *     phase decide: `none`/`no-commits` answers `unspent`; every other
  *     answer — `branch-drift` (the lookup provably did not look for this
  *     branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
- *     foreign line — answers `unmeasured`, with the reason in `detail`.
+ *     foreign line — answers `unmeasured`, with the reason in `detail`. A
+ *     recycled slug inherits its head name's PR history and reads spent; wave
+ *     3 separates incarnations.
  *
  * COST, measured rather than assumed: steps 1–2 are file reads; step 3 is one
  * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
@@ -106,10 +125,11 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
   // D-3347: a PR opened from the child's branch spends it, whatever its base
   // and whether or not it binds — `boundRow`'s base/`ours` conjuncts decide
   // which PR a workspace's CONTROL renders, not whether the branch is spent.
-  // `line.branch` (not `rec.branch`) is the string ccd itself compared
-  // `headRefName` against to build `--head` and to fill this same field, so a
-  // full line already speaks for that comparison — branch-drift answers
-  // `unmeasured` above, before a full line is ever found.
+  // `line.branch`, NOT `rec.branch`: it is the exact string ccd queried gh
+  // WITH (`--head`), so a registry rename landing between the server's own
+  // read of `rec` and ccd's read of the same registry cannot make a real PR
+  // miss this check — this compares against what the gh call actually asked,
+  // not against a value that could have moved since.
   const sameBranch = line.rows.filter((r) => r.headRefName === line.branch);
   const sameRepo = sameBranch.filter((r) => r.isCrossRepository === false);
   // Neither `false` (same-repo, handled above) nor `true` (a stranger's fork,
@@ -131,6 +151,15 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
       detail: 'pr-state named a same-branch PR whose repository could not be established' };
   }
 
+  // Reached only when `sameRepo` and `unestablished` are both empty, which
+  // means `boundRow(line.rows, …)` inside `phaseFor` can only ever return
+  // `null` here (see `LIVE_PHASE`'s own doc for why) — so `measured.phase` can
+  // only be `none` or `no-commits` in practice, and `proves` can only be
+  // `unspent`. The `spent` and `unmeasured` arms below are dead code from this
+  // call site today, kept for the same totality/defence reason `LIVE_PHASE`
+  // itself is kept total: `phaseFor` is shared, and a future change to it or
+  // to the filters above must not silently start reading one of these arms as
+  // if it had always been live.
   const measured = phaseFor(line);
   const proves = LIVE_PHASE[measured.phase];
   if (proves === 'spent' && measured.number !== null) return { kind: 'spent', pr: measured.number, source: 'live' };
