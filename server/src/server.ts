@@ -52,10 +52,12 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { registerUpdateRoutes } from './update/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
+import type { UpdateIntentLog } from './coord/updateintentlog.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -300,6 +302,13 @@ export interface Deps {
    *  `POST /api/updates/refresh` on demand. Optional the way `coord` is:
    *  absent, the lane never runs and the update routes read "never checked". */
   catalogue?: CataloguePoller;
+  /** The flat-file journal under `update_intent`/`update_epoch` (design
+   *  2026-09-20 §6), `poolEdgeLog`'s twin and for its reason:
+   *  `CoordStore.setIntent` appends to it INSIDE its transaction, so
+   *  `POST /api/updates/intent` needs the process's one instance, built in
+   *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
+   *  intent route answers `501 not-configured`. */
+  updateIntentLog?: UpdateIntentLog;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -1557,6 +1566,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // not carry the watcher (this function's own third argument), so there is
   // no second place this wiring could come from.
   registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+
+  // The update control plane (design 2026-09-20 §12, update-management W2),
+  // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
+  // and `box-token-census.test.ts`'s lane sources both read `update/routes.ts` by
+  // name. `sessionAuth` for its one dual-credential read; `watcher` so a read
+  // that finds no row for this box yet measures once instead of answering an
+  // empty node list.
+  registerUpdateRoutes(app, deps, sessionAuth, watcher);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

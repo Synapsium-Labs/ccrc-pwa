@@ -224,15 +224,22 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
   /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`,
-  call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each with
-  its own argument — are the census, not this bullet. What does need saying here are the
+  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`
+  and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
+  W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
+  with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST
   /api/coord/caps` (wave 6) are session-gated only — armed, they sit behind the auth gate like every other
   PWA-surface write. The first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
-  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231). The update
+  control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh` and `POST
+  /api/updates/ack` consult no box token. They are registered from `server/src/update/routes.ts`, a file neither
+  `SESSION_ONLY` nor the kickoff literal can see, so `box-token-census.test.ts` reads it as a lane source of its
+  own and keeps their names in a hand-kept `UPDATE_DOORS`, checked against that file in both directions (wave 5
+  adds `apply` and `rollback` there with their routes).
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

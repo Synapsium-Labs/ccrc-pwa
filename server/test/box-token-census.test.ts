@@ -17,7 +17,7 @@
 // `requireMailToken` call sites alone. A scanner
 // demanding one word from all three would be wrong twice. So this file derives
 // ONE set — every route handler that CONSULTS the box token, by either
-// mechanism, across both files that register one — and the prose was rewritten
+// mechanism, across the three files that register one — and the prose was rewritten
 // to speak that set rather than the scanner widened to tolerate three
 // vocabularies.
 //
@@ -65,6 +65,12 @@ const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8')
 
 const COORD_SRC = read('server/src/coord/routes.ts');
 const SERVER_SRC = read('server/src/server.ts');
+/** The THIRD file that registers routes (update-management W2, design 2026-09-20
+ *  §12 census step (a)). Without it, "the update routes are absent from every
+ *  box-token lane" would be a measured zero over an empty set — this file is
+ *  where a box-token call on the update surface would BE, so it is read like
+ *  the two above. */
+const UPDATE_SRC = read('server/src/update/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -95,7 +101,8 @@ const lanesIn = (src: string): string[] => {
 };
 
 const COORD_LANES = lanesIn(COORD_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC)];
+const UPDATE_LANES = lanesIn(UPDATE_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -125,7 +132,18 @@ const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
 const KICKOFF = '/api/sessions/:id/kickoff';
 
 /** Every coordination write the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF];
+/** The update control plane's session-only routes (design 2026-09-20 §12 census
+ *  step (b): the FOUR the W2 wave registers of §12's six). Registered from `server/src/update/routes.ts`,
+ *  which `coord-pause-route.test.ts`'s `SESSION_ONLY` harvest cannot see for the
+ *  kickoff route's reason. Hand-kept for the NAMES only: the update-surface
+ *  describe below derives the same set from the file and compares in both
+ *  directions, so a route there cannot join or leave without this literal
+ *  moving. Wave 5 appends `/api/updates/apply` and `/api/updates/rollback` with
+ *  their routes. */
+const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack'];
+
+/** Every session-only route the bullet must describe as carrying no box token. */
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ...UPDATE_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -265,7 +283,12 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(COORD_LANES).toContain('GET /api/runs');
     expect(ALL_LANES, 'the server.ts lane is missing').toContain('POST /api/notify');
     expect(ALL_LANES, 'the new server.ts lane is missing').toContain('GET /api/pools/epoch');
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 2);
+    expect(ALL_LANES, 'the update projection read is missing — update/routes.ts is not being read')
+      .toContain('GET /api/updates/intent/:nodeId');
+    // THREE since update-management W2: `server.ts`'s pair plus the update
+    // projection read, the one handler in `update/routes.ts` that consults the
+    // box token (design 2026-09-20 §12, decision 15).
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -564,6 +587,61 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and every door it lists as ungated really is one.
     for (const door of UNGATED_DOORS) {
       expect(bullet, `the bullet no longer names the ungated ${door}`).toContain(door);
+    }
+  });
+});
+
+// ── the update surface (update-management W2, design 2026-09-20 §12) ─────────
+//
+// `server/src/update/routes.ts` is the THIRD file that registers routes and the
+// first whose routes neither harvest above can see. So the census is run over it
+// by construction: which of its handlers consult the box token (exactly one, the
+// projection read), which do not (the rest, and `UPDATE_DOORS` must name exactly
+// them), whether a box-token call planted there would be SEEN (the control that
+// makes the first two assertions mean something), and whether CLAUDE.md's bullet
+// names every one of them.
+describe('the update surface: one dual-credential read, every other route session-only (decision 15)', () => {
+  const REGISTERED = [...UPDATE_SRC.matchAll(/app\.(get|post)\('([^']+)'/g)]
+    .map((m) => `${m[1]!.toUpperCase()} ${m[2]!}`);
+
+  it('update/routes.ts registers what the checks below reason over', () => {
+    // Anti-vacuity: every loop below is over REGISTERED or a filter of it.
+    expect(REGISTERED.length, 'the update scan collapsed — this describe is over nothing')
+      .toBeGreaterThan(UPDATE_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a route is registered twice').toBe(REGISTERED.length);
+  });
+
+  it('exactly one handler there consults the box token — the projection read (§18 "no write route takes the box token")', () => {
+    expect(UPDATE_LANES).toEqual(['GET /api/updates/intent/:nodeId']);
+  });
+
+  it('UPDATE_DOORS is exactly the rest of what the file registers, in both directions', () => {
+    const rest = REGISTERED.filter((k) => !UPDATE_LANES.includes(k)).map((k) => k.slice(k.indexOf(' ') + 1));
+    expect([...rest].sort(),
+      'update/routes.ts and UPDATE_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...UPDATE_DOORS].sort());
+  });
+
+  it('a box-token call planted in update/routes.ts is SEEN — the lane source is live, not decorative', () => {
+    // The control for the two cases above: they would pass just as green over a
+    // scanner that could not see this file at all.
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = UPDATE_SRC.replace(anchor, `${anchor}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/updates/ack');
+    }
+    expect(lanesIn(UPDATE_SRC)).not.toContain('POST /api/updates/ack');
+  });
+
+  it("CLAUDE.md's box-token bullet names every update route by its backticked verb and path", () => {
+    // Anchored on the backticked VERB + path, because a bare `/api/updates` is a
+    // substring of every sibling and would be satisfied by any of them.
+    const bullet = passage('CLAUDE.md, the box-token bullet', CLAUDE_MD,
+      '- **Box token gates every coordination WRITE**', '\n- **').replace(/\s+/g, ' ');
+    for (const key of REGISTERED) {
+      expect(bullet, `the bullet does not name \`${key}\` — the update surface grew and the sentence did not`)
+        .toContain(`\`${key}\``);
     }
   });
 });

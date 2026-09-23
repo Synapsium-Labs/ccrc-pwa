@@ -8392,6 +8392,7 @@ export type UpdateRouteError =
 export interface UpdateRouteRefusal {
   ok: false; error: UpdateRouteError;
   field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
+  verdict?: AuthVerdict;   // the 401 only — the gate-shaped verdict the PWA's login screen reads (`GET /api/pools/epoch`'s body)
 }
 export interface IntentWriteAnswer { ok: true; intent: UpdateIntentWire; epoch: number }
 export interface AckAnswer { ok: true; node: NodeWire }

@@ -566,14 +566,14 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the twenty-six machine lanes the
+liveness gate reads the shipped sha out of it), the twenty-seven machine lanes the
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation,
-and `/api/pools/epoch` — the callers are `curl` inside a Claude Code session and
-`ccd-pool-sync.timer`, both with no cookie jar, though the
+`/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
+Claude Code session, `ccd-pool-sync.timer` and, from W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`) take a live session
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the

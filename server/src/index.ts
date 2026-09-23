@@ -17,6 +17,7 @@ import { readMailToken } from './coord/token.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
 import { readLocalCcdCaps } from './localcaps.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import path from 'node:path';
@@ -88,6 +89,12 @@ if (cfg.releaseSource.ok === false) {
     'catalogue will not poll. Set BOTH CCRC_RELEASE_OWNER and CCRC_RELEASE_REPO in ~/.ccrc/ccrc.env, or run the ' +
     'server from an installed tree whose ccd/ccrc carries its release-source lines.');
 }
+
+// The process's ONE `UpdateIntentLog`, beside `poolEdgeLog` and for its reason:
+// `CoordStore.setIntent` appends to it INSIDE its transaction, so the intent
+// route must share this instance rather than construct its own (design
+// 2026-09-20 §6).
+const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
 // D-3209: validated once, beside the release-source check above — a bad
 // `apiUrl` is just as fatal to the catalogue lane as a missing owner/repo.
 const releaseApiUrlProblem = apiBaseProblem(cfg.releaseApiUrl);
@@ -120,6 +127,7 @@ if (cfg.fleetMode === 'remote') {
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
+    updateIntentLog,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
@@ -173,6 +181,7 @@ if (cfg.fleetMode === 'remote') {
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
+    updateIntentLog,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim
