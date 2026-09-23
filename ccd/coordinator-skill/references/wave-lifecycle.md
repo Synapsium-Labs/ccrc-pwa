@@ -733,7 +733,8 @@ whole time, which is the only prevention this ordering rule buys.
    read, the exact SHA is the producer run's own verified `handoffCommit`:
    prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
    MERGED with `headRefOid` equal to it — the coordinator merges with
-   `gh pr merge <pr> --match-head-commit <handoffCommit>` for exactly this
+   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
+   `--admin` where the repository's ruleset requires it) for exactly this
    reason. An UNMARKED producer — every workspace minted without a marker,
    before wave 1's deploy, or by a dispatch that journaled `child-omitted`
    (§2) — is never refused this way; dropping its `sessionId` anyway is
