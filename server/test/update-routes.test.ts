@@ -9,7 +9,7 @@
 // those are planted by one `UPDATE` each, named where they happen. Nothing here
 // reads the live `$HOME`: every box is a `mkTmp` fixture home, and the two sweeps
 // tests trigger (the local-mode and remote-mode reads) run against that home.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -42,6 +42,12 @@ const PASSPHRASE = 'correct horse battery staple';
 /** Two node-ids in `_inst_node_id`'s lowercase shape (`NODE_ID_RE`). */
 const FLEET_ID = '0f0e0d0c-0b0a-4908-8706-050403020100';
 const OTHER_ID = '1f1e1d1c-1b1a-4918-9716-151413121110';
+/** A well-formed node-id (passes NODE_ID_RE) that no fixture ever plants a row
+ *  for — the ROW-ABSENT arm of the projection's 404 (fix round 2, finding 2):
+ *  `no-such-node` fails NODE_ID_RE itself, so without a probe like this one,
+ *  `row === null` has no case exercising it and could 500 on
+ *  `row.supersededBy` while every named suite stayed green. */
+const MISSING_ID = '2f2e2d2c-2b2a-4928-9726-252423222120';
 
 const failingRunner: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
 
@@ -469,6 +475,32 @@ describe('POST /api/updates/intent', () => {
     }
   });
 
+  // fix round 2, finding 1: the server runs `Fastify({ logger: false })`
+  // (`server.ts`), so `req.log.*` is a silent NOOP — the round-1 fix's own
+  // logging call would have reached nobody. The route now uses
+  // `console.warn` in the house form (`server.ts`'s `/api/notify` refusal),
+  // so THIS is the test that proves the raw detail (with its path) still
+  // reaches an operator somewhere, now that the body no longer carries it.
+  it.skipIf(process.getuid?.() === 0)(
+    '503 journal-unwritable: the raw fs error, path included, reaches the server console — never the body', async () => {
+    const f = await open();
+    const p = defaultUpdateIntentLogPath(f.ccrcDir);
+    writeFileSync(p, JSON.stringify({ epoch: 1, scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setBy: 'migration', at: 0 }) + '\n');
+    chmodSync(p, 0o444);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = await post(f.app, '/api/updates/intent', { scope: '*', channel: 'dev' });
+      expect(r.statusCode).toBe(503);
+      expect(r.body, 'the server home path leaked into the client-visible body').not.toContain(f.home);
+      const lines = warn.mock.calls.map((c) => c.map(String).join(' '));
+      expect(lines.some((l) => l.includes(p) && l.includes('EACCES')),
+        `no console.warn line named the fixture's journal path; got: ${JSON.stringify(lines)}`).toBe(true);
+    } finally {
+      warn.mockRestore();
+      chmodSync(p, 0o600);
+    }
+  });
+
   it('409 no-channel when the stored channel under the patch cannot be read — never the fleet default (Task 6\'s arm)', async () => {
     const f = await open();
     // A newer build's channel token in the fleet row: a patch that names no
@@ -595,6 +627,16 @@ describe('GET /api/updates/intent/:nodeId — the projection', () => {
     const unknown = await f.app.inject({ method: 'GET', url: '/api/updates/intent/no-such-node' });
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json()).toEqual({ ok: false, error: 'unknown-node' });
+
+    // fix round 2, finding 2: `no-such-node` above fails NODE_ID_RE itself,
+    // so it exercises ONLY the malformed-id arm. A well-formed id with no
+    // planted row exercises the OTHER arm — `deps.coord.node(nodeId) ===
+    // null` — and must answer byte-identically, so a caller learns nothing
+    // about which of the two reasons applied.
+    const missing = await f.app.inject({ method: 'GET', url: `/api/updates/intent/${MISSING_ID}` });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ ok: false, error: 'unknown-node' });
+    expect(missing.json()).toEqual(unknown.json());
 
     // fix round 1, finding 4: a `:nodeId` that fails NODE_ID_RE (the same
     // gate `setIntent` applies to intent scopes, D-3194) can never be a

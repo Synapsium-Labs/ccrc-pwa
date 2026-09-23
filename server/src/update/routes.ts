@@ -186,7 +186,11 @@ export function registerUpdateRoutes(
     try {
       await watcher.inventoryNow();
     } catch (err) {
-      req.log.warn({ err }, 'update: the on-demand inventory sweep failed; answering the stored rows');
+      // `Fastify({ logger: false })` (server.ts) makes `req.log.*` a NOOP
+      // (fix round 2, finding 1, verified under fastify 5.10.0) — `console.warn`
+      // is the house pattern (`server.ts`'s `/api/notify` refusal, ~1487).
+      console.warn(`ccrc-server: update: the on-demand inventory sweep failed; answering the stored ` +
+        `rows: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -207,12 +211,18 @@ export function registerUpdateRoutes(
     if (!deps.coord) return;
     try {
       const run = await resolveAndProject({ store: deps.coord, role: deps.cfg.role, ccrcDir: deps.cfg.ccrcDir }, Date.now());
+      // `Fastify({ logger: false })` makes `req.log.*` a NOOP (fix round 2,
+      // finding 1) — `console.warn` in the house form is the only place any
+      // of the three outcomes below reaches an operator.
       if (!run.projection.ok && run.projection.why === 'unwritable') {
-        req.log.warn({ detail: run.projection.detail }, 'update: the server-role projection could not be written');
+        console.warn(`ccrc-server: update: the server-role projection could not be written: ${run.projection.detail}`);
       }
-      for (const r of run.refused) req.log.warn({ nodeId: r.nodeId, why: r.why }, 'update: a node resolution was refused');
+      for (const r of run.refused) {
+        console.warn(`ccrc-server: update: a node resolution was refused: ${r.nodeId} (${r.why})`);
+      }
     } catch (err) {
-      req.log.warn({ err }, 'update: resolution after a write failed; the next inventory sweep retries it');
+      console.warn(`ccrc-server: update: resolution after a write failed; the next inventory sweep retries it: ` +
+        `${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -258,9 +268,13 @@ export function registerUpdateRoutes(
     if (!written.ok) {
       // The raw fs error (which may embed the server's own ~/.ccrc path) is
       // logged here, server-side only — `intentRefusal` never sees it (fix
-      // round 1, finding 1).
+      // round 1, finding 1). `console.warn`, not `req.log.warn`: this server
+      // runs `Fastify({ logger: false })`, so `req.log.*` is a silent noop
+      // (fix round 2, finding 1) — `console.warn` in the house form
+      // (`server.ts`'s `/api/notify` refusal) is the only line that reaches
+      // an operator.
       if (written.why === 'journal-unreadable' || written.why === 'journal-unwritable') {
-        req.log.warn({ why: written.why, detail: written.detail }, 'update: the intent journal failed');
+        console.warn(`ccrc-server: update: the intent journal failed (${written.why}): ${written.detail}`);
       }
       const { code, body } = intentRefusal(written);
       return refuse(reply, code, body);
