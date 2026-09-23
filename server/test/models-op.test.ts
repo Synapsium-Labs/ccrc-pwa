@@ -975,7 +975,7 @@ describe('materialise', () => {
       settings: `${home}/.claude-gpt/settings.json`,
       classes: `${home}/.ccrc/models/gpt.classes.tsv`,
       effort: `${home}/.ccrc/models/gpt.effort.json`,
-      // `null` DELIBERATELY: this fixture's `gpt` is `exec: { kind: 'external' }`
+      // `null` DELIBERATELY: this case's lane is `exec: { kind: 'external' }`
       // — the shape a Codex lane has on a box that has not cut over — and only
       // an `exec.kind: 'codex'` row gets spec §5.4's `lane.json`. The key is
       // present on every answer, so an exact pin here is where dropping it reds.
@@ -1124,7 +1124,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
   };
   // The shape spec §1 measured for today's LIVE Codex lanes: `external`, yet
   // naming provider `openai` and reporting `telemetry: 'codex'`. The row that
-  // tells the kind gate from a gate on either of those two fields — `gpt`
+  // tells the kind gate from a gate on either of those two fields — `router`
   // above carries neither, so it cannot.
   const CODEX_EXTERNAL = {
     id: 'codex-b', label: 'codex-b', configDirSuffix: '.claude-codex-b',
@@ -1193,10 +1193,11 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
   });
 
   it('on a lane that is not exec.kind codex, writes no manifest and answers lane: null', () => {
-    // `gpt` is `external` carrying a CODEX registry — today's live Codex lanes
-    // exactly. It has no auth dir or ports to write, and nothing may guess them.
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+    // `router` is `external` carrying a CODEX registry, as today's live Codex
+    // lanes are (the next case adds their provider and telemetry). It has no
+    // auth dir or ports to write, and nothing may guess them.
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'codex');
+    const r = op('materialise', '--file', rosterPath(), '--id', 'router');
     expect(r.code).toBe(0);
     expect((r.body['wrote'] as Record<string, unknown>)['lane']).toBeNull();
     expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
@@ -1204,7 +1205,7 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
 
   it('on a LIVE-shaped external Codex row (provider openai, telemetry codex), writes no manifest either', () => {
     // A gate on `telemetry === 'codex'` or on `exec.provider === 'openai'`
-    // passes the `gpt` case above and would write THIS row a manifest with no
+    // passes the `router` case above and would write THIS row a manifest with no
     // authDir and no ports — `JSON.stringify` drops the undefined fields.
     op('init', '--file', rosterPath(), '--id', 'codex-b', '--probe', 'codex');
     const r = op('materialise', '--file', rosterPath(), '--id', 'codex-b');
@@ -1257,11 +1258,11 @@ describe('lane.json (spec §5.4) — the codex lane manifest', () => {
   });
 
   it('the same move on a lane with no manifest carries no such remedy', () => {
-    // Control, the other way: `gpt` has no lane.json and no publisher reading
-    // one, so nothing about its usage publication just changed.
-    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
-    const haiku = String(classesOf('gpt')['haiku']);
-    const r = op('set-class', '--file', rosterPath(), '--id', 'gpt', '--class', 'sonnet', '--model', haiku);
+    // Control, the other way: `router` has no lane.json and no publisher
+    // reading one, so nothing about its usage publication just changed.
+    op('init', '--file', rosterPath(), '--id', 'router', '--probe', 'codex');
+    const haiku = String(classesOf('router')['haiku']);
+    const r = op('set-class', '--file', rosterPath(), '--id', 'router', '--class', 'sonnet', '--model', haiku);
     expect(r.code).toBe(0);
     expect(r.body['moved']).toEqual(['haiku']);
     expect(Object.prototype.hasOwnProperty.call(r.body, 'remedy')).toBe(false);
