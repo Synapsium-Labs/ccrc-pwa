@@ -842,6 +842,27 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     expect(p.lastRequestAt()).toBeNull();
   });
 
+  // N2 (fix round 1, re-review round 2): the previous case's bad base is
+  // ALSO refused by `BASE_URL_OK` on its own (non-loopback http), so it
+  // never actually exercised the `'@'` refusal's OWN gate at `pollOnce`'s
+  // `baseProblem !== null` check — a base built from THIS loopback fixture
+  // (which `BASE_URL_OK` alone WOULD accept: http, loopback host) is used
+  // here instead, so only the `'@'` check stands between it and a real
+  // request. Mutation (measured by hand): dropping `baseProblem !== null`
+  // from `pollOnce`'s early-return (leaving only `validatedBase === null`)
+  // reds this case — `validatedBase` is non-null (BASE_URL_OK accepts the
+  // loopback host), so the poll would send both requests, one of them
+  // carrying `/@x`'s host-shaped credential.
+  it("N2: a base containing '@' that BASE_URL_OK alone would accept sends NO request", async () => {
+    const { port, calls } = fixture();
+    const p = poller(port, { apiUrl: `${base}/@x` });
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'no-release-source' } });
+    expect(seen).toHaveLength(0);
+    expect(seenLatest).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(p.lastRequestAt()).toBeNull();
+  });
+
   // F9 (fix round 1): `redirect: 'error'` on the LISTING fetch. Mutation
   // (measured by hand): removing `redirect: 'error'` from the listing's
   // `fetch(...)` call makes node's `fetch` FOLLOW the 302 instead — this
@@ -1055,10 +1076,127 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
     });
 
+    // N1 (fix round 2, re-review): the I3 fix above (D-3215) had a
+    // regression — the keep it computed was ONE POLL STALE (the listing ran
+    // BEFORE the probe), the listing's own ETag advanced on the poll that
+    // applied the stale keep (so a LATER listing answers 304 and writes
+    // nothing), and a 404 never released the tag it had last kept. Together
+    // these meant a genuinely WITHDRAWN stable release could stay
+    // `yanked: false` — and resolve as the fleet's desired stable — forever.
+    // The fix: the probe runs FIRST, so `pollListing` always reads THIS
+    // poll's answer; a 404 clears the kept tag; and the listing's ETag is
+    // dropped whenever the kept tag changes, forcing a full re-judgment.
+    describe('N1 — a withdrawn stable release is still yanked (the I3 keep is never more than one poll fresh)', () => {
+      it('(a) stable S2 deleted; /latest moves to the older S1 -> S2 is yanked on that poll, \'*\' -> S1', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s1 = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        const s2 = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [s2, s1] },
+          { status: 200, etag: '"eL2"', body: [s1] },   // S2 deleted from the listing
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS2"', body: s2 },
+          { status: 200, etag: '"eS1"', body: s1 },     // /latest moves down to the older release
+        ];
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false });
+        await p.poll(2000);
+        // The listing's ETag was dropped because the kept tag changed —
+        // verify the SECOND listing request carried no If-None-Match at all.
+        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: true });
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+
+        const eligibility: EligibilityRow[] = store.releases().map((r) => ({
+          tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked,
+        }));
+        const input: ResolveInput = {
+          currentVersion: 'v0.0.0', highestVersion: null, floorRead: 'absent',
+          nodeIntent: null, fleetIntent: { channel: 'stable', pinnedTag: null, auto: 'off' },
+          releases: eligibility, refusedByThisNode: new Set<string>(),
+        };
+        expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
+      });
+
+      it('(b) a stable release withdrawn to draft (absent from the listing), /latest moving to an older one -> yanked', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s0 = rel('v0.0.0', '2026-07-01T00:00:00Z');   // the eventual new latest
+        const s1 = rel('v0.0.1', '2026-08-01T00:00:00Z');   // withdrawn to draft
+        script = [
+          { status: 200, etag: '"eL1"', body: [s1, s0] },
+          { status: 200, etag: '"eL2"', body: [s0] },       // v0.0.1 no longer listed — a draft is never listed
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: s1 },
+          { status: 200, etag: '"eS0"', body: s0 },         // /latest moves down to v0.0.0
+        ];
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+        await p.poll(2000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+      });
+
+      it('(c) the only stable release deleted, /latest answering 404 -> yanked, and the kept tag clears', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s1 = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        // A noise dev release keeps the listing non-empty on poll 2 — an
+        // empty listing while releases are known is refused outright
+        // (D-3185's 'empty-listing'), which would make this pin vacuous.
+        const noise = rel('v0.1.1', '2026-08-02T00:00:00Z', { prerelease: true });
+        script = [
+          { status: 200, etag: '"eL1"', body: [noise, s1] },
+          { status: 200, etag: '"eL2"', body: [noise] },    // v0.0.1 deleted
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: s1 },
+          { status: 404 },                                  // no stable release exists any more
+        ];
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+        await p.poll(2000);
+        // The listing's ETag was dropped because the 404 cleared the kept
+        // tag — verify no If-None-Match was sent on the second listing request.
+        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+      });
+
+      // (d) is the pre-existing 'I3: …' case above, unmodified: the stable
+      // release stays unyanked across a 200-then-304-then-304 sequence where
+      // the KEPT tag never actually changes — proving this fix does not
+      // reintroduce the ORIGINAL I3 failure it is layered on top of.
+
+      // Mutations (measured by hand, each reds a case above):
+      // (1) reverting to the old order (`pollListing` before `pollLatest`,
+      //     reading last poll's `lastLatestTag`) reds (a) — S2 stays
+      //     un-yanked on poll 2, since poll 2's listing still reads S2 as
+      //     the kept tag from poll 1.
+      // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
+      //     stays kept (and un-yanked) forever.
+      // (3) removing the `etag = null` reset when the kept tag changes reds
+      //     (a) (the listing answers a stale 304 keyed to the old ETag and
+      //     writes nothing, so S2 is never re-judged) and would equally red
+      //     (b) if the fixture's own scripted answers depended on the sent
+      //     ETag — they do not here, so the header assertion in (a)/(c) is
+      //     what actually catches it in this fixture shape.
+    });
+
     // Fix round 1, review round 2, item 4: `/releases/latest` never legally
     // answers a draft or a prerelease — treated as a failed latest (warned,
     // deduped; ETag and lastLatestTag both left alone), never written, so it
     // can neither yank nor alter an existing row.
+    // N3 (fix round 1, re-review round 2): the ORIGINAL version of this case
+    // named a draft/prerelease under a tag that was never an existing row
+    // (`v0.0.1`/`v0.0.2` beside a listed `v0.0.9`), so "does not touch an
+    // existing row" was never actually exercised — a new row would simply
+    // never appear, which the guard trivially achieves whether or not it
+    // reads `draft`/`channel` correctly. The reviewer's measured harm was a
+    // draft answer naming an EXISTING listed tag and yanking it. This case
+    // now names `v0.0.9` (the one listed row) in both the draft and the
+    // prerelease answer and asserts that row's own `yanked` stays `false`.
     it('a draft or prerelease answer from /releases/latest is not written, and does not touch an existing row', async () => {
       const { store, port, calls } = fixture();
       const p = poller(port);
@@ -1067,26 +1205,30 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         { status: 200, etag: '"eL2"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
       ];
       scriptLatest = [
-        { status: 200, etag: '"eS1"', body: rel('v0.0.1', '2026-08-01T00:00:00Z', { draft: true }) },
-        { status: 200, etag: '"eS2"', body: rel('v0.0.2', '2026-08-01T00:00:00Z', { prerelease: true }) },
+        { status: 200, etag: '"eS1"', body: rel('v0.0.9', '2026-09-01T00:00:00Z', { draft: true }) },
+        { status: 200, etag: '"eS2"', body: rel('v0.0.9', '2026-09-01T00:00:00Z', { prerelease: true }) },
       ];
       await p.poll(1000);
       expect(calls).toHaveLength(1);   // the listing only — the draft was never applied
-      expect(store.releases().map((r) => r.tag)).toEqual(['v0.0.9']);
+      expect(store.releases()).toMatchObject([{ tag: 'v0.0.9', yanked: false, channel: 'stable' }]);
       await p.poll(2000);
       expect(calls).toHaveLength(2);   // the listing again — the prerelease was never applied either
-      expect(store.releases().map((r) => r.tag)).toEqual(['v0.0.9']);
+      expect(store.releases()).toMatchObject([{ tag: 'v0.0.9', yanked: false, channel: 'stable' }]);
     });
 
-    // Fix round 1, review round 2 (minor): a rate-limited listing has spent
-    // this box's share of an already-exhausted budget; the latest probe is
-    // skipped rather than spending a second request against it.
-    it('minor: the latest probe is skipped when the listing itself answers rate-limited', async () => {
+    // Fix round 2 (N1): the "skip the latest probe when the listing answers
+    // rate-limited" minor from fix round 1 is RETIRED — it depended on the
+    // listing running first, which is exactly what caused the N1 regression.
+    // Now the latest probe ALWAYS runs first, so a rate-limited listing no
+    // longer has a prior probe result to skip against; both requests are
+    // sent every poll regardless of either one's status.
+    it('a rate-limited listing no longer skips the latest probe (the reordering retires that optimization)', async () => {
       const { port } = fixture();
       const p = poller(port);
       script = [{ status: 403 }];
+      scriptLatest = [{ status: 404 }];
       expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'rate-limited' } });
-      expect(seenLatest).toHaveLength(0);
+      expect(seenLatest).toHaveLength(1);
     });
 
     // Mutations (measured by hand, each reds a case above):

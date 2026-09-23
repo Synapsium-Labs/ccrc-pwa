@@ -16,13 +16,17 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * (D-3215) adds a SECOND, independent conditional GET of
  * `/releases/latest`, with its own ETag, upserted through the same one
  * writer under `'single'` coverage (no absence judgment) — an off-page
- * stable release (§7's window) is not silently unresolvable.
+ * stable release (§7's window) is not silently unresolvable. Fix round 2
+ * (N1): the latest probe runs FIRST, every poll — the listing reads its
+ * answer (`lastLatestTag`) as its own yank exclusion (`keepTags`), and doing
+ * that with a POLL-STALE answer (the probe running second) let a genuinely
+ * withdrawn stable release stay un-yanked indefinitely; see `pollOnce`.
  *
  * Quota (§7, measured; D-3215 doubles it): unauthenticated, 60 requests an
  * hour per IP, and a 304 still counts — the ETag saves bytes, not budget.
- * Each poll now sends TWO requests (the listing and the latest-release
- * probe), so the watcher's 30-minute cadence spends 4 requests an hour, well
- * under the 60/hour budget. `POST /api/updates/refresh` reads
+ * Each poll now sends TWO requests (the latest-release probe, then the
+ * listing), so the watcher's 30-minute cadence spends 4 requests an hour,
+ * well under the 60/hour budget. `POST /api/updates/refresh` reads
  * `lastRequestAt()` for its one-a-minute guard, measured against the LISTING
  * request only. No token is ever sent (decision 4: the repo carries no
  * secrets, and the server holds none for GitHub).
@@ -470,6 +474,15 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * latest — warned, deduped, `latestEtag` and `lastLatestTag` both left
    * exactly where they were — never written, so it can neither yank nor
    * alter an existing row.
+   *
+   * Fix round 2 (N1): runs BEFORE `pollListing` now (see `pollOnce`), so the
+   * `lastLatestTag` it leaves behind is THIS poll's answer, never a
+   * poll-stale one. A 404 CLEARS `lastLatestTag` (and `latestEtag`) — an
+   * answer meaning "no stable exists" releases whatever the probe last
+   * confirmed, so the listing's own absence judgment is free to yank it.
+   * Every other failure (network/cap/parse/draft-or-prerelease/a non-2xx
+   * status) leaves `lastLatestTag` exactly where it was: a TRANSIENT probe
+   * failure must not yank the previous stable on a guess.
    */
   async function pollLatest(now: number, source: { owner: string; repo: string }): Promise<void> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
@@ -478,7 +491,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (answer === null) return warnLatest('no-egress');
     if (answer === 'over-cap') return warnLatest('over-cap');
     if (answer === 'redirect') return warnLatest('redirect');
-    if (answer.status === 404) return latestAnswered();   // an answer: no stable release yet
+    // N1: an answer — "no stable release exists" — releases whatever the
+    // probe last confirmed, so the LISTING is free to yank it this poll.
+    if (answer.status === 404) {
+      lastLatestTag = null;
+      latestEtag = null;
+      return latestAnswered();
+    }
     if (answer.status === 304) {
       if (sentEtag === null) return warnLatest(httpReason(304));
       return latestAnswered();
@@ -515,15 +534,22 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (baseProblem !== null || validatedBase === null) return failed(now, 'no-release-source');
     const source = deps.source;
     if (!source.ok) return failed(now, 'no-release-source');
-    const listingState = await pollListing(now, source);
-    // Fix round 1, review round 2 (minor): a rate-limited listing has already
-    // spent this box's share of an exhausted budget — do not spend a second
-    // request against it.
-    if (listingState.lastError?.reason !== 'rate-limited') {
-      // D-3215: independent of the listing's outcome, and never allowed to
-      // change what pollListing already decided.
-      await pollLatest(now, source);
+    // N1 (fix round 2): the latest probe runs FIRST. `pollListing` reads
+    // `lastLatestTag` as its `keepTags` argument, so running the probe first
+    // makes that read THIS poll's answer (200 → the confirmed tag; 304 →
+    // unchanged; 404 → cleared; any other failure → unchanged) rather than
+    // the previous poll's, which is what let a genuinely withdrawn stable
+    // release stay un-yanked forever (the regression the re-review found).
+    const prevLatestTag = lastLatestTag;
+    await pollLatest(now, source);
+    if (lastLatestTag !== prevLatestTag) {
+      // The stable identity CHANGED this poll (a fresh confirmation, or a
+      // 404 clearing it) — the listing's own absence judgment has to be
+      // re-run against the NEW keep set, which a 304 (writing nothing)
+      // would otherwise silently skip, leaving the old release listed.
+      etag = null;
     }
+    await pollListing(now, source);
     // Fix round 1, review round 2 (I2): resolved only after BOTH requests
     // have fully settled, with the state AS IT STANDS THEN — never a
     // snapshot captured before `pollLatest` ran, which hid a state-touching
