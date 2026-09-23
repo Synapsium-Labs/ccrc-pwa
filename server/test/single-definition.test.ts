@@ -1510,6 +1510,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
+      // W4 Task 4 (D-3254): `_upd_write_previous`
+      // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
+      // with no record is not a completed baseline.
+      'elif [ ! -e "$BOX_INSTALLED_FILE" ]; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);

@@ -211,6 +211,12 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
   writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
   writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
+  // W4 Task 4: the node's update state — install-state like the three above.
+  writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nfixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'install-step'), '_inst_skills\n');
+  writeFileSync(join(home, '.ccrc', 'update.json'),
+    '{"target":"v1.0.0","phase":"done","startedAt":1,"updatedAt":2,"detail":null,"from":"cli","pid":4242}\n');
+  writeFileSync(join(home, '.ccrc', 'update.lock'), '');
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -557,9 +563,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The node's three files are install-state, not config (design 2026-09-20
     // §3, §9): an uninstalled box has no identity to the console, no
     // capabilities and no floor.
-    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+    for (const f of ['node-id', 'ccrc-caps', 'floor', 'previous', 'install-step', 'update.json', 'update.lock']) {
       expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
     }
+    // W4 Task 4: a box with no tree has no update in flight, no baseline to
+    // restore to and no spine step to classify.
+    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock\) removed$/m);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);

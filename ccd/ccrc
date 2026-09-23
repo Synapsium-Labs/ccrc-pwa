@@ -1161,6 +1161,12 @@ BOX_UPDATE_LOCK="$HOME/.ccrc/update.lock"
 # death before `_inst_tree` (nothing replaced) from one at or after it (the
 # tree IS replaced — the unit may already run new code).
 BOX_INSTALL_STEP_FILE="$HOME/.ccrc/install-step"
+# `previous` (design §10, W4 Task 4) — the build this box ran BEFORE the last
+# update that was not itself a return (`--from restore|rollback|watchdog`):
+# line 1 its tag, or `untagged` for a build that carries none
+# (D-3231); line 2 its sha, or `unstamped`. The target of an
+# automatic arm-2 restore and of a bare `ccrc rollback`.
+BOX_PREVIOUS_FILE="$HOME/.ccrc/previous"
 # Who started a run that moves this box — the closed vocabulary `--from`
 # accepts (plan D-3228), declared ONCE: `cli` a hand-typed run
 # (the default), `pwa` the console's detached spawn, `restore` the automatic
@@ -1441,6 +1447,9 @@ UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
 UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
+UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
+UPD_PREV_SHA=""      # _upd_read_previous: line 2 (a sha, or `unstamped`)
+UPD_SPINE_DIED=""    # cmd_update: the step a staged spine died in at or after _inst_tree
 
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
@@ -11567,10 +11576,11 @@ cmd_update() {
   # half. `rc` per condition, same split `cmd_status` renders: absent is the
   # honest "unstamped", anything else unreadable — never collapsed into a
   # version nobody measured.
-  local old_desc="unstamped" old_version="" rc=0
+  local old_desc="unstamped" old_version="" old_sha="" rc=0
   _box_build_fields || rc=$?
   case "$rc" in
     0) old_version="${BOX_BUILD[4]}"
+       old_sha="${BOX_BUILD[0]}"
        if [ -n "$old_version" ]; then old_desc="$old_version (${BOX_BUILD[0]})"
        else old_desc="${BOX_BUILD[0]}"; fi ;;
     3) old_desc="unstamped" ;;
@@ -11599,6 +11609,11 @@ cmd_update() {
   fi
   _upd_phase backing-up
   _upd_backup
+  # THE BASELINE (design §10): written after the backup and BEFORE the staged
+  # install touches anything, so a restore — automatic (arm 2) or a bare
+  # `ccrc rollback` — returns to what ran before THIS run, never to the tag
+  # this run is installing.
+  _upd_write_previous "$old_version" "$old_sha"
 
   # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
   # `_inst_env` at first install. Absent — an older box whose env file
@@ -11621,6 +11636,12 @@ cmd_update() {
   # non-zero exit apart below (D-3114). A box mid-update with no record reads
   # `install: incomplete` to `update --check`, which is the truth of it.
   rm -f "$BOX_INSTALLED_FILE"
+  # W4 Task 4: the step marker is cleared beside the record, for the record's
+  # reason — after the staged install its presence must mean THIS run's
+  # spine wrote it. A marker left by an earlier failed `ccrc install` would
+  # otherwise classify this run's death as that run's step.
+  rm -f -- "$BOX_INSTALL_STEP_FILE" \
+    || _ccrc_die "cannot clear ~/.ccrc/install-step before the staged install — a stale marker would misclassify a spine that dies. Nothing was installed; remove it by hand and re-run"
   # D-3147: caps cleared beside the marker. A pre-W1 staged spine writes
   # only the one-line marker and never touches caps, so if this run's
   # staged install does not reach `_inst_caps` (an old spine, or one that
@@ -11666,7 +11687,42 @@ cmd_update() {
       doctor_failed=1
       echo "update: the staged install completed (the record is written) but its trailing doctor exited $inst_rc — this box IS on $UPD_VERSION; the FAIL lines above are the box's health, not the update's, and 'ccrc doctor' re-reads them"
     else
-      _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+      # THE SPINE DIED BEFORE ITS RECORD (design §11). `install-step` names the
+      # step it was in (`_inst_step`, the staged tree's spine): before
+      # `_inst_tree` nothing was replaced; at or after it the tree WAS, and
+      # `_inst_enable` may already have restarted the unit onto new code.
+      # The report says `spine died at <step>` and nothing else, so the die
+      # below must not overwrite it (`_ccrc_die`'s report hook, Task 1).
+      local step step_desc moved=0 place="before _inst_tree: nothing was replaced"
+      step="$(_upd_spine_step)"
+      step_desc="$step"
+      if [ "$step" = none ]; then
+        # D-3252: no marker. Every release older
+        # than W4 writes none — so every restore or rollback target, for a
+        # while — and its absence says nothing about where the spine died.
+        # The stamp is the one measurement left: `_inst_stamp` runs after
+        # `_inst_tree`, so a stamp that moved off the one read before this
+        # install proves the tree was placed. An unmoved stamp proves nothing,
+        # and the sentence says exactly that; never "nothing was replaced".
+        if _upd_stamp_moved "$old_sha"; then
+          moved=1
+          step_desc="an unrecorded step"
+          echo "update: the staged spine recorded no step (a spine older than W4 writes none), but ~/.ccrc/build.json no longer names the build this run replaced — _inst_stamp ran after _inst_tree, so the tree WAS placed"
+        else
+          step_desc="an unrecorded step (no step marker; a spine older than W4 writes none)"
+          place="and whether the tree was replaced is not known (the stamp, written only after _inst_tree, did not move)"
+        fi
+      elif _upd_step_moved "$step"; then
+        moved=1
+      fi
+      _upd_phase failed "spine died at $step_desc"
+      if [ "$moved" -eq 1 ]; then
+        UPD_SPINE_DIED="$step_desc"
+        UPD_REPORTING=0
+        _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, at or after _inst_tree: the tree WAS replaced; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+      fi
+      UPD_REPORTING=0
+      _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
     fi
   fi
 
@@ -12098,6 +12154,143 @@ _upd_converged() {
   [ -f "$BOX_INSTALLED_FILE" ] || return 1
   IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1
   [ "$rec" = "${box[0]}" ]
+}
+
+# ── _upd_write_previous <old_version> <old_sha> — the baseline (design §10) ─
+# A `--from restore|rollback|watchdog` run is a RETURN to a known tag, not a
+# new baseline: were it to write, arm 2's child would record the FAILED tag
+# as `previous`, and the next bare `ccrc rollback` would roll the box forward
+# onto the release that just reverted. A write that fails REMOVES the old
+# file rather than leave it naming a baseline that is no longer the truth;
+# only when even that fails does the update stop — before anything is
+# installed. `_plat_mv_notdir` for `_inst_step`'s reason.
+#
+# D-3254: two more keeps, on any other
+# `--from`, where the RUNNING stamp is not a completed baseline. A spine that
+# dies after `_inst_stamp` leaves the stamp on the new tag and no record, and
+# the rerun its own sentence prescribes (`ccrc update --to <v> --force`)
+# would then record `previous: <v>` — the release that just failed — and
+# lose the tag that last completed. (a) the stamp already reads the tag this
+# run installs: a reinstall is not a new baseline. (b) the record is ABSENT
+# (read here, before `cmd_update` removes it for this run): an earlier
+# update's spine never finished. Absent only, not a record that disagrees —
+# a `deploy.sh` push leaves the old record beside its own stamp, and that
+# tree IS what ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2);
+# with none, the stamp is written as before — a keep never invents an
+# absence.
+_upd_write_previous() {
+  local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
+  [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
+  [ -n "${2:-}" ] && line2="$2"
+  case "$UPD_FROM" in
+    restore|rollback|watchdog)
+      why="a --from $UPD_FROM run returns to a known tag; it is not a new baseline" ;;
+    *)
+      if [ "$line1" != untagged ] && [ "$line1" = "$UPD_VERSION" ]; then
+        why="this box's stamp already reads $UPD_VERSION, the tag this run installs; a reinstall is not a new baseline"
+      elif [ ! -e "$BOX_INSTALLED_FILE" ]; then
+        why="this box's stamp has no completed-install record, so an earlier update's spine never finished and the stamp is not a new baseline"
+      fi
+      # Either keep needs a baseline TO keep: with no well-formed `previous`
+      # the stamp is still the best record of what ran, and is written.
+      if [ -n "$why" ]; then
+        _upd_read_previous || prc=$?
+        case "$prc" in 0|2) ;; *) why="" ;; esac
+      fi ;;
+  esac
+  if [ -n "$why" ]; then
+    if [ -e "$BOX_PREVIOUS_FILE" ]; then
+      kept="unreadable"
+      if [ -f "$BOX_PREVIOUS_FILE" ] && [ -r "$BOX_PREVIOUS_FILE" ]; then
+        kept=""
+        IFS= read -r kept < "$BOX_PREVIOUS_FILE" || :
+        [ -n "$kept" ] || kept="empty"
+      fi
+    fi
+    echo "update: previous: kept ($kept) — $why"
+    return 0
+  fi
+  if { mkdir -p "$HOME/.ccrc" && printf '%s\n%s\n' "$line1" "$line2" > "$tmp" && chmod 644 "$tmp" \
+         && _plat_mv_notdir "$tmp" "$BOX_PREVIOUS_FILE"; }; then
+    if [ "$line1" = untagged ]; then
+      echo "update: previous: untagged ($line2) — this build carries no release tag, so an automatic restore of it is arm 3 and a bare 'ccrc rollback' refuses (name one with --to)"
+    else
+      echo "update: previous: $line1 ($line2) — the tag a restore or a bare 'ccrc rollback' returns to"
+    fi
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null
+  rm -f -- "$BOX_PREVIOUS_FILE" \
+    || _ccrc_die "could not write ~/.ccrc/previous, and could not remove the stale one either — a restore could target the wrong tag, so this update stops here, before anything is installed. Remove ~/.ccrc/previous by hand and re-run"
+  echo "update: WARN: could not write ~/.ccrc/previous — removed the stale one so no restore can target the wrong tag; this update proceeds without an automatic arm-2 restore"
+}
+
+# ── _upd_read_previous — the ONE reader of ~/.ccrc/previous ────────────────
+# rc 0 a tag (UPD_PREV_TAG/UPD_PREV_SHA set), 1 absent, 2 `untagged` (the sha
+# still set), 3 not a regular readable file or not the two-line grammar.
+# Never dies: each caller (arm 2, `rollback`, the watchdog) has its own
+# answer to each word, and absent is not malformed.
+_upd_read_previous() {
+  UPD_PREV_TAG=""; UPD_PREV_SHA=""
+  [ -e "$BOX_PREVIOUS_FILE" ] || return 1
+  { [ -f "$BOX_PREVIOUS_FILE" ] && [ -r "$BOX_PREVIOUS_FILE" ]; } || return 3
+  local -a pl=()
+  { mapfile -t pl < "$BOX_PREVIOUS_FILE"; } 2>/dev/null || return 3
+  [ "${#pl[@]}" -eq 2 ] || return 3
+  [[ "${pl[1]}" =~ ^[^[:space:]]+$ ]] || return 3
+  if [[ "${pl[0]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    UPD_PREV_TAG="${pl[0]}"; UPD_PREV_SHA="${pl[1]}"; return 0
+  fi
+  if [ "${pl[0]}" = untagged ]; then
+    UPD_PREV_TAG=untagged; UPD_PREV_SHA="${pl[1]}"; return 2
+  fi
+  return 3
+}
+
+# ── the spine-death classifier (design §11, W4 Task 4) ─────────────────────
+# `_upd_spine_step` prints the step the staged spine was in: `none` (no
+# marker — a spine older than W4, or a death before `_inst_step` ran),
+# the step's name, or `unreadable` for anything that is not an `_inst_*`
+# name, so no byte the spine wrote reaches a sentence or update.json
+# unvalidated.
+_upd_spine_step() {
+  local s=""
+  if [ ! -e "$BOX_INSTALL_STEP_FILE" ]; then echo none; return 0; fi
+  { IFS= read -r s < "$BOX_INSTALL_STEP_FILE"; } 2>/dev/null || :
+  [[ "$s" =~ ^_inst_[a-z_]+$ ]] || s=unreadable
+  echo "$s"
+}
+
+# `_upd_step_moved <step>` — rc 0 when the tree was (or may have been)
+# replaced, rc 1 when the spine died before `_inst_tree`. Read against THIS
+# tree's `CCRC_INST_SPINE` (the running ccrc; the step came from the staged
+# one): a name it does not list — a newer spine's step, or `unreadable` —
+# is at-or-after, the direction that runs the gate rather than skip it.
+_upd_step_moved() {   # <step>
+  local want="$1" s
+  [ "$want" = none ] && return 1
+  for s in "${CCRC_INST_SPINE[@]}"; do
+    [ "$s" = _inst_tree ] && return 0
+    [ "$s" = "$want" ] && return 1
+  done
+  return 0
+}
+
+# `_upd_stamp_moved <old_sha>` — rc 0 iff the box's own stamp now parses to
+# a sha other than <old_sha>, the one `cmd_update` read before the staged
+# install (D-3252). `_inst_stamp` runs after
+# `_inst_tree`, so rc 0 PROVES the tree was placed. rc 1 is not the converse:
+# a death in `_inst_tree`/`_inst_bins`/`_inst_files`, a stamp step that
+# skipped, or a reinstall of the running build all leave the stamp where it
+# was. (Not `~/ccrc/build.json`: `_inst_tree`'s rsync copies `server agent
+# shared deploy ccd` and never the release root's stamp.) `BOX_BUILD` is
+# saved and restored around the parse, as `_upd_converged` does.
+_upd_stamp_moved() {   # <old_sha>
+  local old="${1:-}" now=""
+  local -a box=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  _box_build_fields && now="${BOX_BUILD[0]}"
+  BOX_BUILD=(${box[@]+"${box[@]}"})
+  [ -n "$now" ] && [ "$now" != "$old" ]
 }
 
 # ── _upd_floor_check <via> <downgrade> <from> — never below the floor by accident ─
@@ -13140,6 +13333,11 @@ _uninst_tree_bins() {
   # capabilities and no floor. `--purge` would take ~/.ccrc whole anyway.
   rm -f -- "$BOX_NODE_ID_FILE" "$BOX_CAPS_FILE" "$BOX_FLOOR_FILE" \
     || _ccrc_die "removing the node's identity, caps and floor files failed"
+  # The node's update state (design §10–§11, W4 Task 4) is install-state too:
+  # an uninstalled box has no update in flight, no baseline to restore to and
+  # no spine step to classify.
+  rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
+    || _ccrc_die "removing the node's update state files failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -13173,7 +13371,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock) removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

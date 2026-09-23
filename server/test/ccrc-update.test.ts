@@ -302,6 +302,15 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   // through to the real binary, resolved at plant time.
   plant('mv', [
     '#!/bin/sh',
+    // W4 Task 4: a destination this fixture refuses — the one way to make a
+    // write fail AFTER its temp exists without a permission trick root
+    // would bypass. `fixture-mv-fail`'s one line is a suffix of the last
+    // argument (the destination).
+    'if [ -f "$HOME/fixture-mv-fail" ]; then',
+    '  IFS= read -r suffix < "$HOME/fixture-mv-fail"',
+    '  for last in "$@"; do :; done',
+    '  case "$last" in *"$suffix") echo "fixture mv: refusing $last" >&2; exit 1 ;; esac',
+    'fi',
     'src=""; dst=""',
     'for a in "$@"; do src="$dst"; dst="$a"; done',
     'case "$dst" in',
@@ -532,6 +541,18 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
     // mid-install while the parent's process group is killed, so whether the
     // detached run survived is not a race against how fast it finishes.
     + 'if [ -f "$HOME/fixture-install-wait" ]; then i=0; while [ ! -f "$HOME/fixture-install-go" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done; fi\n'
+    // W4 Task 4: what `~/.ccrc/previous` held WHILE the staged spine ran —
+    // "written before the install" is read here, never off the file
+    // afterwards, which a write moved after the spine would leave the same.
+    + 'if [ -f "$HOME/.ccrc/previous" ]; then cp "$HOME/.ccrc/previous" "$HOME/staged-saw-previous"; else : > "$HOME/staged-saw-no-previous"; fi\n'
+    // W4 Task 4: the step marker a real spine's `_inst_step` would leave,
+    // from a fixture file — the classifier's subject is cmd_update's READING
+    // of it; the writing is ccrc-install.test.ts's.
+    + '[ -f "$HOME/fixture-install-step" ] && cp "$HOME/fixture-install-step" "$HOME/.ccrc/install-step"\n'
+    // W4 Task 4 (review fix): a spine older than W4 writes no marker, but its
+    // `_inst_stamp` still places the release's own stamp. `$0` is the staged
+    // `<tree>/ccd/ccrc`, so the tree's `build.json` is `${0%/ccd/ccrc}/build.json`.
+    + '[ -f "$HOME/fixture-restamp" ] && cp "${0%/ccd/ccrc}/build.json" "$HOME/.ccrc/build.json"\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -762,6 +783,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // — provenance verified, no `unsigned` line 2 (D-3117, Task 12).
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8'))
       .toBe('newsha0000000000000000000000000000000000\n');
+    expect(existsSync(join(home, '.ccrc', 'install-step')), 'a completed spine left its step marker').toBe(false);
     // The old tree is GONE and the staged one is in its place: the marker the
     // previous install left does not survive the rsync --delete, and the
     // shipped executables do arrive.
@@ -802,6 +824,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // default) makes `cmd_update` assert CCRC_UPDATE_VERIFIED=1 for this
     // spine, so the marker is ONE line — verified, not `unsigned` (Task 12).
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
+    expect(existsSync(join(home, '.ccrc', 'install-step')), 'a completed spine left its step marker').toBe(false);
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
     // Task 1 (design §10): the report's last word is `done` — the box MOVED
@@ -830,7 +853,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     writeFileSync(join(home, 'fail-bin', 'npm'), '#!/bin/sh\necho "fixture npm: refusing" >&2\nexit 1\n', { mode: 0o755 });
     const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/the staged install \(which ends with doctor\) exited 1 — read its lines above\. The backup taken BEFORE it ran is complete at/);
+    // W4 Task 4: `npm ci` dies INSIDE `_inst_tree`, after its rsync placed the
+    // new tree — at-or-after the tree, which is what the sentence now says.
+    expect(r.stderr).toMatch(/the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, at or after _inst_tree: the tree WAS replaced; read its lines above\. The backup taken BEFORE it ran is complete at/);
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
     expect(r.stdout).not.toMatch(/^update: build: /m);
   });
@@ -970,6 +996,265 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.code, r.stderr).toBe(0);
     argv = readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
     expect(argv.slice(1)).toEqual(['install']);
+  });
+});
+
+describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 Task 4)', () => {
+  const OLD_SHA = 'oldsha0000000000000000000000000000000000';
+  const report = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+  const previous = (home: string): string => readFileSync(join(home, '.ccrc', 'previous'), 'utf8');
+  const stubBox = (prefix: string, installExit = 0): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    // A COMPLETED install on v1.0.0 — the record names the stamp's sha — so
+    // the stamp is a baseline and `previous` is written from it
+    // (D-3254 keeps it otherwise).
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    packRelease(home, stubTree(home, { version: 'v2.0.0', installExit }), { tag: 'v2.0.0' });
+    return home;
+  };
+
+  it('previous is written BEFORE the staged install: two lines, the running tag and sha, mode 0644 (§18 "previous is written before the install")', () => {
+    const home = stubBox('ccrc-update-prev-');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe(`v1.0.0\n${OLD_SHA}\n`);
+    expect(previous(home)).toBe(`v1.0.0\n${OLD_SHA}\n`);
+    expect(statSync(join(home, '.ccrc', 'previous')).mode & 0o777).toBe(0o644);
+    expect(r.stdout).toMatch(new RegExp(`^update: previous: v1\\.0\\.0 \\(${OLD_SHA}\\) — the tag a restore or a bare 'ccrc rollback' returns to$`, 'm'));
+  });
+
+  it('an unversioned box writes `untagged` — its stamp sha when it has one, `unstamped` when it has none (D-3231)', () => {
+    const home = freshUpdateBox('ccrc-update-prev-untagged-');
+    plantOldBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      `{"sha":"${OLD_SHA}","ref":"main","builtAt":"2026-08-20T00:00:00Z","dirty":false}\n`);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe(`untagged\n${OLD_SHA}\n`);
+    expect(r.stdout).toMatch(/^update: previous: untagged \(oldsha0+\) — this build carries no release tag, so an automatic restore of it is arm 3 and a bare 'ccrc rollback' refuses \(name one with --to\)$/m);
+    const bare = freshUpdateBox('ccrc-update-prev-unstamped-');
+    plantOldBox(bare);
+    packRelease(bare, stubTree(bare, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(bare);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(bare, 'staged-saw-previous'), 'utf8')).toBe('untagged\nunstamped\n');
+  });
+
+  it.each([['restore'], ['rollback'], ['watchdog']])('a --from %s run does NOT rewrite previous — it returns to a known tag, not a new baseline (§18 "…and not by a restore")', (from) => {
+    const home = stubBox(`ccrc-update-prev-keep-${from}-`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nbaselinesha\n');
+    const r = runUpdate(home, ['--from', from]);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(previous(home)).toBe('v0.9.0\nbaselinesha\n');
+    expect(r.stdout).toMatch(new RegExp(`^update: previous: kept \\(v0\\.9\\.0\\) — a --from ${from} run returns to a known tag; it is not a new baseline$`, 'm'));
+  });
+
+  // D-3254: the rerun D-3240
+  // prescribes (`ccrc update --to <v> --force`) runs on a box whose stamp
+  // already reads <v> — left there by the spine that died after `_inst_stamp`.
+  // Written from that stamp, `previous` would name the release that just
+  // failed, and a failing rerun's arm 2 would re-install it.
+  it('a --force reinstall of the tag the box already runs keeps previous — a reinstall is not a new baseline (D-3254)', () => {
+    const home = freshUpdateBox('ccrc-update-prev-reinstall-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    // The record is PRESENT, so only the same-tag arm can keep previous here.
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the reinstall never ran — the keep below would be vacuous').toBe(true);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+    expect(previous(home)).toBe('v1.0.0\nbaselinesha\n');
+    expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
+    // …and with NO previous to keep (a box whose first move was made by a
+    // pre-W4 `ccrc`, as Task 16's live `rollout --force` is), the reinstall
+    // writes its stamp as today.
+    const first = freshUpdateBox('ccrc-update-prev-reinstall-none-');
+    plantOldBox(first, { version: 'v2.0.0' });
+    writeFileSync(join(first, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    packRelease(first, stubTree(first, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r2 = runUpdate(first, ['--force']);
+    expect(r2.code, `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`).toBe(0);
+    expect(previous(first)).toBe(`v2.0.0\n${OLD_SHA}\n`);
+  });
+
+  it('a box whose last install never completed (stamp v2.0.0, no record) keeps previous on an update to ANOTHER tag (D-3254)', () => {
+    const home = freshUpdateBox('ccrc-update-prev-incomplete-');
+    plantOldBox(home, { version: 'v2.0.0' });   // no `installed`: the spine that stamped v2.0.0 died before its record
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    // v3.0.0, not v2.0.0: the same-tag arm cannot be what keeps it.
+    packRelease(home, stubTree(home, { version: 'v3.0.0' }), { tag: 'v3.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+    expect(previous(home)).toBe('v1.0.0\nbaselinesha\n');
+    expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\) — this box's stamp has no completed-install record, so an earlier update's spine never finished and the stamp is not a new baseline$/m);
+    // …and with NO previous to keep, the same box writes its stamp as today:
+    // the arm keeps a baseline, it never invents an absence.
+    const fresh = freshUpdateBox('ccrc-update-prev-incomplete-none-');
+    plantOldBox(fresh, { version: 'v2.0.0' });
+    packRelease(fresh, stubTree(fresh, { version: 'v3.0.0' }), { tag: 'v3.0.0' });
+    const r2 = runUpdate(fresh);
+    expect(r2.code, `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`).toBe(0);
+    expect(previous(fresh)).toBe(`v2.0.0\n${OLD_SHA}\n`);
+  });
+
+  it('a previous that cannot be written is REMOVED, never left stale — and the update proceeds saying so', () => {
+    const home = stubBox('ccrc-update-prev-mvfail-');
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v0.5.0\nstalesha\n');
+    writeFileSync(join(home, 'fixture-mv-fail'), '/.ccrc/previous\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: could not write ~\/\.ccrc\/previous — removed the stale one so no restore can target the wrong tag; this update proceeds without an automatic arm-2 restore$/m);
+    expect(existsSync(join(home, '.ccrc', 'previous')), 'the stale previous survived').toBe(false);
+    expect(existsSync(join(home, 'staged-saw-no-previous'))).toBe(true);
+    expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('previous.tmp.'))).toEqual([]);
+  });
+
+  it('a previous that can be neither written nor removed stops the update BEFORE the staged install', () => {
+    const home = stubBox('ccrc-update-prev-stuck-');
+    mkdirSync(join(home, '.ccrc', 'previous', 'in-the-way'), { recursive: true });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not write ~\/\.ccrc\/previous, and could not remove the stale one either/);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the staged install ran').toBe(false);
+    expect(report(home)).toMatchObject({ phase: 'failed' });
+  });
+
+  it('a spine that dies BEFORE _inst_tree: exit 1, "nothing was replaced", update.json failed: spine died at <step> (§11)', () => {
+    const home = stubBox('ccrc-update-spine-before-', 1);
+    writeFileSync(join(home, 'fixture-install-step'), '_inst_node_id\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_node_id, before _inst_tree: nothing was replaced; read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
+    expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_node_id', target: 'v2.0.0' });
+  });
+
+  it.each([['_inst_tree'], ['_inst_bins'], ['_inst_skills'], ['_inst_from_a_newer_spine']])('a spine that dies at %s reads AT OR AFTER _inst_tree — an unknown step is the safe direction (§18 "a spine death after the tree moved reverts", Task 4 half)', (step) => {
+    const home = stubBox(`ccrc-update-spine-after-${step.replace(/^_/, '')}-`, 1);
+    writeFileSync(join(home, 'fixture-install-step'), `${step}\n`);
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`spine died at ${step}, at or after _inst_tree: the tree WAS replaced; read its lines above.`);
+    expect(report(home)).toMatchObject({ phase: 'failed', detail: `spine died at ${step}` });
+  });
+
+  it('no step marker and an unmoved stamp (a spine older than W4) exits 1 WITHOUT claiming nothing was replaced — and a STALE marker from an earlier failed install never classifies this run (D-3252)', () => {
+    const home = stubBox('ccrc-update-spine-none-', 1);
+    writeFileSync(join(home, '.ccrc', 'install-step'), '_inst_skills\n');   // left by an earlier failed `ccrc install`
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('spine died at an unrecorded step (no step marker; a spine older than W4 writes none), and whether the tree was replaced is not known (the stamp, written only after _inst_tree, did not move); read its lines above.');
+    expect(r.stderr, 'an unmarked death claimed a measurement nobody made').not.toMatch(/nothing was replaced/);
+    expect(report(home)).toMatchObject({
+      phase: 'failed', detail: 'spine died at an unrecorded step (no step marker; a spine older than W4 writes none)',
+    });
+    expect(existsSync(join(home, '.ccrc', 'install-step'))).toBe(false);
+  });
+
+  it('no step marker but a MOVED stamp (a pre-W4 spine that reached _inst_stamp) reads AT OR AFTER _inst_tree — the stamp is written only after the tree (D-3252)', () => {
+    const home = stubBox('ccrc-update-spine-none-restamped-', 1);
+    writeFileSync(join(home, 'fixture-restamp'), '');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(existsSync(join(home, '.ccrc', 'install-step')), 'the fixture wrote a marker — this case is about a spine that writes none').toBe(false);
+    expect(r.stdout).toMatch(/^update: the staged spine recorded no step \(a spine older than W4 writes none\), but ~\/\.ccrc\/build\.json no longer names the build this run replaced — _inst_stamp ran after _inst_tree, so the tree WAS placed$/m);
+    expect(r.stderr).toContain('spine died at an unrecorded step, at or after _inst_tree: the tree WAS replaced; read its lines above.');
+    expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at an unrecorded step' });
+  });
+
+  it('FULL flavour: the REAL staged spine records _inst_skills as it enters it, and a death there reads at-or-after the tree (§11 Pins, "spine death")', () => {
+    const home = freshUpdateBox('ccrc-update-spine-skills-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    const tree = fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' });
+    writeFileSync(join(tree, 'ccd', 'install-coordinator-skill.sh'),
+      '#!/bin/bash\necho "fixture: the coordinator skill installer refuses" >&2\nexit 1\n', { mode: 0o755 });
+    rmSync(join(tree, 'MANIFEST'));   // writeManifest lists every file — the old MANIFEST would list itself
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/fixture: the coordinator skill installer refuses/);
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_skills\n');
+    expect(r.stderr).toContain('spine died at _inst_skills, at or after _inst_tree: the tree WAS replaced;');
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_skills' });
+  });
+
+  it('_upd_step_moved classifies by the RUNNING tree\'s CCRC_INST_SPINE; _upd_spine_step answers none, the step, or unreadable', () => {
+    const home = freshUpdateBox('ccrc-update-step-moved-');
+    const cases: Array<[string, number]> = [
+      ['none', 1], ['_inst_banner', 1], ['_inst_node_id', 1],
+      ['_inst_tree', 0], ['_inst_bins', 0], ['_inst_skills', 0], ['_inst_installed', 0],
+      ['_inst_from_a_newer_spine', 0], ['unreadable', 0],
+    ];
+    const r = sourcedCcrc(home, [
+      ...cases.map(([s]) => `_upd_step_moved ${s}; echo "${s}=$?"`),
+      'f="$HOME/.ccrc/install-step"; mkdir -p "$HOME/.ccrc"; rm -f "$f"',
+      'echo "step:$(_upd_spine_step)"',
+      'printf \'%s\\n\' _inst_hooks > "$f"; echo "step:$(_upd_spine_step)"',
+      'printf \'%s\\n\' \'_inst_hooks; echo injected\' > "$f"; echo "step:$(_upd_spine_step)"',
+      ': > "$f"; echo "step:$(_upd_spine_step)"',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.trim().split('\n')).toEqual([
+      ...cases.map(([s, rc]) => `${s}=${rc}`),
+      'step:none', 'step:_inst_hooks', 'step:unreadable', 'step:unreadable',
+    ]);
+  });
+
+  it('_upd_stamp_moved: rc 0 only for a stamp that parses to ANOTHER sha — absent, the same sha or a malformed stamp is rc 1, and BOX_BUILD is restored', () => {
+    const home = freshUpdateBox('ccrc-update-stamp-moved-');
+    const stamp = (sha: string): string =>
+      `printf '%s\\n' '{"sha":"${sha}","ref":"main","builtAt":"2026-08-20T00:00:00Z","dirty":false}' > "$HOME/.ccrc/build.json"`;
+    const r = sourcedCcrc(home, [
+      'mkdir -p "$HOME/.ccrc"; rm -f "$HOME/.ccrc/build.json"',
+      '_upd_stamp_moved oldsha; echo "absent=$?"',
+      stamp('oldsha'), '_upd_stamp_moved oldsha; echo "same=$?"',
+      stamp('newsha'), '_upd_stamp_moved oldsha; echo "moved=$?"',
+      '_upd_stamp_moved ""; echo "from-unstamped=$?"',
+      'printf \'not json\\n\' > "$HOME/.ccrc/build.json"; _upd_stamp_moved oldsha; echo "malformed=$?"',
+      'BOX_BUILD=(keep me); _upd_stamp_moved oldsha; echo "restored=${BOX_BUILD[*]}"',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.trim().split('\n')).toEqual([
+      'absent=1', 'same=1', 'moved=0', 'from-unstamped=0', 'malformed=1', 'restored=keep me',
+    ]);
+  });
+
+  it('_upd_read_previous answers five ways and never dies: tag, absent, untagged, malformed, not-a-file', () => {
+    const home = freshUpdateBox('ccrc-update-read-prev-');
+    const r = sourcedCcrc(home, [
+      'p="$HOME/.ccrc/previous"; mkdir -p "$HOME/.ccrc"',
+      'show() { _upd_read_previous; echo "$1=$? [$UPD_PREV_TAG] [$UPD_PREV_SHA]"; }',
+      'show absent',
+      'printf \'%s\\n\' v1.2.3 abc123 > "$p"; show tag',
+      'printf \'%s\\n\' untagged abc123 > "$p"; show untagged',
+      'printf \'%s\\n\' untagged unstamped > "$p"; show unstamped',
+      'printf \'%s\\n\' latest abc123 > "$p"; show not-a-tag',
+      'printf \'%s\\n\' v1.2.3 > "$p"; show one-line',
+      'printf \'%s\\n\' v1.2.3 abc123 extra > "$p"; show three-lines',
+      'printf \'v1.2.3\\n\\n\' > "$p"; show empty-sha',
+      'rm -f "$p"; mkdir "$p"; show directory',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.trim().split('\n')).toEqual([
+      'absent=1 [] []',
+      'tag=0 [v1.2.3] [abc123]',
+      'untagged=2 [untagged] [abc123]',
+      'unstamped=2 [untagged] [unstamped]',
+      'not-a-tag=3 [] []',
+      'one-line=3 [] []',
+      'three-lines=3 [] []',
+      'empty-sha=3 [] []',
+      'directory=3 [] []',
+    ]);
   });
 });
 
