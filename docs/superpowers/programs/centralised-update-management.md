@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **dispatched** (run 128, 2026-09-23); plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **awaiting review** (run 128, PR #176, tip `a35f5e7c`); review run 134 dispatched 2026-09-23; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
@@ -107,6 +107,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   landed on the detached HEAD (`ebf7e774`) and its push failed silently. Restored by checking the branch out and
   cherry-picking (`079f1881`); both workers' worktrees measured untouched. Later plan pipelines run their agents in
   scratch copies of the tree, never this worktree.
+
+- **Wave 2's wave-done (2026-09-23).** PR #176 at `a35f5e7c` (fingerprint re-measured: branch tip, PR open, clean
+  tree, 30 commits, all under the noreply identity). Six reserve numbers spent (D-3207…D-3212, each defined in the plan). The
+  worker's gate ran six `/6` shards, not the brief's `1/3`+`3/6…6/6`: at this file count vitest's `1/3` shard ends one
+  file before `3/6` starts, so the brief's split skips a file. Later briefs use `K/6` for K = 1…6. Its one red,
+  `tmp-sweep.test.ts`'s FAILS CLOSED case, reproduces on a clean `main` worktree on this box (#168). The worker raised
+  eight items for later waves. They are ruled with the review report, not before it. Review run 134 carries two
+  wave-specific lenses beside the panel (security/untrusted input; interface fidelity against waves 3–5's committed
+  plans).
+- **The catalogue's page window, measured 2026-09-23:** 18 releases published; the current stable (v0.0.11) is the 8th
+  newest. At about three merges a day, GitHub's first page of 30 stops showing it in about four days, and the seeded
+  `'*'` → stable default would then resolve to "no eligible release". That fails safe but is wrong, so it must be fixed
+  before rollout.
 
 ## Carried constraints
 
