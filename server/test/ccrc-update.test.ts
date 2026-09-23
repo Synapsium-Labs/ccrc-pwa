@@ -1025,6 +1025,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(existsSync(join(home, '.ccrc', 'install-step')), 'a completed spine left its step marker').toBe(false);
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
+    expect(r.stdout).not.toMatch(/died inside _inst_installed/);
     // Task 1 (design §10): the report's last word is `done` — the box MOVED
     // — and its detail says whose the FAIL lines are. Exit 3 is unchanged.
     // The em dash in the shipped sentence reaches the report as `-`
@@ -1034,6 +1035,43 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(rep['phase']).toBe('done');
     expect(rep['target']).toBe('v2.0.0');
     expect(rep['detail']).toBe('doctor exited 1 - the box moved; its health is ccrc doctor\'s');
+  });
+
+  it('a floor write that fails inside _inst_installed is named as that, not as doctor: the box IS on the new build, its floor not raised, exit 3 (M1)', () => {
+    // W1 minor M1. `_inst_installed` places the completed-install record and
+    // THEN raises the floor; a floor write that fails dies there — after the
+    // record, before the trailing doctor ever ran — and the record's
+    // presence alone read that death as "its trailing doctor exited 1".
+    // Task 4's step marker tells the two apart: `_inst_installed` removes it
+    // only on its completed returns, so a death inside its floor block
+    // leaves it naming `_inst_installed`.
+    const home = freshUpdateBox('ccrc-update-floor-write-dies-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    // Task 4's knob in the harness's recording `mv`: it refuses exactly the
+    // one move that places ~/.ccrc/floor (`_inst_floor`'s `mv -f -- "$ftmp"
+    // "$BOX_FLOOR_FILE"`) and execs the real mv for every other — the record,
+    // the step marker, update.json — so the spine runs to that line and no
+    // further.
+    writeFileSync(join(home, 'fixture-mv-fail'), '/.ccrc/floor\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    expect(r.stderr).toMatch(/writing \S+\/\.ccrc\/floor failed/);
+    // Task 5's gate ran on the new build and passed — exit 3, not 4, is
+    // that pass (a failed gate here would be Task 6's restore).
+    expect(r.stdout).toMatch(/^update: gate: both answers on v2\.0\.0 /m);
+    expect(r.stdout).toMatch(/^update: the staged install placed its completed-install record, then died inside _inst_installed \(writing ~\/\.ccrc\/floor — read its line above\); this box IS on v2\.0\.0 and its floor was not raised$/m);
+    expect(r.stdout).not.toMatch(/trailing doctor exited/);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
+    expect(existsSync(join(home, '.ccrc', 'floor'))).toBe(false);
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_installed\n');
+    // Task 1's report: the console reads the same cause, not doctor's.
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep['phase']).toBe('done');
+    expect(rep['detail']).toBe('the floor write died inside _inst_installed - the box moved; its floor was not raised');
   });
 
   it('a spine that DIED inside _inst_tree (after the tree moved) is gated, fails the gate on the OLD build, and exits 4 with the backup named — and leaves NO completed-install record (D-3114, design §11)', () => {

@@ -11941,10 +11941,29 @@ cmd_update() {
   # them: present → completed, unhealthy (say so, sweep, report, exit 3);
   # absent → died (die as before, the backup named).
   local doctor_failed=0
+  local done_detail=""
   if [ "$inst_rc" -ne 0 ]; then
     if [ -f "$BOX_INSTALLED_FILE" ]; then
       doctor_failed=1
-      echo "update: the staged install completed (the record is written) but its trailing doctor exited $inst_rc — this box IS on $UPD_VERSION; the FAIL lines above are the box's health, not the update's, and 'ccrc doctor' re-reads them"
+      # M1 (W1 minor): the record is `_inst_installed`'s FIRST write and the
+      # floor its second (`_inst_floor`, which it calls), so a record beside
+      # a non-zero exit is one of two deaths: doctor failing after a
+      # completed spine, or the floor write dying inside `_inst_installed`
+      # before doctor ever ran. The staged spine's step marker (Task 4)
+      # tells them apart — `_inst_installed` removes it only after
+      # `_inst_floor` returns, so a death in the floor step leaves it naming
+      # `_inst_installed`. (Should that removal itself
+      # fail, its WARN line is printed above and a later doctor FAIL reads as
+      # this sentence; the marker's own WARN names the cause.)
+      # `done_detail` is the report's half of the same split (Task 1's final
+      # `_upd_phase done`, below the sweep).
+      done_detail="doctor exited $inst_rc — the box moved; its health is ccrc doctor's"
+      if [ "$(_upd_spine_step)" = _inst_installed ]; then
+        done_detail="the floor write died inside _inst_installed — the box moved; its floor was not raised"
+        echo "update: the staged install placed its completed-install record, then died inside _inst_installed (writing ~/.ccrc/floor — read its line above); this box IS on $UPD_VERSION and its floor was not raised"
+      else
+        echo "update: the staged install completed (the record is written) but its trailing doctor exited $inst_rc — this box IS on $UPD_VERSION; the FAIL lines above are the box's health, not the update's, and 'ccrc doctor' re-reads them"
+      fi
     else
       # THE SPINE DIED BEFORE ITS RECORD (design §11). `install-step` names the
       # step it was in (`_inst_step`, the staged tree's spine): before
@@ -12042,7 +12061,7 @@ cmd_update() {
   fi
   _upd_report "$old_desc" "$old_version"
   if [ "$doctor_failed" -eq 1 ]; then
-    _upd_phase done "doctor exited $inst_rc — the box moved; its health is ccrc doctor's"
+    _upd_phase done "$done_detail"
     exit 3
   fi
   _upd_phase done
