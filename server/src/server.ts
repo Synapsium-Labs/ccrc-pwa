@@ -55,6 +55,7 @@ import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
+import type { CataloguePoller } from './update/catalogue.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -293,6 +294,12 @@ export interface Deps {
    *  itself. Optional the same way `coord` is: a box with no coordination
    *  configured serves no pool-membership routes either. */
   poolEdgeLog?: PoolEdgeLog;
+  /** The release-catalogue poller (design 2026-09-20 §7, `update/catalogue.ts`).
+   *  Constructed in `index.ts` beside `coord`, whose one catalogue writer it
+   *  calls; `FleetWatcher` polls it on its own 30-minute clock and
+   *  `POST /api/updates/refresh` on demand. Optional the way `coord` is:
+   *  absent, the lane never runs and the update routes read "never checked". */
+  catalogue?: CataloguePoller;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this

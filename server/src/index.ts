@@ -18,6 +18,7 @@ import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { readLocalCcdCaps } from './localcaps.js';
+import { createCataloguePoller } from './update/catalogue.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -72,6 +73,22 @@ const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
 // rather than each route constructing its own.
 const poolEdgeLog = new PoolEdgeLog(defaultPoolEdgeLogPath(cfg.home));
 
+// The process's ONE catalogue poller (design 2026-09-20 §7), beside `coord`
+// because its only write is `coord.applyReleaseListing`. Its state and ETag
+// are memory (D-3182). A box whose release source
+// could not be read (Task 9, D-3175) still builds one: every poll
+// then answers `no-release-source` and sends nothing — said once, here.
+const catalogue = createCataloguePoller({ source: cfg.releaseSource, apiUrl: cfg.releaseApiUrl, store: coord });
+if (cfg.releaseSource.ok === false) {
+  // `env-malformed` carries `path: null` (Task 9): the fault is the env pair, not a file.
+  const where = cfg.releaseSource.why === 'env-malformed'
+    ? 'CCRC_RELEASE_OWNER/CCRC_RELEASE_REPO are both set and one is not a plain GitHub name'
+    : cfg.releaseSource.path;
+  console.warn(`ccrc-server: no release source (${cfg.releaseSource.why}: ${where}) — the update ` +
+    'catalogue will not poll. Set BOTH CCRC_RELEASE_OWNER and CCRC_RELEASE_REPO in ~/.ccrc/ccrc.env, or run the ' +
+    'server from an installed tree whose ccd/ccrc carries its release-source lines.');
+}
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
@@ -92,6 +109,7 @@ if (cfg.fleetMode === 'remote') {
     cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
+    catalogue,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
@@ -144,6 +162,7 @@ if (cfg.fleetMode === 'remote') {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
     poolEdgeLog,
+    catalogue,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

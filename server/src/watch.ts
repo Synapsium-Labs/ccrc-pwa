@@ -190,6 +190,12 @@ const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
  *  a stat, not a bash process. */
 const CAPS_REFRESH_MS = 60_000;
 
+/** The catalogue lane (design 2026-09-20 §7). GitHub's unauthenticated
+ *  listing budget is 60 requests an hour per IP and a 304 still spends one,
+ *  so every 30 minutes is 2 an hour, leaving the rest to
+ *  `POST /api/updates/refresh` (one a minute at most). */
+const UPDATE_CATALOGUE_MS = 30 * 60_000;
+
 /** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
  *  against a 5000/hr budget with ~4900 free — about 5%. Measured latency
  *  0.51-0.69 s per call. */
@@ -469,6 +475,11 @@ export class FleetWatcher {
    *  always refreshes — which is what recovers a server that connected to an
    *  agent whose boot-time caps read had already failed. */
   private lastCapsAt = 0;
+  /** The catalogue lane's clock. Starts at 0, like `lastCapsAt`, so the first
+   *  tick after a start polls: the catalogue's state is process memory
+   *  (D-3182), and a restarted server should read
+   *  "never checked" for one tick, not for half an hour. */
+  private lastCatalogueAt = 0;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -786,6 +797,22 @@ export class FleetWatcher {
     if (this.ticking) return;
     this.ticking = true;
     try {
+      // The catalogue lane (design 2026-09-20 §7) is gated HERE, above the
+      // registry read and its fail-shut return (`if (!registryRead.listed)`
+      // below), because it reads nothing from the registry: a GitHub listing
+      // is as answerable while `io.readdir` fails as while it succeeds, and
+      // that return skips every lane below it (D-3198).
+      // NEVER awaited, the caps refresh's reasoning further down: a GitHub
+      // listing behind a 10 s deadline must not stall the dialog detector or
+      // assembleFleet. `poll` records its own failures as `lastError` and does
+      // not reject; the `.catch` covers the one thing it does not catch — a
+      // throw from the store's writer — which must not become an unhandled
+      // rejection via start()'s `void this.tick()`.
+      if (this.deps.catalogue && Date.now() - this.lastCatalogueAt >= UPDATE_CATALOGUE_MS) {
+        this.lastCatalogueAt = Date.now();
+        void this.deps.catalogue.poll(Date.now()).catch(() => { /* one bad poll must not kill the tick */ });
+      }
+
       // Read once, share with the two lanes that would otherwise each read it
       // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
       // every readRegistry() field is its own agent-WS round trip, so this is
