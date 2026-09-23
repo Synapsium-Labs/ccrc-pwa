@@ -75,6 +75,19 @@ Steps:
 
 Numbers are ISSUED, never chosen. This programme's block was allocated once by its coordinator at run-open, and a worker never calls the allocator. A departure found while executing this plan is named in the wave-done mail: what departed, where, and why. The coordinator assigns its number and has it defined here.
 
+- **D-3473** — README.md edited under a held claim (Task 1, S6-R11). `README.md` was claimed by another programme (run 128). The worker mailed the holder its narrow scope, two `ccd/ccd` anchor numbers re-pointed by content (`21079` → `21202`, `19866-19868` → `19989-19991` at fix round 2's tip — +123, the helper's growth below the boundary), and committed the re-point without an answer, because without it the session-hook README case reds. The coordinator accepted it: claims are advisory, and the other programme's coordinator agreed that the second PR to merge re-points README and re-measures.
+- **D-3474** — two existing `_ws_slug_new` unit tests plant a repository (`server/test/ccd-workspaces.test.ts`, "generates a slug that is itself valid" and "honours CCD_WS_SLUG when the name is free"). They called `_ws_slug_new` with no repo, which this plan's table now answers `unmeasurable`. They plant `makeRepo('demo')` in a line-neutral edit, because the frozen corpus cites that file at lines 121–272. The same file gains one DISPOSITION entry for the new file's three `slug in use:` assertions. Fix round 2 (review 141, F1) plants the same repository, line-neutral, in the three other `_ws_slug_new` cases there ("never collides with an existing registry entry", "rejects an invalid CCD_WS_SLUG rather than passing it through", "keeps the generator off a residue slug as well as the explicit one"). Without it they passed for the wrong reason, because the missing repository answered `unmeasurable` before the registry and validity checks they pin could decide.
+- **D-3475** — `_ws_slug_git_state` also proves git's resolved toplevel is `$main` (Task 1). git skips a `.git` it cannot read and keeps discovering upwards. Measured: a broken `$main` inside another repository answered `show-ref` from the outer one (rc 1, which reads as `free`). So a toplevel that is not `$main` is `unmeasurable`. It has its own test and mutation row 6.
+- **D-3476** — the probes tell unreadable from absent and see directory/file conflicts; the plan's show-ref-rc premise was false (fix round 2, review 141 F2–F4, `_ws_slug_git_state` below the frozen boundary). The Global Constraints said `git show-ref --verify --quiet` exits 1 only when the ref is absent. Measured on git 2.43, it also exits 1 for:
+  - a loose ref git cannot read (mode 000), and a corrupt one;
+  - anything under an unsearchable `refs/heads` or `refs/heads/ws`;
+  - a `ws/<slug>/<x>` branch, and a branch named just `ws`.
+  `git worktree add -b ws/<slug>` dies on every one of these. So after rc 1 the helper also runs these probes:
+  - `show-ref` on `refs/heads/ws`;
+  - `for-each-ref` under `refs/heads/ws/<slug>/`, which sees packed children;
+  - the loose paths under `--git-common-dir`. An unsearchable directory is `unmeasurable`. A file at `refs/heads/ws` is `taken branch ws`. A directory at the ref path is `taken`. Anything else standing at the ref path is `unmeasurable`.
+  When `$wt` does not stat and a directory above it is unsearchable, the path probe answers `unmeasurable` rather than `free` (F4). Measured, and kept by ruling: git removes an EMPTY directory at the ref path and succeeds, so `taken` there is stricter than git. Each new arm has its own test and mutation row (13–20 in PR #177's table).
+
 ---
 
 ## Review lenses

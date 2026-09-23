@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9c582002e635ba9702b8d24e6b5d77c01c123f85ad9e229e004c64b49bb1727e
+# ccrc:generated 1 sha256=1c8de8611b5f7fc3450434da600cc3e45a3861c9a0056e24ce022c7b59e693b5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6328,15 +6328,15 @@ _ws_slug_residue() {   # project slug -> the $REG-relative basenames the registr
 }
 
 _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
-  local project="$1" slug i
+  local project="$1" slug i gs
   if [[ -n "${CCD_WS_SLUG:-}" ]]; then             # tests and manual naming
     _ws_slug_valid "$CCD_WS_SLUG" || return 1
-    _ws_slug_free "$project" "$CCD_WS_SLUG" || return 1
+    _ws_slug_free "$project" "$CCD_WS_SLUG" || return 1; gs=$(_ws_slug_git_state "$project" "$CCD_WS_SLUG") || { echo "ccd: $gs" >&2; return 1; }
     echo "$CCD_WS_SLUG"; return 0
   fi
   for ((i = 0; i < 60; i++)); do
     slug="${WS_ADJ[RANDOM % ${#WS_ADJ[@]}]}-${WS_NOUN[RANDOM % ${#WS_NOUN[@]}]}"
-    _ws_slug_free "$project" "$slug" && { echo "$slug"; return 0; }
+    _ws_slug_free "$project" "$slug" && { gs=$(_ws_slug_git_state "$project" "$slug"); case $? in 0) echo "$slug"; return 0 ;; 2) echo "ccd: $gs" >&2; return 1 ;; esac; }
   done
   return 1
 }
@@ -6923,15 +6923,15 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
-  # looking for a workspace that is not there. The list is the reclaim
-  # instruction: those are the files, in $REG, and nothing else holds the slug.
+  # looking for a workspace that is not there. The list is $REG's part of the
+  # reclaim; git and the disk are judged after it, by `_ws_slug_git_state`.
   # A PLAIN LIST ROOTED ONCE (D-2605), not the old `$REG/<id>.{...}` brace
   # template: since `_ws_slug_free` now also refuses on the dot-LEADING private
   # compaction families, the template's dot-AFTER-the-id shape could name no
   # such file, and every path it printed for one would not exist.
-  [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
-                        _ws_slug_free "$project" "$slug" \
-                          || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; }
+  [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; local gs; \
+                        _ws_slug_free "$project" "$slug" || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; \
+                          gs=$(_ws_slug_git_state "$project" "$slug") || { [[ $? -eq 1 ]] && die "slug in use: $slug — ${gs#taken }"; die "cannot judge slug $slug for $project — $gs"; }; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
                         || die "could not find a free slug for $project"; }
 
@@ -19271,6 +19271,129 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # The window expired. An explicit verdict, because falling out of a `for` loop under `set -uo
   # pipefail` with no `-e` returns the status of the last command — `sleep 2`, i.e. 0. That is M6.
   return 4
+}
+
+# ── WS-ADD'S GIT AND DISK JUDGEMENT OF A SLUG (programme ws-slug-collision) ──
+# `_ws_slug_free` reads the REGISTRY and nothing else, and stays that way: its
+# contract is that every reason it refuses is one `_ws_slug_residue` can name,
+# and its `ws-gc` unclaimed-census caller is about registry rows alone. But a
+# slug the registry has forgotten can still be held by git — a `ws/<slug>`
+# branch that outlived its workspace (measured 2026-09-23: 27 of one repo's 33
+# `ws/*` branches had no row) — and `cmd_ws_add` then died AFTER the pick, at
+# `git worktree add`, which the dispatch route surfaced as a bare 502. This is
+# the second judgement, consulted BESIDE the first at ws-add's three slug
+# sites — `_ws_slug_new`'s random loop and its `CCD_WS_SLUG` arm, and
+# `cmd_ws_add`'s named-slug refusal — all of them ahead of the fetch and of
+# anything minted.
+#
+# THREE ANSWERS, one line on stdout:
+#   rc 0  `free`                no refs/heads/ws/<slug>, nothing at all at $wt
+#                               (not even a dangling link), and $wt is not a
+#                               registered worktree of $main;
+#   rc 1  `taken <what>`        `branch ws/<slug>`, `path <wt>` or
+#                               `worktree <wt>` — the first one found;
+#   rc 2  `unmeasurable <why>`  git could not answer.
+# The third must never fold into either of the others. Folded into `free`, it
+# retries into the very late death this exists to prevent; folded into
+# `taken`, it burns all sixty draws and blames the slug for a repository git
+# cannot read.
+#
+# `show-ref --verify` EXIT 1 IS NOT ABSENCE ON ITS OWN (fix round 2, D-3476).
+# This header used to say it was — "1 is the ONLY status read as absence" — and
+# the plan's premise said the same. Measured on git 2.43, show-ref exits 1 for
+# an absent ref AND for a loose ref git cannot read (mode 000), a corrupt one,
+# anything under an unsearchable `refs/heads` or `refs/heads/ws`, and a
+# directory/file conflict — a `ws/<slug>/<x>` branch, or one named just `ws` —
+# every one of which `git worktree add -b ws/<slug>` then dies on. Only an
+# unreadable `packed-refs` reaches the rc 128 its `*)` arm catches. So rc 1 is
+# believed only after three more probes agree:
+#   - `show-ref` on `refs/heads/ws` itself, and `for-each-ref` under
+#     `refs/heads/ws/<slug>/` — the conflicts git can READ, packed or loose;
+#   - the LOOSE PATHS under `--git-common-dir`: `refs` and `refs/heads` must
+#     be searchable; `refs/heads/ws`, if present, must be a searchable
+#     directory (a file there IS a branch named `ws`); and at
+#     `refs/heads/ws/<slug>` nothing may stand — a directory there is `taken`
+#     (it holds a child ref git could not list), anything else is a ref git
+#     cannot resolve, which is `unmeasurable`.
+# A ref present only in `packed-refs` is already answered by `show-ref`. An
+# EMPTY directory at the ref path reads `taken` by ruling, though git itself
+# removes one and succeeds — measured; the stricter answer only skips a slug.
+# The loose probe assumes the files backend: a reftable repository's
+# `refs/heads` is no searchable directory, and it answers `unmeasurable` —
+# loud and closed, never free.
+#
+# THE REPOSITORY IS PROVED TO BE $main FIRST. git skips a `.git` it cannot read
+# and keeps discovering UPWARDS, so a broken $main inside another repository
+# (a dotfiles $HOME) answers `show-ref` from the outer one — measured, rc 1,
+# which would read as `free`. Its toplevel, resolved, must be $main's.
+#
+# PATH IS `-e || -L`: `-e` follows a link, so a dangling one reads as absent
+# while `git worktree add` still refuses the path. An empty directory is
+# `taken` too, deliberately: ccd did not make it, so ccd cannot say whose it is.
+# And `-e` is false on EACCES as well as on absence, so when `$wt` does not stat
+# the directories above it must be searchable, or the answer is `unmeasurable`.
+#
+# WORKTREE COMPARES RESOLVED PATHS. git prints every worktree path with its
+# symlinks collapsed ($HOME/worktrees -> /data/worktrees in production) while
+# $wt is ccd's own spelling, so both sides go through `_ws_realpath`, which
+# resolves the longest EXISTING prefix — the case here being a registered
+# worktree whose directory is gone. A `worktree list` that fails is
+# `unmeasurable`: nothing listed is not nothing registered.
+#
+# THE RESIDUAL, accepted (review 141, F5): this is a judgement, not a lock. The
+# ws-add flock serialises ws-add under one project LABEL only, and between this
+# answer and `git worktree add` come a fetch and a mkdir — so `ws-rename`'s
+# `git branch -m`, any session's own git, or a ws-add under a second label on
+# the same repository can still take the ref in that window. git's own refusal
+# at `worktree add` is then the backstop, as it was before this existed.
+_ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <what>` | 2 `unmeasurable <why>`
+  local main="$PROJECTS_ROOT/$1" wt="$WORKTREES_ROOT/$1/$2" top rc listing line rwt kid common d
+  top=$(git -C "$main" rev-parse --show-toplevel 2>/dev/null) \
+    || { echo "unmeasurable $main is not a repository git can read"; return 2; }
+  [[ "$(_ws_realpath "$top")" == "$(_ws_realpath "$main")" ]] \
+    || { echo "unmeasurable git reads $main as part of $top — its own repository is unreadable"; return 2; }
+  git -C "$main" show-ref --verify --quiet "refs/heads/ws/$2"; rc=$?
+  case "$rc" in
+    0) echo "taken branch ws/$2"; return 1 ;;
+    1) ;;
+    *) echo "unmeasurable git show-ref refs/heads/ws/$2 failed (rc $rc) in $main"; return 2 ;;
+  esac
+  git -C "$main" show-ref --verify --quiet "refs/heads/ws"; rc=$?
+  case "$rc" in
+    0) echo "taken branch ws"; return 1 ;;
+    1) ;;
+    *) echo "unmeasurable git show-ref refs/heads/ws failed (rc $rc) in $main"; return 2 ;;
+  esac
+  kid=$(git -C "$main" for-each-ref --count=1 --format='%(refname)' "refs/heads/ws/$2/" 2>/dev/null) \
+    || { echo "unmeasurable git for-each-ref failed in $main"; return 2; }
+  [[ -n "$kid" ]] && { echo "taken branch ${kid#refs/heads/}"; return 1; }
+  common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    || { echo "unmeasurable git rev-parse --git-common-dir failed in $main"; return 2; }
+  for d in "$common/refs" "$common/refs/heads"; do
+    [[ -d "$d" && -x "$d" ]] || { echo "unmeasurable cannot search $d"; return 2; }
+  done
+  d="$common/refs/heads/ws"
+  if [[ -e "$d" || -L "$d" ]]; then
+    [[ -d "$d" ]] || { echo "taken branch ws"; return 1; }
+    [[ -x "$d" ]] || { echo "unmeasurable cannot search $d"; return 2; }
+    d+="/$2"
+    if [[ -e "$d" || -L "$d" ]]; then
+      [[ -d "$d" && ! -L "$d" ]] && { echo "taken branch ws/$2/ (a directory holds its path)"; return 1; }
+      echo "unmeasurable $d exists but git cannot resolve it"; return 2
+    fi
+  fi
+  [[ -e "$wt" || -L "$wt" ]] && { echo "taken path $wt"; return 1; }
+  for d in "$WORKTREES_ROOT" "$WORKTREES_ROOT/$1"; do
+    [[ -e "$d" && ! -x "$d" ]] && { echo "unmeasurable cannot search $d"; return 2; }
+  done
+  listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) \
+    || { echo "unmeasurable git worktree list failed in $main"; return 2; }
+  rwt=$(_ws_realpath "$wt")
+  while IFS= read -r line; do
+    [[ "$line" == "worktree "* && "${line##*/}" == "$2" ]] || continue   # same leaf first: one resolve, not one per worktree
+    [[ "$(_ws_realpath "${line#worktree }")" == "$rwt" ]] && { echo "taken worktree $wt"; return 1; }
+  done <<< "$listing"
+  echo "free"; return 0
 }
 
 _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the server if this call creates it
