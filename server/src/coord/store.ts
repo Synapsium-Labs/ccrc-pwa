@@ -14,6 +14,9 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
 // deeper.
 import { bodyDigest } from '../../../shared/mark.mjs';
+// Fix round 1, item 5 (ruling A): the same tag comparator every other
+// ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
+import { newestTag } from '../../../shared/semver.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
   holdReasonVerdict,
@@ -197,8 +200,14 @@ export interface ReleaseListingRow {
  *  the yank `UPDATE` below never runs under it. A listing of any length
  *  other than 1 under `single` is refused outright (`single-not-one`) —
  *  the coverage name is a promise about its own argument, not just about
- *  what happens next (fix round 1, review round 2, minor). */
-export type ListingCoverage = 'complete' | 'newest-page' | 'single';
+ *  what happens next (fix round 1, review round 2, minor). `withdrawn`
+ *  (fix round 1, item 5, ruling A, D-3215) = an EMPTY listing that yanks
+ *  EXACTLY the one tag named by `withdrawTag`, and nothing else — the
+ *  poller's own targeted `GET /releases/tags/{K}` answered 404, confirming
+ *  the kept tag K itself is gone (never inferred from its mere absence off
+ *  `/releases/latest` or off a listing page, which prove nothing about a
+ *  release outside their own window). */
+export type ListingCoverage = 'complete' | 'newest-page' | 'single' | 'withdrawn';
 
 /** `applyReleaseListing`'s answers. `yanked` counts rows THIS listing newly
  *  marked absent; `unyanked` counts rows that were yanked and are listed again,
@@ -210,7 +219,8 @@ export type ApplyReleaseListingResult =
   | { ok: false; why: 'duplicate-tag'; tag: string }
   | { ok: false; why: 'bad-row'; tag: string; field: 'channel' | 'publishedAt' | 'tarballUrl' }
   | { ok: false; why: 'empty-listing'; known: number }
-  | { ok: false; why: 'single-not-one'; count: number };
+  | { ok: false; why: 'single-not-one'; count: number }
+  | { ok: false; why: 'withdrawn-not-empty'; count: number };
 
 /** One `releases` row on the way OUT. `channel` is `null` for a stored token
  *  outside `UpdateChannel` — the ClaimState stance (`ClaimEndResult`, below):
@@ -5825,10 +5835,20 @@ export class CoordStore {
    *  successful `single` upsert named, so a `complete`/`newest-page` listing
    *  that omits it (the off-page-stable shape D-3215 exists for) never marks
    *  it `yanked = 1` out from under the latest probe; an invalid entry is
-   *  silently dropped, never a reason to refuse the whole listing. */
-  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage, keepTags: readonly string[] = []): ApplyReleaseListingResult {
+   *  silently dropped, never a reason to refuse the whole listing. `withdrawTag`
+   *  (fix round 1, item 5, ruling A) is read ONLY under `'withdrawn'` coverage:
+   *  the poller's own targeted tag fetch answered 404, so this call yanks
+   *  EXACTLY that one tag — never the general `since`/window judgment below,
+   *  which proves nothing about a release outside its own listing. */
+  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage, keepTags: readonly string[] = [], withdrawTag: string | null = null): ApplyReleaseListingResult {
     if (coverage === 'single' && listing.length !== 1) {
       return { ok: false, why: 'single-not-one', count: listing.length };
+    }
+    if (coverage === 'withdrawn') {
+      if (listing.length !== 0) return { ok: false, why: 'withdrawn-not-empty', count: listing.length };
+      if (!isReleaseTag(withdrawTag ?? '')) return { ok: false, why: 'bad-tag', tag: withdrawTag ?? '' };
+      const res = this.db.prepare('UPDATE releases SET yanked = 1 WHERE tag = ? AND yanked = 0').run(withdrawTag);
+      return { ok: true, upserted: 0, yanked: Number(res.changes), unyanked: 0 };
     }
     const seen = new Set<string>();
     for (const r of listing) {
@@ -5880,6 +5900,20 @@ export class CoordStore {
       ).run(since, ...excludeTags);
       return { ok: true, upserted: listing.length, yanked: Number(res.changes), unyanked };
     });
+  }
+
+  /** READ, not a writer — the writer-group scan governs writes only. Fix
+   *  round 1, item 5 (ruling A): the poller's own reference tag K is never
+   *  stored; it is derived on demand, at poller creation and whenever the
+   *  poller's remembered tag has gone null (a restart, or a first ever poll),
+   *  as the newest un-yanked `channel = 'stable'` release BY TAG — the same
+   *  comparator (`newestTag`, `compareReleaseTags`) every other ordering in
+   *  this design uses, never `publishedAt`. `null` when no such release is
+   *  known yet. */
+  newestUnyankedStable(): string | null {
+    const rows = this.db.prepare("SELECT tag FROM releases WHERE yanked = 0 AND channel = 'stable'")
+      .all() as { tag: string }[];
+    return newestTag(rows.map((r) => r.tag));
   }
 
   /** A node's verdict on a release (§8: a changed `failed` report whose detail

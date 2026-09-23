@@ -410,6 +410,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
    *  no warn, nothing for an old assertion to see. */
   let scriptLatest: Answer[];
   let seenLatest: { method: string; url: string; headers: IncomingMessage['headers'] }[];
+  /** Fix round 1, item 5 (ruling A): the moved-away tag check
+   *  (`/releases/tags/{k}`) is a THIRD, on-demand request — routed by URL
+   *  into its own queue and its own `seen` log, so neither pre-existing
+   *  queue above ever sees it. Unscripted, it defaults to a 500: a FAILURE
+   *  (never an answer), so a pre-existing case that never expects this
+   *  request to fire and never scripts it leaves K exactly where it was —
+   *  the "nothing changes" arm, not a silent yank or upsert. */
+  let scriptWithdrawn: Answer[];
+  let seenWithdrawn: { method: string; url: string; headers: IncomingMessage['headers'] }[];
 
   const respond = (res: ServerResponse, a: Exclude<Answer, 'hang'>): void => {
     const headers: Record<string, string> = { 'content-type': 'application/json', ...(a.headers ?? {}) };
@@ -434,12 +443,16 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     script = [];
     seenLatest = [];
     scriptLatest = [];
+    seenWithdrawn = [];
+    scriptWithdrawn = [];
     server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      const isLatest = (req.url ?? '').endsWith('/releases/latest');
-      const entry = { method: req.method ?? '', url: req.url ?? '', headers: req.headers };
-      (isLatest ? seenLatest : seen).push(entry);
-      const queue = isLatest ? scriptLatest : script;
-      const a = queue.shift() ?? (isLatest ? { status: 404 } : { status: 500, body: 'fixture: no answer scripted' });
+      const url = req.url ?? '';
+      const isLatest = url.endsWith('/releases/latest');
+      const isWithdrawn = /\/releases\/tags\//.test(url);
+      const entry = { method: req.method ?? '', url, headers: req.headers };
+      (isLatest ? seenLatest : isWithdrawn ? seenWithdrawn : seen).push(entry);
+      const queue = isLatest ? scriptLatest : isWithdrawn ? scriptWithdrawn : script;
+      const a = queue.shift() ?? (isLatest ? { status: 404 } : isWithdrawn ? { status: 500 } : { status: 500, body: 'fixture: no answer scripted' });
       if (a === 'hang') return;   // never answered — the deadline's case
       respond(res, a);
     });
@@ -454,20 +467,22 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
 
   function fixture(): {
     store: CoordStore; port: CatalogueStore;
-    calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[] }[];
+    calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[]; withdrawTag: string | null }[];
   } {
     const store = new CoordStore(openCoordDb(path.join(mkTmp('update-catalogue-'), 'coord.db')));
-    const calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[] }[] = [];
+    const calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[]; withdrawTag: string | null }[] = [];
     const port: CatalogueStore = {
       // Fix round 1, review round 2 (I3): forwards `keepTags` — a fixture
       // wrapper that silently dropped it would hide the whole mechanism
       // from every test in this file (measured: this WAS the bug on first
       // write, found by the I3 pin failing while the direct store-level
-      // test passed).
-      applyReleaseListing(listing, now, coverage, keepTags = []) {
-        calls.push({ listing, now, coverage, keepTags });
-        return store.applyReleaseListing(listing, now, coverage, keepTags);
+      // test passed). Fix round 1, item 5 (ruling A): forwards `withdrawTag`
+      // for the same reason.
+      applyReleaseListing(listing, now, coverage, keepTags = [], withdrawTag = null) {
+        calls.push({ listing, now, coverage, keepTags, withdrawTag });
+        return store.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag);
       },
+      newestUnyankedStable: () => store.newestUnyankedStable(),
     };
     return { store, port, calls };
   }
@@ -1076,6 +1091,44 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
     });
 
+    // I-3 (fix round 1, review round 2, findings dispatch fr1-D — the "any
+    // other probe failure keeps the remembered tag" arm had NO test that
+    // could go red): the reviewer's measured harm sequence — 200 K, then a
+    // TRANSIENT probe failure, then a 304 — must leave K kept and un-yanked
+    // throughout. A probe failure is not a "moved away" signal (ruling A
+    // reserves that for a clean 404 or a clean 200 naming an older tag); it
+    // is simply unanswered, and the previous confirmation stands.
+    it('I-3: a transient probe failure (502, then a timeout-shaped over-cap) between two confirmations never clears the kept tag', async () => {
+      const { store, port } = fixture();
+      const p = poller(port);
+      const listingBody = Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.1.${i + 1}`, new Date(Date.UTC(2026, 8, 2, 0, i)).toISOString(), { prerelease: true }));
+      const stableAt = new Date(Date.UTC(2026, 8, 2, 0, 15, 30)).toISOString();
+      script = [
+        { status: 200, etag: '"eL1"', body: listingBody },
+        { status: 200, etag: '"eL2"', body: listingBody },
+        { status: 200, etag: '"eL3"', body: listingBody },
+        { status: 200, etag: '"eL4"', body: listingBody },
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eS"', body: rel('v0.0.1', stableAt) },
+        { status: 502 },                                                        // a plain transient failure
+        { status: 200, headers: { 'content-length': String(CATALOGUE_BODY_MAX_BYTES + 1) } },   // over-cap
+        { status: 304, etag: '"eS"' },                                          // the tag was never disturbed
+      ];
+      await p.poll(1000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      await p.poll(2000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      await p.poll(3000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      await p.poll(4000);
+      // The 304 above only answers a request that still carries "eS" — proof
+      // that neither failure moved latestEtag off the original confirmation.
+      expect(seenLatest[3]!.headers['if-none-match']).toBe('"eS"');
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+    });
+
     // N1 (fix round 2, re-review): the I3 fix above (D-3215) had a
     // regression — the keep it computed was ONE POLL STALE (the listing ran
     // BEFORE the probe), the listing's own ETag advanced on the poll that
@@ -1100,9 +1153,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
           { status: 200, etag: '"eS2"', body: s2 },
           { status: 200, etag: '"eS1"', body: s1 },     // /latest moves down to the older release
         ];
+        // Fix round 1, item 5 (ruling A): /latest naming S1 (older than the
+        // kept K=S2) triggers ONE targeted `GET /releases/tags/v0.0.2` — a
+        // 404 confirms S2 is truly gone.
+        scriptWithdrawn = [{ status: 404 }];
         await p.poll(1000);
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false });
         await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.2');
         // The listing's ETag was dropped because the kept tag changed —
         // verify the SECOND listing request carried no If-None-Match at all.
         expect(seen[1]!.headers['if-none-match']).toBeUndefined();
@@ -1133,6 +1192,10 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
           { status: 200, etag: '"eS1"', body: s1 },
           { status: 200, etag: '"eS0"', body: s0 },         // /latest moves down to v0.0.0
         ];
+        // Fix round 1, item 5 (ruling A): converting to a draft does not
+        // delete the release — GitHub's own tag endpoint still answers 200,
+        // now with draft: true, which the ordinary birth rule yanks.
+        scriptWithdrawn = [{ status: 200, etag: '"eS1d"', body: { ...s1, draft: true } }];
         await p.poll(1000);
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
         await p.poll(2000);
@@ -1150,18 +1213,32 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         script = [
           { status: 200, etag: '"eL1"', body: [noise, s1] },
           { status: 200, etag: '"eL2"', body: [noise] },    // v0.0.1 deleted
+          { status: 200, etag: '"eL3"', body: [noise] },
         ];
         scriptLatest = [
           { status: 200, etag: '"eS1"', body: s1 },
           { status: 404 },                                  // no stable release exists any more
+          { status: 404 },
         ];
+        // Fix round 1, item 5 (ruling A): a bare 404 on /latest with a kept
+        // K still triggers the targeted check — a second 404 confirms K
+        // itself is truly gone.
+        scriptWithdrawn = [{ status: 404 }];
         await p.poll(1000);
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
         await p.poll(2000);
-        // The listing's ETag was dropped because the 404 cleared the kept
-        // tag — verify no If-None-Match was sent on the second listing request.
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
+        // The listing's ETag was dropped because the confirmed withdrawal
+        // cleared the kept tag — verify no If-None-Match was sent on the
+        // second listing request.
         expect(seen[1]!.headers['if-none-match']).toBeUndefined();
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+        // m6 (fix round 1 review, re-measured under ruling A): the CONFIRMED
+        // withdrawal also cleared latestEtag — the third /latest request
+        // carries no If-None-Match either (never a stale ETag off the row
+        // that no longer exists).
+        await p.poll(3000);
+        expect(seenLatest[2]!.headers['if-none-match']).toBeUndefined();
       });
 
       // (d) is the pre-existing 'I3: …' case above, unmodified: the stable
@@ -1182,6 +1259,171 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     (b) if the fixture's own scripted answers depended on the sent
       //     ETag — they do not here, so the header assertion in (a)/(c) is
       //     what actually catches it in this fixture shape.
+    });
+
+    // Fix round 1, item 5 (ruling A): N1 above still left a residual —
+    // nothing ever re-judges a stable release that is withdrawn or demoted
+    // while it sits OFF the listing's own window (D-3215's own shape). The
+    // poller now confirms the moment `/latest` moves away from the kept tag
+    // K with ONE targeted `GET /releases/tags/{K}` before anything yields.
+    describe('ruling A — a withdrawn or demoted stable OFF the window is confirmed, never guessed', () => {
+      it('(a) a full page of 30 newer dev prereleases; K confirmed, then /latest 404s and the tag-check 404s -> K yanked', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const devPage = (day: number) => Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+          rel(`v0.1.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
+        const k = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: devPage(2) },
+          { status: 200, etag: '"eL2"', body: devPage(3) },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 404 },   // /latest itself gone — the bare-404 moved-away path
+        ];
+        scriptWithdrawn = [{ status: 404 }];   // confirms K is truly gone
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+        // Every dev release the listing wrote stays untouched by any of this.
+        expect(store.releases().filter((r) => r.tag !== 'v0.0.1').every((r) => !r.yanked)).toBe(true);
+      });
+
+      it("(b) /latest moves to an OLDER stable S (a demotion) -> K ends channel: 'dev', not yanked, and '*' resolves to S", async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s = rel('v0.0.1', '2026-08-01T00:00:00Z');   // older — the eventual survivor
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');   // newer — the demoted one
+        // Both S and K sit OFF a 30-element dev-only window on every poll —
+        // the load-bearing half of this pin: it is only the CHECK's own
+        // 'single' coverage, never the ordinary listing, that can touch
+        // either of them, so a mutation of the check's coverage word is
+        // caught here even though the general listing never runs dry.
+        const devPage = (day: number) => Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+          rel(`v0.1.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
+        script = [
+          { status: 200, etag: '"eL1"', body: devPage(2) },
+          { status: 200, etag: '"eL2"', body: devPage(3) },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: s },   // /latest moves down to the older S
+        ];
+        // The tag-check answers 200 — K still exists, now flagged prerelease.
+        scriptWithdrawn = [{ status: 200, etag: '"eK-dev"', body: { ...k, prerelease: true } }];
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'dev' });
+        // S was never named in any listing at all — only the check's own
+        // 'single' upsert of K could ever have disturbed it (it must not).
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false, channel: 'stable' });
+
+        const eligibility: EligibilityRow[] = store.releases().map((r) => ({
+          tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked,
+        }));
+        const input: ResolveInput = {
+          currentVersion: 'v0.0.0', highestVersion: null, floorRead: 'absent',
+          nodeIntent: null, fleetIntent: { channel: 'stable', pinnedTag: null, auto: 'off' },
+          releases: eligibility, refusedByThisNode: new Set<string>(),
+        };
+        expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
+      });
+
+      it('(c) a NEWER /latest answer leaves K untouched, with no tag-fetch request sent at all', async () => {
+        const { port } = fixture();
+        const p = poller(port);
+        const k1 = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        const k2 = rel('v0.0.2', '2026-08-15T00:00:00Z');   // strictly newer than k1
+        script = [
+          { status: 200, etag: '"eL1"', body: [k1] },
+          { status: 200, etag: '"eL2"', body: [k2, k1] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k1 },
+          { status: 200, etag: '"eS2"', body: k2 },
+        ];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(0);
+        // K advanced normally: the listing's ETag was dropped because the
+        // kept tag changed (k1 -> k2), the same signal N1's own cases use.
+        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+      });
+
+      it('(d) a failed tag fetch (a 500) leaves K untouched, and the very next poll retries it against the SAME K', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k, s] },
+          { status: 200, etag: '"eL2"', body: [k, s] },
+          { status: 200, etag: '"eL3"', body: [s] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: s },   // moved away — poll 2's check
+          { status: 200, etag: '"eS3"', body: s },   // still away — poll 3's RETRY
+        ];
+        scriptWithdrawn = [
+          { status: 500 },     // poll 2: the check itself fails
+          { status: 404 },     // poll 3: retried against the SAME K, now confirmed
+        ];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false });   // K untouched
+        await p.poll(3000);
+        // A failed check never advances latestEtag either — poll 3's /latest
+        // request still carries K's OWN original etag ("eS1"), never S's, so
+        // it cannot get a cheap 304 in S's place and re-answers in full.
+        expect(seenLatest[2]!.headers['if-none-match']).toBe('"eS1"');
+        expect(seenWithdrawn).toHaveLength(2);
+        expect(seenWithdrawn[1]!.url).toBe(seenWithdrawn[0]!.url);   // the SAME K, retried
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: true });
+      });
+
+      it('(e) after a restart, a fresh poller derives K from the store alone and still runs the check', async () => {
+        const { store, port } = fixture();
+        // Simulate the pre-restart state directly on the store — K is already
+        // its newest un-yanked stable release, with no poller ever having run.
+        const kRow: ReleaseListingRow = {
+          tag: 'v0.0.1', channel: 'stable', publishedAt: Date.parse('2026-08-01T00:00:00Z'),
+          commitSha: null, tarballUrl: null, bundleListed: true, notes: null, draft: false,
+        };
+        store.applyReleaseListing([kRow], 500, 'complete');
+        expect(store.newestUnyankedStable()).toBe('v0.0.1');
+
+        const p = poller(port);   // a FRESH poller: lastLatestTag starts null
+        script = [{ status: 200, etag: '"eL1"', body: [rel('v0.0.9', '2026-08-02T00:00:00Z', { prerelease: true })] }];
+        scriptLatest = [{ status: 404 }];
+        scriptWithdrawn = [{ status: 404 }];
+        await p.poll(1000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+      });
+
+      // Mutations (measured by hand, each reds a case above):
+      // (1) passing a NEWER /latest tag through the moved-away comparison
+      //     (dropping the `compareReleaseTags(row.tag, k) < 0` guard, or
+      //     inverting it) reds (c) — a tag-fetch request fires where none
+      //     should (`seenWithdrawn` is no longer empty).
+      // (2) the check's 200 arm passing 'complete'/'newest-page' instead of
+      //     'single' reds (b) — every OTHER known release ends yanked too.
+      // (3) the check's 404 arm passing 'newest-page'/'complete' instead of
+      //     'withdrawn', or naming a tag other than k, reds (a) (the wrong
+      //     row, or every other row, ends yanked) and the store-level
+      //     'withdrawn' pins in update-store-catalogue.test.ts directly.
+      // (4) advancing `latestEtag`/`lastLatestTag` to T on a FAILED check
+      //     reds (d) — the retry in poll 3 never fires (`seenWithdrawn`
+      //     stays at 1), because the next `/latest` request would carry T's
+      //     etag and could get a cheap 304 in its place.
     });
 
     // Fix round 1, review round 2, item 4: `/releases/latest` never legally

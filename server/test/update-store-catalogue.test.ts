@@ -291,6 +291,77 @@ describe('applyReleaseListing — the one writer of the catalogue columns', () =
     store.db.prepare("UPDATE releases SET channel = 'nightly' WHERE tag = 'v0.0.9'").run();
     expect(store.releases()[0]!.channel).toBeNull();
   });
+
+  // Fix round 1, item 5 (ruling A): the poller's targeted `GET
+  // /releases/tags/{K}` answered 404, confirming K itself is gone — this
+  // coverage yanks EXACTLY that tag, never the general since/window judgment.
+  describe("applyReleaseListing under 'withdrawn' coverage (fix round 1, item 5, ruling A)", () => {
+    it('yanks EXACTLY the named tag, however many other releases are known, and none of them', () => {
+      const store = fresh();
+      store.applyReleaseListing(
+        [rel('v0.1.1', T0 + 1000), rel('v0.1.2', T0 + 2000), rel('v0.0.1', T0 + 500)], T0 + 5, 'complete',
+      );
+      expect(store.applyReleaseListing([], T0 + 10, 'withdrawn', [], 'v0.0.1'))
+        .toEqual({ ok: true, upserted: 0, yanked: 1, unyanked: 0 });
+      expect(store.releases().map((r) => [r.tag, r.yanked])).toEqual([
+        ['v0.1.2', false], ['v0.1.1', false], ['v0.0.1', true],
+      ]);
+    });
+
+    it('is idempotent: withdrawing an already-yanked tag yanks nothing more', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      expect(store.applyReleaseListing([], T0 + 2, 'withdrawn', [], 'v0.0.1'))
+        .toEqual({ ok: true, upserted: 0, yanked: 1, unyanked: 0 });
+      expect(store.applyReleaseListing([], T0 + 3, 'withdrawn', [], 'v0.0.1'))
+        .toEqual({ ok: true, upserted: 0, yanked: 0, unyanked: 0 });
+    });
+
+    it('a tag that names no known row yanks nothing, and is still ok (there is nothing to withdraw)', () => {
+      const store = fresh();
+      expect(store.applyReleaseListing([], T0, 'withdrawn', [], 'v0.0.1'))
+        .toEqual({ ok: true, upserted: 0, yanked: 0, unyanked: 0 });
+      expect(store.releases()).toEqual([]);
+    });
+
+    it('a non-empty listing is refused before anything else runs', () => {
+      const store = fresh();
+      expect(store.applyReleaseListing([rel('v0.0.1', T0)], T0, 'withdrawn', [], 'v0.0.1'))
+        .toEqual({ ok: false, why: 'withdrawn-not-empty', count: 1 });
+      expect(store.releases()).toEqual([]);
+    });
+
+    it('a bad or missing withdrawTag is refused, writing nothing', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      expect(store.applyReleaseListing([], T0 + 2, 'withdrawn', [], 'not-a-tag'))
+        .toEqual({ ok: false, why: 'bad-tag', tag: 'not-a-tag' });
+      expect(store.applyReleaseListing([], T0 + 2, 'withdrawn')).toEqual({ ok: false, why: 'bad-tag', tag: '' });
+      expect(store.releases()[0]).toMatchObject({ yanked: false });
+    });
+  });
+
+  // Fix round 1, item 5 (ruling A): K's home is DERIVED, never stored — the
+  // poller reads this whenever its own remembered tag has gone null.
+  describe('newestUnyankedStable — the read the poller derives K from (fix round 1, item 5, ruling A)', () => {
+    it('null on an empty catalogue, or when every stable release is yanked or dev', () => {
+      const store = fresh();
+      expect(store.newestUnyankedStable()).toBeNull();
+      store.applyReleaseListing([rel('v0.0.1', T0, { channel: 'dev' })], T0 + 1, 'complete');
+      expect(store.newestUnyankedStable()).toBeNull();
+      store.applyReleaseListing([rel('v0.0.2', T0 + 1)], T0 + 2, 'complete');
+      store.db.prepare("UPDATE releases SET yanked = 1 WHERE tag = 'v0.0.2'").run();
+      expect(store.newestUnyankedStable()).toBeNull();
+    });
+
+    it('the newest by TAG, never by publishedAt — a backdated newer tag still wins', () => {
+      const store = fresh();
+      store.applyReleaseListing([
+        rel('v0.0.9', T0 + 5000), rel('v0.0.10', T0 + 1000), rel('v0.1.2', T0 + 2000, { channel: 'dev' }),
+      ], T0 + 6000, 'complete');
+      expect(store.newestUnyankedStable()).toBe('v0.0.10');
+    });
+  });
 });
 
 describe('node_release_refusals — a node\'s verdict on a release, never fleet-wide (decision 16)', () => {

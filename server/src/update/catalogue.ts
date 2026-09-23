@@ -1,5 +1,6 @@
 import { isReleaseTag, type CatalogueErrorReason, type CatalogueState } from '../../../shared/api.js';
 import { BASE_URL_OK } from '../../../shared/base-url.js';
+import { compareReleaseTags } from '../../../shared/semver.js';
 import type { ReleaseSourceRead } from '../config.js';
 import type { ApplyReleaseListingResult, ListingCoverage, ReleaseListingRow } from '../coord/store.js';
 import { openPoolReadDeadline } from '../pools.js';
@@ -20,13 +21,21 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * (N1): the latest probe runs FIRST, every poll — the listing reads its
  * answer (`lastLatestTag`) as its own yank exclusion (`keepTags`), and doing
  * that with a POLL-STALE answer (the probe running second) let a genuinely
- * withdrawn stable release stay un-yanked indefinitely; see `pollOnce`.
+ * withdrawn stable release stay un-yanked indefinitely; see `pollOnce`. Fix
+ * round 1, item 5 (ruling A): a withdrawn or demoted stable OFF the
+ * listing's own window was still never re-judged by any of the above —
+ * `checkWithdrawn` confirms the moment `/latest` moves away from the kept
+ * tag K (a 404, or a 200 naming a tag OLDER than K) with a THIRD request,
+ * `GET /releases/tags/{K}`, before anything yields; see `pollLatest`.
  *
  * Quota (§7, measured; D-3215 doubles it): unauthenticated, 60 requests an
  * hour per IP, and a 304 still counts — the ETag saves bytes, not budget.
- * Each poll now sends TWO requests (the latest-release probe, then the
- * listing), so the watcher's 30-minute cadence spends 4 requests an hour,
- * well under the 60/hour budget. `POST /api/updates/refresh` reads
+ * Each poll sends TWO requests (the latest-release probe, then the listing),
+ * plus a THIRD only on the poll(s) where `/latest` has moved away from K and
+ * the check has not yet resolved — rare, and bounded to one extra request
+ * per poll, never a loop within one poll. The watcher's steady-state
+ * 30-minute cadence spends 4 requests an hour, well under the 60/hour
+ * budget. `POST /api/updates/refresh` reads
  * `lastRequestAt()` for its one-a-minute guard, measured against the LISTING
  * request only. No token is ever sent (decision 4: the repo carries no
  * secrets, and the server holds none for GitHub).
@@ -35,13 +44,18 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * `lastError` and never `lastOkAt`, so no consumer can render a failed poll
  * as "up to date". `lastError` is the CURRENT failure — an answer clears it
  * (D-3197). `catalogueState`
- * (`{lastOkAt, lastError}`) follows the LISTING alone (D-3215) — the
- * latest-release probe never sets either: its own failure is warned once per
- * distinct cause and re-armed on its own next success. The state and both
+ * (`{lastOkAt, lastError}`) follows the LISTING alone (D-3215) — neither the
+ * latest-release probe nor the moved-away check ever sets either: each
+ * failure is warned once per distinct cause (on its OWN dedupe key, so a
+ * check that keeps failing is not silenced by the unrelated `/latest` probe
+ * succeeding) and re-armed on its own next success. The state and both
  * ETags are this process's memory
  * (D-3182): a restarted server polls on its first
  * tick and says "never checked" until then; the rows themselves persist in
- * the store.
+ * the store. K itself is NEVER stored — `currentK` derives it from the
+ * store's `newestUnyankedStable()` whenever the remembered tag has gone
+ * null, so a restart re-derives the same pending check with no new column
+ * and no new process-memory slot.
  *
  * `bundleListed` is a FILENAME in an unauthenticated listing, not a
  * verification — the node verifies (§5) and reports `provenance` (§8).
@@ -72,11 +86,17 @@ const PRINTABLE_ASCII_URL = /^[\x21-\x7e]+$/;
 /** The port this module needs, declared by the consumer (L2). `keepTags`
  *  (fix round 1, review round 2, I3) is optional so an older test double
  *  written against the three-argument shape still type-checks; the real
- *  store always accepts it. */
+ *  store always accepts it. `withdrawTag` (fix round 1, item 5, ruling A) is
+ *  likewise optional, and read only under `'withdrawn'` coverage.
+ *  `newestUnyankedStable` is ALSO optional, for the same reason — a test
+ *  double that never exercises the moved-away mechanism need not implement
+ *  it; `currentK` below reads it through `?.() ?? null`. */
 export interface CatalogueStore {
   applyReleaseListing(
-    listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage, keepTags?: readonly string[],
+    listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage,
+    keepTags?: readonly string[], withdrawTag?: string | null,
   ): ApplyReleaseListingResult;
+  newestUnyankedStable?(): string | null;
 }
 
 export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
@@ -386,6 +406,11 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  listing that omits it (the off-page-stable shape D-3215 exists for)
    *  never marks it absent out from under the probe that just confirmed it. */
   let lastLatestTag: string | null = null;
+  /** Fix round 1, item 5 (ruling A): the moved-away tag-fetch's own dedupe
+   *  key — separate from `lastWarnedLatestError` so a check that keeps
+   *  failing while `/latest` itself keeps answering fine is not re-armed
+   *  every poll by that unrelated success (which would spam the log). */
+  let lastWarnedWithdrawnError: string | null = null;
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -405,6 +430,20 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     lastWarnedLatestError = cause;
   };
   const latestAnswered = (): void => { lastWarnedLatestError = null; };
+  const warnWithdrawn = (cause: string): void => {
+    if (cause === lastWarnedWithdrawnError) return;
+    console.warn(`ccrc-server: update catalogue moved-away tag check failed (${cause})`);
+    lastWarnedWithdrawnError = cause;
+  };
+  const withdrawnAnswered = (): void => { lastWarnedWithdrawnError = null; };
+  /** Fix round 1, item 5 (ruling A): K is never a stored column — derived on
+   *  demand, whenever the poller's own remembered tag has gone null, as the
+   *  store's newest un-yanked stable release BY TAG. `null` when the store
+   *  holds no such release, or the port is a test double that never
+   *  implements the read (an older double, or one that never exercises this
+   *  mechanism). */
+  const currentK = (): string | null =>
+    lastLatestTag !== null ? lastLatestTag : (deps.store.newestUnyankedStable?.() ?? null);
 
   async function pollListing(now: number, source: { owner: string; repo: string }): Promise<CatalogueState> {
     // B2: built from `validatedBase` — the SAME trimmed/normalised base the
@@ -477,12 +516,15 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *
    * Fix round 2 (N1): runs BEFORE `pollListing` now (see `pollOnce`), so the
    * `lastLatestTag` it leaves behind is THIS poll's answer, never a
-   * poll-stale one. A 404 CLEARS `lastLatestTag` (and `latestEtag`) — an
-   * answer meaning "no stable exists" releases whatever the probe last
-   * confirmed, so the listing's own absence judgment is free to yank it.
-   * Every other failure (network/cap/parse/draft-or-prerelease/a non-2xx
-   * status) leaves `lastLatestTag` exactly where it was: a TRANSIENT probe
-   * failure must not yank the previous stable on a guess.
+   * poll-stale one. Fix round 1, item 5 (ruling A) replaces the plain "a 404
+   * clears it, everything else leaves it alone" rule below with a CONFIRMED
+   * transition: `/latest` moving AWAY from the kept tag K — a 404, or a 200
+   * naming a tag OLDER than K (`compareReleaseTags`) — is not itself proof
+   * that K is gone (a listing window or a transient probe answer proves
+   * nothing about a release outside itself, exactly D-3215's own lesson one
+   * layer up), so `checkWithdrawn` fetches K's own tag before `lastLatestTag`
+   * or `latestEtag` move at all. A NEWER tag implies nothing about K and is
+   * adopted immediately, with no extra request — the ordinary forward case.
    */
   async function pollLatest(now: number, source: { owner: string; repo: string }): Promise<void> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
@@ -491,12 +533,18 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (answer === null) return warnLatest('no-egress');
     if (answer === 'over-cap') return warnLatest('over-cap');
     if (answer === 'redirect') return warnLatest('redirect');
-    // N1: an answer — "no stable release exists" — releases whatever the
-    // probe last confirmed, so the LISTING is free to yank it this poll.
+    // Ruling A: a 404 means "no stable release exists" ONLY when there was
+    // no kept tag to begin with — otherwise it is the clean "moved away"
+    // signal, confirmed against K's own endpoint before anything yields.
     if (answer.status === 404) {
-      lastLatestTag = null;
-      latestEtag = null;
-      return latestAnswered();
+      const k = currentK();
+      if (k === null) {
+        lastLatestTag = null;
+        latestEtag = null;
+        return latestAnswered();
+      }
+      latestAnswered();   // the /latest fetch itself is a clean answer
+      return checkWithdrawn(now, source, k, null, null);
     }
     if (answer.status === 304) {
       if (sentEtag === null) return warnLatest(httpReason(304));
@@ -517,15 +565,90 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     let applied: ApplyReleaseListingResult;
     try {
       // D-3215: the ONE catalogue writer, under 'single' coverage — no
-      // absence judgment, so this call can never yank another release.
+      // absence judgment, so this call can never yank another release. T
+      // (this row) is real regardless of what happens to K below, so it is
+      // upserted unconditionally.
       applied = deps.store.applyReleaseListing([row], now, 'single');
     } catch (err) {
       return warnLatest(err instanceof Error ? err.message : String(err));
     }
     if (!applied.ok) return warnLatest(`store-refused-${applied.why}`);
+    latestAnswered();   // the /latest fetch itself succeeded
+    const k = currentK();
+    if (k !== null && compareReleaseTags(row.tag, k) < 0) {
+      // Ruling A: moved AWAY from K to an OLDER tag T. `latestEtag`/
+      // `lastLatestTag` stay pointed at K until the check resolves — never
+      // advanced to T here — so a failed check cannot earn a cheap 304 in
+      // T's place next poll and is retried in full against the SAME K.
+      return checkWithdrawn(now, source, k, row.tag, answer.etag);
+    }
     latestEtag = answer.etag;   // never advanced on any failure arm above
     lastLatestTag = row.tag;    // I3: the LISTING's yank exclusion from now on
-    latestAnswered();
+  }
+
+  /**
+   * Fix round 1, item 5 (ruling A): the confirming half of the moved-away
+   * transition — `GET {api}/repos/{owner}/{repo}/releases/tags/{k}`, the
+   * same base gate, deadline, body cap, element parse and `redirect:
+   * 'error'` the other two requests use, with NO ETag of its own (an ad-hoc
+   * check, not a tracked poll). `t`/`tEtag` are the `/latest` answer that
+   * triggered this call (the new, older-than-K tag and its etag), or both
+   * `null` when `/latest` itself answered 404. On EITHER a confirmed
+   * withdrawal (404) or a confirmed demotion (200, upserted through the same
+   * one writer under `'single'` — a prerelease flips K's channel to `dev`
+   * via the ordinary upsert, a draft yanks it via the ordinary birth rule),
+   * the reference tag moves on to T (or to nothing, on a bare `/latest`
+   * 404). Any failure of the check (no-egress, over-cap, a redirect, a
+   * non-2xx status, a malformed body, or the store refusing) changes
+   * NOTHING — `lastLatestTag`/`latestEtag` stay exactly where they were, so
+   * the check is retried, against the SAME K, on the next poll.
+   */
+  async function checkWithdrawn(
+    now: number, source: { owner: string; repo: string }, k: string, t: string | null, tEtag: string | null,
+  ): Promise<void> {
+    const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
+      + `/releases/tags/${encodeURIComponent(k)}`;
+    const answer = await fetchOne(url, null, timeoutMs);
+    if (answer === null) return warnWithdrawn('no-egress');
+    if (answer === 'over-cap') return warnWithdrawn('over-cap');
+    if (answer === 'redirect') return warnWithdrawn('redirect');
+    if (answer.status === 404) {
+      let applied: ApplyReleaseListingResult;
+      try {
+        // The one catalogue writer, under 'withdrawn' coverage — yanks
+        // EXACTLY k, never the general since/window judgment.
+        applied = deps.store.applyReleaseListing([], now, 'withdrawn', [], k);
+      } catch (err) {
+        return warnWithdrawn(err instanceof Error ? err.message : String(err));
+      }
+      if (!applied.ok) return warnWithdrawn(`store-refused-${applied.why}`);
+      latestEtag = tEtag;
+      lastLatestTag = t;
+      return withdrawnAnswered();
+    }
+    if (answer.status !== 200) return warnWithdrawn(httpReason(answer.status));
+    let body: unknown;
+    try {
+      body = JSON.parse(answer.text);
+    } catch {
+      return warnWithdrawn('malformed-json');
+    }
+    const row = parseReleaseElement(body);
+    if (row === null) return warnWithdrawn('malformed-element');
+    let applied: ApplyReleaseListingResult;
+    try {
+      // The same one writer, under 'single' coverage: whatever K's own page
+      // reports now (a demotion to dev, or still stable) is upserted with no
+      // absence judgment; a draft answer yanks it via the ordinary birth
+      // rule (`applyReleaseListing`'s `yanked = r.draft ? 1 : 0`).
+      applied = deps.store.applyReleaseListing([row], now, 'single');
+    } catch (err) {
+      return warnWithdrawn(err instanceof Error ? err.message : String(err));
+    }
+    if (!applied.ok) return warnWithdrawn(`store-refused-${applied.why}`);
+    latestEtag = tEtag;
+    lastLatestTag = t;
+    withdrawnAnswered();
   }
 
   async function pollOnce(now: number): Promise<CatalogueState> {

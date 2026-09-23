@@ -8463,12 +8463,16 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    handed a listing whose length is not exactly 1 (fix
  *                    round 1, review round 2): the coverage name is a
  *                    promise about its own argument, not just about what
- *                    happens next. */
+ *                    happens next.
+ *    withdrawn-not-empty — `applyReleaseListing` under `'withdrawn'` coverage
+ *                    (fix round 1, item 5, ruling A) was handed a non-empty
+ *                    listing: that coverage names ONE existing tag to yank
+ *                    through `withdrawTag`, never a row to upsert. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
-  'single-not-one',
+  'single-not-one', 'withdrawn-not-empty',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
