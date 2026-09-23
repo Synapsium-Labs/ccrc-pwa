@@ -713,6 +713,13 @@ describe('the rejection table is total, in both directions', () => {
                                   // an input, never a refusal: nothing answers it,
                                   // nothing switches on it over the wire. Its sibling
                                   // `complete` is one word and never reaches this scan.
+      'no-label-row',            // design 2026-09-20 §8 (W2 Task 5) — one of
+                                  // `RekeyNodeResult`'s three `how` words (store.ts):
+                                  // an ANSWER, not a refusal — the sweep's re-key found
+                                  // no label-keyed row, which is the ordinary case on
+                                  // every sweep after the first. Nothing is declined,
+                                  // nothing switches on it over the wire. Its siblings
+                                  // `rekeyed` and `superseded` are one word each.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;

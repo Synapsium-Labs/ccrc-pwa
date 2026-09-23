@@ -27,6 +27,9 @@ import {
   isWorkItemState,
   // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
   isReleaseTag, isUpdateChannel,
+  // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
+  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
+  isUpdatePhase, isUpdateState, SETTLED_UPDATE_STATES, validCapWords,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
@@ -53,6 +56,8 @@ import {
   type RunSummary,
   type SetAccountPoolsRefuseCode,
   type UpdateChannel,
+  type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
+  type SettledUpdateState, type StampRead, type UpdatePhase, type UpdateState,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -214,6 +219,165 @@ interface RawReleaseRow {
   tag: string; version: string; channel: string; publishedAt: number; commitSha: string | null;
   tarballUrl: string; bundleListed: number; notes: string | null; yanked: number; observedAt: number;
   notifiedAt: number | null;
+}
+
+/** Design 2026-09-20 §8 (W2). A node's `~/.ccrc/update.json`, validated by the
+ *  inventory sweep. Times are epoch MS here — the sweep converts the file's
+ *  unix seconds (×1000, the second's FIRST ms) at its one validator, so this
+ *  store holds ms in every column. */
+export interface NodeReport {
+  phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null; detail: string | null;
+}
+
+/** One sweep's measurement of one node: the MEASUREMENT and REPORT column
+ *  groups (§6) and nothing else — which is what makes `upsertNodeMeasurement`
+ *  the writer that can never move a lease, a resolution, a request or an
+ *  identity. `nodeId` is a measured node-id (`NODE_ID_RE`), or the connection
+ *  label when none was measured (a pre-W1 node, keyed by label, §8). */
+export interface NodeMeasurement {
+  nodeId: string;
+  role: NodeRole; label: string;
+  currentVersion: string | null; currentSha: string | null; currentRef: string | null;
+  currentBuiltAt: string | null; currentDirty: boolean | null;
+  stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
+  /** Validated words (`validCapWords`); `[]` is stored as `''`. */
+  caps: readonly string[];
+  /** `null` = no agent by construction (the server's own row, decision 11);
+   *  `[]` = an agent too old to say. Stored NULL and `''` — never folded. */
+  agentOps: readonly string[] | null;
+  highestVersion: string | null; previousVersion: string | null; os: NodeOs;
+  measuredAt: number;
+  /** `null` = no `update.json` on the node. */
+  report: NodeReport | null;
+}
+
+/** One `nodes` row on the way OUT. Every enum column reads through its L0 guard
+ *  to the fallback §6 names (D-3181): `role`, `channel`,
+ *  `requestedKind` → `null`; `stampRead` → `unreadable`; `installState`,
+ *  `provenance`, `os`, `updateState` and a non-NULL `reportedPhase` →
+ *  `unknown`. `measuredAt: null` = never measured; `reportedPhase: null` = no
+ *  report file, distinct from `unknown` = a phase this build cannot name. */
+export interface NodeRow {
+  nodeId: string; role: NodeRole | null; label: string;
+  currentVersion: string | null; currentSha: string | null; currentRef: string | null;
+  currentBuiltAt: string | null; currentDirty: boolean | null;
+  stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
+  caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null; os: NodeOs;
+  measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
+  reportedPhase: UpdatePhase | null; reportedTarget: string | null; reportedStartedAt: number | null;
+  reportedUpdatedAt: number | null; reportedDetail: string | null;
+  updateState: UpdateState; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
+  channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
+  requestedTag: string | null; requestedKind: RequestKind | null; requestedAt: number | null;
+  supersededBy: string | null;
+}
+
+/** The resolved group (§6) — the resolver's answer for one node, and
+ *  `Resolution`'s first three fields structurally (Task 12). */
+export interface NodeResolvedColumns { channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null }
+
+export type UpsertNodeResult =
+  | { ok: true; created: boolean }
+  | { ok: false; why: 'superseded'; supersededBy: string };
+
+/** `how` says what happened to the LABEL-keyed row; `retired` counts OTHER live
+ *  rows carrying the same label under a different node id, now superseded by
+ *  this one — a box uninstalled and re-installed mints a new id, and its old
+ *  identity must not stay live beside the new one for ever
+ *  (D-3193). */
+export type RekeyNodeResult =
+  | { ok: true; how: 'rekeyed' | 'superseded' | 'no-label-row'; retired: number }
+  | { ok: false; why: 'bad-node-id' };
+
+/** `label-key-taken` = no live row carries the label AND the label-keyed
+ *  placeholder cannot be written, because a row already holds that key —
+ *  superseded (`supersededBy` names its heir) or, `null`, live under another
+ *  label. Never folded into success: the caller would report a row that is
+ *  not there. */
+export type MarkUnreachableResult =
+  | { ok: true; nodeId: string; created: boolean; since: number }
+  | { ok: false; why: 'label-key-taken'; supersededBy: string | null };
+
+export type ReleaseLeaseResult =
+  | { ok: true; state: SettledUpdateState }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'not-busy'; state: UpdateState }
+  | { ok: false; why: 'stale-report'; updateStartedAt: number };
+
+export type SettleNodeResult =
+  | { ok: true; clearedRequest: boolean }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'halted'; state: 'failed' | 'reverted' }
+  | { ok: false; why: 'stale-report'; updateStartedAt: number };
+
+export type ResolveNodeResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string };
+
+export type AckNodeResult =
+  | { ok: true; clearedRequest: boolean; clearedRefusals: number }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'busy'; state: BusyUpdateState };
+
+/** The columns `NODE_COLUMNS` names, as SQLite hands them back. */
+interface RawNodeRow {
+  nodeId: string; role: string; label: string;
+  currentVersion: string | null; currentSha: string | null; currentRef: string | null;
+  currentBuiltAt: string | null; currentDirty: number | null;
+  stampRead: string; installState: string; provenance: string; caps: string; agentOps: string | null;
+  highestVersion: string | null; previousVersion: string | null; os: string;
+  measuredAt: number | null; reachable: number; unreachableSince: number | null;
+  reportedPhase: string | null; reportedTarget: string | null; reportedStartedAt: number | null;
+  reportedUpdatedAt: number | null; reportedDetail: string | null;
+  updateState: string; updateTarget: string | null; updateStartedAt: number | null; updateDetail: string | null;
+  channel: string | null; desiredTag: string | null; resolveDetail: string | null;
+  requestedTag: string | null; requestedKind: string | null; requestedAt: number | null;
+  supersededBy: string | null;
+}
+
+/** A stored word list back to words: `null` stays `null` (agentOps: no agent),
+ *  `''` is `[]`, and anything that no longer passes `validCapWords` reads `[]`
+ *  — §8's one-bad-word-drops-the-file rule, applied again on the way out. */
+function wordsOf(text: string | null): string[] | null {
+  if (text === null) return null;
+  return validCapWords(text === '' ? [] : text.split(' ')) ?? [];
+}
+
+function nodeRowOf(r: RawNodeRow): NodeRow {
+  return {
+    nodeId: r.nodeId, role: isNodeRole(r.role) ? r.role : null, label: r.label,
+    currentVersion: r.currentVersion, currentSha: r.currentSha, currentRef: r.currentRef,
+    currentBuiltAt: r.currentBuiltAt, currentDirty: r.currentDirty === null ? null : r.currentDirty === 1,
+    stampRead: isStampRead(r.stampRead) ? r.stampRead : 'unreadable',
+    installState: isInstallState(r.installState) ? r.installState : 'unknown',
+    provenance: isProvenanceState(r.provenance) ? r.provenance : 'unknown',
+    caps: wordsOf(r.caps) ?? [], agentOps: wordsOf(r.agentOps),
+    highestVersion: r.highestVersion, previousVersion: r.previousVersion,
+    os: isNodeOs(r.os) ? r.os : 'unknown',
+    measuredAt: r.measuredAt, reachable: r.reachable === 1, unreachableSince: r.unreachableSince,
+    reportedPhase: r.reportedPhase === null ? null : (isUpdatePhase(r.reportedPhase) ? r.reportedPhase : 'unknown'),
+    reportedTarget: r.reportedTarget, reportedStartedAt: r.reportedStartedAt,
+    reportedUpdatedAt: r.reportedUpdatedAt, reportedDetail: r.reportedDetail,
+    updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
+    updateTarget: r.updateTarget, updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail,
+    channel: isUpdateChannel(r.channel) ? r.channel : null, desiredTag: r.desiredTag, resolveDetail: r.resolveDetail,
+    requestedTag: r.requestedTag, requestedKind: isRequestKind(r.requestedKind) ? r.requestedKind : null,
+    requestedAt: r.requestedAt, supersededBy: r.supersededBy,
+  };
+}
+
+/** A read-back state that halts (`settleNode`'s refusal arm), or `null`. */
+function haltedOf(s: UpdateState): Exclude<SettledUpdateState, 'idle'> | null {
+  return (HALTED_UPDATE_STATES as readonly string[]).includes(s) ? (s as Exclude<SettledUpdateState, 'idle'>) : null;
+}
+
+/** A read-back state that is busy (`ackNode`'s refusal arm), or `null`. */
+function busyOf(s: UpdateState): BusyUpdateState | null {
+  return (BUSY_UPDATE_STATES as readonly string[]).includes(s) ? (s as BusyUpdateState) : null;
 }
 
 /** The reclaim's three answers. `kind`, not `error`, because these are not
@@ -552,6 +716,43 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+
+/** Design 2026-09-20 §6/§10 (W2): the node lease's predicates, built from L0's
+ *  `SETTLED_UPDATE_STATES` by the `.join` `TERMINAL_DELIVERY_SQL` uses — never
+ *  a hand-typed tuple. There is deliberately NO busy fragment: busy is spelled
+ *  `NOT IN` this one, the `INACTIVE_RUN_STATES_SQL` stance above (D-2803). A
+ *  stored `updateState` this build cannot name reads `unknown` on the read
+ *  side, and `unknown` is busy, so the write side counts it busy too — an
+ *  `IN (busy)` fragment would call that row settled for an `ack` and not-busy
+ *  for a release, the one direction that is not safe. */
+const SETTLED_UPDATE_SQL = `('${SETTLED_UPDATE_STATES.join("','")}')`;
+
+/** The settled states that HALT dispatch until `ack` (design §10): every
+ *  settled state but `idle`. `settleNode` refuses a row in one of them, so
+ *  convergence can never silently clear a failure the operator has not seen. */
+const HALTED_UPDATE_STATES = SETTLED_UPDATE_STATES.filter(
+  (s): s is Exclude<SettledUpdateState, 'idle'> => s !== 'idle');
+const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
+
+/** The shape of a node id: the lowercase uuid `_inst_node_id` mints
+ *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or
+ *  CR-terminated `~/.ccrc/node-id` never becomes a row key. Declared ONCE,
+ *  here, beside the one writer that re-keys by it; the inventory's validator
+ *  (`update/inventory.ts`, Task 11) imports it. */
+export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** `ackNode`'s `updateDetail`: the row went back to idle because a person
+ *  said so, not because anything converged. */
+const ACK_DETAIL = 'acknowledged by the operator';
+
+/** The columns every `nodes` read names — explicitly, never `SELECT *` (this
+ *  file's rule, stated above `CoordStore`). */
+const NODE_COLUMNS =
+  'nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, currentDirty, stampRead, ' +
+  'installState, provenance, caps, agentOps, highestVersion, previousVersion, os, measuredAt, reachable, ' +
+  'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, ' +
+  'updateState, updateTarget, updateStartedAt, updateDetail, channel, desiredTag, resolveDetail, ' +
+  'requestedTag, requestedKind, requestedAt, supersededBy';
 
 /** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
  *  `SetWorkItemResult`'s reason. `'absent'` and `'terminal'` are kept apart
@@ -5593,5 +5794,246 @@ export class CoordStore {
    *  zero-change refusal write takes its `why` from, AFTER the write. */
   private nodeRowExists(nodeId: string): boolean {
     return this.db.prepare('SELECT 1 AS one FROM nodes WHERE nodeId = ?').get(nodeId) !== undefined;
+  }
+
+  // ── update inventory (design 2026-09-20 §6, §8, §10; W2) ───────────────
+  //
+  // The node row's writer groups, one method family each (§6): measurement +
+  // report (`upsertNodeMeasurement`, `markUnreachable`), identity
+  // (`rekeyNode`), lease (`releaseLease`, `settleNode`, `ackNode`; W4 adds
+  // `dispatchNode`), resolved (`resolveNode`), request (`settleNode` and
+  // `ackNode` clear it; W4's `requestNode` sets it). Every guard is in the
+  // `WHERE`; a zero-change write reads its `why` back AFTER the write; every
+  // signature is ONE line, so Task 7's writer-group scan can attribute each
+  // statement to its method (`mail-hardening.test.ts`'s `SIG`, the D-2338
+  // precedent). Nothing in W2 calls a lease writer on a real row — no W2 code
+  // acquires a lease — so the release and settle arms are pinned on planted
+  // fixtures for W4's dispatcher to reach.
+
+  /** The measurement and report groups, plus `role` and `label`, and nothing
+   *  else. A row whose id was superseded is never written again: the heir is
+   *  the node now. `reachable = 1` on every measurement — the sweep measured
+   *  it, so it was reachable on this sweep. */
+  upsertNodeMeasurement(m: NodeMeasurement): UpsertNodeResult {
+    const r = m.report;
+    const vals: (string | number | null)[] = [
+      m.role, m.label, m.currentVersion, m.currentSha, m.currentRef, m.currentBuiltAt,
+      m.currentDirty === null ? null : (m.currentDirty ? 1 : 0), m.stampRead, m.installState, m.provenance,
+      m.caps.join(' '), m.agentOps === null ? null : m.agentOps.join(' '), m.highestVersion, m.previousVersion,
+      m.os, m.measuredAt,
+      r === null ? null : r.phase, r === null ? null : r.target, r === null ? null : r.startedAt,
+      r === null ? null : r.updatedAt, r === null ? null : r.detail,
+    ];
+    return tx(this.db, (): UpsertNodeResult => {
+      const ins = this.db.prepare(
+        'INSERT INTO nodes (nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, ' +
+        'currentDirty, stampRead, installState, provenance, caps, agentOps, highestVersion, previousVersion, os, ' +
+        'measuredAt, reachable, unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, ' +
+        'reportedUpdatedAt, reportedDetail) VALUES (' +
+        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
+      ).run(m.nodeId, ...vals);
+      if (Number(ins.changes) > 0) return { ok: true, created: true };
+      const upd = this.db.prepare(
+        'UPDATE nodes SET role = ?, label = ?, currentVersion = ?, currentSha = ?, currentRef = ?, ' +
+        'currentBuiltAt = ?, currentDirty = ?, stampRead = ?, installState = ?, provenance = ?, caps = ?, ' +
+        'agentOps = ?, highestVersion = ?, previousVersion = ?, os = ?, measuredAt = ?, reachable = 1, ' +
+        'unreachableSince = NULL, reportedPhase = ?, reportedTarget = ?, reportedStartedAt = ?, ' +
+        'reportedUpdatedAt = ?, reportedDetail = ? WHERE nodeId = ? AND supersededBy IS NULL',
+      ).run(...vals, m.nodeId);
+      if (Number(upd.changes) > 0) return { ok: true, created: false };
+      // The INSERT conflicted, so the row exists; the UPDATE's only other
+      // predicate is `supersededBy IS NULL`, so the row names its heir.
+      return { ok: false, why: 'superseded', supersededBy: this.nodeLeaseRow(m.nodeId)!.supersededBy! };
+    });
+  }
+
+  /** A connection absent on this sweep (§8): `reachable = 0` on the live row(s)
+   *  carrying its label, `unreachableSince` the FIRST sweep it was missing on.
+   *  With no live row, a never-measured placeholder keyed by the label — shown,
+   *  never dropped. The placeholder's `agentOps` is `''` for a fleet row (an
+   *  agent connection whose ops are not yet known) and NULL for any other role
+   *  (no agent by construction). A second measurement-group writer (D-3207):
+   *  `upsertNodeMeasurement` cannot make this write, because there is nothing
+   *  measured to upsert on the sweep a connection drops. */
+  markUnreachable(label: string, role: NodeRole, at: number): MarkUnreachableResult {
+    return tx(this.db, (): MarkUnreachableResult => {
+      const upd = this.db.prepare(
+        'UPDATE nodes SET reachable = 0, unreachableSince = COALESCE(unreachableSince, ?) ' +
+        'WHERE label = ? AND supersededBy IS NULL',
+      ).run(at, label);
+      if (Number(upd.changes) > 0) {
+        const row = this.nodeByLabel(label)!;
+        return { ok: true, nodeId: row.nodeId, created: false, since: row.unreachableSince! };
+      }
+      const ins = this.db.prepare(
+        'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, agentOps, os, ' +
+        "reachable, unreachableSince) VALUES (?, ?, ?, 'unreadable', 'unknown', 'unknown', '', ?, 'unknown', 0, ?) " +
+        'ON CONFLICT(nodeId) DO NOTHING',
+      ).run(label, role, label, role === 'fleet' ? '' : null, at);
+      if (Number(ins.changes) > 0) return { ok: true, nodeId: label, created: true, since: at };
+      return { ok: false, why: 'label-key-taken', supersededBy: this.nodeLeaseRow(label)!.supersededBy };
+    });
+  }
+
+  /** The identity group (§8). A measured node-id on a connection whose label
+   *  keys a row re-keys that row IN PLACE — history, lease, request and its
+   *  refusal rows carried — unless a row with that id already exists, when the
+   *  label row is superseded by it instead. Then every OTHER live row carrying
+   *  the label under a different id is superseded too: the same connection
+   *  answering a new id is a re-installed box, and its old identity is retired
+   *  (D-3193). One transaction; idempotent. */
+  rekeyNode(label: string, nodeId: string): RekeyNodeResult {
+    if (!NODE_ID_RE.test(nodeId)) return { ok: false, why: 'bad-node-id' };
+    return tx(this.db, (): RekeyNodeResult => {
+      let how: 'rekeyed' | 'superseded' | 'no-label-row' = 'no-label-row';
+      const sup = this.db.prepare(
+        'UPDATE nodes SET supersededBy = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+        'AND EXISTS (SELECT 1 FROM nodes WHERE nodeId = ?)',
+      ).run(nodeId, label, nodeId);
+      if (Number(sup.changes) > 0) {
+        how = 'superseded';
+      } else {
+        const moved = this.db.prepare('UPDATE nodes SET nodeId = ? WHERE nodeId = ? AND supersededBy IS NULL')
+          .run(nodeId, label);
+        if (Number(moved.changes) > 0) {
+          this.db.prepare('UPDATE node_release_refusals SET nodeId = ? WHERE nodeId = ?').run(nodeId, label);
+          how = 'rekeyed';
+        }
+      }
+      const retired = this.db.prepare(
+        'UPDATE nodes SET supersededBy = ? WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? AND nodeId <> ?',
+      ).run(nodeId, label, nodeId, label);
+      return { ok: true, how, retired: Number(retired.changes) };
+    });
+  }
+
+  /** A refusal, a drop, a deadline, or a `failed`/`reverted`/stamp-mismatch
+   *  report (§8, §10): a BUSY lease back to a settled state. The request
+   *  columns are untouched — a refusal does not consume the request (decision
+   *  7). `reportStartedAt` is the report's own start when the release is
+   *  report-driven — the LATEST ms its whole-second stamp covers,
+   *  `startedAt*1000 + 999`, which the sweep computes
+   *  (D-3199) — and `null` otherwise; a report whose
+   *  run began before the lease belongs to a previous run and never moves it. */
+  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, reportStartedAt: number | null): ReleaseLeaseResult {
+    const res = this.db.prepare(
+      'UPDATE nodes SET updateState = ?, updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+      `AND updateState NOT IN ${SETTLED_UPDATE_SQL} ` +
+      'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
+    ).run(to, detail, nodeId, reportStartedAt, reportStartedAt);
+    if (Number(res.changes) > 0) return { ok: true, state: to };
+    const row = this.nodeLeaseRow(nodeId);
+    if (row === null) return { ok: false, why: 'unknown-node' };
+    if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+    if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
+      return { ok: false, why: 'not-busy', state: row.updateState };
+    }
+    // Live and busy, and still refused: the precedence clause is the only
+    // predicate left, and it fails only when `updateStartedAt` is set.
+    return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
+  }
+
+  /** Convergence (§10): the row back to `idle` and its request cleared — the
+   *  only path besides `ack` that clears one. Refused on a HALTED row
+   *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
+   *  precedence as `releaseLease`. */
+  settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult {
+    return tx(this.db, (): SettleNodeResult => {
+      const had = this.requestedTagOf(nodeId) !== null;
+      const res = this.db.prepare(
+        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
+        'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
+        `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
+        'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
+      ).run(detail, nodeId, reportStartedAt, reportStartedAt);
+      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      const halted = haltedOf(row.updateState);
+      if (halted !== null) return { ok: false, why: 'halted', state: halted };
+      return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
+    });
+  }
+
+  /** The resolved group (§9): the resolver's three columns and nothing else.
+   *  `changed` is decided in the `WHERE` (NULL-safe `IS`), so a resolution that
+   *  says what the row already says writes nothing. */
+  resolveNode(nodeId: string, r: NodeResolvedColumns): ResolveNodeResult {
+    const res = this.db.prepare(
+      'UPDATE nodes SET channel = ?, desiredTag = ?, resolveDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+      'AND NOT (channel IS ? AND desiredTag IS ? AND resolveDetail IS ?)',
+    ).run(r.channel, r.desiredTag, r.resolveDetail, nodeId, r.channel, r.desiredTag, r.resolveDetail);
+    if (Number(res.changes) > 0) return { ok: true, changed: true };
+    const row = this.nodeLeaseRow(nodeId);
+    if (row === null) return { ok: false, why: 'unknown-node' };
+    if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+    return { ok: true, changed: false };
+  }
+
+  /** `POST /api/updates/ack` (§12; D-3183): in ONE transaction, a
+   *  SETTLED row back to `idle`, its request cleared, and this node's refusals
+   *  deleted. A busy row is refused and nothing is written — an ack never
+   *  kills a live lease; `unknown` and a token this build cannot name are
+   *  busy. `updateTarget` survives, so "last tried v0.0.10" stays readable. */
+  ackNode(nodeId: string): AckNodeResult {
+    return tx(this.db, (): AckNodeResult => {
+      const had = this.requestedTagOf(nodeId) !== null;
+      const res = this.db.prepare(
+        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
+        `requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL AND updateState IN ${SETTLED_UPDATE_SQL}`,
+      ).run(ACK_DETAIL, nodeId);
+      if (Number(res.changes) > 0) {
+        const cleared = this.db.prepare('DELETE FROM node_release_refusals WHERE nodeId = ?').run(nodeId);
+        return { ok: true, clearedRequest: had, clearedRefusals: Number(cleared.changes) };
+      }
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      return { ok: false, why: 'busy', state: busyOf(row.updateState) ?? 'unknown' };
+    });
+  }
+
+  /** Every LIVE node — the inventory every reader starts from; a superseded row
+   *  is invisible here (§8). */
+  nodes(): NodeRow[] {
+    return (this.db.prepare(`SELECT ${NODE_COLUMNS} FROM nodes WHERE supersededBy IS NULL ORDER BY label, nodeId`)
+      .all() as unknown as RawNodeRow[]).map(nodeRowOf);
+  }
+
+  /** Any row by id, superseded included — so a caller holding an old id can
+   *  learn its heir. `null` = no such row. */
+  node(nodeId: string): NodeRow | null {
+    const r = this.db.prepare(`SELECT ${NODE_COLUMNS} FROM nodes WHERE nodeId = ?`)
+      .get(nodeId) as unknown as RawNodeRow | undefined;
+    return r === undefined ? null : nodeRowOf(r);
+  }
+
+  /** The live row carrying this connection label, the latest measurement
+   *  first (a never-measured placeholder last). `null` = none. */
+  nodeByLabel(label: string): NodeRow | null {
+    const r = this.db.prepare(
+      `SELECT ${NODE_COLUMNS} FROM nodes WHERE label = ? AND supersededBy IS NULL ` +
+      'ORDER BY measuredAt IS NULL, measuredAt DESC, nodeId LIMIT 1',
+    ).get(label) as unknown as RawNodeRow | undefined;
+    return r === undefined ? null : nodeRowOf(r);
+  }
+
+  /** The lease-state read a zero-change node write takes its `why` from —
+   *  AFTER the write, never before it. `null` = no row with this id. */
+  private nodeLeaseRow(nodeId: string): { updateState: UpdateState; updateStartedAt: number | null; supersededBy: string | null } | null {
+    const r = this.db.prepare('SELECT updateState, updateStartedAt, supersededBy FROM nodes WHERE nodeId = ?')
+      .get(nodeId) as { updateState: string; updateStartedAt: number | null; supersededBy: string | null } | undefined;
+    if (r === undefined) return null;
+    return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
+             updateStartedAt: r.updateStartedAt, supersededBy: r.supersededBy };
+  }
+
+  /** Whether a request was outstanding, for `clearedRequest` — a report,
+   *  never a guard; the writes' own `WHERE`s are the guards. */
+  private requestedTagOf(nodeId: string): string | null {
+    const r = this.db.prepare('SELECT requestedTag FROM nodes WHERE nodeId = ?')
+      .get(nodeId) as { requestedTag: string | null } | undefined;
+    return r === undefined ? null : r.requestedTag;
   }
 }

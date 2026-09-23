@@ -8417,9 +8417,21 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    `tarballUrl`. Refused before the transaction opens.
  *    empty-listing — `[]` while releases are known: a transient answer must
  *                    not yank the catalogue.
- *    unknown-node  — no `nodes` row carries this id. */
+ *    unknown-node  — no `nodes` row carries this id.
+ *    bad-node-id   — a node id that is not the lowercase uuid `_inst_node_id`
+ *                    mints (`NODE_ID_RE`, store.ts); `rekeyNode` refuses it.
+ *    label-key-taken — `markUnreachable` found no live row for the label and
+ *                    could not write the label-keyed placeholder: a row
+ *                    already holds that key.
+ *    not-busy      — `releaseLease` on a settled row: there is no lease.
+ *    stale-report  — a report whose run began before the lease (even the
+ *                    last ms its whole-second `startedAt` covers,
+ *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
+ *                    belongs to a previous run and never moves it (design
+ *                    §8's precedence). */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
+  'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
