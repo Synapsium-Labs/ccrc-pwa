@@ -257,6 +257,22 @@ describe('safeDownloadUrl / F10 (fix round 1, D-3216) — a bad download URL wit
   //     catch it — `tarballUrl` would be non-null).
   // (2) reverting `return u.href` to `return raw` reds the default-port
   //     case above (`tarballUrl` would equal the raw string, port included).
+
+  // S2 (fix round 2): `DOWNLOAD_URL_MAX` above bounds the RAW string, but R7
+  // stores `u.href` — WHATWG percent-encoding can more than double a raw
+  // string's length (each `"` becomes `%22`, 1 byte to 3). A raw string
+  // comfortably under the cap can therefore percent-encode to a `tarballUrl`
+  // well over the field's documented bound (D-3216) unless the STORED form
+  // is re-checked. Mutation (measured by hand): removing the `u.href.length
+  // > DOWNLOAD_URL_MAX` re-check reds this case (`tarballUrl` would be the
+  // 2125-ish-char encoded string, not null).
+  it('S2: the length cap also bounds the STORED href — a raw string under the cap can percent-encode over it', () => {
+    const prefix = 'https://example.invalid/';
+    const raw = prefix + '"'.repeat(700);
+    expect(raw.length).toBeLessThanOrEqual(DOWNLOAD_URL_MAX);
+    expect(new URL(raw).href.length).toBeGreaterThan(DOWNLOAD_URL_MAX);   // the percent-encoded form is what would be stored
+    expect(parseReleaseListing([withUrl(raw)])!.rows[0]!.tarballUrl).toBeNull();
+  });
 });
 
 describe('F11 (fix round 1, D-3216) — the tag ingress bound, on top of isReleaseTag', () => {
@@ -1416,8 +1432,13 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     request that warns ('a 404 on the latest probe is an ANSWER …
       //     NOTHING is warned' reds on its warn-count assertion; ruling A's
       //     own '(e) after a restart …' reds the same way, on its
-      //     confirming-request-count assertion). The ordering IS pinned —
-      //     just not by case (a).
+      //     confirming-request-count assertion). C5 (fix round 2, review
+      //     143) CORRECTS this list: it is FOUR reds, not three — the same
+      //     spurious "K already known" also fires R12's own case
+      //     ("R12: a 404 with a kept K re-arms the probe's warning dedupe …")
+      //     one poll early, off a K the reordering planted rather than one
+      //     `/latest` itself ever confirmed. The ordering IS pinned — just
+      //     not by case (a).
       // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
       //     stays kept (and un-yanked) forever.
       // (3) removing the `etag = null` reset when the kept tag changes reds
@@ -1775,6 +1796,60 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     // (7) dropping the `row.draft || row.channel === 'dev'` guard reds the
     //     draft/prerelease case (`calls` would be 2 on poll 1, and the draft
     //     tag would appear in `store.releases()`).
+  });
+
+  // S1 (fix round 2, review 143): ruling 1's "every catalogue REQUEST stamps
+  // the budget clock" was unmet two ways — only `pollListing` stamped
+  // `requestedAt`, and `currentK()`'s `newestUnyankedStable()` read sat
+  // outside any try, so a throwing store REJECTED `poll()` itself (breaking
+  // its own "Never rejects" docstring) after sending only the `/latest`
+  // request, with the listing never sent and `lastRequestAt()` left `null`.
+  describe('S1 — every catalogue request stamps the clock, and a throwing store never rejects poll()', () => {
+    it('a store whose newestUnyankedStable throws never rejects poll(), the listing still runs, and it warns once, deduped (mutation: remove the try around currentK)', async () => {
+      const { port } = fixture();
+      const throwingPort: CatalogueStore = {
+        applyReleaseListing: (listing, now, coverage, keepTags, withdrawTag) =>
+          port.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag),
+        newestUnyankedStable: () => { throw new Error('coord.db is locked'); },
+      };
+      const p = poller(throwingPort);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        // /latest defaults to 404 (unscripted) — an answer whose 404 arm
+        // would normally derive K via currentK(), which throws here instead.
+        await expect(p.poll(1000)).resolves.toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'http-500' } });
+        expect(seenLatest, 'the probe\'s own request was sent').toHaveLength(1);
+        expect(seen, 'S1: the listing still runs even though currentK() threw').toHaveLength(1);
+        expect(p.lastRequestAt()).toBe(1000);
+        const currentKWarnings = warn.mock.calls.filter((c) => String(c[0]).includes('currentK threw'));
+        expect(currentKWarnings).toHaveLength(1);
+
+        // A second poll hitting the SAME throw does not warn again (dedupe,
+        // the existing house style — re-armed only on a distinct message).
+        await p.poll(2000);
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('currentK threw'))).toHaveLength(1);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // Mutation (measured by hand): dropping the probe's own `stampRequest(now)`
+    // call (relying solely on `pollListing`'s) is invisible to every OTHER
+    // case in this file, because `pollListing` always runs immediately after
+    // `pollLatest` with the SAME `now` — but it is exactly what this case
+    // catches: checked SYNCHRONOUSLY, before the listing request has even
+    // been dispatched (JS runs to the first genuine `await` — inside
+    // `fetch()` itself — before yielding), `lastRequestAt()` can only be
+    // non-null here because the PROBE's own call stamped it.
+    it('the latest-release probe stamps lastRequestAt before the listing is even sent (mutation: drop the probe\'s own stampRequest call)', async () => {
+      const { port } = fixture();
+      scriptLatest = ['hang'];
+      const p = poller(port, { timeoutMs: 300 });
+      const pr = p.poll(1000);
+      expect(p.lastRequestAt()).toBe(1000);
+      expect(seen, 'the listing has not been sent yet').toHaveLength(0);
+      await pr;   // let the probe time out and the (unscripted) listing run, so afterEach closes cleanly
+    });
   });
 });
 

@@ -44,13 +44,17 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * the check has not yet resolved — one further tag fetch, rare and bounded to
  * one extra request per poll, never a loop within one poll. The watcher's
  * steady-state 30-minute cadence therefore spends at most 6 requests an
- * hour, well under the 60/hour budget. Fix round 2 (R1, D-3218):
- * `POST /api/updates/refresh` (`routes.ts`) gates `lastRequestAt()` at an
- * interval DERIVED from these same two constants, never a hand-typed one —
- * admitting a poll once a MINUTE (fix round 1's own text) let a thumb spend
- * up to 180 requests an hour, three times the budget, since each admitted
- * poll could itself cost three requests. No token is ever sent (decision 4:
- * the repo carries no secrets, and the server holds none for GitHub).
+ * hour, well under the 60/hour budget. Fix round 2 (R1, D-3218; corrected
+ * C3): `POST /api/updates/refresh` (`routes.ts`) gates `lastRequestAt()` at
+ * an interval DERIVED from these two constants AND `CATALOGUE_POLL_INTERVAL_MS`
+ * below — never a hand-typed one — admitting a poll once a MINUTE (fix
+ * round 1's own text) let a thumb spend up to 180 requests an hour, three
+ * times the budget, since each admitted poll could itself cost three
+ * requests; deriving the door's interval from the door alone (R1's first
+ * fix) still ignored the SCHEDULED poll's own share of the same budget
+ * (C3) — the two lanes' worst cases are summed before the door's interval
+ * is sized. No token is ever sent (decision 4: the repo carries no
+ * secrets, and the server holds none for GitHub).
  *
  * Fail-soft, and the failure is an answer: every LISTING error arm sets
  * `lastError` and never `lastOkAt`, so no consumer can render a failed poll
@@ -73,13 +77,13 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * verification — the node verifies (§5) and reports `provenance` (§8).
  */
 export const RELEASES_PER_PAGE = 30;
-/** Fix round 2 (R1, D-3218): the max HTTP requests a single `poll()` can
- *  issue — the latest-release probe, the listing, and the rare moved-away
- *  tag check (never a loop within one poll; see the module docstring's
- *  Quota paragraph). `routes.ts`'s refresh door derives its interval from
- *  THIS constant and `UNAUTHENTICATED_HOURLY_REQUEST_BUDGET`, never a
- *  hand-typed interval — the two constants are the only place either number
- *  is spelled. */
+/** Fix round 2 (R1, D-3218; corrected C3): the max HTTP requests a single
+ *  `poll()` can issue — the latest-release probe, the listing, and the rare
+ *  moved-away tag check (never a loop within one poll; see the module
+ *  docstring's Quota paragraph). `routes.ts`'s refresh door derives its
+ *  interval from THIS constant, `UNAUTHENTICATED_HOURLY_REQUEST_BUDGET` and
+ *  `CATALOGUE_POLL_INTERVAL_MS` below, never a hand-typed interval — these
+ *  three constants are the only place any of those numbers is spelled. */
 export const CATALOGUE_MAX_REQUESTS_PER_POLL = 3;
 /** Fix round 2 (R1, D-3218): spec §7's unauthenticated budget, GitHub's own
  *  limit for the whole server process's IP — one named constant so the
@@ -88,6 +92,15 @@ export const UNAUTHENTICATED_HOURLY_REQUEST_BUDGET = 60;
 /** A GitHub listing that has not answered in 10 s is not going to; the lane
  *  is void-dispatched, so this bounds a request, not the tick. */
 export const CATALOGUE_TIMEOUT_MS = 10_000;
+/** Fix round 2 (C3, ruling): the SCHEDULED poll's own cadence (`watch.ts`'s
+ *  `tick()`, gated above the registry's fail-shut return, D-3198) — moved
+ *  here, catalogue.ts owning it, so `routes.ts`'s refresh-door interval can
+ *  derive `SCHEDULED_POLLS_PER_HOUR` from the SAME constant `watch.ts`
+ *  polls on, rather than a second copy. GitHub's unauthenticated listing
+ *  budget is 60 requests an hour per IP and a 304 still spends one, so every
+ *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
+ *  to `POST /api/updates/refresh`. */
+export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
 export const NOTES_CAP_BYTES = 4096;
 export const NOTES_MARKER = '…';
 /** D-3209: a hostile or oversized listing must never reach `JSON.parse` or
@@ -260,6 +273,13 @@ function safeDownloadUrl(raw: unknown): string | null {
     return null;
   }
   if (u.protocol !== 'https:' || u.username !== '' || u.password !== '') return null;
+  // S2 (fix round 2): `DOWNLOAD_URL_MAX` above bounds the RAW string, but
+  // WHATWG percent-encoding of `u.href` — the STORED, parsed form — can be
+  // several times longer (measured: 2019 printable-ASCII `"` bytes raw,
+  // 6019 once encoded). Re-check the form that actually reaches
+  // `tarballUrl` before returning it, so the field's bound is the one it is
+  // documented to have (D-3216).
+  if (u.href.length > DOWNLOAD_URL_MAX) return null;
   return u.href;
 }
 
@@ -461,6 +481,23 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  failing while `/latest` itself keeps answering fine is not re-armed
    *  every poll by that unrelated success (which would spam the log). */
   let lastWarnedWithdrawnError: string | null = null;
+  /** Fix round 2 (S1): `currentK()`'s own dedupe key — a throw from
+   *  `deps.store.newestUnyankedStable` is a DIFFERENT failure than any of
+   *  the three requests', so it gets its own message-keyed warn rather than
+   *  sharing `lastWarnedLatestError`/`lastWarnedWithdrawnError`, which would
+   *  let an unrelated request success re-arm it or a store failure silence
+   *  an unrelated request failure. */
+  let lastWarnedCurrentKError: string | null = null;
+
+  /** Fix round 2 (S1, review 143): ruling 1's "every catalogue REQUEST stamps
+   *  the budget clock" — the ONE place `requestedAt` moves, called at every
+   *  one of the three fetch sites (the listing, the latest-release probe, the
+   *  moved-away tag check) immediately before that site's own `fetchOne`
+   *  call, so a request that is SENT is what stamps the clock — never a
+   *  side effect of some other site's success. Fixing the class here (one
+   *  helper, three call sites) rather than at each site's own assignment is
+   *  what keeps them from drifting apart again. */
+  const stampRequest = (now: number): void => { requestedAt = now; };
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -495,6 +532,30 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   const currentK = (): string | null =>
     lastLatestTag !== null ? lastLatestTag : (deps.store.newestUnyankedStable?.() ?? null);
 
+  /** Fix round 2 (S1): `currentK()`'s only caller-visible read that can throw
+   *  — a SQLite error, or a `RangeError` from `newestTag` over any non-tag
+   *  `releases.tag` row (`store.ts:5913-5917`) — sat outside any try, so it
+   *  could reject `poll()` itself, breaking its own "Never rejects"
+   *  docstring and silently freezing the catalogue lane (the listing never
+   *  ran either, since it comes after in `pollOnce`). A throw here is read
+   *  as "K unknown this poll": no tag check is attempted and nothing is
+   *  yanked or advanced on its account, but that is NOT the same outcome as
+   *  a legitimate `null` (no unyanked stable release exists) — the caller
+   *  tells the two apart (`threw` vs `k: null`) so a throwing store cannot
+   *  masquerade as "no stable release" and clear a real, still-standing K. */
+  const measuredCurrentK = (): { threw: true } | { threw: false; k: string | null } => {
+    try {
+      return { threw: false, k: currentK() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== lastWarnedCurrentKError) {
+        console.warn(`ccrc-server: update catalogue currentK threw: ${message}`);
+        lastWarnedCurrentKError = message;
+      }
+      return { threw: true };
+    }
+  };
+
   /** `freshOk` (fix round 2, R2, review 143): true iff THIS call answered
    *  with a fresh 200 body the store accepted — never on a 304 (no body at
    *  all) and never on any failure. `pollOnce` reads it as the ONLY evidence
@@ -509,7 +570,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
-    requestedAt = now;
+    stampRequest(now);
     const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean } => ({ state, freshOk: false });
     const answer = await fetchOne(url, sentEtag, timeoutMs);
     if (answer === null) return notFresh(failed(now, 'no-egress'));
@@ -599,6 +660,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   ): Promise<PendingWithdrawal | null> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
     const sentEtag = latestEtag;
+    stampRequest(now);
     const answer = await fetchOne(url, sentEtag, timeoutMs);
     if (answer === null) { warnLatest('no-egress'); return null; }
     if (answer === 'over-cap') { warnLatest('over-cap'); return null; }
@@ -607,15 +669,19 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // no kept tag to begin with — otherwise it is the clean "moved away"
     // signal, confirmed against K's own endpoint before anything yields.
     if (answer.status === 404) {
-      const k = currentK();
-      if (k === null) {
+      // S1: a throwing read is "K unknown this poll" — never treated as the
+      // legitimate "no stable release" null, which would wrongly clear a
+      // real K out from under a store that merely failed to answer.
+      const measured = measuredCurrentK();
+      if (measured.threw) { latestAnswered(); return null; }
+      if (measured.k === null) {
         lastLatestTag = null;
         latestEtag = null;
         latestAnswered();
         return null;
       }
       latestAnswered();   // the /latest fetch itself is a clean answer
-      return measureWithdrawn(source, k, null, null);
+      return measureWithdrawn(now, source, measured.k, null, null);
     }
     if (answer.status === 304) {
       if (sentEtag === null) { warnLatest(httpReason(304)); return null; }
@@ -650,14 +716,17 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     }
     if (!applied.ok) { warnLatest(`store-refused-${applied.why}`); return null; }
     latestAnswered();   // the /latest fetch itself succeeded
-    const k = currentK();
+    // S1: a throwing read reads as "K unknown" here too — the same branch a
+    // legitimate null takes (advance to T unconditionally, no tag check).
+    const measured = measuredCurrentK();
+    const k = measured.threw ? null : measured.k;
     if (k !== null && compareReleaseTags(row.tag, k) < 0) {
       // Ruling A: moved AWAY from K to an OLDER tag T. `latestEtag`/
       // `lastLatestTag` stay pointed at K until the check resolves AND this
       // poll's listing answers fresh (R2) — never advanced to T here — so a
       // failed or deferred check cannot earn a cheap 304 in T's place next
       // poll and is retried in full against the SAME K.
-      return measureWithdrawn(source, k, row.tag, answer.etag);
+      return measureWithdrawn(now, source, k, row.tag, answer.etag);
     }
     latestEtag = answer.etag;   // never advanced on any failure arm above
     lastLatestTag = row.tag;    // I3: the LISTING's yank exclusion from now on
@@ -692,10 +761,11 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * on the next poll.
    */
   async function measureWithdrawn(
-    source: { owner: string; repo: string }, k: string, t: string | null, tEtag: string | null,
+    now: number, source: { owner: string; repo: string }, k: string, t: string | null, tEtag: string | null,
   ): Promise<PendingWithdrawal | null> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases/tags/${encodeURIComponent(k)}`;
+    stampRequest(now);
     const answer = await fetchOne(url, null, timeoutMs);
     if (answer === null) { warnWithdrawn('no-egress'); return null; }
     if (answer === 'over-cap') { warnWithdrawn('over-cap'); return null; }

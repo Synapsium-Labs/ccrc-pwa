@@ -61,6 +61,7 @@ import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
+import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
@@ -192,11 +193,14 @@ const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
  *  a stat, not a bash process. */
 const CAPS_REFRESH_MS = 60_000;
 
-/** The catalogue lane (design 2026-09-20 §7). GitHub's unauthenticated
- *  listing budget is 60 requests an hour per IP and a 304 still spends one,
- *  so every 30 minutes is 2 an hour, leaving the rest to
- *  `POST /api/updates/refresh` (one a minute at most). */
-const UPDATE_CATALOGUE_MS = 30 * 60_000;
+/** The catalogue lane's own cadence (design 2026-09-20 §7) — declared in
+ *  `catalogue.ts` (`CATALOGUE_POLL_INTERVAL_MS`), which `routes.ts`'s refresh
+ *  door also derives its interval from (fix round 2, C3), never a second
+ *  copy of the 30-minute figure here. GitHub's unauthenticated listing
+ *  budget is 60 requests an hour per IP and a 304 still spends one, so every
+ *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
+ *  to `POST /api/updates/refresh`. */
+const UPDATE_CATALOGUE_MS = CATALOGUE_POLL_INTERVAL_MS;
 
 /** The inventory lane (design 2026-09-20 §8): seven small ~/.ccrc reads per
  *  node, lstat-gated and budget-bounded, once a minute — and at once after a

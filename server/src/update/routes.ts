@@ -5,7 +5,9 @@ import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from '../coord/token.js';
 import { NODE_ID_RE, type NodeRow, type ReleaseRow, type SetIntentResult, type UpdateIntentPatch, type UpdateIntentRow } from '../coord/store.js';
 import { autoGateBlockers, isIngestibleReleaseTag, renderProjection, resolveNodeIntent } from './resolve.js';
-import { CATALOGUE_MAX_REQUESTS_PER_POLL, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET } from './catalogue.js';
+import {
+  CATALOGUE_MAX_REQUESTS_PER_POLL, CATALOGUE_POLL_INTERVAL_MS, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET,
+} from './catalogue.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import {
@@ -46,17 +48,30 @@ import {
 const refuse = (reply: FastifyReply, code: number, body: Omit<UpdateRouteRefusal, 'ok'>): FastifyReply =>
   reply.code(code).send({ ok: false, ...body } satisfies UpdateRouteRefusal);
 
-/** Fix round 2 (R1, D-3218): DERIVED, never a hand-typed interval. D-3215's
- *  own text claimed "one request a minute" was well under the unauthenticated
- *  60/hour budget, but a poll now costs up to `CATALOGUE_MAX_REQUESTS_PER_POLL`
- *  requests (the latest-release probe, the listing, and the rare moved-away
- *  tag check) — admitting a poll once a MINUTE let a thumb spend up to
- *  180 requests an hour, three times the budget. The derived gap admits one
- *  poll's WORST CASE once per gap, which lands exactly on the budget:
- *  `CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET`
- *  of an hour, in ms. */
+/** Fix round 2 (R1, D-3218; corrected C3): DERIVED, never a hand-typed
+ *  interval, and never against the door alone. D-3215's own text claimed
+ *  "one request a minute" was well under the unauthenticated 60/hour budget,
+ *  but a poll now costs up to `CATALOGUE_MAX_REQUESTS_PER_POLL` requests (the
+ *  latest-release probe, the listing, and the rare moved-away tag check) —
+ *  admitting a poll once a MINUTE let a thumb spend up to 180 requests an
+ *  hour, three times the budget. R1's own fix (fix round 2) derived the
+ *  interval as if the refresh door were the ONLY source of requests, which
+ *  ignores the SCHEDULED poll (`watch.ts`'s `tick()`, on its own
+ *  `CATALOGUE_POLL_INTERVAL_MS` clock, independent of this door's clock):
+ *  the true worst case per hour is (door polls + scheduled polls) ×
+ *  `CATALOGUE_MAX_REQUESTS_PER_POLL`. `SCHEDULED_POLLS_PER_HOUR` is derived
+ *  from that SAME cadence constant catalogue.ts owns (never a hand-typed
+ *  2), and the door's interval is sized so the two lanes TOGETHER fit the
+ *  budget: `HOUR_MS · CATALOGUE_MAX_REQUESTS_PER_POLL / (BUDGET −
+ *  SCHEDULED_POLLS_PER_HOUR · CATALOGUE_MAX_REQUESTS_PER_POLL)` — with
+ *  today's values, 3600000·3 / (60 − 2·3) = 200,000 ms (200 s). The 429
+ *  answer shape is unchanged; only the interval's value and its derivation
+ *  change. */
+const HOUR_MS = 3_600_000;
+const SCHEDULED_POLLS_PER_HOUR = HOUR_MS / CATALOGUE_POLL_INTERVAL_MS;
 export const REFRESH_MIN_INTERVAL_MS =
-  (CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET) * 60 * 60_000;
+  (HOUR_MS * CATALOGUE_MAX_REQUESTS_PER_POLL) /
+  (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - SCHEDULED_POLLS_PER_HOUR * CATALOGUE_MAX_REQUESTS_PER_POLL);
 export const INTENT_BODY_KEYS = ['scope', 'channel', 'pinnedTag', 'auto', 'notify'] as const;
 
 export function toReleaseWire(row: ReleaseRow): ReleaseWire {
@@ -327,8 +342,9 @@ export function registerUpdateRoutes(
    * a single poll now costs up to `CATALOGUE_MAX_REQUESTS_PER_POLL`
    * requests, so a door open once a minute admitted up to 180 requests an
    * hour, three times the budget. `REFRESH_MIN_INTERVAL_MS` is DERIVED from
-   * that same per-poll maximum and the hourly budget (never a hand-typed
-   * interval), landing exactly on it. The 429 answer shape is unchanged. A
+   * that same per-poll maximum, the hourly budget AND the scheduled poll's
+   * own cadence (fix round 2, C3 — the two lanes share one budget), never a
+   * hand-typed interval. The 429 answer shape is unchanged. A
    * `lastRequestAt` in the FUTURE (the clock stepped back) does not lock the
    * door: only an elapsed time in `[0, REFRESH_MIN_INTERVAL_MS)` refuses.
    */

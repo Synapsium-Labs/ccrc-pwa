@@ -12,9 +12,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, type ReleaseSourceRead } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
@@ -25,7 +27,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src/coord/store.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import {
-  CATALOGUE_MAX_REQUESTS_PER_POLL, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET, type CataloguePoller,
+  CATALOGUE_MAX_REQUESTS_PER_POLL, CATALOGUE_POLL_INTERVAL_MS, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET,
+  createCataloguePoller, type CataloguePoller,
 } from '../src/update/catalogue.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
@@ -128,7 +131,14 @@ const writeSecret = async (home: string): Promise<void> => {
 };
 
 const open = async (
-  o: { auth?: boolean; watcher?: boolean; catalogue?: CataloguePoller; remote?: boolean } = {},
+  o: {
+    auth?: boolean; watcher?: boolean; catalogue?: CataloguePoller; remote?: boolean;
+    // C2 (fix round 2): a REAL `createCataloguePoller` needs the SAME `CoordStore`
+    // instance the route's `deps.coord` uses (so its writes are visible through
+    // the route and `f.coord`), which does not exist until `open()` creates it —
+    // hence a factory, never a pre-built poller, for this one case.
+    catalogueFactory?: (coord: CoordStore) => CataloguePoller;
+  } = {},
 ): Promise<Opened> => {
   const home = mkTmp('ccrc-update-routes-');
   seedRoster(home);
@@ -147,6 +157,7 @@ const open = async (
     queue: new KeyedQueue(), mailToken: TOKEN, coord,
     updateIntentLog: new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir)),
     ...(o.catalogue ? { catalogue: o.catalogue } : {}),
+    ...(o.catalogueFactory ? { catalogue: o.catalogueFactory(coord) } : {}),
     // Task 11's `fleetState` fixture shape, disconnected: the sweep writes the
     // agent connection's row as unreachable on the sweep that sees it.
     ...(o.remote
@@ -581,22 +592,29 @@ describe('POST /api/updates/refresh', () => {
     expect(r.statusCode).toBe(501);
   });
 
-  // R1 (fix round 2, D-3218, review 143): D-3215's own text called this door
-  // "one request a minute", but a single admitted poll can itself cost up
-  // to `CATALOGUE_MAX_REQUESTS_PER_POLL` (3) requests — so a door open once
-  // a minute let a thumb spend up to 180 requests an hour against spec §7's
-  // unauthenticated 60/hour budget, three times over. The door's interval
-  // is now DERIVED from that same per-poll maximum and the hourly budget
-  // (never a hand-typed 180000). This pins the actual DOOR BEHAVIOUR the
-  // derivation buys: three refreshes a minute apart admit only ONE poll,
-  // not three, and the door stays shut for the FULL derived interval after
-  // any admitted poll (worst case or not — the route has no way to know how
-  // many requests a poll actually sent, so it always assumes the worst).
-  it('REFRESH_MIN_INTERVAL_MS is derived, never hand-typed: three refreshes a minute apart admit one poll, not three', async () => {
+  // R1 (fix round 2, D-3218, review 143), corrected C3: D-3215's own text
+  // called this door "one request a minute", but a single admitted poll can
+  // itself cost up to `CATALOGUE_MAX_REQUESTS_PER_POLL` (3) requests — so a
+  // door open once a minute let a thumb spend up to 180 requests an hour
+  // against spec §7's unauthenticated 60/hour budget, three times over. R1's
+  // own fix derived the interval from the door alone, which still ignored
+  // the SCHEDULED poll's own share of the same budget (C3): the door's
+  // interval is now sized so (door polls + scheduled polls) ×
+  // `CATALOGUE_MAX_REQUESTS_PER_POLL` fits the hour, never a hand-typed
+  // number. This pins the actual DOOR BEHAVIOUR the derivation buys: three
+  // refreshes a minute apart admit only ONE poll, not three, and the door
+  // stays shut for the FULL derived interval after any admitted poll (worst
+  // case or not — the route has no way to know how many requests a poll
+  // actually sent, so it always assumes the worst).
+  it('REFRESH_MIN_INTERVAL_MS is derived, never hand-typed, and accounts for the scheduled lane: three refreshes a minute apart admit one poll, not three', async () => {
+    const scheduledPollsPerHour = 3_600_000 / CATALOGUE_POLL_INTERVAL_MS;
     expect(REFRESH_MIN_INTERVAL_MS).toBe(
-      (CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET) * 60 * 60_000,
+      (3_600_000 * CATALOGUE_MAX_REQUESTS_PER_POLL) /
+      (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - scheduledPollsPerHour * CATALOGUE_MAX_REQUESTS_PER_POLL),
     );
-    expect(REFRESH_MIN_INTERVAL_MS).toBe(180_000);   // three minutes: 3 requests/poll, 60/hour budget
+    // 3600000·3 / (60 − 2·3) = 200,000 ms (200 s): the two lanes' worst
+    // cases summed, not the door alone.
+    expect(REFRESH_MIN_INTERVAL_MS).toBe(200_000);
 
     const p = scriptedPoller();
     const f = await open({ catalogue: p.poller });
@@ -620,6 +638,86 @@ describe('POST /api/updates/refresh', () => {
     const d = await post(f.app, '/api/updates/refresh', {});
     expect(d.statusCode).toBe(200);
     expect(p.polls()).toBe(2);
+  });
+
+  // C2 (fix round 2, review 143): every case above drives the door through
+  // `scriptedPoller()`, whose `poll()` never sends a request at all — so
+  // none of them proves the door's `lastRequestAt()` is stamped correctly by
+  // a REAL poll that actually sends the three requests ruling A/D-3215 added
+  // (the latest-release probe moving away from the kept stable, its
+  // confirming tag fetch, then the listing). This case wires a REAL
+  // `createCataloguePoller` (Task 10) to a loopback fixture standing in for
+  // GitHub — never `vi.stubGlobal('fetch')`, the `update-catalogue.test.ts`
+  // convention — behind the real route, and reads the outcome back off the
+  // SAME `CoordStore` the route itself writes through.
+  it('C2: a REAL three-request poll (latest moved away -> tag fetch -> listing) reaches the door, its own store, and the route', async () => {
+    const seenUrls: string[] = [];
+    let latestHits = 0;
+    let tagHits = 0;
+    let listingHits = 0;
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const url = req.url ?? '';
+      seenUrls.push(url);
+      res.setHeader('content-type', 'application/json');
+      if (url.endsWith('/releases/latest')) {
+        // K (v0.0.10, seeded below) has moved away: a bare 404 is the
+        // "withdrawn" signal ruling A's confirming tag fetch exists for.
+        latestHits += 1;
+        res.writeHead(404); res.end('{}'); return;
+      }
+      if (/\/releases\/tags\//.test(url)) {
+        // The confirming fetch of K's own tag: also 404 — a CONFIRMED
+        // withdrawal, never guessed off the probe's 404 alone (R2).
+        tagHits += 1;
+        res.writeHead(404); res.end('{}'); return;
+      }
+      // The listing: answers fresh so R2's evidence gate lets the confirmed
+      // withdrawal apply this SAME poll. Echoes both known releases back —
+      // the withdrawal is applied by `applyWithdrawn`'s OWN 'withdrawn'
+      // coverage call, straight after, never by this listing's own upsert.
+      listingHits += 1;
+      res.writeHead(200);
+      res.end(JSON.stringify(LISTING.map((r) => ({
+        tag_name: r.tag, name: r.tag, draft: false, prerelease: r.channel === 'dev',
+        published_at: new Date(r.publishedAt).toISOString(), target_commitish: null, body: null,
+        assets: [
+          { name: `ccrc-${r.tag}.tar.gz`, browser_download_url: r.tarballUrl },
+          { name: `ccrc-${r.tag}.tar.gz.sigstore.json`, browser_download_url: `${r.tarballUrl}.sigstore` },
+        ],
+      }))));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const source: ReleaseSourceRead = { ok: true, owner: 'fixture-owner', repo: 'fixture-repo', from: 'env' };
+      const f = await open({
+        catalogueFactory: (coord) => {
+          catalogue(coord);   // seeds v0.0.10 (stable, K) and v0.0.11 (dev)
+          return createCataloguePoller({ source, apiUrl: base, store: coord });
+        },
+      });
+
+      const a = await post(f.app, '/api/updates/refresh', {});
+      expect(a.statusCode, a.body).toBe(200);
+      // All THREE requests fired, in the documented order, in ONE poll.
+      expect(seenUrls).toEqual([
+        '/repos/fixture-owner/fixture-repo/releases/latest',
+        '/repos/fixture-owner/fixture-repo/releases/tags/v0.0.10',
+        '/repos/fixture-owner/fixture-repo/releases?per_page=30',
+      ]);
+      expect({ latestHits, tagHits, listingHits }).toEqual({ latestHits: 1, tagHits: 1, listingHits: 1 });
+      // The confirmed withdrawal reached the SAME store the route reads.
+      expect(f.coord.releases().find((r) => r.tag === 'v0.0.10')).toMatchObject({ tag: 'v0.0.10', yanked: true });
+
+      // The door's `lastRequestAt()` was stamped by the REAL poll (not a
+      // scripted stub), so an immediate second refresh is still refused.
+      const b = await post(f.app, '/api/updates/refresh', {});
+      expect(b.statusCode).toBe(429);
+      expect(seenUrls, 'the refused refresh sent nothing').toHaveLength(3);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => { server.close(() => r()); });
+    }
   });
 
   // Mutations (measured by hand, on a scratch copy): hand-typing
