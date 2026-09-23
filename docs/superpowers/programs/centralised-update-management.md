@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | planned |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **dispatched** (run 128, 2026-09-23); plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | planned |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | planned |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | planned |
@@ -53,6 +53,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   most found by review rather than planning). A worker never mints; it names a departure in its mail and the
   coordinator assigns from the block.
 
+- **Wave 2's plan (2026-09-23).** `docs/superpowers/plans/2026-09-22-centralised-update-w2-control-plane.md`, 15
+  tasks, committed alone as `1288beec` and cherry-picked by the worker. Written by the coordinator's workflows: a
+  ten-reader understand sweep at `d759c914`, an interface skeleton, fifteen task bodies (several measured in scratch
+  copies of the tree), a fix pass applying thirteen rulings, then an eight-lens review (Opus) with two Sonnet
+  refuters per finding — 28 survived, 5 refuted, all 28 applied. Rulings that cross waves: `~/.ccrc/update.json`
+  times are unix SECONDS; the report reader ignores unknown keys (wave 4 adds `pid`); the projection route answers
+  `text/plain`. The spec's §12 says six session doors; wave 2 registers the four it owns, wave 5 adds the other two.
+- **Wave 2's deviation block.** The plan's thirty-three departures are D-3174 through D-3206, issued to run 128
+  and defined in that plan. A reserve of twenty more, from 3207 (written bare here because none is defined yet),
+  was issued to the same run; the worker spends it in order and defines each where it first cites it.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -71,4 +82,10 @@ trusted root is dated — if it outlives an upstream key rotation it refuses eve
 
 ## Next-wave brief
 
-(Wave 2 — written with its plan.)
+**Wave 2 (run 128) — dispatched 2026-09-23.** The brief as sent is the plan's path and sha, tasks 1–15, execution
+skill `superpowers:subagent-driven-development`, routing Opus · high main loop / Sonnet · high implementers / Opus ·
+high per-task reviewer / workflow off / compact 40, the deviation block and reserve above, the migration-slot
+re-measure, the concurrent-wave boundary (wave 2 never edits `ccd/`, `deploy/`), the sharded full-suite gate, and
+"wave-done in the same turn as the push; never end a turn to wait on CI".
+
+**Wave 3 and wave 4 plans** are in preparation; wave 4 may be dispatched while wave 2 runs, and merges after it.
