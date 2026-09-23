@@ -1090,15 +1090,19 @@ export const MIGRATIONS: readonly string[] = [
     currentVersion TEXT, currentSha TEXT, currentRef TEXT, currentBuiltAt TEXT, currentDirty INTEGER,
     stampRead TEXT NOT NULL, installState TEXT NOT NULL, provenance TEXT NOT NULL, caps TEXT NOT NULL,
     agentOps TEXT, highestVersion TEXT, previousVersion TEXT,
-    -- floorRead / previousRead: fix round 1, D-3213 -- the read-STATE beside
-    -- each tag column ('measured' | 'absent' | 'unmeasured'). An unreadable
-    -- read carries the column's value forward from the row's own previous
-    -- measurement rather than overwriting it with NULL, so highestVersion
-    -- alone can no longer tell "no floor file" (unconstrained, section 9)
-    -- apart from "this sweep could not read the floor file" (never
-    -- unconstrained). This slot is still UNMERGED (entry 14 as written), so
-    -- the two columns join the measurement group's DDL directly rather than
-    -- a later migration.
+    -- floorRead / previousRead: fix round 1, D-3213 (re-review N-1) -- the
+    -- STORED read-STATE beside each tag column ('measured' | 'absent' |
+    -- 'unmeasured'), a fact about the ROW: 'unmeasured' means NEVER
+    -- measured (no sweep, this one or an earlier one, has read this file).
+    -- applyMeasurement carries the PAIR (value AND state) forward from the
+    -- row when a sweep's own raw read is 'unmeasured' and the row already
+    -- held something better, rather than overwrite it with NULL, so
+    -- highestVersion alone can no longer tell "no floor file" (unconstrained,
+    -- section 9) apart from "never measured" (also unconstrained, but for a
+    -- different reason -- resolve.ts checks the state, not just the value).
+    -- This slot is still UNMERGED (entry 14 as written), so the two columns
+    -- join the measurement group's DDL directly rather than a later
+    -- migration.
     floorRead TEXT NOT NULL, previousRead TEXT NOT NULL,
     os TEXT NOT NULL, measuredAt INTEGER,
     reachable INTEGER NOT NULL, unreachableSince INTEGER,

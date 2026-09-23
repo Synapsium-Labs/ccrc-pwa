@@ -141,10 +141,12 @@ export function eligibleTags(releases: readonly EligibilityRow[], channel: Updat
 interface ChannelAnswer { desiredTag: string | null; resolveDetail: string | null }
 
 function resolveOnChannel(channel: UpdateChannel, pin: string | null, input: ResolveInput): ChannelAnswer {
-  // fix round 1, D-3213: a NULL floor with nothing ever measured is NOT the
-  // same fact as a NULL floor this sweep determined to be absent — only the
-  // latter is unconstrained (§9). Checked before `floorOf`, which cannot
-  // itself tell the two apart: it would otherwise fall back to
+  // fix round 1, D-3213 (re-review N-1): a NULL floor that was NEVER
+  // measured (floorRead 'unmeasured') is NOT the same fact as a NULL floor
+  // the STORED row says is genuinely absent (floorRead 'absent' — measured
+  // this sweep, or carried forward as a pair from an earlier one) — only
+  // the latter is unconstrained (§9). Checked before `floorOf`, which
+  // cannot itself tell the two apart: it would otherwise fall back to
   // `currentVersion` here exactly as it does for a genuinely absent floor.
   if (input.highestVersion === null && input.floorRead === 'unmeasured') {
     return { desiredTag: null, resolveDetail: RESOLVE_DETAIL.floorUnmeasured() };

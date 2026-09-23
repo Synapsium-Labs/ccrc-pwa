@@ -273,11 +273,15 @@ export interface NodeMeasurement {
    *  `[]` = an agent too old to say. Stored NULL and `''` — never folded. */
   agentOps: readonly string[] | null;
   highestVersion: string | null; previousVersion: string | null;
-  /** fix round 1, D-3213: THIS sweep's read state of the floor/previous
-   *  files. `highestVersion`/`previousVersion` NULL means "no floor" only
-   *  when the matching `*Read` is `absent`; `unmeasured` means this sweep
-   *  could not tell, and the caller (`applyMeasurement`) carries the row's
-   *  own previous value forward rather than let this write null it out. */
+  /** fix round 1, D-3213 (re-review N-1): the STORED read state of the
+   *  floor/previous files — a fact about the ROW, not just about the sweep
+   *  that last touched it. `highestVersion`/`previousVersion` NULL means "no
+   *  floor" only when the matching `*Read` is `absent`; `unmeasured` means
+   *  NEVER MEASURED — no sweep, this one or an earlier one, has read this
+   *  file — because `applyMeasurement` carries the PAIR (value AND state)
+   *  forward from the row when THIS sweep's own raw read comes back
+   *  `unmeasured` and the row already held something better, rather than
+   *  overwrite a floor a past sweep did measure with `unmeasured`/NULL. */
   floorRead: TagFileRead; previousRead: TagFileRead;
   os: NodeOs;
   measuredAt: number;

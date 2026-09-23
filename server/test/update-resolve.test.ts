@@ -69,14 +69,26 @@ describe('the floor read-state (fix round 1, D-3213): unmeasured is never absent
     expect(r.resolveDetail).toBe(RESOLVE_DETAIL.floorUnmeasured());
   });
 
-  it('a carried floor (highestVersion set) still constrains, even though floorRead says unmeasured — the un-current-equal-to-floor case', () => {
+  // fix round 1, D-3213 re-review (N-3): after I-1's fix, a NORMAL carry
+  // stores `measured` (see the store.ts/schema.ts docstrings) — `highestVersion`
+  // non-NULL together with `floorRead: 'unmeasured'` is NOT the shape a carry
+  // produces any more. The only path that reaches it is N-2's out-of-vocabulary
+  // fold (an unknown stored token reads as `unmeasured`), reachable only after
+  // a rollback from a newer build that wrote a token this build doesn't know.
+  // Retitled rather than switched to `floorRead: 'measured'`: measured directly
+  // (`__m4check`, this dispatch) — with `floorRead: 'measured'` the M4 mutation
+  // (`floorOf(floorRead === 'unmeasured' ? null : highestVersion, …)`) is a
+  // no-op, so the fixture would no longer bind it. What these two cases bind
+  // today is the non-NULL-floor-constrains-regardless-of-label property, over
+  // the one state that can still carry that label with a non-NULL value.
+  it('a non-NULL floor constrains whatever its label says, even the out-of-vocabulary-fold label unmeasured — the un-current-equal-to-floor case', () => {
     const r = resolveNodeIntent(input({
       highestVersion: 'v0.0.9', floorRead: 'unmeasured', currentVersion: 'v0.0.9', releases: [rel('v0.0.10')],
     }));
     expect(r.desiredTag).toBe('v0.0.10');
   });
 
-  it('a carried floor stays sticky on a ROLLED-BACK node exactly as a fresh one would — this pin actually binds (fix round 1, I-3)', () => {
+  it('a non-NULL floor constrains a ROLLED-BACK node exactly as a fresh one would, whatever its label says — this pin actually binds (fix round 1, I-3)', () => {
     // currentVersion ('v0.0.8') differs from the carried highestVersion
     // ('v0.0.9'), so an unconstrained answer (floorOf falling back to
     // currentVersion) and a constrained one DIVERGE — I-3's own reviewer
