@@ -9,6 +9,7 @@ import { decideAllocation } from './ledger.js';
 import type { CoordPlacementStamp } from './placement.js';
 import type { LedgerLog } from './ledgerlog.js';
 import type { PoolEdgeLog } from './pooledgelog.js';
+import type { UpdateIntentLog } from './updateintentlog.js';
 // `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
 // `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
 // deeper.
@@ -30,6 +31,9 @@ import {
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
   BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
   isUpdatePhase, isUpdateState, SETTLED_UPDATE_STATES, validCapWords,
+  // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
+  // shared/api.ts (ruling R4), imported here and never spelled.
+  FLEET_SCOPE, isAutoMode, isNotifyMode,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
@@ -58,6 +62,7 @@ import {
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type UpdatePhase, type UpdateState,
+  type AutoMode, type NotifyMode,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -324,6 +329,40 @@ export type AckNodeResult =
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'busy'; state: BusyUpdateState };
+
+/** A partial intent write. `undefined` = leave the field as it stands;
+ *  `pinnedTag: null` = CLEAR the pin — two different requests, never folded. */
+export interface UpdateIntentPatch { channel?: UpdateChannel; pinnedTag?: string | null; auto?: AutoMode; notify?: NotifyMode }
+
+/** One `update_intent` row as the READ side sees it (D-3181):
+ *  an out-of-vocabulary `channel` reads `null` (spec §6's ClaimState stance —
+ *  never the fleet default, which would be fail-open), `auto` reads `'off'`
+ *  (nothing unattended), `notify` reads `'channel'` (the operator hears of more,
+ *  never of nothing). `pinnedTag` is returned as stored: a malformed pin is
+ *  still a pin, and the resolver finds it ineligible rather than reading it as
+ *  "unpinned, so newest". */
+export interface UpdateIntentRow {
+  scope: string; channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode; notify: NotifyMode;
+  setAt: number; setBy: string;
+}
+
+/** `setIntent`'s answer. Every refusal is its own arm, each word a member of
+ *  the ONE update-store vocabulary (`UpdateStoreRefuseCode`, `shared/api.ts`,
+ *  ruling R5), and every one but the two journal arms is decided before the
+ *  transaction opens, so a refused write leaves no journal line.
+ *
+ *  `setAccountPools`'s C2 warning applies verbatim: the type system will NOT
+ *  stop a caller discarding this value — `store.setIntent(…);` unbound compiles
+ *  clean — so THE RESULT MUST BE BOUND AND ITS `.ok` DISCRIMINATED before any
+ *  effect is drawn from the call. */
+export type SetIntentResult =
+  | { ok: true; row: UpdateIntentRow; epoch: number }
+  | { ok: false; why: 'empty-patch' }
+  | { ok: false; why: 'bad-field'; field: keyof UpdateIntentPatch }
+  | { ok: false; why: 'unknown-scope'; scope: string }
+  | { ok: false; why: 'no-channel'; scope: string; base: string }
+  | { ok: false; why: 'journal-unreadable'; detail: string }
+  | { ok: false; why: 'journal-unwritable'; detail: string };
 
 /** The columns `NODE_COLUMNS` names, as SQLite hands them back. */
 interface RawNodeRow {
@@ -1061,6 +1100,52 @@ const jsonOrNull = (s: string | null): unknown => {
   if (s === null) return null;
   try { return JSON.parse(s); } catch { return null; }
 };
+
+/** `update_intent`'s read-side fallbacks (D-3181), ONCE: the
+ *  row reader and `setIntent`'s merge base both name them. */
+const INTENT_AUTO_FALLBACK: AutoMode = 'off';
+const INTENT_NOTIFY_FALLBACK: NotifyMode = 'channel';
+/** Who `setIntent` records (spec §6 DDL: `'pwa' | 'migration'`). Its one caller
+ *  is the PWA's intent route; the migration writes the other word. */
+const INTENT_SET_BY = 'pwa';
+const INTENT_COLUMNS_SQL = 'scope, channel, pinnedTag, auto, notify, setAt, setBy';
+
+interface IntentRowDb {
+  scope: string; channel: string; pinnedTag: string | null; auto: string; notify: string; setAt: number; setBy: string;
+}
+
+const intentOfDb = (r: IntentRowDb): UpdateIntentRow => ({
+  scope: r.scope,
+  channel: isUpdateChannel(r.channel) ? r.channel : null,
+  pinnedTag: r.pinnedTag,
+  auto: isAutoMode(r.auto) ? r.auto : INTENT_AUTO_FALLBACK,
+  notify: isNotifyMode(r.notify) ? r.notify : INTENT_NOTIFY_FALLBACK,
+  setAt: r.setAt,
+  setBy: r.setBy,
+});
+
+/** The first named patch field whose value is outside its vocabulary, in a
+ *  fixed order, or null. Reads the values as `unknown`: the route hands over
+ *  parsed JSON, and `UpdateIntentPatch` is a claim about the caller, not a
+ *  measurement of it. `pinnedTag: null` is a valid value (clear the pin). */
+const badIntentField = (patch: UpdateIntentPatch): keyof UpdateIntentPatch | null => {
+  const p: { [K in keyof UpdateIntentPatch]?: unknown } = patch;
+  if (p.channel !== undefined && !isUpdateChannel(p.channel)) return 'channel';
+  if (p.pinnedTag !== undefined && p.pinnedTag !== null && !isReleaseTag(p.pinnedTag)) return 'pinnedTag';
+  if (p.auto !== undefined && !isAutoMode(p.auto)) return 'auto';
+  if (p.notify !== undefined && !isNotifyMode(p.notify)) return 'notify';
+  return null;
+};
+
+/** A journal failure inside `setIntent`'s transaction, carried OUT of `tx()` as
+ *  a throw — so `tx` rolls the transaction back — and turned into a result arm
+ *  at the method's edge. Module-private: nothing but `setIntent` throws or
+ *  catches it, and any other error still propagates as itself. */
+class IntentJournalFault extends Error {
+  constructor(readonly why: 'journal-unreadable' | 'journal-unwritable', cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -6046,5 +6131,106 @@ export class CoordStore {
     const r = this.db.prepare('SELECT requestedTag FROM nodes WHERE nodeId = ?')
       .get(nodeId) as { requestedTag: string | null } | undefined;
     return r === undefined ? null : r.requestedTag;
+  }
+
+  // ── update intent ─────────────────────────────────────────────────────
+  //
+  // Desired state (design 2026-09-20 §6, §9). `setIntent` copies
+  // `setAccountPools`'s journal sequence above: every refusal is decided
+  // BEFORE the transaction and before either journal call; inside one `tx`
+  // the epoch is MAX(db, journal) + 1, the journal line is appended FIRST,
+  // the intent row second and the epoch row LAST — so a crash between append
+  // and commit SKIPS an epoch and never reissues one. `update_intent` and
+  // `update_epoch` have no other writer (Task 7's writer-group scan).
+
+  /** Writes one scope's intent. The merge base is the scope's own row, else —
+   *  a node scope written for the first time — the `'*'` row AS IT STANDS NOW:
+   *  spec §9 makes `'*'` the fallback for a node with no row, and copying it at
+   *  this moment freezes what the operator saw when they made the node its own
+   *  scope. A later `'*'` write does not reach a node that has a row. */
+  setIntent(scope: string, patch: UpdateIntentPatch, log: UpdateIntentLog, now: number): SetIntentResult {
+    // Refused HERE — before `tx()` opens and before `log.maxEpoch()`/
+    // `log.append()` run — so a refused write leaves no journal line and opens
+    // no transaction it would only roll back. These reads and the transaction
+    // below run in one synchronous call on `DatabaseSync`: nothing interleaves.
+    if (patch.channel === undefined && patch.pinnedTag === undefined
+        && patch.auto === undefined && patch.notify === undefined) {
+      return { ok: false, why: 'empty-patch' };
+    }
+    const bad = badIntentField(patch);
+    if (bad !== null) return { ok: false, why: 'bad-field', field: bad };
+    // A node scope is a MEASURED node-id (`NODE_ID_RE`, Task 5's one
+    // declaration, above in this file) on a live row. A live label-keyed row is
+    // refused: `rekeyNode` never carries an `update_intent` row, so intent under
+    // a label would be orphaned when the node-id is first measured
+    // (D-3194).
+    if (scope !== FLEET_SCOPE && (!NODE_ID_RE.test(scope) || this.db.prepare(
+      'SELECT 1 AS one FROM nodes WHERE nodeId = ? AND supersededBy IS NULL',
+    ).get(scope) === undefined)) {
+      return { ok: false, why: 'unknown-scope', scope };
+    }
+    const own = this.intentFor(scope);
+    const base = own ?? this.intentFor(FLEET_SCOPE);
+    const channel = patch.channel ?? base?.channel ?? null;
+    if (channel === null) {
+      return { ok: false, why: 'no-channel', scope, base: own !== null ? scope : FLEET_SCOPE };
+    }
+    const row: UpdateIntentRow = {
+      scope, channel,
+      pinnedTag: patch.pinnedTag !== undefined ? patch.pinnedTag : (base?.pinnedTag ?? null),
+      auto: patch.auto ?? base?.auto ?? INTENT_AUTO_FALLBACK,
+      notify: patch.notify ?? base?.notify ?? INTENT_NOTIFY_FALLBACK,
+      setAt: now,
+      setBy: INTENT_SET_BY,
+    };
+    try {
+      return tx(this.db, () => {
+        const dbMax = (this.db.prepare('SELECT epoch AS e FROM update_epoch WHERE id = 1')
+          .get() as { e: number }).e;
+        let fileMax: number | null;
+        try { fileMax = log.maxEpoch(); } catch (err) { throw new IntentJournalFault('journal-unreadable', err); }
+        const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
+        try {
+          log.append({ epoch, scope, channel, pinnedTag: row.pinnedTag, auto: row.auto,
+                       notify: row.notify, setBy: row.setBy, at: now });
+        } catch (err) { throw new IntentJournalFault('journal-unwritable', err); }
+        this.db.prepare(
+          'INSERT INTO update_intent (scope, channel, pinnedTag, auto, notify, setAt, setBy) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope) DO UPDATE SET channel = excluded.channel, ' +
+          'pinnedTag = excluded.pinnedTag, auto = excluded.auto, notify = excluded.notify, ' +
+          'setAt = excluded.setAt, setBy = excluded.setBy',
+        ).run(scope, channel, row.pinnedTag, row.auto, row.notify, now, row.setBy);
+        this.db.prepare('UPDATE update_epoch SET epoch = ?, issuedAt = ? WHERE id = 1').run(epoch, now);
+        return { ok: true as const, row, epoch };
+      });
+    } catch (err) {
+      if (!(err instanceof IntentJournalFault)) throw err;
+      return err.why === 'journal-unreadable'
+        ? { ok: false, why: 'journal-unreadable', detail: err.message }
+        : { ok: false, why: 'journal-unwritable', detail: err.message };
+    }
+  }
+
+  /** Every intent row, `'*'` first (`ORDER BY scope`: `'*'` is 0x2A, below
+   *  every character a nodeId starts with). */
+  intents(): UpdateIntentRow[] {
+    return (this.db.prepare(`SELECT ${INTENT_COLUMNS_SQL} FROM update_intent ORDER BY scope`)
+      .all() as unknown as IntentRowDb[]).map(intentOfDb);
+  }
+
+  /** One scope's row. `null` = no row for that scope — for a node, "the fleet
+   *  default applies" (spec §9) — which is a different answer from a row whose
+   *  `channel` reads null. */
+  intentFor(scope: string): UpdateIntentRow | null {
+    const r = this.db.prepare(`SELECT ${INTENT_COLUMNS_SQL} FROM update_intent WHERE scope = ?`)
+      .get(scope) as unknown as IntentRowDb | undefined;
+    return r === undefined ? null : intentOfDb(r);
+  }
+
+  /** The projection's epoch — the migration seeds the one row, so no reader
+   *  handles absence. */
+  updateEpoch(): { epoch: number; issuedAt: number } {
+    return this.db.prepare('SELECT epoch, issuedAt FROM update_epoch WHERE id = 1')
+      .get() as { epoch: number; issuedAt: number };
   }
 }

@@ -8428,10 +8428,25 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    last ms its whole-second `startedAt` covers,
  *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
  *                    belongs to a previous run and never moves it (design
- *                    §8's precedence). */
+ *                    §8's precedence).
+ *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
+ *                    auto/notify.
+ *    bad-field     — a named patch field's value is outside its vocabulary
+ *                    (`pinnedTag` must be null or pass `isReleaseTag`).
+ *    unknown-scope — the intent scope is neither `FLEET_SCOPE` nor a live
+ *                    `nodes` row keyed by a measured node-id (`NODE_ID_RE`):
+ *                    a label-keyed row is refused, because `rekeyNode` never
+ *                    carries an intent row to the UUID.
+ *    no-channel    — the merge base's channel reads null (a token this build
+ *                    does not know) and the patch names none; the fleet
+ *                    default is never substituted — fail-open.
+ *    journal-unreadable — `UpdateIntentLog.maxEpoch()` threw; nothing written.
+ *    journal-unwritable — `UpdateIntentLog.append()` threw; the transaction
+ *                    rolled back. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
+  'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
