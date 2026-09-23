@@ -1196,9 +1196,9 @@ only ever sees the tmux name, so `_spawn` is what emits this, once it has
 both back): `<id> is waiting for login on <wrapper> — attach and run
 /login`.
 
-The startup verdict is four-valued now, not the one non-zero code above: `0`
+The startup verdict is six-valued now, not the one non-zero code above: `0`
 a live marker appeared, `2` a login screen (unchanged, above), `3` the tmux
-session vanished mid-poll, `4` the window expired with no marker. `3` ends
+session vanished mid-poll, `4` the window expired with no marker, `5` a hard block (a limit/spend banner or lost auth), `6` a live pane too narrow to read (or of unreadable width), so the startup gates stood down. `3` ends
 the wait **immediately** — a debounced second probe, not the ~15-minute wait
 a vanished pane used to cost. Every verdict, success included, is recorded in
 `$REG/<id>.spawn` as `<epoch> <rc>`, which is the one channel from a spawn
@@ -2579,8 +2579,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7465-7467`), each with an operator sentence of its own at `:7505`,
-`:7513` and `:7526`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7474-7476`), each with an operator sentence of its own at `:7514`,
+`:7522` and `:7535`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -3001,7 +3001,7 @@ never left half-true:
 | `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
 | `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
 | `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
-| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4/5/6), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
 **30 seconds**, so a live loop never drifts stale under its own steady

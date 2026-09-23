@@ -42,7 +42,7 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
 } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
-import { divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
+import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
@@ -474,6 +474,15 @@ export class FleetWatcher {
   private mergedNotified = new Set<string>();
   /** Last-seen model/effort/ultracode/branch per live session (from the pane). */
   private statuslines = new Map<string, Statusline>();
+  /** The branch each worktree's own HEAD names, keyed by the CCD ID measured
+   *  off its checkout path (`ccdIdForWorktree`, never git's admin name, which
+   *  git suffixes on a basename collision and so can name a stranger), as
+   *  `sweepDivergences` last measured it — the fleet's branch fallback when a
+   *  pane gives no fresh full branch (fleet.ts). `project` rides along so a
+   *  failed read can keep its own project's entries. Kept apart from the
+   *  census's per-sweep map: that retention must never reach the census,
+   *  which a failed read may only ever suppress, never feed. */
+  private headBranches = new Map<string, { project: string; branch: string | null }>();
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
   /** Last swept task progress per session id, and when the sweep ran. */
@@ -965,6 +974,13 @@ export class FleetWatcher {
     return new Map(this.statuslines);
   }
 
+  /** Last-measured worktree HEAD branches — passed into a one-shot fleet
+   *  assembly (REST + initial /ws/fleet push) so a narrow pane's label shows
+   *  its checked-out branch immediately. Same reasoning as currentPending(). */
+  currentHeadBranches(): Map<string, string | null> {
+    return new Map([...this.headBranches].map(([id, h]) => [id, h.branch]));
+  }
+
   /** Last-swept plan progress — same reasoning as currentPending(). */
   currentTaskProgress(): Map<string, TaskProgress> {
     return new Map(this.taskProgress);
@@ -1210,7 +1226,7 @@ export class FleetWatcher {
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
       // than computed a second, independent way off `records` — see that
       // derivation's own comment (blocking review finding 4).
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage);
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches());
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -2046,7 +2062,7 @@ export class FleetWatcher {
     if (this.lastNameSweep !== 0 && now - this.lastNameSweep < NAME_SWEEP_MS) return;
     this.lastNameSweep = now;
     // The REGISTRY's branch, never the assembled `FleetSession.branch`: that one
-    // is `sl?.branch ?? r.branch` (fleet.ts:268) and the statusline wins, so it
+    // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
@@ -2232,6 +2248,8 @@ export class FleetWatcher {
     const projects = [...new Set(records.map((r) => r.project))];
     const worktrees: DivergenceInput['worktrees'][number][] = [];
     const headBranch = new Map<string, string | null>();
+    const fleetHeads = new Map<string, { project: string; branch: string | null }>();
+    const transientlyUnread = new Set<string>();
     for (const project of projects) {
       const read = await readWorktreeRecords(this.deps.io, this.deps.cfg.projectsRoot, project);
       // §1.7. Both refusals contribute nothing for this project — a census can
@@ -2271,13 +2289,32 @@ export class FleetWatcher {
         if (read.reason === 'refused-project') {
           console.warn(`ccrc-server: sweepDivergences cannot census project ${JSON.stringify(project)} — the name is refused by the path guard, so this project is permanently absent from the census`);
         }
+        if (read.reason === 'unreachable' || read.reason === 'unlistable') transientlyUnread.add(project);
         continue;
       }
       for (const w of read.records) {
         worktrees.push({ project, name: w.name, path: w.path });
         headBranch.set(`${project}/${w.name}`, w.headBranch);
+        const id = ccdIdForWorktree(project, w.path);
+        if (id !== null) fleetHeads.set(id, { project, branch: w.headBranch });
       }
     }
+    // The fleet's copy (see `headBranches`), written BEFORE any of the census's
+    // own early returns below: the HEAD reads above are valid whether or not
+    // the registry listing or the run read then refuses. A project that
+    // answered replaces its entries, so a removed worktree's goes with it. One
+    // whose worktree LISTING failed transiently (`unreachable`, `unlistable`)
+    // keeps the last it had, so a dropped agent round trip does not flip every
+    // label in it back to the registry's name for a minute; a STANDING refusal
+    // (`not-a-checkout`, `refused-project`) keeps nothing. NOT covered: a
+    // per-worktree `gitdir`/`HEAD` read that fails inside a listing that
+    // answered — `readWorktreeRecords` reports those as a dropped record or a
+    // null HEAD, indistinguishable from a detached one, so that row falls to
+    // the registry until the next sweep.
+    for (const [id, h] of this.headBranches) {
+      if (transientlyUnread.has(h.project) && !fleetHeads.has(id)) fleetHeads.set(id, h);
+    }
+    this.headBranches = fleetHeads;
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
     // rather than the one `tick()` already took (D-283's "one listing,
@@ -2347,7 +2384,7 @@ export class FleetWatcher {
       console.warn(`ccrc-server: sweepDivergences activeClaims failed (${err instanceof Error ? err.message : String(err)}) — no claim findings this pass`);
     }
     // THE REGISTRY'S `.branch`, never the assembled `FleetSession.branch`:
-    // `assembleFleet` computes `sl?.branch ?? r.branch` (fleet.ts) and the
+    // `assembleFleet` puts the pane's branch ahead of HEAD and this (fleet.ts), and the
     // STATUSLINE wins there, so a census fed from `sessions` would compare git's
     // HEAD against whatever Claude Code last rendered. The field a
     // done-fingerprint trusts, and the field a rename moves, is this one — which
@@ -3856,14 +3893,17 @@ export class FleetWatcher {
         // whose identity triple is measurable), used at nine other sites in
         // this file. A local of that name shadows it inside this block.
         const sawStatuslineIdentity = sl.model || sl.branch || sl.effort;
+        // `retained` marks identity this tick did NOT measure, so the fleet can
+        // rank a kept branch below the worktree's measured HEAD (fleet.ts) —
+        // the map itself still keeps it, exactly as D-2012 argues below.
         if (sawStatuslineIdentity) {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct } : sl);
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, retained: true } : sl);
         } else {
           const prev = this.statuslines.get(r.id);
-          if (prev && prev.ctxPct !== undefined) this.statuslines.set(r.id, { ...prev, ctxPct: undefined });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the

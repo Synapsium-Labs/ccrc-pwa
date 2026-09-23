@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES,
+  SPAWN_VERDICTS,
 } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -2281,12 +2282,23 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     expect(api).not.toMatch(/SPAWN_VERDICTS[^=]*=\s*\[/);
   });
 
-  it('spells the spawn members nowhere else — no second table of the same six words', () => {
+  it('spells the spawn members nowhere else — no second free-standing list of them', () => {
     // `SessionLine.tsx`'s `SPAWN_WORD` is a PRESENTATIONAL map keyed BY the type
     // (`Record<SpawnVerdict, string | null>`, which the compiler keeps total), not
     // a second enumeration — so it holds the member names as KEYS and is exempt by
     // being typed. What this forbids is a free-standing list.
-    const LIST = /\[\s*'ready',\s*'login',\s*'vanished',\s*'expired',\s*'blocked',\s*'unrecognised'\s*\]/;
+    //
+    // BUILT FROM `SPAWN_VERDICTS`, in any order, the way the deliberate-cancel
+    // SET scan above is. The literal this replaced spelled the six members the
+    // union had when it was written, in that order — so once `narrow` joined,
+    // the one list it could still see was the stale one, and a copy of the
+    // union as it now stands passed. A list holding all but one member counts:
+    // a copy written from memory is as likely to drop one as to reorder them.
+    const M = `(?:${SPAWN_VERDICTS.join('|')})`;
+    const LIST = new RegExp(`\\[\\s*'${M}'\\s*(?:,\\s*'${M}'\\s*){${SPAWN_VERDICTS.length - 2},}\\]`);
+    expect(LIST.test(`['${[...SPAWN_VERDICTS].reverse().join("', '")}']`)).toBe(true);
+    expect(LIST.test(`['${SPAWN_VERDICTS.slice(1).join("','")}']`)).toBe(true);
+    expect(LIST.test("['ready', 'login', 'blocked']")).toBe(false);
     expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 

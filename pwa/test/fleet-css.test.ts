@@ -427,6 +427,28 @@ describe('selection is polarity, status is hue', () => {
     }
   });
 
+  it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
+    // rc 6 does not heal on its own: the window stays narrow after the client
+    // that narrowed it leaves, the startup gates it skipped are never revisited,
+    // and the stamp changes only on the next spawn. So it takes `.sess-spawn`'s
+    // default --status-dead-text, like blocked/login/vanished — which it gets by
+    // having NO variant rule of its own.
+    expect(declValue(ruleFor('.sess-spawn'), 'color')).toBe('var(--status-dead-text)');
+    // Every rule that names a `data-spawn` VALUE and sets a colour, however its
+    // selector is spelled (`[data-spawn=narrow].sess-spawn`, `:is(…)`, a second
+    // rule further down) — `narrow` must be in none of them.
+    const painted: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      if (!/data-spawn/.test(selector!) || !/(^|;)\s*color\s*:/.test(body!)) continue;
+      for (const v of selector!.matchAll(/data-spawn\s*=\s*['"]?([\w-]+)/g)) painted.push(v[1]!);
+    }
+    // The control: the scan does find the two quiet variants, so an empty
+    // result below is a finding, not a scan that saw nothing.
+    expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
+    expect(painted).not.toContain('narrow');
+  });
+
   it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
     // Same shape as the spawn-chip test above, one cell over. Membership in
     // the achromatic group (asserted in the earlier list test) is necessary
