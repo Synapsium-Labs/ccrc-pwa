@@ -26,7 +26,7 @@ numbers; the spec wave each one implements is named beside it.
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **dispatched** (run 128, 2026-09-23); plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
-| 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | planned |
+| 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | planned |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
@@ -91,8 +91,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   13 tasks, committed alone as `d638c602`; one combined pipeline (skeleton, bodies, fix, six Opus lenses with Sonnet
   refuters: 14 of 21 survived, none critical, all applied). Its twenty-one departures are D-3294 through D-3314,
   issued to run 130 and defined in that plan; a reserve of fifteen more, from 3315 (bare here), issued beside it.
-- **Waves 5 and 6 are being planned** (2026-09-23) against the three committed producer plans; each wave's run and
-  block are opened when its plan is final.
+- **Wave 5's plan and block (2026-09-23).** `docs/superpowers/plans/2026-09-23-centralised-update-w5-convergence.md`, 9
+  tasks, committed alone as `6acbff6d`, written against the three committed producer plans (19 of 26 review findings
+  survived, none critical, all applied). Its thirty-four departures are D-3370 through D-3403, issued for run **132**
+  and defined in that plan; a reserve of fifteen, from 3404 (bare here), beside it. The allocator's title for the
+  thirty-four says "run 131" — a typo of this session's (the run opened as 132 because another programme took 131
+  between the plan and the open); the allocation log is append-only, so the correction lives here.
+- **Wave 6 is being planned** (2026-09-23) against wave 4's committed plan; its run and block open when its plan is final.
 
 ## Carried constraints
 
