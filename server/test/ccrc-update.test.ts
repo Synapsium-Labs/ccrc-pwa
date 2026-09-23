@@ -100,17 +100,49 @@ function healthyBox(home: string): void {
   // `$HOME/curl-argv`. Anything else is answered as `/api/fleet/health` —
   // body + trailing status code, the `-w '\n%{http_code}'` shape ccrc reads —
   // from the `fixture-health-{body,code}` files when a test has an opinion.
+  // A URL ending /health that is not /api/fleet/health is the update gate's
+  // probe (design §11) — see the block inside.
   stub('curl', [
-    'dest=""; url=""',
+    'dest=""; url=""; wfmt=""',
     'while [ $# -gt 0 ]; do',
     '  case "$1" in',
     '    -o) dest="$2"; shift 2 ;;',
-    '    -H|-w|--max-time) shift 2 ;;',
+    '    -w) wfmt="$2"; shift 2 ;;',
+    '    -H|--max-time) shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
     '  esac',
     'done',
     'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
+    // THE GATE'S `/health` (design §11), told apart from `/api/fleet/health`
+    // — which ALSO ends in `/health` — before the main case reads anything.
+    // The version is the test's pin (`fixture-health-pin`; an EMPTY pin is an
+    // answer with no `version` key, and `fixture-health-pin-probes` bounds
+    // how many probes the pin answers), else the version the STUB shim
+    // "installed" (`fixture-health-version`), else the box's own stamp — so a
+    // FULL run answers what `_inst_stamp` placed. `build` is the stamp and
+    // `-w` gets the status line, because doctor's `_check_build` asks this
+    // same URL with `-w '\n%{http_code}'` and parses `build.sha`.
+    'case "$url" in local://*|*/api/fleet/health) ;; */health)',
+    '  [ -f "$HOME/fixture-health-down" ] && { echo "curl: (7) Failed to connect to ${url#http://}" >&2; exit 7; }',
+    '  v=""; pinned=0',
+    '  if [ -f "$HOME/fixture-health-pin" ]; then',
+    '    left=1; [ -f "$HOME/fixture-health-pin-probes" ] && IFS= read -r left < "$HOME/fixture-health-pin-probes"',
+    '    if [ "$left" -gt 0 ]; then',
+    '      pinned=1; IFS= read -r v < "$HOME/fixture-health-pin"',
+    '      [ -f "$HOME/fixture-health-pin-probes" ] && echo $((left - 1)) > "$HOME/fixture-health-pin-probes"',
+    '    fi',
+    '  fi',
+    '  if [ "$pinned" -eq 0 ]; then',
+    '    if [ -f "$HOME/fixture-health-version" ]; then IFS= read -r v < "$HOME/fixture-health-version"',
+    '    else v="$(jq -r \'.version // empty\' "$HOME/.ccrc/build.json" 2>/dev/null)"; fi',
+    '  fi',
+    '  build="$(jq -c . "$HOME/.ccrc/build.json" 2>/dev/null)" || build=null; [ -n "$build" ] || build=null',
+    '  if [ -n "$v" ]; then body="$(printf \'{"ok":true,"build":%s,"version":"%s"}\' "$build" "$v")"',
+    '  else body="$(printf \'{"ok":true,"build":%s}\' "$build")"; fi',
+    '  if [ -n "$wfmt" ]; then printf \'%s\\n200\' "$body"; else printf \'%s\\n\' "$body"; fi',
+    '  exit 0 ;;',
+    'esac',
     'case "$url" in',
     '  local://*)',
     '    case "$url" in *.sigstore.json)',
@@ -178,7 +210,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
     // stable default is a job that stayed up, `fixture-pid-churn` a crash
     // loop. Same knob as ccrc-install.test.ts's stub.
-    '      if [ -f "$HOME/fixture-pid-churn" ]; then',
+    // Split per job kind (design §11's gate): `fixture-pid-churn` churns the
+    // SESSION jobs (the sweep's subject), `fixture-main-pid-churn` the
+    // ccrc/ccrc-agent jobs (the gate's), so each case measures one of them.
+    '      churn=""',
+    '      case "$lbl" in app.ccrc.session.*) [ -f "$HOME/fixture-pid-churn" ] && churn=1 ;; *) [ -f "$HOME/fixture-main-pid-churn" ] && churn=1 ;; esac',
+    '      if [ -n "$churn" ]; then',
     '        echo "	pid = $(($(wc -l < "$HOME/launchctl-calls") + 4000))"',
     '      else',
     '        echo "	pid = 4242"',
@@ -238,7 +275,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // whatever descriptor it was handed.
     '    if [ -f "$HOME/fixture-sweep-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/sweep-linger-pid"; fi',
     '    exit 0 ;;',
-    '  is-active) echo active; exit 0 ;;',
+    // The gate's unit probe (design §11): `fixture-unit-state` is the one
+    // answer for every unit (default active). systemd exits 3 for anything
+    // else; `_svc_is_active` reads the word, never the status.
+    '  is-active)',
+    '    st=active; [ -f "$HOME/fixture-unit-state" ] && IFS= read -r st < "$HOME/fixture-unit-state"',
+    '    echo "$st"; [ "$st" = active ] && exit 0; exit 3 ;;',
     // The sweep's three list-units queries (Task 7): the unfiltered preflight
     // enumeration and the failed/active follow-ups, answered from per-state
     // fixture files a test plants (absent file = empty listing, exit 0 — a box
@@ -268,7 +310,10 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '    fi',
     '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
     '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-    '    echo 4242; exit 0 ;;',
+    // `fixture-mainpid-churn`: a unit crash-looping behind `active` — every
+    // read a fresh MainPID, which verify-service.sh's two samples catch.
+    '    if [ -f "$HOME/fixture-mainpid-churn" ]; then echo $(($(wc -l < "$HOME/systemctl-calls") + 5000)); else echo 4242; fi',
+    '    exit 0 ;;',
     '  status) echo "fixture systemctl status: $*"; exit 0 ;;',
     'esac',
     'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
@@ -382,6 +427,9 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
+  // The health gate (design §11) probes once and decides at a 0 s deadline;
+  // a case that wants the retry loop sets its own window.
+  env['CCRC_UPDATE_HEALTH_S'] = '0';
   // graphify Task 3: the same FULL-flavour happy path re-runs the real
   // `cmd_install` spine, which now includes `_inst_graphify_skill` right
   // after `_inst_skills`, unconditional on every role but `server`. The fake
@@ -553,6 +601,15 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
     // `_inst_stamp` still places the release's own stamp. `$0` is the staged
     // `<tree>/ccd/ccrc`, so the tree's `build.json` is `${0%/ccd/ccrc}/build.json`.
     + '[ -f "$HOME/fixture-restamp" ] && cp "${0%/ccd/ccrc}/build.json" "$HOME/.ccrc/build.json"\n'
+    // The gate's three answers for a spine that never ran (design §11): the
+    // version `/health` reports is the one this "install" placed; the two
+    // main jobs are loaded for launchctl's `print` (what `_inst_enable_darwin`
+    // bootstraps — without it every Darwin STUB run fails the gate); and
+    // `fixture-stub-installed` writes the completed-install record, so a
+    // non-zero exit reads as D-3114's "completed, doctor FAILed".
+    + `printf '%s\\n' '${opts.version}' > "$HOME/fixture-health-version"\n`
+    + 'printf \'app.ccrc.ccrc.plist\\napp.ccrc.ccrc-agent.plist\\n\' >> "$HOME/launchctl-loaded"\n'
+    + '[ -f "$HOME/fixture-stub-installed" ] && mkdir -p "$HOME/.ccrc" && printf \'newsha0000000000000000000000000000000000\\n\' > "$HOME/.ccrc/installed"\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -779,6 +836,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // The health gate ran on the REAL spine's result (design §11): the
+    // staged `_inst_env` wrote ccrc.env's address, `_inst_stamp` the version.
+    expect(r.stdout).toMatch(/^update: gate: both answers on v2\.0\.0 \(ccrc\.service up, \/health at 127\.0\.0\.1:7788 answers v2\.0\.0\)$/m);
     // A verified bundle (packRelease's default) makes this a ONE-line marker
     // — provenance verified, no `unsigned` line 2 (D-3117, Task 12).
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8'))
@@ -818,6 +878,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    // The health gate ran on the REAL spine's result (design §11): the
+    // staged `_inst_env` wrote ccrc.env's address, `_inst_stamp` the version.
+    expect(r.stdout).toMatch(/^update: gate: both answers on v2\.0\.0 \(ccrc\.service up, \/health at 127\.0\.0\.1:7788 answers v2\.0\.0\)$/m);
     expect(r.stdout).toMatch(/^FAIL git_email: /m);
     expect(r.stdout).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1 — this box IS on v2\.0\.0; the FAIL lines above are the box's health, not the update's/m);
     // Line 2 (design 2026-09-20 §5, D-3117): a verified bundle (packRelease's
@@ -838,7 +901,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(rep['detail']).toBe('doctor exited 1 - the box moved; its health is ccrc doctor\'s');
   });
 
-  it('a spine that DIED mid-way still exits 1 with the backup named — and leaves NO completed-install record (D-3114)', () => {
+  it('a spine that DIED inside _inst_tree (after the tree moved) is gated, fails the gate on the OLD build, and exits 4 with the backup named — and leaves NO completed-install record (D-3114, design §11)', () => {
     // `npm ci` failing after the tree is placed — v0.0.2's own death shape
     // (D-3105) — kills `_inst_tree` before the stamp and long before the
     // record. The record was cleared before the staged install ran, so the
@@ -852,10 +915,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     mkdirSync(join(home, 'fail-bin'), { recursive: true });
     writeFileSync(join(home, 'fail-bin', 'npm'), '#!/bin/sh\necho "fixture npm: refusing" >&2\nexit 1\n', { mode: 0o755 });
     const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
-    expect(r.code).toBe(1);
-    // W4 Task 4: `npm ci` dies INSIDE `_inst_tree`, after its rsync placed the
-    // new tree — at-or-after the tree, which is what the sentence now says.
-    expect(r.stderr).toMatch(/the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, at or after _inst_tree: the tree WAS replaced; read its lines above\. The backup taken BEFORE it ran is complete at/);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
+    expect(r.stderr).toMatch(/update: v2\.0\.0 was installed, but the box did not come back healthy on it \(.*\) — exit 4\. The backup taken BEFORE the install is complete at/);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
     expect(r.stdout).not.toMatch(/^update: build: /m);
@@ -1140,7 +1202,9 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     writeFileSync(join(home, 'fixture-install-step'), `${step}\n`);
     const r = runUpdate(home);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain(`spine died at ${step}, at or after _inst_tree: the tree WAS replaced; read its lines above.`);
+    // W4 Task 5: the moved arm is GATED now; the gate passes, so the run
+    // exits 1 naming --force (D-3240).
+    expect(r.stderr).toContain(`update: the box moved and answers on v2.0.0, but its install never completed (spine died at ${step}) — rerun: ccrc update --to v2.0.0 --force`);
     expect(report(home)).toMatchObject({ phase: 'failed', detail: `spine died at ${step}` });
   });
 
@@ -1164,7 +1228,9 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(r.code).toBe(1);
     expect(existsSync(join(home, '.ccrc', 'install-step')), 'the fixture wrote a marker — this case is about a spine that writes none').toBe(false);
     expect(r.stdout).toMatch(/^update: the staged spine recorded no step \(a spine older than W4 writes none\), but ~\/\.ccrc\/build\.json no longer names the build this run replaced — _inst_stamp ran after _inst_tree, so the tree WAS placed$/m);
-    expect(r.stderr).toContain('spine died at an unrecorded step, at or after _inst_tree: the tree WAS replaced; read its lines above.');
+    // W4 Task 5: an unmarked spine whose stamp moved is gated like any other
+    // moved death; the gate passes, so the run exits 1 naming --force.
+    expect(r.stderr).toContain('update: the box moved and answers on v2.0.0, but its install never completed (spine died at an unrecorded step) — rerun: ccrc update --to v2.0.0 --force');
     expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at an unrecorded step' });
   });
 
@@ -1182,7 +1248,7 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(/fixture: the coordinator skill installer refuses/);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_skills\n');
-    expect(r.stderr).toContain('spine died at _inst_skills, at or after _inst_tree: the tree WAS replaced;');
+    expect(r.stderr).toContain('update: the box moved and answers on v2.0.0, but its install never completed (spine died at _inst_skills) — rerun: ccrc update --to v2.0.0 --force');
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
     expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_skills' });
   });
@@ -1566,13 +1632,16 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    // The ONLY systemctl traffic in a stub-flavour run is the sweep's, so the
-    // whole recording is the order pin: enumerate, preflight EVERY unit plus
+    // The ONLY systemctl traffic in a stub-flavour run is the health gate's
+    // unit probe (design §11 — it runs BEFORE the sweep) and the sweep's, so
+    // the whole recording is the order pin: the gate, then enumerate,
+    // preflight EVERY unit plus
     // the uninstantiated template probe, try-restart, then the two state
     // queries — warn about failed, verify active.
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8')
       .split('\n').filter((l) => l !== '');
     expect(calls).toEqual([
+      '--user is-active ccrc.service',
       '--user list-units claude-session@* --plain --no-legend',
       '--user show -p KillMode claude-session@alpha.service',
       '--user show -p KillMode claude-session@beta.service',
@@ -2191,7 +2260,6 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // that writes it; Task 6 deletes the literal, and the union assertion below
   // becomes total.
   const PENDING = new Set<string>([
-    'checking',   // Task 5 — the health gate
     'restoring',  // Task 6 — `_upd_restore`
     'reverted',   // Task 6 — `_upd_restore`'s last word
   ]);
@@ -2212,7 +2280,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     packRelease(moved, stubTree(moved, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     let r = runUpdate(moved);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'restarting', 'done']);
+    // W4 Task 5: the gate writes `checking` BEFORE the sweep's `restarting`
+    // (design §11 — the gate precedes the sweep; nothing reads the order).
+    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
 
     // 2. The converged no-op (the "already there" gate's three shas agree).
     const same = freshUpdateBox('ccrc-update-json-same-');
@@ -2272,7 +2342,9 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     const t1 = Math.ceil(Date.now() / 1000);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     const w = reportWrites(home);
-    expect(w.length).toBe(7);
+    // W4 Task 5: the gate's `checking` is the eighth report; the order and
+    // the count are pinned together, so neither can drift alone.
+    expect(w.map((x) => x['phase'])).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'checking', 'restarting', 'done']);
     // latest/download: nothing names a tag until SHA256SUMS has been read.
     expect(w[0]!['phase']).toBe('resolving');
     expect(w[0]!['target']).toBeNull();
@@ -2900,5 +2972,280 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(r.stderr).toMatch(/^ccrc: --detach is Linux-only \(decision 17\)$/m);
     expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
     expect(existsSync(join(home, 'curl-argv'))).toBe(false);
+  });
+});
+
+describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', () => {
+  // After the staged install returns and BEFORE the sweep, the run waits up
+  // to CCRC_UPDATE_HEALTH_S for the role's signal: server/both — the unit up
+  // and `/health` answering the STAGED version; fleet — the agent's unit up
+  // and staying up. A doctor FAIL with the gate passing is D-3114's exit 3
+  // ("moved, unhealthy"); a failed gate is exit 4 (Task 6 adds the restore
+  // that exit 4 means). All against the recording stubs — updateEnv's
+  // systemctl/launchctl and healthyBox's curl — never a real manager or port.
+  const gateBox = (prefix: string, role?: 'server' | 'fleet' | 'both', installExit = 0): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    if (role !== undefined) {
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      // What `_inst_env` seeds (a fleet box's env file names no server).
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), role === 'fleet'
+        ? 'CCRC_ROLE=fleet\n'
+        : `CCRC_ROLE=${role}\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n`);
+    }
+    packRelease(home, stubTree(home, { version: 'v2.0.0', installExit }), { tag: 'v2.0.0' });
+    return home;
+  };
+  /** Everything a sweep needs, so a "no sweep" assertion is about the gate —
+   *  the gate describe's own copy of the converged() discipline above. */
+  const withSweep = (home: string): void => {
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+  };
+  const lines = (home: string, f: string): string[] => (existsSync(join(home, f))
+    ? readFileSync(join(home, f), 'utf8').split('\n').filter((l) => l !== '') : []);
+  /** The gate's probes only — `/api/fleet/health` (the fleet-first warning)
+   *  also ends in `/health` and is not one. */
+  const healthProbes = (home: string): string[] => lines(home, 'curl-argv')
+    .filter((l) => /^http:\/\/[^/]+\/health$/.test(l));
+  const reportOf = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+
+  itLinux('server: ccrc.service active and /health answering the staged version passes — and the gate runs BEFORE the sweep', () => {
+    const home = gateBox('ccrc-update-gate-pass-', 'server');
+    withSweep(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: gate: server answers on v2\.0\.0 \(ccrc\.service up, \/health at 127\.0\.0\.1:7788 answers v2\.0\.0\)$/m);
+    const calls = lines(home, 'systemctl-calls');
+    const gate = calls.indexOf('--user is-active ccrc.service');
+    expect(gate, calls.join('\n')).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf('--user try-restart claude-session@*')).toBeGreaterThan(gate);
+    expect(healthProbes(home)).toEqual(['http://127.0.0.1:7788/health']);
+    expect(reportOf(home)['phase']).toBe('done');
+  });
+
+  it('/health answering the OLD version past the deadline fails the gate: exit 4, a failed report naming it, no sweep and no from→to report (§11 Pins; §18 "the gate restores" — Task 6 adds the restore)', () => {
+    const home = gateBox('ccrc-update-gate-old-', 'server');
+    withSweep(home);
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — \/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0$/m);
+    expect(r.stderr).toMatch(/update: v2\.0\.0 was installed, but the box did not come back healthy on it \(\/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0\) — exit 4\. The backup taken BEFORE the install is complete at \S*ccrc-backups/);
+    const rep = reportOf(home);
+    expect(rep['phase']).toBe('failed');   // Task 6: `reverted`
+    expect(rep['detail']).toBe('gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
+    // withSweep planted everything a sweep needs, so this absence is the gate's.
+    expect(lines(home, 'systemctl-calls').join('\n')).not.toMatch(/try-restart/);
+    expect(lines(home, 'launchctl-calls').join('\n')).not.toMatch(/kickstart/);
+    expect(r.stdout).not.toMatch(/^update: build: /m);
+  });
+
+  itLinux('a unit that is not active fails the gate before /health is asked: exit 4, naming the unit and its state', () => {
+    const home = gateBox('ccrc-update-gate-dead-', 'server');
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stdout).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — ccrc\.service is failed \(systemctl --user is-active\), not active$/m);
+    expect(healthProbes(home)).toEqual([]);
+    expect(reportOf(home)['detail']).toBe('gate: ccrc.service is failed (systemctl --user is-active), not active');
+  });
+
+  it('/health that does not answer fails the gate, naming curl\'s exit', () => {
+    const home = gateBox('ccrc-update-gate-down-', 'server');
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stdout).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — GET http:\/\/127\.0\.0\.1:7788\/health got no answer \(curl exited 7\)$/m);
+  });
+
+  it('/health answering with no version fails the gate — an unversioned answer is not the staged version', () => {
+    const home = gateBox('ccrc-update-gate-nover-', 'server');
+    writeFileSync(join(home, 'fixture-health-pin'), '');
+    const r = runUpdate(home);
+    expect(r.code, r.stdout).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — GET http:\/\/127\.0\.0\.1:7788\/health answered without a release version$/m);
+  });
+
+  it('the gate probes again until CCRC_UPDATE_HEALTH_S elapses: the old version first, the staged one two seconds later — passes', () => {
+    const home = gateBox('ccrc-update-gate-retry-', 'server');
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');
+    writeFileSync(join(home, 'fixture-health-pin-probes'), '1\n');
+    const r = runUpdate(home, [], { CCRC_UPDATE_HEALTH_S: '5' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(healthProbes(home)).toHaveLength(2);
+    expect(r.stdout).toMatch(/^update: gate: server answers on v2\.0\.0 /m);
+  });
+
+  it('a doctor FAIL with the gate passing is exit 3 and a done report; the same with the gate failing is exit 4 — two failures, two exit codes (§18 "doctor FAIL does not restore")', () => {
+    const home = gateBox('ccrc-update-gate-doctor-', 'server', 1);
+    writeFileSync(join(home, 'fixture-stub-installed'), 'yes\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    expect(r.stdout).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1/m);
+    expect(r.stdout).toMatch(/^update: gate: server answers on v2\.0\.0 /m);
+    expect(reportOf(home)['phase']).toBe('done');
+    const both = gateBox('ccrc-update-gate-doctor-and-gate-', 'server', 1);
+    writeFileSync(join(both, 'fixture-stub-installed'), 'yes\n');
+    writeFileSync(join(both, 'fixture-health-pin'), 'v1.0.0\n');
+    const r2 = runUpdate(both);
+    expect(r2.code, r2.stdout).toBe(4);
+    expect(reportOf(both)['phase']).toBe('failed');
+  });
+
+  itLinux('fleet: ccrc-agent.service active AND staying up (verify-service.sh\'s two samples) passes with no /health asked; a MainPID that churns behind `active` fails', () => {
+    const home = gateBox('ccrc-update-gate-fleet-', 'fleet');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: gate: fleet answers on v2\.0\.0 \(ccrc-agent\.service up and staying up\)$/m);
+    const calls = lines(home, 'systemctl-calls');
+    expect(calls).toContain('--user is-active ccrc-agent.service');
+    expect(calls).toContain('--user show -p MainPID --value ccrc-agent.service');
+    expect(calls).not.toContain('--user is-active ccrc.service');
+    expect(healthProbes(home)).toEqual([]);
+    const churn = gateBox('ccrc-update-gate-fleet-churn-', 'fleet');
+    writeFileSync(join(churn, 'fixture-mainpid-churn'), 'yes\n');
+    const r2 = runUpdate(churn);
+    expect(r2.code, r2.stdout).toBe(4);
+    expect(r2.stdout).toMatch(/^update: gate FAILED after \d+s — ccrc-agent\.service did not stay up \(deploy\/verify-service\.sh exited 1; systemctl --user status ccrc-agent\.service says why\)$/m);
+  });
+
+  itDarwin('Darwin server: the job\'s pid must hold across the window (_ccrc_job_stayed_up) — a churning ccrc job fails the gate, and systemctl is never called (§11 Pins)', () => {
+    const home = gateBox('ccrc-update-gate-darwin-', 'server');
+    writeFileSync(join(home, 'fixture-main-pid-churn'), 'yes\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stdout).toBe(4);
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — ccrc\.service did not stay up \(pid \d+ -> \d+ across 0s\+0s\)$/m);
+    expect(existsSync(join(home, 'systemctl-calls')), 'the Darwin gate reached systemctl').toBe(false);
+    expect(healthProbes(home)).toEqual([]);
+  });
+
+  it('a spine that died AFTER the tree moved runs the gate: passing → exit 1 naming --force, no sweep, the report stays "spine died"; failing → exit 4; a death BEFORE the tree runs no gate (§11 Pins; D-3240)', () => {
+    const home = gateBox('ccrc-update-gate-spine-', 'server', 1);
+    withSweep(home);
+    writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');
+    let r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toMatch(/^update: gate: server answers on v2\.0\.0 /m);
+    expect(r.stderr).toMatch(/update: the box moved and answers on v2\.0\.0, but its install never completed \(spine died at _inst_skills\) — rerun: ccrc update --to v2\.0\.0 --force/);
+    // Re-asserted after the gate's own `checking` write.
+    expect(reportOf(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_skills' });
+    expect(lines(home, 'systemctl-calls').join('\n')).not.toMatch(/try-restart/);
+    // …and failing the gate as well: exit 4, both causes in the report.
+    const failing = gateBox('ccrc-update-gate-spine-fail-', 'server', 1);
+    writeFileSync(join(failing, 'fixture-install-step'), '_inst_skills\n');
+    writeFileSync(join(failing, 'fixture-health-pin'), 'v1.0.0\n');
+    r = runUpdate(failing);
+    expect(r.code, r.stdout).toBe(4);
+    expect(reportOf(failing)['detail'])
+      .toBe('spine died at _inst_skills; gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
+    // …and BEFORE the tree: nothing was replaced, so nothing is measured.
+    const early = gateBox('ccrc-update-gate-spine-early-', 'server', 1);
+    writeFileSync(join(early, 'fixture-install-step'), '_inst_env\n');
+    r = runUpdate(early);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).not.toMatch(/^update: gate/m);
+    expect(lines(early, 'systemctl-calls')).not.toContain('--user is-active ccrc.service');
+    expect(healthProbes(early)).toEqual([]);
+  });
+
+  it('--no-gate skips the gate: one line says so, nothing is probed, and the run completes (only the restore child passes it automatically)', () => {
+    const home = gateBox('ccrc-update-gate-nogate-', 'server');
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');
+    const r = runUpdate(home, ['--no-gate']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: gate: skipped \(--no-gate\) — nothing measured whether v2\.0\.0 came back up on this box$/m);
+    expect(healthProbes(home)).toEqual([]);
+    expect(lines(home, 'systemctl-calls')).not.toContain('--user is-active ccrc.service');
+    expect(reportOf(home)['phase']).toBe('done');
+  });
+
+  itLinux('--detach carries a typed --no-gate into the detached argv, after the other typed flags (the D-3139 trap: a flag the caller typed is never dropped)', () => {
+    const home = gateBox('ccrc-update-gate-detach-', 'server');
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0', '--no-gate']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(lines(home, 'systemd-run-argv')).toEqual([
+      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from cli --no-gate`,
+    ]);
+  });
+
+  it('--check and --no-gate are exclusive — the D-3139 refusal shape, exit 2, nothing fetched', () => {
+    const home = freshUpdateBox('ccrc-update-gate-check-');
+    const r = runUpdate(home, ['--check', '--no-gate']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: update: --check and --no-gate are exclusive — --check measures and writes nothing, --no-gate skips the health gate of a run that moves this box; pick one$/m);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+  });
+
+  it('a CCRC_UPDATE_HEALTH_S that is not a number of seconds is named and replaced by 90', () => {
+    const home = gateBox('ccrc-update-gate-knob-', 'server');
+    const r = runUpdate(home, [], { CCRC_UPDATE_HEALTH_S: 'soon' });
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: CCRC_UPDATE_HEALTH_S='soon' is not a number of seconds — using 90$/m);
+  });
+
+  // THE ARMS, SOURCED. `ccrc` recomputes CCD_OS from $OSTYPE at source time
+  // (ccd/ccrc:109-114), so the Darwin arms of a whole `ccrc update` run only
+  // on the macOS leg — which is non-required and measured unable to finish.
+  // Sourced (the `_check_routing` idiom in ccrc-doctor.test.ts), CCD_OS is
+  // set AFTER the file computed it, and `_ccrc_job_stayed_up` is shadowed to
+  // record its argument, so every leg measures which arm ran: the arm's
+  // CHOICE is the subject here, the two-sample check is the itDarwin case's.
+  const probe = (home: string, os: 'linux' | 'darwin', role: string): { rc: number; why: string } => {
+    replantDoctorStubs(home);
+    writeFileSync(join(home, 'fixture-health-pin'), 'v2.0.0\n');
+    const script = [
+      'set -uo pipefail',
+      '. "$1"',
+      'CCD_OS="$2"',
+      '_ccrc_job_stayed_up() { printf \'%s\\n\' "$1" >> "$HOME/stayed-up-calls"; CCRC_STAYED_DETAIL="pid 4242 -> 4242 across 0s+0s"; [ ! -f "$HOME/fixture-shadow-churn" ]; }',
+      'rc=0; _upd_gate_probe "$3" v2.0.0 || rc=$?',
+      'printf \'rc=%s\\nwhy=%s\\n\' "$rc" "$UPD_GATE_WHY"',
+    ].join('\n');
+    const r = spawnSync(BASH, ['-c', script, 'gate-probe', join(REPO, 'ccd', 'ccrc'), os, role],
+      { env: { ...updateEnv(home), CCRC_ADDR: '127.0.0.1:7788' }, encoding: 'utf8' });
+    const rc = /^rc=(\d+)$/m.exec(r.stdout ?? '');
+    const why = /^why=(.*)$/m.exec(r.stdout ?? '');
+    if (rc === null || why === null) throw new Error(`the probe printed no verdict:\n${r.stdout}\n${r.stderr}`);
+    return { rc: Number(rc[1]), why: why[1]! };
+  };
+
+  it('the arms, sourced: Darwin takes _ccrc_job_stayed_up and never reaches systemctl; Linux takes is-active (fleet: plus verify-service.sh); only server/both ask /health (§18 "the gate has per-OS arms")', () => {
+    const ds = freshUpdateBox('ccrc-update-gate-arm-ds-');
+    expect(probe(ds, 'darwin', 'server')).toEqual({ rc: 0, why: 'ccrc.service up, /health at 127.0.0.1:7788 answers v2.0.0' });
+    expect(lines(ds, 'stayed-up-calls')).toEqual(['ccrc.service']);
+    expect(existsSync(join(ds, 'systemctl-calls')), 'the Darwin arm reached systemctl').toBe(false);
+    expect(healthProbes(ds)).toEqual(['http://127.0.0.1:7788/health']);
+
+    const df = freshUpdateBox('ccrc-update-gate-arm-df-');
+    expect(probe(df, 'darwin', 'fleet')).toEqual({ rc: 0, why: 'ccrc-agent.service up and staying up' });
+    expect(lines(df, 'stayed-up-calls')).toEqual(['ccrc-agent.service']);
+    expect(existsSync(join(df, 'systemctl-calls'))).toBe(false);
+    expect(healthProbes(df)).toEqual([]);
+
+    const dc = freshUpdateBox('ccrc-update-gate-arm-dc-');
+    writeFileSync(join(dc, 'fixture-shadow-churn'), 'yes\n');
+    expect(probe(dc, 'darwin', 'both')).toEqual({ rc: 1, why: 'ccrc.service did not stay up (pid 4242 -> 4242 across 0s+0s)' });
+    expect(healthProbes(dc), 'the unit is measured before /health').toEqual([]);
+
+    const ls = freshUpdateBox('ccrc-update-gate-arm-ls-');
+    expect(probe(ls, 'linux', 'server')).toEqual({ rc: 0, why: 'ccrc.service up, /health at 127.0.0.1:7788 answers v2.0.0' });
+    expect(lines(ls, 'systemctl-calls')).toEqual(['--user is-active ccrc.service']);
+    expect(existsSync(join(ls, 'stayed-up-calls'))).toBe(false);
+
+    const lf = freshUpdateBox('ccrc-update-gate-arm-lf-');
+    expect(probe(lf, 'linux', 'fleet')).toEqual({ rc: 0, why: 'ccrc-agent.service up and staying up' });
+    // Ours, then verify-service.sh's two samples (is-active + MainPID, twice).
+    expect(lines(lf, 'systemctl-calls')).toEqual([
+      '--user is-active ccrc-agent.service',
+      '--user is-active ccrc-agent.service',
+      '--user show -p MainPID --value ccrc-agent.service',
+      '--user is-active ccrc-agent.service',
+      '--user show -p MainPID --value ccrc-agent.service',
+    ]);
+    expect(existsSync(join(lf, 'stayed-up-calls'))).toBe(false);
+    expect(healthProbes(lf)).toEqual([]);
   });
 });

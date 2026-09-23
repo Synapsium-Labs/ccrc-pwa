@@ -1367,7 +1367,7 @@ BOX_BACKUP_ROOT="$HOME/ccrc-backups"
 CCRC_RELEASE_OWNER="Synapsium-Labs"
 CCRC_RELEASE_REPO="ccrc-pwa"
 
-# How long the ONE network call in this file (`GET /api/fleet/health`) may take.
+# How long a call to this box's server (`GET /api/fleet/health`; the update gate's `GET /health`) may take.
 # Overridable for the reason `deploy/verify-service.sh:56-62` makes its
 # settle/window knobs overridable, and `ccrc-doctor-checks` makes
 # `CCRC_DOCTOR_GH_TIMEOUT` overridable: a route that hangs must not hang the
@@ -1450,6 +1450,9 @@ UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measur
 UPD_PREV_TAG=""      # _upd_read_previous: line 1 of ~/.ccrc/previous (a tag, or `untagged`)
 UPD_PREV_SHA=""      # _upd_read_previous: line 2 (a sha, or `unstamped`)
 UPD_SPINE_DIED=""    # cmd_update: the step a staged spine died in at or after _inst_tree
+UPD_GATE_WHY=""        # _upd_gate_probe: one line — what the last probe measured (pass or fail)
+UPD_HEALTH_VERSION=""  # _upd_health_version: the version /health answered
+UPD_HEALTH_ADDR=""     # _upd_health_version: the host:port it asked
 
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
@@ -1602,13 +1605,18 @@ already running).
             detached run gets the user manager's environment, not yours
             (its argv is the whole contract), and its progress is
             ~/.ccrc/update.json.
+            After the install a health gate waits up to
+            CCRC_UPDATE_HEALTH_S (default 90) for this role's unit to come
+            back and, with a server, for /health to answer the new version:
+            a failed gate exits 4; a doctor FAIL with the gate passed exits
+            3; --no-gate skips it.
             Per box; across a fleet, 'ccrc rollout' runs it in order
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
             version from SHA256SUMS once, runs 'ccrc update --to' over ssh on
             the fleet box then the server box (--server-first inverts), stops
-            at the first failure, and re-measures both ('ccrc version',
+            at the first failure (a box's exit 3 is relayed, not a stop; its exit 4 stops), and re-measures both ('ccrc version',
             /health). --check only prints where each box stands; --force
             passes through; [--to vX.Y.Z] pins a tag. Exit 2 = nothing touched
   uninstall move this box off ccrc, leaving reinstall safe: stop, disable
@@ -2068,7 +2076,7 @@ _box_path_for() {   # $1 = env key, $2 = the default when it is unset or empty
 _box_auth_path()     { _box_path_for CCRC_AUTH_SECRET_PATH "$BOX_AUTH_FILE"; }
 _box_sessions_path() { _box_path_for CCRC_SESSIONS_PATH "$BOX_SESSIONS_FILE"; }
 
-# ── THE ONE NETWORK CALL: GET /api/fleet/health ───────────────────────────
+# ── THE FLEET-HEALTH CALL: GET /api/fleet/health (the gate's /health: _upd_gate) ──
 # The server is the only party that can compare the two boxes — it holds this
 # box's stamp and the fleet host's, and both rosters' digests — so this asks it
 # and reports what it says. It DECIDES nothing about the comparison:
@@ -11393,6 +11401,12 @@ _inst_floor() {
 #      which is this verb's doctor too — running a second doctor from the
 #      tree this run just replaced would measure the box with the old check
 #      table and print every verdict twice.
+#   3b. GATE (`_upd_gate`, design §11): after the staged spine returns — so
+#      after its doctor — and BEFORE the sweep, the role's signal, per OS,
+#      for up to CCRC_UPDATE_HEALTH_S: server/both the unit up and `/health`
+#      answering the STAGED version; fleet the agent up and staying up. A
+#      failed gate is exit 4 and no sweep; a doctor FAIL with the gate passed
+#      stays D-3114's exit 3. `--no-gate` skips it (the restore child's flag).
 #   4. SWEEP (`_upd_sweep`): every live `claude-session@*` supervisor is
 #      try-restarted onto the ccd this run just installed — behind the
 #      MANDATORY KillMode=process preflight (R1, granted 2026-08-21; the
@@ -11415,7 +11429,7 @@ _inst_floor() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -11427,6 +11441,7 @@ cmd_update() {
       --force) force=1 ;;
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
+      --no-gate) no_gate=1 ;;
       --detach) detach=1 ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
@@ -11483,6 +11498,10 @@ cmd_update() {
     echo "$PROG: update: --check and --detach are exclusive — --check measures and writes nothing, --detach hands a run that moves this box to a transient unit; pick one" >&2
     exit 2
   fi
+  if [ "$check" -eq 1 ] && [ "$no_gate" -eq 1 ]; then
+    echo "$PROG: update: --check and --no-gate are exclusive — --check measures and writes nothing, --no-gate skips the health gate of a run that moves this box; pick one" >&2
+    exit 2
+  fi
   # D-3229: design §10's re-exec argv always carries `--to`,
   # and a detached run that resolved a channel itself would print its
   # `following stable` sentence — or its refusal — into a unit nobody reads.
@@ -11530,6 +11549,7 @@ cmd_update() {
     [ "$force" -eq 1 ] && dflags+=(--force)
     [ "$downgrade" -eq 1 ] && dflags+=(--downgrade)
     [ "$allow_unsigned" -eq 1 ] && dflags+=(--allow-unsigned)
+    [ "$no_gate" -eq 1 ] && dflags+=(--no-gate)
     _upd_detach update "$to" "$UPD_FROM" ${dflags[@]+"${dflags[@]}"}
     return 0
   fi
@@ -11716,13 +11736,48 @@ cmd_update() {
       fi
       _upd_phase failed "spine died at $step_desc"
       if [ "$moved" -eq 1 ]; then
+        # W4 Task 5: the tree WAS replaced, so the box is GATED below (design
+        # §11) — no die here. UPD_REPORTING stays 1: the die it protected is
+        # gone, and a later die on this path is a `failed` report like any other.
         UPD_SPINE_DIED="$step_desc"
+      else
         UPD_REPORTING=0
-        _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, at or after _inst_tree: the tree WAS replaced; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+        _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
       fi
-      UPD_REPORTING=0
-      _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
     fi
+  fi
+
+  # ── THE HEALTH GATE (design §11) ─────────────────────────────────────────
+  # The staged spine restarted the role's unit onto the new tree (and ran its
+  # doctor — D-3256); this measures whether the box
+  # CAME BACK on it, before the sweep moves a single supervisor. Two failures,
+  # two exit codes, because they have two remedies: a doctor FAIL with the
+  # unit up is D-3114's 3 (the box's health, no revert); a dead unit or a
+  # `/health` on the wrong version is 4. A spine that died AFTER the tree
+  # moved (Task 4) is gated too: the unit may well answer on the new version.
+  if [ "$no_gate" -eq 1 ]; then
+    echo "update: gate: skipped (--no-gate) — nothing measured whether $UPD_VERSION came back up on this box"
+  elif ! _upd_gate "$role" "$UPD_VERSION"; then
+    # ONE failed-report line for both shapes (a completed spine, or one that
+    # died after the tree): Task 6 replaces exactly this line with its restore.
+    local gate_fail="gate: $UPD_GATE_WHY"
+    [ -n "$UPD_SPINE_DIED" ] && gate_fail="spine died at $UPD_SPINE_DIED; $gate_fail"
+    _upd_phase failed "$gate_fail"
+    _upd_unlock
+    echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $UPD_BACKUP_DIR" >&2
+    exit 4
+  fi
+  # D-3240: the box moved and answers, but its spine did
+  # not finish — no sweep (the supervisors are not moved onto a half-placed
+  # install) and no restore (the box is healthy). The report is re-asserted:
+  # the gate's own `checking` overwrote Task 4's `failed`.
+  if [ -n "$UPD_SPINE_DIED" ]; then
+    _upd_phase failed "spine died at $UPD_SPINE_DIED"
+    _upd_unlock
+    local measured="answers on $UPD_VERSION"
+    [ "$no_gate" -eq 1 ] && measured="was not measured (--no-gate)"
+    echo "$PROG: update: the box moved and $measured, but its install never completed (spine died at $UPD_SPINE_DIED) — rerun: ccrc update --to $UPD_VERSION --force" >&2
+    exit 1
   fi
 
   _upd_phase restarting
@@ -12292,6 +12347,129 @@ _upd_stamp_moved() {   # <old_sha>
   [ -n "$now" ] && [ "$now" != "$old" ]
 }
 
+# ── _upd_health_version — what the server on THIS box says it runs ───────
+# `GET /health` is auth-EXEMPT (server/src/auth/gate.ts:195-198) and carries
+# `version` for a versioned build only (server/src/server.ts:1073-1078). The
+# address is `_box_server_addr`'s — CCRC_ADDR, then ccrc.env's
+# CCRC_HOST/CCRC_PORT — and NOTHING CONFIGURED is the server's own default
+# bind, 127.0.0.1:7788 (server/src/config.ts:305-318; the pair
+# `cmd_install`'s landing block falls back to), not a failure: the gate only
+# asks on a server/both box, which runs a server whether or not its seed-once
+# env file names the two keys (D-3255). An address
+# that is configured and unusable fails, in the resolver's own sentence. The
+# answered value is never echoed — it came off the network.
+# Called DIRECTLY, never in `$(…)`: its out-parameters are the answer.
+#   0 -> UPD_HEALTH_VERSION = a vX.Y.Z the server answered
+#   1 -> the address is unusable            (UPD_GATE_WHY says why)
+#   2 -> no answer (curl's exit is named)   (UPD_GATE_WHY)
+#   3 -> answered, without a release version (UPD_GATE_WHY)
+_upd_health_version() {
+  local out rc=0 v=""
+  UPD_HEALTH_VERSION=""; UPD_HEALTH_ADDR=""
+  out="$(_box_server_addr)" || rc=$?
+  case "$rc" in
+    0) UPD_HEALTH_ADDR="${out%%$'\n'*}" ;;
+    1) UPD_HEALTH_ADDR="127.0.0.1:7788" ;;
+    *) UPD_GATE_WHY="${out%%$'\n'*}"; return 1 ;;
+  esac
+  rc=0
+  out="$(curl -fsS --max-time "$CCRC_HEALTH_TIMEOUT" "http://$UPD_HEALTH_ADDR/health" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    UPD_GATE_WHY="GET http://$UPD_HEALTH_ADDR/health got no answer (curl exited $rc)"
+    return 2
+  fi
+  v="$(printf '%s' "$out" | jq -r '.version // empty' 2>/dev/null)" || v=""
+  if [[ ! "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    UPD_GATE_WHY="GET http://$UPD_HEALTH_ADDR/health answered without a release version"
+    return 3
+  fi
+  UPD_HEALTH_VERSION="$v"
+  return 0
+}
+
+# ── _upd_gate_probe <role> <version> — ONE measurement of the role's signal ─
+# Design §11, per OS. The UNIT first (a dead unit never costs a request),
+# then — for a role that runs the server — `/health` on the STAGED version.
+#   server/both, Linux:  is-active ccrc.service, and /health
+#   server/both, Darwin: _ccrc_job_stayed_up ccrc.service, and /health
+#   fleet, Linux:        is-active ccrc-agent.service, and deploy/verify-service.sh
+#                        — the Linux twin of `_ccrc_job_stayed_up`, which reads
+#                        launchctl and is Darwin-only by call site (its own
+#                        header); `_inst_enable` guards it with the same `[ -f ]`
+#                        (D-3242). The
+#                        agent's `ready` is the server's to measure, not ours.
+#   fleet, Darwin:       _ccrc_job_stayed_up ccrc-agent.service
+# No Darwin arm reaches systemctl. rc 0 pass, 1 fail; UPD_GATE_WHY says what
+# was measured either way. An empty role is `both`, the staged spine's own
+# default for a box that recorded none. Task 9's watchdog runs this same
+# function — one gate, two callers.
+_upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
+  local role="${1:-both}" want="$2" unit st vrc=0 hrc=0
+  UPD_GATE_WHY=""
+  case "$role" in
+    server|both) unit=ccrc.service ;;
+    fleet)       unit=ccrc-agent.service ;;
+    *) UPD_GATE_WHY="no health gate is defined for role '$role'"; return 1 ;;
+  esac
+  if [ "$CCD_OS" = darwin ]; then   # the launchd arm: two pid samples, never systemctl
+    if ! _ccrc_job_stayed_up "$unit"; then
+      UPD_GATE_WHY="$unit did not stay up ($CCRC_STAYED_DETAIL)"
+      return 1
+    fi
+  else
+    st="$(_svc_is_active "$unit")"
+    if [ "$st" != active ]; then
+      UPD_GATE_WHY="$unit is ${st:-unanswered} (systemctl --user is-active), not active"
+      return 1
+    fi
+    if [ "$role" = fleet ] && [ -f "$CCRC_HERE/../deploy/verify-service.sh" ]; then
+      bash "$CCRC_HERE/../deploy/verify-service.sh" "$unit" >/dev/null 2>&1 || vrc=$?
+      if [ "$vrc" -ne 0 ]; then
+        UPD_GATE_WHY="$unit did not stay up (deploy/verify-service.sh exited $vrc; systemctl --user status $unit says why)"
+        return 1
+      fi
+    fi
+  fi
+  if [ "$role" = fleet ]; then
+    UPD_GATE_WHY="$unit up and staying up"
+    return 0
+  fi
+  _upd_health_version || hrc=$?
+  [ "$hrc" -eq 0 ] || return 1
+  if [ "$UPD_HEALTH_VERSION" != "$want" ]; then
+    UPD_GATE_WHY="/health at $UPD_HEALTH_ADDR answers $UPD_HEALTH_VERSION, not $want"
+    return 1
+  fi
+  UPD_GATE_WHY="$unit up, /health at $UPD_HEALTH_ADDR answers $want"
+  return 0
+}
+
+# ── _upd_gate <role> <version> — the probe, until it passes or time is up ─
+# Probes at once, then every 2 s, for CCRC_UPDATE_HEALTH_S (default 90): a
+# restarted server takes seconds to bind, and the first `/health` after a
+# restart answering nothing is the ordinary case, not a verdict. The ONLY
+# writer of the `checking` phase.
+_upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window ends first
+  local role="${1:-both}" want="$2" limit="${CCRC_UPDATE_HEALTH_S:-90}" start
+  case "$limit" in
+    ''|*[!0-9]*)
+      echo "update: WARN: CCRC_UPDATE_HEALTH_S='${limit//[![:print:]]/?}' is not a number of seconds — using 90"
+      limit=90 ;;
+  esac
+  _upd_phase checking
+  start=$SECONDS
+  while :; do
+    if _upd_gate_probe "$role" "$want"; then
+      echo "update: gate: $role answers on $want ($UPD_GATE_WHY)"
+      return 0
+    fi
+    [ "$((SECONDS - start))" -lt "$limit" ] || break
+    sleep 2
+  done
+  echo "update: gate FAILED after $((SECONDS - start))s — $UPD_GATE_WHY"
+  return 1
+}
+
 # ── _upd_floor_check <via> <downgrade> <from> — never below the floor by accident ─
 # (design 2026-09-20 §9, decision 8). Checked against the RESOLVED version,
 # whichever way it was resolved — `--to`, or `latest/download` — because a
@@ -12822,11 +13000,18 @@ cmd_rollout() {
     rc="${PIPESTATUS[0]}"
     # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
     # the box's health, not the rollout's — relay it, carry on, verify, and
-    # say it again in this verb's own exit code. Anything else non-zero is a
-    # box that did not move, and the rollout stops there as before.
+    # say it again in this verb's own exit code. 4 (design §11) = its health
+    # GATE failed and it restored itself: not on the target, so the rollout
+    # stops — with a sentence that points at that box's own report, because
+    # deploy.sh is not the remedy for a box that already reverted. Anything
+    # else non-zero is a box that did not move, and the rollout stops there.
     if [ "$rc" -eq 3 ]; then
       unhealthy=1
       echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+    elif [ "$rc" -eq 4 ]; then
+      untouched=""
+      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
+      _ccrc_die "rollout: the ${labels[$i]} box's update failed its health gate and restored itself (exit 4) — stopped here.$untouched Its ~/.ccrc/update.json names the restore arm; 'ccrc update --check' there says where it now stands"
     elif [ "$rc" -ne 0 ]; then
       untouched=""
       [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."

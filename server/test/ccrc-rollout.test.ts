@@ -344,6 +344,27 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(updates(home2)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
   });
 
+  it('a box whose update failed its health gate (update exit 4) stops the rollout with its own sentence — the other box is never touched (design §11)', () => {
+    // Exit 4 is "the gate failed and the box restored itself": NOT on the
+    // target, so the rollout stops like any other non-zero — but the remedy
+    // is that box's own report, not deploy.sh.
+    const home = twoBoxFleet('ccrc-rollout-gate-failed-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 4 });
+    const r = run(home);
+    expect(r.code).toBe(1);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
+    expect(r.stderr).toMatch(/rollout: the fleet box's update failed its health gate and restored itself \(exit 4\) — stopped here\. The server box was not touched\. Its ~\/\.ccrc\/update\.json names the restore arm; 'ccrc update --check' there says where it now stands$/m);
+    expect(r.stderr).not.toMatch(/deploy\.sh remains the fallback/);
+    expect(sshCalls(home).some((l) => l.endsWith(' ccrc version')), 'step 6 ran after a gate failure').toBe(false);
+    // Inverted: the server's 4 leaves the fleet box untouched, same sentence.
+    const inv = twoBoxFleet('ccrc-rollout-gate-failed-inv-');
+    plantHost(inv, SERVER, { role: 'server', version: 'v1.0.0', updateExit: 4 });
+    const r2 = run(inv, ['--server-first']);
+    expect(r2.code).toBe(1);
+    expect(updates(inv)).toEqual([`${SERVER} ccrc update --to v2.0.0`]);
+    expect(r2.stderr).toMatch(/the server box's update failed its health gate and restored itself \(exit 4\) — stopped here\. The fleet box was not touched\./);
+  });
+
   it('--check measures and stops: no update argv; exit 1 while any box is behind, 0 when all current', () => {
     const home = twoBoxFleet('ccrc-rollout-check-');
     let r = run(home, ['--check']);
