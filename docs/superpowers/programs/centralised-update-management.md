@@ -24,7 +24,7 @@ numbers; the spec wave each one implements is named beside it.
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **dispatched** (run 128, 2026-09-23); plan `1288beec` |
-| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | planned |
+| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | planned |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | planned |
@@ -86,6 +86,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   archived workspace, and `git worktree add` refused. Nothing was spawned or held (measured: no worktree, no registry
   rows, no tmux session, run still `planned`), so the retry was safe and landed on `keen-meadow`. The name picker does
   not check for an existing branch.
+
+- **Wave 3's plan and block (2026-09-23).** `docs/superpowers/plans/2026-09-23-centralised-update-w3-settings-and-notification.md`,
+  13 tasks, committed alone as `d638c602`; one combined pipeline (skeleton, bodies, fix, six Opus lenses with Sonnet
+  refuters: 14 of 21 survived, none critical, all applied). Its twenty-one departures are D-3294 through D-3314,
+  issued to run 130 and defined in that plan; a reserve of fifteen more, from 3315 (bare here), issued beside it.
+- **Waves 5 and 6 are being planned** (2026-09-23) against the three committed producer plans; each wave's run and
+  block are opened when its plan is final.
 
 ## Carried constraints
 
