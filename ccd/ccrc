@@ -10041,6 +10041,14 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name too,
     # so the orphan scan in `_inst_wrappers` cannot report it.
     _inst_atomic "$tree/ccd/ccd-pool-sync" "$bin/ccd-pool-sync" 755
+    # programme wave 4 (design 2026-09-20 §9): the update-intent puller, on
+    # `ccd-pool-sync`'s terms exactly — every ROLE, not Darwin, because its
+    # only runner is `ccd-update-sync.timer` (systemd), which `_inst_units`
+    # arms on `fleet` alone. The binary is never the gate (graph-sweep's
+    # rule), and `_uninst_tree_bins` removes it on every role to match.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or
+    # the orphan scan in `_inst_wrappers` (every role) would report it.
+    _inst_atomic "$tree/ccd/ccd-update-sync" "$bin/ccd-update-sync" 755
     # graphify Task 10 (O3/O6b): the sweep executable, every ROLE but — like
     # `ccd-cap-scopes` above — not Darwin: its timer only installs on the
     # systemd arm, and the script leans on GNU stat/date and flock(1), which
@@ -10082,9 +10090,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep and no ccd-pool-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
@@ -10500,6 +10508,19 @@ _inst_units() {
   if [ "$INST_ROLE" = fleet ]; then
     _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.service" "$dir/ccd-pool-sync.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.timer" "$dir/ccd-pool-sync.timer" 644
+    # programme wave 4 (design 2026-09-20 §9): the update-intent puller's
+    # pair, on THIS gate and derived the same way — from its own
+    # precondition, not from the sibling above it. `ccd-update-sync` refuses
+    # without `$HOME/.ccrc/agent.env` (the server URL) exactly as
+    # `ccd-pool-sync` does, and only a `fleet` install writes that file; on
+    # `server`/`both` the server process writes `~/.ccrc/update-intent`
+    # itself, so a timer there would be a second writer of one path that
+    # fails every 60 seconds. `deploy/deploy.sh` installs NO copy of this
+    # pair (spec §19 leaves that file untouched): a deploy.sh-installed fleet
+    # box has no timer file, so `ccrc update`'s reader takes the
+    # not-configured arm there — the spec's own table.
+    _inst_atomic "$tree/deploy/systemd/ccd-update-sync.service" "$dir/ccd-update-sync.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-update-sync.timer" "$dir/ccd-update-sync.timer" 644
   fi
   # graphify Task 10 (O3/O6b): ROLE-GATED, unlike every unit above — a server
   # box runs no per-tree AST sweep at all, so its unit files stay off it
@@ -10623,6 +10644,12 @@ _inst_enable() {
   # stopped timer, not for dying here over one that merely would not enable.
   [ "$INST_ROLE" != fleet ] || systemctl --user enable --now ccd-pool-sync.timer \
     || echo "install: pool-sync: could not enable ccd-pool-sync.timer — run: systemctl --user enable --now ccd-pool-sync.timer" >&2
+  # programme wave 4: the update-intent puller's timer, on the gate its unit
+  # files carry in `_inst_units`, and DEGRADING the same way — a timer that
+  # will not enable is doctor's `services` finding (`known` names it), not a
+  # reason to fail an otherwise-converged install.
+  [ "$INST_ROLE" != fleet ] || systemctl --user enable --now ccd-update-sync.timer \
+    || echo "install: update-sync: could not enable ccd-update-sync.timer — run: systemctl --user enable --now ccd-update-sync.timer" >&2
   # graphify Task 10 (O3/O6b): the sweep timer, gated exactly as
   # `_inst_units` gates its unit files — SKIPPED on a server box, which runs
   # no per-tree AST sweep at all. UNLIKE the loop above, a refusal here
@@ -14456,6 +14483,7 @@ _uninst_units() {
     : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
       ccd-pool-sync.timer ccd-pool-sync.service \
+      ccd-update-sync.timer ccd-update-sync.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
       ccd-usage-sweep.timer ccd-usage-sweep.service \
       ccd-tmp-sweep.timer ccd-tmp-sweep.service \
@@ -14473,6 +14501,7 @@ _uninst_units() {
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
+    "$dir/ccd-update-sync.service" "$dir/ccd-update-sync.timer" \
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.timer" \
     "$dir/ccd-tmp-sweep.service" "$dir/ccd-tmp-sweep.timer" \
@@ -14573,7 +14602,8 @@ _uninst_wrappers() {
     # `_uninst_tree_bins` — which owns this name — would never get a say,
     # which is verbatim what this case exists to prevent. `ccd-tmp-sweep`
     # joins on those same terms: id-shaped, unmarked, ours.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-pool-sync) continue ;; esac
+    # `ccd-update-sync` (programme wave 4) joins on them once more.
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-pool-sync|ccd-update-sync) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -14703,6 +14733,11 @@ _uninst_tree_bins() {
   # and its own paragraph: it is the one name in this census that is not
   # ccrc's own binary.)
   #
+  # `ccd-update-sync` (programme wave 4, the update-intent puller) joins on
+  # `ccd-pool-sync`'s exact terms: `_inst_bins` places it on every
+  # non-Darwin role and only its timer is fleet-gated, so it is removed here
+  # on every role.
+  #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
   # account wave's merge, where main added `ccd-telemetry-keepalive` to the
@@ -14718,8 +14753,9 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccd-update-sync" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

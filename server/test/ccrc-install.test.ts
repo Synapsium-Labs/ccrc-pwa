@@ -2489,6 +2489,21 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-agent');
   });
 
+  it('installs no ccd-update-sync pair on the default role — the server process writes the projection there', () => {
+    // programme wave 4 (design 2026-09-20 §9): the default role is `both`,
+    // and on `both` the SERVER is the writer of `~/.ccrc/update-intent`. A
+    // timer here would be a second writer of one path whose binary refuses
+    // every 60 seconds (no agent.env), under a timer `_check_services` reads
+    // as active. The BINARY is still on PATH — graph-sweep's rule: the timer
+    // is the gate, never the binary.
+    const { home } = units;
+    expect(existsSync(unitDir(home, 'ccd-update-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-update-sync.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-update-sync');
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-update-sync')),
+      'the puller binary is missing on the default role').toBe(true);
+  });
+
   it('reloads and enables in that order, and only after every unit file landed', () => {
     // TWO ORDERINGS IN ONE ASSERTION, because they fail the same way. systemd
     // reads the directory at `daemon-reload`; a unit enabled before its drop-in
@@ -3006,10 +3021,13 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
         // an exact set, so deleting the install reds here rather than leaving
-        // `ccd-pool-sync.timer` enabled against a 203/EXEC.
+        // `ccd-pool-sync.timer` enabled against a 203/EXEC. Programme wave 4:
+        // `ccd-update-sync` joins on the same terms, and this set is the
+        // mutation site for its line too (spec §18 "the puller is installed
+        // where its timer looks").
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
-           'ccrc', 'graphify']);
+           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-usage-sweep.py', 'ccrc', 'graphify']);
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -3719,6 +3737,17 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // the only precondition under which `ccd-pool-sync` can ever exit 0.
     expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(true);
     expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(true);
+    // programme wave 4 (design 2026-09-20 §9): the update-intent puller's
+    // pair lands on this role and ONLY this one — the pool-sync pair's own
+    // precondition (the agent.env this role's install wrote) and its own
+    // gate. Byte for byte from the PLACED tree, at 644.
+    for (const u of ['ccd-update-sync.service', 'ccd-update-sync.timer']) {
+      const p = unitDir(home, u);
+      expect(existsSync(p), `${u} never reached ~/.config/systemd/user on the fleet role`).toBe(true);
+      expect(readFileSync(p), `${u} is not the shipped file`)
+        .toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
     // W4a Task 9: the watchdog pair lands on every role BUT this one — a
     // fleet node runs no server, and the server's own deadline covers it.
     expect(existsSync(unitDir(home, 'ccrc-update-watchdog.service'))).toBe(false);
@@ -3743,6 +3772,11 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // matching absence, so the pair of claims cannot both be satisfied by a
     // gate that is simply always true or always false.
     expect(argv).toContain('--user enable --now ccd-pool-sync.timer');
+    // programme wave 4: the update-intent puller's timer, on the same gate.
+    expect(argv).toContain('--user enable --now ccd-update-sync.timer');
+    expect(argv.indexOf('--user enable --now ccd-update-sync.timer'),
+      'the puller timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3804,6 +3838,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     // timer it is not supposed to arm.
     expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
+    // programme wave 4: the update-intent puller's pair is gated on `fleet`
+    // exactly as the pool-sync pair is — `both` gets no agent.env, and on
+    // `both` the server process writes the projection itself.
+    expect(existsSync(unitDir(home, 'ccd-update-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-update-sync.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-update-sync');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=both$/m);
     const calls = systemctlCalls(home)
       // Reads dropped, mutations kept — see the sibling assertion above for why
@@ -3872,6 +3912,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-pool-sync');
+    // programme wave 4: and the update-intent puller's pair, on the pool-sync
+    // pair's narrower `= fleet` gate — the server process is this box's
+    // projection writer.
+    expect(existsSync(unitDir(home, 'ccd-update-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-update-sync.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-update-sync');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');

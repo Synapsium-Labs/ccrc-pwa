@@ -137,6 +137,10 @@ function plantInstalledBox(home: string): void {
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
   // it away — planted here so that removal can be MEASURED rather than read.
   writeFileSync(join(bin, 'ccd-pool-sync'), '#!/bin/sh\n# pool sync\n', { mode: 0o755 });
+  // programme wave 4: the update-intent puller, placed by `_inst_bins` on the
+  // non-Darwin arm for EVERY role (only its timer is fleet-gated) — planted
+  // so `_uninst_tree_bins`' removal of it is measured rather than read.
+  writeFileSync(join(bin, 'ccd-update-sync'), '#!/bin/sh\n# update sync\n', { mode: 0o755 });
   // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
   // The account wave's own, and UNMARKED exactly as every name above is:
@@ -173,6 +177,10 @@ function plantInstalledBox(home: string): void {
     // every role-gated pair below it, `_inst_units` ships this one on every
     // non-Darwin role — so it is on the box under test whatever role it had.
     'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+    // programme wave 4: the update-intent puller's pair. `_inst_units` ships
+    // it on the `fleet` role only; planted here because the uninstall removes
+    // it whatever role the box had.
+    'ccd-update-sync.service', 'ccd-update-sync.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
     // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
@@ -379,6 +387,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       // `_uninst_units` had never heard of — `ccrc uninstall` removed the
       // binary's siblings and left this timer ENABLED and orphaned.
       'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+      // programme wave 4: the update-intent puller's pair.
+      'ccd-update-sync.service', 'ccd-update-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
       'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
@@ -400,6 +410,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The half a file-absence assertion cannot see: a unit file deleted under
     // a still-enabled unit leaves systemd holding a dangling enablement.
     expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
+    expect(calls).toContain('--user disable --now ccd-update-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
@@ -561,7 +572,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // the binary would otherwise stay on PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -633,6 +644,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  it('a STAMPED ccd-update-sync is the bin arm\'s subject too — the uninstall twin of its TOOLCHAIN_EXECUTABLES entry', () => {
+    // programme wave 4: the pool-sync sibling above, for the update-intent
+    // puller. INERT ON A REAL BOX TODAY for the same reason (`_inst_atomic`
+    // never stamps), and pinned for the same reason: only a MARKED fixture
+    // can tell `_uninst_wrappers`' case entry from its absence.
+    const home = mkTmp('ccrc-uninst-updatesync-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-update-sync'),
+      markGenerated('#!/bin/sh\n# update sync\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-update-sync')),
+      'the puller survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-update-sync/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-update-sync.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the

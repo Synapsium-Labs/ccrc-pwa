@@ -2266,6 +2266,45 @@ describe('ccrc doctor: services knows about the update-watchdog timer', () => {
   });
 });
 
+describe('ccrc doctor: services knows about the update-sync timer', () => {
+  // programme wave 4 (design 2026-09-20 §9): `ccd-update-sync.timer` joins
+  // `known` on `ccd-pool-sync.timer`'s own ruling — a stopped puller is
+  // SILENT: the projection ages in place, nothing looks wrong, and then its
+  // lease ends and every `ccrc update` without --to refuses as stale.
+  itLinux('warns — with its OWN consequence — when the update-sync timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-update-sync.timer is installed but inactive');
+    expect(lines[i]).toContain('stops refreshing its update projection');
+    expect(lines[i]).toContain('without --to refuses as stale');
+    expect(lines[i]).not.toContain('pool projection');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-update-sync\.timer$/);
+    // A stopped refresh is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-ok-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-update-sync.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-update-sync-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-update-sync');
+  });
+});
+
 // ── pool-sync: the EFFECT check, item 4 (I2, wave-1 fix round A) ──────────
 // `services` (above) measures the TIMER's own activation state, which stays
 // `active` while its oneshot fails every run — this describe block is the
