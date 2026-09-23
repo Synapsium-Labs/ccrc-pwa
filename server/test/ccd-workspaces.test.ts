@@ -87,7 +87,7 @@ describe('slug rules', () => {
 
   it('never collides with an existing registry entry', () => {
     // Pin the generator to one candidate, then occupy it.
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');   // free in git: the REGISTRY refuses
     const slug = sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`);
     expect(slug).toBe('EXHAUSTED');
   });
@@ -97,7 +97,7 @@ describe('slug rules', () => {
   });
 
   it('rejects an invalid CCD_WS_SLUG rather than passing it through', () => {
-    expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');   // VALIDITY refuses
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
@@ -268,7 +268,7 @@ describe('a partially purged registry never frees the slug', () => {
   });
 
   it('keeps the generator off a residue slug as well as the explicit one', () => {
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');   // the residue refuses
     expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`)).toBe('EXHAUSTED');
   });
 

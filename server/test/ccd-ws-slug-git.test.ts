@@ -74,7 +74,7 @@ describe('_ws_slug_git_state: three answers', () => {
     h.git(main, 'pack-refs', '--all');
     fs.appendFileSync(path.join(main, '.git', 'packed-refs'), 'garbage line\n');
     expect(h.sh('_ws_slug_git_state demo quiet-delta; echo "rc=$?"'))
-      .toMatch(/^unmeasurable git show-ref failed \(rc 128\)[^\n]*\nrc=2$/);
+      .toMatch(/^unmeasurable git show-ref refs\/heads\/ws\/quiet-delta failed \(rc 128\)[^\n]*\nrc=2$/);
   });
 
   it('unmeasurable: a worktree list that fails is not an empty list', () => {
@@ -84,6 +84,123 @@ describe('_ws_slug_git_state: three answers', () => {
     const stub = 'git() { [[ " $* " == *" worktree list "* ]] && return 128; command git "$@"; };';
     expect(h.sh(`${stub} _ws_slug_git_state demo quiet-delta; echo "rc=$?"`))
       .toMatch(/^unmeasurable git worktree list failed[^\n]*\nrc=2$/);
+  });
+
+  // ── THE LOOSE SIDE (fix round 2, D-3476). Measured on git 2.43: `show-ref
+  // --verify` exits 1 — the ABSENT answer — for an unreadable or corrupt loose
+  // ref, for anything under an unsearchable `refs/heads/ws` or `refs/heads`,
+  // and for a directory/file conflict (a `ws/<slug>/<x>` branch, or one named
+  // just `ws`), all of which `git worktree add -b ws/<slug>` then dies on.
+  // Directories chmod-ed here are restored in `finally`, or cleanup cannot
+  // remove them.
+  const refsDir = (main: string, ...rest: string[]): string => path.join(main, '.git', 'refs', 'heads', ...rest);
+  const state = (): string => h.sh('_ws_slug_git_state demo quiet-delta; echo "rc=$?"');
+
+  it('unmeasurable: a loose ref git cannot read (mode 000), never free', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/quiet-delta');
+    fs.chmodSync(refsDir(main, 'ws', 'quiet-delta'), 0o000);
+    try {
+      expect(state()).toMatch(/^unmeasurable \S*\/refs\/heads\/ws\/quiet-delta exists but git cannot resolve it\nrc=2$/);
+    } finally { fs.chmodSync(refsDir(main, 'ws', 'quiet-delta'), 0o644); }
+  });
+
+  it('unmeasurable: a corrupt loose ref, never free', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/quiet-delta');
+    fs.writeFileSync(refsDir(main, 'ws', 'quiet-delta'), 'junk\n');
+    expect(state()).toMatch(/^unmeasurable \S*\/refs\/heads\/ws\/quiet-delta exists but git cannot resolve it\nrc=2$/);
+  });
+
+  it('unmeasurable: refs/heads/ws cannot be searched', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/other');
+    fs.chmodSync(refsDir(main, 'ws'), 0o000);
+    try {
+      expect(state()).toMatch(/^unmeasurable cannot search \S*\/refs\/heads\/ws\nrc=2$/);
+    } finally { fs.chmodSync(refsDir(main, 'ws'), 0o755); }
+  });
+
+  it('unmeasurable: refs/heads cannot be searched', () => {
+    const main = h.makeRepo('demo');
+    fs.chmodSync(refsDir(main), 0o000);
+    try {
+      expect(state()).toMatch(/^unmeasurable cannot search \S*\/refs\/heads\nrc=2$/);
+    } finally { fs.chmodSync(refsDir(main), 0o755); }
+  });
+
+  it('taken: a PACKED child ref ws/<slug>/<x> — only for-each-ref can see it', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/quiet-delta/x');
+    h.git(main, 'pack-refs', '--all');
+    expect(fs.existsSync(refsDir(main, 'ws')), 'packed: no loose directory left').toBe(false);
+    expect(state()).toBe('taken branch ws/quiet-delta/x\nrc=1');
+  });
+
+  it('taken: a child ref git cannot read — the directory at the ref path holds it', () => {
+    // for-each-ref only warns "ignoring broken ref" and lists nothing here.
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/quiet-delta/x');
+    fs.chmodSync(refsDir(main, 'ws', 'quiet-delta', 'x'), 0o000);
+    try {
+      expect(state()).toMatch(/^taken branch ws\/quiet-delta\/ \(a directory holds its path\)\nrc=1$/);
+    } finally { fs.chmodSync(refsDir(main, 'ws', 'quiet-delta', 'x'), 0o644); }
+  });
+
+  it('taken: a branch named exactly ws', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws');
+    expect(state()).toBe('taken branch ws\nrc=1');
+  });
+
+  it('taken: a PACKED branch named exactly ws — only show-ref can see it', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws');
+    h.git(main, 'pack-refs', '--all');
+    expect(fs.existsSync(refsDir(main, 'ws')), 'packed: no loose file left').toBe(false);
+    expect(state()).toBe('taken branch ws\nrc=1');
+  });
+
+  it('unmeasurable: show-ref on refs/heads/ws failing for a reason other than absence', () => {
+    // Fails ONLY the exact `refs/heads/ws` read (a shell-function `git` in this
+    // test's shell), so the arm is measured on its own rather than masked by
+    // the `ws/<slug>` read before it, which a real corrupt packed-refs also fails.
+    h.makeRepo('demo');
+    const stub = 'git() { [[ " $* " == *" refs/heads/ws "* ]] && return 128; command git "$@"; };';
+    expect(h.sh(`${stub} _ws_slug_git_state demo quiet-delta; echo "rc=$?"`))
+      .toMatch(/^unmeasurable git show-ref refs\/heads\/ws failed \(rc 128\)[^\n]*\nrc=2$/);
+  });
+
+  it('taken: a branch named exactly ws whose loose ref git cannot read', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws');
+    fs.chmodSync(refsDir(main, 'ws'), 0o000);
+    try {
+      expect(state()).toBe('taken branch ws\nrc=1');
+    } finally { fs.chmodSync(refsDir(main, 'ws'), 0o644); }
+  });
+
+  it('unmeasurable: the worktree path\'s parent cannot be searched, never free', () => {
+    h.makeRepo('demo');
+    const parent = path.join(home, 'worktrees', 'demo');
+    fs.mkdirSync(path.join(parent, 'quiet-delta'), { recursive: true });
+    fs.chmodSync(parent, 0o600);
+    try {
+      expect(state()).toMatch(/^unmeasurable cannot search \S*\/worktrees\/demo\nrc=2$/);
+    } finally { fs.chmodSync(parent, 0o755); }
+  });
+
+  it('a named slug on an unreadable loose ref is refused as unmeasurable, not at worktree add', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'branch', 'ws/quiet-delta');
+    fs.chmodSync(refsDir(main, 'ws', 'quiet-delta'), 0o000);
+    try {
+      const out = h.sh(`${WS_ADD} ( cmd_ws_add demo quiet-delta ) 2>&1 || echo REFUSED`);
+      expect(out).toContain('REFUSED');
+      expect(out).toContain('unmeasurable');
+      expect(out).not.toContain('git worktree add failed');
+      expect(regTrace('demo-quiet-delta')).toEqual([]);
+    } finally { fs.chmodSync(refsDir(main, 'ws', 'quiet-delta'), 0o644); }
   });
 
   it('unmeasurable, never the OUTER repository\'s answer: a broken repository nested inside another', () => {
