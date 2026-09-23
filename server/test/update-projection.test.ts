@@ -3,9 +3,9 @@
 // nothing), resolveAndProject over a real coord.db on a fixture home, and the
 // inventory run that calls it. Fixture HOMEs only (mkTmp); nothing here reads
 // the live $HOME.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
-  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -342,7 +342,10 @@ describe('resolveAndProject — every live node resolved and stored; the server 
       updateEpoch: () => s.updateEpoch(), resolveNode: (id, r) => s.resolveNode(id, r),
     };
     const a = resolveAndProject(f.deps, Date.now());
-    // An intent write between the two calls, as a route's POST lands during a sweep's run.
+    // Not a race: this write is synchronous and lands before A's queued snapshot has even run (the
+    // `Promise.resolve().then(once)` inside resolveAndProject is a microtask away). What this case proves is
+    // the QUEUE, not timing — B's own read (`observing.nodes`, below) is the one that has to wait for A's
+    // write to land, and `seenByB` is the assertion that it did.
     expect(s.setIntent('*', { channel: 'dev' }, f.log, NOW)).toMatchObject({ ok: true });
     const b = resolveAndProject({ ...f.deps, store: observing }, Date.now());
     const [ra, rb] = await Promise.all([a, b]);
@@ -372,5 +375,84 @@ describe('the inventory run resolves and projects (§9: "at every resolution AND
     expect(text).toContain('channel stable\ndesired v0.0.10\n');
     const v = validate(text);
     expect(v.ok, v.err).toBe(true);
+  });
+});
+
+// Fix round 1, finding 1: the dedupe must compare a STABLE key (`why` + errno `code`), never the message —
+// an fs failure's message embeds `writeOwnProjection`'s tmp path, which carries `process.pid` and
+// `Date.now()`, so two failures of the SAME condition never produced the same string and the "once per
+// change of reason" guard never actually deduped anything for the case it exists for.
+describe('the projection warning dedupes on a stable key, never the message (fix round 1, finding 1)', () => {
+  const runningAsRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  // Root bypasses directory write permissions entirely, so the EACCES this case measures cannot occur —
+  // skipped rather than false-green under a root test runner.
+  it.skipIf(runningAsRoot)(
+    'two sweeps against an unwritable ~/.ccrc warn ONCE; writable then unwritable again warns again',
+    async () => {
+      const home = mkTmp('ccrc-update-warn-');
+      const base = testDeps(home);
+      const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+      // A directory of its own, separate from base.cfg.ccrcDir (which also holds coord.db): chmod-ing the
+      // real ~/.ccrc would risk starving sqlite's own WAL writes, which this case has no interest in.
+      const unwritable = path.join(home, 'no-write-here');
+      mkdirSync(unwritable, { recursive: true });
+      const cfg = { ...base.cfg, ccrcDir: unwritable };
+      const w = new FleetWatcher({ ...base, cfg, coord }, new Bus(), 2000, path.join(home, 'state-cache.json'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        chmodSync(unwritable, 0o500);
+        await w.inventoryNow();
+        await w.inventoryNow();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toMatch(/unwritable: .*EACCES/);
+
+        chmodSync(unwritable, 0o700);
+        warn.mockClear();
+        await w.inventoryNow();
+        expect(warn).not.toHaveBeenCalled();
+        expect(existsSync(projectionPath(unwritable))).toBe(true);
+
+        // A DIFFERENT failure (the dir is unwritable again) after a success in between: the key changed
+        // (null, because the write succeeded) so this warns again — deduping is "once per change", not "once
+        // ever".
+        chmodSync(unwritable, 0o500);
+        await w.inventoryNow();
+        expect(warn).toHaveBeenCalledTimes(1);
+      } finally {
+        chmodSync(unwritable, 0o700);
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it('a planted throw inside the resolve/project step still returns the sweep\'s outcomes', async () => {
+    const home = mkTmp('ccrc-update-warn-throw-');
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+    mkdirSync(base.cfg.ccrcDir, { recursive: true });
+    writeFileSync(path.join(base.cfg.ccrcDir, NODE_FILES.floor), 'v0.0.9\n');
+    const w = new FleetWatcher({ ...base, coord }, new Bus(), 2000, path.join(home, 'state-cache.json'));
+    const originalNodes = coord.nodes.bind(coord);
+    let threw = false;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately shadowing the instance method
+    (coord as unknown as { nodes: () => unknown }).nodes = () => {
+      threw = true;
+      throw new Error('planted: resolve step boom');
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const outcomes = await w.inventoryNow();
+      expect(threw).toBe(true);
+      // The sweep's own outcomes (the server row's measurement) came back even though the resolve step
+      // that runs after it threw — a resolve failure never loses what the sweep already measured.
+      expect(outcomes.length).toBeGreaterThan(0);
+      expect(outcomes.every((o) => o.label === SERVER_LABEL)).toBe(true);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the resolve run threw: planted: resolve step boom/);
+    } finally {
+      (coord as unknown as { nodes: () => unknown }).nodes = originalNodes;
+      warn.mockRestore();
+    }
   });
 });

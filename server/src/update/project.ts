@@ -51,7 +51,15 @@ export function resolveInputFor(store: Omit<ProjectStore, 'resolveNode' | 'nodes
   };
 }
 
-export type WriteProjectionResult = { ok: true; path: string } | { ok: false; why: 'unwritable'; detail: string };
+/** `code` is the fs errno (`EACCES`, `EROFS`, …) when the failure carries one — `null` for a thrown value
+ *  that isn't a `NodeJS.ErrnoException` (fix round 1, finding 1). It is the STABLE half of the failure:
+ *  `detail` embeds `e.message`, which for a `writeFile`/`rename` failure includes the tmp path — and that
+ *  path embeds `process.pid` and `Date.now()` (below), so two failures of the SAME underlying condition
+ *  never produce the same `detail` string. A caller that wants to dedupe repeated warnings compares on
+ *  `why` + `code`, never on `detail`. */
+export type WriteProjectionResult =
+  | { ok: true; path: string }
+  | { ok: false; why: 'unwritable'; detail: string; code: string | null };
 
 /** tmp then ONE rename(2) — a symlink at the path is replaced, never followed; a directory there refuses.
  *  The tmp is dot-leading (every reader skips it) and removed on every failure arm. Never throws. */
@@ -67,7 +75,10 @@ export async function writeOwnProjection(ccrcDir: string, text: string): Promise
     return { ok: true, path: dest };
   } catch (e) {
     await rm(tmp, { force: true }).catch(() => { /* the refusal below is the answer */ });
-    return { ok: false, why: 'unwritable', detail: e instanceof Error ? e.message : String(e) };
+    return {
+      ok: false, why: 'unwritable', detail: e instanceof Error ? e.message : String(e),
+      code: e instanceof Error ? (e as NodeJS.ErrnoException).code ?? null : null,
+    };
   }
 }
 

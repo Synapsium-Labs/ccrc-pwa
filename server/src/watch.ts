@@ -203,10 +203,24 @@ const UPDATE_CATALOGUE_MS = 30 * 60_000;
  *  `ready` frame (`triggerInventory`, wired in `index.ts`). */
 const UPDATE_INVENTORY_MS = 60_000;
 
-/** null = written, or nothing to write by construction (a fleet-role server has no own projection). */
-function projectionWhy(p: ProjectionOutcome): string | null {
+/** A thrown value's fs errno (`EACCES`, `EROFS`, …), or null — same stance as `writeOwnProjection`'s `code`
+ *  (fix round 1, finding 1): a caller that wants to dedupe compares this, never the message. */
+function errnoOf(e: unknown): string | null {
+  return e instanceof Error ? (e as NodeJS.ErrnoException).code ?? null : null;
+}
+
+/** null = written, or nothing to write by construction (a fleet-role server has no own projection).
+ *  Otherwise a STABLE `key` (`why`, plus the errno `code` when the outcome carries one — never the
+ *  message or a path, both of which `writeOwnProjection`'s tmp name makes unique per attempt) for the
+ *  caller to dedupe on, and the full `message` to print (fix round 1, finding 1: the previous version
+ *  compared whole strings built from `detail`, so a box whose ~/.ccrc cannot take the file warned on
+ *  every sweep instead of once per change of reason). */
+function projectionWarn(p: ProjectionOutcome): { key: string; message: string } | null {
   if (p.ok || p.why === 'not-server-role') return null;
-  return p.why === 'unwritable' || p.why === 'no-channel' ? `${p.why}: ${p.detail}` : p.why;
+  const code = p.why === 'unwritable' ? p.code : null;
+  const key = code !== null ? `${p.why}:${code}` : p.why;
+  const message = p.why === 'unwritable' || p.why === 'no-channel' ? `${p.why}: ${p.detail}` : p.why;
+  return { key, message };
 }
 
 /** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
@@ -498,8 +512,8 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
-  /** Task 12: the last reason the server's own projection was not written, so a box whose ~/.ccrc cannot
-   *  take the file warns once per change of reason, not once a minute. */
+  /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
+   *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
   private lastProjectionWhy: string | null = null;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
@@ -787,22 +801,29 @@ export class FleetWatcher {
    *  tick's are ONE sweep. The single-flight is not what orders the writers, though: the update routes'
    *  `reproject` (Task 13) calls `resolveAndProject` without the watcher, and it is `resolveAndProject`'s own
    *  per-directory queue that keeps this run and a route's from interleaving two writers of the resolved
-   *  columns or of the file. A resolve failure is warned and never loses the sweep's outcomes. */
+   *  columns or of the file. A resolve failure is warned and never loses the sweep's outcomes. The warning
+   *  is deduped on `projectionWarn`'s stable `key` (fix round 1, finding 1) — never on the message text,
+   *  which for an `unwritable` result embeds the tmp path's pid and timestamp and so never repeats. */
   private async sweepThenProject(inv: InventoryDeps, now: number): Promise<SweepOutcome[]> {
     const outcomes = await sweepInventory(inv, now);
     const coord = this.deps.coord;
     if (!coord) return outcomes;
-    let why: string | null;
+    let warn: { key: string; message: string } | null;
     try {
       const run = await resolveAndProject({ store: coord, role: this.deps.cfg.role, ccrcDir: this.deps.cfg.ccrcDir }, now);
-      why = projectionWhy(run.projection);
+      warn = projectionWarn(run.projection);
     } catch (e) {
-      why = `the resolve run threw: ${e instanceof Error ? e.message : String(e)}`;
+      const code = errnoOf(e);
+      warn = {
+        key: code !== null ? `threw:${code}` : 'threw',
+        message: `the resolve run threw: ${e instanceof Error ? e.message : String(e)}`,
+      };
     }
-    if (why !== null && why !== this.lastProjectionWhy) {
-      console.warn(`update: this server's own ~/.ccrc/update-intent was not written (${why})`);
+    const key = warn?.key ?? null;
+    if (warn !== null && key !== this.lastProjectionWhy) {
+      console.warn(`update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
-    this.lastProjectionWhy = why;
+    this.lastProjectionWhy = key;
     return outcomes;
   }
 
