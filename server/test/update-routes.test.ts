@@ -257,6 +257,7 @@ describe('GET /api/updates', () => {
       current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.9' },
       stampRead: 'ok', installState: 'complete', provenance: 'verified',
       caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+      floorRead: 'measured', previousRead: 'absent',
       measuredAt: 1_000, reachable: true, unreachableSince: null,
       channel: null, desiredTag: null, resolveDetail: null,
       request: null, report: null,
@@ -809,5 +810,39 @@ describe('index.ts hands the one journal to BOTH deps arms (a text pin over the 
     expect(depsLiterals[0]).toContain('io: fleet.io');
     expect(depsLiterals[1]).toContain('io: localIO');
     for (const lit of depsLiterals) expect(lit).toMatch(/^\s+updateIntentLog,$/m);
+  });
+});
+
+describe('NodeWire.floorRead/previousRead — "no floor" vs "floor never measured" for the same NULL highestVersion (fix round 2, R4)', () => {
+  it('GET /api/updates tells the two apart: floorRead absent (a real, measured "no floor") vs unmeasured (never measured)', async () => {
+    const f = await open();
+    plant(f.coord, measured({ highestVersion: null, floorRead: 'absent' }));
+    plant(f.coord, measured({
+      nodeId: OTHER_ID, label: 'other', highestVersion: null, previousVersion: null,
+      floorRead: 'unmeasured', previousRead: 'unmeasured',
+    }));
+
+    const r = await f.app.inject({ method: 'GET', url: '/api/updates' });
+    expect(r.statusCode, r.body).toBe(200);
+    const view = r.json() as UpdatesView;
+    const byId = new Map(view.nodes.map((n) => [n.nodeId, n]));
+    // Same wire value, `highestVersion: null`, on both rows — the ambiguity
+    // F1/R4 named. `floorRead` is what tells them apart.
+    expect(byId.get(FLEET_ID)).toMatchObject({ highestVersion: null, floorRead: 'absent' });
+    expect(byId.get(OTHER_ID)).toMatchObject({ highestVersion: null, floorRead: 'unmeasured' });
+    expect(byId.get(FLEET_ID)!.floorRead).not.toBe(byId.get(OTHER_ID)!.floorRead);
+  });
+
+  it('toNodeWire always sends floorRead/previousRead — never omitted for an absent-vs-unmeasured reader to miss', async () => {
+    const f = await open();
+    plant(f.coord, measured());
+    const row = f.coord.node(FLEET_ID)!;
+    const wire = toNodeWire(row);
+    expect(wire.floorRead).toBe('measured');
+    expect(wire.previousRead).toBe('absent');
+    // The field is OPTIONAL on the type (an older fixture may omit it), but
+    // this mapper never exercises that: both keys are always present.
+    expect(Object.prototype.hasOwnProperty.call(wire, 'floorRead')).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(wire, 'previousRead')).toBe(true);
   });
 });

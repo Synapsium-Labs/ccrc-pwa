@@ -8370,11 +8370,29 @@ export interface NodeReportWire {
 /** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
 export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
 /** One node of the inventory (§6 `nodes`, §12). `agentOps` NULL = no agent by
- *  construction (the server's own row); `[]` = an agent too old to say. */
+ *  construction (the server's own row); `[]` = an agent too old to say.
+ *  `floorRead`/`previousRead` (fix round 2, R4): the STORED read-state
+ *  (`TagFileRead`) beside `highestVersion`/`previousVersion` — additive and
+ *  OPTIONAL so an older fixture or consumer that never set them still
+ *  type-checks. `toNodeWire` (`server/src/update/routes.ts`) always sends
+ *  both for a build that has them; a reader on an OLDER wire, or ANY reader
+ *  that never checks, sees `undefined` and MUST treat that as "not reported
+ *  by this build" — never as `'measured'` and never as evidence the floor
+ *  was never measured either. Absence here is silence, not a value: it is
+ *  the same shape `agentOps` already uses (NULL/undefined ≠ a real answer).
+ *  Without this pair a `null` `highestVersion` is ambiguous on the wire
+ *  between "no floor, unconstrained" (`floorRead: 'absent'`) and "floor never
+ *  measured, nothing resolves" (`floorRead: 'unmeasured'`) — the same
+ *  distinction D-3213 drew in the store and the resolver, now carried one
+ *  seam further out. No PWA reader exists yet (W2 ships no PWA change); the
+ *  first one W3 adds must read this field, never re-derive the distinction
+ *  from `highestVersion` alone. No `FLEET_PROTO` bump — additive, absence
+ *  permits. */
 export interface NodeWire {
   nodeId: string; role: NodeRole | null; label: string; os: NodeOs;
   current: BuildInfo | null; stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
   caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null;
+  floorRead?: TagFileRead; previousRead?: TagFileRead;
   measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
   channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
   request: NodeRequestWire | null;

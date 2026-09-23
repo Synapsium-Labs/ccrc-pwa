@@ -70,13 +70,17 @@ export function toReleaseWire(row: ReleaseRow): ReleaseWire {
 /** One live `nodes` row on the wire. `current` is the five `current*` columns
  *  through `buildInfoOfRow` — null unless the stamp read `ok`, so an EACCES never
  *  presents an old stamp as this node's build. `request` needs all three request
- *  columns (the wire's `at` is a number); `report` exists iff a phase was read. */
+ *  columns (the wire's `at` is a number); `report` exists iff a phase was read.
+ *  `floorRead`/`previousRead` (fix round 2, R4): ALWAYS sent, never omitted —
+ *  `NodeWire`'s optionality is for an older build's fixture/consumer, not for
+ *  this mapper, which always has the row's own `TagFileRead` to hand. */
 export function toNodeWire(row: NodeRow): NodeWire {
   return {
     nodeId: row.nodeId, role: row.role, label: row.label, os: row.os,
     current: buildInfoOfRow(row), stampRead: row.stampRead, installState: row.installState,
     provenance: row.provenance, caps: [...row.caps], agentOps: row.agentOps === null ? null : [...row.agentOps],
     highestVersion: row.highestVersion, previousVersion: row.previousVersion,
+    floorRead: row.floorRead, previousRead: row.previousRead,
     measuredAt: row.measuredAt, reachable: row.reachable, unreachableSince: row.unreachableSince,
     channel: row.channel, desiredTag: row.desiredTag, resolveDetail: row.resolveDetail,
     request: row.requestedTag !== null && row.requestedKind !== null && row.requestedAt !== null
