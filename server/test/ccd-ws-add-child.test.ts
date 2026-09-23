@@ -131,11 +131,12 @@ const WIDE_DIGIT_LOCALE: string | null = (() => {
 })();
 
 describe('the run-id grammar is ASCII in every locale (D-2522\'s shape)', () => {
-  it('is spelled ONCE in ccd/ccd — every run-id parse calls _child_runid_valid', () => {
+  it('spells the literal run-id pattern once in ccd/ccd — in _child_runid_valid', () => {
     // Wave 3's `--child-of` parse and its marker reads call the helper; none
     // re-spells the pattern, whose ten-digit bound `{0,9}` is its fingerprint.
     // A second spelling would be a second grammar free to drift — and the
     // first place it would drift is the `LC_ALL=C` shadow above.
+    // What passes it: a differently spelled grammar (a literal-absence pin; wave 3's review checks its parses by reading).
     const code = fs.readFileSync(CCD, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l));
     const spelled = code.filter((l) => l.includes('[0-9]{0,9}'));
     expect(spelled, 'the run-id pattern must be spelled exactly once — in _child_runid_valid').toHaveLength(1);
