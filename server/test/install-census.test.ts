@@ -1270,27 +1270,32 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       .toEqual([]);
   });
 
-  it('deploy.sh enables no template unit, and no instance of a template either installer places', () => {
+  it('deploy.sh enables no template unit, and no instance of a template either installer places or the repository ships', () => {
     // A bare template cannot be enabled, and an INSTANCE is not a deploy's to
     // arm: a session's is `ccd`'s, and a GPT lane's is the step that adopts the
     // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
-    // are DERIVED from the templates the two installers place, not typed, so
-    // this binds `claude-session@` today and any template either installer
-    // places later. (`ccgpt-usage@` is placed by neither — `_inst_units` says
-    // why — so it is no family here.)
+    // are DERIVED from the templates the two installers place and the
+    // repository ships, not typed, so this binds `claude-session@` and
+    // `ccgpt-usage@` alike, and any template added later.
     const enabled = deployEnabled();
     expect(enabled.size,
       'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
       .toBeGreaterThan(ENABLE_FLOOR);
-    const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)].filter(isTemplate);
+    // ...and every template unit file this repository SHIPS, placed or not
+    // (`git ls-files`, by basename): `ccgpt-usage@` ships in `deploy/systemd/`
+    // and no installer places it (F-1), because a live fleet box holds another
+    // repository's template at that name, and a deploy that armed one of its
+    // instances would arm THAT one.
+    const shipped = [...trackedFiles()].map((f) => path.posix.basename(f)).filter(isTemplate);
+    const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS), ...shipped].filter(isTemplate);
     expect(templates.length,
-      'neither installer places a template unit, so the instance half of this case would check nothing — an extractor has gone stale')
+      'neither installer places a template unit and the repository ships none, so the instance half of this case would check nothing — an extractor has gone stale')
       .toBeGreaterThan(0);
     const families = [...new Set(templates.map((t) => t.slice(0, t.indexOf('@') + 1)))];
 
     expect([...enabled].filter((u) => isTemplate(u) || families.some((f) => u.startsWith(f))).sort(),
       `these \`systemctl … enable\` operands in ${DEPLOY_WHERE} are a template unit (\`name@.suffix\`) or an `
-      + `instance of one an installer places (${families.join(', ')}). Remove them from the enable chain: a template `
+      + `instance of one an installer places or the repository ships (${families.join(', ')}). Remove them from the enable chain: a template `
       + 'is placed and never enabled, and its instances are armed per session or per lane, not by a deploy.')
       .toEqual([]);
   });
