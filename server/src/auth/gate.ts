@@ -235,7 +235,7 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'projection anonymous'],
   ['GET /api/updates/intent/:nodeId',
     'EXEMPT-BUT-AUTHENTICATED (update-management W2, design 2026-09-20 §9/§12), the same ' +
-    'dual-credential arrangement as `GET /api/pools/epoch`: from W4 a fleet node\'s ' +
+    'dual-credential arrangement as `GET /api/pools/epoch`: from update-management W4 a fleet node\'s ' +
     '`ccd-update-sync.timer` pulls its own update projection cookieless every minute, and the PWA ' +
     'reads the same document with a session. The handler requires one of those credentials before ' +
     'revealing even `501 not-configured` or whether the node exists, so this entry makes the machine ' +

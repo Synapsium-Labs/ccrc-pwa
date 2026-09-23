@@ -570,7 +570,7 @@ liveness gate reads the shipped sha out of it), the twenty-seven machine lanes t
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
-Claude Code session, `ccd-pool-sync.timer` and, from W4, `ccd-update-sync.timer`, none with a cookie jar, though the
+Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
 `/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session

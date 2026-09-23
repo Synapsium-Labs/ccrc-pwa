@@ -3,7 +3,7 @@ import type { Deps } from '../server.js';
 import type { FleetWatcher } from '../watch.js';
 import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from '../coord/token.js';
-import type { NodeRow, ReleaseRow, SetIntentResult, UpdateIntentPatch, UpdateIntentRow } from '../coord/store.js';
+import { NODE_ID_RE, type NodeRow, type ReleaseRow, type SetIntentResult, type UpdateIntentPatch, type UpdateIntentRow } from '../coord/store.js';
 import { autoGateBlockers, renderProjection, resolveNodeIntent } from './resolve.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
@@ -132,7 +132,15 @@ export function parseIntentBody(body: unknown): ParsedIntentBody {
 
 /** `setIntent`'s refusals as HTTP. `bad-field` cannot arrive past `parseIntentBody`
  *  and is mapped anyway, so a store that learns a new field refusal answers 400
- *  rather than 500. */
+ *  rather than 500.
+ *
+ *  THE TWO JOURNAL ARMS NEVER PASS `r.detail` TO THE CLIENT (fix round 1,
+ *  finding 1): it is `err.message` off a thrown `fs` error, which on an
+ *  EACCES/EROFS/ENOSPC carries the server's own absolute `~/.ccrc` path — a
+ *  publicly reachable server must not hand that to whoever is asking it to
+ *  set an intent. The body carries a fixed sentence instead; the raw
+ *  `r.detail` is logged SERVER-SIDE ONLY, by the caller, which has the
+ *  request's logger and this function does not. */
 function intentRefusal(r: Exclude<SetIntentResult, { ok: true }>): { code: number; body: Omit<UpdateRouteRefusal, 'ok'> } {
   switch (r.why) {
     case 'empty-patch': return { code: 400, body: { error: 'bad-request', field: 'body', detail: 'empty-patch' } };
@@ -142,8 +150,10 @@ function intentRefusal(r: Exclude<SetIntentResult, { ok: true }>): { code: numbe
     // name) and the patch names none: a state of the stored row, not of the
     // request — so 409, naming the scope whose row holds it.
     case 'no-channel': return { code: 409, body: { error: 'no-channel', detail: r.base } };
-    case 'journal-unreadable': return { code: 503, body: { error: 'journal-unreadable', detail: r.detail } };
-    case 'journal-unwritable': return { code: 503, body: { error: 'journal-unwritable', detail: r.detail } };
+    case 'journal-unreadable':
+      return { code: 503, body: { error: 'journal-unreadable', detail: 'the intent journal could not be read — see the server log' } };
+    case 'journal-unwritable':
+      return { code: 503, body: { error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' } };
   }
 }
 
@@ -232,6 +242,13 @@ export function registerUpdateRoutes(
     const parsed = parseIntentBody(req.body);
     if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
     if (parsed.patch.auto !== undefined && parsed.patch.auto !== 'off') {
+      // EXCEPTION to `reproject`'s "a write route must not wait out a whole
+      // sweep's agent reads" (below): the auto gate must be measured, not
+      // stale, before it lets `auto` through, so this ONE write path — unlike
+      // every other write in this file — awaits `ensureInventory`'s full
+      // single-flight sweep on a box with no `server` row yet (fix round 1,
+      // finding 7). It still costs nothing when the row exists, which it does
+      // after the first tick.
       await ensureInventory(req);
       const blockers = autoGateBlockers(parsed.scope,
         deps.coord.nodes().map((n) => ({ nodeId: n.nodeId, caps: n.caps })));
@@ -239,6 +256,12 @@ export function registerUpdateRoutes(
     }
     const written = deps.coord.setIntent(parsed.scope, parsed.patch, deps.updateIntentLog, Date.now());
     if (!written.ok) {
+      // The raw fs error (which may embed the server's own ~/.ccrc path) is
+      // logged here, server-side only — `intentRefusal` never sees it (fix
+      // round 1, finding 1).
+      if (written.why === 'journal-unreadable' || written.why === 'journal-unwritable') {
+        req.log.warn({ why: written.why, detail: written.detail }, 'update: the intent journal failed');
+      }
       const { code, body } = intentRefusal(written);
       return refuse(reply, code, body);
     }
@@ -320,6 +343,12 @@ export function registerUpdateRoutes(
     }
     if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
     const { nodeId } = req.params as { nodeId: string };
+    // A `:nodeId` that is not a measured node-id (`NODE_ID_RE`, Global
+    // Constraint "a node-id is a lowercase UUID") can never be a live row's
+    // key — the SAME 404 the missing-node arm answers, not a distinct shape
+    // that would tell a caller its malformed id was at least well-formed
+    // (fix round 1, finding 4).
+    if (!NODE_ID_RE.test(nodeId)) return refuse(reply, 404, { error: 'unknown-node' });
     const row = deps.coord.node(nodeId);
     if (row === null) return refuse(reply, 404, { error: 'unknown-node' });
     if (row.supersededBy !== null) return refuse(reply, 409, { error: 'superseded', detail: row.supersededBy });

@@ -90,17 +90,18 @@ if (cfg.releaseSource.ok === false) {
     'server from an installed tree whose ccd/ccrc carries its release-source lines.');
 }
 
-// The process's ONE `UpdateIntentLog`, beside `poolEdgeLog` and for its reason:
-// `CoordStore.setIntent` appends to it INSIDE its transaction, so the intent
-// route must share this instance rather than construct its own (design
-// 2026-09-20 §6).
-const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
 // D-3209: validated once, beside the release-source check above — a bad
 // `apiUrl` is just as fatal to the catalogue lane as a missing owner/repo.
 const releaseApiUrlProblem = apiBaseProblem(cfg.releaseApiUrl);
 if (releaseApiUrlProblem !== null) {
   console.warn(`ccrc-server: ${releaseApiUrlProblem} — the update catalogue will not poll.`);
 }
+
+// The process's ONE `UpdateIntentLog`, beside `poolEdgeLog` and for its reason:
+// `CoordStore.setIntent` appends to it INSIDE its transaction, so the intent
+// route must share this instance rather than construct its own (design
+// 2026-09-20 §6).
+const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
 
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against

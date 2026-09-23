@@ -138,8 +138,8 @@ const KICKOFF = '/api/sessions/:id/kickoff';
  *  kickoff route's reason. Hand-kept for the NAMES only: the update-surface
  *  describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal
- *  moving. Wave 5 appends `/api/updates/apply` and `/api/updates/rollback` with
- *  their routes. */
+ *  moving. Programme wave 5 (spec W4 part B) appends `/api/updates/apply` and
+ *  `/api/updates/rollback` with their routes. */
 const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */

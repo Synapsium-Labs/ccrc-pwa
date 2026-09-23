@@ -10,7 +10,7 @@
 // reads the live `$HOME`: every box is a `mkTmp` fixture home, and the two sweeps
 // tests trigger (the local-mode and remote-mode reads) run against that home.
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
@@ -412,17 +412,61 @@ describe('POST /api/updates/intent', () => {
     expect(f.coord.intentFor('*')!.auto).toBe('off');
   });
 
-  it('503 journal-unreadable, and the intent row and the epoch are untouched', async () => {
+  // fix round 1, findings 1+2: the OLD fixture here was a directory at the
+  // journal path, whose EISDIR message carries no path at all — a fixture
+  // that could never have caught a leak. `chmodSync(…, 0o000)` gives a REAL
+  // EACCES, whose `err.message` embeds this fixture's own absolute
+  // `~/.ccrc` path (`open(EACCES): permission denied, open '<home>/.ccrc/…'`),
+  // so the assertion that the body never contains `f.home` is a real check,
+  // not a vacuous one. Root ignores file permissions, so both cases skip
+  // under root — the same idiom as `ccd-project-pool.test.ts`'s 0o000 cases.
+  it.skipIf(process.getuid?.() === 0)(
+    '503 journal-unreadable: the fixed sentence never leaks the journal path, the raw detail is logged ' +
+    'server-side only, and the intent row and the epoch are untouched', async () => {
     const f = await open();
-    // A DIRECTORY where the journal file belongs: `maxEpoch()` cannot read it,
-    // and "cannot read the journal" must never be taken as "the journal is empty".
-    mkdirSync(defaultUpdateIntentLogPath(f.ccrcDir));
-    const r = await post(f.app, '/api/updates/intent', { scope: '*', channel: 'dev' });
-    expect(r.statusCode).toBe(503);
-    expect(r.json()).toMatchObject({ ok: false, error: 'journal-unreadable' });
-    expect(typeof r.json().detail).toBe('string');
-    expect(f.coord.updateEpoch().epoch).toBe(0);
-    expect(f.coord.intentFor('*')!.channel).toBe('stable');
+    const p = defaultUpdateIntentLogPath(f.ccrcDir);
+    writeFileSync(p, '');
+    chmodSync(p, 0o000);
+    try {
+      const r = await post(f.app, '/api/updates/intent', { scope: '*', channel: 'dev' });
+      expect(r.statusCode).toBe(503);
+      expect(r.json()).toEqual({
+        ok: false, error: 'journal-unreadable',
+        detail: 'the intent journal could not be read — see the server log',
+      });
+      expect(r.body, 'the server home path leaked into the client-visible body')
+        .not.toContain(f.home);
+      expect(f.coord.updateEpoch().epoch).toBe(0);
+      expect(f.coord.intentFor('*')!.channel).toBe('stable');
+    } finally {
+      chmodSync(p, 0o600);   // so mkTmp's own cleanup can remove it
+    }
+  });
+
+  // The companion arm (finding 2: "there is no journal-unwritable case"). A
+  // journal that EXISTS and READS fine (`maxEpoch()` succeeds) but cannot be
+  // APPENDED to — a 0o444 file — reaches `UpdateIntentLog.append`'s throw
+  // inside `setIntent`'s transaction, which rolls back.
+  it.skipIf(process.getuid?.() === 0)(
+    '503 journal-unwritable: the fixed sentence never leaks the journal path, and nothing is written', async () => {
+    const f = await open();
+    const p = defaultUpdateIntentLogPath(f.ccrcDir);
+    writeFileSync(p, JSON.stringify({ epoch: 1, scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setBy: 'migration', at: 0 }) + '\n');
+    chmodSync(p, 0o444);
+    try {
+      const r = await post(f.app, '/api/updates/intent', { scope: '*', channel: 'dev' });
+      expect(r.statusCode).toBe(503);
+      expect(r.json()).toEqual({
+        ok: false, error: 'journal-unwritable',
+        detail: 'the intent journal could not be written — see the server log',
+      });
+      expect(r.body, 'the server home path leaked into the client-visible body')
+        .not.toContain(f.home);
+      expect(f.coord.updateEpoch().epoch).toBe(0);
+      expect(f.coord.intentFor('*')!.channel).toBe('stable');
+    } finally {
+      chmodSync(p, 0o600);
+    }
   });
 
   it('409 no-channel when the stored channel under the patch cannot be read — never the fleet default (Task 6\'s arm)', async () => {
@@ -539,18 +583,29 @@ describe('GET /api/updates/intent/:nodeId — the projection', () => {
     expect(f.coord.node(FLEET_ID)!.desiredTag).toBeNull();
   });
 
-  it('404 unknown-node, 409 superseded, 409 no-channel for a channel token outside the vocabulary', async () => {
+  it('404 unknown-node, 404 for a label-keyed node-id that fails NODE_ID_RE, 409 superseded, ' +
+     '409 no-channel for a channel token outside the vocabulary', async () => {
     const f = await open();
     catalogue(f.coord);
-    plant(f.coord, measured());
-    plant(f.coord, measured({ nodeId: FLEET_LABEL }));
-    supersede(f.coord, FLEET_LABEL, FLEET_ID);
+    plant(f.coord, measured());                                    // FLEET_ID: live, never superseded
+    plant(f.coord, measured({ nodeId: OTHER_ID, label: 'other' })); // will be superseded by FLEET_ID
+    supersede(f.coord, OTHER_ID, FLEET_ID);
+    plant(f.coord, measured({ nodeId: FLEET_LABEL }));              // a live pre-W1 label-keyed row
 
     const unknown = await f.app.inject({ method: 'GET', url: '/api/updates/intent/no-such-node' });
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json()).toEqual({ ok: false, error: 'unknown-node' });
 
-    const sup = await f.app.inject({ method: 'GET', url: `/api/updates/intent/${FLEET_LABEL}` });
+    // fix round 1, finding 4: a `:nodeId` that fails NODE_ID_RE (the same
+    // gate `setIntent` applies to intent scopes, D-3194) can never be a
+    // measured node's own key — the SAME 404 the missing-node arm answers,
+    // live row or not, so this route cannot be used to learn whether a label
+    // happens to carry a row at all.
+    const label = await f.app.inject({ method: 'GET', url: `/api/updates/intent/${FLEET_LABEL}` });
+    expect(label.statusCode).toBe(404);
+    expect(label.json()).toEqual({ ok: false, error: 'unknown-node' });
+
+    const sup = await f.app.inject({ method: 'GET', url: `/api/updates/intent/${OTHER_ID}` });
     expect(sup.statusCode).toBe(409);
     expect(sup.json()).toEqual({ ok: false, error: 'superseded', detail: FLEET_ID });
 
