@@ -783,7 +783,11 @@ const OLD_SHA = 'oldsha0000000000000000000000000000000000';
 /** Records its argv, the lock marker it was handed, its own $PPID and
  *  whether ~/.ccrc/update.lock was HELD while it ran — a fresh `flock -n`
  *  that FAILS is the measurement (spec §10's own), and it can only fail
- *  because the parent holds its descriptor. Exits `fixture-restore-exit`. */
+ *  because the parent holds its descriptor. Exits `fixture-restore-exit`.
+ *  D-3275: when that exit is 3 — a real child's spine completed and only its
+ *  trailing doctor FAILed (D-3114) — it writes the completed-install record
+ *  ITS OWN spine would have, so a test can measure that arm 2's rc-3 arm
+ *  leaves it alone (only arm 3 would have deleted it). */
 const RESTORE_RECORDER = [
   '#!/bin/sh',
   'printf \'%s\\n\' "$0" "$@" > "$HOME/restore-child-argv"',
@@ -791,6 +795,7 @@ const RESTORE_RECORDER = [
   'if command -v flock >/dev/null 2>&1 && ! flock -n "$HOME/.ccrc/update.lock" true; then locked=yes; fi',
   'printf \'held=%s ppid=%s locked=%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" "$PPID" "$locked" > "$HOME/restore-child-env"',
   'code=0; [ -f "$HOME/fixture-restore-exit" ] && IFS= read -r code < "$HOME/fixture-restore-exit"',
+  '[ "$code" = 3 ] && { mkdir -p "$HOME/.ccrc"; printf \'childsha0000000000000000000000000000000\\n\' > "$HOME/.ccrc/installed"; }',
   'exit "$code"',
 ].join('\n') + '\n';
 /** The hazard spec §11's arm 2 carries: a new tree whose own ccrc is broken. */
@@ -3401,6 +3406,30 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
       expect(calls, 'the automatic restore swept the supervisors').not.toMatch(/try-restart/);
     }
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(`v1.0.0\n${OLD_SHA}\n`);
+  });
+
+  // D-3275 (fix round 1): the child is a real `ccrc update` — exit 3 means
+  // ITS spine completed and wrote its own record, and only its trailing
+  // doctor FAILed (D-3114). That is a restore, not a failure: arm 3 over it
+  // would delete the record the child just wrote and report a MIXED tree
+  // that is not mixed, and on any box with a standing doctor FAIL no restore
+  // could ever take arm 2.
+  it('a restore child whose OWN doctor FAILs (exit 3) is still a restore: arm 2 accepts it, never falls to arm 3, and the child\'s own record survives (D-3275)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-doctor3-');
+    plantRestoreBox(home);
+    writeFileSync(join(home, 'fixture-restore-exit'), '3\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 2\): this box runs v1\.0\.0 again, re-installed from its release, but its doctor reports FAIL lines \('ccrc doctor' re-reads them\) — gate: /m);
+    expect(r.stdout).not.toMatch(/arm 2 failed/);
+    expect(r.stdout).not.toMatch(/arm 3/);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 3\)/);
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm2: restored v1\.0\.0 \(its doctor exited 3\); gate: /);
+    // The child's own record (D-3275's fixture extension) is untouched — only
+    // arm 3 removes `~/.ccrc/installed`, and arm 3 never ran.
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('childsha0000000000000000000000000000000\n');
   });
 
   it('arm 2 passes --allow-unsigned only when the marker read `unsigned` BEFORE the install rewrote it (§18 "arm 2 never silently unsigns")', () => {

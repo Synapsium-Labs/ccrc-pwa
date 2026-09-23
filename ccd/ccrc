@@ -12772,6 +12772,17 @@ _upd_restore_arm2() {
   # nothing else can supply $PPID's own value.)
   CCRC_UPDATE_LOCK_HELD=$$ bash "$BOX_TREE_DIR/ccd/ccrc" update --to "$UPD_PREV_TAG" --no-gate --from restore \
     ${extra[@]+"${extra[@]}"} || crc=$?
+  # D-3275 — the child is a real `ccrc update`: exit 3 means ITS spine
+  # completed and wrote its own record, and only its trailing doctor FAILed
+  # (D-3114) — the box IS whole on the previous release. Counting that as a
+  # failure would send it to arm 3, which deletes the record the child just
+  # wrote and reports a MIXED tree that is not mixed; on any box with a
+  # standing doctor FAIL, no restore could ever take arm 2.
+  if [ "$crc" -eq 3 ]; then
+    _upd_phase reverted "arm2: restored $UPD_PREV_TAG (its doctor exited 3); $reason"
+    echo "update: REVERTED (arm 2): this box runs $UPD_PREV_TAG again, re-installed from its release, but its doctor reports FAIL lines ('ccrc doctor' re-reads them) — $reason"
+    return 0
+  fi
   if [ "$crc" -ne 0 ]; then
     echo "update: arm 2 failed (the restore child exited $crc) — falling to arm 3"
     return 1
