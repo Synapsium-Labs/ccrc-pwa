@@ -187,6 +187,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  to do a machine's job." The Set below is the list; counting it is the
  *  reader's, in one line, and cannot go stale.
  *
+ *  `ccd-tmp-sweep`, the per-uid temp-dir reaper, joins on the same terms as
+ *  `ccd-pool-sync` above: non-Darwin only, timer-run, no marker.
+ *
  *  AND THE CLAUSE ORDER, stated correctly here because three paragraphs above
  *  state it backwards (fix round 2, B4): the scan tests THIS SET FIRST
  *  (`TOOLCHAIN_EXECUTABLES.has(name)`) and the marker only afterwards
@@ -199,7 +202,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  happening to stay unmarked, which is the day this entry starts mattering
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync',
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep',
   // GPT lane common executables are ccrc-owned before Plan 2 installs them.
   'ccgpt', 'ccgpt-runtime']);
 

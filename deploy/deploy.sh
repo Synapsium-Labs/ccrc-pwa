@@ -713,6 +713,11 @@ if [ "$TARGET" = "agent" ]; then
   # `ccrc-models-probe` already spends one of them.
   install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
   install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
+  # The per-uid temp-dir reaper (Claude Code's /tmp/claude-<uid>, 138G on the
+  # fleet host on 2026-09-22), unconditional here exactly as its siblings above
+  # and placed below the noise list for the same D-2600 reason the usage sweep
+  # gives: `graph-noise-ship.test.ts` has no slack left beside ccd-graph-sweep.
+  install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -806,6 +811,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccgpt-usage@.service ~/.config/systemd/user/ccgpt-usage@.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccgpt-usage@.timer ~/.config/systemd/user/ccgpt-usage@.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
@@ -938,6 +945,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user enable --now ccrc-models.timer \
     && systemctl --user enable --now ccd-usage-sweep.timer \
+    && systemctl --user enable --now ccd-tmp-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

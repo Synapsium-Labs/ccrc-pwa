@@ -32,12 +32,12 @@ vocabulary §5.1 validates against.
 
 | Work shape | Main loop | Subagents | Workflow mode | Why |
 |---|---|---|---|---|
-| Coordinator: opens the program, dispatches waves, re-measures wave-done, reviews handoffs, rules on deviations; every operator-started session | Fable · ultracode while orchestrating; drops itself to Fable · high with workflows off while idle on mail | Opus · high review lenses (3–5, scaled to the diff); Sonnet · high refute pass per finding; Haiku scouts | On while orchestrating | Operator ruling 2026-09-14: operator-started sessions get the best model at the start and decide routing for everything below them. This runs above Anthropic's Fable 5.1 default of `high` (higher effort over-deliberates on routine work), which is why the idle drop is part of the row. |
-| Brainstorm, spec, architecture with cross-cutting blast radius; multi-day plan | Fable · high; ultracode at the decision itself | Opus · high refuters and design lenses; Sonnet fact checks | On as a judge panel only when the solution space is wide | Fable's launch guidance names design and long horizons; not independently measured. A panel pays only when there is a real space of designs (design choice). |
+| Coordinator: opens the program, dispatches waves, re-measures wave-done, reviews handoffs, rules on deviations; every operator-started session | Opus · ultracode while orchestrating; drops itself to Opus · high with workflows off while idle on mail | Opus · high review lenses (3–5, scaled to the diff); Sonnet · high refute pass per finding; Haiku scouts | On while orchestrating | Operator instruction 2026-09-22 supersedes the class in the 2026-09-14 ruling: operator-started sessions still decide routing for everything below them, but they start on Opus, because Fable is reached only by an explicit human choice and may therefore not be anybody's default. Effort still runs above the Anthropic default of `high` (higher effort over-deliberates on routine work), which is why the idle drop is part of the row. |
+| Brainstorm, spec, architecture with cross-cutting blast radius; multi-day plan | Opus · high; ultracode at the decision itself | Opus · high refuters and design lenses; Sonnet fact checks | On as a judge panel only when the solution space is wide | Design and long horizons are what Fable's launch guidance names, and this row used to route there on that guidance alone — never independently measured. Operator instruction 2026-09-22 ends the automatic hop: the shape runs on Opus, and a human who wants Fable for a particular decision selects it on the picker. A panel pays only when there is a real space of designs (design choice). |
 | Worker executing a spec'd plan: a dependent chain that fits one context | Opus · high | Sonnet · high implementers; Opus · high per-task reviewer; Haiku scouts | Off | Measured by Anthropic, not on this fleet: a single model on a dependent chain that fits one context beat orchestration in every case, at lower effort; Opus 5 matched Fable 5 on coding at 60% of its cost. Measured here: this fleet's Opus turns average 155k of context, so a wave that outgrows one context falls under the bulk row; the coordinator names the row in the brief. The wave's `route` carries `compact 40` (the worker's lower threshold, S6-R9): a dependent chain that fills one context compacts earlier than the box default, so the wave's later tasks start lean. |
 | Bulk independent work: mechanical sweeps, transforms, many files with checkable output; a wave larger than one context | Opus · ultracode orchestrating | Sonnet · medium or high workers; Haiku for transcription-grade | On | Measured by Anthropic, not on this fleet: orchestrator with cheaper workers cost 55% less at 3–7 points below the frontier model solo, only when bulk exceeds one context. The 3–7 points is the largest measured quality cost in this matrix; the held-out panel runs on this row's output from the first wave. |
-| Whole-branch review pass, large program | Fable · ultracode | Opus · high lenses | On | One second-hand data point (a 2026-07-22 Anthropic webinar): Fable orchestrating Sonnet workers reached 96% of Fable-solo's score at 46% of cost on bulk reading, and on an easier subset the same mix added 60% cost for no gain. This row is a design choice betting that a whole-branch pass is the hard subset. |
-| Debugging | Opus · xhigh | Sonnet · high refuters | Off | Operator's standing rule: Fable · high after two failed Opus attempts. `max` is reachable only by the mechanical rule below. |
+| Whole-branch review pass, large program | Opus · ultracode | Opus · high lenses | On | This was the last row that sent work to Fable on its own, on one second-hand data point (a 2026-07-22 Anthropic webinar): Fable orchestrating Sonnet workers reached 96% of Fable-solo's score at 46% of cost on bulk reading, and on an easier subset the same mix added 60% cost for no gain. The bet that a whole-branch pass is the hard subset is now a human's to place per branch, not the table's (operator instruction 2026-09-22). |
+| Debugging | Opus · xhigh | Sonnet · high refuters | Off | The operator's 2026-09-14 standing rule sent a debug that survived two Opus attempts to Fable automatically; instruction 2026-09-22 withdraws that, and the third attempt is a rung a human chooses — the session reports the ceiling and stops. `max` is reachable only by the mechanical rule below. |
 | Tests from a spec; refute a concrete claim; mutation checks | Sonnet · high | none, or Haiku | Off | Anthropic's guidance: Sonnet 5 respects effort strictly and under-thinks at low; high is its floor here. |
 | Scout, grep, status probe, file listing | Haiku (no effort level) | none | Off | Zero judgment; the caller checks the answer. |
 | Docs, comments, ledger prose | Sonnet · medium | none | Off | Not implementation, so it may sit below Sonnet · high (design choice). |
@@ -47,9 +47,16 @@ bulk mechanical work whose output the orchestrator checks file by file (the bulk
 workers at `medium`, because the checker carries the gate there. `max` is never a default: it is
 reachable only from `xhigh`, after a second failed check of the same kind on the same session.
 Fable is never a fan-out worker and never inherits into workflow agents; every workflow agent
-names its class and effort explicitly. The class ladder for a subagent ends at Opus (Haiku →
+names its class and effort explicitly. **Fable is selected only by an explicit human choice and
+is never an automatic destination** (operator instruction 2026-09-22): no default seeds it, no
+row of this table routes to it, and no escalation climbs to it. The choices that do reach it are
+all a person saying so — the session screen's model picker, `ccd route --set class=fable`,
+`--route class=fable` on a verb that mints a session, and the coordinator door's explicit route
+call — and a session a human has put there keeps every way back down, so the choice is not a
+trap. The class ladder ends at Opus for a main loop exactly as it does for a subagent (Haiku →
 Sonnet → Opus); a capability ceiling above Opus inside a subagent escalates the main loop, never
-the fan-out.
+the fan-out, and a capability ceiling on an Opus main loop is reported as a ceiling for a human
+to answer.
 
 **Where subagent class and effort can be set.** Subagent class has three surfaces: the
 per-session class floor (§5.1, `subagent`), agent frontmatter `model:`, and the per-call `model`
@@ -65,9 +72,10 @@ it on the surface that carries it.
 incomplete work (tests missed, a plan half-followed) raises effort one rung within the class
 over the full ladder `low → medium → high → xhigh → max`, floored as above. A capability ceiling
 (ambiguity the session could not resolve, cross-session review, a design flaw, a debug that
-survived two attempts on the same class) raises class one rung (Haiku → Sonnet → Opus → Fable for
-a main loop; ends at Opus for a subagent). A class rung resets effort to the new class's matrix
-row, never carries the old level across, because effort names do not transfer; where the matrix
+survived two attempts on the same class) raises class one rung (Haiku → Sonnet → Opus, in both
+scopes; nothing above Opus is reached by escalation in either). A class rung resets effort to
+the new class's matrix row, never carries the old level across, because effort names do not
+transfer; where the matrix
 has no cell for the pair, the target is the new class's Anthropic default (`high`). Effort-first
 is the default when the kind is unclear, and it is class-aware: Claude Code 2.1.270's model
 catalogue carries a per-model `effort_cost_index`, read from the installed binary's compiled seed

@@ -1769,7 +1769,7 @@ describe('the model files, and who reads each one', () => {
     //
     // Until then it matches through the QUOTED-literal arm — its `/model
     // <alias>` rows quote the same four words as Claude Code CLI
-    // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
+    // slash-command aliases (`row('Opus 5.5', 'opus', 'opus')` literally
     // contains `'opus'`), not as a classification walk — so tightening the
     // bare-word arm (the fix for a match found in PROSE) cannot exclude it
     // without also excluding the other real holders, which reach the quoted

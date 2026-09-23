@@ -2597,7 +2597,7 @@ plan's job.
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
   THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:20970`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19758-19760`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19776-19778`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
@@ -2713,6 +2713,30 @@ roughly 8 passes at the sweep's own budget (`CCRC_GRAPH_BUDGET=8` builds/pass). 
 shrink-refusal literal the build discriminator greps for (the comment at its check in
 `ccd/ccd-graph-sweep`) against the new version's installed `watch.py`/`export.py` before shipping —
 the message has already moved once between minor versions.
+
+### Temp-dir reaper (ccd-tmp-sweep)
+
+Claude Code keeps each session's scratchpad and background-task output under
+`${TMPDIR:-/tmp}/claude-<uid>/<project-slug>/<session-uuid>/`, agents write loose files straight
+into that root, and nothing ever collected any of it: on 2026-09-22 the fleet host's
+`/tmp/claude-1000` had reached 138G and put `/` at 94%. `ccd-tmp-sweep`, driven by
+`ccd-tmp-sweep.timer` (`OnActiveSec=10min`, `OnUnitActiveSec=1h`, idle CPU/IO), removes a session
+dir or a loose top-level entry only when **all** of these hold, and re-checks all three immediately
+before each `rm`:
+
+- **not live** — no live session id is in its path, read from every config dir's
+  `sessions/<pid>.json` whose pid is running (roster config dirs from `~/.ccrc/accounts.sh`, plus
+  `~/.claude*/`, plus each running claude's own `CLAUDE_CONFIG_DIR`); if claude is running and no
+  sessions dir is readable at all, the pass refuses rather than treat everything as dead;
+- **not in use** — no process has its cwd or an open fd at or under it (`/proc/*/cwd`, `/proc/*/fd`);
+- **not recent** — nothing at or under it has an mtime newer than `CCD_TMP_SWEEP_MAX_AGE_DAYS`
+  (default 7). Every entry is checked, not the dir's own mtime, which was measured to lie.
+
+It never follows a symlink out of the root, never crosses a filesystem, refuses a root that does not
+resolve inside `/tmp` or `$TMPDIR` or that another uid owns, and prints one summary line per pass to
+the journal (`journalctl --user -u ccd-tmp-sweep.service`). `ccd-tmp-sweep --dry-run` prints what a
+pass would remove and removes nothing; `touch ~/.ccrc/tmp-sweep-paused` short-circuits every pass
+until removed. `ccrc doctor`'s `services` check warns when the timer is installed and stopped.
 
 ---
 
