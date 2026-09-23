@@ -86,12 +86,70 @@ const CCD_SRC = read('ccd/ccd');
  *  had to add a prose caveat about the mail pair. */
 const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
 
-/** Every `app.get`/`app.post` handler in one source file whose body consults the
- *  box token, keyed `VERB /path`. Bodies run from a route's own registration to
- *  the next one, the same slice `auth-gate.test.ts:432-440` takes. */
+/** Every fastify registration VERB this scan credits — not just `get`/`post`.
+ *  F14: the two callers below (`lanesIn` and the update-surface `REGISTERED`)
+ *  used to match only `get|post`, so a route registered with any other verb —
+ *  or through `app.route({...})` — was invisible to both: not counted as a
+ *  lane, not counted as a door, and "no route can join or leave without the
+ *  literal moving" was false for exactly that shape. Measured (fix round 1,
+ *  scratch copy of `update/routes.ts`): a planted `app.delete(...)` and a
+ *  planted `app.route({ method: 'PUT', ... })` were both absent from
+ *  `REGISTERED` before this fix, so "UPDATE_DOORS is exactly the rest" stayed
+ *  GREEN over a door it never saw. */
+const ALL_VERBS = 'get|post|put|patch|delete|head|options|all';
+
+/** `app.route({ method, url, ... })` calls, brace-counted rather than regexed
+ *  end to end — the handler nested inside the object routinely contains its
+ *  own `{`/`}` pairs, so a naive `[\s\S]*?\}\)` would close on the FIRST inner
+ *  brace followed by a `)` and silently mis-read the object's extent. `method`
+ *  may be a single-quoted/double-quoted string or an array of them; each
+ *  method the call registers is emitted as its own entry sharing the call's
+ *  `at`, so a `body.slice(at, next.at)` still spans the whole registration. */
+const routeCallsIn = (src: string): { key: string; at: number }[] => {
+  const out: { key: string; at: number }[] = [];
+  const re = /app\.route\(\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const openBrace = m.index + m[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = openBrace; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) { close = i; break; }
+      }
+    }
+    if (close === -1) continue;
+    const body = src.slice(openBrace + 1, close);
+    const methodMatch = /method:\s*(\[[^\]]*\]|'[^']*'|"[^"]*")/.exec(body);
+    const urlMatch = /url:\s*'([^']+)'|url:\s*"([^"]+)"/.exec(body);
+    if (!methodMatch || !urlMatch) continue;
+    const url = urlMatch[1] ?? urlMatch[2]!;
+    const methods = methodMatch[1]!.startsWith('[')
+      ? [...methodMatch[1]!.matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => (x[1] ?? x[2])!.toUpperCase())
+      : [methodMatch[1]!.replace(/['"]/g, '').toUpperCase()];
+    for (const method of methods) out.push({ key: `${method} ${url}`, at: m.index });
+  }
+  return out;
+};
+
+/** Every registration in one source file — every `app.<verb>('/path', ...)` for
+ *  every fastify verb, plus every `app.route({...})` — keyed `VERB /path`, in
+ *  source order. The shared extraction `lanesIn` and `REGISTERED` both build on,
+ *  so a verb or shape invisible to one is invisible to the other. */
+const registrationsIn = (src: string): { key: string; at: number }[] => {
+  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\('([^']+)'`, 'g');
+  const verbHits = [...src.matchAll(verbRe)]
+    .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[2]!}`, at: mm.index! }));
+  return [...verbHits, ...routeCallsIn(src)].sort((a, b) => a.at - b.at);
+};
+
+/** Every handler in one source file whose body consults the box token, keyed
+ *  `VERB /path`. Bodies run from a route's own registration to the next one,
+ *  the same slice `auth-gate.test.ts:432-440` takes. */
 const lanesIn = (src: string): string[] => {
-  const starts = [...src.matchAll(/app\.(get|post)\('([^']+)'/g)]
-    .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! }));
+  const starts = registrationsIn(src);
   return starts
     .filter(({ at }, i) => {
       const body = src.slice(at, starts[i + 1]?.at ?? src.length);
@@ -601,8 +659,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
 // makes the first two assertions mean something), and whether CLAUDE.md's bullet
 // names every one of them.
 describe('the update surface: one dual-credential read, every other route session-only (decision 15)', () => {
-  const REGISTERED = [...UPDATE_SRC.matchAll(/app\.(get|post)\('([^']+)'/g)]
-    .map((m) => `${m[1]!.toUpperCase()} ${m[2]!}`);
+  const REGISTERED = registrationsIn(UPDATE_SRC).map((r) => r.key);
 
   it('update/routes.ts registers what the checks below reason over', () => {
     // Anti-vacuity: every loop below is over REGISTERED or a filter of it.
@@ -632,6 +689,31 @@ describe('the update surface: one dual-credential read, every other route sessio
       expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/updates/ack');
     }
     expect(lanesIn(UPDATE_SRC)).not.toContain('POST /api/updates/ack');
+  });
+
+  it('a route registered with a non-get/post verb, or through app.route(), is SEEN by REGISTERED (F14)', () => {
+    // The control for "UPDATE_DOORS is exactly the rest": before this fix,
+    // `REGISTERED`'s extraction matched only `get|post`, so a route added with
+    // any other verb — or via `app.route({...})` — never appeared in
+    // `REGISTERED` at all, and "the rest" stayed equal to `UPDATE_DOORS`
+    // whether or not the new door was named. Measured (scratch copy): both
+    // plants below were invisible pre-fix, so this describe's assertions
+    // stayed green over an uncensused door.
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    const plantedDelete = UPDATE_SRC.replace(anchor,
+      `app.delete('/api/updates/x', async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedDelete).map((r) => r.key), 'a planted app.delete went unseen')
+      .toContain('DELETE /api/updates/x');
+
+    const plantedRoute = UPDATE_SRC.replace(anchor,
+      `app.route({ method: 'PUT', url: '/api/updates/y', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedRoute).map((r) => r.key), 'a planted app.route({ method, url }) went unseen')
+      .toContain('PUT /api/updates/y');
+
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('DELETE /api/updates/x');
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('PUT /api/updates/y');
   });
 
   it("CLAUDE.md's box-token bullet names every update route by its backticked verb and path", () => {
