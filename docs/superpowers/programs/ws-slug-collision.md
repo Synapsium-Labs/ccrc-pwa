@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **merged** `a3a93b41` 2026-09-23 (run 137 on `warm-hollow`; reviews 141, 142); rollout with v0.0.20 |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **deployed** v0.0.20 (`a3a93b41`, 2026-09-23 ~20:25 UTC; run 137 on `warm-hollow`; reviews 141, 142) — COMPLETE |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -77,6 +77,10 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
   - **Accepted as committed before the round.** The residue is recorded below and carried. Required checks
     green. Merged with `--admin --match-head-commit`. Run 137 closed `done`, released, and the programme
     retired.
+
+- **2026-09-23 — deployed.** `ccrc rollout --to v0.0.20`, default order, rc 3 (the server box's
+  pre-existing inactive `ccrc-agent.service` FAIL; fleet box 0 failed). Both boxes agree at `a3a93b41`, and
+  the installed `ccd` carries `_ws_slug_git_state`. **Programme complete.**
 
 ## Residue, carried into child-reclamation wave 4 (the next wave that edits ccd after wave 3)
 
