@@ -477,8 +477,10 @@ leave a wave undispatchable pending a ruling below.
   `phaseFor`'s binding test answers a different question: same base, and the head an ancestor of the local
   tip. So `childSpent`'s live rung answers `spent`, with that row's number, when ANY same-repository PR row names
   the child's branch as its head, in any state and whatever its base or ancestry. `unspent` needs no such row.
-  If the live read cannot carry unbound rows on the real ccd, this rung moves to wave 3's ccd edit rather than
-  being approximated.
+  Measured on the real ccd: it can, because ccd lists `gh pr list --head <branch> --state all`. Consequence,
+  accepted: a recycled slug inherits its head name's PR history and reads `spent`. Wave 3 separates
+  incarnations by each row's `createdAt` against the child's birth, and a row with no readable
+  `createdAt` still counts.
 - **R29 — a listed marker that reads absent is `unreadable`** (wave 2, review 144). This amends the marker's
   listing rung. When the registry listing names `$REG/<id>.child` but the read answers absent (a dangling link,
   or a file removed between list and read), `ChildMark` is `unreadable`, so a bind is refused and a reclaim is

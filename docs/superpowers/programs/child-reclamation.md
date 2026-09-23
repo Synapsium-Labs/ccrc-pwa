@@ -253,6 +253,13 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
      and wave 2's `childSpent` answers `unspent`, which permits a bind. The read becomes three-valued: an
      unreadable answer is `unmeasured`, which already refuses. This is the programme's no-boolean rule, one
      layer down.
+- **Wave 3: a recycled slug inherits its head name's PR history** (ruled 2026-09-23 on wave 2's F1 fix).
+  Slugs recycle within a 144-name namespace per project; 12 are already PR heads on this repo. `gh pr list
+  --head` returns every PR ever opened from that head name. Since R28 counts unbound rows, a child on a
+  recycled slug reads `spent` from birth. That is safe, and it costs only a re-bind of a research child: a
+  fresh child is never gated. Wave 3 adds `createdAt` to ccd's `PR_JSON_FIELDS`, and a same-branch row then
+  counts only if it was created at or after this incarnation's birth. A row with no readable `createdAt` still
+  counts.
 - **Wave 4 also carries ws-slug-collision's review residue** (that programme's ledger, "Residue"). It is two
   unpinned arms of `_ws_slug_git_state`, plus header and plan wording, plus two fail-closed narrowings. It is
   ccd-only and below the frozen boundary, and it rides wave 4 because wave 4 edits ccd anyway.
