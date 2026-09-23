@@ -18,8 +18,9 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { unreadableField } from './ioDoubles.js';
-import { okRuns } from './coordReadHelpers.js';
+import { unreadableField, degradedReadIO } from './ioDoubles.js';
+import { okRuns, okRun } from './coordReadHelpers.js';
+import { holdReason } from '../src/coord/rundefs.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROJECT = 'demo';
@@ -184,5 +185,211 @@ describe('the coordinator is told, where it decides', () => {
     const start = skill.indexOf('6. **Rule on the report**');
     expect(start, 'SKILL.md lost step 6').toBeGreaterThanOrEqual(0);
     expect(skill.slice(start, skill.indexOf('**Same project:**', start))).toContain('`workspace-spent`');
+  });
+});
+
+const postDispatch = (app: FastifyInstance, id: number) =>
+  app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers, payload: { brief: 'do the thing' } });
+
+describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** Opens wave `wave` on the child while it is still UNSPENT, as a
+   *  coordinator following the protocol would. */
+  const openOn = async (a: FastifyInstance, wave: number): Promise<number> => {
+    const res = await postOpen(a, { ...OPEN_BODY, wave, sessionId: CHILD });
+    expect(res.statusCode, res.body).toBe(200);
+    return (res.json() as { id: number }).id;
+  };
+
+  it('refuses before ensure, releases the claim, unbinds the run — and the next dispatch mints a fresh child', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const id = await openOn(app, 2);
+    spend(home, CHILD, 42);   // the previous wave's worker opened its PR after this open
+    const before = calls.length;
+
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'workspace-spent', pr: 42, unbound: true });
+    const after = calls.slice(before);
+    expect(after).toContainEqual(['ws-release', '--session', CHILD]);
+    expect(verbsOf(after), 'a spent child was resumed').not.toContain('ensure');
+    expect(verbsOf(after), 'a /clear was typed into a spent child').not.toContain('send-keys');
+    const row = okRun(w.coord.run(id))!;
+    expect(row.state).toBe('planned');
+    expect(row.sessionId).toBeNull();
+    expect(row.dispatchedAt).toBeNull();
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`session-unbound: ${CHILD} (workspace-spent #42)`);
+
+    // The automated exit: rule 4 forbids a refusal that needs a human.
+    const again = await postDispatch(app, id);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ ok: true, sessionId: `${PROJECT}-fresh`, resumed: false });
+  });
+
+  it('a failed release changes nothing — unbound:false, the binding kept, no unbind event', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run } = makeRunner(home, { fail: new Set(['ws-release']) });
+    const w = await openApp(home, run); app = w.app;
+    const id = await openOn(app, 2);
+    spend(home, CHILD, 42);
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'workspace-spent', pr: 42, unbound: false });
+    expect((res.json() as { detail: string }).detail).toContain('ws-release failed');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe(CHILD);
+    expect(w.coord.runEvents(id).map((e) => e.detail).join('\n')).not.toContain('session-unbound');
+  });
+
+  it('a box whose ccd does not advertise ws-release changes nothing', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run, { fleetState: {
+      connected: true, downSince: null, ccdVerbs: ['ws-hold', 'pr-state', 'ensure', 'ws-add'], rosterFp: null, build: null,
+    } }); app = w.app;
+    const id = await openOn(app, 2);
+    spend(home, CHILD, 42);
+    const before = calls.length;
+    const res = await postDispatch(app, id);
+    expect(res.json()).toEqual({ ok: false, refused: 'workspace-spent', pr: 42,
+      detail: 'this box\'s ccd does not support ws-release', unbound: false });
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-release');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe(CHILD);
+  });
+
+  it('spent-unmeasured at dispatch keeps the binding and sends nothing — unknown is not spent', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    let degrade = false;
+    const io = degradedReadIO((p) => degrade && p.endsWith(`${CHILD}.child`));
+    const w = await openApp(home, run, { io }); app = w.app;
+    const id = await openOn(app, 2);
+    degrade = true;
+    const before = calls.length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'spent-unmeasured',
+      detail: 'the child marker could not be read', unbound: false });
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-release');
+    expect(verbsOf(calls.slice(before))).not.toContain('ensure');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe(CHILD);
+  });
+
+  it('a sibling still open on the child keeps its claim: the hold is HANDED OVER, never released', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const a = await openOn(app, 2);   // still open — dispatched out of protocol order
+    const b = await openOn(app, 3);
+    spend(home, CHILD, 42);
+    const before = calls.length;
+    const res = await postDispatch(app, b);
+    expect(res.json()).toEqual({ ok: false, refused: 'workspace-spent', pr: 42, unbound: true });
+    const after = calls.slice(before);
+    expect(after).toContainEqual(['ws-hold', '--session', CHILD, '--reason', holdReason('build4', 2, 3, a)]);
+    expect(verbsOf(after), 'a release would drop the live sibling\'s claim').not.toContain('ws-release');
+    expect(okRun(w.coord.run(b))!.sessionId).toBeNull();
+    expect(okRun(w.coord.run(a))!.sessionId).toBe(CHILD);
+  });
+
+  it('an UNREADABLE sibling list refuses before any fleet act', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const a = await openOn(app, 2);
+    const b = await openOn(app, 3);
+    // An integer this process cannot represent — `openRunsForSession` refuses
+    // the whole list rather than assert "nothing else claims it" (D-2545).
+    w.coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?').run(BigInt(Number.MAX_SAFE_INTEGER) + 1n, a);
+    spend(home, CHILD, 42);
+    const before = calls.length;
+    const res = await postDispatch(app, b);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'workspace-spent', pr: 42, unbound: false });
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-release');
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-hold');
+    expect(okRun(w.coord.run(b))!.sessionId).toBe(CHILD);
+  });
+
+  it('an INVALID survivor hold refuses before any fleet act — the claim is never handed to a hold the hook rejects', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const b = await openOn(app, 3);
+    // `coord-abandon.test.ts`'s invalid-survivor fixture: a reconstructed run,
+    // still open on the child, whose programme slug the hold grammar rejects.
+    const [survivor] = w.coord.reconstruct({
+      ledger: { slug: 'bad program', title: 'Recovered', waves: [{ wave: 1, of: 1, handoffCommit: null }] },
+      registry: { sessionId: CHILD, project: PROJECT, workspace: CHILD, branch: `ws/${CHILD}`, held: 'legacy hold' },
+      prHistory: [],
+    });
+    if (!survivor) throw new Error('reconstruct did not return a survivor');
+    spend(home, CHILD, 42);
+    const before = calls.length;
+    const res = await postDispatch(app, b);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'workspace-spent', pr: 42, unbound: false });
+    expect((res.json() as { detail: string }).detail).toContain('the surviving run\'s claim cannot be written');
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-release');
+    expect(verbsOf(calls.slice(before))).not.toContain('ws-hold');
+    expect(okRun(w.coord.run(b))!.sessionId).toBe(CHILD);
+  });
+
+  it('an UNLISTABLE registry at dispatch refuses spent-unmeasured for a NON-child too — where the resume arm used to answer 502', async () => {
+    // Spec §5.4's fail-shut exception, pinned at the second door: the gate's
+    // listing fails, it cannot tell a child from any workspace, so it refuses
+    // retryably before `ensure`. Readdir calls: 1 the open's gate, 2 the
+    // dispatch pause check, 3 dispatch's gate — the one this fails.
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, 'demo-plain');   // no marker
+    const { run, calls } = makeRunner(home);
+    let n = 0;
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    const w = await openApp(home, run, { io }); app = w.app;
+    const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-plain' });
+    expect(opened.statusCode, opened.body).toBe(200);
+    const id = (opened.json() as { id: number }).id;
+    const before = calls.length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'spent-unmeasured',
+      detail: 'the registry could not be listed', unbound: false });
+    expect(verbsOf(calls.slice(before))).not.toContain('ensure');
+    expect(okRun(w.coord.run(id))!.sessionId).toBe('demo-plain');
+  });
+});
+
+describe('the dispatch refusal is documented field for field', () => {
+  it('names every field the 409 carries, in the §2 rows that explain it', () => {
+    // HARVESTED from the route's own arm rather than typed, so a field added
+    // there reds here until the coordinator is told what it means.
+    const routes = readFileSync(path.join(repoRoot, 'server/src/coord/routes.ts'), 'utf8');
+    const at = routes.indexOf("case 'childSpent':");
+    expect(at, 'sendDispatchOutcome has no childSpent arm — this harvest is stale').toBeGreaterThan(-1);
+    const arm = routes.slice(at, routes.indexOf('\n    case ', at + 1));
+    const fields = [...new Set([...arm.matchAll(/(\w+):/g)].map((m) => m[1]!))]
+      .filter((f) => f !== 'ok' && f !== 'refused').sort();
+    expect(fields).toEqual(['detail', 'pr', 'unbound']);
+    const wl = readFileSync(path.join(repoRoot, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    const s2 = wl.slice(wl.indexOf('## 2 — Dispatch a wave'), wl.indexOf('## 3 — Read mail'));
+    const rows = s2.split('\n')
+      .filter((l) => l.startsWith('| `workspace-spent`') || l.startsWith('| `spent-unmeasured`')).join('\n');
+    expect(rows, '§2 carries no workspace-spent/spent-unmeasured rows').not.toBe('');
+    for (const f of fields) expect(rows, `§2's rows never name \`${f}\``).toContain(`\`${f}\``);
+  });
+
+  it('§5 tells the coordinator what unbound:true asks of it', () => {
+    const wl = readFileSync(path.join(repoRoot, 'ccd/coordinator-skill/references/wave-lifecycle.md'), 'utf8');
+    const start = wl.indexOf('## 5 — The boundary');
+    expect(wl.slice(start, wl.indexOf('**Same project:**', start)).replace(/\s+/g, ' ')).toContain('`unbound:true`');
   });
 });

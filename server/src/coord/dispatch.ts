@@ -7,7 +7,9 @@ import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
-import { CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import {
+  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec, type ActorFlags,
+} from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -16,6 +18,7 @@ import {
   clearRefusedDetail,
   holdReasonVerdict,
   queueSystemMail,
+  releaseIsSafe,
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
@@ -25,6 +28,7 @@ import {
   type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
+import { childBindGate, type ChildBindVerdict } from './childBind.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -165,7 +169,19 @@ export type DispatchOutcome =
   | { ok: false; kind: 'registry-unmeasurable'; stderr?: string }
   | { ok: false; kind: 'unsupported' }
   | { ok: false; kind: 'fleetFailed'; stderr: string }
-  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> };
+  | { ok: false; kind: 'advanceFailed'; adv: Extract<AdvanceResult, { ok: false }> }
+  /** Rule 3 at dispatch (child-reclamation spec §5.4): the resumed session is
+   *  a CHILD whose branch has had a PR since this run was opened
+   *  (`workspace-spent`, `pr` naming it), or whose evidence could not be read
+   *  (`spent-unmeasured`, `detail` saying which). Its own member rather than a
+   *  `refused` code because it is the one refusal on this union that may
+   *  CHANGE something: on `workspace-spent` the spent child's claim is
+   *  released — or handed to a surviving sibling — and the run is unbound, and
+   *  `unbound` says whether that happened. `true`: dispatch again and a fresh
+   *  child is minted. `false`: nothing changed (`detail` says why) and the
+   *  same dispatch may be retried. `spent-unmeasured` never unbinds — unknown
+   *  is not spent. `pr` and `detail` distinguish by PRESENCE. */
+  | { ok: false; kind: 'childSpent'; code: 'workspace-spent' | 'spent-unmeasured'; pr?: number; detail?: string; unbound: boolean };
 
 /**
  * Dispatch a run: pause and caps checked FIRST, then either a fresh
@@ -204,6 +220,63 @@ export function capsMeasured(coord: CoordStore): {
     ? { limit: caps.maxConcurrentWorkers, running: usage.running }
     : null;
   return { caps, usage, overConcurrency };
+}
+
+/** The `DispatchOutcome` member `refuseSpentChild` answers, and its inputs —
+ *  named so its signature carries no braces (see the note above). */
+type ChildSpentOutcome = Extract<DispatchOutcome, { kind: 'childSpent' }>;
+type ChildBindRefusal = Extract<ChildBindVerdict, { ok: false }>;
+interface RunBinding { id: number; sessionId: string }
+
+/**
+ * The resume arm refusing a CHILD it may not bind (child-reclamation spec
+ * §5.4). Spentness can turn true between open and dispatch — the previous
+ * wave's worker opens its PR after this wave was opened on its workspace — so
+ * this refusal cannot merely fail: a refusal with no automated exit would need
+ * a human, which rule 4 forbids.
+ *
+ * `spent-unmeasured` touches nothing and keeps the binding: unknown is not
+ * spent, and the retry re-asks. `workspace-spent` runs the FLEET ACT FIRST
+ * (D-48's order: a failed act leaves the run retryable, never half-unbound),
+ * then `clearSession`:
+ *   - RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — `closeRun`'s abandon arm,
+ *     reached from a second door. If another open run still names this
+ *     workspace (a coordinator that dispatched N+1 before closing N), a
+ *     release would drop that live run's claim; the claim is HANDED OVER
+ *     instead, re-held with the surviving run's own reason.
+ *   - An unreadable sibling list, an invalid survivor hold, a ccd that lacks
+ *     the verb, or a failed act answers `unbound: false` and changes nothing.
+ *   - The act spends `dispatchDec` — this lane undoing its own open-time
+ *     claim, under the same actor — never a second `sweepDec` label.
+ * A crash between the act and `clearSession` leaves a released run still
+ * bound; the next dispatch re-asks the gate, re-releases (idempotent) and
+ * unbinds.
+ */
+async function refuseSpentChild(
+  deps: DispatchRunDeps, run: RunBinding, gate: ChildBindRefusal, dispatchDec: ActorFlags | null,
+): Promise<ChildSpentOutcome> {
+  if (gate.code === 'spent-unmeasured') {
+    return { ok: false, kind: 'childSpent', code: 'spent-unmeasured', detail: gate.detail, unbound: false };
+  }
+  const pr = gate.pr;
+  const keep = (detail: string): ChildSpentOutcome =>
+    ({ ok: false, kind: 'childSpent', code: 'workspace-spent', pr, detail, unbound: false });
+  const sibRead = deps.coord.openRunsForSession(run.sessionId, run.id);
+  if (!sibRead.ok) return keep(`the other runs naming this workspace could not be read: ${sibRead.detail}`);
+  const survivor = sibRead.siblings[sibRead.siblings.length - 1] ?? null;
+  let handoff: HoldReasonVerdict | null = null;
+  if (!releaseIsSafe(sibRead.siblings) && survivor !== null) {
+    handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    if (!handoff.ok) return keep(`the surviving run's claim cannot be written: ${handoff.detail}`);
+  }
+  const argv = handoff !== null && handoff.ok
+    ? CCD_ARGV.wsHold(run.sessionId, handoff.reason, dispatchDec)
+    : CCD_ARGV.wsRelease(run.sessionId, dispatchDec);
+  if (!verbSupported(deps.fleetState, argv)) return keep(`this box's ccd does not support ${argv[0]}`);
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return keep(`${argv[0]} failed: ${res.stderr.trim()}`);
+  const cleared = deps.coord.clearSession(run.id, pr);
+  return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: cleared.cleared };
 }
 
 export async function dispatchRun(
@@ -413,6 +486,11 @@ export async function dispatchRun(
   // rows of one act outweighs a flag pair a regressed box refuses, and the
   // regression is a deploy-window event — but it is a staleness, not the
   // absence of one.
+  //
+  // AND A THIRD SPEND, on a refusal path only (child-reclamation wave 2):
+  // `refuseSpentChild` releases — or hands to a surviving sibling — the claim
+  // THIS lane's open placed on a spent child, under the same actor, because
+  // it is this lane undoing its own hold rather than a new act by a new one.
   const dispatchDec = sweepDec(deps.fleetState, `run:${run.id} dispatch`);
 
   if (run.sessionId === null) {
@@ -605,6 +683,13 @@ export async function dispatchRun(
     // reds `run-routes.test.ts`'s resume-scope pin, which is the intended
     // cost — do it only as a decided scope change, never as a tidy-up.
     sessionId = run.sessionId;
+    // Rule 3's dispatch half (child-reclamation spec §5.4) — BEFORE `ensure`,
+    // so a spent child is never resumed, and ahead of every other resume-arm
+    // read. The open route asked the same gate, but spentness can turn true
+    // between open and dispatch. A workspace with no marker passes untouched —
+    // every workspace wave 1 did not mint.
+    const childGate = await childBindGate(deps, sessionId);
+    if (!childGate.ok) return refuseSpentChild(deps, { id: run.id, sessionId }, childGate, dispatchDec);
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);
     if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
@@ -782,10 +867,13 @@ export async function dispatchRun(
   // STILL ONE SHARED CALL SITE, positioned exactly where it always was — a
   // fresh spawn never sends a `/clear` at all, and a resume's `/clear` moved
   // to AFTER this point (below) rather than the hold moving to BEFORE the
-  // resume arm's own preconditions; `unattended-actor.test.ts`'s own
-  // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
-  // file, so the fix is the `/clear` relocating to meet the hold, not a
-  // second hold call meeting the `/clear`.
+  // resume arm's own preconditions. This is the ONE hold that claims the
+  // workspace for THIS run: the `wsHold` in `refuseSpentChild` hands a spent
+  // child's claim to a SURVIVING sibling, on a path that returns before
+  // `ensure` and never reaches a `/clear`. `unattended-actor.test.ts` pins
+  // every such call site by its surrounding text, so the fix is still the
+  // `/clear` relocating to meet this hold, not a second hold meeting the
+  // `/clear`.
   const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };

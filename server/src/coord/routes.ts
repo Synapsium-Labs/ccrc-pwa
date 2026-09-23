@@ -196,6 +196,16 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
         ok: false, error: 'registry-unmeasurable',
         ...(r.stderr === undefined ? {} : { stderr: r.stderr }),
       });
+    // Rule 3 at dispatch. `pr`/`detail` spread by PRESENCE (an L4 adapter may
+    // not narrow a distinction it received); `unbound` unconditionally — it is
+    // the answer to "what do I do next", and absent would read as `false`.
+    // `child-reclaim-refusals.test.ts` harvests this arm's fields and requires
+    // each in `wave-lifecycle.md` §2.
+    case 'childSpent':
+      return reply.code(409).send({ ok: false, refused: r.code,
+        ...(r.pr === undefined ? {} : { pr: r.pr }),
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
+        unbound: r.unbound });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);

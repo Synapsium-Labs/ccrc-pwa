@@ -1330,23 +1330,24 @@ describe('POST /api/runs/:id/dispatch', () => {
   // gate entirely: `/clear` would have been injected into a possibly
   // mid-turn worker. Written FIRST and confirmed red against the pre-fix
   // code, which answered 200 here (an injected `/clear`) instead of 502.
-  it('refuses registry-unmeasurable on wave N>=2 when the SECOND directory read (the resumed ' +
+  it('refuses registry-unmeasurable on wave N>=2 when the FOURTH directory read (the resumed ' +
      'session\'s own registry listing) fails, even though the pause-marker\'s own read moments ' +
      'earlier succeeded — the busy gate must fail shut here exactly as hard as the AFTER read does',
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
     // Succeeds on the open's child bind gate (call 1 — child-reclamation
-    // wave 2: `readSessionRecord` lists the registry once) and on the
-    // pause-marker's own read (call 2), fails on the very next one — this
-    // route's own registry read for the resumed session (call 3) — never a
-    // fourth: nothing else touches `io.readdir` before those. `POST /api/runs`'
+    // wave 2: `readSessionRecord` lists the registry once), on the
+    // pause-marker's own read (call 2) and on dispatch's own child bind gate
+    // (call 3, ahead of `ensure`), fails on the very next one — this route's
+    // own registry read for the resumed session (call 4) — never a fifth:
+    // nothing else touches `io.readdir` before those. `POST /api/runs`'
     // own coordinator-project stamp read (Task 1) does NOT count against this:
     // it reads `<claimedBy>.project` through `fieldMeasured`, a FILE read
     // (`io.readFileMeasured`), never `io.readdir` — this fixture only
     // overrides the latter.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 4 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
@@ -1475,18 +1476,22 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing', { project: 'other-project' });
     const { run } = makeRunner(home);
-    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
-    // readdir, before anything is counted) and answers `paused`, never
-    // reaching this arm at all — so this scopes the failure to the SECOND
-    // read, the resumed session's own registry listing, the same idiom the
-    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    // A blanket `unlistableIO` is now refused `spent-unmeasured` at the OPEN's
+    // own child bind gate (child-reclamation wave 2, Task 5), before a run row
+    // even exists — never reaching dispatch, and never `paused`, at all. This
+    // fixture instead degrades only the LATER reads, so the open still
+    // succeeds and the failure scopes to dispatch's own resumed-session
+    // listing, the same idiom the wave-N>=2 `registry-unmeasurable` case above
+    // this one already uses.
     // `POST /api/runs`' own coordinator-project stamp read (Task 1) does NOT
     // count against this: it reads `<claimedBy>.project` through
     // `fieldMeasured`, a FILE read, never `io.readdir`. The open's child bind
     // gate DOES (child-reclamation wave 2: `readSessionRecord` lists the
-    // registry once), so the resumed session's own listing is the THIRD.
+    // registry once), and so does dispatch's own gate, ahead of `ensure` —
+    // the open's gate, dispatch's pause check, dispatch's gate — so the
+    // resumed session's own listing is the FOURTH.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 4 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);

@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the eleven pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the thirteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -116,7 +116,10 @@ describe('every unattended ccd call site names itself', () => {
     // fleet act: `CCD_ARGV.wsHold(sessionId, handoff.reason, …)` (the
     // hand-over arm, a surviving sibling claims the workspace) and
     // `CCD_ARGV.wsRelease(sessionId, …)` (no survivor) — both in
-    // `coord/close.ts`, both new entries in `SITES` below.
+    // `coord/close.ts`, both new entries in `SITES` below. Eleven became
+    // thirteen with child-reclamation wave 2's `refuseSpentChild`
+    // (`coord/dispatch.ts`): a hand-over and a release, both spending
+    // `dispatchDec`.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
@@ -130,7 +133,7 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Eleven sites, five distinct labels, each site identified by the code AROUND
+ * Thirteen sites — five distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five `closeRun` sites share one identical label
@@ -215,6 +218,17 @@ const SITES: readonly Site[] = [
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },
+  // child-reclamation wave 2: `refuseSpentChild`'s two arms — the hand-over to
+  // a surviving sibling and the release — spend the hoisted `dispatchDec`
+  // above rather than typing a label, so the capture is the VARIABLE: a
+  // second `sweepDec(…)` here would be a second clock for one act, which is
+  // what the hoist exists to prevent.
+  { file: 'coord/dispatch.ts', what: 'refuseSpentChild — hand a spent child\'s claim to a surviving sibling',
+    find: /\? CCD_ARGV\.wsHold\(run\.sessionId, handoff\.reason, (dispatchDec)\)/,
+    label: 'dispatchDec' },
+  { file: 'coord/dispatch.ts', what: 'refuseSpentChild — release a spent child nothing else claims',
+    find: /: CCD_ARGV\.wsRelease\(run\.sessionId, (dispatchDec)\);/,
+    label: 'dispatchDec' },
 ];
 
 describe('each unattended label is pinned to its own call site', () => {
