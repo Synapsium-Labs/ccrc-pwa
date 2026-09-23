@@ -1289,7 +1289,12 @@ describe('ccrc install: the files the operator owns', () => {
     const mine = [
       '# my box, my rules',
       'CCRC_FLEET=remote',
-      'CCRC_HOST=203.0.113.7',
+      // LOOPBACK, and not by accident (W4, design 2026-09-20 §12): with the
+      // gate off, a routable bind is exactly what doctor's `update-exposure`
+      // check FAILs — this box's routes answer anyone who can reach it — and
+      // this test is about a file being KEPT, not about that finding. The
+      // `fleet`/`config` reasoning below is the same rule.
+      'CCRC_HOST=127.0.0.1',
       'CCRC_PORT=9999',
       // Both agent keys, because `CCRC_FLEET=remote` with either one missing is
       // a config the server REFUSES TO BOOT on (server/src/index.ts:75-79), and
@@ -3398,11 +3403,15 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // `127.0.0.1:7788` regardless would be telling that operator to open an
     // address their box does not listen on.
     const home = freshBox('ccrc-install-addr-');
-    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=box.example.invalid\nCCRC_PORT=8123\n');
+    // `localhost`, not a routable name: both differ from the default this
+    // line would print if it ignored the file, and only a LOOPBACK one keeps
+    // doctor's `update-exposure` check (W4, design 2026-09-20 §12) from
+    // FAILing a box whose gate this run deliberately left off.
+    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=localhost\nCCRC_PORT=8123\n');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(
-      /^install: PWA: http:\/\/box\.example\.invalid:8123\/ \(CCRC_HOST\/CCRC_PORT in .*\/\.ccrc\/ccrc\.env change this\)$/m);
+      /^install: PWA: http:\/\/localhost:8123\/ \(CCRC_HOST\/CCRC_PORT in .*\/\.ccrc\/ccrc\.env change this\)$/m);
     expect(r.stdout).toMatch(/^install: next: add your first session with: ccd menu {3}\(and read .*\/\.ccrc\/ccrc\.env\)$/m);
   });
 

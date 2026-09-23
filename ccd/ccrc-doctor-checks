@@ -182,6 +182,7 @@ CCRC_DOCTOR_CHECKS=(
   auth
   rc
   exposure
+  update-exposure
   caddy
   caddyfile
   cert
@@ -196,6 +197,7 @@ CCRC_DOCTOR_CHECKS=(
   graphify
   graphify-path
   build
+  provenance
   fleet
   memory
   routing
@@ -1691,6 +1693,141 @@ _check_exposure() {
   else
     _dr_pass exposure "configured — CCRC_ORIGIN=$origin (rp id: $rpid)$modesaid"
   fi
+}
+
+# ── update-exposure: can anyone who reaches this box move it? ─────────────
+# (design 2026-09-20 §12, "the unarmed-exposure doctor check"). With CCRC_AUTH
+# off every route is open to whoever reaches the port — auth/gate.ts says so in
+# its own words ("there is no credential to forge with") — and the update
+# routes are routes like any other. The sentences below name
+# `POST /api/updates/apply`, the route that moves this box, because it is the
+# one this check exists for (design §12); programme wave 5 registers it, and
+# until then the update writes W2 registers (`POST /api/updates/intent`,
+# `/refresh`, `/ack`) are what an unarmed gate leaves open.
+# So this check is two measurements, and the obvious reading of each is wrong:
+#
+#   ARMED — CCRC_AUTH=on, read with the SERVER UNIT's precedence: ccrc.service
+#     carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and
+#     for a key in both the LATER file wins. `ccrc expose` writes CCRC_AUTH=on
+#     into the exposure file and never into ccrc.env (`_exp_env_write`, D-162),
+#     so `_check_auth`'s ccrc.env-only read — deliberate THERE, where the
+#     question is the passphrase — would call every correctly exposed box
+#     unarmed. `_check_exposure`'s CCRC_HOST read above is the precedent this
+#     copies: the exposure file's NON-EMPTY value wins. Its one blind spot,
+#     named rather than implied: `_box_env_value` answers "" for an absent key
+#     AND for a bare `CCRC_AUTH=` line, so a hand-written bare line in the
+#     exposure file reads here as "not set" while systemd sets the variable
+#     empty (OFF) — a false PASS for ccrc.env=on beside it. `ccrc expose`
+#     never writes that line.
+#   REACHABLE — not the bind alone: a correctly exposed box keeps CCRC_HOST at
+#     its loopback default (config.ts) because Caddy on 443 proxies
+#     127.0.0.1. So reachable is a non-loopback CCRC_HOST (same precedence) OR
+#     any exposure artifact present — $CCRC_EXPOSURE_FILE, $CCRC_CADDYFILE, or
+#     the $CCRC_DDNS_UNIT unit (.service or .timer) installed. "expose ran,
+#     then the exposure file was deleted" leaves the Caddyfile: still
+#     reachable, now unarmed — the case this check exists for. A HOSTNAME bind
+#     counts as reachable: judging it loopback would need a resolver, and the
+#     wrong answer in that direction is a false PASS.
+#
+# FAIL iff reachable and not armed. A fleet-role box runs no server and serves
+# no update route: SKIP, on either piece of evidence the other role-aware
+# checks use — ccrc.env's recorded CCRC_ROLE=fleet (D-3111's read, `-f` before
+# `-r`, D-3025), or `_check_auth`'s two unit files (D-86: "no ccrc.service"
+# alone is also a dev checkout, and a dev checkout DOES run a server).
+#
+# NOT ONE PATH OR UNIT NAME IS SPELLED HERE (D-85's rule): single-definition's
+# holder scans pin `.ccrc/exposure.env`, `.ccrc/Caddyfile` and the ddns unit
+# name to ccd/ccrc's declarations alone, and a message that spelled one would
+# be a second holder. Every one below is a variable.
+_check_update-exposure() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${CCRC_DDNS_UNIT:-}" ] \
+     || [ -z "${BOX_ENV_FILE:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail update-exposure "ccrc's own config and exposure constants are not loaded, so whether this box's update routes are gated was never measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_update-exposure reads BOX_ENV_FILE and CCRC_EXPOSURE_FILE through _box_env_value and looks for CCRC_CADDYFILE and the CCRC_DDNS_UNIT unit, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local envok=0 role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    envok=1
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  if [ "$role" = fleet ]; then
+    _dr_skip update-exposure "this box runs no ccrc server ($BOX_ENV_FILE records CCRC_ROLE=fleet), so no update route is served here"
+    return 3
+  fi
+  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
+    _dr_skip update-exposure "this box runs no ccrc server ($CCRC_UNIT_DIR has ccrc-agent.service and no ccrc.service), so no update route is served here"
+    return 3
+  fi
+
+  # The exposure file in three states, never two: absent, readable, or THERE
+  # AND UNREADABLE — the last is unmeasured, because its value would have won.
+  local expok=0 expunread=0
+  if [ -e "$CCRC_EXPOSURE_FILE" ]; then
+    if [ -f "$CCRC_EXPOSURE_FILE" ] && [ -r "$CCRC_EXPOSURE_FILE" ]; then expok=1; else expunread=1; fi
+  fi
+
+  # ── ARMED ────────────────────────────────────────────────────────────────
+  local auth="" authsrc="" v=""
+  if [ "$envok" -eq 1 ]; then
+    auth="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
+    [ -z "$auth" ] || authsrc="$BOX_ENV_FILE"
+  fi
+  if [ "$expok" -eq 1 ]; then
+    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"
+    if [ -n "$v" ]; then auth="$v"; authsrc="$CCRC_EXPOSURE_FILE"; fi
+  fi
+
+  # ── REACHABLE ────────────────────────────────────────────────────────────
+  local bindhost="" bindsrc=""
+  if [ "$envok" -eq 1 ]; then
+    bindhost="$(_box_env_value "$BOX_ENV_FILE" CCRC_HOST)"
+    [ -z "$bindhost" ] || bindsrc="$BOX_ENV_FILE"
+  fi
+  if [ "$expok" -eq 1 ]; then
+    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_HOST)"
+    if [ -n "$v" ]; then bindhost="$v"; bindsrc="$CCRC_EXPOSURE_FILE"; fi
+  fi
+  local -a reach=()
+  case "$bindhost" in
+    # Empty is config.ts's default (127.0.0.1); every 127/8 address and both
+    # spellings of ::1 are loopback. Everything else — a wildcard, a routable
+    # address, a hostname — answers someone other than this box.
+    ''|localhost|::1|'[::1]'|127.*) ;;
+    *) reach+=("CCRC_HOST=$bindhost in $bindsrc") ;;
+  esac
+  [ ! -e "$CCRC_EXPOSURE_FILE" ] || reach+=("$CCRC_EXPOSURE_FILE exists")
+  [ ! -e "$CCRC_CADDYFILE" ] || reach+=("$CCRC_CADDYFILE exists")
+  # The ddns unit, in this platform's spelling. On Linux it is a PAIR, and
+  # either half on its own is the evidence. On macOS `_exp_ddns_units`' Darwin
+  # arm writes ONE launchd job for the pair, `app.ccrc.<unit>.plist`, and it is
+  # reached through the `.service` name ONLY: `_svc_label` strips `.service`
+  # and nothing else, so `_dr_unit_file` maps the `.timer` name to
+  # `app.ccrc.<unit>.timer.plist`, a file nothing writes — looking it up would
+  # be a second, vacuous lookup that could never find anything.
+  local -a ddns=("$CCRC_DDNS_UNIT.service")
+  [ "${CCD_OS:-linux}" = darwin ] || ddns+=("$CCRC_DDNS_UNIT.timer")
+  local u f
+  for u in "${ddns[@]}"; do
+    f="$(_dr_unit_file "$u")"
+    [ ! -f "$CCRC_UNIT_DIR/$f" ] || reach+=("$f is installed in $CCRC_UNIT_DIR")
+  done
+
+  if [ "$expunread" -eq 1 ]; then
+    _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether POST /api/updates/apply is gated — was not measured" \
+      "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
+    return 2
+  fi
+  if [ "$auth" = on ]; then
+    _dr_pass update-exposure "CCRC_AUTH=on (read from $authsrc) — the update routes sit behind the session gate"
+    return 0
+  fi
+  if [ "${#reach[@]}" -gt 0 ]; then
+    _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — POST /api/updates/apply, and every other write route, answers anyone who can reach it" \
+      "arm the gate: ccrc expose (writes CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE), or set all three in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
+    return 1
+  fi
+  _dr_pass update-exposure "loopback only — no exposure artifact and CCRC_HOST=${bindhost:-127.0.0.1 (the default)}"
 }
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
@@ -4228,6 +4365,65 @@ _check_build() {
   _dr_fail build "the running server at $addr reports a DIFFERENT sha than $BOX_STAMP_FILE (${stamped:0:12} is installed) — the process is still on the build it booted with" \
     "restart it onto the installed build: $(_dr_restart_hint ccrc.service)"
   return 1
+}
+
+# ── provenance: did `ccrc update` verify the tree this box runs? ──────────
+# (design 2026-09-20 §11; plan D-3247). Line 2 of the
+# completed-install record reads `unsigned` for EVERY install `cmd_update` did
+# not verify: `_inst_installed` writes it unless the updater put
+# CCRC_UPDATE_VERIFIED=1 in the staged spine's environment, which it does only
+# after verify-provenance.mjs accepted the release's bundle (D-3117). So the
+# mark means "nobody verified this tree" — a checkout `ccrc install`,
+# `install.sh --release` (trust on first use), an update driven by a pre-W1
+# ccrc, and `--allow-unsigned` alike; the spec's sentence named only the last.
+#
+# NEVER A FAIL, BY CONSTRUCTION — this function contains no `_dr_fail` at all,
+# and ccrc-doctor.test.ts scans its body for one. An unverified install is a
+# fact about consent, not a fault: the box it describes is running, and the
+# remedy (the next verified `ccrc update`) is the operator's to choose. That is
+# why the constants guard is a WARN here, unlike every other check's guard:
+# "this table was sourced by something that is not ccrc" is not a finding this
+# check may raise to FAIL either.
+#
+# UNSIGNED IS A PASS, NOT A WARN — coordinator ruling 2026-09-23, over this
+# plan's own text: operator ruling D-139 ("a fresh install ends green") stands,
+# and every first install of a box is unsigned by construction (a checkout
+# `ccrc install`, `install.sh --release`), so a WARN here would make a real
+# fresh install's doctor tail close yellow until the box's first verified
+# `ccrc update` — exactly the state D-139 was written to forbid. The sentence
+# still names the fact; only the verdict and the exit code move.
+#
+# FOUR ANSWERS, never folded: no record -> SKIP (no spine completed here, so
+# there is no install to describe — a deploy.sh box, or a spine that died);
+# a record that is not a readable regular file -> WARN, unmeasured; `unsigned`
+# -> PASS (see above); anything else -> PASS. Line 1 is `ccrc version`'s
+# subject (complete/incomplete against the stamp) and is not judged here.
+_check_provenance() {
+  if [ -z "${BOX_INSTALLED_FILE:-}" ]; then
+    _dr_warn provenance "ccrc's own completed-install path is not loaded, so how this install was made was not measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_provenance reads BOX_INSTALLED_FILE, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 2
+  fi
+  if [ ! -e "$BOX_INSTALLED_FILE" ]; then
+    _dr_skip provenance "no completed-install record ($BOX_INSTALLED_FILE) — nothing to say about how this install was made"
+    return 3
+  fi
+  # `-f` BEFORE `-r`, and both before any read (D-3025): a directory at this
+  # path would make the read below fail in a way that prints no verdict.
+  if [ ! -f "$BOX_INSTALLED_FILE" ] || [ ! -r "$BOX_INSTALLED_FILE" ]; then
+    _dr_warn provenance "$BOX_INSTALLED_FILE cannot be read, so how this install was made was not measured" \
+      "ls -l $BOX_INSTALLED_FILE"
+    return 2
+  fi
+  local rec="" prov=""
+  # `|| :`, not `|| prov=""`: a last line with no newline still lands in the
+  # variable, and clearing it on read's EOF status would lose it.
+  { IFS= read -r rec || :; IFS= read -r prov || :; } < "$BOX_INSTALLED_FILE"
+  if [ "$prov" = unsigned ]; then
+    _dr_pass provenance "unsigned — this install was not verified by ccrc update (a checkout install, install.sh's trust-on-first-use, or --allow-unsigned); the next ccrc update verifies"
+    return 0
+  fi
+  _dr_pass provenance "the completed-install record carries no unsigned mark"
 }
 
 # ── the two boxes' matched set ────────────────────────────────────────────
