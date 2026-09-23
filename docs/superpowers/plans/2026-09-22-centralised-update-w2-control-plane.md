@@ -4364,7 +4364,9 @@ const WRITER_GROUPS: readonly { table: 'releases' | 'node_release_refusals' | 'n
 const ROW_KEYS: Readonly<Record<Table, readonly string[]>> = {
   releases: ['tag'], node_release_refusals: ['nodeId', 'tag'], nodes: ['nodeId'], update_intent: ['scope'], update_epoch: ['id'],
 };
-/** The W2 writers the scan must FIND writing (the floor): a renamed table or a rewritten call shape reds, not disarms. */
+/** The W2 writers the scan must FIND writing (the floor): a renamed table reds, and so does rewriting a required
+ *  writer's own write into an invisible shape (fix round 1, F15: narrowed — three shapes, ${…} table interpolation,
+ *  prepare(q), a mid-token split, escape this scan; a NEW illegitimate write built the same way would not red). */
 const W2_WRITERS = ['applyReleaseListing', 'refuseRelease', 'clearRefusals', 'upsertNodeMeasurement', 'markUnreachable',
   'rekeyNode', 'releaseLease', 'settleNode', 'resolveNode', 'ackNode', 'setIntent'] as const;
 
@@ -4401,11 +4403,15 @@ Create `server/test/update-writer-groups.test.ts`:
 // It scans TEXT, and says what that costs. A column list built at runtime
 // (`${COLS.join(', ')}`) is unreadable to it and reds as an unowned column —
 // the remedy is to spell the list in the statement, which is also what keeps
-// "no SELECT *" true in this file. A write that is not inside a
-// `this.db.prepare(` window at all (SQL in a const, an `exec`) reds as a stray
-// line, so a rewritten call shape cannot disarm the scan. A trailing `// …`
-// comment on a CODE line that names a write (`UPDATE nodes …`) also reds as a
-// stray: move that prose onto a comment line of its own.
+// "no SELECT *" true in this file. A write whose literal SQL text sits
+// outside any `this.db.prepare(` window (a plain-literal `const`, an `exec`)
+// still reds as a stray line — but a table name reached through `${…}`
+// interpolation, a `prepare(q)` built from such a `const`, or a verb/table
+// token split mid-word across concatenated fragments are each invisible to
+// this scan (fix round 1, F15; nothing here closes them — a reviewer reading
+// the diff does). A trailing `// …` comment on a CODE line that names a
+// write (`UPDATE nodes …`) also reds as a stray: move that prose onto a
+// comment line of its own.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -4622,7 +4628,7 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 writer writing — a renamed table or a rewritten call shape reds this, not disarms it', () => {
+  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s own write into an invisible shape (fix round 1, F15)', () => {
     const found = new Set(stmts.map((s) => s.method));
     for (const w of W2_WRITERS) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);

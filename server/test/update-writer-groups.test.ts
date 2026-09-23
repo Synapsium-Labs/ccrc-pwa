@@ -13,22 +13,45 @@
 // It scans TEXT, and says what that costs. A column list built at runtime
 // (`${COLS.join(', ')}`) is unreadable to it and reds as an unowned column —
 // the remedy is to spell the list in the statement, which is also what keeps
-// "no SELECT *" true in this file. A write that is not inside a
-// `this.db.prepare(` window at all (SQL in a const, an `exec`) reds as a stray
-// line. A trailing `// …` comment on a CODE line that names a write
-// (`UPDATE nodes …`) also reds as a stray: move that prose onto a comment
-// line of its own. WRITE_VERB and TABLE_WRITE_LINE are both case-sensitive
-// and require a bare table name, so on their own a lowercase verb, a quoted
-// table name or a schema-qualified one (`update nodes …`, `UPDATE "nodes" …`,
-// `UPDATE main.nodes …`) would pass with no statement, no problem and no
-// violation (review fix round 1, finding 1) — `nonCanonicalWrites`, below,
-// closes that gap by requiring every write-shaped mention of the five tables
-// to be spelled in exactly this scan's canonical form. And `ROW_KEYS`
-// excludes a row's key from an INSERT's column list — naming it is the row's
-// creation, not a write to any group — so an INSERT naming ONLY the key left
-// nothing for `violations` to iterate and passed for any method silently
-// (finding 2); `violations` now attributes that shape too. Together, a
-// rewritten call shape cannot disarm the scan.
+// "no SELECT *" true in this file. A write whose literal SQL text sits
+// outside any `this.db.prepare(` window (a plain-literal `const`, an `exec`)
+// still reds as a stray line, because the literal characters are still there
+// in the source for TABLE_WRITE_LINE to find. A trailing `// …` comment on a
+// CODE line that names a write (`UPDATE nodes …`) also reds as a stray: move
+// that prose onto a comment line of its own. WRITE_VERB and TABLE_WRITE_LINE
+// are both case-sensitive and require a bare table name, so on their own a
+// lowercase verb, a quoted table name or a schema-qualified one
+// (`update nodes …`, `UPDATE "nodes" …`, `UPDATE main.nodes …`) would pass
+// with no statement, no problem and no violation (review fix round 1,
+// finding 1) — `nonCanonicalWrites`, below, closes that gap by requiring
+// every write-shaped mention of the five tables to be spelled in exactly
+// this scan's canonical form. And `ROW_KEYS` excludes a row's key from an
+// INSERT's column list — naming it is the row's creation, not a write to any
+// group — so an INSERT naming ONLY the key left nothing for `violations` to
+// iterate and passed for any method silently (finding 2); `violations` now
+// attributes that shape too.
+//
+// WHAT STILL GETS PAST BOTH FIXES (fix round 1, F15 — the claim above is
+// narrowed, not widened into a check, because store.ts already has
+// legitimate non-literal `prepare(` calls elsewhere, e.g. `${OUTSTANDING_STATES_SQL}`,
+// `${placeholders(…)}`, `${RUN_ROW_COLUMNS}`, `${TERMINAL_RUN_STATES_SQL}` —
+// a blanket "every prepare( argument is a literal with no `${…}`" rule would
+// red on those, so it is not added here). This scan reads a
+// `this.db.prepare(` window's LITERAL text; it never evaluates JS, so three
+// shapes are invisible to it, measured directly against this file's own
+// `scan`/`writeOf`/`nonCanonicalWrites`: a table name reached through a
+// `${…}` interpolation inside the `prepare(` literal itself
+// (`` `UPDATE ${T} SET yanked = 1 …` ``); the same SQL built the same way but
+// assigned to a `const` first and passed as `prepare(q)` (no literal argument
+// is left in the window for anything to read); and a verb or table token
+// split MID-WORD across concatenated literal fragments (`'UPD' + 'ATE …'`) —
+// `sqlOf` joins fragments with a single space, which cannot repair a split
+// inside a keyword. Each reproduces a rewritten `releases.yanked` write with
+// zero statements, zero problems and zero violations. Nothing in this file
+// closes any of the three; what closes them today is a reviewer reading the
+// diff, not a mechanism — a rewritten call shape CAN still disarm this scan,
+// in exactly these three ways, and findings 1 and 2 above close only the two
+// shapes they name.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -300,7 +323,7 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 writer writing — a renamed table or a rewritten call shape reds this, not disarms it', () => {
+  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s own write into one of the header\'s three invisible shapes (a NEW illegitimate write built the same way would not — see header)', () => {
     const found = new Set(stmts.map((s) => s.method));
     for (const w of W2_WRITERS) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);
