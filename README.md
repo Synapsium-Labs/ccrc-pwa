@@ -489,6 +489,28 @@ does it in order — roles preflighted, version pinned once from SHA256SUMS, fle
 box, stop on the first failure, both boxes re-measured. `ccrc doctor`'s `build` check compares the
 running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`.
 
+**Control plane (update-management W2).** The server now measures and records the fleet's update state; nothing
+in it moves a node yet. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
+listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
+`ccd/ccrc`, or from `CCRC_RELEASE_OWNER` and `CCRC_RELEASE_REPO` when both are set — a pair that is not two
+plain names stops the poll rather than falling back); a release that vanishes from the listing is marked
+yanked, never deleted — a **node inventory** re-measured every 60 seconds (each node's `~/.ccrc` stamp,
+install record, `ccrc-caps`, floor, previous version, `node-id` and update report; every file lstat-gated,
+capped at 64 KiB and validated; the fleet node's read through an exact-basename read set on the agent, never a
+prefix of `~/.ccrc`), and one **desired-state intent** per scope (`*`, or a node id: channel, pin, auto,
+notify), each write journalled to `~/.ccrc/update-intent.log` under a rising epoch. The catalogue and the
+inventory keep their cadence when the fleet registry cannot be listed. After every inventory sweep the server
+resolves each node's desired tag — the newest eligible release on its channel, never below the node's floor
+(the higher of its recorded floor and the version it runs), pinned or not — and on a `server` or `both` box
+writes its own projection, `~/.ccrc/update-intent` (whole, by rename; mode 0600; times in unix seconds). The
+role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from `CCRC_FLEET` and the boot log
+says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
+(once a minute) and `/api/updates/ack` are session-only — the box token never writes intent — and
+`GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
+`/api/fleet/health`'s `builds` is now a view of the inventory rows. Not yet: no apply or rollback route, no
+fleet-side projection reader, no release notification, no settings screen — and an `auto` other than `off` is
+refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own

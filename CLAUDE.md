@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3200 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3300 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -111,7 +111,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `rollout`. **What is
   running where:** `ccrc version` (with its `install:` line — which also says `unsigned` when the tree was placed
   without a verified bundle), `ccrc update --check`, `/health`'s `version`, the PWA's
-  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113). A
+  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
+  The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
+  resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
+  `/api/fleet/health`'s `builds` is a view of it. A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
