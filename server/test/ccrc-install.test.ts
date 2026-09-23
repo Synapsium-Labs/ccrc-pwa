@@ -1722,11 +1722,13 @@ describe('ccrc install: the executables and files it installs', () => {
   });
 
   it('places the two GPT-lane executables that exist today on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
-    // Unlike the three darwin-gated cases above, these are NOT gated: the
-    // two `.py` files are NOT timer-only tools reserved to the systemd arm.
-    // `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py` is
-    // placed here so an operator can run it by hand — its TIMER
-    // (`ccgpt-usage@.timer`) is systemd-only, but the binary itself is not.
+    // Unlike the three darwin-gated cases above, these are NOT platform-gated:
+    // the two `.py` files are NOT timer-only tools reserved to the systemd
+    // arm. `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py`
+    // is placed here so an operator can run it by hand (no installer places
+    // its timer yet). They ARE role-gated, `!= server` (spec §11, final
+    // review F-2): this install is role `both`, the fleet describe pins
+    // `fleet`, and the `--role server` case pins their absence.
     //
     // Fix round 1, Finding 1: `ccgpt` and `ccgpt-runtime` are NOT placed by
     // `_inst_bins` yet — they don't exist in the tree (`git ls-files ccd/`
@@ -3759,6 +3761,20 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
+  it('places the two GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
+    // Final review F-2 (spec §11): `_inst_bins` gates them `!= server`, on
+    // both platform arms, so a fleet box gets both. The server-role case in
+    // the next describe pins the other side of that gate.
+    const { home, r } = await fleet();
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      const bin = join(home, '.local', 'bin', name);
+      expect(existsSync(bin), `--role fleet did not place ${name}`).toBe(true);
+      expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+      expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+    }
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/m);
+  });
+
   itLinux('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
     const { home } = await fleet();
     const agent = unitDir(home, 'ccrc-agent.service');
@@ -3932,6 +3948,16 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    // Final review F-2 (spec §11): the two GPT-lane executables are gated
+    // `!= server` — the lane needs a converged per-account launcher, and a
+    // server-role box converges nothing per account (D-3111) — and the
+    // closing line must not claim what the gate skipped.
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(home, '.local', 'bin', name)), `--role server placed ${name}`).toBe(false);
+    }
+    const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+    expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
+    expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

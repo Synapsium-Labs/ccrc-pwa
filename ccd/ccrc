@@ -9856,19 +9856,26 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
-  # Plan 2b-1 Task 2 (fix round 1, Finding 6): grouped here, BEFORE the
-  # platform `if` below, beside `ccd-account-auth` — unconditional means
-  # visible as POSITION, not inferred from an absent gate. Only the two
-  # GPT-lane files that exist in the tree today. `ccgpt` and `ccgpt-runtime`
-  # join this list in Plan 2b-2, IN THE SAME COMMIT that writes the real
-  # files at `ccd/ccgpt` and `ccd/ccgpt-runtime` — `_inst_atomic` dies on a
-  # missing source by design (never soften that here), and every commit on
-  # `main` must be installable.
+  # Plan 2b-1: the two GPT-lane files that exist in the tree today, BEFORE
+  # the platform `if` below, so on BOTH arms — but ROLE-gated, `!= server`,
+  # which no other name in this function is (spec §11 says so, and why): the
+  # lane they serve needs a converged per-account launcher, and a server-role
+  # box converges nothing per account (D-3111). `_uninst_tree_bins` removes
+  # them on every role, as it does every name here. `ccgpt` and
+  # `ccgpt-runtime` join this gate in Plan 2b-2, IN THE SAME COMMIT that
+  # writes the real files at `ccd/ccgpt` and `ccd/ccgpt-runtime` —
+  # `_inst_atomic` dies on a missing source by design (never soften that
+  # here), and every commit on `main` must be installable.
   # `ccgpt-usage.py` is placed on BOTH arms so an operator can run it by
   # hand; its timer is placed by no installer yet (`_inst_units` says why),
   # and whether macOS gets a launchd equivalent is Plan 3's decision too.
-  _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
-  _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
+  # `lane_bins` is what the closing line claims, set under the same gate.
+  local lane_bins="" lane_note=" (no GPT-lane executables: a server box converges nothing per account)"
+  if [ "$INST_ROLE" != server ]; then
+    _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
+    _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
+    lane_bins=", ccgpt-proxy.py, ccgpt-usage.py" lane_note=""
+  fi
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -9927,9 +9934,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep and no ccd-pool-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep and no ccd-pool-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 

@@ -824,14 +824,14 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # names, owned by another repository and with an instance enabled, so placing
   # ours is the cutover, which is Plan 3's. The files ship in the tree only.
   #
-  # The two executables, unconditional, as `ccd/ccrc`'s `_inst_bins` places them
-  # on every role. The rsync above already lands them at ~/ccrc/ccd/; without
-  # these two lines a fallback deploy never put them on PATH. After the build
-  # and before the stamp, so a failed copy aborts the lane before this box's
-  # build record can claim it. Only the two that exist in the tree today:
-  # `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE SAME COMMIT that
-  # writes them, because this helper on a missing source aborts the lane
-  # mid-chain, and every commit on `main` must deploy.
+  # The two executables, on this agent lane only: `ccd/ccrc`'s `_inst_bins`
+  # places them on every role but server. The rsync above already lands them at
+  # ~/ccrc/ccd/; without these two lines a fallback deploy never put them on
+  # PATH. After the build and before the stamp, so a failed copy aborts the
+  # lane before this box's build record can claim it. Only the two that exist
+  # in the tree today: `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE
+  # SAME COMMIT that writes them, because this helper on a missing source
+  # aborts the lane mid-chain, and every commit on `main` must deploy.
   #
   # `server/test/install-census.test.ts` reds when a binary or unit file
   # `ccrc install` places is placed by NEITHER lane of this file (it reads the
