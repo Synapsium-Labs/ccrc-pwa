@@ -15,8 +15,10 @@
 // the remedy is to spell the list in the statement, which is also what keeps
 // "no SELECT *" true in this file. A write whose literal SQL text sits
 // outside any `this.db.prepare(` window (a plain-literal `const`, an `exec`)
-// still reds as a stray line, because the literal characters are still there
-// in the source for TABLE_WRITE_LINE to find. A trailing `// …` comment on a
+// reds as a stray line only when its verb and its table sit on ONE line —
+// TABLE_WRITE_LINE is tested per LINE, so the same write with its verb and
+// table split across lines is invisible to it (fix round 1, I-1b — the
+// fourth shape below). A trailing `// …` comment on a
 // CODE line that names a write (`UPDATE nodes …`) also reds as a stray: move
 // that prose onto a comment line of its own. WRITE_VERB and TABLE_WRITE_LINE
 // are both case-sensitive and require a bare table name, so on their own a
@@ -37,21 +39,38 @@
 // `${placeholders(…)}`, `${RUN_ROW_COLUMNS}`, `${TERMINAL_RUN_STATES_SQL}` —
 // a blanket "every prepare( argument is a literal with no `${…}`" rule would
 // red on those, so it is not added here). This scan reads a
-// `this.db.prepare(` window's LITERAL text; it never evaluates JS, so three
-// shapes are invisible to it, measured directly against this file's own
-// `scan`/`writeOf`/`nonCanonicalWrites`: a table name reached through a
-// `${…}` interpolation inside the `prepare(` literal itself
-// (`` `UPDATE ${T} SET yanked = 1 …` ``); the same SQL built the same way but
-// assigned to a `const` first and passed as `prepare(q)` (no literal argument
-// is left in the window for anything to read); and a verb or table token
-// split MID-WORD across concatenated literal fragments (`'UPD' + 'ATE …'`) —
-// `sqlOf` joins fragments with a single space, which cannot repair a split
-// inside a keyword. Each reproduces a rewritten `releases.yanked` write with
-// zero statements, zero problems and zero violations. Nothing in this file
-// closes any of the three; what closes them today is a reviewer reading the
-// diff, not a mechanism — a rewritten call shape CAN still disarm this scan,
-// in exactly these three ways, and findings 1 and 2 above close only the two
-// shapes they name.
+// `this.db.prepare(` window's LITERAL text, and TABLE_WRITE_LINE reads one
+// line at a time; it never evaluates JS, so FOUR shapes are invisible to it,
+// measured directly against this file's own `scan`/`writeOf`/
+// `nonCanonicalWrites`: a table name reached through a `${…}` interpolation
+// inside the `prepare(` literal itself (`` `UPDATE ${T} SET yanked = 1 …` ``);
+// the same SQL built the same way but assigned to a `const` first and passed
+// as `prepare(q)` (no literal argument is left in the window for anything to
+// read); a verb or table token split MID-WORD across concatenated literal
+// fragments (`'UPD' + 'ATE …'`) — `sqlOf` joins fragments with a single
+// space, which cannot repair a split inside a keyword; and a plain-literal
+// `const`/`exec` OUTSIDE any `prepare(` window whose verb and table sit on
+// DIFFERENT lines (fix round 1, I-1b, measured M-B) — the SAME text on one
+// line still reds (M-C), and the same multi-line text INSIDE a `prepare(`
+// window still reds too (M-D); only the outside-window, multi-line
+// combination escapes. Each of the first three reproduces a rewritten
+// `releases.yanked` write with zero statements, zero problems and zero
+// violations; the fourth reproduces it with zero problems and, because no
+// statement is attributed, zero violations either. Nothing in this file
+// closes any of the four; what closes them today is a reviewer reading the
+// diff, not a mechanism.
+//
+// None of the four also defeats "finds every W2 writer writing" (the test
+// below) for a writer with more than one statement in this scan — six of
+// the eleven W2_WRITERS do (`applyReleaseListing`, `upsertNodeMeasurement`,
+// `markUnreachable`, `rekeyNode`, `ackNode`, `setIntent`): `found` is
+// per-method, so rewriting only ONE of a multi-statement method's writes
+// (measured, M-A: `applyReleaseListing`'s `releases.yanked` UPDATE, the
+// exact example above) leaves that method "found" through its OTHER
+// statement, and the check still passes — correctly, since the method is
+// still visibly writing. The check is defeated only for a writer whose scan
+// entry is a SINGLE statement, when that one statement is rewritten into one
+// of the four shapes above.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -323,7 +342,7 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s own write into one of the header\'s three invisible shapes (a NEW illegitimate write built the same way would not — see header)', () => {
+  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
     const found = new Set(stmts.map((s) => s.method));
     for (const w of W2_WRITERS) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);

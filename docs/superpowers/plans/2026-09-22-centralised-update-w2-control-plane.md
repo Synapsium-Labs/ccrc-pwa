@@ -4386,8 +4386,10 @@ const ROW_KEYS: Readonly<Record<Table, readonly string[]>> = {
   releases: ['tag'], node_release_refusals: ['nodeId', 'tag'], nodes: ['nodeId'], update_intent: ['scope'], update_epoch: ['id'],
 };
 /** The W2 writers the scan must FIND writing (the floor): a renamed table reds, and so does rewriting a required
- *  writer's own write into an invisible shape (fix round 1, F15: narrowed — three shapes, ${…} table interpolation,
- *  prepare(q), a mid-token split, escape this scan; a NEW illegitimate write built the same way would not red). */
+ *  writer's ONLY write into an invisible shape (fix round 1, F15/I-1: narrowed — four shapes, ${…} table
+ *  interpolation, prepare(q), a mid-token split, and a plain-literal outside a prepare( window whose verb and table
+ *  sit on different lines, escape this scan; for a writer with more than one statement in the scan, rewriting just
+ *  one of them still leaves it "found"; a NEW illegitimate write built the same way would not red either). */
 const W2_WRITERS = ['applyReleaseListing', 'refuseRelease', 'clearRefusals', 'upsertNodeMeasurement', 'markUnreachable',
   'rekeyNode', 'releaseLease', 'settleNode', 'resolveNode', 'ackNode', 'setIntent'] as const;
 
@@ -4426,11 +4428,15 @@ Create `server/test/update-writer-groups.test.ts`:
 // the remedy is to spell the list in the statement, which is also what keeps
 // "no SELECT *" true in this file. A write whose literal SQL text sits
 // outside any `this.db.prepare(` window (a plain-literal `const`, an `exec`)
-// still reds as a stray line — but a table name reached through `${…}`
-// interpolation, a `prepare(q)` built from such a `const`, or a verb/table
-// token split mid-word across concatenated fragments are each invisible to
-// this scan (fix round 1, F15; nothing here closes them — a reviewer reading
-// the diff does). A trailing `// …` comment on a CODE line that names a
+// reds as a stray line only when its verb and table sit on ONE line — split
+// across lines, it is invisible to TABLE_WRITE_LINE too. A table name reached
+// through `${…}` interpolation, a `prepare(q)` built from such a `const`, a
+// verb/table token split mid-word across concatenated fragments, or that
+// same outside-window plain-literal split across lines are each invisible to
+// this scan (fix round 1, F15/I-1; nothing here closes them — a reviewer
+// reading the diff does; none of the four defeats "finds every W2 writer
+// writing" for a writer with more than one statement in the scan). A
+// trailing `// …` comment on a CODE line that names a
 // write (`UPDATE nodes …`) also reds as a stray: move that prose onto a
 // comment line of its own.
 import { describe, it, expect } from 'vitest';
@@ -4649,7 +4655,7 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s own write into an invisible shape (fix round 1, F15)', () => {
+  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
     const found = new Set(stmts.map((s) => s.method));
     for (const w of W2_WRITERS) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);

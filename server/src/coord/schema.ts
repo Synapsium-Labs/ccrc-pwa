@@ -1098,8 +1098,8 @@ export const MIGRATIONS: readonly string[] = [
     -- row when a sweep's own raw read is 'unmeasured' and the row already
     -- held something better, rather than overwrite it with NULL, so
     -- highestVersion alone can no longer tell "no floor file" (unconstrained,
-    -- section 9) apart from "never measured" (also unconstrained, but for a
-    -- different reason -- resolve.ts checks the state, not just the value).
+    -- section 9) apart from "never measured" (never unconstrained -- resolve.ts
+    -- checks the state, not just the value, and refuses to resolve instead).
     -- This slot is still UNMERGED (entry 14 as written), so the two columns
     -- join the measurement group's DDL directly rather than a later
     -- migration.
