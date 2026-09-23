@@ -762,6 +762,10 @@ export async function assembleFleet(
       // convert (unlike `stoppedBy`/`swapBlocked`/`stranded`/`substrate`
       // above), so this is a bare passthrough.
       route: r.route,
+      // Carried straight off the record, like `route` above: the registry's
+      // three-way reading of `$REG/<id>.child` (`SessionRecord.child`). A
+      // display value on this wire — the bind gate re-reads the registry.
+      child: r.child,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

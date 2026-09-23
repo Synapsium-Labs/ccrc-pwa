@@ -8293,6 +8293,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   this commit (`git show 4b6bdaa7:shared/api.ts | grep -n` and the
       //   same grep on the working tree). Still not `:5644`, so the entry
       //   stays 1 -> 1.
+      //   Task 2 (`FleetSession.child`'s docstring, `reviveChildMark`): three
+      //   pure-insertion hunks (`git diff -U0`: `@@ -460,0 +461,22 @@`,
+      //   `@@ -2772,0 +2795,24 @@`, `@@ -2938,0 +2985 @@` — +22, +24, +1),
+      //   all above the same `RoutingArm` referent, which shifts by their sum,
+      //   +47: `:5797` -> `:5844` (measured by the same bytes, not by adding
+      //   the delta). Still not `:5644`, so the entry stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that

@@ -16,6 +16,9 @@ import { readRegistry, readSessionRecord, type SessionRecord } from '../src/regi
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { absentField, unreadableField } from './ioDoubles.js';
+import { assembleFleet } from '../src/fleet.js';
+import { Tmux, type Runner } from '../src/exec.js';
+import { reviveFleetSession, type FleetSession } from '../../shared/api.js';
 
 const ID = 'demo-child';
 let home: string;
@@ -112,5 +115,69 @@ describe('SessionRecord.child — three answers, never a boolean', () => {
     mark('17');
     const rows = await readRegistry(localIO, cfg());
     expect(rows.find((r) => r.id === ID)?.child).toEqual({ kind: 'child', runId: 17 });
+  });
+});
+
+/** A complete fleet row — `fleet-wire-route.test.ts`'s `session()` shape. */
+const fleetRow = (id: string): FleetSession => ({
+  id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
+  workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
+  dialogPending: false, version: null, model: null, effort: null, ultracode: false,
+  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
+});
+
+describe('reviveFleetSession — child (ADDITIVE, absence-permits)', () => {
+  it('a snapshot from before markers existed (no key at all) revives none — it describes no children', () => {
+    const raw = JSON.parse(JSON.stringify(fleetRow(ID))) as Record<string, unknown>;
+    delete raw['child'];
+    expect(reviveFleetSession(raw)?.child).toEqual({ kind: 'none' });
+  });
+
+  it('an explicit null revives none', () => {
+    expect(reviveFleetSession({ ...fleetRow(ID), child: null })?.child).toEqual({ kind: 'none' });
+  });
+
+  it.each([{ kind: 'none' }, { kind: 'child', runId: 17 }, { kind: 'unreadable' }] as const)(
+    'round-trips %j exactly', (child) => {
+      expect(reviveFleetSession(JSON.parse(JSON.stringify({ ...fleetRow(ID), child })))?.child).toEqual(child);
+    });
+
+  it.each([
+    ['a bare string', '17'],
+    ['an array', []],
+    ['an unknown kind', { kind: 'maybe' }],
+    ['a child with no runId', { kind: 'child' }],
+    ['a child whose runId is a string', { kind: 'child', runId: '17' }],
+    ['a child whose runId is zero', { kind: 'child', runId: 0 }],
+    ['a child whose runId is fractional', { kind: 'child', runId: 1.5 }],
+    // A safe integer no marker can carry: ccd writes at most ten digits and
+    // the registry reader refuses more (spec §5.1), so a persisted eleven-digit
+    // run id is a value this build did not write.
+    ['a child whose runId has eleven digits', { kind: 'child', runId: 12345678901 }],
+  ])('rejects the WHOLE session on %s — never laundered into "not a child"', (_what, child) => {
+    expect(reviveFleetSession({ ...fleetRow(ID), child })).toBeNull();
+  });
+});
+
+describe('assembleFleet — child rides the fleet frame', () => {
+  const noopRun: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
+  const fleet = (io: FleetIO = localIO) => assembleFleet(io, cfg(), new Tmux(noopRun), 1784600000);
+
+  it('carries a marker naming a run', async () => {
+    mark('42');
+    expect((await fleet()).find((s) => s.id === ID)?.child).toEqual({ kind: 'child', runId: 42 });
+  });
+
+  it('carries an unreadable marker as unreadable — the wire does not narrow it', async () => {
+    mark('42');
+    expect((await fleet(unreadableField(ID, 'child'))).find((s) => s.id === ID)?.child)
+      .toEqual({ kind: 'unreadable' });
+  });
+
+  it('carries none for a workspace with no marker', async () => {
+    expect((await fleet()).find((s) => s.id === ID)?.child).toEqual({ kind: 'none' });
   });
 });

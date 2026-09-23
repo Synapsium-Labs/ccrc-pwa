@@ -458,6 +458,28 @@ export interface FleetSession {
     readonly fields: RouteFields; readonly degraded: string | null;
     readonly inert: readonly RouteField[]; readonly unreadable: readonly RouteReadField[];
   } | null;
+
+  /**
+   * Whether this workspace is a CHILD — minted by `dispatch` for a run and
+   * marked so at creation (`$REG/<id>.child`, child-reclamation spec §5.1) —
+   * `server/src/registry.ts`'s `SessionRecord.child`, carried straight onto
+   * the wire. Three answers, never a boolean (`ChildMark`): `none`, `child`
+   * with the minting run's id, or `unreadable` — a marker the registry listing
+   * named whose bytes did not come back or did not parse as one run id.
+   *
+   * DISPLAY ONLY on this wire. No server decision reads it: the bind gate
+   * (`coord/childBind.ts`) re-reads the registry at the instant it decides,
+   * because a snapshot is exactly the staleness spec §5.3 refuses.
+   *
+   * ADDITIVE, absence-permits: an older persisted `FleetSession[]` revives
+   * with `{ kind: 'none' }` through `reviveFleetSession` below — a frame
+   * written before markers existed describes no children. The LIVE `fleet`
+   * frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s `asFleetMsg`), so a
+   * frame from a server older than this field arrives with the key genuinely
+   * absent: a PWA reader must read `s.child?.kind` and treat `undefined` as
+   * `none`. No `FLEET_PROTO` bump.
+   */
+  readonly child: ChildMark;
 }
 
 /**
@@ -2770,6 +2792,30 @@ const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
   return v as IdentityField[];
 };
 
+/** `FleetSession.child`'s persistence contract (child-reclamation wave 2) —
+ *  THE ONE READER of the key off raw JSON. Absent or null → `{ kind: 'none' }`:
+ *  a snapshot written before markers existed describes no children, and
+ *  nothing else on an older record could say otherwise. Present → exactly one
+ *  of the three `ChildMark` shapes, or the WHOLE session is rejected: the
+ *  `held`/`bucket` stance, not `reviveAsk`'s, because an affirmative-looking
+ *  value this build cannot parse must never be laundered into "not a child" —
+ *  and a `child` whose `runId` is outside `CHILD_RUN_ID` (spec §5.1: at most
+ *  ten digits, the only run ids the registry reader ever produces) is exactly
+ *  that value. */
+const reviveChildMark = (o: RawObj, k: string): ChildMark => {
+  const v = o[k];
+  if (v === undefined || v === null) return { kind: 'none' };
+  const s = asObj(v, k);
+  const kind = s['kind'];
+  if (kind === 'none') return { kind: 'none' };
+  if (kind === 'unreadable') return { kind: 'unreadable' };
+  if (kind === 'child') {
+    const runId = s['runId'];
+    if (isPositiveDecimalSafeInteger(runId) && CHILD_RUN_ID.test(String(runId))) return { kind: 'child', runId };
+  }
+  throw new MalformedSnapshot(k);
+};
+
 /** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
  *  membership is not re-checked here because this file imports no class list. */
 function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
@@ -2936,6 +2982,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // does the identical thing with both.
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
+      child: reviveChildMark(o, 'child'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
