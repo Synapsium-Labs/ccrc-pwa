@@ -22,9 +22,11 @@ import type { Deps } from '../src/server.js';
 import {
   FLEET_LABEL, NODE_FILE_CAP_BYTES, REPORT_DETAIL_MAX, SERVER_LABEL,
   buildInfoOfRow, capsFrom, installFrom, measurementFrom, nodeIdFrom, printableDetail, readNodeFile, readNodeFiles,
-  reportFrom, stampFrom, sweepInventory, sweepPlanFor, tagLineFrom, tagStateFrom,
+  reportFrom, stampFrom, sweepInventory, sweepPlanFor, tagStateFrom,
   type InventoryDeps, type NodeFileRead, type NodeFileReads, type SweepOutcome,
 } from '../src/update/inventory.js';
+import { RESOLVE_DETAIL, resolveNodeIntent } from '../src/update/resolve.js';
+import { resolveInputFor } from '../src/update/project.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { bootAgent, connectToAgent, makeFixture } from './remoteHelpers.js';
@@ -242,21 +244,20 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     expect(capsFrom(ok(`os linux\n${words(33)}\n`))).toEqual(refused);
   });
 
-  it('tagLineFrom and nodeIdFrom: line 1 through the one guard, or null', () => {
-    expect(tagLineFrom(ok('v0.0.12\n'))).toBe('v0.0.12');
-    expect(tagLineFrom(ok('v0.0.12\r\n'))).toBe('v0.0.12');
-    for (const bad of ['0.0.12\n', 'v0.0.12 \n', 'latest\n', '', 'v0.0\n']) expect(tagLineFrom(ok(bad)), bad).toBeNull();
+  it('tagStateFrom and nodeIdFrom: line 1 through the one guard, or null (fix round 1: tagLineFrom deleted, no non-test caller — this is its replacement)', () => {
+    expect(tagStateFrom(ok('v0.0.12\n'))).toEqual({ tag: 'v0.0.12', state: 'measured' });
+    expect(tagStateFrom(ok('v0.0.12\r\n'))).toEqual({ tag: 'v0.0.12', state: 'measured' });
+    for (const bad of ['0.0.12\n', 'v0.0.12 \n', 'latest\n', '', 'v0.0\n']) {
+      expect(tagStateFrom(ok(bad)), bad).toEqual({ tag: null, state: 'absent' });
+    }
     // D-3213: the tag alone is null for both absent and unreadable, but the
     // read STATE tells them apart — absent is a real, measured absence
     // (unconstrained, §9); unreadable is UNMEASURED (carried forward,
     // NEVER unconstrained). Re-pins the assertion that used to read
     // `tagLineFrom(UNREADABLE) === null` as the whole story.
-    expect(tagLineFrom(ABSENT)).toBeNull();
-    expect(tagLineFrom(UNREADABLE)).toBeNull();
     expect(tagStateFrom(ABSENT)).toEqual({ tag: null, state: 'absent' });
     expect(tagStateFrom(UNREADABLE)).toEqual({ tag: null, state: 'unmeasured' });
     expect(tagStateFrom(TOO_LARGE)).toEqual({ tag: null, state: 'unmeasured' });
-    expect(tagStateFrom(ok('v0.0.12\n'))).toEqual({ tag: 'v0.0.12', state: 'measured' });
     expect(tagStateFrom(ok('latest\n'))).toEqual({ tag: null, state: 'absent' });   // garbled reads as absent, not unmeasured
     expect(nodeIdFrom(ok(`${U1}\n`))).toBe(U1);
     expect(nodeIdFrom(ok(`${U1.toUpperCase()}\n`))).toBeNull();
@@ -353,21 +354,39 @@ describe('measurementFrom and buildInfoOfRow (§18 "a full BuildInfo round-trips
   });
 });
 
-describe('the floor/previous carry-forward (fix round 1, D-3213)', () => {
-  it.skipIf(process.getuid?.() === 0)('a measured floor survives an unreadable sweep, and the row keeps it', async () => {
+describe('the floor/previous carry-forward (fix round 1, D-3213, corrected by this fix round\'s own review, I-1)', () => {
+  it.skipIf(process.getuid?.() === 0)('a measured floor survives an unreadable sweep — VALUE and STATE both carried', async () => {
     const b = box('ccrc-inv-floor-carry-');
     plant(b.ccrcDir, { ...FULL, floor: 'v0.0.9\n' });
     await sweepInventory(localDeps(b), NOW - 60_000);
     expect(b.store.node(U1)).toMatchObject({ highestVersion: 'v0.0.9', floorRead: 'measured' });
     chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
     await sweepInventory(localDeps(b), NOW);
-    // The value is carried forward from the row's own previous measurement;
-    // the read state stays `unmeasured`, honestly — this sweep read nothing.
-    expect(b.store.node(U1)).toMatchObject({ highestVersion: 'v0.0.9', floorRead: 'unmeasured' });
+    // I-1: something WAS measured before, so the row's own (value, state)
+    // PAIR carries forward unchanged — `floorRead` stays `measured`, never
+    // relabelled `unmeasured` just because THIS sweep's own read failed.
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: 'v0.0.9', floorRead: 'measured' });
     chmodSync(path.join(b.ccrcDir, 'floor'), 0o644);
   });
 
-  it.skipIf(process.getuid?.() === 0)('a first-ever unreadable floor (nothing to carry) leaves highestVersion NULL, floorRead unmeasured', async () => {
+  it.skipIf(process.getuid?.() === 0)('an absent floor also survives an unreadable sweep — carried as absent, still unconstrained (I-1)', async () => {
+    const b = box('ccrc-inv-floor-absentcarry-');
+    plant(b.ccrcDir, { stamp: stampJson(), installed: `${SHA}\n`, caps: 'os linux\nverify\nnode-id\nfloor\n', nodeId: `${U1}\n` });
+    // Sweep 1: no floor file at all — determined absent (a real measurement).
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'absent' });
+    // The file now exists but is unreadable — a DIFFERENT sweep's own read fails.
+    writeFileSync(path.join(b.ccrcDir, 'floor'), 'v0.0.9\n');
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    // I-1: a previously-measured absence is carried as `absent`, never
+    // flipped to `unmeasured` — the node stays unconstrained exactly as
+    // before, not "refuse to resolve".
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'absent' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a first-ever unreadable floor (nothing EVER measured) leaves highestVersion NULL, floorRead unmeasured', async () => {
     const b = box('ccrc-inv-floor-first-');
     plant(b.ccrcDir, { ...FULL, floor: 'v0.0.9\n' });
     chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
@@ -390,14 +409,52 @@ describe('the floor/previous carry-forward (fix round 1, D-3213)', () => {
     expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'unmeasured' });
   });
 
-  it.skipIf(process.getuid?.() === 0)('previous carries forward the same way', async () => {
+  it('the shared per-node deadline expiring reads the floor as unmeasured too (m-3), never absent', async () => {
+    const b = box('ccrc-inv-floor-deadline-');
+    plant(b.ccrcDir, FULL);
+    // Only the floor's own read hangs; every other file resolves normally,
+    // so this isolates the DEADLINE path (readNodeFile's own `deadline?.expired()`
+    // check, not an EACCES/chmod-based unreadable) from every other file.
+    const hungFloor: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p: string, t?: number, s?: AbortSignal): Promise<MeasuredRead> =>
+        (p.endsWith(`${path.sep}floor`) ? new Promise<MeasuredRead>(() => {}) : localIO.readFileMeasured(p, t, s)),
+    };
+    const deps: InventoryDeps = { store: b.store, localIo: hungFloor, ccrcDir: b.ccrcDir, role: 'both', fleet: null, budgetMs: 50 };
+    await sweepInventory(deps, NOW);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'unmeasured' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('end to end: a first-sweep unreadable floor resolves nothing, never currentVersion (m-3)', async () => {
+    const b = box('ccrc-inv-floor-e2e-');
+    plant(b.ccrcDir, { ...FULL, floor: 'v0.0.9\n' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    const row = b.store.node(U1)!;
+    expect(row).toMatchObject({ highestVersion: null, floorRead: 'unmeasured', currentVersion: 'v0.0.12' });
+    const r = resolveNodeIntent(resolveInputFor(b.store, row));
+    expect(r.desiredTag).toBeNull();
+    expect(r.resolveDetail).toBe(RESOLVE_DETAIL.floorUnmeasured());
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('previous carries forward the same way — VALUE and STATE both carried', async () => {
     const b = box('ccrc-inv-previous-carry-');
     plant(b.ccrcDir, { ...FULL, previous: 'v0.0.11\n' });
     await sweepInventory(localDeps(b), NOW - 60_000);
     expect(b.store.node(U1)).toMatchObject({ previousVersion: 'v0.0.11', previousRead: 'measured' });
     chmodSync(path.join(b.ccrcDir, 'previous'), 0o000);
     await sweepInventory(localDeps(b), NOW);
-    expect(b.store.node(U1)).toMatchObject({ previousVersion: 'v0.0.11', previousRead: 'unmeasured' });
+    expect(b.store.node(U1)).toMatchObject({ previousVersion: 'v0.0.11', previousRead: 'measured' });
+    chmodSync(path.join(b.ccrcDir, 'previous'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a first-ever unreadable previous (nothing EVER measured) leaves previousVersion NULL, previousRead unmeasured (m-3)', async () => {
+    const b = box('ccrc-inv-previous-first-');
+    plant(b.ccrcDir, { ...FULL, previous: 'v0.0.11\n' });
+    chmodSync(path.join(b.ccrcDir, 'previous'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ previousVersion: null, previousRead: 'unmeasured' });
     chmodSync(path.join(b.ccrcDir, 'previous'), 0o644);
   });
 
@@ -754,6 +811,10 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     expect(await sweepInventory(localDeps(b), NOW)).toEqual([
       { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'none', refused: false },
     ]);
+    // I-2: the restore must never claim "no report file" (reportedPhase
+    // NULL, §6) for an update.json that WAS read fine — only the stamp is
+    // unmeasured here.
+    expect(b.store.node(U1)?.reportedPhase).not.toBeNull();
     expect(b.store.node(U1)).toMatchObject({ updateState: 'applying', stampRead: 'unreadable' });
     chmodSync(path.join(b.ccrcDir, 'build.json'), 0o644);
     // The changed-report gate must not have swallowed this report while its

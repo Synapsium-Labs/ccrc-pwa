@@ -8478,17 +8478,17 @@ export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode 
  *  L0 file). Both now import this one constant; neither declares its own. */
 export const UNIX_SECONDS_MAX = 99_999_999_999;
 
-/** How a floor/previous tag-file read went THIS SWEEP (§8, fix round 1
- *  D-3213): `measured` = this sweep read a valid tag; `absent` = this sweep
- *  determined THERE IS NO FLOOR — the file is missing, or present but not a
- *  tag (garbled) — which §9's "a NULL floor is unconstrained" governs exactly
- *  as before; `unmeasured` = this sweep could not tell (unreadable,
- *  too-large, or the per-node read deadline expiring) — the row's PREVIOUSLY
- *  measured value is carried forward rather than overwritten with a null
- *  this sweep never earned, and a row with nothing to carry resolves
- *  NOTHING, never the `currentVersion` an absent file would license. A token
- *  outside the list reads `unmeasured` — the direction that never licenses a
- *  floor this build cannot vouch for. */
+/** How a floor/previous tag-file column's STORED value was arrived at (§8,
+ *  D-3213, corrected by fix round 1's own review): `measured` = the stored
+ *  tag was measured, this sweep or carried forward; `absent` = the stored
+ *  NULL was measured absent or garbled, this sweep or carried — §9's "a NULL
+ *  floor is unconstrained" governs it exactly as before, carried or not;
+ *  `unmeasured` = NOTHING has EVER been measured for this row, so the stored
+ *  value is always NULL here too. On an unreadable/too-large/deadline read
+ *  the row's own previous (value, state) PAIR carries forward unchanged, and
+ *  only a row with no prior measurement reads `unmeasured`, which resolves
+ *  NOTHING, never the `currentVersion` an absent floor would license. A
+ *  token outside the list reads `unmeasured`. */
 export const TAG_FILE_READS = ['measured', 'absent', 'unmeasured'] as const;
 export type TagFileRead = (typeof TAG_FILE_READS)[number];
 /** Use THIS, never `TAG_FILE_READS.includes(x as TagFileRead)` — `isRunState`'s rule. */

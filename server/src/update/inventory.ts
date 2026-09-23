@@ -205,23 +205,20 @@ export function installFrom(read: NodeFileRead, stamp: { stampRead: StampRead; b
 }
 
 /** floor / previous → line 1 through the one tag guard, plus THIS SWEEP's
- *  read state (fix round 1, D-3213). `absent` covers both a missing file and
- *  a garbled one (read fine, not a tag): both are determined THIS SWEEP to
- *  carry no floor, so a NULL floor stays UNCONSTRAINED to the resolver (§9)
- *  exactly as before. `unreadable`/`too-large`/the per-node deadline are
- *  `unmeasured` — this sweep could not tell, so the caller
- *  (`applyMeasurement`) carries the row's own previous value forward rather
- *  than let this write null it out, and never falls back to `currentVersion`
- *  as if the file were absent. */
+ *  raw read state (fix round 1, D-3213). `absent` covers both a missing file
+ *  and a garbled one (read fine, not a tag): both are determined THIS SWEEP
+ *  to carry no floor, so a NULL floor stays UNCONSTRAINED to the resolver
+ *  (§9) exactly as before. `unreadable`/`too-large`/the per-node deadline
+ *  are `unmeasured` for THIS raw read — the caller (`applyMeasurement`)
+ *  then decides, from the row's OWN previous `floorRead`/`previousRead`,
+ *  whether to carry the previous (value, state) pair forward unchanged
+ *  (I-1: something WAS measured before) or leave it `unmeasured` (nothing
+ *  ever was) — never falling back to `currentVersion` as if the file were
+ *  absent. */
 export function tagStateFrom(read: NodeFileRead): { tag: string | null; state: TagFileRead } {
   if (!read.ok && read.reason !== 'absent') return { tag: null, state: 'unmeasured' };
   const line = firstLine(read);
   return isReleaseTag(line) ? { tag: line, state: 'measured' } : { tag: null, state: 'absent' };
-}
-
-/** The tag alone, for a caller that never needs the read state. */
-export function tagLineFrom(read: NodeFileRead): string | null {
-  return tagStateFrom(read).tag;
 }
 
 /** node-id → line 1 through NODE_ID_RE, else NULL (the row keys by label). */
@@ -246,6 +243,16 @@ function secondsToMs(v: unknown): number | null {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 && v <= UNIX_SECONDS_MAX ? v * 1000 : null;
 }
 
+/** The report the phase table treats as "a node wrote SOMETHING unreadable
+ *  or unparseable, leave the lease alone" (§8) — `reportFrom`'s own fallback,
+ *  and (fix round 1, D-3214, I-2) `applyMeasurement`'s fallback for a
+ *  `stamp-unmeasured` verdict with no previous report to restore: a
+ *  guaranteed-non-NULL sentinel no node's own `update.json` would ever
+ *  produce as its literal phase token, so it both satisfies "never NULL for
+ *  a report that exists" and differs from a real `done` report on the next
+ *  sweep, keeping the changed-report gate open for re-evaluation. */
+const UNKNOWN_REPORT: NodeReport = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null };
+
 /** update.json `{target, phase, startedAt, updatedAt, detail, from}` → the
  *  five report columns (§8, §10). NULL = no report file. Any other failure is
  *  a report whose phase is `unknown` — a node that wrote SOMETHING, which the
@@ -254,11 +261,10 @@ function secondsToMs(v: unknown): number | null {
  *  additive, and a newer writer's extra key (wave 4's `pid`) is not a
  *  malformed report. */
 export function reportFrom(read: NodeFileRead): NodeReport | null {
-  const unknown: NodeReport = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null };
-  if (!read.ok) return read.reason === 'absent' ? null : unknown;
+  if (!read.ok) return read.reason === 'absent' ? null : UNKNOWN_REPORT;
   let parsed: unknown;
-  try { parsed = JSON.parse(read.content); } catch { return unknown; }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return unknown;
+  try { parsed = JSON.parse(read.content); } catch { return UNKNOWN_REPORT; }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return UNKNOWN_REPORT;
   const o = parsed as Record<string, unknown>;
   const detail = typeof o.detail === 'string' ? printableDetail(o.detail) : '';
   return {
@@ -528,24 +534,40 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
     // rather than nulling it out.
     m = { ...m, report: previousReportOf(preRow) ?? m.report };
   }
-  // fix round 1, D-3213: an unmeasured floor/previous read must carry the
-  // row's own previously measured value forward — never overwrite it with
-  // this sweep's null, which `resolveOnChannel` would otherwise read as "no
-  // floor file" (unconstrained) rather than "nothing measured yet".
-  // `floorRead`/`previousRead` themselves stay `unmeasured`, honestly: only
-  // the carried VALUE changes.
-  if (m.floorRead === 'unmeasured') m = { ...m, highestVersion: preRow?.highestVersion ?? null };
-  if (m.previousRead === 'unmeasured') m = { ...m, previousVersion: preRow?.previousVersion ?? null };
+  // fix round 1, D-3213 (I-1, corrected by this fix round's own review): an
+  // unmeasured READ this sweep carries the row's own previous (VALUE, STATE)
+  // PAIR forward unchanged — never just the value. `floorRead`/`previousRead`
+  // describe the STORED value, not this sweep's raw read: `measured` and
+  // `absent` both survive a later unreadable sweep exactly as they were,
+  // because something WAS measured, and only a row with NO PRIOR
+  // measurement at all (`preRow` absent, or itself `unmeasured`) reads
+  // `unmeasured` here — which then always pairs with a NULL value, never a
+  // carried one. Without the state carrying too, a previously-absent floor
+  // (a real, measured "no floor") would relabel itself `unmeasured` on the
+  // next EACCES and the resolver would refuse to resolve a node that was
+  // always unconstrained.
+  if (m.floorRead === 'unmeasured' && preRow !== null && preRow.floorRead !== 'unmeasured') {
+    m = { ...m, highestVersion: preRow.highestVersion, floorRead: preRow.floorRead };
+  }
+  if (m.previousRead === 'unmeasured' && preRow !== null && preRow.previousRead !== 'unmeasured') {
+    m = { ...m, previousVersion: preRow.previousVersion, previousRead: preRow.previousRead };
+  }
   const plan = sweepPlanFor(preRow, m);
-  // fix round 1, D-3214 (F2): a `done` report seen while the stamp could not
-  // be read must be re-evaluated once the stamp reads fine — never consumed
-  // as "seen" while its verdict was withheld. Restore the row's own previous
-  // report (possibly none) before the upsert, so the NEXT sweep's report —
-  // even the identical one — reads as CHANGED against what is actually
-  // stored, and `leaseActionFor` runs again with (by then, hopefully) a
-  // readable stamp.
+  // fix round 1, D-3214 (F2, corrected by this fix round's own review, I-2):
+  // a `done` report seen while the stamp could not be read must be
+  // re-evaluated once the stamp reads fine — never consumed as "seen" while
+  // its verdict was withheld. Restore the row's own previous report before
+  // the upsert, so the NEXT sweep's report — even the identical one — reads
+  // as CHANGED against what is actually stored, and `leaseActionFor` runs
+  // again with (by then, hopefully) a readable stamp. A busy row with NO
+  // previous report falls back to `UNKNOWN_REPORT`, never `NULL` (I-2: a
+  // `reportedPhase NULL` claims "no report file", §6, for an `update.json`
+  // that DID read fine — the stamp is what is unmeasured, not the report)
+  // and never `m.report` itself (storing the real, unchanged `done` report
+  // would make the NEXT identical sweep read as unchanged too, wedging the
+  // gate exactly like the bug this override exists to fix).
   if (plan.lease.kind === 'none' && plan.lease.why === 'stamp-unmeasured') {
-    m = { ...m, report: previousReportOf(preRow) };
+    m = { ...m, report: previousReportOf(preRow) ?? UNKNOWN_REPORT };
   }
   const upserted = store.upsertNodeMeasurement(m);
   if (!upserted.ok) return { label, result: 'refused', why: `${upserted.why}: ${upserted.supersededBy}` };

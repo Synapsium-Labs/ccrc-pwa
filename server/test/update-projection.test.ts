@@ -267,6 +267,15 @@ describe('resolveAndProject — every live node resolved and stored; the server 
     expect(v.ok, v.err).toBe(true);
   });
 
+  it('a never-reached node (markUnreachable\'s placeholder) resolves with the floorUnmeasured sentence, never noFloor (fix round 1, m-2)', async () => {
+    const f = fixture('both');
+    expect(f.store.markUnreachable('never-connected', 'fleet', NOW)).toMatchObject({ ok: true, created: true });
+    await resolveAndProject(f.deps, Date.now());
+    expect(f.store.node('never-connected')).toMatchObject({
+      desiredTag: null, resolveDetail: RESOLVE_DETAIL.floorUnmeasured(),
+    });
+  });
+
   it('a refusal by ANOTHER node never blocks this one; this node\'s own does (decision 16)', async () => {
     const f = fixture('both');
     expect(f.store.refuseRelease(FLEET_ID, 'v0.0.11', NOW, 'provenance: fixture')).toMatchObject({ ok: true });

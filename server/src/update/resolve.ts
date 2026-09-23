@@ -24,12 +24,13 @@ export interface EligibilityRow { tag: string; channel: UpdateChannel | null; bu
 export interface IntentView { channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode }
 export interface ResolveInput {
   currentVersion: string | null; highestVersion: string | null;
-  /** fix round 1, D-3213: THIS sweep's read state of the floor file. A NULL
-   *  `highestVersion` is unconstrained only when this is `absent`
-   *  (determined THIS sweep that there is no floor); when it is `unmeasured`
-   *  and `highestVersion` is still NULL (nothing was ever carried forward),
-   *  nothing resolves — never the `currentVersion` fallback an absent file
-   *  would license. */
+  /** fix round 1, D-3213 (corrected by its own review): how the STORED
+   *  `highestVersion` was arrived at, this sweep or carried forward. A NULL
+   *  `highestVersion` is unconstrained when this is `absent` (measured,
+   *  this sweep or carried, that there is no floor); `unmeasured` means
+   *  NOTHING has ever been measured for this node, so `highestVersion` is
+   *  always NULL alongside it — nothing resolves then, never the
+   *  `currentVersion` fallback an absent floor would license. */
   floorRead: TagFileRead;
   /** update_intent[nodeId]; null = no row → the fleet row decides. */
   nodeIntent: IntentView | null;
@@ -68,8 +69,11 @@ export const RESOLVE_DETAIL = {
   rolledBack: (current: string, floor: string): string =>
     `this node was rolled back to ${current} and its floor is ${floor} — auto stays off this tag until a release above ${floor} exists (decision 8)`,
   noFloor: (): string => 'no floor and no measured version — nothing to compare against',
+  // fix round 1's own review, m-2: worded to hold for a node that was never
+  // reached at all (markUnreachable's placeholder, D-3213), not only one
+  // whose floor file failed to read — both are "nothing has been measured".
   floorUnmeasured: (): string =>
-    "this node's floor file could not be read — nothing resolves until it can be measured",
+    "this node's floor has not been measured — nothing resolves until it is",
   pinnedIneligible: (pin: string, why: PinnedIneligibleWhy): string =>
     `pinned ${pin} is not eligible on this node — ${PINNED_WHY_TEXT[why]}`,
   noEligible: (channel: UpdateChannel): string =>

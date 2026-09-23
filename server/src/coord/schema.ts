@@ -1026,12 +1026,15 @@ export const MIGRATIONS: readonly string[] = [
   // `commitSha NULL` = `target_commitish` was a branch name; `notifiedAt NULL`
   // = no release push sent; `currentVersion NULL` with `stampRead = 'ok'` = an
   // unversioned build; `measuredAt NULL` = never measured; `highestVersion
-  // NULL` = UNCONSTRAINED only when `floorRead = 'absent'` (this sweep
-  // determined there is no floor file, or a garbled one) — a NULL beside
-  // `floorRead = 'unmeasured'` means nothing was ever measured, and the
-  // resolver refuses to treat that as unconstrained (fix round 1, D-3213);
-  // `previousVersion NULL` = nothing to roll back to, by the same
-  // `previousRead` distinction; `agentOps NULL` = no agent by construction (a server-role
+  // NULL` = UNCONSTRAINED only when `floorRead = 'absent'` (measured, this
+  // sweep OR CARRIED FORWARD from an earlier one, that there is no floor
+  // file, or a garbled one) — a NULL beside `floorRead = 'unmeasured'` means
+  // NOTHING WAS EVER MEASURED for this row, and the resolver refuses to
+  // treat that as unconstrained (D-3213, corrected by fix round 1's own
+  // review, I-1: the STATE carries forward with the value, so a
+  // previously-absent floor never relabels itself `unmeasured` just because
+  // one later sweep's own read failed); `previousVersion NULL` = nothing to
+  // roll back to, by the same `previousRead` distinction; `agentOps NULL` = no agent by construction (a server-role
   // row) while `''` = an agent too old to say; `unreachableSince NULL` iff
   // reachable; `reportedPhase NULL` = no report file, distinct from
   // `'unknown'`, a phase outside the vocabulary; `desiredTag NULL` carries

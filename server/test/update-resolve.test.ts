@@ -43,9 +43,9 @@ describe('the four floor sentences are §9\'s, verbatim', () => {
   it('no floor and no measured version', () => {
     expect(RESOLVE_DETAIL.noFloor()).toBe('no floor and no measured version — nothing to compare against');
   });
-  it('floor unmeasured (fix round 1, D-3213)', () => {
+  it('floor unmeasured (fix round 1, D-3213, reworded by the review\'s m-2 so it holds for a never-reached placeholder too)', () => {
     expect(RESOLVE_DETAIL.floorUnmeasured())
-      .toBe("this node's floor file could not be read — nothing resolves until it can be measured");
+      .toBe("this node's floor has not been measured — nothing resolves until it is");
   });
 });
 
@@ -69,11 +69,28 @@ describe('the floor read-state (fix round 1, D-3213): unmeasured is never absent
     expect(r.resolveDetail).toBe(RESOLVE_DETAIL.floorUnmeasured());
   });
 
-  it('a carried floor (highestVersion set) still constrains, even though floorRead says unmeasured', () => {
+  it('a carried floor (highestVersion set) still constrains, even though floorRead says unmeasured — the un-current-equal-to-floor case', () => {
     const r = resolveNodeIntent(input({
       highestVersion: 'v0.0.9', floorRead: 'unmeasured', currentVersion: 'v0.0.9', releases: [rel('v0.0.10')],
     }));
     expect(r.desiredTag).toBe('v0.0.10');
+  });
+
+  it('a carried floor stays sticky on a ROLLED-BACK node exactly as a fresh one would — this pin actually binds (fix round 1, I-3)', () => {
+    // currentVersion ('v0.0.8') differs from the carried highestVersion
+    // ('v0.0.9'), so an unconstrained answer (floorOf falling back to
+    // currentVersion) and a constrained one DIVERGE — I-3's own reviewer
+    // finding: the earlier pin above used current === highest, so the two
+    // answers coincided and a broken resolver still passed it.
+    const r = resolveNodeIntent(input({
+      currentVersion: 'v0.0.8', highestVersion: 'v0.0.9', floorRead: 'unmeasured', releases: [rel('v0.0.9')],
+    }));
+    // Constrained (correct): the floor stays v0.0.9, and v0.0.9 is not
+    // strictly newer than itself — decision 8's sticky-rollback sentence.
+    expect(r.desiredTag).toBeNull();
+    expect(r.resolveDetail).toBe(RESOLVE_DETAIL.rolledBack('v0.0.8', 'v0.0.9'));
+    // Unconstrained (the regression this pin catches): floorOf(null, 'v0.0.8')
+    // = 'v0.0.8', and v0.0.9 IS newer than that — it would resolve v0.0.9.
   });
 
   it('an absent floor (determined this sweep) is unconstrained exactly as before', () => {
