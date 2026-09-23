@@ -793,11 +793,16 @@ export class FleetWatcher {
     return run;
   }
 
-  /** C2: `sweepInventory` throwing is not a bug in the ordinary sense — it is
-   *  a synchronous `node:sqlite` call hitting a locked or corrupt coord.db —
-   *  but it is also not silent: warned once per DISTINCT message, quiet
-   *  while the same cause repeats, and re-armed (by the caller, on the next
-   *  clean settle) after a recovery. */
+  /** C2, reworded by re-review finding 1 (final fix wave): C1 gave each
+   *  connection's own measurement+apply its own try/catch, and
+   *  `sweepThenProject` already catches a `resolveAndProject` throw
+   *  separately (as a projection warning, never a rejection) — so a
+   *  rejection THIS reads is now a throw from OUTSIDE both of those: a bug in
+   *  this dispatch/warn plumbing itself, not the ordinary "coord.db is locked"
+   *  case, which `warnInventoryIssues`'s `error` arm names instead. Still not
+   *  silent either way: warned once per DISTINCT message, quiet while the
+   *  same cause repeats, and re-armed (by the caller, on the next clean
+   *  settle) after a recovery. */
   private warnInventoryRejected(err: unknown): void {
     // Deduped on the MESSAGE, never the stack: two throws of the very same
     // condition from two different call sites (or two turns of one retry
@@ -805,19 +810,23 @@ export class FleetWatcher {
     const message = err instanceof Error ? err.message : String(err);
     if (message !== this.lastInventoryRejectWarn) {
       const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-      console.warn('ccrc-server: the inventory sweep rejected — sync node:sqlite throws on a locked ' +
-        `or corrupt coord.db, which is environmental, not a code bug: ${detail}`);
+      console.warn('ccrc-server: the inventory sweep rejected — a throw outside the per-row ' +
+        `measurement+apply catch (C1) or the projection path (both are their own arms/warnings): ${detail}`);
       this.lastInventoryRejectWarn = message;
     }
   }
 
   /** Fire-and-forget `inventoryNow()`, shared by `tick()`'s minute gate and
-   *  `triggerInventory()`: a rejection is POSSIBLE — sync `node:sqlite`
-   *  throws on a locked or corrupt coord.db, and C1's per-row isolation in
-   *  `sweepInventory` only covers the two connections' own measurement+apply,
-   *  not e.g. a throw inside `resolveAndProject`'s own queueing — warned,
-   *  deduped (C2), never swallowed silently; the dedupe key clears on the
-   *  next clean settle, so a NEW cause after a recovery warns again. */
+   *  `triggerInventory()`. Reworded by re-review finding 1 (final fix wave):
+   *  a rejection here is now the NARROW case, not the ordinary one — C1 gave
+   *  each connection's own measurement+apply its own try/catch (a throw
+   *  there is the `error` `SweepOutcome` `warnInventoryIssues` names), and
+   *  `sweepThenProject`'s own try/catch around `resolveAndProject` turns a
+   *  throw there into a projection warning, never a rejection either. What
+   *  reaches here is a throw from OUTSIDE both — a bug in this dispatch/warn
+   *  plumbing itself. Still warned, deduped (C2), never swallowed silently;
+   *  the dedupe key clears on the next clean settle, so a NEW cause after a
+   *  recovery warns again. */
   private dispatchInventorySweep(): Promise<void> {
     return this.inventoryNow().then(
       () => { this.lastInventoryRejectWarn = null; },
@@ -847,13 +856,26 @@ export class FleetWatcher {
 
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
    *  sweep's `SweepOutcome[]` was discarded by both callers — nothing ever
-   *  printed it. Warns each `node-id-collision` and each `refused` outcome
-   *  ONCE per (label, nodeId-or-why) tuple: a tuple already warned about
-   *  stays quiet while it repeats, and warns again if it clears (the row
-   *  measures cleanly for at least one sweep) and later recurs. Called from
-   *  `sweepThenProject`, the one place both `tick()`'s minute gate and
-   *  `triggerInventory()`'s `ready` hook funnel through (both reach it via
-   *  `inventoryNow()` -> `runInventory()`). */
+   *  printed it. Warns each `node-id-collision`, each `refused` and each
+   *  `error` outcome ONCE per (label, nodeId-or-why-or-message) tuple: a
+   *  tuple already warned about stays quiet while it repeats, and warns
+   *  again if it clears (the row measures cleanly for at least one sweep)
+   *  and later recurs.
+   *
+   *  The `error` arm (re-review finding 1, final fix wave): C1's per-row
+   *  isolation turns EVERY throw from a connection's own measurement+apply —
+   *  a locked/corrupt coord.db, but just as much a real bug in
+   *  `measurementFrom`/`applyMeasurement` — into this outcome, and nothing
+   *  else reads `SweepOutcome` for it (`sweepThenProject`'s own try/catch is
+   *  scoped to `resolveAndProject`, a DIFFERENT call). Before C1 such a
+   *  throw rejected `sweepInventory` and `dispatchInventorySweep`'s own
+   *  `warnInventoryRejected` named it; after C1 it resolves quietly unless
+   *  named HERE. Deduped on `error:<label>:<message>`, same clear-and-recur
+   *  rule as the other two arms.
+   *
+   *  Called from `sweepThenProject`, the one place both `tick()`'s minute
+   *  gate and `triggerInventory()`'s `ready` hook funnel through (both reach
+   *  it via `inventoryNow()` -> `runInventory()`). */
   private warnInventoryIssues(outcomes: readonly SweepOutcome[]): void {
     const keys = new Map<string, string>();
     for (const o of outcomes) {
@@ -864,6 +886,9 @@ export class FleetWatcher {
       } else if (o.result === 'refused') {
         keys.set(`refused:${o.label}:${o.why}`,
           `ccrc-server: update inventory — ${o.label}'s sweep was refused: ${o.why}`);
+      } else if (o.result === 'error') {
+        keys.set(`error:${o.label}:${o.message}`,
+          `ccrc-server: update: inventory row ${o.label} failed: ${o.message}`);
       }
     }
     for (const [key, message] of keys) {
@@ -1031,10 +1056,13 @@ export class FleetWatcher {
       // every lane below it (D-3198, which covers
       // both update lanes).
       // NEVER awaited: seven reads per node over the agent must not stall the
-      // dialog detector or the busy->idle push. A rejection here IS POSSIBLE
-      // — sync `node:sqlite` throws on a locked or corrupt coord.db, which is
-      // environmental, not a code bug (C2) — logged, deduped, same idiom as
-      // the catalogue lane just above, never swallowed silently.
+      // dialog detector or the busy->idle push. A rejection here is now the
+      // NARROW case (re-review finding 1, final fix wave): C1's per-row
+      // isolation names a locked/corrupt coord.db as an `error` outcome
+      // (`warnInventoryIssues`), and the projection path has its own catch —
+      // what reaches `dispatchInventorySweep`'s own catch is a throw outside
+      // both. Logged, deduped (C2), same idiom as the catalogue lane just
+      // above, never swallowed silently either way.
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
         void this.dispatchInventorySweep();
       }

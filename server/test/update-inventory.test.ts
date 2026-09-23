@@ -823,6 +823,39 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     }
   });
 
+  // Re-review finding 1 (final fix wave): C1 turned every per-row throw into
+  // an `error` outcome, but nothing warned about it — `warnInventoryIssues`
+  // named only `node-id-collision` and `refused`. It now also names `error`,
+  // deduped on `error:<label>:<message>` with the same clear-and-recur rule.
+  it('a standing per-row throw is warned once, quiet while it repeats, and warns again once it clears and recurs', async () => {
+    const home = mkTmp('ccrc-inv-error-warn-');
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+    plant(base.cfg.ccrcDir, FULL);
+    const w = new FleetWatcher({ ...base, coord }, new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes('inventory row') && String(c[0]).includes('boom'));
+    const original = coord.upsertNodeMeasurement.bind(coord);
+    let throwing = true;
+    coord.upsertNodeMeasurement = (m) => {
+      if (throwing && m.label === SERVER_LABEL) throw new Error('boom: coord.db locked');
+      return original(m);
+    };
+    try {
+      await w.inventoryNow();
+      expect(errorWarns()).toHaveLength(1);
+      await w.inventoryNow();   // the SAME throw, still standing — quiet
+      expect(errorWarns()).toHaveLength(1);
+      throwing = false;
+      await w.inventoryNow();   // clears — the row measures cleanly
+      throwing = true;
+      await w.inventoryNow();   // the SAME message again, after it cleared — warns again
+      expect(errorWarns()).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('C4: a ready that joins an in-flight sweep is not swallowed — exactly one rerun fires after it settles', async () => {
     const home = mkTmp('ccrc-inv-rerun-');
     const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));

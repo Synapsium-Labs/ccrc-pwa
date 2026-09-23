@@ -51,13 +51,6 @@ import { openPoolReadDeadline, type PoolReadDeadline } from '../pools.js';
 export const NODE_FILE_CAP_BYTES = 65536;
 /** §8: "`reportedDetail` is cut to 200 printable-ASCII characters". */
 export const REPORT_DETAIL_MAX = 200;
-/** update.json's times are unix SECONDS (bash-native — the W4 writer's
- *  contract). Eleven digits reach the year 5138; a thirteen-digit value is a
- *  millisecond stamp written by mistake, and it is REFUSED (null), never
- *  divided — a guess about units is the C1 defect `server.ts`'s pool-epoch
- *  route records, the other way round. `UNIX_SECONDS_MAX` (`shared/api.ts`)
- *  is the one declaration of this bound — `resolve.ts`'s `MAX_UNIX_S` used to
- *  be a second copy (C5, final fix wave). */
 /** A seconds stamp names a whole second: `startedAt = s` covers
  *  [s*1000, s*1000 + 999] ms. The precedence below compares the LATEST instant
  *  the report's run could have started with the lease's ms stamp, so a run
@@ -229,6 +222,13 @@ export function printableDetail(raw: string): string {
   return raw.replace(/[^\x20-\x7e]+/g, ' ').trim().slice(0, REPORT_DETAIL_MAX);
 }
 
+/** update.json's times are unix SECONDS (bash-native — the W4 writer's
+ *  contract). Eleven digits reach the year 5138; a thirteen-digit value is a
+ *  millisecond stamp written by mistake, and it is REFUSED (null), never
+ *  divided — a guess about units is the C1 defect `server.ts`'s pool-epoch
+ *  route records, the other way round. `UNIX_SECONDS_MAX` (`shared/api.ts`)
+ *  is the one declaration of this bound — `resolve.ts`'s `MAX_UNIX_S` used to
+ *  be a second copy (C5, final fix wave). */
 function secondsToMs(v: unknown): number | null {
   return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 && v <= UNIX_SECONDS_MAX ? v * 1000 : null;
 }

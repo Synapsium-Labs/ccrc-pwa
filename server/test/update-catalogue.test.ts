@@ -630,13 +630,17 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       await p.poll(1000);
       await p.poll(2000);
       expect(warn.mock.calls.filter((c) => String(c[0]).includes('boom'))).toHaveLength(1);
-      // A success resets the dedupe.
+      // A success resets the dedupe — re-review finding 3 (final fix wave):
+      // the ORIGINAL version of this case re-threw a DIFFERENT message
+      // ('other cause') here, which would warn again whether or not the
+      // reset ran (a new message always clears the old dedupe key). Re-throw
+      // the SAME message ('boom') instead: this only warns a second time if
+      // the success actually cleared `lastWarnedStoreError`.
       mode = 'ok';
       await p.poll(3000);
-      // The SAME message again after a success is warned again.
-      mode = 'other';
+      mode = 'boom';
       await p.poll(4000);
-      expect(warn.mock.calls.filter((c) => String(c[0]).includes('other cause'))).toHaveLength(1);
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('boom'))).toHaveLength(2);
     } finally {
       warn.mockRestore();
     }

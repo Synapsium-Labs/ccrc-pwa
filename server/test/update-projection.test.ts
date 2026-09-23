@@ -5,7 +5,7 @@
 // the live $HOME.
 import { describe, it, expect, vi } from 'vitest';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -408,6 +408,12 @@ describe('the inventory run resolves and projects (§9: "at every resolution AND
       return original(m);
     };
     const fleetMeasuredBefore = coord.nodeByLabel(FLEET_LABEL)!.measuredAt;
+    // Re-review finding 2 (final fix wave): the FIRST sweep already wrote
+    // this file (:400), so a bare "it exists and is non-empty" assertion
+    // would stay green even if a mutation skipped resolveAndProject after an
+    // errored row entirely — deleting it here and requiring it back proves
+    // THIS sweep is what wrote it.
+    rmSync(projectionPath(base.cfg.ccrcDir));
     await w.inventoryNow();
     expect(coord.nodeByLabel(FLEET_LABEL)!.measuredAt).not.toBe(fleetMeasuredBefore);
     expect(readFileSync(projectionPath(base.cfg.ccrcDir), 'utf8').length).toBeGreaterThan(0);
