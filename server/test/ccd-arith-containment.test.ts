@@ -118,7 +118,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.sh(
       '_reg_set myid wrapper claude;'
       + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
-      + ' _pane_for_keystroke(){ KS_PANE="▓ ctx ████ 88%"; return 0; };'
+      + ' _pane_for_keystroke(){ KS_PANE="  👤 acct-a │ ▓ ctx ████ 88%"; return 0; };'
       + ' _idle_for_keystroke(){ KS_WHY=not-idle; KS_DETAIL=x; return 1; };'
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactfield'))).toBe(false);
@@ -357,8 +357,12 @@ describe('_pane_ctx_pct is the one sanitiser the compact arithmetic depends on (
     // single point that keeps a payload out of that arithmetic. Do NOT add a
     // second guard downstream — one authoritative sanitiser is the right shape;
     // an unnamed dependency on it is not, which is why this test names it.
-    const out = h.sh('_pane_ctx_pct \'ctx REG[$(touch "$HOME/PWNED-pane")] 45%\'');
-    expect(out).toMatch(/^[0-9]*$/);
+    // Inside a real statusline row's `▓` segment — the only text the reader
+    // takes a number from — so the payload reaches the digit extraction.
+    const out = h.sh('_pane_ctx_pct \'  👤 acct-a │ ▓ ctx REG[$(touch "$HOME/PWNED-pane")] 45%\'');
+    // Exactly the digits — an EMPTY answer would also be digits-only, and would
+    // mean the payload never reached the extraction this test is about.
+    expect(out).toBe('45');
     expect(existsSync(path.join(h.home, 'PWNED-pane'))).toBe(false);
     h.cleanup();
   });

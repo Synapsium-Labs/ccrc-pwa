@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
+import { hasMenu, parseDialog, paneOptionRows, paneState } from '../src/pane/dialog.js';
 import { FleetWatcher } from '../src/watch.js';
 import { Bus } from '../src/bus.js';
 import { Tmux, type Runner } from '../src/exec.js';
@@ -621,5 +621,69 @@ describe('FleetWatcher whole-fleet collapse (readdir -> null) fails shut (blocki
     expect(watcher.currentTaskProgress().get(id)).toEqual(before); // heals
 
     rmSync(home, { recursive: true, force: true });
+  });
+});
+
+// Real Claude Code 2.1.280 captures (private tmux, mock API), trimmed to their
+// bottom rows and scrubbed of the fixture path. The prompt box with the `👤`
+// statusline row under it is on screen in every IDLE capture and in no MENU
+// capture — 128 of them, both renderers, 100x24 to 220x50 — so it vetoes the
+// two whole-pane arms, which used to fire on each of the idle shapes below.
+describe('hasMenu: the prompt box with the statusline under it is never a menu', () => {
+  const RULE = '─'.repeat(120);
+  const ROW = '  👤 cfg │ 🤖 Opus 5.5 (1M context) · medium │ ⎇ ws/rig-branch │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0053';
+  const idle = (above: string[], box: string[] = ['❯ ']): string =>
+    [...above, RULE, ...box, RULE, ROW, '  ⏸ manual mode on · ← for agents'].join('\n');
+
+  it('a reply QUOTING the footer is not a menu', () => {
+    const pane = idle(['❯ negfooter', '● The footer reads "Enter to select · ↑/↓ to navigate · Esc to cancel".', '✻ Cooked for 0s · done 3:53 PM']);
+    expect(hasMenu(pane)).toBe(false);
+    expect(parseDialog(pane)).toBeNull();
+  });
+
+  it('an echoed `❯ 1.` prompt over a numbered reply is not a menu', () => {
+    const pane = idle(['  1. first', '  2. second', '  3. third', '✻ Baked for 0s · done 3:53 PM', '❯ 1. alpha', '● Noted alpha.', '✻ Brewed for 0s · done 3:53 PM']);
+    expect(hasMenu(pane)).toBe(false);
+  });
+
+  it('a numbered DRAFT in the box is not a menu', () => {
+    expect(hasMenu(idle([], ['❯ 1. one', '  2. two']))).toBe(false);
+  });
+
+  it('control: a real question menu, which hides the box and the row, is still one', () => {
+    const pane = [
+      '❯ ask1', RULE, ' ☐ Database', 'Which database should the rig use?',
+      '❯ 1. Postgres', '     Relational, mature, the default choice.',
+      '  2. SQLite', '     Embedded single-file database.',
+      '  3. Redis', '     In-memory key-value store.',
+      '  4. Type something.', RULE, '  5. Chat about this',
+      'Enter to select · ↑/↓ to navigate · Esc to cancel',
+    ].join('\n');
+    expect(hasMenu(pane)).toBe(true);
+    expect(parseDialog(pane)?.options.map((o) => o.label).slice(0, 3)).toEqual(['Postgres', 'SQLite', 'Redis']);
+  });
+
+  it('a real menu stays a menu with a statusline-shaped line printed in chat above it', () => {
+    // The dangerous direction: a missed menu gets typed into. A tool's output
+    // (a Read of a fixture, a raw run of statusline-command.sh) can put a
+    // `👤`-led line on screen above a menu — its continuation lines trim to a
+    // `👤` start — but not directly under the prompt box's bottom border,
+    // which the menu has hidden. Only the box-and-row pair vetoes.
+    const pane = [
+      '  ⎿  $ bash ccd/statusline-command.sh <fixture.json',
+      '     👤 acct-a │ 🤖 Opus 5 · high │ ⎇ main',
+      RULE, ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel · Tab to amend',
+    ].join('\n');
+    expect(hasMenu(pane)).toBe(true);
+  });
+
+  it('control: a real permission prompt — no "Enter to" footer — is still one, off its cursor row', () => {
+    const pane = [
+      '  ⎿  $ touch rigfile.txt', RULE, ' Bash command', '   touch rigfile.txt', '   Create rigfile',
+      ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project',
+      '   3. Yes, and switch to auto mode · auto mode handles these prompts for you', '   4. No',
+      ' Esc to cancel · Tab to amend',
+    ].join('\n');
+    expect(hasMenu(pane)).toBe(true);
   });
 });

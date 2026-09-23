@@ -672,6 +672,11 @@ describe('the dispatch response documents that ok is not proof of a ready pane',
     expect(bullet, 'the narrow bullet does not send the operator to the startup prompt').toMatch(/startup prompt/);
     expect(bullet, 'the narrow bullet claims mail is held — the mail lane is not width-aware')
       .toMatch(/not width-aware/);
+    // `_spawn_start` pins every new window 220x50 (ccd-spawn-split.test.ts),
+    // so a narrow terminal on ANOTHER session no longer narrows a spawn; a
+    // bullet still sending the operator to close one is telling them a cause
+    // that is gone.
+    expect(bullet, 'the narrow bullet still names the pre-pin cause').not.toMatch(/attached to any session/);
   });
 });
 

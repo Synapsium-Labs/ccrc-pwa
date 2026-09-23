@@ -2579,8 +2579,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7555-7557`), each with an operator sentence of its own at `:7595`,
-`:7603` and `:7616`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7611-7613`), each with an operator sentence of its own at `:7651`,
+`:7659` and `:7672`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2618,8 +2618,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21202`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19989-19991`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21356`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20143-20145`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
