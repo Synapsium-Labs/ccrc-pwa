@@ -182,13 +182,20 @@ describe('ccrc: dispatch and usage', () => {
     // a box a public name and a real certificate (spec D1–D3), the same shape
     // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
     // `server/test/ccrc-expose.test.ts` owns what it does.
+    //
+    // `channel` joined it in W4a Task 8 — the READ-ONLY view of this box's
+    // update-intent projection: what `ccrc update` with no --to would follow,
+    // and the line `ccrc rollout --channel` reads over ssh. It takes no
+    // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
+    // does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}channel {3}print this box's update channel as the control plane projects/m);
     expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);

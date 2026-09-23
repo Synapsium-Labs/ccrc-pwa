@@ -45,7 +45,7 @@ import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { itLinux, itDarwin } from './platformFixtures.js';
+import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -751,6 +751,12 @@ const localUrls = (home: string): string[] => (existsSync(join(home, 'curl-argv'
   ? readFileSync(join(home, 'curl-argv'), 'utf8').split('\n')
     .filter((l) => l.startsWith('local://'))
   : []);
+
+/** `update --check`'s machine line, found by its prefix rather than assumed
+ *  to be line 1 — the same rule rollout's parser applies (`grep -m1
+ *  '^check: '`), so a sentence printed before it can never shift what a
+ *  test reads. */
+const checkLine = (s: string): string => s.split('\n').find((l) => l.startsWith('check: ')) ?? '';
 
 /** The backup directory THIS run announced — parsed from the transcript, not
  *  guessed from `ls`: the hooks installer inside a full run writes its own
@@ -3087,7 +3093,21 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
         ? 'CCRC_ROLE=fleet\n'
         : `CCRC_ROLE=${role}\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n`);
     }
-    packRelease(home, stubTree(home, { version: 'v2.0.0', installExit }), { tag: 'v2.0.0' });
+    const tree = stubTree(home, { version: 'v2.0.0', installExit });
+    packRelease(home, tree, { tag: 'v2.0.0' });
+    // W4a Task 8: a server or `both` box's `ccrc update` with no --to follows
+    // the control plane's projection, which the server process writes — so an
+    // ABSENT one is `unreadable (absent)` and refused before the gate is ever
+    // reached. Give the box what a real server box has: the frozen clock and
+    // an in-force projection naming the v2.0.0 it publishes, packed at
+    // download/v2.0.0 too. latest/download stays for the Darwin leg, whose
+    // reader answers `not-configured` whatever is planted. A fleet box has no
+    // ccd-update-sync.timer here, reads `not-configured`, and needs neither.
+    if (role === 'server' || role === 'both') {
+      plantClock(home);
+      plantIntent(home, intentDoc({ desired: 'v2.0.0', desiredStable: 'v2.0.0' }));
+      packRelease(home, tree, { tag: 'v2.0.0', latest: false });
+    }
     return home;
   };
   /** Everything a sweep needs, so a "no sweep" assertion is about the gate —
@@ -4109,5 +4129,503 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(r.stdout).toMatch(/already runs v2\.0\.0/);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
     expect(r.stdout).toMatch(/probe-inline=0/);
+  });
+});
+
+// ── The control plane's projection (design 2026-09-20 §9; W4a Task 8) ────
+// Fixtures for the two describes below. The reader's ONE clock is
+// `date +%s` — the document is unix SECONDS — so every case that plants a
+// projection freezes it: a lease compared against a moving second is a
+// flake, and "a lease EQUAL to now is still in force" is unmeasurable
+// without it.
+const REAL_DATE = realPath('date');
+const INTENT_NOW = 2_000_000_000;
+
+interface IntentFields {
+  epoch?: string; issued?: string; lease?: string; channel?: string;
+  desired?: string; desiredStable?: string; desiredDev?: string; auto?: string;
+}
+
+/** Spec §9's nine-line document in its own order, SECONDS, ending `end\n` —
+ *  the grammar W2's route and server-role writer render and `ccd-update-sync`
+ *  installs. Defaults: in force at INTENT_NOW (issued a minute before, lease
+ *  issued + 900, `pool_epoch`'s lease), channel stable, desired v2.0.0 on
+ *  stable and v2.1.0 on dev. */
+function intentDoc(f: IntentFields = {}): string {
+  const issued = f.issued ?? String(INTENT_NOW - 60);
+  return [
+    `epoch ${f.epoch ?? '7'}`,
+    `issued ${issued}`,
+    `lease ${f.lease ?? String(Number(issued) + 900)}`,
+    `channel ${f.channel ?? 'stable'}`,
+    `desired ${f.desired ?? 'v2.0.0'}`,
+    `desired-stable ${f.desiredStable ?? 'v2.0.0'}`,
+    `desired-dev ${f.desiredDev ?? 'v2.1.0'}`,
+    `auto ${f.auto ?? 'off'}`,
+    'end',
+  ].join('\n') + '\n';
+}
+
+const intentPath = (home: string): string => join(home, '.ccrc', 'update-intent');
+
+/** The projection at its one path, mode 0600 — the mode W2's writer and the
+ *  puller both place it with. */
+function plantIntent(home: string, text: string | Buffer): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(intentPath(home), text, { mode: 0o600 });
+}
+
+/** The role where `cmd_install` records it: `~/.ccrc/ccrc.env`'s `CCRC_ROLE=`. */
+function plantRole(home: string, role: 'fleet' | 'server' | 'both'): void {
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_ROLE=${role}\n`);
+}
+
+/** "Configured" on a fleet node: the puller's timer unit FILE is installed —
+ *  `_pool_sync_installed`'s rule, and `plantPoolSyncTimer`'s zero-byte idiom
+ *  (`ccdWsHelpers.ts:136-139`): nothing reads the unit's content. */
+function plantSyncTimer(home: string): void {
+  const units = join(home, '.config', 'systemd', 'user');
+  mkdirSync(units, { recursive: true });
+  writeFileSync(join(units, 'ccd-update-sync.timer'), '');
+}
+
+/** Freezes `date +%s` at `s` (every other `date` argv execs the real one).
+ *  Planted in `doctor-stubs`, so every run's `replantDoctorStubs` re-plants
+ *  it ahead of the real binary on PATH. */
+function plantClock(home: string, s: number = INTENT_NOW): void {
+  writeFileSync(join(home, 'fixture-now'), `${s}\n`);
+  writeFileSync(join(home, 'doctor-stubs', 'date'),
+    '#!/bin/sh\n'
+    + 'if [ "$#" -eq 1 ] && [ "$1" = "+%s" ] && [ -f "$HOME/fixture-now" ]; then\n'
+    + '  IFS= read -r n < "$HOME/fixture-now"; echo "$n"; exit 0\n'
+    + 'fi\n'
+    + `exec ${REAL_DATE} "$@"\n`, { mode: 0o755 });
+}
+
+/** `ccrc channel` against the fixture box, in `runUpdate`'s environment and
+ *  order (env built, then the doctor stubs re-planted). */
+function runChannel(home: string, args: string[] = []): Result {
+  const env = updateEnv(home);
+  replantDoctorStubs(home);
+  const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'channel', ...args], { env, encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** A fleet node the control plane manages: role recorded, timer unit file
+ *  installed, the clock frozen, an OLD v1.0.0 build on it. */
+function managedFleetBox(prefix: string): string {
+  const home = freshUpdateBox(prefix);
+  plantOldBox(home, { version: 'v1.0.0' });
+  plantRole(home, 'fleet');
+  plantSyncTimer(home);
+  plantClock(home);
+  return home;
+}
+
+const PULLER_REMEDY = 'systemctl --user start ccd-update-sync.service';
+const SERVER_REMEDY = 'restart ccrc.service (it writes ~/.ccrc/update-intent on every sweep)';
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+describe('ccrc update: the projection (role-aware reader, --channel)', () => {
+  // THE FALLBACK, AND ONLY WHERE IT IS HONEST (spec §9's table; §18 "absent
+  // + no timer says so"): a node nothing manages follows stable — and says
+  // so, rather than reading an absent projection as `stable` in silence.
+  platformContrast('no control plane on this box: update follows latest/download and says which kind of box it is', {
+    darwin: ['never centrally managed (decision 17), whatever the box records', () => {
+      const home = freshUpdateBox('ccrc-update-intent-fallback-mac-');
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantRole(home, 'server');
+      plantClock(home);
+      plantIntent(home, intentDoc());
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const r = runUpdate(home, ['--check']);
+      expect(checkLine(r.stdout)).toMatch(/^check: box=v1\.0\.0 sha=\S+ target=v2\.0\.0 (.* )?state=behind$/);
+      expect(r.stdout).toMatch(/^update: no control plane on this box \(macOS: not centrally managed\) — following stable$/m);
+      expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    }],
+    linux: ['a fleet node with no ccd-update-sync.timer, and a node recording no role', () => {
+      for (const role of ['fleet', null] as const) {
+        const home = freshUpdateBox('ccrc-update-intent-fallback-');
+        plantOldBox(home, { version: 'v1.0.0' });
+        if (role !== null) plantRole(home, role);
+        packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+        const r = runUpdate(home);
+        expect(r.code, `role ${role}: ${r.stderr}`).toBe(0);
+        expect(r.stdout).toMatch(/^update: no control plane on this box — following stable$/m);
+        expect(localUrls(home)[0]).toBe(`local://${home}/releases/latest/download/SHA256SUMS`);
+        expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+      }
+    }],
+  });
+
+  // Review Focus 2: the silent fallback is the failure. A fleet node whose
+  // timer IS installed and whose projection is absent has never synced —
+  // `unreadable`, refused, never the stable sentence.
+  itLinux('fleet + the timer unit file installed + projection ABSENT → unreadable (never synced), the puller\'s remedy, nothing fetched', () => {
+    const home = managedFleetBox('ccrc-update-intent-never-synced-');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(new RegExp(`^ccrc: update: ~/\\.ccrc/update-intent is unreadable \\(never synced\\) — ${esc(PULLER_REMEDY)}$`, 'm'));
+    expect(r.stdout).not.toMatch(/following stable/);
+    expect(localUrls(home)).toEqual([]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // §18 "the reader is role-aware": on server/both the server process is the
+  // writer, so an absent projection is unreadable with NO timer consulted.
+  // A latest release IS published, so a reader that fell back would visibly
+  // fetch it.
+  itLinux('server or both + projection absent → unreadable (absent) and the server-restart remedy, never stable', () => {
+    for (const role of ['server', 'both'] as const) {
+      const home = freshUpdateBox(`ccrc-update-intent-absent-${role}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantRole(home, role);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const r = runUpdate(home);
+      expect(r.code, role).toBe(1);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc: update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}$`, 'm'));
+      expect(r.stdout, role).not.toMatch(/following stable/);
+      expect(localUrls(home), role).toEqual([]);
+    }
+  });
+
+  itLinux('an in-force projection names the target: download/<desired>, said on stdout, never latest/download', () => {
+    const home = managedFleetBox('ccrc-update-intent-ok-');
+    plantIntent(home, intentDoc());
+    packRelease(home, stubTree(home, { version: 'v9.9.9' }), { tag: 'v9.9.9' });   // a DIFFERENT latest: never fetched
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: following the control plane — channel stable, desired v2\.0\.0$/m);
+    expect(localUrls(home)[0]).toBe(`local://${home}/releases/download/v2.0.0/SHA256SUMS`);
+    expect(localUrls(home).some((u) => u.includes('/latest/'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  itLinux('--channel dev selects desired-dev for one run; --channel=stable selects desired-stable (spec §9)', () => {
+    const home = managedFleetBox('ccrc-update-intent-channel-');
+    plantIntent(home, intentDoc({ desired: 'v2.0.0', desiredStable: 'v2.0.0', desiredDev: 'v2.1.0' }));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    packRelease(home, stubTree(home, { version: 'v2.1.0' }), { tag: 'v2.1.0', latest: false });
+    let r = runUpdate(home, ['--channel', 'dev']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: following the control plane — channel dev, desired v2\.1\.0$/m);
+    expect(localUrls(home)[0]).toBe(`local://${home}/releases/download/v2.1.0/SHA256SUMS`);
+    rmSync(join(home, 'curl-argv'));
+    r = runUpdate(home, ['--check', '--channel=stable']);
+    expect(checkLine(r.stdout)).toMatch(/ target=v2\.0\.0 /);
+    expect(r.stdout).toMatch(/^this box: \S+ \(\S+\) · channel stable: v2\.0\.0 — /m);
+  });
+
+  // §18 "`--channel` refuses off the control plane": the fetch layer has no
+  // URL that means "newest prerelease", so dev must never reach latest/.
+  itLinux('--channel with no projection to resolve it refuses naming --to, and never reaches latest/download', () => {
+    const home = freshUpdateBox('ccrc-update-intent-channel-off-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantRole(home, 'fleet');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    for (const args of [['--channel', 'dev'], ['--check', '--channel', 'dev']]) {
+      const r = runUpdate(home, args);
+      expect(r.code, args.join(' ')).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc: update: --channel needs the control plane \(no projection resolves on this box\); use --to <tag>$/m);
+      expect(localUrls(home), args.join(' ')).toEqual([]);
+    }
+  });
+
+  itLinux('a lease in the past is stale: refused naming its age and the role\'s remedy, on --check too', () => {
+    const cases = [['fleet', PULLER_REMEDY], ['both', SERVER_REMEDY]] as const;
+    for (const [role, remedy] of cases) {
+      const home = freshUpdateBox(`ccrc-update-intent-stale-${role}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantRole(home, role);
+      if (role === 'fleet') plantSyncTimer(home);
+      plantClock(home);
+      plantIntent(home, intentDoc({ issued: String(INTENT_NOW - 1200), lease: String(INTENT_NOW - 300) }));
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      for (const args of [[], ['--check']]) {
+        const r = runUpdate(home, args);
+        expect(r.code, `${role} ${args.join(' ')}`).toBe(1);
+        expect(r.stderr).toMatch(new RegExp(
+          `^ccrc: update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}$`, 'm'));
+        expect(localUrls(home)).toEqual([]);
+      }
+    }
+  });
+
+  itLinux('a lease EQUAL to now is still in force — the comparison is strict', () => {
+    const home = managedFleetBox('ccrc-update-intent-lease-now-');
+    plantIntent(home, intentDoc({ issued: String(INTENT_NOW - 900), lease: String(INTENT_NOW) }));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check']);
+    expect(r.stderr).not.toMatch(/stale/);
+    expect(checkLine(r.stdout)).toMatch(/ target=v2\.0\.0 /);
+    expect(r.stdout).toMatch(/^update: following the control plane — channel stable, desired v2\.0\.0$/m);
+  });
+
+  itLinux('a malformed projection is refused — never followed, never read as "no control plane"', () => {
+    const home = managedFleetBox('ccrc-update-intent-malformed-');
+    plantIntent(home, intentDoc().replace('end\n', ''));   // torn before its terminator
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(new RegExp(
+      `^ccrc: update: ~/\\.ccrc/update-intent is malformed \\(its last line is not end\\) — refusing to follow a projection this reader does not recognise; ${esc(PULLER_REMEDY)}$`, 'm'));
+    expect(r.stdout).not.toMatch(/following stable/);
+    expect(localUrls(home)).toEqual([]);
+  });
+
+  itLinux('`desired none` refuses and says where the reason is; --channel takes the other line when it names a tag', () => {
+    const home = managedFleetBox('ccrc-update-intent-none-');
+    plantIntent(home, intentDoc({ desired: 'none', desiredStable: 'none', desiredDev: 'v2.1.0' }));
+    packRelease(home, stubTree(home, { version: 'v2.1.0' }), { tag: 'v2.1.0', latest: false });
+    for (const [args, key] of [[[], 'desired'], [['--channel', 'stable'], 'desired-stable']] as const) {
+      const r = runUpdate(home, [...args]);
+      expect(r.code, key).toBe(1);
+      expect(r.stderr).toMatch(new RegExp(
+        `^ccrc: update: the control plane resolves no target for this box \\(${key} none\\) — nothing newer than this box's floor is eligible, or the server declined one; its reason is on the console's update screen \\(GET /api/updates, resolveDetail\\); name one with --to <tag>$`, 'm'));
+      expect(localUrls(home), key).toEqual([]);
+    }
+    const r = runUpdate(home, ['--channel', 'dev']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(localUrls(home)[0]).toBe(`local://${home}/releases/download/v2.1.0/SHA256SUMS`);
+  });
+
+  // A CONVERGED managed node's projection IS `desired none`: W2 names a tag
+  // only when one is strictly newer than the floor (`notNewerThanFloor`), and
+  // a completed install raises the floor to the running tag. So --check reads
+  // `none` as "nothing newer" and compares the box against ITSELF (plan
+  // D-3266) — a refusing --check would answer
+  // exit 1, with no machine line, on every healthy managed box. `update`
+  // itself still refuses (spec §9).
+  itLinux('--check on a converged box whose projection says `none` answers state=current, exit 0, fetching nothing; update itself still refuses', () => {
+    const home = managedFleetBox('ccrc-update-intent-none-current-');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');   // plantOldBox's stamp sha
+    plantIntent(home, intentDoc({ desired: 'none', desiredStable: 'none' }));
+    const sentence = (key: string): string => `update: the control plane resolves no target for this box (${key} none) — nothing newer than this box's floor is eligible, or the server declined one; its reason is on the console's update screen (GET /api/updates, resolveDetail)`;
+    for (const [args, key] of [[['--check'], 'desired'], [['--check', '--channel', 'stable'], 'desired-stable']] as const) {
+      const r = runUpdate(home, [...args]);
+      expect(r.code, `${key}: ${r.stderr}`).toBe(0);
+      expect(r.stdout.split('\n')[0], key).toMatch(/^check: box=v1\.0\.0 sha=oldsha0+ target=v1\.0\.0 (.* )?state=current$/);
+      expect(r.stdout.split('\n'), key).toContain(sentence(key));
+      expect(r.stdout).toMatch(new RegExp(`^this box: v1\\.0\\.0 \\(oldsha0+\\) · channel stable \\(${key} none\\): v1\\.0\\.0 — current$`, 'm'));
+      expect(localUrls(home), key).toEqual([]);
+    }
+    // No completed-install record: incomplete, exit 1 — and the reinstall it
+    // names carries --to, because a bare update refuses on this projection.
+    rmSync(join(home, '.ccrc', 'installed'));
+    let r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(checkLine(r.stdout)).toMatch(/ target=v1\.0\.0 (.* )?state=incomplete$/);
+    expect(r.stdout).toMatch(/— same version, but the install never completed \(ccrc version explains\); 'ccrc update --to v1\.0\.0' will reinstall \(with no --to, update refuses: the control plane names no target\)$/m);
+    // The install path keeps spec §9's refusal, nothing fetched.
+    r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: the control plane resolves no target for this box \(desired none\) — nothing newer than this box's floor is eligible/m);
+    expect(localUrls(home)).toEqual([]);
+    // A box with no stamped version has nothing to compare against: refused.
+    const bare = freshUpdateBox('ccrc-update-intent-none-unversioned-');
+    plantOldBox(bare);
+    plantRole(bare, 'fleet');
+    plantSyncTimer(bare);
+    plantClock(bare);
+    plantIntent(bare, intentDoc({ desired: 'none', desiredStable: 'none' }));
+    r = runUpdate(bare, ['--check']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: the control plane resolves no target for this box \(desired none\) — .*; this box records no release version to compare against — name one with --to <tag>$/m);
+    expect(checkLine(r.stdout)).toBe('');
+    expect(localUrls(bare)).toEqual([]);
+  });
+
+  itLinux('--check with no --to reports what update WOULD install — the projection\'s desired, on a server box too — and writes nothing', () => {
+    const home = freshUpdateBox('ccrc-update-intent-check-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantRole(home, 'server');
+    plantClock(home);
+    plantIntent(home, intentDoc());
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    updateEnv(home);
+    replantDoctorStubs(home);
+    const before = homeSnapshot(home);
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(r.stdout.split('\n')[0]).toMatch(/^check: box=v1\.0\.0 sha=\S+ target=v2\.0\.0 (.* )?state=behind$/);
+    expect(r.stdout).toMatch(/^update: following the control plane — channel stable, desired v2\.0\.0$/m);
+    expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(\S+\) · channel stable: v2\.0\.0 — behind$/m);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
+    expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  // §18 "the floor is checked on every path": the W1 check keys on the
+  // RESOLVED version, and the projection is a third way to resolve it.
+  itLinux('a projection-resolved target below the floor is refused before any backup, naming the control plane', () => {
+    const home = freshUpdateBox('ccrc-update-intent-floor-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v3.0.0\n');
+    plantRole(home, 'fleet');
+    plantSyncTimer(home);
+    plantClock(home);
+    plantIntent(home, intentDoc());
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by the control plane \(channel stable\)\) is below this box's floor v3\.0\.0/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('--channel is a usage error beside --to, with no value, or with any word but stable|dev — exit 2, nothing fetched', () => {
+    const home = freshUpdateBox('ccrc-update-intent-argv-');
+    const cases: Array<[string[], RegExp]> = [
+      [['--channel', 'dev', '--to', 'v1.0.0'], /^ccrc: update: --channel and --to are exclusive — --to names the tag, --channel asks the control plane which one; pick one$/m],
+      [['--to=v1.0.0', '--channel=stable'], /^ccrc: update: --channel and --to are exclusive/m],
+      [['--channel', 'beta'], /^ccrc: --channel expects stable or dev \(got: beta\)$/m],
+      [['--channel='], /^ccrc: --channel expects stable or dev \(got: nothing\)$/m],
+      [['--channel'], /^ccrc: --channel needs a value: stable or dev$/m],
+    ];
+    for (const [args, says] of cases) {
+      const r = runUpdate(home, args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stderr, args.join(' ')).toMatch(says);
+      expect(existsSync(join(home, 'curl-argv')), `${args.join(' ')}: a fetch ran`).toBe(false);
+    }
+  });
+
+  // The Darwin arm, measured on EVERY platform: `CCD_OS` is computed at
+  // source time, so an assignment after the `.` is how a Linux run reaches
+  // it (Task 3's `sourcedCcrc`). A projection, a role and a timer are all
+  // present — the reader must answer before it looks at any of them.
+  it('the reader answers not-configured on CCD_OS=darwin before it reads a byte, and --channel is refused there', () => {
+    const home = freshUpdateBox('ccrc-update-intent-darwin-arm-');
+    plantRole(home, 'fleet');
+    plantSyncTimer(home);
+    plantIntent(home, intentDoc());
+    let r = sourcedCcrc(home, 'CCD_OS=darwin; _upd_intent_state; printf "%s|%s|%s\\n" "$UPD_INTENT_STATE" "$UPD_INTENT_WHY" "$UPD_INTENT_DESIRED"; _upd_target "" ""; printf "via=%s target=[%s]\\n" "$UPD_TARGET_VIA" "$UPD_TARGET"');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toEqual([
+      'not-configured|macos|',
+      'update: no control plane on this box (macOS: not centrally managed) — following stable',
+      'via=latest/download target=[]',
+      '',
+    ]);
+    r = sourcedCcrc(home, 'CCD_OS=darwin; _upd_target "" dev; echo unreachable');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: --channel needs the control plane \(no projection resolves on this box\); use --to <tag>$/m);
+    expect(r.stdout).not.toMatch(/unreachable/);
+  });
+});
+
+describe('ccrc channel (design 2026-09-20 §14 — read-only)', () => {
+  itLinux('an in-force projection: the machine line carries the document, then one sentence; exit 0; nothing written', () => {
+    const home = managedFleetBox('ccrc-channel-ok-');
+    plantIntent(home, intentDoc({ channel: 'dev', desired: 'v2.1.0', auto: 'channel' }));
+    updateEnv(home);
+    replantDoctorStubs(home);
+    const before = homeSnapshot(home);
+    const r = runChannel(home);
+    expect(r.code, r.stderr).toBe(0);
+    const out = r.stdout.split('\n');
+    expect(out[0]).toBe('channel: state=ok channel=dev desired=v2.1.0 desired-stable=v2.0.0 desired-dev=v2.1.0 auto=channel');
+    expect(out[1]).toBe("this box follows channel dev: the control plane resolves v2.1.0 (stable v2.0.0, dev v2.1.0; auto channel) — 'ccrc update' with no --to installs v2.1.0; the channel is set from the console");
+    expect(out.slice(2)).toEqual(['']);
+    expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  itLinux('every other state: its word, `-` for each field no document carries, and its exit code', () => {
+    type Case = { name: string; plant: (h: string) => void; line: string; says: RegExp; code: number };
+    const dash = 'channel=- desired=- desired-stable=- desired-dev=- auto=-';
+    const cases: Case[] = [
+      { name: 'none', plant: (h) => { plantRole(h, 'fleet'); plantSyncTimer(h); plantIntent(h, intentDoc({ desired: 'none', desiredStable: 'none' })); },
+        line: 'channel: state=none channel=stable desired=none desired-stable=none desired-dev=v2.1.0 auto=off',
+        says: /^this box follows channel stable: the control plane resolves no target for it \(desired none\) — its reason is on the console's update screen/m, code: 0 },
+      { name: 'not-configured', plant: (h) => plantRole(h, 'fleet'),
+        line: `channel: state=not-configured ${dash}`, says: /^no control plane on this box — 'ccrc update' follows stable$/m, code: 1 },
+      { name: 'unreadable (never synced)', plant: (h) => { plantRole(h, 'fleet'); plantSyncTimer(h); },
+        line: `channel: state=unreadable ${dash}`, says: new RegExp(`^~/\\.ccrc/update-intent is unreadable \\(never synced\\) — ${esc(PULLER_REMEDY)}$`, 'm'), code: 1 },
+      { name: 'unreadable (absent, server)', plant: (h) => plantRole(h, 'server'),
+        line: `channel: state=unreadable ${dash}`, says: new RegExp(`^~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}$`, 'm'), code: 1 },
+      { name: 'stale', plant: (h) => { plantRole(h, 'server'); plantIntent(h, intentDoc({ issued: String(INTENT_NOW - 2000), lease: String(INTENT_NOW - 1100) })); },
+        line: `channel: state=stale ${dash}`, says: /is stale — its lease ended 1100s ago; restart ccrc\.service/m, code: 1 },
+      // No role recorded and no puller installed: the only writer of a
+      // present copy is a server that DERIVED its role (W2's D-3174), so the
+      // remedy is the server's — never a unit this box does not have.
+      { name: 'stale, no role, no timer', plant: (h) => plantIntent(h, intentDoc({ issued: String(INTENT_NOW - 2000), lease: String(INTENT_NOW - 1100) })),
+        line: `channel: state=stale ${dash}`, says: new RegExp(`is stale — its lease ended 1100s ago; ${esc(SERVER_REMEDY)}$`, 'm'), code: 1 },
+      // …and with the timer unit file installed, the puller's.
+      { name: 'stale, no role, timer', plant: (h) => { plantSyncTimer(h); plantIntent(h, intentDoc({ issued: String(INTENT_NOW - 2000), lease: String(INTENT_NOW - 1100) })); },
+        line: `channel: state=stale ${dash}`, says: new RegExp(`is stale — its lease ended 1100s ago; ${esc(PULLER_REMEDY)}$`, 'm'), code: 1 },
+    ];
+    for (const c of cases) {
+      const home = freshUpdateBox('ccrc-channel-state-');
+      plantClock(home);
+      c.plant(home);
+      const r = runChannel(home);
+      expect(r.stdout.split('\n')[0], c.name).toBe(c.line);
+      expect(r.stdout, c.name).toMatch(c.says);
+      expect(r.code, c.name).toBe(c.code);
+    }
+  });
+
+  // The whole-document grammar (spec §9), case by case, through the verb.
+  // Every row must answer `malformed` — except the two the grammar admits.
+  itLinux('the grammar: every torn, reordered, widened or foreign document is malformed; a missing final newline is not', () => {
+    const doc = intentDoc();
+    const malformed: Array<[string, string | Buffer]> = [
+      ['empty', ''],
+      ['torn before end', doc.replace('end\n', '')],
+      ['torn mid-line', doc.slice(0, doc.indexOf('desired-dev') + 9)],
+      ['a blank line after end', `${doc}\n`],
+      ['a tenth line', doc.replace('auto off\n', 'auto off\nauto off\n')],
+      ['a blank line inside', doc.replace('channel stable\n', 'channel stable\n\n')],
+      ['reordered', doc.replace(/^epoch 7\nissued (\d+)\n/, 'issued $1\nepoch 7\n')],
+      ['CRLF', doc.replace(/\n/g, '\r\n')],
+      ['a leading zero', doc.replace('epoch 7', 'epoch 07')],
+      ['a negative number', doc.replace('epoch 7', 'epoch -7')],
+      ['twenty digits (wraps positive in bash)', intentDoc({ lease: '99999999999999999999' })],
+      ['two spaces', doc.replace('epoch 7', 'epoch  7')],
+      ['a tag without its v', intentDoc({ desired: '2.0.0' })],
+      ['a word for a tag', intentDoc({ desiredDev: 'latest' })],
+      ['an unknown channel', intentDoc({ channel: 'beta' })],
+      ['an unknown auto', intentDoc({ auto: 'on' })],
+      ['a NUL byte', Buffer.concat([Buffer.from('epoch 7\0'), Buffer.from(doc.slice('epoch 7'.length))])],
+      ['over the 65536-byte cap', doc.replace('epoch 7', `epoch 7${'0'.repeat(70_000)}`)],
+    ];
+    for (const [name, text] of malformed) {
+      const home = managedFleetBox('ccrc-channel-grammar-');
+      plantIntent(home, text);
+      const r = runChannel(home);
+      expect(r.stdout.split('\n')[0], name).toMatch(/^channel: state=malformed channel=- /);
+      expect(r.stdout, name).toMatch(/is malformed \(.+\) — refusing to follow a projection this reader does not recognise; systemctl --user start ccd-update-sync\.service$/m);
+      expect(r.code, name).toBe(1);
+    }
+    for (const [name, text] of [['no final newline', doc.slice(0, -1)], ['a 13-digit (ms-shaped) lease is grammatical', intentDoc({ lease: '2000000000000' })]] as const) {
+      const home = managedFleetBox('ccrc-channel-grammar-ok-');
+      plantIntent(home, text);
+      const r = runChannel(home);
+      expect(r.stdout.split('\n')[0], name).toMatch(/^channel: state=ok /);
+    }
+    const home = managedFleetBox('ccrc-channel-grammar-dir-');
+    mkdirSync(intentPath(home), { recursive: true });
+    const r = runChannel(home);
+    expect(r.stdout).toMatch(/^channel: state=unreadable /);
+    expect(r.stdout).toMatch(/is unreadable \(not a readable regular file\)/);
+  }, 60_000);
+
+  it('every argument is refused — the channel is set from the console (decision 15); -h prints usage', () => {
+    const home = freshUpdateBox('ccrc-channel-argv-');
+    plantIntent(home, intentDoc());
+    const doc = readFileSync(intentPath(home));
+    for (const args of [['dev'], ['stable'], ['--set', 'dev'], ['--channel=dev']]) {
+      const r = runChannel(home, args);
+      expect(r.code, args.join(' ')).toBe(2);
+      expect(r.stderr).toMatch(/^ccrc: channel: set the channel from the console — a node never writes intent \(decision 15\)$/m);
+      expect(r.stdout, args.join(' ')).toBe('');
+    }
+    expect(readFileSync(intentPath(home)).equals(doc)).toBe(true);
+    const h = runChannel(home, ['-h']);
+    expect(h.code).toBe(0);
+    expect(h.stdout).toMatch(/usage: ccrc \{/);
   });
 });

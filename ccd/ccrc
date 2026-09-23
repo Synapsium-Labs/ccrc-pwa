@@ -1175,6 +1175,16 @@ BOX_PREVIOUS_FILE="$HOME/.ccrc/previous"
 # Every sentence that lists it expands this array.
 UPD_FROM_WORDS=(cli pwa restore rollback watchdog rollout)
 
+# ── THE CONTROL PLANE'S PROJECTION (design 2026-09-20 §9; W4 Task 8) ─────
+# `~/.ccrc/update-intent` — nine lines, `epoch`/`issued`/`lease` in unix
+# SECONDS, ending `end`: the server's resolution for THIS node. A fleet
+# node's `ccd-update-sync` pulls it every minute; on a server or `both` node
+# the server process writes it at every resolution and inventory sweep.
+# `ccrc update` with no --to follows it and `ccrc channel` prints it — both
+# through `_upd_intent_state` and nothing else. ccrc itself never writes it;
+# `_uninst_tree_bins` removes it.
+BOX_INTENT_FILE="$HOME/.ccrc/update-intent"
+
 # ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
 # `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
 # CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
@@ -1456,6 +1466,27 @@ UPD_GATE_WHY=""        # _upd_gate_probe: one line — what the last probe measu
 UPD_HEALTH_VERSION=""  # _upd_health_version: the version /health answered
 UPD_HEALTH_ADDR=""     # _upd_health_version: the host:port it asked
 
+# The projection reader's answer and the target chosen from it (design
+# 2026-09-20 §9; W4 Task 8), at file scope for the same `set -u` reason:
+# `_upd_intent_state` fills UPD_INTENT_*, `_upd_target` reads them and fills
+# UPD_TARGET*, and `--check`, the floor and `ccrc channel` read those.
+UPD_INTENT_STATE=""           # ok|none|not-configured|unreadable|stale|malformed
+UPD_INTENT_ROLE=""            # the recorded CCRC_ROLE (fleet|server|both), or "" — absent or unrecognised
+UPD_INTENT_WHY=""             # the state's reason; spliced into its sentence, never a byte of the file
+UPD_INTENT_EPOCH=""           # the eight document fields — set on ok|none ONLY
+UPD_INTENT_ISSUED=""
+UPD_INTENT_LEASE=""
+UPD_INTENT_CHANNEL=""
+UPD_INTENT_DESIRED=""
+UPD_INTENT_DESIRED_STABLE=""
+UPD_INTENT_DESIRED_DEV=""
+UPD_INTENT_AUTO=""
+UPD_TARGET=""                 # the tag _upd_resolve is handed; "" = latest/download
+UPD_TARGET_VIA=""             # how it was chosen, in the floor's words: --to <t> | the control plane (channel <c>) | latest/download
+UPD_TARGET_CHANNEL=""         # the channel whose desired line was taken (projection only)
+UPD_TARGET_LINE=""            # the one stdout sentence naming that choice, or "" for --to
+UPD_TARGET_NONE=""            # --check only: the desired key whose line read none, else "" (never folded into UPD_TARGET="")
+
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
 # one part of the verb and read in another.
@@ -1521,7 +1552,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|rollout|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1612,6 +1643,12 @@ already running).
             back and, with a server, for /health to answer the new version:
             a failed gate exits 4; a doctor FAIL with the gate passed exits
             3; --no-gate skips it.
+            With no --to the target is the control plane's projection
+            (~/.ccrc/update-intent): its desired, or for one run
+            [--channel stable|dev]'s desired-stable/desired-dev; a box no
+            control plane manages follows stable and says so, and a
+            projection that is unreadable, stale or malformed is refused
+            with its remedy ('ccrc channel' prints it).
             Per box; across a fleet, 'ccrc rollout' runs it in order
   rollback  return this box to an earlier published release: the build
             before its last update (~/.ccrc/previous) by default, or
@@ -1624,6 +1661,13 @@ already running).
             target was the known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
             [--from <who>] names the caller (${UPD_FROM_WORDS[*]})
+  channel   print this box's update channel as the control plane projects
+            it (~/.ccrc/update-intent): one line (state, channel, desired,
+            desired-stable, desired-dev, auto), then what 'ccrc update'
+            with no --to would do. Exit 0 while a projection is in force, 1
+            otherwise (no control plane, or one that is unreadable, stale
+            or malformed: the sentence names the remedy). Read-only: the
+            channel is set from the console, never from a node
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
@@ -11442,7 +11486,7 @@ _inst_floor() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -11460,6 +11504,10 @@ cmd_update() {
         [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
         from="$2"; from_set=1; shift ;;
       --from=*) from="${1#--from=}"; from_set=1 ;;
+      --channel)
+        [ $# -ge 2 ] || { echo "$PROG: --channel needs a value: stable or dev" >&2; usage >&2; exit 2; }
+        channel="$2"; channel_set=1; shift ;;
+      --channel=*) channel="${1#--channel=}"; channel_set=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
@@ -11483,6 +11531,21 @@ cmd_update() {
   fi
   UPD_FROM="${from:-cli}"
   UPD_REPORT_TARGET="$to"
+  # `--channel` (design §9): stable or dev, for ONE run, and never beside
+  # --to — --to names the tag, --channel asks the control plane which one,
+  # and which the operator meant is not ours to guess (D-3139's shape).
+  if [ "$channel_set" -eq 1 ]; then
+    case "$channel" in
+      stable|dev) ;;
+      *) echo "$PROG: --channel expects stable or dev (got: ${channel:-nothing})" >&2
+         usage >&2
+         exit 2 ;;
+    esac
+    if [ -n "$to" ]; then
+      echo "$PROG: update: --channel and --to are exclusive — --to names the tag, --channel asks the control plane which one; pick one" >&2
+      exit 2
+    fi
+  fi
   # `--check` MEASURES and writes nothing; `--force`, `--downgrade` and
   # `--allow-unsigned` each commit this box to an act the check arm never
   # reaches (D-3139) — the same "silently drop the flag you also typed" trap
@@ -11540,7 +11603,16 @@ cmd_update() {
   if [ "$check" -eq 1 ]; then
     command -v curl >/dev/null 2>&1 || _ccrc_die "curl is required by 'ccrc update --check' but is not on PATH"
     local sha="none" box="unversioned" state="unversioned" label="latest" rec="" rc=0
-    [ -n "$to" ] && label="target"
+    # The target is what `update` would install (design §9): --to, the
+    # projection's desired, or latest/download — ONE decision, `_upd_target`,
+    # whose sentence waits until the machine line is out (rollout reads the
+    # first `check: ` line; this file's own --check tests read line 1).
+    _upd_target "$to" "$channel" check >/dev/null
+    case "$UPD_TARGET_VIA" in
+      --to\ *)              label="target" ;;
+      "the control plane"*) label="channel $UPD_TARGET_CHANNEL" ;;
+    esac
+    [ -z "$UPD_TARGET_NONE" ] || label="$label ($UPD_TARGET_NONE none)"
     _box_build_fields || rc=$?
     if [ "$rc" -eq 0 ]; then
       sha="${BOX_BUILD[0]}"
@@ -11548,7 +11620,20 @@ cmd_update() {
         box="${BOX_BUILD[4]}"; state="behind"
       fi
     fi
-    _upd_resolve "$to" >/dev/null
+    # `none` is what a CONVERGED managed node reads (W2 names only a tag
+    # strictly newer than the floor): nothing newer, so compare the box
+    # against ITS OWN tag and fetch nothing — the state below then reads
+    # `current` on a completed install (plan D-3266).
+    # A box with no stamped tag has nothing to compare against.
+    local again="update will reinstall"
+    if [ -n "$UPD_TARGET_NONE" ]; then
+      [ "$box" != unversioned ] \
+        || _ccrc_die "$UPD_TARGET_LINE; this box records no release version to compare against — name one with --to <tag>"
+      UPD_VERSION="$box"
+      again="'ccrc update --to $box' will reinstall (with no --to, update refuses: the control plane names no target)"
+    else
+      _upd_resolve "$UPD_TARGET" >/dev/null
+    fi
     if [ "$state" = behind ] && [ "$box" = "$UPD_VERSION" ]; then
       state="incomplete"
       if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then
@@ -11557,9 +11642,10 @@ cmd_update() {
     fi
     # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
     echo "check: box=$box sha=$sha target=$UPD_VERSION state=$state"
+    [ -z "$UPD_TARGET_LINE" ] || printf '%s\n' "$UPD_TARGET_LINE"
     case "$state" in
       current)    echo "this box: $box ($sha) · $label: $UPD_VERSION — current"; return 0 ;;
-      incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); update will reinstall"; return 1 ;;
+      incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); $again"; return 1 ;;
       behind)     echo "this box: $box ($sha) · $label: $UPD_VERSION — behind"; return 1 ;;
       *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
     esac
@@ -11634,13 +11720,17 @@ cmd_update() {
 
   _upd_fleet_warn
   _upd_phase resolving
-  _upd_resolve "$to"
+  # WHICH RELEASE (design §9): --to, else the control plane's projection,
+  # else — on a box no control plane manages, said out loud — stable. A
+  # projection this reader cannot follow refuses HERE, before any fetch, and
+  # (past the lock) is this run's `failed` report.
+  _upd_target "$to" "$channel"
+  UPD_REPORT_TARGET="$UPD_TARGET"
+  _upd_resolve "$UPD_TARGET"
   UPD_REPORT_TARGET="$UPD_VERSION"
-  # The floor names HOW the target was resolved (W1's sentence), computed
-  # here so the check keys on the resolved version whichever path chose it.
-  local via="latest/download"
-  [ -n "$to" ] && via="--to $to"
-  _upd_floor_check "$via" "$downgrade" "$UPD_FROM"
+  # The floor is checked against the RESOLVED version whichever way it was
+  # chosen, and its sentence names that way.
+  _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
   _upd_phase fetching
   _upd_fetch "$allow_unsigned"
   # THE GATE (design §5): the no-op path costs one verified download and no
@@ -12221,6 +12311,257 @@ _upd_unlock() {
   [ -n "$UPD_LOCK_FD" ] || return 0
   { exec {UPD_LOCK_FD}>&-; } 2>/dev/null || true
   UPD_LOCK_FD=""
+}
+
+# ── _upd_intent_state — the projection, measured (design 2026-09-20 §9) ──
+# `_acct_pool_state`'s vocabulary (`ccd/ccd:2162`) re-derived for this file,
+# plus `none` — `ok`'s twin for a document that resolves no target — and made
+# ROLE-AWARE, because "is a control plane configured here" is measured
+# differently per role (spec §9's table), and the timer-unit test alone is
+# false on exactly the node that is most centrally managed:
+#   macOS — never configured (decision 17), decided before anything is read.
+#   fleet, or no role recorded — `ccd-update-sync.timer`'s unit FILE is
+#       installed (`_pool_sync_installed`'s rule, `ccd/ccd:2116-2122`: the
+#       artifact the installer left, NEVER the projection's own absence,
+#       which is the thing being told apart). Absent file and no unit file:
+#       `not-configured`, the one answer that falls back to stable. Absent
+#       file WITH the unit file: `unreadable` (never synced) — never the
+#       fallback, or a stopped timer would silently follow stable.
+#   server / both — the recorded role IS the configuration: the server
+#       process is the writer, so an absent file is `unreadable`, always.
+# NAMED HAZARD: `CCRC_ROLE` is seed-once in ccrc.env (`_inst_env`), so a box
+# re-installed with another --role keeps its first; this reader trusts the
+# recorded role exactly as `cmd_update`'s role passthrough and rollout's
+# preflight already do. And the server DERIVES a role when none is recorded
+# (W2's D-3174) and writes its own projection, while this reader keys
+# "configured" on the RECORDED role, as spec §9's table does: a no-role box
+# with no timer unit file reads an ABSENT projection as `not-configured`.
+# rollout refuses a no-role box (D-3106), so no release-lane box is one.
+# A present file is judged the same way on every role: a bounded, NUL-aware
+# read (`_acct_pool_state`'s INVERTED rc, `ccd/ccd:2252-2254` — 0 means the
+# read stopped short of EOF, at the 65536-byte cap or a NUL), `end` as the
+# last line (the torn-write detector), exactly nine lines in spec order,
+# each its own grammar, and `lease` against `date +%s` — SECONDS, spec §9's
+# unit (the C1 defect, `server.ts:2679-2688`) — STRICTLY, so a lease equal
+# to now is still in force. A number wider than 18 digits is malformed
+# (plan D-3265): bash arithmetic wraps past 2^63-1, and a
+# 20-digit lease wraps to a POSITIVE value decades out — a garbage document
+# read as in force. `UPD_INTENT_WHY` is built from this function's own words,
+# never from the file's bytes. Always rc 0; prints nothing.
+_upd_intent_state() {
+  local LC_ALL=C   # `-n 65536` is a BYTE cap only under C (`_acct_pool_state`'s reason)
+  local f="$BOX_INTENT_FILE" role="" body="" tail="" rest="" now="" k v i
+  local -a lines=() vals=() keys=(epoch issued lease channel desired desired-stable desired-dev auto)
+  UPD_INTENT_STATE="" UPD_INTENT_ROLE="" UPD_INTENT_WHY=""
+  UPD_INTENT_EPOCH="" UPD_INTENT_ISSUED="" UPD_INTENT_LEASE="" UPD_INTENT_CHANNEL=""
+  UPD_INTENT_DESIRED="" UPD_INTENT_DESIRED_STABLE="" UPD_INTENT_DESIRED_DEV="" UPD_INTENT_AUTO=""
+  if [ "$CCD_OS" = darwin ]; then
+    UPD_INTENT_STATE=not-configured; UPD_INTENT_WHY=macos
+    return 0
+  fi
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  UPD_INTENT_ROLE="$role"
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    case "$role" in
+      server|both) UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY=absent ;;
+      *) if [ -f "$BOX_UNIT_DIR/ccd-update-sync.timer" ]; then
+           UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY="never synced"
+         else
+           UPD_INTENT_STATE=not-configured; UPD_INTENT_WHY="no ccd-update-sync.timer"
+         fi ;;
+    esac
+    return 0
+  fi
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY="not a readable regular file"
+    return 0
+  fi
+  if { IFS= read -r -d '' -n 65536 body; } 2>/dev/null < "$f"; then
+    UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="65536 bytes or more, or a NUL byte"
+    return 0
+  fi
+  tail="$body"
+  [[ "$tail" == *$'\n' ]] && tail="${tail%$'\n'}"
+  if [[ "${tail##*$'\n'}" != end ]]; then
+    UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="its last line is not end"
+    return 0
+  fi
+  # Split with builtins, and stop at ten lines: a document of 60 000
+  # newlines is as malformed at line 10 as at line 60 000.
+  rest="$tail"
+  while [ "${#lines[@]}" -lt 10 ] && [[ "$rest" == *$'\n'* ]]; do
+    lines+=("${rest%%$'\n'*}")
+    rest="${rest#*$'\n'}"
+  done
+  lines+=("$rest")
+  if [ "${#lines[@]}" -ne 9 ]; then
+    UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="not exactly nine lines"
+    return 0
+  fi
+  for i in 0 1 2 3 4 5 6 7; do
+    k="${keys[$i]}"
+    v="${lines[$i]#"$k "}"
+    if [[ "${lines[$i]}" != "$k "* ]] || ! case "$k" in
+         epoch|issued|lease) [[ "$v" =~ ^(0|[1-9][0-9]{0,17})$ ]] ;;
+         channel) [[ "$v" == stable || "$v" == dev ]] ;;
+         auto) [[ "$v" == off || "$v" == stable || "$v" == channel ]] ;;
+         *) [[ "$v" == none || "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ;;
+       esac; then
+      UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="line $((i + 1)) is not a well-formed $k line"
+      return 0
+    fi
+    vals[i]="$v"
+  done
+  # An unmeasurable clock is not "in force": without this, `(( > ))` on an
+  # empty `now` reads 0 and every lease passes.
+  now="$(date +%s)"
+  if [[ ! "$now" =~ ^[1-9][0-9]{0,17}$ ]]; then
+    UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY="the clock did not answer: date +%s"
+    return 0
+  fi
+  if (( now > 10#${vals[2]} )); then
+    UPD_INTENT_STATE=stale; UPD_INTENT_WHY="its lease ended $(( now - 10#${vals[2]} ))s ago"
+    return 0
+  fi
+  UPD_INTENT_EPOCH="${vals[0]}" UPD_INTENT_ISSUED="${vals[1]}" UPD_INTENT_LEASE="${vals[2]}"
+  UPD_INTENT_CHANNEL="${vals[3]}" UPD_INTENT_DESIRED="${vals[4]}"
+  UPD_INTENT_DESIRED_STABLE="${vals[5]}" UPD_INTENT_DESIRED_DEV="${vals[6]}" UPD_INTENT_AUTO="${vals[7]}"
+  if [ "$UPD_INTENT_DESIRED" = none ]; then UPD_INTENT_STATE=none; else UPD_INTENT_STATE=ok; fi
+  return 0
+}
+
+# `_upd_intent_say` — the sentence for a projection nobody may follow
+# (unreadable, stale, malformed), ending in the remedy for WHOEVER WRITES
+# THIS BOX'S COPY (spec §9's words): the puller's oneshot on a fleet node,
+# and a server restart where the server process is the writer. A box that
+# records no role is either: the puller when its timer unit file is
+# installed, else the server — which DERIVES a role from CCRC_FLEET when
+# none is recorded and writes its own projection (W2's D-3174), so there the
+# puller's unit does not even exist. `_upd_target` refuses with it (prefixed
+# `update: `); `ccrc channel` prints it bare. One line, stdout.
+_upd_intent_say() {
+  local puller="systemctl --user start ccd-update-sync.service"
+  local server="restart ccrc.service (it writes ~/.ccrc/update-intent on every sweep)"
+  local remedy="$puller"
+  case "$UPD_INTENT_ROLE" in
+    server|both) remedy="$server" ;;
+    "") [ -f "$BOX_UNIT_DIR/ccd-update-sync.timer" ] || remedy="$server" ;;
+  esac
+  case "$UPD_INTENT_STATE" in
+    unreadable) printf '%s\n' "~/.ccrc/update-intent is unreadable ($UPD_INTENT_WHY) — $remedy" ;;
+    stale)      printf '%s\n' "the control plane's projection (~/.ccrc/update-intent) is stale — $UPD_INTENT_WHY; $remedy" ;;
+    malformed)  printf '%s\n' "~/.ccrc/update-intent is malformed ($UPD_INTENT_WHY) — refusing to follow a projection this reader does not recognise; $remedy" ;;
+  esac
+}
+
+# ── _upd_target <to> <channel> — which release this run resolves (§9) ────
+# One decision before `_upd_resolve`, on the install path AND on --check (so
+# --check's `target=` is what update would install). --to wins outright;
+# otherwise the projection decides, through its ONE reader:
+#   ok | none      → `desired`, or `desired-<ch>` under --channel; a `none`
+#                    there refuses, pointing at where the server's reason is
+#                    — the document carries none (plan
+#                    D-3245);
+#   not-configured → stable through latest/download, SAID (spec §9's two
+#                    sentences) — unless --channel asked for the control
+#                    plane, which is refused: the fetch layer has no URL that
+#                    means "newest prerelease", and a node never resolves a
+#                    channel locally;
+#   anything else  → refused with `_upd_intent_say`'s sentence.
+# Every refusal is `_ccrc_die` — exit 1, nothing fetched. Sets UPD_TARGET,
+# UPD_TARGET_VIA, UPD_TARGET_CHANNEL, UPD_TARGET_LINE and UPD_TARGET_NONE,
+# and prints UPD_TARGET_LINE: --check silences it here and prints it AFTER
+# its machine line. `none` is also the STEADY STATE of a converged managed
+# node — W2 names a tag only when one is strictly newer than the floor — so
+# with a third argument `check` it does not die: UPD_TARGET_NONE names the
+# key and --check compares the box against itself (plan
+# D-3266). The install path keeps spec §9's
+# refusal, and its sentence names the ordinary reason first.
+_upd_target() {
+  local to="$1" ch="$2" mode="${3-}" key="desired" v="" none_why=""
+  UPD_TARGET="" UPD_TARGET_VIA="" UPD_TARGET_CHANNEL="" UPD_TARGET_LINE="" UPD_TARGET_NONE=""
+  if [ -n "$to" ]; then
+    UPD_TARGET="$to"; UPD_TARGET_VIA="--to $to"
+    return 0
+  fi
+  _upd_intent_state
+  case "$UPD_INTENT_STATE" in
+    ok|none)
+      UPD_TARGET_CHANNEL="${ch:-$UPD_INTENT_CHANNEL}"
+      v="$UPD_INTENT_DESIRED"
+      case "$ch" in
+        stable) key="desired-stable"; v="$UPD_INTENT_DESIRED_STABLE" ;;
+        dev)    key="desired-dev";    v="$UPD_INTENT_DESIRED_DEV" ;;
+      esac
+      UPD_TARGET_VIA="the control plane (channel $UPD_TARGET_CHANNEL)"
+      if [ "$v" = none ]; then
+        none_why="the control plane resolves no target for this box ($key none) — nothing newer than this box's floor is eligible, or the server declined one; its reason is on the console's update screen (GET /api/updates, resolveDetail)"
+        [ "$mode" = check ] || _ccrc_die "update: $none_why; name one with --to <tag>"
+        UPD_TARGET_NONE="$key"
+        UPD_TARGET_LINE="update: $none_why"
+      else
+        UPD_TARGET="$v"
+        UPD_TARGET_LINE="update: following the control plane — channel $UPD_TARGET_CHANNEL, desired $v"
+      fi ;;
+    not-configured)
+      [ -z "$ch" ] \
+        || _ccrc_die "update: --channel needs the control plane (no projection resolves on this box); use --to <tag>"
+      UPD_TARGET_VIA="latest/download"
+      if [ "$UPD_INTENT_WHY" = macos ]; then
+        UPD_TARGET_LINE="update: no control plane on this box (macOS: not centrally managed) — following stable"
+      else
+        UPD_TARGET_LINE="update: no control plane on this box — following stable"
+      fi ;;
+    *) _ccrc_die "update: $(_upd_intent_say)" ;;
+  esac
+  printf '%s\n' "$UPD_TARGET_LINE"
+}
+
+# ── cmd_channel — the projection, read-only (design 2026-09-20 §14) ──────
+# What `_upd_intent_state` measured, as one fixed-shape machine line —
+# `channel: state=<w> channel=<c> desired=<t> desired-stable=<t>
+# desired-dev=<t> auto=<a>`, `-` for every field a state carries no document
+# for — which `ccrc rollout --channel` reads over ssh (plan
+# D-3234), then one sentence. Exit 0 while a
+# document is in force (ok, none), 1 otherwise. READ-ONLY BY DESIGN: a node
+# never writes intent — the one credential it holds is the box token, and
+# decision 15 forbids that token any intent write — so every argument is
+# refused and the channel is set from the console.
+cmd_channel() {
+  case "${1-}" in -h|--help) usage; exit 0 ;; esac
+  if [ $# -gt 0 ]; then
+    echo "$PROG: channel: set the channel from the console — a node never writes intent (decision 15)" >&2
+    exit 2
+  fi
+  local c="-" d="-" ds="-" dd="-" a="-"
+  _upd_intent_state
+  case "$UPD_INTENT_STATE" in
+    ok|none)
+      c="$UPD_INTENT_CHANNEL"; d="$UPD_INTENT_DESIRED"; ds="$UPD_INTENT_DESIRED_STABLE"
+      dd="$UPD_INTENT_DESIRED_DEV"; a="$UPD_INTENT_AUTO" ;;
+  esac
+  echo "channel: state=$UPD_INTENT_STATE channel=$c desired=$d desired-stable=$ds desired-dev=$dd auto=$a"
+  case "$UPD_INTENT_STATE" in
+    ok)
+      echo "this box follows channel $c: the control plane resolves $d (stable $ds, dev $dd; auto $a) — 'ccrc update' with no --to installs $d; the channel is set from the console"
+      return 0 ;;
+    none)
+      echo "this box follows channel $c: the control plane resolves no target for it (desired none) — its reason is on the console's update screen (GET /api/updates, resolveDetail)"
+      return 0 ;;
+    not-configured)
+      if [ "$UPD_INTENT_WHY" = macos ]; then
+        echo "no control plane on this box (macOS: not centrally managed) — 'ccrc update' follows stable"
+      else
+        echo "no control plane on this box — 'ccrc update' follows stable"
+      fi
+      return 1 ;;
+    *)
+      _upd_intent_say
+      return 1 ;;
+  esac
 }
 
 # ── _upd_resolve / _upd_fetch — SHA256SUMS first, then the tarball ────────
@@ -13955,7 +14296,9 @@ _uninst_tree_bins() {
   # The node's update state (design §10–§11, W4 Task 4) is install-state too:
   # an uninstalled box has no update in flight, no baseline to restore to and
   # no spine step to classify.
+  # The control plane's projection goes with them (W4 Task 8): a box with no tree follows nothing.
   rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
+    "$BOX_INTENT_FILE" \
     || _ccrc_die "removing the node's update state files failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
@@ -13990,7 +14333,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock) removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
@@ -14169,6 +14512,7 @@ case "$VERB" in
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   rollback) cmd_rollback "$@" ;;
+  channel) cmd_channel "$@" ;;
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;

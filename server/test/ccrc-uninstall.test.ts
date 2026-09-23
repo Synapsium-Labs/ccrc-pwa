@@ -217,6 +217,10 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'update.json'),
     '{"target":"v1.0.0","phase":"done","startedAt":1,"updatedAt":2,"detail":null,"from":"cli","pid":4242}\n');
   writeFileSync(join(home, '.ccrc', 'update.lock'), '');
+  // W4a Task 8: the control plane's projection — install-state too: a box with
+  // no tree follows nothing, and a stale copy would outlive the node's identity.
+  writeFileSync(join(home, '.ccrc', 'update-intent'),
+    'epoch 1\nissued 1\nlease 901\nchannel stable\ndesired none\ndesired-stable none\ndesired-dev none\nauto off\nend\n', { mode: 0o600 });
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -563,12 +567,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The node's three files are install-state, not config (design 2026-09-20
     // §3, §9): an uninstalled box has no identity to the console, no
     // capabilities and no floor.
-    for (const f of ['node-id', 'ccrc-caps', 'floor', 'previous', 'install-step', 'update.json', 'update.lock']) {
+    for (const f of ['node-id', 'ccrc-caps', 'floor', 'previous', 'install-step', 'update.json', 'update.lock', 'update-intent']) {
       expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
     }
     // W4 Task 4: a box with no tree has no update in flight, no baseline to
     // restore to and no spine step to classify.
-    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock\) removed$/m);
+    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock, update-intent\) removed$/m);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
