@@ -47,8 +47,10 @@
 // becomes a BLANK line — commenting a line out is the commonest way to
 // disable it, and a commented-out removal must not count as a removal. A
 // comment opens where bash opens one, at a WORD-INITIAL `#`: at line start, or
-// after whitespace or one of `;&|(<>` (measured, bash 5: `true;# x` and
-// `a|# x` are comments; `$(echo a)#b` and `{#` are not, so `)` and `{` stay out).
+// after UNESCAPED whitespace or one of `;&|(<>` (measured, bash 5: `true;# x`
+// and `a|# x` are comments; `$(echo a)#b` and `{#` are not, so `)` and `{` stay
+// out; `\;#x`, `\ #x` and `\\#x` are not either — a backslash-escaped
+// character is part of a word, so the `#` after it is too).
 // Backslash continuations are then joined, and a join never crosses a second
 // newline, so a continuation into a comment or a blank line ends the command
 // exactly where bash ends it. A command is recognised by its name standing as a
@@ -164,6 +166,16 @@
 //     — none exists; it would need its own rule when one does.
 //   - Commands inside `echo` arguments and heredoc bodies are read as commands,
 //     and a string or heredoc spanning lines is not modelled.
+//   - `#` contexts the comment cut does not model, in both directions (measured,
+//     bash 5). CUT here, not a comment to bash: a word-initial-looking `#`
+//     inside `${…}` (`${v%%;#*}`), inside a `[[ … =~ … ]]` regex (`=~ (#)`),
+//     or inside `(( … ))` — the rest of that line is invisible to this reader,
+//     so a call hidden there is an escape. NOT cut, a comment to bash: a `#`
+//     right after a subshell's or a case pattern's closing `)` (`(cd x)# …`,
+//     `a)# …`) — `)` stays out of the opening set so that `$(…)#` is not cut —
+//     so a call written in such a comment is read as made (a phantom `rm -f`
+//     there would mask an orphan). Measured when written: none of the four
+//     occurs in `ccd/ccrc` or `deploy/deploy.sh`.
 //
 // READING `deploy/deploy.sh`. The same machinery — `scanLine`, `calls`,
 // `argAt`, `census` and its normalisation — and where that file's shape makes
@@ -193,10 +205,12 @@
 //     there (move it into a remote-script assignment), the intended red for a
 //     hidden one — and so does the bare word in prose inside a quoted string
 //     (an echo message, a remedy). The count is compared line group by line
-//     group, not only in total, so an unread mention cannot be balanced by a
-//     read call spelled so the count misses it (`en""able`). Measured when
-//     written: every `enable` in the file's code is a `systemctl` operand, and
-//     no `reenable` appears.
+//     group, not only in total, and mentions are counted on each line's
+//     DEQUOTED form (quotes and backslash escapes removed, as bash removes
+//     them), so `en""able` and `en\able` count as `enable`: an unread mention
+//     cannot be balanced by a read call spelled so the count misses it, within
+//     a group or across groups. Measured when written: every `enable` in the
+//     file's code is a `systemctl` operand, and no `reenable` appears.
 //   - Known FALSE reds, each loud and each by design rather than modelled: a
 //     `systemctl` spelled by absolute path (`/usr/bin/systemctl`) is not read
 //     as the command; a remote-script assignment spelled `export NAME='…'` is
@@ -345,24 +359,32 @@ function logicalLines(body: string): string[] {
 /**
  * THE ONE QUOTE-AWARE PASS over a line. It tracks single- and double-quote
  * state and returns (a) the line with an UNQUOTED trailing comment cut — a `#`
- * that starts a word (line start, or after whitespace or one of `;&|(<>`),
- * outside quotes, as bash has it (header) — and (b) for each offset of what is
- * left, whether it sits outside quotes. `fnBody` uses (a); command
- * recognition and `assignments` use (b), so a diagnostic `echo "dir=$dir"` is
- * not a second binding. One line at a time: a string spanning lines, a heredoc
- * body and an `echo`'s arguments are not modelled (header).
+ * that starts a word (line start, or after an UNESCAPED, unquoted whitespace or
+ * one of `;&|(<>`), outside quotes, as bash has it (header) — and (b) for each
+ * offset of what is left, whether it sits outside quotes. `fnBody` uses (a);
+ * command recognition and `assignments` use (b), so a diagnostic
+ * `echo "dir=$dir"` is not a second binding. One line at a time: a string
+ * spanning lines, a heredoc body and an `echo`'s arguments are not modelled,
+ * and neither are the `#` contexts STATED SCOPE lists (header).
+ *
+ * `opens` is whether the NEXT character starts a word. A backslash-escaped
+ * character never opens one: `\;` is a literal `;` inside a word, so the `#`
+ * after it is inside that word too (`echo \;#x` prints `;#x`).
  */
 function scanLine(line: string): { code: string; outside: boolean[] } {
   const outside: boolean[] = [];
   let dq = false;
   let sq = false;
+  let opens = true;
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
     const top = !dq && !sq;
-    if (top && c === '#' && (i === 0 || /[\s;&|(<>]/.test(line[i - 1]!))) return { code: line.slice(0, i), outside };
+    if (top && c === '#' && opens) return { code: line.slice(0, i), outside };
     outside.push(top);
-    if (sq) { if (c === "'") sq = false; continue; }
-    if (c === '\\') { outside.push(top); i++; } else if (c === '"') dq = !dq; else if (c === "'" && !dq) sq = true;
+    if (sq) { if (c === "'") sq = false; opens = false; continue; }
+    if (c === '\\') { outside.push(top); i++; opens = false; continue; }
+    if (c === '"') dq = !dq; else if (c === "'" && !dq) sq = true;
+    opens = top && /[\s;&|(<>]/.test(c);
   }
   return { code: line, outside };
 }
@@ -849,7 +871,12 @@ function deployGroups(): { first: number; lines: number; text: string }[] {
 function everyMentionRead(word: string, readIn: (group: string) => number, as: string): void {
   const raw = deployText().split('\n').map((l) => scanLine(l).code);
   const re = new RegExp(`(?<![A-Za-z0-9_-])${word}(?![A-Za-z0-9_(-])`, 'g');
-  const said = raw.map((l) => [...l.matchAll(re)].length);
+  // Counted on the DEQUOTED line — backslash escapes and quote characters
+  // removed, as bash removes them from a word — so `en""able` is a mention of
+  // `enable` here exactly as it is a call to bash (header). Removing them can
+  // only ADD mentions, never lose one.
+  const dequote = (l: string): string => l.replace(/\\(.)/g, '$1').replace(/["']/g, '');
+  const said = raw.map((l) => [...dequote(l).matchAll(re)].length);
   const groups = deployGroups();
   // The per-group comparison below covers every line only while `deployCode`
   // keeps one line per line of the file; a reader that lost lines would leave
@@ -880,8 +907,8 @@ function everyMentionRead(word: string, readIn: (group: string) => number, as: s
       `install-census.test.ts: ${DEPLOY_PATH} names \`${word}\` ${total} time(s) outside comments and definitions, `
       + `and this reader reads ${read} ${as} — and line by line the two disagree at: `
       + unread.map((ln) => `line ${ln} ${JSON.stringify(raw[ln - 1]!.trim().slice(0, 120))}`).join('; ')
-      + '. (Equal totals can still disagree there: a call this reader reads under a spelling the count '
-      + 'cannot see, such as `en""able`, offsets a mention it does not read.) A CALL there sits inside a '
+      + '. (The count is taken on each line\'s dequoted form, so `en""able` is a mention; equal totals '
+      + 'across the file can still disagree group by group.) A CALL there sits inside a '
       + 'string this reader does not unwrap, or past a remote script\'s closing '
       + 'quote, and would lose what it places or enables without a word: teach this reader, or move the call '
       + 'into a remote-script assignment where it reads. PROSE there (the word in an echo message or a remedy, '
