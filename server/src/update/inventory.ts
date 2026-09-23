@@ -31,6 +31,7 @@ import path from 'node:path';
 import {
   BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
+  type TagFileRead,
 } from '../../../shared/api.js';
 import { NODE_FILES, type NodeFileKey } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../../shared/buildinfo.js';
@@ -203,12 +204,24 @@ export function installFrom(read: NodeFileRead, stamp: { stampRead: StampRead; b
   return { installState: 'complete', provenance };
 }
 
-/** floor / previous → line 1 through the one tag guard, else NULL (§8). A
- *  NULL floor is UNCONSTRAINED to the resolver (§9), so a garbled floor file
- *  reads as the absence it is, never as `v0.0.0`. */
-export function tagLineFrom(read: NodeFileRead): string | null {
+/** floor / previous → line 1 through the one tag guard, plus THIS SWEEP's
+ *  read state (fix round 1, D-3213). `absent` covers both a missing file and
+ *  a garbled one (read fine, not a tag): both are determined THIS SWEEP to
+ *  carry no floor, so a NULL floor stays UNCONSTRAINED to the resolver (§9)
+ *  exactly as before. `unreadable`/`too-large`/the per-node deadline are
+ *  `unmeasured` — this sweep could not tell, so the caller
+ *  (`applyMeasurement`) carries the row's own previous value forward rather
+ *  than let this write null it out, and never falls back to `currentVersion`
+ *  as if the file were absent. */
+export function tagStateFrom(read: NodeFileRead): { tag: string | null; state: TagFileRead } {
+  if (!read.ok && read.reason !== 'absent') return { tag: null, state: 'unmeasured' };
   const line = firstLine(read);
-  return isReleaseTag(line) ? line : null;
+  return isReleaseTag(line) ? { tag: line, state: 'measured' } : { tag: null, state: 'absent' };
+}
+
+/** The tag alone, for a caller that never needs the read state. */
+export function tagLineFrom(read: NodeFileRead): string | null {
+  return tagStateFrom(read).tag;
 }
 
 /** node-id → line 1 through NODE_ID_RE, else NULL (the row keys by label). */
@@ -275,6 +288,8 @@ export function measurementFrom(reads: NodeFileReads, conn: NodeConnection, now:
   // pair, not just on installFrom's own answer, so provenance is re-gated on
   // the installState this function actually returns, not on install's.
   const installState: InstallState = nodeId === null ? 'unknown' : install.installState;
+  const floorState = tagStateFrom(reads.floor);
+  const previousState = tagStateFrom(reads.previous);
   return {
     nodeId: nodeId ?? conn.label,
     role: conn.role,
@@ -289,8 +304,10 @@ export function measurementFrom(reads: NodeFileReads, conn: NodeConnection, now:
     provenance: installState === 'complete' ? install.provenance : 'unknown',
     caps,
     agentOps: conn.agentOps === null ? null : (validCapWords(conn.agentOps) ?? []),
-    highestVersion: tagLineFrom(reads.floor),
-    previousVersion: tagLineFrom(reads.previous),
+    highestVersion: floorState.tag,
+    previousVersion: previousState.tag,
+    floorRead: floorState.state,
+    previousRead: previousState.state,
     os,
     measuredAt: now,
     report: reportFrom(reads.report),
@@ -314,7 +331,14 @@ export function buildInfoOfRow(row: Pick<NodeRow, 'stampRead' | 'currentSha' | '
 }
 
 export type LeaseAction =
-  | { kind: 'none'; why: 'no-report' | 'unchanged-report' | 'not-busy' | 'in-flight' | 'stale-report' | 'unknown-phase' }
+  | {
+    kind: 'none';
+    why: 'no-report' | 'unchanged-report' | 'not-busy' | 'in-flight' | 'stale-report' | 'unknown-phase'
+      /** fix round 1, D-3214 (F2): a `done` report whose stamp could not be
+       *  read gives NO verdict — the lease stays pending until a later sweep
+       *  reads the stamp fine. */
+      | 'stamp-unmeasured';
+  }
   | { kind: 'settle'; detail: string }
   | { kind: 'release'; to: SettledUpdateState; detail: string };
 export interface SweepPlan { lease: LeaseAction; refuse: { tag: string; detail: string } | null }
@@ -335,15 +359,27 @@ function latestStartOf(r: NodeReport): number | null {
 
 function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport): LeaseAction {
   if (row === null || !BUSY.has(row.updateState)) return { kind: 'none', why: 'not-busy' };
+  // fix round 1, D-3214 (item 12): a report that names no start at all
+  // cannot be shown to belong to THIS lease (or any other run) — treat it as
+  // stale rather than let a report with a missing `startedAt` move a lease
+  // it never announced starting, whenever the row holds one (it does here,
+  // BUSY having just been proven).
+  if (r.startedAt === null) return { kind: 'none', why: 'stale-report' };
   // PRECEDENCE (§8): a report whose run started before this lease belongs to
   // a previous run and never moves it — the round-2 race, where a stale
   // `done` released a lease acquired seconds earlier. The store's WHERE
   // carries the same guard (Task 5); this plan never asks it to be tested.
-  const latest = latestStartOf(r);
-  if (latest !== null && row.updateStartedAt !== null && latest < row.updateStartedAt) return { kind: 'none', why: 'stale-report' };
+  const latest = latestStartOf(r)!;
+  if (row.updateStartedAt !== null && latest < row.updateStartedAt) return { kind: 'none', why: 'stale-report' };
   if (IN_FLIGHT.has(r.phase)) return { kind: 'none', why: 'in-flight' };
   switch (r.phase) {
     case 'done':
+      // fix round 1, D-3214 (F2): `currentVersion` is null both for an
+      // unversioned build and for a stamp that could not be read — comparing
+      // it against the target when the stamp itself is unmeasured would read
+      // an unreadable build.json as a mismatch. Give NO verdict instead: the
+      // lease stays pending until a later sweep reads the stamp fine.
+      if (m.stampRead !== 'ok') return { kind: 'none', why: 'stamp-unmeasured' };
       return r.target !== null && m.currentVersion === r.target
         ? { kind: 'settle', detail: `done: ${r.target}` }
         : { kind: 'release', to: 'failed', detail: 'stamp-mismatch' };
@@ -454,8 +490,9 @@ function unreachable(store: InventoryStore, now: number): SweepOutcome {
 }
 
 /** One measurement into the store, in the order §8 fixes: collision check,
- *  re-key, plan against the pre-upsert row (report override included),
- *  upsert, refuse, lease. */
+ *  re-key, the report/floor/previous unmeasured-carry overrides, plan against
+ *  the pre-upsert row, the stamp-unmeasured report override (fix round 1,
+ *  D-3214), upsert, refuse, lease. */
 function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unmeasuredReport: boolean, now: number): SweepOutcome {
   const label = measured.label;
   let m = measured;
@@ -480,13 +517,36 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
   }
   const preRow = store.node(m.nodeId);
   if (unmeasuredReport) {
-    // D-3210: an unmeasured report read must never overwrite a previously
-    // measured one — reuse the row's own report columns unchanged so the
-    // changed-report gate below sees no change, and the same unchanged value
-    // is what gets written back by the upsert two lines down.
+    // D-3210, corrected by fix round 1 D-3213 (F8): an unmeasured report read
+    // must never overwrite a previously measured one — reuse the row's own
+    // report columns unchanged so the changed-report gate below sees no
+    // change. But when there IS no previous report to carry (a first sweep,
+    // or a row whose `reportedPhase` is still NULL), falling back to `null`
+    // would store "no report file" (§6) for a file that DOES exist and was
+    // merely unreadable — `measurementFrom` already computed `m.report` as
+    // `reportFrom`'s `unknown` fold for exactly this read, so keep THAT
+    // rather than nulling it out.
+    m = { ...m, report: previousReportOf(preRow) ?? m.report };
+  }
+  // fix round 1, D-3213: an unmeasured floor/previous read must carry the
+  // row's own previously measured value forward — never overwrite it with
+  // this sweep's null, which `resolveOnChannel` would otherwise read as "no
+  // floor file" (unconstrained) rather than "nothing measured yet".
+  // `floorRead`/`previousRead` themselves stay `unmeasured`, honestly: only
+  // the carried VALUE changes.
+  if (m.floorRead === 'unmeasured') m = { ...m, highestVersion: preRow?.highestVersion ?? null };
+  if (m.previousRead === 'unmeasured') m = { ...m, previousVersion: preRow?.previousVersion ?? null };
+  const plan = sweepPlanFor(preRow, m);
+  // fix round 1, D-3214 (F2): a `done` report seen while the stamp could not
+  // be read must be re-evaluated once the stamp reads fine — never consumed
+  // as "seen" while its verdict was withheld. Restore the row's own previous
+  // report (possibly none) before the upsert, so the NEXT sweep's report —
+  // even the identical one — reads as CHANGED against what is actually
+  // stored, and `leaseActionFor` runs again with (by then, hopefully) a
+  // readable stamp.
+  if (plan.lease.kind === 'none' && plan.lease.why === 'stamp-unmeasured') {
     m = { ...m, report: previousReportOf(preRow) };
   }
-  const plan = sweepPlanFor(preRow, m);
   const upserted = store.upsertNodeMeasurement(m);
   if (!upserted.ok) return { label, result: 'refused', why: `${upserted.why}: ${upserted.supersededBy}` };
   let refused = false;

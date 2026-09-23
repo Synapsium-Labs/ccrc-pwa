@@ -22,7 +22,7 @@ import type { Deps } from '../src/server.js';
 import {
   FLEET_LABEL, NODE_FILE_CAP_BYTES, REPORT_DETAIL_MAX, SERVER_LABEL,
   buildInfoOfRow, capsFrom, installFrom, measurementFrom, nodeIdFrom, printableDetail, readNodeFile, readNodeFiles,
-  reportFrom, stampFrom, sweepInventory, sweepPlanFor, tagLineFrom,
+  reportFrom, stampFrom, sweepInventory, sweepPlanFor, tagLineFrom, tagStateFrom,
   type InventoryDeps, type NodeFileRead, type NodeFileReads, type SweepOutcome,
 } from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -88,7 +88,8 @@ const ROW: NodeRow = {
   nodeId: U1, role: 'fleet', label: FLEET_LABEL,
   currentVersion: 'v0.0.12', currentSha: SHA, currentRef: 'main', currentBuiltAt: BUILT, currentDirty: false,
   stampRead: 'ok', installState: 'complete', provenance: 'verified',
-  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.12', previousVersion: 'v0.0.11', os: 'linux',
+  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.12', previousVersion: 'v0.0.11',
+  floorRead: 'measured', previousRead: 'measured', os: 'linux',
   measuredAt: NOW - 60_000, reachable: true, unreachableSince: null,
   reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null,
   updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
@@ -100,7 +101,8 @@ const meas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
   nodeId: U1, role: 'fleet', label: FLEET_LABEL,
   currentVersion: 'v0.0.12', currentSha: SHA, currentRef: 'main', currentBuiltAt: BUILT, currentDirty: false,
   stampRead: 'ok', installState: 'complete', provenance: 'verified', caps: ['verify', 'node-id', 'floor'], agentOps: [],
-  highestVersion: 'v0.0.12', previousVersion: 'v0.0.11', os: 'linux', measuredAt: NOW, report: null, ...over,
+  highestVersion: 'v0.0.12', previousVersion: 'v0.0.11', floorRead: 'measured', previousRead: 'measured',
+  os: 'linux', measuredAt: NOW, report: null, ...over,
 });
 const rep = (over: Partial<NodeReport> = {}): NodeReport => ({
   phase: 'done', target: 'v0.0.12', startedAt: T_S * 1000, updatedAt: (T_S + 90) * 1000, detail: 'converged', ...over,
@@ -244,8 +246,18 @@ describe('the validators (§8 "Validation", §18 "reads are bounded and validate
     expect(tagLineFrom(ok('v0.0.12\n'))).toBe('v0.0.12');
     expect(tagLineFrom(ok('v0.0.12\r\n'))).toBe('v0.0.12');
     for (const bad of ['0.0.12\n', 'v0.0.12 \n', 'latest\n', '', 'v0.0\n']) expect(tagLineFrom(ok(bad)), bad).toBeNull();
+    // D-3213: the tag alone is null for both absent and unreadable, but the
+    // read STATE tells them apart — absent is a real, measured absence
+    // (unconstrained, §9); unreadable is UNMEASURED (carried forward,
+    // NEVER unconstrained). Re-pins the assertion that used to read
+    // `tagLineFrom(UNREADABLE) === null` as the whole story.
     expect(tagLineFrom(ABSENT)).toBeNull();
     expect(tagLineFrom(UNREADABLE)).toBeNull();
+    expect(tagStateFrom(ABSENT)).toEqual({ tag: null, state: 'absent' });
+    expect(tagStateFrom(UNREADABLE)).toEqual({ tag: null, state: 'unmeasured' });
+    expect(tagStateFrom(TOO_LARGE)).toEqual({ tag: null, state: 'unmeasured' });
+    expect(tagStateFrom(ok('v0.0.12\n'))).toEqual({ tag: 'v0.0.12', state: 'measured' });
+    expect(tagStateFrom(ok('latest\n'))).toEqual({ tag: null, state: 'absent' });   // garbled reads as absent, not unmeasured
     expect(nodeIdFrom(ok(`${U1}\n`))).toBe(U1);
     expect(nodeIdFrom(ok(`${U1.toUpperCase()}\n`))).toBeNull();
     expect(nodeIdFrom(ok(`${U1} \n`))).toBeNull();
@@ -310,7 +322,8 @@ describe('measurementFrom and buildInfoOfRow (§18 "a full BuildInfo round-trips
       nodeId: U1, role: 'both', label: SERVER_LABEL,
       currentVersion: 'v0.0.12', currentSha: SHA, currentRef: 'main', currentBuiltAt: BUILT, currentDirty: false,
       stampRead: 'ok', installState: 'complete', provenance: 'verified', caps: ['verify', 'node-id', 'floor'],
-      agentOps: null, highestVersion: 'v0.0.12', previousVersion: 'v0.0.11', os: 'linux', measuredAt: NOW, report: null,
+      agentOps: null, highestVersion: 'v0.0.12', previousVersion: 'v0.0.11', floorRead: 'measured', previousRead: 'measured',
+      os: 'linux', measuredAt: NOW, report: null,
     });
   });
 
@@ -340,6 +353,76 @@ describe('measurementFrom and buildInfoOfRow (§18 "a full BuildInfo round-trips
   });
 });
 
+describe('the floor/previous carry-forward (fix round 1, D-3213)', () => {
+  it.skipIf(process.getuid?.() === 0)('a measured floor survives an unreadable sweep, and the row keeps it', async () => {
+    const b = box('ccrc-inv-floor-carry-');
+    plant(b.ccrcDir, { ...FULL, floor: 'v0.0.9\n' });
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: 'v0.0.9', floorRead: 'measured' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    // The value is carried forward from the row's own previous measurement;
+    // the read state stays `unmeasured`, honestly — this sweep read nothing.
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: 'v0.0.9', floorRead: 'unmeasured' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a first-ever unreadable floor (nothing to carry) leaves highestVersion NULL, floorRead unmeasured', async () => {
+    const b = box('ccrc-inv-floor-first-');
+    plant(b.ccrcDir, { ...FULL, floor: 'v0.0.9\n' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'unmeasured' });
+    chmodSync(path.join(b.ccrcDir, 'floor'), 0o644);
+  });
+
+  it('an absent floor is unconstrained exactly as before — floorRead reads absent, never unmeasured', async () => {
+    const b = box('ccrc-inv-floor-absent-');
+    plant(b.ccrcDir, { stamp: stampJson(), installed: `${SHA}\n`, caps: 'os linux\nverify\nnode-id\nfloor\n', nodeId: `${U1}\n` });
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'absent' });
+  });
+
+  it('a too-large floor is unmeasured too (D-3213), never folded into absent', async () => {
+    const b = box('ccrc-inv-floor-toolarge-');
+    plant(b.ccrcDir, { ...FULL, floor: 'x'.repeat(70 * 1024) });
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ highestVersion: null, floorRead: 'unmeasured' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('previous carries forward the same way', async () => {
+    const b = box('ccrc-inv-previous-carry-');
+    plant(b.ccrcDir, { ...FULL, previous: 'v0.0.11\n' });
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ previousVersion: 'v0.0.11', previousRead: 'measured' });
+    chmodSync(path.join(b.ccrcDir, 'previous'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ previousVersion: 'v0.0.11', previousRead: 'unmeasured' });
+    chmodSync(path.join(b.ccrcDir, 'previous'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F8: an unreadable update.json on a FIRST sweep is reportedPhase unknown, never null', async () => {
+    const b = box('ccrc-inv-report-first-');
+    plant(b.ccrcDir, { ...FULL, report: reportJson() });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'unknown' });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o644);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('F8: an unreadable update.json on a row whose reportedPhase is still NULL also reads unknown, never null', async () => {
+    const b = box('ccrc-inv-report-nullphase-');
+    plant(b.ccrcDir, FULL);                              // no update.json yet — reportedPhase stays NULL
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: null });
+    plant(b.ccrcDir, { report: reportJson() });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o000);
+    await sweepInventory(localDeps(b), NOW);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'unknown' });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o644);
+  });
+});
+
 describe('sweepPlanFor — the §8 phase table, the precedence, and only a changed report acts', () => {
   const T0 = T_S * 1000 + 500;   // the lease was taken half a second into the report's own second
   const busy = (over: Partial<NodeRow> = {}): NodeRow =>
@@ -363,12 +446,27 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
 
   it('done at the measured version settles; done at any other version is failed: stamp-mismatch', () => {
     expect(sweepPlanFor(busy(), withReport({})).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
+    // The stampRead: 'ok' twin (fix round 1, D-3214): a READABLE stamp that
+    // differs still releases failed: stamp-mismatch — only an UNMEASURED one
+    // (below) withholds the verdict.
+    expect(sweepPlanFor(busy(), withReport({}, { currentVersion: 'v0.0.11', stampRead: 'ok' })).lease)
+      .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
     expect(sweepPlanFor(busy(), withReport({}, { currentVersion: 'v0.0.11' })).lease)
       .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
     expect(sweepPlanFor(busy(), withReport({}, { currentVersion: null })).lease)
       .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
     expect(sweepPlanFor(busy(), withReport({ target: null }, { currentVersion: null })).lease)
       .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
+  });
+
+  it('a done report whose stamp could not be read gives NO verdict — the lease stays pending (fix round 1, D-3214, F2)', () => {
+    expect(sweepPlanFor(busy(), withReport({}, { stampRead: 'unreadable' })).lease).toEqual({ kind: 'none', why: 'stamp-unmeasured' });
+    expect(sweepPlanFor(busy(), withReport({}, { stampRead: 'malformed' })).lease).toEqual({ kind: 'none', why: 'stamp-unmeasured' });
+    expect(sweepPlanFor(busy(), withReport({}, { stampRead: 'absent' })).lease).toEqual({ kind: 'none', why: 'stamp-unmeasured' });
+    // failed/reverted never read `currentVersion` at all, so an unmeasured
+    // stamp does not touch them.
+    expect(sweepPlanFor(busy(), withReport({ phase: 'failed', detail: 'x' }, { stampRead: 'unreadable' })).lease)
+      .toEqual({ kind: 'release', to: 'failed', detail: 'x' });
   });
 
   it('failed and reverted release to the same word, carrying the report\'s detail (or the word)', () => {
@@ -389,9 +487,13 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
     expect(sweepPlanFor(busy(), withReport({ startedAt: T_S * 1000 })).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
   });
 
-  it('a NULL on either side of the precedence is not stale', () => {
+  it('a NULL row.updateStartedAt is not itself stale — only a report with no startedAt at all is (fix round 1, D-3214, item 12)', () => {
     expect(sweepPlanFor(busy({ updateStartedAt: null }), withReport({ startedAt: (T_S - 3600) * 1000 })).lease.kind).toBe('settle');
-    expect(sweepPlanFor(busy(), withReport({ startedAt: null })).lease.kind).toBe('settle');
+    // A report naming no start at all can never be shown to belong to THIS
+    // lease (or any lease) — item 12 treats it as stale rather than let it
+    // settle/release a lease it never announced starting.
+    expect(sweepPlanFor(busy(), withReport({ startedAt: null })).lease).toEqual({ kind: 'none', why: 'stale-report' });
+    expect(sweepPlanFor(busy({ updateStartedAt: null }), withReport({ startedAt: null })).lease).toEqual({ kind: 'none', why: 'stale-report' });
   });
 
   it('a changed failed report whose detail begins provenance: refuses (node, target), busy or not — once', () => {
@@ -643,6 +745,23 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     plant(b.ccrcDir, { report: reportJson() });
     await sweepInventory(localDeps(b), NOW);
     expect(b.store.node(U1)).toMatchObject({ updateState: 'failed', updateDetail: 'stamp-mismatch' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a done report while the stamp is unreadable stays pending; the SAME report settles once the stamp reads fine (fix round 1, D-3214, F2)', async () => {
+    const b = await busyBox();
+    plant(b.ccrcDir, { report: reportJson() });
+    chmodSync(path.join(b.ccrcDir, 'build.json'), 0o000);
+    expect(await sweepInventory(localDeps(b), NOW)).toEqual([
+      { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'none', refused: false },
+    ]);
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'applying', stampRead: 'unreadable' });
+    chmodSync(path.join(b.ccrcDir, 'build.json'), 0o644);
+    // The changed-report gate must not have swallowed this report while its
+    // verdict was withheld — the SAME report, unchanged, settles it now.
+    expect(await sweepInventory(localDeps(b), NOW + 60_000)).toEqual([
+      { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'settle', refused: false },
+    ]);
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.12' });
   });
 
   it('a previous run\'s done leaves a fresh lease busy', async () => {
