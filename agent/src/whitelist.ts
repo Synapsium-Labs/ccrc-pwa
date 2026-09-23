@@ -76,7 +76,9 @@ export type PathMode = 'read' | 'write';
  * What this function refuses: a live symlink carrying one of the eight names
  * whose FULLY RESOLVED target — following any chain to its end — lies
  * outside every admitted prefix, or is another of the eight; both fail the
- * second condition, and no other `checkPath` arm admits a `~/.ccrc`-rooted
+ * second condition, and — in the common case, `~/.ccrc` itself not being a
+ * symlink into an admitted prefix (N-1, fix round 1 dispatch C re-review) —
+ * no other `checkPath` arm admits a `~/.ccrc`-rooted
  * path either. A chain classifies by where it finally lands, not by its
  * first hop: `previous → installed → ~/.cc-sessions/x` resolves to
  * `.cc-sessions/x`, not to `installed`.
@@ -97,7 +99,9 @@ export type PathMode = 'read' | 'write';
  * `lstat` reports it as `symlink` too, which the sweep also refuses.
  *
  * `canonicalCcrc` is `canonicalize(<home>/.ccrc)`, not `<canonical home>/.ccrc`,
- * so a `~/.ccrc` that is itself a symlink admits its own eight and nothing else.
+ * so a `~/.ccrc` that is itself a symlink admits its own eight and nothing else —
+ * in the common case (N-1): if that symlink's target is ITSELF under an
+ * admitted prefix, the prefix arm admits all of `~/.ccrc`, not just its eight.
  */
 function isCcrcNodeFile(canonicalCcrc: string, targetPath: string, canonicalTarget: string): boolean {
   const admitted = new Set(NODE_FILE_BASENAMES.map((b) => path.join(canonicalCcrc, b)));
