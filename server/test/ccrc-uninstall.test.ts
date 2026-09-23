@@ -183,7 +183,9 @@ function plantInstalledBox(home: string): void {
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
-    'ccrc-models.service', 'ccrc-models.timer']) {
+    'ccrc-models.service', 'ccrc-models.timer',
+    // W4a Task 9: the server-role watchdog's pair.
+    'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -383,7 +385,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       'ccd-account-health.service', 'ccd-account-health.timer',
       'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
       // C5: the models pair, mirroring the three role-gated siblings above.
-      'ccrc-models.service', 'ccrc-models.timer']) {
+      'ccrc-models.service', 'ccrc-models.timer',
+      // W4a Task 9: the server-role watchdog's pair.
+      'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -402,6 +406,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
+    expect(calls).toContain('--user disable --now ccrc-update-watchdog.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).

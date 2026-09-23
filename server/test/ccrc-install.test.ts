@@ -2383,6 +2383,12 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
+  // OTHER way round from the pairs above: `_inst_units` places it on `server`
+  // and `both` (this list's role) and never on `fleet`, whose node the
+  // server's own deadline covers. The fleet describe asserts its absence.
+  ['ccrc-update-watchdog.service', 'deploy/systemd/ccrc-update-watchdog.service'],
+  ['ccrc-update-watchdog.timer', 'deploy/systemd/ccrc-update-watchdog.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2529,6 +2535,10 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
+      // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
+      // role enables it — degrading rather than dying like every timer in
+      // this list, and taking no restart (a oneshot holds no code).
+      '--user enable --now ccrc-update-watchdog.timer',
       // THE RESTART, in deploy's own position (deploy.sh:803-805): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -2560,6 +2570,55 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     // …and the run stopped there rather than carrying on to report a box it
     // could not finish converging.
     expect(r.stdout).not.toMatch(/^install: linger:/m);
+  });
+
+  it('a systemd that will not take the watchdog timer DEGRADES the install, never fails it', () => {
+    // The watchdog bounds a FUTURE update; an install that converged must not
+    // be failed over it. `_inst_linger`'s idiom, and every other timer's here.
+    const home = freshBox('ccrc-install-watchdog-enable-fails-');
+    writeFileSync(join(home, 'fixture-enable-fail'), 'ccrc-update-watchdog.timer\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(
+      /^install: update-watchdog: could not enable ccrc-update-watchdog\.timer — run: systemctl --user enable --now ccrc-update-watchdog\.timer$/m);
+    expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user restart ccrc.service');
+  });
+
+  it('the watchdog unit SKIPS on a tree with no watchdog verb: a restore or rollback onto an older release never turns it into a failed oneshot a minute', () => {
+    // An arm-2 restore (Task 6) or `ccrc rollback --to` (Task 7) onto a
+    // release older than W4a runs THAT release's spine, which neither knows
+    // nor removes this pair. The timer stays enabled, and the launcher execs
+    // whatever tree ~/ccrc holds. `ExecCondition=` rc 1-254 skips the run
+    // without marking the unit failed (systemd.service(5)). Only 255 or a
+    // signal counts as a failure.
+    const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-update-watchdog.service'), 'utf8');
+    const conds = unit.split('\n').filter((l) => l.startsWith('ExecCondition='));
+    expect(conds).toEqual([`ExecCondition=/bin/sh -c 'grep -q "^cmd_watchdog()" %h/ccrc/ccd/ccrc'`]);
+    // It precedes ExecStart, so it cannot be read as a second command after it.
+    expect(unit.indexOf('ExecCondition=')).toBeLessThan(unit.indexOf('ExecStart='));
+    const script = /^ExecCondition=\/bin\/sh -c '(.*)'$/.exec(conds[0]!)![1]!;
+    const cond = (home: string): number | null =>
+      spawnSync('/bin/sh', ['-c', script.replace(/%h/g, home)]).status;
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const plant = (prefix: string, body: string): string => {
+      const home = mkTmp(prefix);
+      mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+      writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), body);
+      return home;
+    };
+    // This tree has the verb: the condition passes and ExecStart runs.
+    expect(cond(plant('ccrc-watchdog-cond-this-', src))).toBe(0);
+    // An older tree, which is this file without the verb's definition line:
+    // skipped, and not a failure.
+    const old = src.split('\n').filter((l) => !l.startsWith('cmd_watchdog()')).join('\n');
+    expect(old).not.toBe(src);
+    const rcOld = cond(plant('ccrc-watchdog-cond-old-', old));
+    expect(rcOld).toBeGreaterThanOrEqual(1);
+    expect(rcOld).toBeLessThanOrEqual(254);
+    // No tree at all (grep's rc 2): skipped too, never 255.
+    const rcNone = cond(mkTmp('ccrc-watchdog-cond-none-'));
+    expect(rcNone).toBeGreaterThanOrEqual(1);
+    expect(rcNone).toBeLessThanOrEqual(254);
   });
 
   it('fails the install when the started service does not stay up', () => {
@@ -3649,7 +3708,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(existsSync(unitDir(home, 'ccrc.service'))).toBe(false);
     // …while the four role-independent units and drop-ins still land.
     for (const [dest] of UNIT_FILES) {
-      if (dest === 'ccrc.service') continue;
+      // W4a Task 9: the watchdog pair is `!= fleet` — asserted ABSENT below.
+      if (dest === 'ccrc.service' || dest.startsWith('ccrc-update-watchdog.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     // Ruling T4-R1: the pool-sync pair lands HERE AND ONLY HERE. It is not in
@@ -3659,6 +3719,10 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // the only precondition under which `ccd-pool-sync` can ever exit 0.
     expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(true);
     expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(true);
+    // W4a Task 9: the watchdog pair lands on every role BUT this one — a
+    // fleet node runs no server, and the server's own deadline covers it.
+    expect(existsSync(unitDir(home, 'ccrc-update-watchdog.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccrc-update-watchdog.timer'))).toBe(false);
   });
 
   itLinux('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
@@ -3683,6 +3747,7 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
     expect(argv.join('\n')).not.toMatch(/\bccrc\.service\b/);
+    expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
   });
@@ -3761,6 +3826,10 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
+      // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
+      // role enables it — degrading rather than dying like every timer in
+      // this list, and taking no restart (a oneshot holds no code).
+      '--user enable --now ccrc-update-watchdog.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -3808,6 +3877,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
+    // UNIT_FILES loop above (not skipped there), and its timer is enabled.
+    expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

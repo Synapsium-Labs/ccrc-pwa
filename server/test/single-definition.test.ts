@@ -1508,6 +1508,15 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
+      // ONE line; its failed-detail sentence names no path (the assertion
+      // above). Measured (not the brief's claimed anchor, which put this
+      // above `_upd_converged`'s lines): `cmd_watchdog` sits between
+      // `cmd_update` (whose own read is the line above) and
+      // `_upd_marker_unsigned` (whose reads are the two lines below) in
+      // `ccd/ccrc`'s FILE ORDER, so its entry goes here — controller ruling
+      // C3, "let single-definition.test.ts decide".
+      '[ -f "$BOX_INSTALLED_FILE" ] && { IFS= read -r rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || true',
       // _upd_marker_unsigned (wave 4, Task 6): the ONE read of the record's
       // line 2 for an update — cmd_update's arm-2 precondition and
       // cmd_rollback's --allow-unsigned both call it, so neither caller

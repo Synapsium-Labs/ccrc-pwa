@@ -2226,6 +2226,46 @@ describe('ccrc doctor: services knows about the pool-sync timer', () => {
   });
 });
 
+describe('ccrc doctor: services knows about the update-watchdog timer', () => {
+  // W4a Task 9 (design §11): `ccrc-update-watchdog.timer` joins `known` — the
+  // DIRECT design — because a stopped watchdog is SILENT: it acts only on the
+  // day a server self-update dies mid-install, and on that day nothing else
+  // is left on the box to measure the update.
+  itLinux('warns — with its OWN consequence — when the watchdog timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-');
+    writeUnitFile(home, 'ccrc-update-watchdog.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-update-watchdog.timer'), 'inactive\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc-update-watchdog.timer is installed but inactive');
+    expect(lines[i]).toContain('never measured or reverted');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc-update-watchdog\.timer$/);
+    // The verdict line and the rc agree (cmd_doctor cross-checks them).
+    expect(r.stdout).not.toMatch(/the check exited/);
+    // A stopped watchdog is not a failed box: WARN, and rc stays 0.
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-ok-');
+    writeUnitFile(home, 'ccrc-update-watchdog.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-update-watchdog.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccrc-update-watchdog.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-update-watchdog-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccrc-update-watchdog');
+  });
+});
+
 // ── pool-sync: the EFFECT check, item 4 (I2, wave-1 fix round A) ──────────
 // `services` (above) measures the TIMER's own activation state, which stays
 // `active` while its oneshot fails every run — this describe block is the

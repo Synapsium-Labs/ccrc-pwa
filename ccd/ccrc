@@ -1552,7 +1552,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1676,6 +1676,14 @@ already running).
             at the first failure (a box's exit 3 is relayed, not a stop; its exit 4 stops), and re-measures both ('ccrc version',
             /health). --check only prints where each box stands; --force
             passes through; [--to vX.Y.Z] pins a tag. Exit 2 = nothing touched
+  watchdog  (server/both, Linux; run by ccrc-update-watchdog.timer every
+            minute) re-measure a self-update whose ~/.ccrc/update.json has
+            gone stale: a live updater is left alone, and recorded as
+            wedged past twice the deadline (CCRC_UPDATE_DEADLINE_MS,
+            default 15 min); a box that answers healthy is recorded as
+            abandoned and nothing moves; only a box that fails its health
+            probe is rolled back (ccrc rollback --from watchdog). Safe by
+            hand; takes no arguments
   uninstall move this box off ccrc, leaving reinstall safe: stop, disable
             and remove the units (incl. both drop-ins and the slice
             escape), remove ccrc's managed settings.json hook entries
@@ -10526,6 +10534,19 @@ _inst_units() {
     _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
   fi
+  # W4a Task 9 (design §11): the server-role watchdog's pair, gated
+  # `!= fleet` — the complement of pool-sync's `= fleet`, and derived like it
+  # from the unit's own precondition rather than from a sibling's gate:
+  # `ccrc watchdog` guards the update that restarts THIS box's
+  # `ccrc.service`, and a fleet box runs no server (the server's own deadline
+  # covers its updates). `both` — the default role — runs the server, so it
+  # gets the pair. Linux only by construction: the Darwin arm returned at the
+  # top of this function, and `_inst_units_darwin` installs no timer at all
+  # (decision 17 — macOS is not centrally managed).
+  if [ "$INST_ROLE" != fleet ]; then
+    _inst_atomic "$tree/deploy/systemd/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccrc-update-watchdog.timer" "$dir/ccrc-update-watchdog.timer" 644
+  fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
   _inst_atomic "$tree/deploy/systemd/app-claude-session.slice.d/limits.conf" \
@@ -10639,6 +10660,14 @@ _inst_enable() {
   # turn an otherwise converged install into a failed one.
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccrc-models.timer \
     || echo "install: models: could not enable ccrc-models.timer — run: systemctl --user enable --now ccrc-models.timer" >&2
+  # W4a Task 9: the watchdog's timer, on `_inst_units`' own gate for its
+  # files (`!= fleet`), spelled `= fleet ||` so it reads in the shape of the
+  # enables above while naming its own set. DEGRADES rather than dies, the
+  # idiom of every timer here: an install that converged must not be failed
+  # over the actor that bounds a FUTURE update — doctor's `services` check
+  # names the stopped timer (`known`). No restart: a oneshot holds no code.
+  [ "$INST_ROLE" = fleet ] || systemctl --user enable --now ccrc-update-watchdog.timer \
+    || echo "install: update-watchdog: could not enable ccrc-update-watchdog.timer — run: systemctl --user enable --now ccrc-update-watchdog.timer" >&2
   # ── THE RESTART, AND WHY `enable --now` IS NOT ENOUGH ─────────────────
   # `deploy.sh:808-810` has this line between the enable and the verify, and
   # Task 8 shipped without it. Measured consequence on the SECOND run — the
@@ -12069,6 +12098,267 @@ _upd_rerun_hint() {
     rollback|watchdog) printf 'ccrc rollback --to %s' "$UPD_VERSION" ;;
     *) printf 'ccrc update --to %s --force' "$UPD_VERSION" ;;
   esac
+}
+
+# ── _upd_deadline_ms — the one deadline, read the way the server reads it ──
+# (W4a Task 9). W2's server takes `CCRC_UPDATE_DEADLINE_MS` from ccrc.env
+# through `ccrc.service`'s EnvironmentFile (its `updateDeadlineMs`); this
+# node's watchdog runs under a timer whose environment is the user manager's,
+# which never saw that file — so the file is read here by name, after an
+# exported value (a test's, or an operator's one-off). A value that is not a
+# positive integer of at most 15 digits is not read at all: zero would make
+# every live update "stale" the moment it wrote, and 15 digits is a JavaScript
+# safe integer — so W2's `updateDeadlineMs` (`Number.isSafeInteger(n) && n > 0`)
+# reads the same value from the same key — and keeps every product below inside
+# bash's 64-bit arithmetic. MILLISECONDS by name: the one caller divides by
+# 1000 (update.json is seconds, rulings R1/R14). Default: 15 minutes (spec §10).
+_upd_deadline_ms() {
+  local v="${CCRC_UPDATE_DEADLINE_MS:-}"
+  if [[ ! "$v" =~ ^[1-9][0-9]{0,14}$ ]]; then
+    v=""
+    if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+      v="$(_box_env_value "$BOX_ENV_FILE" CCRC_UPDATE_DEADLINE_MS)"
+    fi
+    [[ "$v" =~ ^[1-9][0-9]{0,14}$ ]] || v=900000
+  fi
+  printf '%s' "$v"
+}
+
+# ── ccrc watchdog — the server box's own measure of a self-update that died ─
+# (design 2026-09-20 §11; D-3227). W2's deadline sweep measures
+# a node's update from INSIDE the server process, and on a server-role box
+# that is the process the update restarts. A detached `ccrc update` that dies
+# mid-install (OOM, a crash) leaves nothing measuring: the lock dies with it,
+# `update.json` stays non-terminal, and `ccrc.service`'s `Restart=always`
+# restart-loops a half-replaced tree into systemd's start limit. This verb,
+# run every minute by `ccrc-update-watchdog.timer` (server and both roles,
+# Linux — `_inst_units`), is that measure, and it NEVER acts on a timestamp
+# alone:
+#   - absent, settled, unreadable or fresh → one line, exit 0, nothing else;
+#   - stale with a LIVE holder of ~/.ccrc/update.lock → left alone (slow is
+#     not dead), and past twice the deadline recorded WEDGED, so the inventory
+#     shows a wedged box instead of silence;
+#   - stale with NO holder → RE-MEASURED — the stamp, the completed-install
+#     record, and the gate's own probe (`_upd_gate_probe`, the one the update
+#     itself ends with). Healthy → the report is rewritten `failed:
+#     abandoned…` and nothing moves: a hand-run `ccrc update` over a dropped
+#     ssh session leaves exactly this file on a box that finished. The one
+#     exception is healthy but NOT at the target, in a phase that may have
+#     moved the tree (`installing` onward). There nothing is written, and the
+#     next tick measures again. Only a FAILING probe runs
+#     `$HOME/.local/bin/ccrc rollback --from watchdog`.
+# THE LOCK IS HELD across the re-measure and the rewrite
+# (D-3267): probe-then-act would leave a window in
+# which an operator's fresh `ccrc update` takes the lock, writes `resolving`,
+# and has that LIVE report replaced by `failed: abandoned…`. It is RELEASED
+# before the rollback, which takes it itself (Task 7) and would otherwise be
+# refused by its own parent. A lock that cannot be MEASURED — the file will not
+# open, or `flock -n` answers neither 0 nor contention's 1 (`_upd_lock_probe`'s
+# rc 3, Task 2) — is neither a live holder nor a free lock, and is not acted
+# on (ruling R16, D-3250). The rollback runs in this oneshot's cgroup,
+# which a `ccrc.service` restart does not touch; the unit file bounds it.
+# Nothing here writes a report through `_ccrc_die`: `UPD_REPORTING` is never
+# set by this verb, so its refusals leave `update.json` exactly as they found
+# it. Every detail it writes is printable ASCII — `_upd_json_str` turns each
+# non-ASCII byte into `?`.
+UPD_IN_FLIGHT_PHASES=(queued resolving fetching verifying backing-up installing restarting checking restoring)
+cmd_watchdog() {
+  case "${1:-}" in -h|--help) usage; exit 0 ;; esac
+  [ $# -eq 0 ] || _ccrc_usage_die "$1"
+  if [ "$CCD_OS" = darwin ]; then
+    echo "watchdog: macOS is not centrally managed (decision 17) — nothing to watch"
+    return 0
+  fi
+  # The RECORDED role, `cmd_update`'s own read: an absent or unknown value is
+  # the staged spine's default, `both`, which runs the server this guards.
+  local role=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  if [ "$role" = fleet ]; then
+    echo "watchdog: a fleet node is covered by the server's own deadline — nothing to watch here"
+    return 0
+  fi
+  if [ ! -e "$BOX_UPDATE_JSON" ] && [ ! -L "$BOX_UPDATE_JSON" ]; then
+    echo "watchdog: no update report"
+    return 0
+  fi
+  command -v jq >/dev/null 2>&1 \
+    || _ccrc_die "watchdog: jq is not on PATH, so ~/.ccrc/update.json cannot be read — nothing was re-measured or reverted"
+  # ONE parse into a fixed seven-line shape closed by an END sentinel —
+  # `_box_build_fields`' rule: `$( )` strips trailing newlines, so an empty
+  # last field would vanish silently without it. Not JSON, not an object, a
+  # phase that is not a word, an `updatedAt` that is not an integer: all
+  # UNREADABLE, and unreadable is never acted on. `updatedAt` is unix SECONDS
+  # (rulings R1, R14) — Task 1's `now` shape, at most W2's REPORT_TIME_MAX_S
+  # eleven digits — so a millisecond stamp is malformed here, never "fresh".
+  local out=""
+  out="$(jq -r '
+    try (
+      if type == "object" and (.phase | type == "string") and (.updatedAt | type == "number")
+      then "\(.phase)\n\(.updatedAt)\n\(.target // "")\n\(.pid // "")\n\(.startedAt // "")\n\(.from // "")\nEND"
+      else empty
+      end
+    ) catch empty' -- "$BOX_UPDATE_JSON" 2>/dev/null)" || out=""
+  local -a f=()
+  [ -n "$out" ] && mapfile -t f <<< "$out"
+  local phase="${f[0]:-}" upd="${f[1]:-}" tgt="${f[2]:-}" pid="${f[3]:-}" started="${f[4]:-}" from="${f[5]:-}"
+  if [ "${#f[@]}" -ne 7 ] || [ "${f[6]}" != END ] \
+     || [[ ! "$phase" =~ ^[a-z-]{1,32}$ ]] || [[ ! "$upd" =~ ^[1-9][0-9]{0,10}$ ]]; then
+    echo "watchdog: ~/.ccrc/update.json is unreadable or malformed — not acting on what cannot be read"
+    return 0
+  fi
+  local p inflight=0
+  for p in "${UPD_IN_FLIGHT_PHASES[@]}"; do [ "$p" = "$phase" ] && inflight=1; done
+  if [ "$inflight" -eq 0 ]; then
+    echo "watchdog: last update $phase — nothing to do"
+    return 0
+  fi
+  # THE UPDATER'S ATTRIBUTION SURVIVES every rewrite below: `_upd_phase`
+  # stamps target, startedAt, from and pid from these globals, preset from
+  # the report. Each is held to its shape first, because the file is data —
+  # a value that fails falls to the writer's own default (a null target, a
+  # startedAt of now, `from` watchdog, this process's pid).
+  [[ "$tgt" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || tgt=""
+  [[ "$pid" =~ ^[1-9][0-9]{0,9}$ ]] || pid=""
+  [[ "$started" =~ ^[1-9][0-9]{0,10}$ ]] || started=""
+  local w known_from=0
+  for w in "${UPD_FROM_WORDS[@]}"; do [ "$w" = "$from" ] && known_from=1; done
+  [ "$known_from" -eq 1 ] || from=watchdog
+  UPD_REPORT_TARGET="$tgt"; UPD_REPORT_STARTED="$started"; UPD_FROM="$from"; UPD_REPORT_PID="$pid"
+  # ONE UNIT, the report's own: unix SECONDS (rulings R1, R14). `_upd_phase`
+  # (Task 1) stamps `updatedAt` with `date +%s`, so `now` is read by the same
+  # call. The deadline is milliseconds BY NAME (`CCRC_UPDATE_DEADLINE_MS`, the
+  # knob W2's server reads) and is divided by 1000 HERE, the one place it is
+  # compared — a sub-second deadline is 0 s, so a report one second old is
+  # stale.
+  local now deadline lim age
+  now="$(date +%s)"
+  # A `date` that did not answer would make the subtraction below a bash
+  # arithmetic error, not an age — Task 1's `_upd_phase` refuses the same.
+  [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] \
+    || _ccrc_die "watchdog: date +%s did not answer with unix seconds — nothing was re-measured or reverted"
+  deadline="$(_upd_deadline_ms)"
+  lim=$(( deadline / 1000 ))
+  age=$(( 10#$now - 10#$upd ))
+  if [ "$age" -le "$lim" ]; then
+    echo "watchdog: update in progress ($phase, ${age}s old)"
+    return 0
+  fi
+  command -v flock >/dev/null 2>&1 \
+    || _ccrc_die "watchdog: flock (util-linux) is not on PATH, so a live updater cannot be told from a dead one — nothing was re-measured or reverted"
+  # The compound form (`ccd/ccd:4381-4410`): a failed open is this line's
+  # answer, never bash's own diagnostic on stderr. THREE answers, never two
+  # (ruling R16; `_upd_lock_probe`'s contract, Task 2): 0 this process took
+  # it, 1 a LIVE holder (contention), 3 UNMEASURED — the open failed, or
+  # `flock` failed with anything but contention's 1. Folding 3 into 1 would
+  # record a wedge nobody measured; folding it into 0 would probe and roll
+  # back past a lock this process could not see.
+  local lrc=0
+  if { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null; then
+    flock -n "$UPD_LOCK_FD" || lrc=$?
+  else
+    UPD_LOCK_FD=""; lrc=3
+  fi
+  case "$lrc" in 0|1) ;; *) lrc=3 ;; esac
+  if [ "$lrc" -eq 3 ]; then
+    _upd_unlock
+    echo "watchdog: the update lock could not be measured — not acting"
+    return 0
+  fi
+  local who="${pid:-unknown}"
+  if [ "$lrc" -eq 1 ]; then
+    _upd_unlock
+    if [ "$age" -gt $(( 2 * lim )) ]; then
+      _upd_phase failed "watchdog: updater pid $who wedged holding ~/.ccrc/update.lock since $upd"
+      echo "watchdog: updater pid $who has held ~/.ccrc/update.lock with no report for ${age}s, past twice the deadline — recorded as wedged; nothing was reverted"
+      return 0
+    fi
+    echo "watchdog: updater pid $who holds ~/.ccrc/update.lock — its report is ${age}s old; not acting while it lives"
+    return 0
+  fi
+  # ── RE-MEASURE, holding the lock. The three facts "converged" is made of
+  # (the stamp's version is the target, the completed-install record names
+  # the stamp's sha, the probe passes) and nothing the report claims.
+  local src=0 cur_v="" cur_sha="" rec="" prc=0
+  _box_build_fields || src=$?
+  if [ "$src" -eq 0 ]; then cur_sha="${BOX_BUILD[0]}"; cur_v="${BOX_BUILD[4]}"; fi
+  # ONE line, so ONE entry in single-definition's census of this record's
+  # readers. `-f` first: a FIFO or a directory at that path is not read.
+  [ -f "$BOX_INSTALLED_FILE" ] && { IFS= read -r rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || true
+  # An unversioned stamp is asked for version "" — which `/health` can never
+  # answer (it carries `version` only for a versioned build), so that box
+  # reads as unhealthy here, and the rollback below then refuses `untagged`
+  # by name (Task 7) and is recorded: nothing moves on a box with no tag.
+  _upd_gate_probe "$role" "$cur_v" || prc=$?
+  if [ "$prc" -eq 0 ]; then
+    if [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
+      _upd_phase failed "abandoned by its updater; box measures converged at $cur_v"
+      echo "watchdog: stale report ($phase, ${age}s) on a box that measures converged at $cur_v and answers healthy — recorded as abandoned; nothing was reverted"
+    elif [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ]; then
+      # D-3268: on the target and healthy, but the
+      # spine never reached `_inst_installed` — a box to finish, not revert.
+      # The remedy is Task 7's ONE helper, read against the report's own
+      # `from` (preset above): a rollback's target sits below the floor, where
+      # `update --force` is refused (M7), so its rerun is `ccrc rollback --to`.
+      local hint
+      hint="$(UPD_VERSION="$cur_v" _upd_rerun_hint)"
+      # No path in the sentence: single-definition allows one non-comment
+      # line naming the record's path, and it is the declaration.
+      _upd_phase failed "abandoned by its updater; box answers healthy on $cur_v but its install never completed (the completed-install record does not name its stamp); rerun: $hint"
+      echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy on $cur_v, but its install never completed — recorded as abandoned; nothing was reverted. Rerun: $hint"
+    else
+      # D-3246: healthy, but not at the target.
+      # Split by the phase the updater died in, because a probe that passes
+      # on the OLD build does not show that the tree on disk is the old tree.
+      # `installing` spans `_inst_tree`/`_inst_bins`/`_inst_files`, which run
+      # before `_inst_stamp` and `_inst_enable`: killed there, the stamp and
+      # the running ccrc.service are still the old build over a partly-new
+      # tree. A terminal report would close this verb on that box for good.
+      case "$phase" in
+        queued|resolving|fetching|verifying|backing-up)
+          # The tree cannot have moved, so the box it left is the box it found.
+          _upd_phase failed "abandoned by its updater; box measures healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target}"
+          echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — recorded as abandoned; nothing was reverted (only a failing probe reverts)"
+          ;;
+        *)
+          # installing, restarting, checking, restoring, and any in-flight
+          # word added later (the fail-safe direction): NOTHING is written, so
+          # the next tick re-measures, and a failing probe then rolls back.
+          echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — its tree may be partly replaced; not acting, re-measuring every tick"
+          ;;
+      esac
+    fi
+    _upd_unlock
+    return 0
+  fi
+  local why="${UPD_GATE_WHY:-the probe gave no reason}" rrc=0
+  echo "watchdog: stale report ($phase, ${age}s) and the box fails its health probe ($why) — rolling back"
+  # Released FIRST: the rollback takes the lock itself, and a child that
+  # inherited this descriptor would pin it past this process (the D-2605
+  # measurement §10 cites). `env -u` so an ambient marker can never make the
+  # rollback skip acquiring it.
+  _upd_unlock
+  env -u CCRC_UPDATE_LOCK_HELD "$HOME/.local/bin/ccrc" rollback --from watchdog || rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    echo "watchdog: ccrc rollback --from watchdog exited $rrc"
+    # Recorded only when the rollback wrote nothing of its own (the report's
+    # `updatedAt` never moved) and nobody has taken the lock since — a
+    # rollback that refused through its own report, or an operator's run that
+    # started after it, owns update.json now. The verdict leads and the
+    # probe's words follow, so the 200-character bound cuts the probe, never
+    # the verdict. A re-lock that is contended OR unmeasured records nothing:
+    # only a lock this process holds licenses a write.
+    if { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null && flock -n "$UPD_LOCK_FD"; then
+      local after=""
+      after="$(jq -r 'try (.updatedAt | tostring) catch empty' -- "$BOX_UPDATE_JSON" 2>/dev/null)" || after=""
+      [ "$after" != "$upd" ] \
+        || _upd_phase failed "watchdog: rollback refused (exit $rrc); box unhealthy: $why"
+    fi
+    _upd_unlock
+  fi
+  return "$rrc"
 }
 
 # One warning, or silence — never a refusal and never a guess. Address
@@ -14077,7 +14367,8 @@ _uninst_units() {
       ccd-tmp-sweep.timer ccd-tmp-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
-      ccrc-models.timer ccrc-models.service; do
+      ccrc-models.timer ccrc-models.service \
+      ccrc-update-watchdog.timer ccrc-update-watchdog.service; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -14094,6 +14385,7 @@ _uninst_units() {
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
+    "$dir/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -14519,6 +14811,7 @@ case "$VERB" in
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;
+  watchdog) cmd_watchdog "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

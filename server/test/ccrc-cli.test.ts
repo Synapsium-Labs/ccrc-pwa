@@ -188,9 +188,15 @@ describe('ccrc: dispatch and usage', () => {
     // and the line `ccrc rollout --channel` reads over ssh. It takes no
     // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
     // does.
+    //
+    // `watchdog` joined it in W4a Task 9 — the verb `ccrc-update-watchdog.timer`
+    // runs every minute on a server/both box: it re-measures a self-update
+    // whose report went stale and reverts only a box that fails its health
+    // probe. A timer's verb is still a verb an operator can type by hand.
+    // `server/test/ccrc-update.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
@@ -201,6 +207,7 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
     // paragraph: no domain at all, caddy's internal CA, passphrase-only.
     expect(r.stdout).toMatch(/ip \(no domain at all/);

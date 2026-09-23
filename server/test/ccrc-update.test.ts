@@ -621,6 +621,10 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
     // FILE the shim reads (knobs are files: `replantDoctorStubs` clobbers a
     // re-planted stub between two runner calls, never a fixture file).
     + '[ "$1" = install ] && [ -f "$HOME/fixture-on-install" ] && { sh "$HOME/fixture-on-install" || exit 91; }\n'
+    // W4a Task 9: the update killed mid-install. The shim has recorded its
+    // argv (so the test knows the spine is running) and then does not
+    // return; the test kills the whole process group.
+    + '[ -f "$HOME/fixture-install-hang" ] && sleep 30\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -4628,4 +4632,485 @@ describe('ccrc channel (design 2026-09-20 §14 — read-only)', () => {
     expect(h.code).toBe(0);
     expect(h.stdout).toMatch(/usage: ccrc \{/);
   });
+});
+
+describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)', () => {
+  // THE REPORT'S OWN UNIT: unix SECONDS (rulings R1, R14). Task 1's
+  // `_upd_phase` stamps `startedAt` and `updatedAt` with `date +%s`, and
+  // `cmd_watchdog` reads its clock with the same call; the deadline alone is
+  // milliseconds (`CCRC_UPDATE_DEADLINE_MS`, W2's `updateDeadlineMs`), divided
+  // by 1000 at the one place it is compared. The real-writer case at the end
+  // of this block is the one that goes red if the two sides ever disagree.
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  /** One minute: a 90 s report is stale, a 200 s one is past twice it. */
+  const DEADLINE_MS = '60000';
+  /** W2's `IN_FLIGHT_UPDATE_PHASES`, spelled from spec §6 until Task 15
+   *  merges W2 and swaps this literal for the import. */
+  const IN_FLIGHT = ['queued', 'resolving', 'fetching', 'verifying', 'backing-up',
+    'installing', 'restarting', 'checking', 'restoring'];
+  const NOT_IN_FLIGHT = ['done', 'reverted', 'failed', 'unknown'];
+
+  /** `$HOME/.local/bin/ccrc` — the launcher the watchdog's rollback runs
+   *  through — as a RECORDER: its argv; whether ~/.ccrc/update.lock was FREE
+   *  when it ran (the rollback takes that lock itself, so the watchdog must
+   *  have let go of it); whether a lock marker reached it; an optional report
+   *  it writes as its own; its exit code. What `ccrc rollback` DOES is Task
+   *  7's subject — this block owns who calls it, when, and what is recorded
+   *  around it. */
+  const LAUNCHER = [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/launcher-argv"',
+    'if flock -n "$HOME/.ccrc/update.lock" true; then echo free; else echo held; fi >> "$HOME/launcher-lock"',
+    'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" >> "$HOME/launcher-marker"',
+    '[ -f "$HOME/fixture-rollback-report" ] && cp "$HOME/fixture-rollback-report" "$HOME/.ccrc/update.json"',
+    'code=0',
+    '[ -f "$HOME/fixture-rollback-exit" ] && IFS= read -r code < "$HOME/fixture-rollback-exit"',
+    'exit "$code"',
+  ].join('\n') + '\n';
+
+  const stampSha = (home: string): string =>
+    (JSON.parse(readFileSync(join(home, '.ccrc', 'build.json'), 'utf8')) as { sha: string }).sha;
+  /** A server box on stamp `version`, carrying the three facts "converged"
+   *  is made of when a report names that version: the recorded role, the
+   *  loopback address `_upd_gate_probe`'s `/health` read resolves through
+   *  `_box_server_addr`, and a completed-install record naming the stamp's
+   *  sha — read off the stamp, never retyped. `role: null` records none. */
+  const watchBox = (prefix: string, opts: { version?: string; role?: string | null } = {}): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: opts.version ?? 'v2.0.0' });
+    const role = opts.role === undefined ? 'server' : opts.role;
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'),
+      `${role === null ? '' : `CCRC_ROLE=${role}\n`}CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n`);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${stampSha(home)}\n`);
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'), LAUNCHER, { mode: 0o755 });
+    return home;
+  };
+
+  type WatchReport = { target: string | null; phase: string; startedAt: number; updatedAt: number;
+    detail: null; from: string; pid: number };
+  const jsonPath = (home: string): string => join(home, '.ccrc', 'update.json');
+  /** A report in Task 1's exact shape — seven keys, in order — last written
+   *  `ageS` seconds ago. */
+  const report = (home: string,
+    r: { phase: string; ageS: number; target?: string | null; pid?: number; from?: string }): WatchReport => {
+    const updatedAt = nowS() - r.ageS;
+    const doc: WatchReport = {
+      target: r.target === undefined ? 'v2.0.0' : r.target,
+      phase: r.phase,
+      startedAt: updatedAt - 45,
+      updatedAt,
+      detail: null,
+      from: r.from ?? 'pwa',
+      pid: r.pid ?? 4321,
+    };
+    writeFileSync(jsonPath(home), `${JSON.stringify(doc)}\n`);
+    return doc;
+  };
+  const readReport = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(jsonPath(home), 'utf8')) as Record<string, unknown>;
+  const lines = (home: string, name: string): string[] => (existsSync(join(home, name))
+    ? readFileSync(join(home, name), 'utf8').split('\n').filter((l) => l !== '') : []);
+  /** The gate's own `/health` read ran: the watchdog MEASURED a healthy unit. */
+  const healthProbed = (home: string): boolean =>
+    lines(home, 'curl-argv').some((u) => u === 'http://127.0.0.1:7788/health');
+  /** The probe STARTED at all. `_upd_gate_probe` measures the unit before it
+   *  spends a `/health` request (Task 5), so on a box whose `fixture-unit-state`
+   *  reads `failed` `healthProbed` is false whether or not a probe ran — the
+   *  "nothing probed" negatives read the unit question instead. */
+  const probed = (home: string): boolean =>
+    lines(home, 'systemctl-calls').some((c) => c === '--user is-active ccrc.service');
+  const lockFree = (home: string): boolean =>
+    spawnSync('flock', ['-n', join(home, '.ccrc', 'update.lock'), 'true']).status === 0;
+
+  const runWatchdog = (home: string, args: string[] = [],
+    extraEnv: Record<string, string | undefined> = {}): Result => {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_UPDATE_DEADLINE_MS: DEADLINE_MS,
+    };
+    for (const [k, v] of Object.entries(extraEnv)) {
+      if (v === undefined) delete env[k]; else env[k] = v;
+    }
+    replantDoctorStubs(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'watchdog', ...args], { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  const release = (pgid: number): void => {
+    try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+  };
+  /** A LIVE holder: a real `flock` on the real lock file, in its own process
+   *  group, returned once the lock measurably IS held. `flock <file> sleep 30`
+   *  hands its descriptor to the `sleep` child, which a kill of `flock` alone
+   *  would leave holding the lock (Task 2's reason for its one-process
+   *  `bash -c 'exec 9>>…'` holder); `release` kills the whole GROUP, so both go. */
+  const holdLock = async (home: string): Promise<number> => {
+    const holder = spawn('flock', [join(home, '.ccrc', 'update.lock'), 'sleep', '30'],
+      { stdio: 'ignore', detached: true });
+    const until = Date.now() + 5000;
+    while (Date.now() < until) {
+      if (!lockFree(home)) return holder.pid!;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    release(holder.pid!);
+    throw new Error('the fixture holder never took ~/.ccrc/update.lock');
+  };
+
+  itLinux('leaves an absent, a settled, an unreadable and a fresh report alone — one line each, exit 0, nothing probed, nothing rolled back', () => {
+    const home = watchBox('ccrc-watchdog-quiet-');
+    // A box that WOULD be rolled back if any of these acted.
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    let r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('watchdog: no update report\n');
+    for (const phase of NOT_IN_FLIGHT) {
+      report(home, { phase, ageS: 3600 });
+      const before = readFileSync(jsonPath(home), 'utf8');
+      r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      expect(r.stdout).toBe(`watchdog: last update ${phase} — nothing to do\n`);
+      expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
+    }
+    for (const bad of ['not json\n', '[1,2]\n', '{"phase":"installing"}\n',
+      '{"phase":"installing","updatedAt":"yesterday"}\n', '{"phase":"installing","updatedAt":1.5}\n',
+      // A MILLISECOND stamp (13 digits): not this file's unit (rulings R1,
+      // R14), and past W2's REPORT_TIME_MAX_S — unreadable, never "fresh".
+      `{"phase":"installing","updatedAt":${Date.now()}}\n`,
+      '{"phase":"install\\u001bing","updatedAt":1}\n']) {
+      writeFileSync(jsonPath(home), bad);
+      r = runWatchdog(home);
+      expect(r.code, `${bad}: ${r.stderr}`).toBe(0);
+      expect(r.stdout).toBe('watchdog: ~/.ccrc/update.json is unreadable or malformed — not acting on what cannot be read\n');
+      expect(readFileSync(jsonPath(home), 'utf8')).toBe(bad);
+    }
+    report(home, { phase: 'installing', ageS: 30 });
+    r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^watchdog: update in progress \(installing, 3\ds old\)\n$/);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    expect(probed(home)).toBe(false);
+  });
+
+  itLinux('acts on exactly the nine in-flight phases — W2\'s IN_FLIGHT_UPDATE_PHASES — declared once in ccd/ccrc', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const m = /^UPD_IN_FLIGHT_PHASES=\(([^)]*)\)$/m.exec(src);
+    expect(m, 'ccd/ccrc declares no UPD_IN_FLIGHT_PHASES').toBeTruthy();
+    expect(m![1]!.split(' ')).toEqual(IN_FLIGHT);
+    expect(src.split('\n').filter((l) => l.startsWith('UPD_IN_FLIGHT_PHASES=')).length).toBe(1);
+    const home = watchBox('ccrc-watchdog-inflight-');
+    for (const phase of IN_FLIGHT) {
+      report(home, { phase, ageS: 90 });
+      const r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      expect(readReport(home).phase, phase).toBe('failed');
+      expect(readReport(home).detail, phase).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    }
+  });
+
+  itLinux('stale, no holder, and the box measures CONVERGED at the target: rewritten failed: abandoned…converged, the updater\'s attribution kept, NO rollback (§18 "the watchdog re-measures before it reverts")', () => {
+    const home = watchBox('ccrc-watchdog-converged-');
+    const was = report(home, { phase: 'installing', ageS: 90, from: 'pwa', pid: 4321 });
+    const r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const now = readReport(home);
+    expect(Object.keys(now)).toEqual(['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid']);
+    expect(now.phase).toBe('failed');
+    expect(now.detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    expect(now.target).toBe('v2.0.0');
+    expect(now.from).toBe('pwa');
+    expect(now.pid).toBe(4321);
+    expect(now.startedAt).toBe(was.startedAt);
+    expect(now.updatedAt as number).toBeGreaterThan(was.updatedAt);
+    expect(r.stdout).toMatch(/^watchdog: stale report \(installing, 9\ds\) on a box that measures converged at v2\.0\.0 and answers healthy — recorded as abandoned; nothing was reverted$/m);
+    // It MEASURED — the gate's own /health read ran — and it did not revert.
+    expect(healthProbed(home)).toBe(true);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // …and it let go: a later update is never refused by a watchdog that ended.
+    expect(lockFree(home)).toBe(true);
+  });
+
+  itLinux('stale, no holder, healthy but NOT converged: rewritten with what the box IS, never a rollback (D-3246, D-3268)', () => {
+    // The updater died before the tree moved: healthy on the OLD build.
+    const home = watchBox('ccrc-watchdog-healthy-old-', { version: 'v1.0.0' });
+    report(home, { phase: 'fetching', ageS: 90, target: 'v2.0.0' });
+    let r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home).detail).toBe('abandoned by its updater; box measures healthy at v1.0.0, not at v2.0.0');
+    expect(r.stdout).toMatch(/\(only a failing probe reverts\)$/m);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // On the target and healthy, but the spine never reached `_inst_installed`:
+    // a box to FINISH, not to revert — and the sentence says how.
+    const home2 = watchBox('ccrc-watchdog-healthy-incomplete-');
+    writeFileSync(join(home2, '.ccrc', 'installed'), 'a-record-for-some-other-build\n');
+    report(home2, { phase: 'installing', ageS: 90 });
+    r = runWatchdog(home2);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home2).detail).toBe('abandoned by its updater; box answers healthy on v2.0.0 but its install never completed (the completed-install record does not name its stamp); rerun: ccrc update --to v2.0.0 --force');
+    expect(existsSync(join(home2, 'launcher-argv'))).toBe(false);
+    // …and when the run that died was a ROLLBACK, `update --force` would be
+    // refused below the floor (M7): the remedy is Task 7's `_upd_rerun_hint`.
+    report(home2, { phase: 'installing', ageS: 90, from: 'rollback' });
+    r = runWatchdog(home2);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home2).detail).toBe('abandoned by its updater; box answers healthy on v2.0.0 but its install never completed (the completed-install record does not name its stamp); rerun: ccrc rollback --to v2.0.0');
+    // A report with no target (null) is never "converged", and stays null.
+    const home3 = watchBox('ccrc-watchdog-healthy-notarget-');
+    report(home3, { phase: 'resolving', ageS: 90, target: null });
+    r = runWatchdog(home3);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home3).detail).toBe('abandoned by its updater; box measures healthy at v2.0.0, not at its target');
+    expect(readReport(home3).target).toBe(null);
+  });
+
+  itLinux('stale, no holder, healthy but NOT at the target, in a phase that may have moved the tree: left non-terminal and re-measured every tick, so a later failing probe still reverts it (D-3246, design §11)', () => {
+    // The updater was killed INSIDE `_inst_tree`, `_inst_bins` or `_inst_files`,
+    // which run before `_inst_stamp` and `_inst_enable`. The stamp still names
+    // v1.0.0 and ccrc.service is still the old in-memory process, so the probe
+    // passes on v1.0.0, over a tree that is partly v2.0.0 on disk. A terminal
+    // `failed` here would answer "nothing to do" on the tick after ccrc.service
+    // restarts onto that tree, which is design §11's own scenario.
+    for (const phase of ['installing', 'restarting', 'checking', 'restoring']) {
+      const home = watchBox(`ccrc-watchdog-healthy-moving-${phase}-`, { version: 'v1.0.0' });
+      report(home, { phase, ageS: 90, target: 'v2.0.0' });
+      const before = readFileSync(jsonPath(home), 'utf8');
+      let r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      expect(r.stdout).toMatch(new RegExp(`^watchdog: stale report \\(${phase}, 9\\ds\\) on a box that answers healthy at v1\\.0\\.0, not at v2\\.0\\.0 — its tree may be partly replaced; not acting, re-measuring every tick$`, 'm'));
+      expect(readFileSync(jsonPath(home), 'utf8'), phase).toBe(before);
+      // It MEASURED, and it let go of the lock.
+      expect(healthProbed(home), phase).toBe(true);
+      expect(existsSync(join(home, 'launcher-argv')), phase).toBe(false);
+      expect(lockFree(home), phase).toBe(true);
+      // ccrc.service restarts onto the half-placed tree and fails: the NEXT
+      // tick still reverts, because nothing above closed the report.
+      writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+      r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      expect(lines(home, 'launcher-argv'), phase).toEqual(['rollback --from watchdog']);
+    }
+  });
+
+  itLinux('stale, no holder, and the box FAILS its health probe: ccrc rollback --from watchdog, with the lock FREE and no marker; the rollback owns update.json after (§18 "the watchdog reverts a dead updater")', () => {
+    const home = watchBox('ccrc-watchdog-revert-');
+    report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    // An ambient marker must never reach the rollback: it takes the lock itself.
+    const r = runWatchdog(home, [], { CCRC_UPDATE_LOCK_HELD: String(process.pid) });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^watchdog: stale report \(installing, 9\ds\) and the box fails its health probe \(.+\) — rolling back$/m);
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+    expect(lines(home, 'launcher-lock')).toEqual(['free']);
+    expect(lines(home, 'launcher-marker')).toEqual(['unset']);
+    expect(readReport(home).phase).toBe('installing');
+    expect(lockFree(home)).toBe(true);
+    // /health answering the OLD version on a box whose stamp moved — the
+    // half-replaced tree restart-looping on the previous server — fails the
+    // same probe.
+    const home2 = watchBox('ccrc-watchdog-revert-oldhealth-');
+    report(home2, { phase: 'restarting', ageS: 90 });
+    writeFileSync(join(home2, 'fixture-health-pin'), 'v1.0.0\n');
+    expect(runWatchdog(home2).code).toBe(0);
+    expect(lines(home2, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+  });
+
+  itLinux('a refused rollback is relayed; when it wrote nothing it is recorded, verdict first — when it wrote its own report, that report stands', () => {
+    const home = watchBox('ccrc-watchdog-refused-');
+    const was = report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home, 'fixture-rollback-exit'), '1\n');
+    let r = runWatchdog(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^watchdog: ccrc rollback --from watchdog exited 1$/m);
+    const now = readReport(home);
+    expect(now.phase).toBe('failed');
+    expect(String(now.detail)).toMatch(/^watchdog: rollback refused \(exit 1\); box unhealthy: ./);
+    expect(now.startedAt).toBe(was.startedAt);
+    expect(now.pid).toBe(was.pid);
+    const home2 = watchBox('ccrc-watchdog-refused-own-');
+    report(home2, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home2, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home2, 'fixture-rollback-exit'), '1\n');
+    const own = `${JSON.stringify({ target: 'v1.0.0', phase: 'failed', startedAt: nowS(), updatedAt: nowS(),
+      detail: 'rollback: nothing to roll back to', from: 'watchdog', pid: 777 })}\n`;
+    writeFileSync(join(home2, 'fixture-rollback-report'), own);
+    r = runWatchdog(home2);
+    expect(r.code).toBe(1);
+    expect(readFileSync(jsonPath(home2), 'utf8')).toBe(own);
+  });
+
+  itLinux('a LIVE holder of ~/.ccrc/update.lock is never acted on — exit 0 and the sentence, nothing probed, the report byte-identical (§18 "the watchdog reverts a dead updater": the lock check)', async () => {
+    const home = watchBox('ccrc-watchdog-live-');
+    report(home, { phase: 'installing', ageS: 90, pid: 4321 });
+    // The probe WOULD fail: only the lock stands between this box and a rollback.
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const holder = await holdLock(home);
+    try {
+      const r = runWatchdog(home);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(/^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 9\ds old; not acting while it lives$/m);
+      expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
+      expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+      expect(probed(home)).toBe(false);
+    } finally { release(holder); }
+  });
+
+  itLinux('a holder whose report has not advanced in twice the deadline is recorded WEDGED — its pid, the instant it last reported — and nothing is reverted (§18 "the watchdog bounds a wedged holder")', async () => {
+    const home = watchBox('ccrc-watchdog-wedged-');
+    const was = report(home, { phase: 'installing', ageS: 200, pid: 4321, from: 'cli' });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const holder = await holdLock(home);
+    try {
+      const r = runWatchdog(home);
+      expect(r.code, r.stderr).toBe(0);
+      const now = readReport(home);
+      expect(now.phase).toBe('failed');
+      expect(now.detail).toBe(`watchdog: updater pid 4321 wedged holding ~/.ccrc/update.lock since ${String(was.updatedAt)}`);
+      expect(now.pid).toBe(4321);
+      expect(now.from).toBe('cli');
+      expect(now.target).toBe('v2.0.0');
+      expect(r.stdout).toMatch(/recorded as wedged; nothing was reverted$/m);
+      expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+      // The verdict is terminal: the next tick leaves it alone.
+      expect(runWatchdog(home).stdout).toBe('watchdog: last update failed — nothing to do\n');
+    } finally { release(holder); }
+  });
+
+  itLinux('a lock that cannot be MEASURED is neither a live holder nor a free lock — exit 0 and the one sentence, nothing probed, nothing rewritten (ruling R16, D-3250)', () => {
+    // Both of `_upd_lock_probe`'s rc-3 conditions (Task 2), on a report that
+    // is past TWICE the deadline and a box whose probe would fail — so folding
+    // rc 3 into "held" rewrites it as wedged, and folding it into "taken"
+    // probes and rolls back. Only the rc-3 arm leaves both alone.
+    const quiet = 'watchdog: the update lock could not be measured — not acting\n';
+    // (1) The OPEN fails: a directory where the lock file belongs.
+    const home = watchBox('ccrc-watchdog-lock-unopenable-');
+    report(home, { phase: 'installing', ageS: 200 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    mkdirSync(join(home, '.ccrc', 'update.lock'));
+    const before = readFileSync(jsonPath(home), 'utf8');
+    let r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(quiet);
+    expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
+    expect(probed(home)).toBe(false);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // (2) `flock -n` answers neither 0 (taken) nor contention's 1: a `flock`
+    // on the fixture's PATH (its `~/.local/bin`, first) that fails the way a
+    // bad descriptor does. `lockFree` uses the host's own flock, not this one.
+    const home2 = watchBox('ccrc-watchdog-flock-unmeasured-');
+    report(home2, { phase: 'installing', ageS: 200 });
+    writeFileSync(join(home2, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home2, '.local', 'bin', 'flock'),
+      '#!/bin/sh\necho "flock: fixture: Bad file descriptor" >&2\nexit 64\n', { mode: 0o755 });
+    const before2 = readFileSync(jsonPath(home2), 'utf8');
+    r = runWatchdog(home2);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(quiet);
+    expect(readFileSync(jsonPath(home2), 'utf8')).toBe(before2);
+    expect(probed(home2)).toBe(false);
+    expect(existsSync(join(home2, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('the deadline is CCRC_UPDATE_DEADLINE_MS, else ccrc.env\'s, else fifteen minutes — a positive integer of ms, or it is not read', () => {
+    const home = watchBox('ccrc-watchdog-deadline-');
+    const inProgress = /^watchdog: update in progress \(installing, 9\ds old\)$/m;
+    report(home, { phase: 'installing', ageS: 90 });
+    // No environment, no key: fifteen minutes, so 90 s is in progress.
+    let r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.stdout).toMatch(inProgress);
+    // Not a positive integer: read as absent — never as zero, which would make
+    // every live update stale the instant it wrote.
+    for (const bad of ['0', 'soon', '-5', '']) {
+      r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: bad });
+      expect(r.stdout, `CCRC_UPDATE_DEADLINE_MS='${bad}'`).toMatch(inProgress);
+    }
+    // The environment wins over the file…
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_UPDATE_DEADLINE_MS=60000\n');
+    r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: '600000' });
+    expect(r.stdout).toMatch(inProgress);
+    // …and the file — the key W2's server reads — is read when it has none.
+    r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home).detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    // Past fifteen minutes is stale on the default.
+    const home2 = watchBox('ccrc-watchdog-deadline-default-');
+    report(home2, { phase: 'installing', ageS: 16 * 60 });
+    expect(runWatchdog(home2, [], { CCRC_UPDATE_DEADLINE_MS: undefined }).code).toBe(0);
+    expect(readReport(home2).phase).toBe('failed');
+  });
+
+  itLinux('a fleet node has nothing to watch; an unrecorded role is the spine\'s default, both; any argument is a usage error', () => {
+    const fleet = watchBox('ccrc-watchdog-fleet-', { role: 'fleet' });
+    report(fleet, { phase: 'installing', ageS: 3600 });
+    writeFileSync(join(fleet, 'fixture-unit-state'), 'failed\n');
+    let r = runWatchdog(fleet);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('watchdog: a fleet node is covered by the server\'s own deadline — nothing to watch here\n');
+    expect(existsSync(join(fleet, 'launcher-argv'))).toBe(false);
+    const bare = watchBox('ccrc-watchdog-norole-', { role: null });
+    report(bare, { phase: 'installing', ageS: 90 });
+    r = runWatchdog(bare);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(bare).detail).toBe('abandoned by its updater; box measures converged at v2.0.0');
+    r = runWatchdog(bare, ['--now']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: unknown argument: --now$/m);
+  });
+
+  itDarwin('macOS is not centrally managed: exit 0 and the sentence, whatever the report says (decision 17)', () => {
+    const home = watchBox('ccrc-watchdog-darwin-');
+    report(home, { phase: 'installing', ageS: 3600 });
+    const r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('watchdog: macOS is not centrally managed (decision 17) — nothing to watch\n');
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('a REAL update killed mid-install: the watchdog reads the real writer\'s report in its own unit, leaves it while fresh, and reverts it once stale on a box that fails its probe (design §16, Review Focus 5)', async () => {
+    const home = watchBox('ccrc-watchdog-killed-', { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    writeFileSync(join(home, 'fixture-install-hang'), '');
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = {
+      ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+    };
+    replantDoctorStubs(home);
+    // Its own process group, so one kill takes the update AND its hung spine —
+    // the OOM that ends a detached run mid-install.
+    const child = spawn(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v2.0.0'],
+      { env, detached: true, stdio: 'ignore' });
+    let phase = '';
+    try {
+      const until = Date.now() + 15_000;
+      while (Date.now() < until) {
+        try { phase = String(readReport(home).phase); } catch { phase = ''; }
+        if (phase === 'installing' && existsSync(join(home, 'staged-ccrc-argv'))) break;
+        await new Promise((res) => setTimeout(res, 50));
+      }
+    } finally {
+      release(child.pid!);
+    }
+    expect(phase, 'the update never reached its staged install').toBe('installing');
+    const until = Date.now() + 5000;
+    while (!lockFree(home) && Date.now() < until) await new Promise((res) => setTimeout(res, 20));
+    expect(lockFree(home), 'the lock outlived the killed updater').toBe(true);
+    const left = readReport(home);
+    expect(left.phase).toBe('installing');
+    expect(left.pid).toBe(child.pid);
+    // FRESH on the default deadline. The writer's instant and the watchdog's
+    // clock are one unit — seconds — or this reads as decades stale (a
+    // seconds writer against a ms clock) or as from the future (the reverse).
+    let r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: undefined });
+    expect(r.stdout).toMatch(/^watchdog: update in progress \(installing, [0-9]{1,2}s old\)$/m);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    // STALE (a 1 ms deadline — 0 s once divided, so the report must be at
+    // least one whole second old), no holder, and the half-replaced server
+    // will not stay up: the one case the watchdog reverts.
+    while (nowS() <= (left.updatedAt as number)) await new Promise((res) => setTimeout(res, 50));
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    r = runWatchdog(home, [], { CCRC_UPDATE_DEADLINE_MS: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+    expect(lines(home, 'launcher-lock')).toEqual(['free']);
+  }, 60_000);
 });
