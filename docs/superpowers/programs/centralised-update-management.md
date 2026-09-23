@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **final review** (run 128, PR #176 at `1258a57a` after fix round 2); review run 146 dispatched 2026-09-23 22:5x UTC; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **narrow fix round 3** (run 128, PR #176); review run 146 at `1258a57a`: 3 behaviour + 11 coverage/prose; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -282,6 +282,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - In parallel, the coordinator's second re-pointing pass (R6) runs against `1258a57a`. It covers every
     `NodeMeasurement`/`NodeRow`/`NodeWire` literal in waves 3 and 5, fix round 2's changes (including wave 3's copy
     for the refresh door, which is no longer "a minute"), and an addendum for wave 4.
+
+- **Review run 146 on wave 2 (2026-09-23), the final one, at `1258a57a`.** 77 agents, no lens unverified, no finding
+  unexamined; 23 survived and were merged into 14, and 1 was killed. The rule announced in round 2 applied as written:
+  - **Behaviour → narrow fix round 3:**
+    - B1: one throwing store read on the `/latest` 200 arm lost K until restart.
+    - B2: R2's gate yanked K even when the same fresh listing named K, so the yank alternated every poll. **Ruling: the
+      listing wins over `releases/tags/K` in the same poll.**
+    - B3: the derived interval had zero headroom for a restart's immediate poll and for late sends. Each request now
+      stamps at send time, with a named margin term.
+  - **Coverage/prose → carried:** P1–P11, plus the worker's round-2 C-a, C-b, C-d and three nits. The escape hatch has
+    to be real, and wave 5's planned tasks do not touch `catalogue.ts`. So the coordinator adds a residue task to wave
+    5's plan (between its Tasks 8 and 9) holding each item. The review after round 3 is scoped to round 3's delta and
+    sends back only a behaviour defect in it.
 
 ## Carried constraints
 
