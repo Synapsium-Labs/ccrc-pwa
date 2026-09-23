@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **second review** (run 128, PR #176 at `2b5d4ce1` after fix round 1); review run 143 dispatched 2026-09-23 19:4x UTC; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **fix round 2, the last full round** (run 128, PR #176); review run 143 at `2b5d4ce1`: 16 findings (6 important); plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -244,6 +244,29 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
 
   **Wave 4:** its plan is held by its worker, so it got a report only: 28 items, every one verified against the tree.
   That report is the artifact of its wake mail.
+
+- **Review run 143 on wave 2 (2026-09-23), at `2b5d4ce1`.** The panel plus a security lens: 94 agents, no lens
+  unverified, no finding unexamined. 25 survived and were merged into 16 (6 important, 10 minor); 5 were killed and
+  kept. Ruled **send back, fix round 2, announced in its ruling as the LAST full round**. From review round 3, only a
+  shipped-behaviour defect goes back. A coverage gap or false prose is carried to programme wave 5, which edits
+  `server/src/update/` and `store.ts`, and #176 then merges with it recorded.
+
+  **Shipped-behaviour defects, fixed now:**
+  - R1: the refresh door counts every catalogue request, and its interval is derived from the per-poll maximum.
+  - R2: a tag-check 404 yanks only when the same poll's listing answered 200. A repository-wide 404 had been yanking
+    one stable per poll, for good.
+  - R4: `NodeWire` gains optional `floorRead`/`previousRead`, always sent.
+  - R7: the download URL is stored normalised, and a raw backslash is refused.
+  - R8: a tag answer must name the tag asked for.
+  - R9: no numeric component over 18 digits, the bash twin's ordering limit.
+
+  **Coverage gaps and false prose, fixed by class:** R3 (a disarmed guard), R5 (D-3217's Interfaces), and R10–R16.
+
+  **Carried:** R6 (the later plans) is the coordinator's second re-pointing pass after the merge. X1 goes to wave 5 as a
+  known limitation: a garbled floor reads `absent` on the server while the node refuses it, which fails safe as a
+  named halt.
+
+  `main` moved to `a3a93b41` (#177) during the review. The tip merges clean onto it, and `MIGRATIONS[13]` still holds.
 
 ## Carried constraints
 
