@@ -75,6 +75,10 @@ Steps:
 
 Numbers are ISSUED, never chosen. This programme's block was allocated once by its coordinator at run-open, and a worker never calls the allocator. A departure found while executing this plan is named in the wave-done mail: what departed, where, and why. The coordinator assigns its number and has it defined here.
 
+- **D-3473** — README.md edited under a held claim (Task 1, S6-R11). `README.md` was claimed by another programme (run 128). The worker mailed the holder its narrow scope, two `ccd/ccd` anchor numbers re-pointed by content (`21079` → `21143`, `19866-19868` → `19930-19932`), and committed the re-point without an answer, because without it the session-hook README case reds. The coordinator accepted it: claims are advisory, and the other programme's coordinator agreed that the second PR to merge re-points README and re-measures.
+- **D-3474** — two existing `_ws_slug_new` unit tests plant a repository (`server/test/ccd-workspaces.test.ts`, "generates a slug that is itself valid" and "honours CCD_WS_SLUG when the name is free"). They called `_ws_slug_new` with no repo, which this plan's table now answers `unmeasurable`. They plant `makeRepo('demo')` in a line-neutral edit, because the frozen corpus cites that file at lines 121–272. The same file gains one DISPOSITION entry for the new file's three `slug in use:` assertions.
+- **D-3475** — `_ws_slug_git_state` also proves git's resolved toplevel is `$main` (Task 1). git skips a `.git` it cannot read and keeps discovering upwards. Measured: a broken `$main` inside another repository answered `show-ref` from the outer one (rc 1, which reads as `free`). So a toplevel that is not `$main` is `unmeasurable`. It has its own test and mutation row 6.
+
 ---
 
 ## Review lenses
