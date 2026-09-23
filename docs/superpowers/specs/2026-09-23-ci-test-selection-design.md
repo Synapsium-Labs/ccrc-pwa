@@ -141,14 +141,15 @@ Per test file, **repository paths only** (anything outside the checkout, and `no
 | `read` | a file is opened or executed, by the test or any descendant (bash, git, tmux, node) — under the path the kernel resolved as well as the path asked for, so a read through a symlink planted outside the repo counts — or is the in-repo target of a symlink the test creates (§15.9) | that path is modified, deleted or renamed |
 | `probed` | a stat/access/open of a path fails with `ENOENT` | that path is added |
 | `listed` | a directory is enumerated (`getdents64`) | a file directly inside it is added, deleted or renamed |
+| `subtree` | the test creates a symlink whose target is an in-repo DIRECTORY (a fixture home that links `deploy/` or `shared/` whole) — what it later stats or probes through the link has no resolved path to record (§15.13) | any path at or under it is added, modified, deleted or renamed |
 | `git` | any path under the repository's `.git/` is opened | **always** — the test reads the whole tracked tree or its history (`git ls-files`, `git grep`, a range scan) |
-| `unknown` | the traced run failed, timed out, or was killed, or a relative path could not be resolved | **always**, until a clean trace replaces it |
+| `unknown` | the traced run failed, timed out, or was killed, a relative path could not be resolved, or a floor test lost its breadth | **always**, until a clean trace replaces it |
 
 - **Recursive walks** enumerate every subdirectory they descend into, so each is recorded in `listed` on its own.
 - **`git` is derived, not hand-kept.** It is expected to contain at least `source-bytes`, `topology-clean`,
   `deviation-refs`, `dtbd`, `providers`, `modelenv-single-writer`, `install-census` and `gitignore-secrets` — the
-  repo-wide guards the study found, about 2% of runtime together with the two below. `map-build` refuses a map in which that floor is broken, so a tracer regression that stops seeing
-  `.git` reads goes red instead of silently narrowing the guards (§15.10). `single-definition` and `typecheck-tests` are repo-wide too, but
+  repo-wide guards the study found, about 2% of runtime together with the two below. `map-build` goes red when that floor is broken — after publishing the map with each violator marked `unknown`, so a
+  tracer regression that stops seeing `.git` reads is loud and the violators are still always selected (§15.13). `single-definition` and `typecheck-tests` are repo-wide too, but
   through directory walks and `tsc` project reads rather than `.git`; their breadth arrives through `listed` and
   `read`, and the same pin names them.
 - **`unknown` exists because a test that dies early reads less.** Its record would be too small, which is the one
@@ -182,10 +183,13 @@ Carrying the old entries is sound for the same reason selection is (§9): a test
 executed identically, so its record is unchanged. If there is no map yet, or a full-run trigger fired, the refresh
 traces everything. A test the refresh meant to trace but got no record for — its trace shard crashed or was
 cancelled — is written `unknown`, never carried: carrying is sound only for tests that read none of the changed paths
-(§15.3). A refresh's test failures show red on the `main` commit — they are either a real semantic merge
-conflict among the affected tests, or a timing test perturbed by tracing — and mark those tests `unknown`. They gate
-nothing. A refresh publishes its map only if the map it started from is still the newest trusted one (§15.7); a
-rebuild always publishes.
+(§15.3). A test that fails or times out under tracing is recorded `unknown` — always selected — and the
+map is published regardless. `map-build` then goes red, after publishing, only for news: a traced test that newly
+fails (failing now, not unknown in the map the run started from) — a real semantic merge conflict among the affected
+tests, or a test newly perturbed by tracing. A failure that was already unknown is a warning, so a test that always
+fails under tracing (§15.12) reds the first build that sees it, not every merge that re-traces it; with no map to start
+from, every failure counts once. It gates nothing. A refresh publishes its map only if, when checked just before the upload, the map it started from is still the
+newest trusted one (§15.7); a rebuild always publishes.
 
 ### 5.5 Storage
 
@@ -215,6 +219,7 @@ modified and deleted, which §5.2's table needs.
 3. A modified, deleted or renamed path is in its `read`.
 4. An added path is in its `probed`.
 5. An added, deleted or renamed path sits directly inside a directory in its `listed`.
+6. Any changed path sits at or under a directory in its `subtree`.
 
 ### 6.3 The full suite runs instead when
 
@@ -343,12 +348,14 @@ full run succeeded.
 ### 11.3 The history replay — the acceptance measurement
 
 Before enforcing, the selector runs over the study's dataset — **114 real CI test failures across 64 runs, plus the 6
-documented misses** (the `deploy/build-release.sh` → `compact-card-ship`, `ccd/ccrc-doctor-checks` →
+documented misses**, frozen as `2026-09-23-ci-test-selection-replay-dataset.json` beside this spec because GitHub job
+logs expire and the set could not be rebuilt later — (the `deploy/build-release.sh` → `compact-card-ship`, `ccd/ccrc-doctor-checks` →
 `ccrc-install` + `pool-name-parity`, `COORD_SCHEMA_VERSION` → `asks-store`, `closeReviewRun`'s `sweepDec(` sites →
 `unattended-actor`, `dispatch.ts`'s `cap-concurrency` frame → `coordinator-skill`, and the NUL byte → `source-bytes`
 cases) — against the first real traced map. Target: **every failure not inherited from `main`, whose test is in the
 map, is selected**; a failing test absent from today's map proves nothing either way and is reported separately, never
-counted as caught. Each miss is explained and either fixed in the tracer or recorded as a known limit (§9). Reported
+counted as caught. Each miss is explained and either fixed in the tracer or recorded as a known limit (§9). A set with no proven
+case reports recall `n/a`, which does not count as 100%. Reported
 alongside: the selected share of server runtime across the last 100 merged PRs.
 
 ## 12. Rollout
@@ -426,8 +433,10 @@ confirmed, none refuted) added the following.
    branch — would have become that pull request's selection baseline, with a final diff that shows nothing. The
    artifact picker accepts only `ci.yml` runs on this repository's `main`, triggered by `push`, `schedule` or
    `workflow_dispatch`; `select` also refuses a map whose commit is not an ancestor of the tree under test. A refresh
-   publishes only if its starting map is still the newest trusted one, so a refresh racing the daily rebuild can never
-   hide the rebuild's corrections.
+   publishes only if, when checked just before its upload, its starting map is still the newest trusted one. The check
+   and the upload are two steps, not one atomic act, so this narrows a refresh racing the daily rebuild to the seconds
+   between them rather than closing it: the worst case is that the rebuild's corrections wait for the next rebuild, and
+   selection stays safe because every map is a correct map for its own commit.
 8. **A pull request is never judged only by the code it changes.** A plain-bash `git diff` against the merge base
    forces the full suite when `.github/` changed, before the selector runs. `verdict.mjs` exits 1 unless it reaches a
    successful verdict, and both `test (server)` and `full-suite` start with a script-free step over the job results that
@@ -448,3 +457,14 @@ confirmed, none refuted) added the following.
 12. **Known trace-time pressure.** `session-hook` traced in 823 s on the loaded development box against a 900 s per-file
     budget; its tests also fail under tracing (timing budgets), so it stays `unknown` and always selected. The spike
     measures the heaviest traced times on a real runner and the plan raises the budget or isolates the file if needed.
+
+The bounded second review round (closure of the 43, plus a fresh pass over the new surface) added:
+
+13. **Directory symlinks and the floors.** A test that links a whole repository directory into a fixture home and then
+    only stats or probes a file through the link leaves no resolved path for that file; the directory is recorded as a
+    `subtree`, and any change under it selects the test (rule 6). A broken `git` or walk floor no longer stops the map:
+    the violators are published as `unknown` (always selected) and `map-build` goes red afterwards, so one legitimate
+    refactor of a floor test cannot freeze the map until it expires.
+14. **The acceptance dataset is frozen.** The replay runs over the study's frozen set (§11.3) and over a fresh collection
+    of newer failures, and reports each set's size, because a fresh collection from live job logs finds only about a
+    third of the study's window.
