@@ -6,16 +6,17 @@
 split across parallel runners; the full suite runs daily on `main` and gates every promotion to `stable`.
 
 **Architecture:** One `select` job in `ci.yml` decides a mode from the trigger and, for a pull request, diffs the tree
-under test against the commit of the newest dependency map (Actions cache) and picks the server test files whose
+under test against the commit of the newest dependency map (an artifact of a trusted `main` run — never the
+Actions cache, whose pull-request scope a pull request can write) and picks the server test files whose
 recorded reads, failed probes or directory listings the change touches — falling back to the full suite on any doubt.
-The map is produced by running each server test file under `strace -ff -y` (every descendant process included), rebuilt
+The map is produced by running each server test file under `strace -ff -ttt -y` (every descendant process included), rebuilt
 in full by the daily run and patched after each merge by re-tracing only the affected tests. Selected files are packed
 onto 1–5 Linux runners by measured duration; a summary job keeps the required name `test (server)`. The change lands in
 **shadow mode** (selection computed and reported, everything still run) and is enforced by a one-line flip after a
 replay of real CI history.
 
-**Tech Stack:** GitHub Actions (`ubuntu-latest`, `macos-latest`; `actions/cache` v4, `actions/upload-artifact` /
-`download-artifact` v4, reusable workflows), Node 22 ESM scripts under `.github/ci/` using `node:` builtins only,
+**Tech Stack:** GitHub Actions (`ubuntu-latest`, `macos-latest`; `actions/upload-artifact` / `download-artifact` v4,
+`gh run download`, the Actions REST API for artifacts, reusable workflows), Node 22 ESM scripts under `.github/ci/` using `node:` builtins only,
 vitest 4.1.10, strace 6.8, git.
 
 **Spec:** `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md` — read it before any task; this plan argues
@@ -38,8 +39,8 @@ from it, and the section numbers below (§N) are its sections.
   it (`build-release.test.ts`).
 - `fetch-depth: 0` on every job that runs server tests or the selector (`topology-clean`, `deviation-refs` need
   `origin/main`).
-- Linux server shards 1–5; macOS shards at most 2 in `selected` mode and 4 in `full`, inside the organisation's 5-job
-  macOS cap; `test-macos` stays non-required; `probe-macos` stays independent of the selector.
+- Linux server shards 1–5; macOS shards at most 2 on any pull request (even one that falls back to full) and 4 on a
+  scheduled, dispatched or called full run, inside the organisation's 5-job macOS cap; `test-macos` stays non-required; `probe-macos` stays independent of the selector.
 - `.github/ci/*.mjs` use `node:` builtins only (the `select` job runs before any `npm ci`). The selector never answers
   "nothing" on an error: it answers `full` and says why.
 - `ci.yml` lands with `CCRC_SELECTION: shadow`. The flip to `enforce` is Task 15, only after the operator has seen the
@@ -47,11 +48,11 @@ from it, and the section numbers below (§N) are its sections.
 - Node floor `>=22.13.0`; CI uses `setup-node` `node-version: '22'`.
 - Tests: `./node_modules/.bin/vitest run test/<file>.test.ts` from inside the package, never `npx`; fixture
   directories via `mkTmp` from `./tmpHelpers.js`; never the live `$HOME`, tmux or `ccd` state.
-- Commits carry the same author name and GitHub noreply address as `origin/main`'s own commits; before every push,
-  `git log --format='%an <%ae>' origin/main..HEAD` must show only that identity. No tailnet or docserver URL, IP address or email address in any committed file; no new
+- Commits are authored by the operator's GitHub identity with its noreply address; check `git log --format='%an <%ae>' origin/main..HEAD`
+  before every push. No tailnet or docserver URL, IP address or email address in any committed file; no new
   deviation number or placeholder deviation token (numbers are minted by the ledger API only).
-- The branch is green only on the FULL server suite run sharded (`--shard=1/3`, `3/6`, `4/6`, `5/6`, `6/6` — their
-  union is every file once), plus the agent and pwa suites. A named list of suites is a floor, never the verdict.
+- The branch is green only on the FULL server suite run sharded (`--shard=1/6` … `--shard=6/6` — the same `n` in
+  every shard, so their union is every file once), plus the agent and pwa suites. A named list of suites is a floor, never the verdict.
 
 ## Review Focus
 
@@ -63,10 +64,16 @@ Inputs the spec implies but no rule of §6 names — each has a test in the task
    (red `select`, red `test (server)`) rather than run the wrong files — Task 9.
 3. **The daily run's "already green" API call failing** (rate limit, network). It must resolve to "not green" and run
    the full suite, never skip — Task 11.
-4. **A refresh racing the daily rebuild's cache save.** `map-build` must refresh against exactly the map `select`
-   used (the `select-inputs` artifact), never a fresh cache restore — Task 11.
+4. **A refresh racing the daily rebuild's publish.** `map-build` must refresh against exactly the map `select`
+   used (the `select-inputs` artifact), never a fresh fetch, and publish only if that map is still the newest
+   trusted one (a compare-and-swap on its artifact id) — Task 11.
 5. **A PR that renames a test file.** The new name is selected by rule 1; the old name is no longer a live test and
    its map entry causes no error — Task 5.
+6. **A pull request that plants its own map, or edits the selector.** The map and durations come only from
+   artifacts of `ci.yml` runs on `main` of this repository triggered by `push`, `schedule` or `workflow_dispatch`
+   (Task 11's `main-artifact.mjs`); a pull request that changes `.github/` runs everything, decided in plain bash
+   before the selector runs; `verdict.mjs` fails closed and both verdicts sit behind a script-free step; `select`
+   refuses to answer `tests: none` for a pull request — Tasks 8, 9, 11.
 
 ---
 
@@ -79,18 +86,23 @@ deleted in this task's last step.
 **Files:**
 - Create: `.github/workflows/ci-spike.yml`
 - Create: `.github/workflows/ci-spike-callee.yml`
-- Delete (Step 7): both of the above
+- Modify (Step 6): `docs/superpowers/plans/2026-09-23-ci-test-selection.md` — this plan, its results table filled
+- Delete (Step 7): both workflow files
 
 **Interfaces:** Consumes: nothing. Produces: the measured answers recorded in the task's results table (Step 6) —
 strace works, the syscall census, the async/realpath probe, the baseline footprint and its process split,
 tracing overhead per file, the check-run name of a called job, and what `github.workflow` evaluates to inside a
 called workflow. Tasks 3, 6, 7, 11 and 12 read those answers (see the decision rule).
-- Changed in integration: the baseline and overhead steps trace with Task 7's exact `traceArgv` list (`readlink`,
-  `clone`, `clone3` added), under `UV_USE_IO_URING=0`, and the baseline runs through the same
-  `sh -c 'echo $$ > "$0"; exec "$@"'` root-pid wrapper and prints `SPIKE-SPLIT`: the root/rest split of Tasks 3,
-  4 and 7 rebuilds the vitest root process's thread group from `clone`/`clone3` lines, so the runner's strace must
-  print them (on the fleet box the include glob's walk of `server/test` was measured on a root threadpool thread,
-  never in the root pid's own file).
+- Changed in integration: the probe, baseline and overhead steps trace with Task 7's exact `traceArgv` flags and
+  list (`-ttt`; `readlink`, `symlink`, `symlinkat`, `chdir`, `fchdir`, `clone`, `clone3` in the list), under
+  `UV_USE_IO_URING=0`, and the baseline runs through the same `sh -c 'echo $$ > "$0"; exec "$@"'` root-pid wrapper
+  and prints `SPIKE-SPLIT`: the root/rest split of Tasks 3, 4 and 7 rebuilds the vitest root process's thread
+  group from `clone`/`clone3` lines, so the runner's strace must print them (on the fleet box the include glob's
+  walk of `server/test` was measured on a root threadpool thread, never in the root pid's own file). Every line
+  now starts with `-ttt`'s `<seconds>.<micros> ` stamp, so the baseline step's line-anchored greps allow it —
+  anchored at `^clone3?\(` they matched nothing and printed `clone_thread_lines=0`, a false STOP (measured). The
+  probe also makes a symlink (`ln -s`), and the overhead matrix adds `session-hook.test.ts`, the heaviest traced
+  file measured on the fleet box.
 
 - [ ] **Step 1: Write the caller workflow** — `.github/workflows/ci-spike.yml`, exactly:
 
@@ -118,8 +130,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Q1: does strace -f -ff -y run here at all, and does it print what the
-  # parser needs — an fd shown as its path, a failed probe, a listing, a chdir.
+  # Q1: does strace -f -ff -ttt -y run here at all, and does it print what the
+  # parser needs — a timestamp, an fd shown as its path, a failed probe, a
+  # listing, a chdir, a symlink made to a repository file.
   strace-probe:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -147,12 +160,12 @@ jobs:
           strace -V | head -1
           p="$RUNNER_TEMP/probe"; mkdir -p "$p/sub"; echo hi > "$p/a.txt"
           cd "$p"
-          strace -f -ff -y -qq \
-            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlinkat,getdents64,execve,execveat,chdir,fchdir \
-            -o "$p/t" sh -c 'cd sub && cat ../a.txt; ls .; test -e nope' \
+          strace -f -ff -ttt -y -qq \
+            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3 \
+            -o "$p/t" sh -c 'cd sub && cat ../a.txt; ls .; ln -s ../a.txt lnk; test -e nope' \
             || echo "probe exit $? (expected 1: the last command is the failed probe)"
           echo "--- per-pid files: $(find "$p" -maxdepth 1 -name 't.*' | wc -l)"
-          for f in "$p"/t.*; do echo "=== $f"; grep -E 'a\.txt|nope|getdents64|chdir' "$f" || true; done
+          for f in "$p"/t.*; do echo "=== $f"; grep -E 'a\.txt|nope|getdents64|chdir|symlink' "$f" || true; done
       # Node's asynchronous fs goes through libuv, which can submit through
       # io_uring on a new enough kernel — and io_uring ops are not in the
       # trace list. realpathSync.native probes with `readlink`, which is not
@@ -178,7 +191,7 @@ jobs:
           echo "--- file-shaped syscalls NOT in the trace list:"
           awk 'NR>2 && $NF ~ /^[a-z_0-9]+$/ {print $NF}' "$RUNNER_TEMP/census.txt" \
             | grep -E 'open|stat|access|link|dents|exec|chdir|uring|name_to_handle|mknod|rename|unlink|utime|chmod|chown|xattr|truncate|mkdir|rmdir|getcwd' \
-            | grep -vxE 'openat|openat2|open|newfstatat|statx|access|faccessat2|readlink|readlinkat|getdents64|execve|execveat|clone|clone3|chdir|fchdir' || echo '(none)'
+            | grep -vxE 'openat|openat2|open|newfstatat|statx|access|faccessat2|readlink|readlinkat|getdents64|execve|execveat|symlink|symlinkat|chdir|fchdir|clone|clone3' || echo '(none)'
       # Q3: vitest's own startup footprint — a trivial test file traced with
       # the same invocation, its repository reads counted. Through the same
       # `sh -c 'echo $$ > "$0"; exec "$@"'` wrapper trace-run.mjs uses, so the
@@ -191,27 +204,31 @@ jobs:
           printf "import { it, expect } from 'vitest';\nit('baseline', () => { expect(1).toBe(1); });\n" > test/zz-spike-baseline.test.ts
           t="$RUNNER_TEMP/base"; mkdir -p "$t"
           # shellcheck disable=SC2016 # $$, $0 and $@ are sh's own, expanded by sh
-          UV_USE_IO_URING=0 strace -f -ff -y -qq \
-            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,clone,clone3 \
+          UV_USE_IO_URING=0 strace -f -ff -ttt -y -qq \
+            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3 \
             -o "$t/t" sh -c 'echo $$ > "$0"; exec "$@"' "$RUNNER_TEMP/root.pid" ./node_modules/.bin/vitest run test/zz-spike-baseline.test.ts
           echo "--- pids: $(find "$t" -maxdepth 1 -name 't.*' | wc -l)"
-          echo "SPIKE-SPLIT root_pid=$(cat "$RUNNER_TEMP/root.pid") clone_thread_lines=$(cat "$t"/t.* | grep -cE '^clone3?\(.*CLONE_THREAD' || true)"
+          # Every line starts with -ttt's `<seconds>.<micros> ` stamp.
+          echo "SPIKE-SPLIT root_pid=$(cat "$RUNNER_TEMP/root.pid") clone_thread_lines=$(cat "$t"/t.* | grep -cE '^[0-9.]+ clone3?\(.*CLONE_THREAD' || true)"
           echo "--- pid files that list server/test (the root pid's own file, or one of its threads):"
-          grep -lE "^getdents64\([0-9]+<${GITHUB_WORKSPACE}/server/test>" "$t"/t.* || echo '(none)'
+          grep -lE "^[0-9.]+ getdents64\([0-9]+<${GITHUB_WORKSPACE}/server/test>" "$t"/t.* || echo '(none)'
           echo "--- repository paths opened (node_modules excluded):"
           cat "$t"/t.* | grep -oE "\"${GITHUB_WORKSPACE}/[^\"]*\"" | grep -v node_modules | sort -u
           echo "--- repository directories listed:"
-          cat "$t"/t.* | grep -E '^getdents64' | grep -oE "<${GITHUB_WORKSPACE}[^>]*>" | grep -v node_modules | sort -u
+          cat "$t"/t.* | grep -E '^[0-9.]+ getdents64' | grep -oE "<${GITHUB_WORKSPACE}[^>]*>" | grep -v node_modules | sort -u
 
   # Q4: tracing's wall-clock cost on the three heaviest files, untraced then
-  # traced, installed exactly as the server leg installs.
+  # traced, installed exactly as the server leg installs — and on
+  # session-hook.test.ts, the heaviest TRACED file measured on the fleet box
+  # (about 25,000 trace files; 823 s traced, against trace-run's 900 s
+  # per-file timeout).
   overhead:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        file: [test/ccd-ws-audit.test.ts, test/ccrc-doctor.test.ts, test/ccd-ws-reap.test.ts]
+        file: [test/ccd-ws-audit.test.ts, test/ccrc-doctor.test.ts, test/ccd-ws-reap.test.ts, test/session-hook.test.ts]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -241,8 +258,8 @@ jobs:
           plain=$(( (e - s) / 1000000 ))
           t="$RUNNER_TEMP/tr"; mkdir -p "$t"
           s=$(date +%s%N)
-          UV_USE_IO_URING=0 strace -f -ff -y -qq \
-            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,clone,clone3 \
+          UV_USE_IO_URING=0 strace -f -ff -ttt -y -qq \
+            -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3 \
             -o "$t/t" ./node_modules/.bin/vitest run "$FILE" > "$RUNNER_TEMP/traced.log" 2>&1; rc2=$?
           e=$(date +%s%N)
           traced=$(( (e - s) / 1000000 ))
@@ -336,13 +353,14 @@ tar xzf "$AL/al.tgz" -C "$AL" actionlint
   whose `$$`, `$0` and `$@` are deliberately left for `sh` to expand).
 
   Optional local replay of the probe step (fixture dir only; strace 6.8 on the fleet box printed exactly these
-  shapes): the probe's last command `test -e nope` exits 1, which is why the step carries `|| echo "probe exit …"` —
-  without it the runner's default `bash -e` fails the step. Expected lines per pid file: `chdir("<abs>/sub") = 0`,
-  `newfstatat(AT_FDCWD</…/sub>, "nope", …) = -1 ENOENT`, `openat(AT_FDCWD</…/sub>, "../a.txt", O_RDONLY) = 3</…/a.txt>`,
-  `getdents64(3</…/sub>, … /* 2 entries */, 32768) = 48`. The baseline step, replayed locally the same way
-  (`RUNNER_TEMP` and `GITHUB_WORKSPACE` pointed at a scratch dir and this checkout, cwd `server/`), printed
-  `--- pids: 60`, `SPIKE-SPLIT root_pid=<n> clone_thread_lines=58`, and ONE pid file listing `server/test` —
-  not the root pid's own.
+  shapes, each line after its `<seconds>.<micros> ` stamp): the probe's last command `test -e nope` exits 1, which
+  is why the step carries `|| echo "probe exit …"` — without it the runner's default `bash -e` fails the step.
+  Expected lines across the 4 pid files: `chdir("<abs>/sub") = 0`, `newfstatat(AT_FDCWD</…/sub>, "nope", …) = -1
+  ENOENT`, `openat(AT_FDCWD</…/sub>, "../a.txt", O_RDONLY) = 3</…/a.txt>`,
+  `getdents64(3</…/sub>, … /* 2 entries */, 32768) = 48`, `symlinkat("../a.txt", AT_FDCWD</…/sub>, "lnk") = 0`.
+  The baseline step, replayed locally the same way (`RUNNER_TEMP` and `GITHUB_WORKSPACE` pointed at a scratch dir
+  and this checkout, cwd `server/`), printed `--- pids: 60`, `SPIKE-SPLIT root_pid=<n> clone_thread_lines=58`, and
+  ONE pid file listing `server/test` — not the root pid's own.
 
 - [ ] **Step 4: Commit**
 
@@ -367,8 +385,8 @@ RUN=<databaseId from the line above>
 gh run view "$RUN" --json status,conclusion,jobs --jq '.status, .conclusion, (.jobs[] | "\(.name)\t\(.status)\t\(.conclusion)")'
 ```
 
-  Poll the last command until `status` is `completed` (the `overhead` legs take the longest: two runs of the
-  heaviest server files, one of them under strace — under 60 minutes by their deadline). If the `collide` job
+  Poll the last command until `status` is `completed` (the four `overhead` legs take the longest: two runs of a
+  heavy server file, one of them under strace — under 60 minutes by their deadline). If the `collide` job
   (named `collide / full-suite`) is still `queued`/`waiting` 15 minutes after every other job completed, record
   "pending — no deadlock detection" and cancel it: `gh run cancel "$RUN"`. Then read the answers (if a `step`
   call prints nothing, gh could not attribute that step's lines — it prints `UNKNOWN STEP` then — so read the whole
@@ -389,12 +407,12 @@ grep -hE 'SPIKE-CALLEE|SPIKE-CALL |SPIKE-CHECK' "$LOG"   # Q5, Q6
 gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name | startswith("collide")) | "\(.name)\t\(.status)\t\(.conclusion)"'
 ```
 
-- [ ] **Step 6: Record the answers and apply the decision rule.** Copy each answer into this table in the plan (the
-  PR description carries it too):
+- [ ] **Step 6: Record the answers and apply the decision rule.** Copy each answer into this table in this plan,
+  `docs/superpowers/plans/2026-09-23-ci-test-selection.md` (committed in Step 7; the PR description carries it too):
 
   | Question | What the log says | Consequence |
   |---|---|---|
-  | Q1 strace runs, prints `-y` paths, a failed probe, a listing, a chdir | | |
+  | Q1 strace runs, prints `-ttt` stamps, `-y` paths, a failed probe, a listing, a chdir, a symlinkat | | |
   | Q2 file-shaped syscalls outside the trace list | | |
   | Q2b async fs / `realpathSync.native` visible, io_uring submission count | | |
   | Q3 baseline footprint (repo paths read, dirs listed) | | |
@@ -407,7 +425,9 @@ gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name | startswith("collid
   design stops") — if ANY of:
   1. the probe step failed, printed no `strace -- version` line, or its per-pid files lack any one of: an `openat`
      of `../a.txt` whose return value prints the resolved `<…/a.txt>` path; a stat/access-family call on `nope`
-     returning `-1 ENOENT`; a `getdents64(N<…/sub>` line; a `chdir(` line;
+     returning `-1 ENOENT`; a `getdents64(N<…/sub>` line; a `chdir(` line; a `symlinkat(` (or `symlink(`) line
+     naming `../a.txt`; or any of these lines lacks its leading `<seconds>.<micros>` stamp — Task 3 orders each
+     process's cwd changes by it;
   2. the async probe lacks the `openat` of `b.txt`, the `ENOENT` on `nope2`, or a `getdents64` — the runner's
      kernel serves Node's async fs through io_uring, which strace's syscall list cannot see, so a map would miss
      every async read;
@@ -424,7 +444,13 @@ gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name | startswith("collid
     emits ONLY `readlink("…/missing", …) = -1 ENOENT`, so `readlink` is in Task 7's list and Task 3 parses it like
     `access`; and Task 7 runs every trace with `UV_USE_IO_URING=0`, which keeps libuv's fs on its threadpool.
   - Q4: if the largest traced/untraced ratio exceeds 4.0, Task 6's `PROFILES.trace.scale` becomes that ratio
-    rounded up (the contract's 4 assumes ≤ 4.0).
+    rounded up (the contract's 4 assumes ≤ 4.0). And the heaviest `traced_ms` is checked against the per-file
+    deadline Task 11 hands trace-run (`--timeout 900`, i.e. 900000 ms): above 900000 / 1.5 = 600000 ms, raise that
+    `--timeout` in Task 11's Trace step to 1.5 × the heaviest `traced_ms`, rounded up to a whole minute and kept
+    under the trace-shard job's 60-minute deadline — or, past that, give the file a trace shard of its own. A file
+    past its deadline is recorded `unknown` on every rebuild and turns the trace shard red (Task 7 exits 3). On the
+    fleet box `session-hook.test.ts` traced in 823 s without `-ttt` and was killed at the 900 s deadline with it (a
+    loaded box); the runner's number decides.
   - Q5: expected `full / full-suite`. Tasks 11 and 12 match `full-suite` or a name ending `/ full-suite`; if the
     measured shape differs, change the jq matcher in BOTH `ci.yml` (select's "already green" step) and
     `release-stable.yml` (`gate`) to the measured shape — `build-release.test.ts` holds the two equal.
@@ -437,10 +463,11 @@ gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name | startswith("collid
     `deno.json`, `lerna.json`, `pnpm-workspace.yaml`, `package.json` at the repo root and in `server/`, plus
     `server/.env*`, `server/postcss.config.*` and `server/.postcssrc*` (60 processes).
 
-- [ ] **Step 7: Delete the spike** (a follow-up commit, once the table is filled)
+- [ ] **Step 7: Delete the spike and commit the results table** (a follow-up commit, once the table is filled)
 
 ```bash
 git rm .github/workflows/ci-spike.yml .github/workflows/ci-spike-callee.yml
+git add docs/superpowers/plans/2026-09-23-ci-test-selection.md
 ```
 
 ```bash
@@ -704,14 +731,15 @@ export default merged;
 - [ ] **Step 4: Run it, expect PASS**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ci-vitest-select-config.test.ts --maxWorkers=2
-cd server && ./node_modules/.bin/vitest run test/ci-baseline.test.ts --maxWorkers=2
+cd server
+./node_modules/.bin/vitest run test/ci-vitest-select-config.test.ts --maxWorkers=2
+./node_modules/.bin/vitest run test/ci-baseline.test.ts --maxWorkers=2
 ```
 
   Measured: `Tests  7 passed (7)`, then `Tests  1 passed (1)`.
 
-- [ ] **Step 5: Measure the mutation table.** For each row: apply the edit, run Step 4's first command, see the
-  named test(s) red, restore the file byte-for-byte, re-run green.
+- [ ] **Step 5: Measure the mutation table.** For each row: apply the edit, run Step 4's first vitest command,
+  see the named test(s) red, restore the file byte-for-byte, re-run green.
 
   | Mutation | Test(s) that go red |
   |---|---|
@@ -760,7 +788,7 @@ EOF
 - Create: `.github/ci/trace-to-deps.mjs`
 - Test: `server/test/ci-trace-to-deps.test.ts`
 
-**Interfaces:** Consumes: a `traceDir` of `strace -f -ff -y -qq` output files — one per THREAD (`t.<tid>`), as
+**Interfaces:** Consumes: a `traceDir` of `strace -f -ff -ttt -y -qq` output files — one per THREAD (`t.<tid>`), as
 Task 7's `traceArgv` produces — and a `repoRoot` / Produces: `export function parseTraceDir(traceDir, repoRoot):
 DepRecord` (the union of every file; the CLI prints it), `export function parseTraceDirDetailed(traceDir,
 repoRoot): { record: DepRecord, unresolved: number }`, `export function parseTraceDirSplit(traceDir, repoRoot,
@@ -779,30 +807,56 @@ rootPid): { root: DepRecord, rest: DepRecord, unresolved: number }` (what Task 7
   file depends on it existing — so deleting that file must select the test. `EINVAL` from any other syscall is
   still not recorded. The contract's
   `TestRecord` typedef moved to Task 4 (nothing here uses it).
+- Changed in integration (symlinks, operator's rulings S1-S2): a file reached THROUGH a symlink is a read. A
+  successful fd-returning call's `-y` return annotation (`= 3</repo/ccd/x>`) names where the path really led, and
+  that resolved path is recorded as read alongside the argument; and `symlink`/`symlinkat` (both in Task 7's list
+  now) record the link's in-repo TARGET as read — absolute, or joined to the LINK's directory, never the cwd.
+  Measured on `ccrc-models.test.ts`, which symlinks `ccd/ccrc-models-probe` into a fixture tree and runs it from
+  there: each mechanism alone records `ccd/ccrc-models-probe`, and with both removed the record misses it (the
+  argument path is outside the repo, `/tmp/…/ccrc/ccd/ccrc-models-probe`). End to end: a map built from that trace,
+  and a commit changing `ccd/ccrc-models-probe`, select `ccrc-models.test.ts` by rule 3.
+- Changed in integration (cwd, operator's ruling S3): a dirfd-less relative path (`open`/`access`/`readlink`, and a
+  relative `symlink` linkpath) resolves against its process's cwd AT THAT MOMENT, replayed from a timeline:
+  `AT_FDCWD<…>` annotations and successful `chdir`/`fchdir` (both in the list now), ordered by `-ttt`'s stamp
+  across the process's threads (grouped by `CLONE_THREAD` clones — threads share one cwd). Before the first
+  move the cwd is the one the annotations name, unknown if they disagree; a relative `chdir` from an unknown cwd
+  stays unknown. The ruling's first form — resolve only when a process's cwd is unambiguous — was measured on the
+  eight files it named and left 3 of 8 `unknown` by cwd alone (git `chdir`s to the top level before
+  `access(".git/config")`: `worker-skill` 45 unresolved paths, `ccd-account-ok` 318, `session-hook` 8256), past
+  its bound of 2, so the time-ordered form was built: 0 of 8 by cwd (`session-hook` stays `unknown` only because
+  its timing tests fail under tracing, and its kept trace parses with 0 unresolved). One case the stamp cannot
+  order: a relative call in the SAME microsecond as a move of the cwd. It is counted `unresolved` (the record goes
+  `unknown`, always selected) unless the move left the cwd where it was — a `<`-for-`<=` mutation of the lookup first
+  survived here, which is how the tie was found. Measured on nine kept real traces (the six below,
+  `ccrc-models`, `ccd-account-ok`, and `session-hook` up to its 900 s kill): the tie rule made nothing
+  unresolved.
 
 - [ ] **Step 1: Capture real strace fixtures, then write the failing test**
 
-  First capture real `strace -ff -y` output against this repo's own test files, exactly as `trace-run.mjs`'s
+  First capture real `strace -ff -ttt -y` output against this repo's own test files, exactly as `trace-run.mjs`'s
   invocation will (from `server/`, with the clone's `node_modules` in place):
 
 ```bash
 cd server
 W=$(mktemp -d); mkdir "$W/trace"; echo test/ci-baseline.test.ts > "$W/list.txt"
-CCRC_TEST_LIST="$W/list.txt" CI=true UV_USE_IO_URING=0 strace -f -ff -y -qq \
-  -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,clone,clone3 \
+CCRC_TRACING=1 CCRC_TEST_LIST="$W/list.txt" CI=true UV_USE_IO_URING=0 strace -f -ff -ttt -y -qq \
+  -e trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3 \
   -o "$W/trace/t" sh -c 'echo $$ > "$0"; exec "$@"' "$W/root.pid" \
   ./node_modules/.bin/vitest run --config vitest.select.config.ts --maxWorkers=1
 ```
 
   Repeat for `test/bus.test.ts`, `test/ccd-rc-flag.test.ts`, `test/worker-skill.test.ts`,
-  `test/oss-metadata.test.ts`, `test/single-definition.test.ts`. Measured output shapes (used verbatim,
-  prefix-substituted, in the fixtures below): successful `openat(AT_FDCWD<cwd>, "/abs/path", FLAGS) = FD<resolved>`;
+  `test/oss-metadata.test.ts`, `test/single-definition.test.ts` (and `test/ccrc-models.test.ts`, for the symlink
+  shapes). Measured output shapes (used verbatim, prefix-substituted, in the fixtures below; every line starts with
+  a `<seconds>.<micros> ` stamp, which the fixtures carry where time order matters): successful `openat(AT_FDCWD<cwd>, "/abs/path", FLAGS) = FD<resolved>`;
   `access(".git/config", R_OK) = 0` / a failing sibling `= -1 ENOENT (No such file or directory)`;
   `getdents64(FD<dir>, buf, N) = bytes` (0 bytes = end, still a real listing); `newfstatat`/`statx` success with
   NO trailing `<resolved>` annotation (only fd-returning calls get one); a real trailing-slash directory open
   (`"…/test/"`) whose OWN `<resolved>` annotation has no trailing slash — a dedup hazard, see Step 3; `readlink`
-  with an ENOENT, a symlink target, and `EINVAL` on a regular file; and `clone3({flags=…|CLONE_THREAD|…} …) = <tid>`
-  in the creating thread's file.
+  with an ENOENT, a symlink target, and `EINVAL` on a regular file; `clone3({flags=…|CLONE_THREAD|…} …) = <tid>`
+  in the creating thread's file; `symlink("/repo/ccd/x", "/tmp/…/x") = 0` (node's `fs.symlinkSync`) and
+  `symlinkat("../a.txt", AT_FDCWD</…/sub>, "lnk") = 0` (coreutils `ln -s`); `openat(…, "/tmp/…/x", O_RDONLY) =
+  3</repo/ccd/x>` through that link; and git's `chdir("/repo") = 0` followed by `access(".git/config", R_OK)`.
 
   **The process-split measurement** (the reason for `parseTraceDirSplit`), from those captures — which pid file
   holds each `getdents64`, grouped into processes by the `clone`/`clone3` lines:
@@ -815,7 +869,7 @@ CCRC_TEST_LIST="$W/list.txt" CI=true UV_USE_IO_URING=0 strace -f -ff -y -qq \
     census). Subtracting the baseline per side keeps `server/test` in its record; subtracting one merged baseline
     (the contract's format 1) erased it.
 
-  Write `server/test/ci-trace-to-deps.test.ts` (22 cases):
+  Write `server/test/ci-trace-to-deps.test.ts` (29 cases):
 
 <!-- file: server/test/ci-trace-to-deps.test.ts -->
 ```ts
@@ -1116,6 +1170,131 @@ describe('parseTraceDir: readlink (the syscall realpathSync.native probes with)'
   });
 });
 
+describe('reads through a symlink: the resolved path of an opened fd, and a created link\'s target', () => {
+  // Real shapes (strace 6.8 -y): opening a symlink prints the fd's RESOLVED path after `=`, and node's
+  // fs.symlinkSync emits `symlink(target, linkpath)` while coreutils `ln -s` emits `symlinkat(target, dirfd,
+  // linkpath)`. ccrc-models and its siblings build a fixture box by symlinking repo files into a tmp HOME and
+  // run them there, so the argument path is outside the repo and only these two record the repo file.
+  it('a successful open of a path outside the repo records the repo file its fd resolved to', () => {
+    const dir = traceDirWith({
+      't.17001': [
+        `openat(AT_FDCWD</tmp/box>, "/tmp/box/ccd/ccrc-models-probe", O_RDONLY) = 3<${REPO}/ccd/ccrc-models-probe>`,
+        `open("/tmp/box/lib.sh", O_RDONLY|O_CLOEXEC) = 4<${REPO}/ccd/ccrc-wrapper-shape>`,
+        `openat(AT_FDCWD</tmp/box>, "/tmp/box/gone", O_RDONLY) = -1 ENOENT (No such file or directory)`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/ccrc-models-probe', 'ccd/ccrc-wrapper-shape']);
+    expect(rec.probed).toEqual([]);
+  });
+
+  it('a created symlink records its in-repo TARGET as read — absolute, or relative to the link\'s directory', () => {
+    const dir = traceDirWith({
+      't.17101': [
+        `symlink("${REPO}/ccd/ccrc", "box/ccd/ccrc") = 0`,
+        `symlinkat("${REPO}/deploy", AT_FDCWD</tmp/box>, "deploy") = 0`,
+        `symlinkat("../ccd/x", AT_FDCWD<${REPO}/server>, "lnk") = 0`,
+        `symlinkat("${REPO}/ccd/exists", AT_FDCWD</tmp/box>, "dup") = -1 EEXIST (File exists)`,
+        `symlink("/usr/bin/env", "box/env") = 0`,
+      ].join('\n') + '\n',
+    });
+    const { record, unresolved } = parseTraceDirDetailed(dir, REPO);
+    expect(record.read).toEqual(['ccd/ccrc', 'ccd/x', 'deploy']);
+    expect(unresolved).toBe(0);
+  });
+});
+
+describe('the cwd of a dirfd-less relative path, tracked through chdir in time order (-ttt)', () => {
+  // open/access/readlink/symlink carry no dirfd, so a relative path needs the process's cwd at that moment. The
+  // trace carries `chdir`/`fchdir` and a `-ttt` timestamp on every line, and the process's events — across all
+  // its threads' files — are replayed in time order: AT_FDCWD<…> says what the cwd is, chdir/fchdir move it.
+  // Measured why this is needed: git chdirs to the work tree before `access(".git/config")`, so every test that
+  // runs git would otherwise be unknown (worker-skill 45 unresolved paths, ccd-account-ok 318, session-hook
+  // 8256 under a "never chdir'd" rule), and the old per-file "last cwd seen" rule joined the path to the stale
+  // cwd (`process.chdir('<repo>/ccd'); fs.existsSync('x')` recorded server/x).
+  const t = (s: number, line: string) => `1727000000.${String(s).padStart(6, '0')} ${line}`;
+
+  it('after a chdir, a relative access resolves against the NEW cwd', () => {
+    const dir = traceDirWith({
+      't.18001': [
+        t(1, `openat(AT_FDCWD<${REPO}/server>, "${REPO}/server/package.json", O_RDONLY) = 3<${REPO}/server/package.json>`),
+        t(2, `chdir("${REPO}/ccd")                     = 0`),
+        t(3, `access("nope-rel-probe", F_OK) = -1 ENOENT (No such file or directory)`),
+      ].join('\n') + '\n',
+    });
+    expect(parseTraceDirDetailed(dir, REPO)).toEqual({
+      record: { read: ['server/package.json'], probed: ['ccd/nope-rel-probe'], listed: [], git: false }, unresolved: 0,
+    });
+  });
+
+  it('before the chdir the old cwd holds; a relative chdir moves relative to it; fchdir takes its fd\'s path', () => {
+    const dir = traceDirWith({
+      't.18101': [
+        t(1, `openat(AT_FDCWD<${REPO}/server>, "${REPO}/server/package.json", O_RDONLY) = 3<${REPO}/server/package.json>`),
+        t(2, `access("a", F_OK) = 0`),
+        t(3, `chdir("../ccd")                          = 0`),
+        t(4, `access("b", F_OK) = 0`),
+        t(5, `fchdir(5<${REPO}/deploy>)                = 0`),
+        t(6, `access("c", F_OK) = 0`),
+        t(7, `chdir("${REPO}/nowhere") = -1 ENOENT (No such file or directory)`),
+        t(8, `access("d", F_OK) = 0`),
+      ].join('\n') + '\n',
+    });
+    expect(parseTraceDirDetailed(dir, REPO)).toEqual({
+      record: { read: ['ccd/b', 'deploy/c', 'deploy/d', 'server/a', 'server/package.json'], probed: [], listed: [], git: false },
+      unresolved: 0,
+    });
+  });
+
+  it('threads share one cwd: a chdir in one thread moves the cwd for another thread\'s LATER calls only', () => {
+    const clone = `clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, child_tid=0x1, parent_tid=0x1, exit_signal=0, stack=0x1, stack_size=0x1, tls=0x1} => {parent_tid=[18302]}, 88) = 18302`;
+    // The leader moves the cwd at t=5; the only annotation is the thread's, at t=2, in a file read AFTER the
+    // leader's — so the events must be replayed by time, not by file, and across the thread group.
+    const dir = traceDirWith({
+      't.18301': [
+        t(1, clone),
+        t(5, `chdir("${REPO}/ccd") = 0`),
+      ].join('\n') + '\n',
+      't.18302': [
+        t(2, `openat(AT_FDCWD<${REPO}/server>, "${REPO}/server/package.json", O_RDONLY) = 3<${REPO}/server/package.json>`),
+        t(3, `access("early", F_OK) = 0`),
+        t(7, `access("late", F_OK) = 0`),
+      ].join('\n') + '\n',
+    });
+    expect(parseTraceDirDetailed(dir, REPO)).toEqual({
+      record: { read: ['ccd/late', 'server/early', 'server/package.json'], probed: [], listed: [], git: false }, unresolved: 0,
+    });
+  });
+
+  it('with no known cwd, a relative path is unresolved — and so is one after a relative chdir from an unknown cwd', () => {
+    const dir = traceDirWith({
+      't.18401': [t(1, `access("rel", F_OK) = 0`)].join('\n') + '\n',
+      't.18402': [
+        t(1, `openat(AT_FDCWD<${REPO}/server>, "a", O_RDONLY) = 3<${REPO}/server/a>`),
+        t(2, `openat(AT_FDCWD<${REPO}/ccd>, "b", O_RDONLY) = 4<${REPO}/ccd/b>`),
+        t(3, `chdir("sub") = 0`),
+        t(4, `access("rel", F_OK) = 0`),
+      ].join('\n') + '\n',
+    });
+    // t.18402: two cwds before any traced chdir (an untraced move) — its start is unknown, so "sub" is too.
+    expect(parseTraceDirDetailed(dir, REPO).unresolved).toBe(2);
+  });
+
+  it('a relative call in the SAME microsecond as a move is unresolved: the stamp cannot order the two', () => {
+    const dir = traceDirWith({
+      't.18501': [
+        t(1, `openat(AT_FDCWD<${REPO}/server>, "${REPO}/server/package.json", O_RDONLY) = 3<${REPO}/server/package.json>`),
+        t(5, `chdir("${REPO}/ccd") = 0`),
+        t(5, `access("tie", F_OK) = 0`),
+        t(6, `access("after", F_OK) = 0`),
+      ].join('\n') + '\n',
+    });
+    expect(parseTraceDirDetailed(dir, REPO)).toEqual({
+      record: { read: ['ccd/after', 'server/package.json'], probed: [], listed: [], git: false }, unresolved: 1,
+    });
+  });
+});
+
 describe('parseTraceDirSplit (the vitest root process apart from every other process)', () => {
   // vitest's own startup — the config, the include glob's walk of `server/test/` — happens in the vitest ROOT
   // process; what a test file itself does happens in its worker and in whatever that spawns. The baseline is
@@ -1213,23 +1392,34 @@ Error: Cannot find module '../../.github/ci/trace-to-deps.mjs' imported from …
 
 <!-- file: .github/ci/trace-to-deps.mjs -->
 ```js
-// CI test selection (spec §5.1-5.2, contract Task 3): parses `strace -f -ff -y -qq` output for one server test
-// file — one file per pid, as `trace-run.mjs`'s `traceArgv` produces — into a repo-relative `DepRecord`.
+// CI test selection (spec §5.1-5.2, contract Task 3): parses `strace -f -ff -ttt -y -qq` output for one server
+// test file — one file per thread, as `trace-run.mjs`'s `traceArgv` produces — into a repo-relative `DepRecord`.
 //
 // `-y` is what makes this parser possible without tracking file descriptors by hand: it prints, inline on every
 // syscall that takes a directory-fd or plain fd argument, that fd's OWN resolved path in `<...>` — `AT_FDCWD<cwd>`
 // for the process's current directory, `N<path>` for a numbered fd. A relative path argument on a syscall that
 // carries its own dirfd (`openat`, `openat2`, `newfstatat`, `statx`, `faccessat2`, `readlinkat`, `execveat`,
-// `getdents64`) is therefore always resolvable from that SAME line — no fd bookkeeping needed. Only the four
-// syscalls with no dirfd argument at all (`open`, `access`, `readlink`, `execve`) can carry a relative path with
-// nothing on the line to resolve it against; those fall back to the pid's own current-working-directory, tracked from every
-// `AT_FDCWD<...>` annotation seen anywhere else in that pid's file (last one before the line, else the first one
-// anywhere later in the file — a process's FIRST syscall in this trace is rarely its first ever `AT_FDCWD` hit,
-// but it never had a *different* cwd before that first hit either, so "the first one later" is exact, not a
-// guess). `execve` is exempt from that fallback entirely: a relative `execve` is deliberately ignored (never
-// resolved, never counted `unresolved`) because the *interpreter's* own `openat` of that same script records the
-// dependency a moment later — recorded twice would be redundant, and guessing at an unresolved cwd for it would
-// not be.
+// `getdents64`) is therefore always resolvable from that SAME line — no fd bookkeeping needed. Only the
+// syscalls with no dirfd argument at all (`open`, `access`, `readlink`, `symlink`, `execve`) can carry a relative
+// path with nothing on the line to resolve it against. Those use the PROCESS's cwd AT THAT MOMENT — the whole
+// thread group's, since threads share one. Every line carries a `-ttt` timestamp and `chdir`/`fchdir` are traced,
+// so a process's events, across all its threads' files, are replayed in time order: an `AT_FDCWD<...>` annotation
+// says what the cwd is, a successful `chdir`/`fchdir` moves it. A relative path with no known cwd at its moment is
+// counted `unresolved`, which makes the record `unknown` — and so is one in the SAME microsecond as a move of the
+// cwd, which the stamp cannot order (measured on nine real traces: it left nothing unresolved). Measured why the time order is needed: git chdirs to
+// the work tree before `access(".git/config")`, so a rule that gave up on any process that chdir'd left
+// worker-skill, ccd-account-ok and session-hook unknown (45, 318 and 8256 unresolved paths); and the older
+// per-file "last cwd seen" rule joined such a path to the STALE cwd (after `process.chdir('<repo>/ccd')`,
+// `fs.existsSync('x')` issues a bare `access` it recorded as `server/x`). `execve` is exempt entirely: a relative
+// `execve` is deliberately ignored (never resolved, never counted `unresolved`) because the *interpreter's* own
+// `openat` of that same script records the dependency a moment later.
+//
+// Reads THROUGH a symlink: a successful `open`/`openat`/`openat2` prints the new fd's RESOLVED path after `=`
+// (`= 3</repo/ccd/f>`), and that path is recorded as well as the argument — ccrc-models and its siblings symlink
+// repo files into a tmp HOME and run them there, where the argument path is outside the repo. And a created
+// symlink (`symlink`/`symlinkat`) records its TARGET as `read` when the target is in the repo — a relative
+// target resolved against the link's own directory — because a test that later only stats or lists through the
+// link has no resolved fd to read it from.
 //
 // Only a successful call or one that failed with ENOENT is ever recorded. Any other failure (EACCES, ENOTDIR, a
 // signal-interrupted call, …) is silently skipped: it is neither "this test's behaviour depends on this path's
@@ -1263,13 +1453,27 @@ import { pathToFileURL } from 'node:url';
 const FD_ANNOTATION = /^(?:AT_FDCWD|\d+)<([^>]*)>$/;
 
 // Syscalls whose first argument is a dirfd (or AT_FDCWD) and whose second argument is the path: a relative path
-// is always resolvable from this same line's dirfd annotation.
+// is always resolvable from this same line's dirfd annotation. The last group is the resolved path `-y` prints
+// after a successful call's returned fd (`= 3</path>`), for the calls that return one.
 const DIRFD_PATH_RE =
-  /^(openat|openat2|newfstatat|statx|faccessat2|readlinkat|execveat)\(((?:AT_FDCWD|\d+)<[^>]*>), "((?:[^"\\]|\\.)*)"[^)]*\)\s*=\s*(-1\s+\S+|\d+)/;
+  /^(openat|openat2|newfstatat|statx|faccessat2|readlinkat|execveat)\(((?:AT_FDCWD|\d+)<[^>]*>), "((?:[^"\\]|\\.)*)"[^)]*\)\s*=\s*(-1\s+\S+|\d+)(?:<([^>]*)>)?/;
 
-// Syscalls with no dirfd argument at all: the path is either absolute, or relative to the pid's tracked cwd
+// Syscalls with no dirfd argument at all: the path is either absolute, or relative to the process's cwd
 // (`open`/`access`) or ignored entirely when relative (`execve`).
-const BARE_PATH_RE = /^(open|access|execve)\("((?:[^"\\]|\\.)*)"[^)]*\)\s*=\s*(-1\s+\S+|\d+)/;
+const BARE_PATH_RE = /^(open|access|execve)\("((?:[^"\\]|\\.)*)"[^)]*\)\s*=\s*(-1\s+\S+|\d+)(?:<([^>]*)>)?/;
+
+// `symlink(target, linkpath)` (node's fs.symlinkSync) and `symlinkat(target, newdirfd, linkpath)` (coreutils
+// `ln -s`), both measured. Only a successful creation is recorded.
+const SYMLINK_RE = /^symlink\("((?:[^"\\]|\\.)*)", "((?:[^"\\]|\\.)*)"\)\s*=\s*(-1\s+\S+|\d+)/;
+const SYMLINKAT_RE =
+  /^symlinkat\("((?:[^"\\]|\\.)*)", ((?:AT_FDCWD|\d+)<[^>]*>), "((?:[^"\\]|\\.)*)"\)\s*=\s*(-1\s+\S+|\d+)/;
+
+// A successful `chdir("path")` / `fchdir(N<dir>)`: the process's cwd moved.
+const CHDIR_RE = /^chdir\("((?:[^"\\]|\\.)*)"\)\s*=\s*0\s*$/;
+const FCHDIR_RE = /^fchdir\(\d+<([^>]*)>\)\s*=\s*0\s*$/;
+
+// `-ttt`'s prefix: seconds and microseconds since the epoch.
+const TS_RE = /^(\d+)\.(\d{6}) /;
 
 // `readlink(path, buf, size)` — no dirfd either, so a relative path resolves against the pid's cwd exactly like
 // `access`. Its second argument is the link's TARGET, printed as a string that may itself contain `)`, so the
@@ -1310,21 +1514,22 @@ function isEnoent(result) {
   return /^-1\s+ENOENT\b/.test(result);
 }
 
-/** Parses one pid's trace file text, folding its findings into `sink` (mutable Sets/flag holder). */
-function parsePidFile(text, root, sink) {
-  const lines = text.split('\n');
+/** @typedef {{ key: number, line: string }} Entry  one trace line, its `-ttt` prefix stripped into `key` */
 
-  // Pass 1: every AT_FDCWD<...> cwd this pid ever showed, in file order — needed both for "last seen before"
-  // (forward scan below) and "first seen later" (the fallback when nothing preceded).
-  /** @type {string[]} */
-  const cwdsInOrder = [];
-  for (const line of lines) {
-    const m = line.match(/AT_FDCWD<([^>]*)>/);
-    if (m) cwdsInOrder.push(m[1]);
-  }
-  const firstCwdEver = cwdsInOrder.length > 0 ? cwdsInOrder[0] : undefined;
+/** Parses one pid's trace entries, folding its findings into `sink` (mutable Sets/flag holder). `cwdAt(key)` is
+ *  the process's cwd at that moment, or `undefined` when it is not known (see the file header). */
+function parsePidFile(entries, root, sink, cwdAt) {
+  let entryKey = 0;
 
-  let lastCwd;
+  /** A dirfd-less relative path, absolute when the process's cwd at this line is known; else unresolved. */
+  const relative = (rawPath) => {
+    const cwd = cwdAt(entryKey);
+    if (cwd === undefined) {
+      sink.unresolved.value += 1;
+      return null;
+    }
+    return path.posix.join(cwd, rawPath);
+  };
 
   const record = (rel, bucket) => {
     if (bucket === 'read') sink.read.add(rel);
@@ -1349,8 +1554,8 @@ function parsePidFile(text, root, sink) {
     record(c.rel, bucket);
   };
 
-  for (const line of lines) {
-    const cwdMatch = line.match(/AT_FDCWD<([^>]*)>/);
+  for (const { key, line } of entries) {
+    entryKey = key;
     // getdents64 first: its regex is a prefix of no other pattern, cheap to check early.
     const gd = line.match(GETDENTS_RE);
     if (gd) {
@@ -1359,13 +1564,12 @@ function parsePidFile(text, root, sink) {
       if (fdAnnot && resultMatch && isSuccess(resultMatch[1])) {
         classifyAndRecord(fdAnnot[1], 'listed');
       }
-      if (cwdMatch) lastCwd = cwdMatch[1];
       continue;
     }
 
     const df = line.match(DIRFD_PATH_RE);
     if (df) {
-      const [, , dirfdRaw, rawPath, result] = df;
+      const [, , dirfdRaw, rawPath, result, resolved] = df;
       const success = isSuccess(result);
       const enoent = isEnoent(result);
       if (success || enoent) {
@@ -1377,15 +1581,16 @@ function parsePidFile(text, root, sink) {
           abs = dm ? path.posix.join(dm[1], rawPath) : null;
         }
         if (abs !== null) classifyAndRecord(abs, success ? 'read' : 'probed');
+        // The fd's resolved path: where a symlinked argument really led.
+        if (success && resolved !== undefined && resolved.startsWith('/')) classifyAndRecord(resolved, 'read');
       }
-      if (cwdMatch) lastCwd = cwdMatch[1];
       continue;
     }
 
     const bp = line.match(BARE_PATH_RE);
     const rl = bp ? null : line.match(READLINK_RE);
     if (bp || rl) {
-      const [name, rawPath, result] = bp ? [bp[1], bp[2], bp[3]] : ['readlink', rl[1], rl[2]];
+      const [name, rawPath, result, resolved] = bp ? [bp[1], bp[2], bp[3], bp[4]] : ['readlink', rl[1], rl[2], undefined];
       // readlink's EINVAL: the path exists and is not a symlink — a read, as far as existence goes.
       const success = isSuccess(result) || (name === 'readlink' && isEinval(result));
       const enoent = isEnoent(result);
@@ -1395,19 +1600,36 @@ function parsePidFile(text, root, sink) {
         } else if (name === 'execve') {
           // Relative execve: deliberately ignored, never unresolved (see file header).
         } else {
-          const base = lastCwd ?? firstCwdEver;
-          if (base === undefined) {
-            sink.unresolved.value += 1;
-          } else {
-            classifyAndRecord(path.posix.join(base, rawPath), success ? 'read' : 'probed');
-          }
+          const abs = relative(rawPath);
+          if (abs !== null) classifyAndRecord(abs, success ? 'read' : 'probed');
         }
+        if (success && resolved !== undefined && resolved.startsWith('/')) classifyAndRecord(resolved, 'read');
       }
-      if (cwdMatch) lastCwd = cwdMatch[1];
       continue;
     }
 
-    if (cwdMatch) lastCwd = cwdMatch[1];
+    const sl = line.match(SYMLINK_RE);
+    const sla = sl ? null : line.match(SYMLINKAT_RE);
+    if (sl || sla) {
+      const [target, linkDirOf, result] = sl
+        // symlink(target, linkpath): the link's directory from the linkpath (dirfd-less when relative).
+        ? [sl[1], () => (sl[2].startsWith('/') ? sl[2] : relative(sl[2])), sl[3]]
+        // symlinkat(target, newdirfd, linkpath): relative to the dirfd's annotation.
+        : [sla[1], () => {
+          if (sla[3].startsWith('/')) return sla[3];
+          const dm = sla[2].match(FD_ANNOTATION);
+          return dm ? path.posix.join(dm[1], sla[3]) : null;
+        }, sla[4]];
+      if (isSuccess(result)) {
+        if (target.startsWith('/')) {
+          classifyAndRecord(target, 'read');
+        } else {
+          const link = linkDirOf();
+          if (link !== null) classifyAndRecord(path.posix.join(path.posix.dirname(link), target), 'read');
+        }
+      }
+      continue;
+    }
   }
 }
 
@@ -1431,16 +1653,26 @@ function sinkRecord(sink) {
   };
 }
 
-/** Every readable pid file in `traceDir`, as `[fileName, text]`, in name order. */
+/** Every readable pid file in `traceDir`, as `[fileName, entries]`, in name order. An entry's `key` orders it in
+ *  time: the `-ttt` stamp in microseconds, or — for a line with none — a sequence number, so lines without
+ *  stamps keep file order (file after file, in name order).
+ *  @returns {Array<[string, Entry[]]>} */
 function readPidFiles(traceDir) {
-  /** @type {Array<[string, string]>} */
+  /** @type {Array<[string, Entry[]]>} */
   const out = [];
+  let seq = 0;
   for (const file of readdirSync(traceDir).sort()) {
+    let text;
     try {
-      out.push([file, readFileSync(path.join(traceDir, file), 'utf8')]);
+      text = readFileSync(path.join(traceDir, file), 'utf8');
     } catch {
       continue;
     }
+    out.push([file, text.split('\n').map((raw) => {
+      const m = raw.match(TS_RE);
+      seq += 1;
+      return m ? { key: Number(m[1]) * 1e6 + Number(m[2]), line: raw.slice(m[0].length) } : { key: seq, line: raw };
+    })]);
   }
   return out;
 }
@@ -1451,8 +1683,8 @@ function readPidFiles(traceDir) {
 function threadGroupFiles(pidFiles, rootPid) {
   /** @type {Array<[string, string]>} */
   const threadEdges = [];
-  for (const [file, text] of pidFiles) {
-    for (const line of text.split('\n')) {
+  for (const [file, entries] of pidFiles) {
+    for (const { line } of entries) {
       const m = line.match(CLONE_RE);
       if (m && /\bCLONE_THREAD\b/.test(m[1])) threadEdges.push([file, `t.${m[2]}`]);
     }
@@ -1471,6 +1703,81 @@ function threadGroupFiles(pidFiles, rootPid) {
   return group;
 }
 
+/** For every pid file, `cwdAt(key)`: its process's cwd at that moment, or `undefined` when unknown. The files are
+ *  grouped into processes by their `CLONE_THREAD` clones (threads share one cwd); a process's cwd events —
+ *  `AT_FDCWD<…>` annotations, successful `chdir`/`fchdir` — are replayed in time order. Before its first move the
+ *  cwd is the one its annotations name (unknown if they disagree: the cwd moved untraced); after a move it is
+ *  wherever the moves and later annotations put it.
+ *  @param {Array<[string, Entry[]]>} pidFiles @returns {Map<string, (key: number) => string | undefined>} */
+function processCwds(pidFiles) {
+  /** @type {Map<string, string>} */
+  const parent = new Map(pidFiles.map(([file]) => [file, file]));
+  const find = (f) => {
+    while (parent.get(f) !== f) f = /** @type {string} */ (parent.get(f));
+    return f;
+  };
+  for (const [file, entries] of pidFiles) {
+    for (const { line } of entries) {
+      const m = line.match(CLONE_RE);
+      if (m && /\bCLONE_THREAD\b/.test(m[1])) {
+        const created = `t.${m[2]}`;
+        if (parent.has(created)) parent.set(find(created), find(file));
+      }
+    }
+  }
+  /** @type {Map<string, Array<{ key: number, kind: 'at'|'chdir'|'fchdir', dir: string }>>} */
+  const events = new Map();
+  for (const [file, entries] of pidFiles) {
+    const g = find(file);
+    if (!events.has(g)) events.set(g, []);
+    const list = /** @type {Array<{ key: number, kind: 'at'|'chdir'|'fchdir', dir: string }>} */ (events.get(g));
+    for (const { key, line } of entries) {
+      const cd = line.match(CHDIR_RE);
+      const fcd = cd ? null : line.match(FCHDIR_RE);
+      if (cd) list.push({ key, kind: 'chdir', dir: cd[1] });
+      else if (fcd) list.push({ key, kind: 'fchdir', dir: fcd[1] });
+      else for (const a of line.matchAll(/AT_FDCWD<([^>]*)>/g)) list.push({ key, kind: 'at', dir: a[1] });
+    }
+  }
+  /** @type {Map<string, (key: number) => string | undefined>} */
+  const byGroup = new Map();
+  for (const [g, list] of events) {
+    list.sort((a, b) => a.key - b.key);
+    const firstMove = list.findIndex((e) => e.kind !== 'at');
+    const before = new Set(list.slice(0, firstMove === -1 ? list.length : firstMove).map((e) => e.dir));
+    const initial = before.size === 1 ? [...before][0] : undefined;
+    /** @type {Array<{ key: number, cwd: string | undefined }>} */
+    const after = [];
+    let cwd = initial;
+    for (const e of firstMove === -1 ? [] : list.slice(firstMove)) {
+      if (e.kind === 'at' || e.kind === 'fchdir') cwd = e.dir;
+      else cwd = e.dir.startsWith('/') ? path.posix.normalize(e.dir) : cwd === undefined ? undefined : path.posix.join(cwd, e.dir);
+      after.push({ key: e.key, cwd });
+    }
+    /** The cwd after every event stamped at or before `key`. */
+    const at = (key) => {
+      let lo = 0;
+      let hi = after.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (after[mid].key <= key) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo === 0 ? initial : after[lo - 1].cwd;
+    };
+    // A call stamped in the same microsecond as a move cannot be ordered against it: unknown, unless the move
+    // left the cwd where it was. (A line with no stamp has a unique sequence key, so it never ties.)
+    byGroup.set(g, (key) => {
+      const now = at(key);
+      return at(key - 1) === now ? now : undefined;
+    });
+  }
+  /** @type {Map<string, (key: number) => string | undefined>} */
+  const out = new Map();
+  for (const [file] of pidFiles) out.set(file, /** @type {(key: number) => string | undefined} */ (byGroup.get(find(file))));
+  return out;
+}
+
 /**
  * Parses every trace file in `traceDir` (one per pid, `strace -ff` output) and merges them into one `DepRecord`,
  * plus the count of relative paths that could not be resolved to any cwd (a test with `unresolved > 0` should be
@@ -1482,7 +1789,9 @@ function threadGroupFiles(pidFiles, rootPid) {
 export function parseTraceDirDetailed(traceDir, repoRoot) {
   const root = realpathSync(repoRoot).replace(/\/+$/, '');
   const sink = newSink();
-  for (const [, text] of readPidFiles(traceDir)) parsePidFile(text, root, sink);
+  const pidFiles = readPidFiles(traceDir);
+  const cwds = processCwds(pidFiles);
+  for (const [file, entries] of pidFiles) parsePidFile(entries, root, sink, /** @type {(key: number) => string | undefined} */ (cwds.get(file)));
   return { record: sinkRecord(sink), unresolved: sink.unresolved.value };
 }
 
@@ -1499,9 +1808,12 @@ export function parseTraceDirSplit(traceDir, repoRoot, rootPid) {
   const root = realpathSync(repoRoot).replace(/\/+$/, '');
   const pidFiles = readPidFiles(traceDir);
   const group = threadGroupFiles(pidFiles, rootPid);
+  const cwds = processCwds(pidFiles);
   const rootSink = newSink();
   const restSink = newSink();
-  for (const [file, text] of pidFiles) parsePidFile(text, root, group.has(file) ? rootSink : restSink);
+  for (const [file, entries] of pidFiles) {
+    parsePidFile(entries, root, group.has(file) ? rootSink : restSink, /** @type {(key: number) => string | undefined} */ (cwds.get(file)));
+  }
   return {
     root: sinkRecord(rootSink),
     rest: sinkRecord(restSink),
@@ -1537,10 +1849,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();
 cd server && ./node_modules/.bin/vitest run test/ci-trace-to-deps.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  22 passed (22)`.
+  Measured: `Test Files  1 passed (1)` / `Tests  29 passed (29)`.
 
   Cross-check against REAL captures (not fixtures) — `node .github/ci/trace-to-deps.mjs <traceDir> <repoRoot>`
-  prints the union record, and `parseTraceDirSplit(<traceDir>, <repoRoot>, <root.pid>)` the split:
+  prints the union record, and `parseTraceDirSplit(<traceDir>, <repoRoot>, <root.pid>)` the split (re-captured with
+  Step 1's exact command, `-ttt` and the full list: every figure below as measured, `unresolved` 0 for all six):
   - `oss-metadata`'s `read` contains `.github/workflows/ci.yml`; `ccd-rc-flag`'s `read` contains `ccd/ccd`;
     `worker-skill`'s `listed` contains `ccd/worker-skill` (its `rest` side).
   - `ci-baseline`, split: `root.listed = ["server/test"]`, `rest.listed = []`; `root.read` = `.`, `server`,
@@ -1554,16 +1867,16 @@ cd server && ./node_modules/.bin/vitest run test/ci-trace-to-deps.test.ts --maxW
 
 - [ ] **Step 5: Measure the mutation table.** For each row: apply the edit to `.github/ci/trace-to-deps.mjs`, run
   Step 4's command, see exactly the named test(s) red, restore byte-for-byte, re-run green. All re-measured in the
-  integration clone (22 cases each):
+  integration clone (29 cases each):
 
   | Mutation | Test(s) that go red |
   |---|---|
   | Delete the `node_modules` segment check in `classify` | `drops a path under a node_modules segment` (1) |
   | Delete the `.git` detection branch in `classify` | `records a .git read as the git flag…`, `the root pid and every thread its process creates are root…` (2) |
   | Remove the trailing-slash strip before `classify` | `treats a trailing-slash directory open as the same path…` (1) |
-  | `isEnoent` always returns `false` | `records an ENOENT probe…`, `records a .git read…`, both `readlink` cases (4) |
+  | `isEnoent` always returns `false` | `records an ENOENT probe…`, `records a .git read…`, both `readlink` cases, `after a chdir, a relative access resolves against the NEW cwd` (5) |
   | Remove the `execve`-relative special case (resolve it like `access`) | `ignores a relative execve…` (1) |
-  | Remove the outside-repo containment check in `classify` | `drops a path outside the repo…`, `resolves a relative access()… OUTSIDE the repo…` (2) |
+  | Remove the outside-repo containment check in `classify` | `drops a path outside the repo…`, `resolves a relative access()… OUTSIDE the repo…`, and both symlink cases (4) |
   | `READLINK_RE` never matches | `an ENOENT readlink is probed, a successful one read…`, `an EINVAL readlink is read…`, `a relative readlink resolves…` (3) |
   | Treat a relative `readlink` like a relative `execve` (ignored) | `a relative readlink resolves against the pid's cwd…`, `an EINVAL readlink is read…` (2) |
   | Drop the `readlink` EINVAL clause (only success reads) | `an EINVAL readlink is read: the path exists, it just is not a symlink…` (1) |
@@ -1573,6 +1886,21 @@ cd server && ./node_modules/.bin/vitest run test/ci-trace-to-deps.test.ts --maxW
   | Every `clone` counts as a thread (drop the `CLONE_THREAD` test) | `the root pid and every thread its process creates are root…` (1) |
   | Thread-group closure not transitive (one pass only) | `the root pid and every thread its process creates are root…` (1 — the fixture's `t.1000` sorts before `t.500`, so a single pass misses the thread `t.1000` created) |
   | `unresolved` counts the root side only | `a root pid with no file leaves root empty, and unresolved counts both sides` (1) |
+  | Drop the resolved-fd read for the dirfd calls (`openat`…) | `a successful open of a path outside the repo records the repo file its fd resolved to` (1) |
+  | Drop the resolved-fd read for `open` | the same (1) |
+  | `symlink`/`symlinkat` targets ignored | `a created symlink records its in-repo TARGET as read — absolute, or relative to the link's directory` (1) |
+  | A relative target joined to the cwd instead of the link's directory | the same (1) |
+  | `SYMLINKAT_RE` never matches | the same (1) |
+  | A FAILED `symlink` recorded too | the same (1) |
+  | `chdir` ignored | `after a chdir, a relative access resolves against the NEW cwd`, `before the chdir the old cwd holds…`, `threads share one cwd…`, `a relative call in the SAME microsecond as a move is unresolved…` (4) |
+  | `fchdir` ignored | `before the chdir the old cwd holds; a relative chdir moves relative to it; fchdir takes its fd's path` (1) |
+  | The cwd events not put in time order | `threads share one cwd: a chdir in one thread moves the cwd for another thread's LATER calls only` (1) |
+  | A relative `chdir` taken as absolute from `/` | `before the chdir the old cwd holds…`, `with no known cwd, a relative path is unresolved…` (2) |
+  | Disagreeing pre-move cwds taken as the first one | `with no known cwd, a relative path is unresolved…` (1) |
+  | No thread grouping for the cwd (each file its own events) | `threads share one cwd…` (1) |
+  | The `-ttt` stamp not stripped from the line | the four cwd cases above and the same-microsecond case (5) |
+  | The cwd lookup with `<` for `<=` (a call sees the cwd from BEFORE a move stamped at or before it) | `a relative call in the SAME microsecond as a move is unresolved…`, `after a chdir…`, `before the chdir the old cwd holds…` (3) |
+  | The same-microsecond rule removed (a tied call takes the new cwd) | `a relative call in the SAME microsecond as a move is unresolved: the stamp cannot order the two` (1) |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -1593,12 +1921,16 @@ git add .github/ci/trace-to-deps.mjs server/test/ci-trace-to-deps.test.ts
 git commit -F - <<'EOF'
 feat(ci): strace trace parser, split by process
 
-.github/ci/trace-to-deps.mjs parses `strace -f -ff -y -qq` output (one
-file per thread) into a repo-relative DepRecord (read/probed/listed/git),
-using the -y dirfd/fd annotations to resolve relative paths without
-tracking file descriptors by hand, and the pid's last-seen (or
-first-seen-later) AT_FDCWD for the four dirfd-less syscalls
-(open/access/readlink/execve). readlink is parsed because
+.github/ci/trace-to-deps.mjs parses `strace -f -ff -ttt -y -qq` output
+(one file per thread) into a repo-relative DepRecord (read/probed/
+listed/git), using the -y dirfd/fd annotations to resolve relative paths
+without tracking file descriptors by hand. The four dirfd-less syscalls
+(open/access/readlink/execve) resolve against the thread group's cwd AT
+THAT MOMENT, from a -ttt-ordered timeline of AT_FDCWD annotations and
+chdir/fchdir (git chdirs before it reads .git/config). A file reached
+through a symlink is read: the -y return annotation of a successful
+open names where it really led, and symlink/symlinkat into the
+repository records the target. readlink is parsed because
 realpathSync.native probes a path with it and nothing else (measured);
 its EINVAL (the path exists, not a symlink) counts as a read.
 
@@ -1624,7 +1956,8 @@ EOF
 **Interfaces:** Consumes: the JSDoc `DepRecord` typedef from Task 3 (type only; `node:fs`/`node:path` at runtime) and
 Task 7's `Records` JSON (format 2). Produces: `MAP_FORMAT` (1), `RECORDS_FORMAT` (2), `TRACE_MISSING`,
 `subtractBaseline(rec, baseline): DepRecord`, `buildMap(sha, records): TestMap`,
-`refreshMap(old, sha, records, liveTests, traced): TestMap`, `readMap(file): {ok:true,map}|{ok:false,reason}`,
+`refreshMap(old, sha, records, liveTests, traced): TestMap`, `GIT_FLOOR`, `WALK_FLOOR`,
+`readMap(file): {ok:true,map}|{ok:false,reason}`,
 `writeMap(file, map): void`, `readRecordsDir(dir): Records`, the typedefs `DepRecord`, `TestRecord`, `SplitDeps`,
 `SplitTestRecord`, `Records`, `TestMap`, and the CLI (`build --sha S --records DIR --out FILE`; `refresh --sha S
 --old FILE --records DIR --live FILE --traced FILE --out FILE`) — consumed by Tasks 5, 9 and 10 and by Task 11's
@@ -1641,6 +1974,16 @@ Task 7's `Records` JSON (format 2). Produces: `MAP_FORMAT` (1), `RECORDS_FORMAT`
   `unknown: true, why: TRACE_MISSING` ('trace missing (shard failed or cancelled)') instead of carrying its old
   entry: those are exactly the tests whose dependencies the merge changed. A `build` simply leaves such a test out,
   and Task 5's rule 1 selects a test absent from the map. The CLI refuses a refresh without `--traced`.
+- Changed in integration (the floor, operator's ruling M2 — spec §5.2's floor, now enforced): `buildMap`, and
+  `refreshMap` for its freshly traced entries (a carried entry was judged when it was traced), refuse a map whose
+  floor tests lost their breadth, naming each: every `GIT_FLOOR` test (`source-bytes`, `topology-clean`,
+  `deviation-refs`, `dtbd`, `providers`, `modelenv-single-writer`, `install-census`, `gitignore-secrets`) must
+  come out `git: true` or `unknown`, and every `WALK_FLOOR` test (`single-definition`, `typecheck-tests`) must
+  list something or be `unknown` — an `unknown` test is always selected, so it cannot shrink a selection (the
+  ruling's text asked only for a non-empty `listed`; the `unknown` allowance is this plan's, reported). Measured
+  on real traces in the integration clone: the eight `GIT_FLOOR` tests all `git: true`, `single-definition` 46
+  listed dirs, `typecheck-tests` 42 (it failed in a tree without `agent/`/`pwa/` modules, and passed once they
+  were installed — CI installs all three).
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-testmap.test.ts`:
 
@@ -1663,7 +2006,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  MAP_FORMAT, RECORDS_FORMAT, TRACE_MISSING, subtractBaseline, buildMap, refreshMap, readMap, writeMap, readRecordsDir,
+  MAP_FORMAT, RECORDS_FORMAT, TRACE_MISSING, GIT_FLOOR, WALK_FLOOR, subtractBaseline, buildMap, refreshMap, readMap, writeMap, readRecordsDir,
 } from '../../.github/ci/testmap.mjs';
 import type { DepRecord, Records, SplitTestRecord, TestMap } from '../../.github/ci/testmap.mjs';
 
@@ -1971,6 +2314,55 @@ describe('the refresh CLI (what ci.yml\'s map-build runs)', () => {
   });
 });
 
+describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () => {
+  // A tracer regression that stops seeing .git reads would silently narrow the repo-wide guards (rule 2 selects
+  // a test only if it read .git); one that stops seeing directory walks would narrow single-definition and
+  // typecheck-tests. So a map is refused — build or refresh fails red, naming the test — when a freshly traced
+  // floor test lacks its breadth. `unknown` is allowed: an unknown test is always selected.
+  it('names the floor exactly as the spec does', () => {
+    expect(GIT_FLOOR).toEqual(['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
+      'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`));
+    expect(WALK_FLOOR).toEqual(['single-definition', 'typecheck-tests'].map((n) => `server/test/${n}.test.ts`));
+  });
+
+  it('a build refuses a git-floor test with git false, and says which', () => {
+    const r = records({}, { 'server/test/dtbd.test.ts': split({ read: ['x'] }) });
+    expect(() => buildMap(SHA_A, r)).toThrow(/server\/test\/dtbd\.test\.ts: git is false/);
+  });
+
+  it('a build accepts git true, or unknown', () => {
+    const r = records({}, {
+      'server/test/dtbd.test.ts': split({}, { git: true }),
+      'server/test/providers.test.ts': split({}, {}, { unknown: true, why: 'vitest exited 1' }),
+    });
+    expect(Object.keys(buildMap(SHA_A, r).tests)).toEqual(['server/test/dtbd.test.ts', 'server/test/providers.test.ts']);
+  });
+
+  it('a build refuses a walk-floor test that lists nothing once the baseline is subtracted', () => {
+    const r = records({ root: { listed: ['server/test'] } }, {
+      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, {}),
+    });
+    expect(() => buildMap(SHA_A, r)).toThrow(/single-definition\.test\.ts: lists nothing/);
+    const ok = records({ root: { listed: ['server/test'] } }, {
+      'server/test/single-definition.test.ts': split({ listed: ['server/test'] }, { listed: ['server/test'] }),
+    });
+    expect(buildMap(SHA_A, ok).tests['server/test/single-definition.test.ts'].listed).toEqual(['server/test']);
+  });
+
+  it('a refresh refuses a freshly traced floor violation, and does not re-judge a carried entry', () => {
+    const old: TestMap = {
+      format: MAP_FORMAT, sha: SHA_A, baseline: emptyDep(),
+      tests: { 'server/test/install-census.test.ts': { ...emptyDep(), unknown: false } },
+    };
+    const bad = records({}, { 'server/test/dtbd.test.ts': split() });
+    expect(() => refreshMap(old, SHA_B, bad, ['server/test/dtbd.test.ts', 'server/test/install-census.test.ts'], ['server/test/dtbd.test.ts']))
+      .toThrow(/dtbd\.test\.ts: git is false/);
+    const good = records({}, { 'server/test/dtbd.test.ts': split({}, { git: true }) });
+    const map = refreshMap(old, SHA_B, good, ['server/test/dtbd.test.ts', 'server/test/install-census.test.ts'], ['server/test/dtbd.test.ts']);
+    expect(map.tests['server/test/install-census.test.ts']).toEqual(old.tests['server/test/install-census.test.ts']);
+  });
+});
+
 /*
  * Mutation table (measured — see the plan's Task 4 for the transcript):
  *
@@ -2043,6 +2435,31 @@ export const RECORDS_FORMAT = 2;
 /** The `why` of a test a refresh meant to re-trace but got no record for. */
 export const TRACE_MISSING = 'trace missing (shard failed or cancelled)';
 
+// THE FLOOR (spec §5.2). The repo-wide guards reach every change only through their breadth in the map: the
+// git-reading ones through `git: true` (rule 2), the walking ones through what they list. A tracer regression
+// that stops seeing `.git` reads or directory walks would narrow them silently, so a map is refused — build or
+// refresh throws, naming the test — when a freshly traced floor test lacks that breadth. `unknown` passes: an
+// unknown test is always selected. Checked on the REAL traces every map-build makes, which is what catches a
+// strace-side regression as well as a parser one.
+export const GIT_FLOOR = ['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
+  'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`);
+export const WALK_FLOOR = ['single-definition', 'typecheck-tests'].map((n) => `server/test/${n}.test.ts`);
+
+/** Throws naming every floor test among `tests` that lacks its breadth.
+ *  @param {Record<string, TestRecord>} tests */
+function assertFloor(tests) {
+  const bad = [];
+  for (const f of GIT_FLOOR) {
+    const r = tests[f];
+    if (r && !r.unknown && !r.git) bad.push(`${f}: git is false`);
+  }
+  for (const f of WALK_FLOOR) {
+    const r = tests[f];
+    if (r && !r.unknown && r.listed.length === 0) bad.push(`${f}: lists nothing`);
+  }
+  if (bad.length > 0) throw new Error(`the map's floor is broken (spec §5.2) — ${bad.join('; ')}`);
+}
+
 const SHA_RE = /^[0-9a-f]{40}$/;
 
 /** Sort + dedupe a string array. Every `DepRecord` array is kept in this
@@ -2103,6 +2520,7 @@ export function buildMap(sha, records) {
   for (const name of Object.keys(records.tests)) {
     tests[name] = flattenTestRecord(records.tests[name], records.baseline);
   }
+  assertFloor(tests);
   return { format: MAP_FORMAT, sha, baseline: unionDeps(records.baseline.root, records.baseline.rest), tests };
 }
 
@@ -2123,6 +2541,8 @@ export function refreshMap(old, sha, records, liveTests, traced) {
     if (!live.has(name)) continue;
     tests[name] = flattenTestRecord(records.tests[name], records.baseline);
   }
+  // Only the freshly traced entries are judged; a carried entry was judged when it was traced.
+  assertFloor(tests);
   for (const name of traced) {
     if (!live.has(name) || name in tests) continue;
     // Meant to be re-traced, and no record arrived (a trace shard crashed or
@@ -2329,16 +2749,16 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 cd server && ./node_modules/.bin/vitest run test/ci-testmap.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  27 passed (27)`.
+  Measured: `Test Files  1 passed (1)` / `Tests  32 passed (32)`.
 
 - [ ] **Step 5: Measure the mutation table.** For each row, apply the mutation to `.github/ci/testmap.mjs`, run
   Step 4's command, confirm exactly the named test(s) go red, then restore the file byte-for-byte and re-run green
-  before the next row. All re-measured in the integration clone (27 cases each):
+  before the next row. All re-measured in the integration clone (32 cases each):
 
   | mutation | test(s) that go red |
   |---|---|
-  | `subtractBaseline`: fold `git: rec.git` to `git: baseline.git` | `keeps the git flag as-is...` (1) |
-  | `buildMap`: subtract the JOINED baseline from the joined record (no per-side subtraction) | `a test's OWN listing of server/test survives, the include glob's is subtracted...` (1) |
+  | `subtractBaseline`: fold `git: rec.git` to `git: baseline.git` | `keeps the git flag as-is...`, and the floor's `a build accepts git true, or unknown` and `a refresh refuses a freshly traced floor violation…` (3) |
+  | `buildMap`: subtract the JOINED baseline from the joined record (no per-side subtraction) | `a test's OWN listing of server/test survives, the include glob's is subtracted...`, `a build refuses a walk-floor test that lists nothing once the baseline is subtracted` (2) |
   | `buildMap`: `map.baseline` = the root side only | `the map's baseline is the union of both sides...` (1) |
   | `readMap`: drop the `format !== MAP_FORMAT` check | `wrong format -> ok:false` (1) |
   | `readMap`: drop the sha-shape check | `malformed sha (not 40-hex) -> ok:false` (1) |
@@ -2348,8 +2768,15 @@ cd server && ./node_modules/.bin/vitest run test/ci-testmap.test.ts --maxWorkers
   | `readRecordsDir`: drop the baseline-agreement `else if` branch | `throws when two shards disagree on baseline — either side` (1) |
   | `refreshMap`: drop the `if (!live.has(name)) continue;` filter on fresh entries | `a fresh record for a test NOT in liveTests is dropped (deleted mid-refresh)` (1) |
   | `refreshMap`: drop the traced-but-missing → unknown loop | `a test MEANT to be traced whose record never arrived is unknown...`, `with --traced, a traced test that left no record comes out unknown` (2) |
-  | `refreshMap`: drop the old-entry carry-forward | `fresh entries replace old ones; old entries for live-but-not-retraced tests are carried...`, `a traced-list test that is no longer live is dropped...` (2) |
+  | `refreshMap`: drop the old-entry carry-forward | `fresh entries replace old ones; old entries for live-but-not-retraced tests are carried...`, `a traced-list test that is no longer live is dropped...`, `a refresh refuses a freshly traced floor violation, and does not re-judge a carried entry` (3) |
   | CLI: drop the `--traced` requirement | `refuses to refresh without --traced` (1) |
+  | `buildMap`: skip the floor | `a build refuses a git-floor test with git false, and says which`, `a build refuses a walk-floor test that lists nothing once the baseline is subtracted` (2) |
+  | `refreshMap`: skip the floor | `a refresh refuses a freshly traced floor violation, and does not re-judge a carried entry` (1) |
+  | `refreshMap`: judge the floor at the END (carried entries too) | the same (1) |
+  | The git floor unchecked | `a build refuses a git-floor test with git false…`, `a refresh refuses a freshly traced floor violation…` (2) |
+  | The walk floor unchecked | `a build refuses a walk-floor test that lists nothing…` (1) |
+  | An `unknown` floor test refused too | `a build accepts git true, or unknown` (1) |
+  | `GIT_FLOOR` loses `gitignore-secrets` | `names the floor exactly as the spec does` (1) |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -2380,7 +2807,9 @@ on any malformed map (§6.3). Records arrive split by process (format 2);
 the baseline is subtracted per side, so the include glob's walk of
 server/test goes while a test's own walk of it stays. A refresh is told
 which tests it meant to re-trace, and writes any of them that left no
-record as unknown instead of carrying its stale entry.
+record as unknown instead of carrying its stale entry. A map whose
+floor tests lost their breadth (a git-reading guard with git false, a
+tree walker that lists nothing) is refused, naming the test.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2407,6 +2836,11 @@ Task 9 (`select.mjs`) and Task 10 (`replay.mjs`).
   clause is safe only because of Task 4's per-side subtraction: a test that walks `server/test` itself keeps that
   listing and is selected by rule 5, the added test by rule 1 — pinned end to end below. `baseline.read` and
   `baseline.probed` stay triggers.
+- Changed in integration (operator's rulings P1-P2): `.gitattributes` and `.npmrc` at ANY depth, and any path under
+  `server/scripts/`, are full-run triggers — each is consumed by a setup step before any traced process runs (git
+  applies `.gitattributes` at checkout, `npm ci` reads `.npmrc`, the install lifecycle runs `server/scripts/`), so
+  no trace can see it. And `readChanges` strips the leading `:` of `git diff --raw`'s old mode, so a symlink turned
+  into a file (`:120000 100644`) is still seen as a symlink change.
 - Changed in integration: the JSDoc typedefs moved from `//` comments into `/** */` blocks — in a `//` comment
   they were invisible, and `@returns {Selection}` resolved to the DOM's `Selection` type, which failed
   `tsc -p test/tsconfig.tests.json` (the project `typecheck-tests.test.ts` runs in CI). New end-to-end cases pin a
@@ -2426,7 +2860,7 @@ Task 9 (`select.mjs`) and Task 10 (`replay.mjs`).
 // tree. Mutation table at the bottom.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import {
@@ -2475,6 +2909,20 @@ describe('fullTrigger', () => {
   it('anything under .github/', () => {
     expect(fullTrigger([{ status: 'M', path: '.github/workflows/ci.yml', symlink: false }], baseline))
       .toMatch(/pipeline path/);
+  });
+
+  it('.gitattributes at any depth (checkout applies it outside any traced process)', () => {
+    expect(fullTrigger([{ status: 'A', path: '.gitattributes', symlink: false }], baseline)).toMatch(/checkout attributes/);
+    expect(fullTrigger([{ status: 'M', path: 'ccd/.gitattributes', symlink: false }], baseline)).toMatch(/checkout attributes/);
+  });
+
+  it('.npmrc at any depth (npm ci reads it before any test runs)', () => {
+    expect(fullTrigger([{ status: 'M', path: 'server/.npmrc', symlink: false }], baseline)).toMatch(/npm config/);
+  });
+
+  it('anything under server/scripts/ (the install lifecycle scripts)', () => {
+    expect(fullTrigger([{ status: 'M', path: 'server/scripts/fix-node-pty-helper.mjs', symlink: false }], baseline))
+      .toMatch(/install script/);
   });
 
   it('a symlinked path', () => {
@@ -2895,6 +3343,22 @@ describe('readChanges (git-backed)', () => {
     expect(changes).toEqual([{ status: 'A', path: 'server/src/has space.ts', symlink: false }]);
   });
 
+  it('marks a symlink on the OLD side too: a deleted symlink, and a symlink turned into a file', () => {
+    const dir = mkTmp('ccrc-ci-select-oldlink-');
+    initRepo(dir);
+    writeIn(dir, 'server/src/target.ts', 'export const t = 1;\n');
+    symlinkSync('target.ts', path.join(dir, 'server/src/gone-link.ts'));
+    symlinkSync('target.ts', path.join(dir, 'server/src/was-link.ts'));
+    const base = commitAll(dir, 'two symlinks');
+    execFileSync('git', ['rm', '-q', 'server/src/gone-link.ts'], { cwd: dir, env: gitEnv() });
+    rmSync(path.join(dir, 'server/src/was-link.ts'));
+    writeIn(dir, 'server/src/was-link.ts', 'export const now = 1;\n');
+    const head = commitAll(dir, 'delete one, retype the other');
+    const byPath = Object.fromEntries(readChanges(dir, base, head).map((c) => [c.path, c]));
+    expect(byPath['server/src/gone-link.ts']).toEqual({ status: 'D', path: 'server/src/gone-link.ts', symlink: true });
+    expect(byPath['server/src/was-link.ts']).toEqual({ status: 'M', path: 'server/src/was-link.ts', symlink: true });
+  });
+
   it('marks a symlinked path', () => {
     const dir = mkTmp('ccrc-ci-select-symlink-');
     initRepo(dir);
@@ -3068,7 +3532,10 @@ export function readChanges(repoDir, fromSha, toRef = 'HEAD') {
     if (!header || !p) continue;
     const fields = header.trim().split(/\s+/);
     if (fields.length < 5) continue;
-    const [oldMode, newMode, , , statusRaw] = fields;
+    // The header starts with git's ':' — `:120000 000000 …` — which is stripped before the old mode is read, or an
+    // old-side symlink (a deleted one, or one turned into a file) would never be flagged.
+    const [oldModeRaw, newMode, , , statusRaw] = fields;
+    const oldMode = oldModeRaw.replace(/^:/, '');
     const letter = statusRaw[0];
     /** @type {'A'|'M'|'D'} */
     const status = letter === 'A' ? 'A' : letter === 'D' ? 'D' : 'M';
@@ -3112,6 +3579,11 @@ export function gitExistsAt(repoDir) {
 const PACKAGE_FILE_RE = /^(package\.json|package-lock\.json)$/;
 const VITEST_CONFIG_RE = /^vitest\..*config\.[cm]?[jt]s$/;
 const TSCONFIG_RE = /^tsconfig.*\.json$/;
+// Consumed by the setup steps before any traced process: git applies `.gitattributes` at checkout (an `eol`
+// attribute rewrites a script's line endings), `npm ci` reads `.npmrc`, and the packages' install lifecycle
+// runs server/scripts/.
+const GITATTRIBUTES_RE = /^\.gitattributes$/;
+const NPMRC_RE = /^\.npmrc$/;
 
 /** Parent directory of a repo-relative POSIX path, `'.'` at the root — the
  *  same "root is `.`" convention CONTRACT.md states for every path in this
@@ -3143,6 +3615,9 @@ export function fullTrigger(changes, baseline) {
     if (PACKAGE_FILE_RE.test(base)) return `package manifest changed: ${c.path}`;
     if (VITEST_CONFIG_RE.test(base)) return `vitest config changed: ${c.path}`;
     if (TSCONFIG_RE.test(base)) return `tsconfig changed: ${c.path}`;
+    if (GITATTRIBUTES_RE.test(base)) return `checkout attributes changed: ${c.path}`;
+    if (NPMRC_RE.test(base)) return `npm config changed: ${c.path}`;
+    if (c.path.startsWith('server/scripts/')) return `install script changed: ${c.path}`;
     if (c.path === '.github' || c.path.startsWith('.github/')) return `pipeline path changed: ${c.path}`;
     if (c.symlink) return `symlink changed: ${c.path}`;
     if (readSet.has(c.path)) return `baseline reads this path: ${c.path}`;
@@ -3308,10 +3783,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 cd server && ./node_modules/.bin/vitest run test/ci-select-tests.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  36 passed (36)`.
+  Measured: `Test Files  1 passed (1)` / `Tests  40 passed (40)`.
 
 - [ ] **Step 5: Measure the mutation table.** Same discipline as Task 4 Step 5 (apply, run, confirm the named
-  reds, restore, confirm green). All re-measured in the integration clone (36 cases each):
+  reds, restore, confirm green). All re-measured in the integration clone (40 cases each):
 
   | mutation | reds observed |
   |---|---|
@@ -3335,6 +3810,11 @@ cd server && ./node_modules/.bin/vitest run test/ci-select-tests.test.ts --maxWo
   | `selectTests`: drop the `fullTrigger` call at the top | `a package.json change forces full even when...` (1) |
   | `selectTests`: drop the final `.sort()` on `liveTests` | `sorts the selection by file, independent of rule or input order` (1) |
   | `affectedSet`: drop the ancestor-walk (`Pa = [p]`, `E = parentOf(p)` always) | `fires via the gone-ancestor rule...`, `fires when a brand-new subdirectory appears under a listed dir...`, `handles a root-level entry directory...` (3) |
+  | `fullTrigger`: `.gitattributes` not a trigger | `.gitattributes at any depth (checkout applies it outside any traced process)` (1) |
+  | `fullTrigger`: `.gitattributes` matched at the root only (the full path, not the basename) | the same (1) |
+  | `fullTrigger`: `.npmrc` not a trigger | `.npmrc at any depth (npm ci reads it before any test runs)` (1) |
+  | `fullTrigger`: `server/scripts/` not a trigger | `anything under server/scripts/ (the install lifecycle scripts)` (1) |
+  | `readChanges`: keep the `:` on the old mode | `marks a symlink on the OLD side too: a deleted symlink, and a symlink turned into a file` (1) |
 
   Note: rule 5 needs no separate `status === 'M'` guard — `affectedSet` gives every `M` change `E: null`, which
   already excludes it from rule 5's `a.E !== null` check. And rule 1 is what makes a rename safe: the new name is
@@ -3352,7 +3832,7 @@ for f in topology-clean source-bytes single-definition dtbd; do ./node_modules/.
   `Tests  1 passed (1)`; `tsc` prints nothing (it needs `agent/node_modules`, which `typecheck-tests.test.ts` also
   needs).
 
-  Plus `./node_modules/.bin/vitest run test/ci-testmap.test.ts --maxWorkers=2` — `Tests  27 passed (27)`.
+  Plus `./node_modules/.bin/vitest run test/ci-testmap.test.ts --maxWorkers=2` — `Tests  32 passed (32)`.
 
 - [ ] **Step 7: Commit**
 
@@ -3369,7 +3849,8 @@ changed-set bullet, and the three git-backed primitives (readChanges,
 liveTestFiles, gitExistsAt). What the baseline read or probed is a
 trigger; what it listed is not (the include glob lists server/test for
 every test — a trigger there would run the full suite for half of all
-PRs).
+PRs). .gitattributes and .npmrc at any depth and server/scripts/ are
+full-run triggers.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -3387,8 +3868,8 @@ EOF
 **Interfaces:**
 - Consumes: a vitest JSON-reporter report object (`{ testResults: Array<{ name, startTime, endTime }> }`, vitest's
   own shape — `name` absolute, `startTime`/`endTime` ms-epoch, possibly fractional — measured live, see the test);
-  repo-relative test file lists produced by Task 5's `selectTests`/`liveTestFiles`; the `testtimes-<sha>` cache JSON
-  this module's own `times` CLI produces.
+  repo-relative test file lists produced by Task 5's `selectTests`/`liveTestFiles`; the `testtimes` artifact JSON
+  this module's own `times` CLI produces (Task 11 publishes it from trusted main runs).
 - Produces: `durationsFromVitestJson(report, repoRoot) : Record<string, number>`, `PROFILES` (the four
   `ShardProfile` constants), `planShards(files, durations, profile) : ShardPlan`, `toMatrix(plan) : { include: [...] }`,
   and the `times` CLI (`node .github/ci/shards.mjs times --out FILE <report.json>...`, run from the repository
@@ -3399,6 +3880,9 @@ EOF
   (trace-run takes an exact list and has no `--shard`). The `times` CLI makes keys relative to its cwd (vitest's
   JSON names are absolute), which is now said in the code and CHECKED: a key outside `server/` means it ran from the
   wrong directory, and it refuses rather than write durations no file will ever match.
+- Changed in integration (operator's ruling P4, spec §7.1): a file missing from a non-empty durations table is
+  packed at the table's MEDIAN duration (the mean of the two middle values for an even count), not `defaultMs` —
+  a new test is more like a typical test than a 5-second one. `defaultMs` remains for an empty table.
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-shards.test.ts`:
 
@@ -3553,7 +4037,19 @@ describe('planShards — durations known (LPT)', () => {
     expect(capped).toHaveLength(4);
   });
 
-  it('a file missing from durations falls back to defaultMs', () => {
+  it('a file missing from a NON-empty table is given the MEDIAN of the known durations (spec §7.1)', () => {
+    // median of 1000, 2000, 9000 is 2000: total 14000 → 2 shards, d packed as 2000 (after b by path).
+    // At defaultMs (5000) the total would be 17000 → 3 shards.
+    const plan = planShards(['a', 'b', 'c', 'd'], { a: 1000, b: 2000, c: 9000 },
+      { targetMs: 7000, min: 1, max: 5, workers: 1, defaultMs: 5000 });
+    expect(plan.map((s) => s.files)).toEqual([['c'], ['b', 'd', 'a']]);
+    // An even count takes the mean of the middle two: 1000, 3000 → 2000, so three unknown files make the total
+    // 10000 → 4 shards (the lower middle would give 7000 → 3, the upper 13000 → 5, defaultMs 31000 → 5).
+    const even = planShards(['a', 'b', 'x', 'y', 'z'], { a: 1000, b: 3000 }, { targetMs: 3000, min: 1, max: 5, workers: 1, defaultMs: 9000 });
+    expect(even.length).toBe(4);
+  });
+
+  it('a file missing from durations is still planned (one shard holds both)', () => {
     const files = ['server/test/known.test.ts', 'server/test/unknown.test.ts'];
     const durations = { 'server/test/known.test.ts': 1000 };
     const profile = { targetMs: 240_000, min: 1, max: 1, workers: 2, defaultMs: 5000 };
@@ -3747,10 +4243,10 @@ Error: Cannot find module '../../.github/ci/shards.mjs' imported from …/server
 //
 // Packs the selected server test files across a bounded number of CI
 // runners: LPT (longest-processing-time-first) bin-packing when real
-// per-file durations are known (from the `testtimes-` cache), or an equal
-// vitest hash-shard fallback (`--shard=i/n`, each shard given every file)
-// when they are not (spec §7.1's "If the cache holds no durations,
-// sharding falls back to vitest's own `--shard=i/n`").
+// per-file durations are known (from the `testtimes` artifact of a trusted
+// main run), or an equal vitest hash-shard fallback (`--shard=i/n`, each
+// shard given every file) when none are (spec §7.1: with no durations at
+// all, sharding falls back to vitest's own `--shard=i/n`).
 //
 // Paths in `files` / the keys of `durations` are REPO-RELATIVE POSIX
 // strings, matching every other module in `.github/ci/` (contract
@@ -3805,7 +4301,8 @@ function clamp(n, lo, hi) {
 /**
  * Pack `files` into a `ShardPlan` (spec §7.1).
  *
- * total = Σ(duration ?? defaultMs)·scale; count = clamp(ceil(total /
+ * total = Σ(duration ?? the median of the known durations, or defaultMs
+ * when none are known)·scale; count = clamp(ceil(total /
  * workers / targetMs), min, max), never more than `files.length`. With
  * `durations`: LPT — sort files longest-duration-first (ties by path
  * ascending), assign each to the currently least-loaded shard;
@@ -3821,7 +4318,12 @@ function clamp(n, lo, hi) {
 export function planShards(files, durations, { targetMs, min, max, workers, defaultMs, scale = 1 }) {
   if (files.length === 0) return [];
 
-  const durationOf = (f) => (durations != null ? (durations[f] ?? defaultMs) : defaultMs);
+  // A file with no duration is given the MEDIAN of the known ones (spec §7.1); `defaultMs` only when none are
+  // known — an empty table, or none at all.
+  const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
+  const mid = known.length >> 1;
+  const fallback = known.length === 0 ? defaultMs : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const durationOf = (f) => (durations != null ? (durations[f] ?? fallback) : defaultMs);
   const total = files.reduce((sum, f) => sum + durationOf(f), 0) * scale;
   const raw = Math.ceil(total / workers / targetMs);
   const count = Math.min(clamp(raw, min, max), files.length);
@@ -3929,20 +4431,22 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
 cd server && ./node_modules/.bin/vitest run test/ci-shards.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  20 passed (20)`.
+  Measured: `Test Files  1 passed (1)` / `Tests  21 passed (21)`.
 
 - [ ] **Step 5: Measure the mutation table** (mutate → run Step 4's command → restore; every row re-measured red in
-  the integration clone, then reverted and reconfirmed green at 20/20):
+  the integration clone, then reverted and reconfirmed green at 21/21):
 
   | # | Mutation | Test(s) that go RED |
   |---|---|---|
-  | 1 | Reverse the LPT sort (`db - da` → `da - db`) | `a single file far longer than the target gets a shard of its own` (1) |
+  | 1 | Reverse the LPT sort (`db - da` → `da - db`) | `a single file far longer than the target gets a shard of its own`, `a file missing from a NON-empty table is given the MEDIAN…` (2) |
   | 2 | Drop the `files.length` cap on the shard count | `never produces more shards than files…`, `every shard gets ALL files, with a vitestShard "i/n" string` (2) |
   | 3 | Drop the `clamp` (`Math.min(raw, files.length)`) | `clamps the shard count to [min, max] regardless of total` (1) |
   | 4 | Remove the `durations === null` branch entirely (always LPT) | `every shard gets ALL files, with a vitestShard "i/n" string`, `with a single computed shard, vitestShard is "1/1"` (2) |
   | 5 | `toMatrix` stops stripping the `server/` prefix | `converts repo-relative paths to server-relative, space-joined` (1) |
   | 6 | Treat an EMPTY durations object as null (`durations === null \|\| Object.keys(durations).length === 0`) | `packs by LPT at defaultMs, every file exactly once, and never hands out a vitest --shard` (1) |
   | 7 | `times` CLI: drop the repository-root check | `run from anywhere else (server/): refuses, and writes nothing` (1) |
+  | 8 | A file missing from a non-empty table packed at `defaultMs`, not the median | `a file missing from a NON-empty table is given the MEDIAN of the known durations (spec §7.1)` (1) |
+  | 9 | An even count's median taken as the lower middle, not the mean of the two | the same (1) |
 
   One mutation was tried and found NOT load-bearing, measured rather than assumed: removing the
   `if (files.length === 0) return [];` early-return left every test green, because `Math.min(clamp(raw, min, max),
@@ -3971,8 +4475,8 @@ git commit -F - <<'EOF'
 feat(ci): shard planner (spec §7)
 
 LPT bin-packing of selected server test files onto a bounded shard count
-when per-file durations are known (an empty table counts as known, at the
-default duration), falling back to vitest's own hash-shard (--shard=i/n,
+when per-file durations are known (a file missing from the table is
+packed at the table's median; an empty table at the default), falling back to vitest's own hash-shard (--shard=i/n,
 every shard given every file) when they are null. Includes the four
 shard profiles, the repo-relative -> server-relative toMatrix boundary,
 and the `times` CLI that merges per-shard vitest JSON reports into one
@@ -3993,10 +4497,13 @@ EOF
 **Interfaces:** Consumes: `parseTraceDirSplit` from Task 3, `server/vitest.select.config.ts` and
 `server/test/ci-baseline.test.ts` from Task 2 / Produces: `export function traceArgv(traceDir): string[]` (the
 exact strace invocation, pinned), `export function tracedCommand(traceDir, pidFile): string[]`,
-`export function tracedEnv(env, listFile)`, `export function recordOf(workDir, repoRoot, exit, timeoutSec)`,
-`export async function traceAll(repoRoot, serverRelPaths, {jobs?, timeoutSec?}): Promise<Records>` (format 2,
-repo-relative test keys, NOT baseline-subtracted — consumed by Task 4), and the CLI (`node .github/ci/trace-run.mjs
---repo ROOT --files LISTFILE --out FILE [--jobs N] [--timeout SEC]`) that Task 11's `trace-shard` invokes.
+`export function tracedEnv(env, listFile)`, `export function runTraced(argv, opts)`,
+`export function recordOf(workDir, repoRoot, exit, timeoutSec)`, `export async function runPool(items, concurrency,
+worker)`, `export async function traceAll(repoRoot, serverRelPaths, {jobs?, timeoutSec?, baselineTimeoutSec?,
+killAfterSec?}): Promise<Records>` (format 2, repo-relative test keys, NOT baseline-subtracted — consumed by Task 4),
+and the CLI (`node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE [--jobs N] [--timeout SEC]
+[--kill-after SEC]`) that Task 11's `trace-shard` invokes. The CLI exits 3, AFTER writing the records, when any
+traced test failed or timed out (`::error::` per test), else 0.
 - Changed in integration (process split): vitest runs as `sh -c 'echo $$ > "$0"; exec "$@"' <workDir>/root.pid
   ./node_modules/.bin/vitest run …` under strace — sh writes its own pid, then execs vitest as that same pid — so
   every record is `{ root, rest, unknown, why? }` and `Records` is format 2 (Task 4). A run whose root pid was not
@@ -4007,18 +4514,40 @@ repo-relative test keys, NOT baseline-subtracted — consumed by Task 4), and th
   process, for the split); the traced child's environment sets `UV_USE_IO_URING=0`, which keeps libuv's fs on its
   threadpool, where every fs op is a visible syscall. The traced fixture asserts that variable from INSIDE the
   traced process, so the environment the call site really passes is what is pinned.
+- Changed in integration (operator's rulings S1-S3, M1): `traceArgv` is `strace -f -ff -ttt -y -qq` with `symlink`,
+  `symlinkat`, `chdir` and `fchdir` added (Task 3 reads them); `tracedEnv` sets `CCRC_TRACING=1`, which this very
+  test file reads to skip its own nested-strace cases when a map rebuild traces it (strace cannot attach under an
+  outer strace — without the skip it would be `unknown` in every map). A traced test that failed or timed out
+  still leaves its record (`unknown`), and the CLI then exits 3, so a trace shard shows red; Task 11's map-build
+  still builds from it.
+- Changed in integration (operator's rulings X1-X5): the fixtures live in a per-run DOT directory under `server/`
+  (`server/.ci-tracerun-<pid>-<ms>`), never `server/test/` — a concurrent vitest collected them there and
+  `typecheck-tests`' census raced them; vitest's include glob does not match a dot directory and a literal include
+  there runs (measured). The leak fixture's detached process is killed by the pid it wrote (`process.kill(-pid)`),
+  never by a command-line pattern that could hit another run's. `traceAll` takes a separate `baselineTimeoutSec`
+  and a configurable `killAfterSec` (the CLI's `--kill-after`, default 30), so a test can give the baseline a
+  generous deadline and the leak case a 2-second grace. The case that runs the baseline plus two files runs them at
+  `jobs: 2`, so `runPool`'s concurrency is exercised by a real run.
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-trace-run.test.ts` (real, non-mocked
-  `strace`/`timeout`/`vitest` runs against fixture files written into this repo's own `server/test/`, because
-  `vitest.select.config.ts` resolves `CCRC_TEST_LIST` relative to `server/`; the pure half needs no strace):
+  `strace`/`timeout`/`vitest` runs against fixture files written into a per-run dot directory under this repo's own
+  `server/`, because `vitest.select.config.ts` resolves `CCRC_TEST_LIST` relative to `server/`; the pure half needs
+  no strace):
 
 <!-- file: server/test/ci-trace-run.test.ts -->
 ```ts
 // `.github/ci/trace-run.mjs` (spec §5.1/§5.3/§5.4, contract Task 7): runs a real `strace`d `vitest` process per
 // server test file. These are REAL integration tests -- they shell out to real `strace`, `timeout` and `vitest`
-// against fixture test files written into this repo's OWN `server/test/`, because `vitest.select.config.ts`
-// resolves `CCRC_TEST_LIST` entries relative to `server/`, and a synthetic standalone repo would need its own
-// `node_modules` to run real `vitest` under real `strace` at all.
+// against fixture test files written into this repo's OWN `server/`, because `vitest.select.config.ts` resolves
+// `CCRC_TEST_LIST` entries relative to `server/`, and a synthetic standalone repo would need its own
+// `node_modules` to run real `vitest` under real `strace` at all. The fixtures live in a per-run DOT directory
+// under `server/` — never `server/test/`, where a concurrent vitest would collect them and typecheck-tests'
+// census would race them; vitest's include glob does not match it, the census skips dot directories, and a
+// literal include there runs (measured).
+//
+// When this file is itself being traced (a map rebuild traces every server test; `CCRC_TRACING=1` comes from
+// trace-run's own environment), its nested-strace cases skip: strace cannot attach under an outer strace, so
+// they would fail and leave this file `unknown` in every map.
 //
 // Platform gating (per the plan): `strace` does not exist on Darwin, so this whole suite is a structural no-op
 // there -- `describe.skip`. On Linux, `strace` is a required tool for real CI (the daily map rebuild and every
@@ -4026,10 +4555,10 @@ repo-relative test keys, NOT baseline-subtracted — consumed by Task 4), and th
 // skip -- §6.3's "loud, never silent" applies to the tracer's own preconditions as much as to the selector's.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, rmSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { traceArgv, traceAll, tracedCommand, tracedEnv, recordOf } from '../../.github/ci/trace-run.mjs';
+import { traceArgv, traceAll, tracedCommand, tracedEnv, recordOf, runTraced, runPool } from '../../.github/ci/trace-run.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -4047,10 +4576,41 @@ describe('trace-run.mjs: the traced command and how a finished run is read', () 
     ]);
   });
 
-  it('tracedEnv: the exact list, CI, and libuv kept off io_uring', () => {
+  it('tracedEnv: the exact list, CI, libuv kept off io_uring, and CCRC_TRACING marking a traced run', () => {
     expect(tracedEnv({ PATH: '/bin', UV_USE_IO_URING: '1' }, '/w/list.txt')).toEqual({
-      PATH: '/bin', CCRC_TEST_LIST: '/w/list.txt', CI: 'true', UV_USE_IO_URING: '0',
+      PATH: '/bin', CCRC_TEST_LIST: '/w/list.txt', CI: 'true', UV_USE_IO_URING: '0', CCRC_TRACING: '1',
     });
+  });
+
+  it('runTraced resolves when the process EXITS, even while a backgrounded descendant still holds its stdio', async () => {
+    // The guard for a trace shard hanging to its deadline: `stdio: 'ignore'` + the 'exit' event. With a piped
+    // stdio and 'close', this waits the sleeper's full 30s (measured: 4ms against 7007ms for a 7s sleeper).
+    const dir = mkTmp('ccrc-trace-run-bg-');
+    const pidFile = path.join(dir, 'bg.pid');
+    const start = Date.now();
+    const exit = await runTraced(['sh', '-c', `sleep 30 & echo $! > "${pidFile}"; exit 0`], {});
+    const elapsed = Date.now() - start;
+    try {
+      expect(exit).toEqual({ code: 0, signal: null, error: null });
+      expect(elapsed).toBeLessThan(10_000);
+    } finally {
+      try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
+  it('runPool visits every item once and never runs more than `concurrency` at a time', async () => {
+    const seen: number[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    await runPool([1, 2, 3, 4, 5], 2, async (n: number) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 20));
+      seen.push(n);
+      inFlight -= 1;
+    });
+    expect(seen.sort()).toEqual([1, 2, 3, 4, 5]);
+    expect(peak).toBe(2);
   });
 
   /** A finished run's work dir: `trace/t.<pid>` files and, unless `pid` is null, `root.pid`. */
@@ -4119,60 +4679,81 @@ describe.skipIf(isDarwin)('trace-run.mjs', () => {
 
   it('traceArgv is exactly the pinned strace invocation', () => {
     expect(traceArgv('/some/dir')).toEqual([
-      'strace', '-f', '-ff', '-y', '-qq',
-      '-e', 'trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,clone,clone3',
+      'strace', '-f', '-ff', '-ttt', '-y', '-qq',
+      '-e', 'trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3',
       '-o', '/some/dir/t',
     ]);
   });
 
-  describe('real traced runs', () => {
-    const tinyFixture = 'test/ci-tracerun-fixture-tiny.test.ts';
-    const tinyFixturePath = path.join(serverRoot, tinyFixture);
-    const leakFixture = 'test/ci-tracerun-fixture-leak.test.ts';
-    const leakFixturePath = path.join(serverRoot, leakFixture);
+  const nested = process.env.CCRC_TRACING === '1';
+
+  describe.skipIf(nested)('real traced runs', () => {
+    // A per-run dot directory under server/: see the file header.
+    const fixtureRel = `.ci-tracerun-${process.pid}-${Date.now()}`;
+    const fixtureDir = path.join(serverRoot, fixtureRel);
+    const tiny = `${fixtureRel}/tiny.test.ts`;
+    const linked = `${fixtureRel}/linked.test.ts`;
+    const failing = `${fixtureRel}/failing.test.ts`;
+    const slow = `${fixtureRel}/slow.test.ts`;
+    const leak = `${fixtureRel}/leak.test.ts`;
+    const leakPidFile = path.join(fixtureDir, 'leak.pid');
+    const cli = path.join(repoRoot, '.github', 'ci', 'trace-run.mjs');
 
     beforeAll(() => {
-      writeFileSync(
-        tinyFixturePath,
+      mkdirSync(fixtureDir);
+      writeFileSync(path.join(serverRoot, tiny),
         "import { describe, it, expect } from 'vitest';\n" +
         "describe('ci-tracerun tiny fixture', () => {\n" +
         // Asserted INSIDE the traced process, so the environment traceOne really passes is what is checked
         // (a red here makes the run exit 1, which the record reports as unknown).
         "  it('runs with libuv off io_uring', () => { expect(process.env.UV_USE_IO_URING).toBe('0'); });\n" +
-        '});\n',
-        'utf8',
-      );
-      writeFileSync(
-        leakFixturePath,
+        '});\n');
+      // Reads two repo files only THROUGH symlinks in a tmp dir, the way ccrc-models builds its fixture box: one
+      // opened (its fd resolves to the repo file), one only stat'ed (only the link's creation names it).
+      writeFileSync(path.join(serverRoot, linked),
+        "import { it, expect } from 'vitest';\n" +
+        "import { mkdtempSync, symlinkSync, readFileSync, statSync } from 'node:fs';\n" +
+        "import { tmpdir } from 'node:os';\n" +
+        "import path from 'node:path';\n" +
+        "it('reads through tmp symlinks', () => {\n" +
+        "  const box = mkdtempSync(path.join(tmpdir(), 'ccrc-tracerun-box-'));\n" +
+        `  symlinkSync(${JSON.stringify(path.join(repoRoot, 'ccd', 'worker-skill', 'SKILL.md'))}, path.join(box, 'skill'));\n` +
+        `  symlinkSync(${JSON.stringify(path.join(repoRoot, 'ccd', 'ccrc-models-probe'))}, path.join(box, 'probe'));\n` +
+        "  expect(readFileSync(path.join(box, 'skill'), 'utf8').length).toBeGreaterThan(0);\n" +
+        "  expect(statSync(path.join(box, 'probe')).isFile()).toBe(true);\n" +
+        '});\n');
+      writeFileSync(path.join(serverRoot, failing),
+        "import { it, expect } from 'vitest';\n" +
+        "it('fails', () => { expect(1).toBe(2); });\n");
+      writeFileSync(path.join(serverRoot, slow),
+        "import { it } from 'vitest';\n" +
+        "it('outlives the trace timeout', async () => { await new Promise((r) => setTimeout(r, 20_000)); }, 30_000);\n");
+      writeFileSync(path.join(serverRoot, leak),
         "import { describe, it } from 'vitest';\n" +
         "import { spawn } from 'node:child_process';\n" +
+        "import { writeFileSync } from 'node:fs';\n" +
         "describe('ci-tracerun leak fixture', () => {\n" +
         // `stdio: 'inherit'` (not 'ignore') is the part that matters: it shares this grandchild's stdout/
-        // stderr fds with the process that spawned it, which (absent trace-run.mjs's own `stdio: 'ignore'`
-        // on the traced process) are the SAME pipe fds trace-run.mjs itself set up -- exactly the shape that
-        // makes a naive `'close'`-event wait hang on a leaked descendant.
+        // stderr fds with the process that spawned it. Its pid goes to a file, so afterAll kills exactly it.
         "  it('spawns a detached long-running process, inheriting stdio, and returns immediately', () => {\n" +
         "    const child = spawn('sleep', ['300'], { detached: true, stdio: 'inherit' });\n" +
+        `    writeFileSync(${JSON.stringify(leakPidFile)}, String(child.pid));\n` +
         '    child.unref();\n' +
         '  });\n' +
-        '});\n',
-        'utf8',
-      );
+        '});\n');
     });
 
     afterAll(() => {
-      rmSync(tinyFixturePath, { force: true });
-      rmSync(leakFixturePath, { force: true });
-      const snap = path.join(serverRoot, 'test', '__snapshots__', 'ci-tracerun-fixture-tiny.test.ts.snap');
-      if (existsSync(snap)) rmSync(snap, { force: true });
-      // The leaked `sleep 300` this suite deliberately spawns escapes `timeout`'s direct kill (it is
-      // reparented, not a child of anything this process controls) and is harmless left running for the rest
-      // of its 300s -- but killing it here keeps the box clean rather than relying on that.
-      spawnSync('pkill', ['-f', '^sleep 300$']);
+      // Exactly the leaked sleeper, never a pattern: it is the leader of its own process group (detached).
+      if (existsSync(leakPidFile)) {
+        const pid = Number(readFileSync(leakPidFile, 'utf8'));
+        try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+      rmSync(fixtureDir, { recursive: true, force: true });
     });
 
-    it('traces the baseline plus one tiny test: both unknown:false, the tiny test reads itself', async () => {
-      const records = await traceAll(repoRoot, [tinyFixture], { jobs: 1, timeoutSec: 60 });
+    it('traces the baseline plus two files at jobs:2: the tiny one reads itself, the linked one reads through symlinks', async () => {
+      const records = await traceAll(repoRoot, [tiny, linked], { jobs: 2, timeoutSec: 120 });
       expect(records.format).toBe(2);
       expect(records.baseline.root.git).toBe(false);
       expect(records.baseline.rest.git).toBe(false);
@@ -4182,30 +4763,51 @@ describe.skipIf(isDarwin)('trace-run.mjs', () => {
       expect(records.baseline.root.listed).toContain('server/test');
       expect(records.baseline.rest.listed).not.toContain('server/test');
 
-      const key = `server/${tinyFixture}`;
-      expect(Object.keys(records.tests)).toEqual([key]);
-      const rec = records.tests[key];
-      expect(rec.unknown).toBe(false);
-      expect(rec.root.read).toContain(key);
+      expect(Object.keys(records.tests).sort()).toEqual([`server/${linked}`, `server/${tiny}`]);
+      const t = records.tests[`server/${tiny}`];
+      expect(t.unknown).toBe(false);
+      expect(t.root.read).toContain(`server/${tiny}`);
+      const l = records.tests[`server/${linked}`];
+      expect(l.unknown).toBe(false);
+      expect(l.rest.read).toContain('ccd/worker-skill/SKILL.md');
+      expect(l.rest.read).toContain('ccd/ccrc-models-probe');
+    }, 180_000);
+
+    it('a baseline that fails to trace is a hard stop for the whole run', async () => {
+      await expect(traceAll(repoRoot, [], { baselineTimeoutSec: 0.05, killAfterSec: 1 }))
+        .rejects.toThrow(/trace-run: baseline trace failed: timeout after 0\.05s/);
     }, 60_000);
 
     it('records a leaked detached background process as unknown, and the runner returns', async () => {
-      // `--kill-after=30` is fixed by the contract (Task 7), not configurable -- with a 3s `timeoutSec`, the
-      // realistic wall-clock bound for THIS call is timeoutSec + up to 30s of kill-after grace + process
-      // overhead. Measured locally: ~35s. The `it()` timeout below is set generously above that so the
-      // assertion, not vitest's own per-test clock, is what proves the runner returned.
+      // The baseline gets its own ordinary timeout (a loaded box once took the 3s for itself); the leak fixture
+      // gets 3s and a 2s kill-after grace, so this case does not idle on the default 30.
       const start = Date.now();
-      const records = await traceAll(repoRoot, [leakFixture], { jobs: 1, timeoutSec: 3 });
+      const records = await traceAll(repoRoot, [leak], { jobs: 1, timeoutSec: 3, baselineTimeoutSec: 120, killAfterSec: 2 });
       const elapsedMs = Date.now() - start;
-
-      const key = `server/${leakFixture}`;
-      const rec = records.tests[key];
+      const rec = records.tests[`server/${leak}`];
       expect(rec.unknown).toBe(true);
       expect(rec.why).toMatch(/timeout/i);
-      // Review Focus: the leaked grandchild must not hang the job -- it returned well inside the 300s the
-      // leaked process itself sleeps for, which is the property under test.
-      expect(elapsedMs).toBeLessThan(120_000);
+      // The leaked grandchild must not hang the job: back well inside its 300s — and inside the default 30s
+      // kill-after grace too, which is what shows `killAfterSec` reached `timeout` (measured ~10s here).
+      expect(elapsedMs).toBeLessThan(25_000);
     }, 150_000);
+
+    it('the CLI exits 3 after writing the records when a traced test FAILED or TIMED OUT, and 0 on a clean run', () => {
+      const dir = mkTmp('ccrc-trace-run-cli-');
+      writeFileSync(path.join(dir, 'red.txt'), `${failing}\n${slow}\n`);
+      writeFileSync(path.join(dir, 'none.txt'), '');
+      const red = spawnSync(process.execPath, [cli, '--repo', repoRoot, '--files', path.join(dir, 'red.txt'),
+        '--out', path.join(dir, 'red.json'), '--timeout', '8', '--kill-after', '2'], { encoding: 'utf8' });
+      expect(red.status).toBe(3);
+      expect(red.stdout).toContain(`::error::trace-run: server/${failing}: vitest exited 1`);
+      expect(red.stdout).toContain(`::error::trace-run: server/${slow}: timeout after 8s`);
+      const records = JSON.parse(readFileSync(path.join(dir, 'red.json'), 'utf8'));
+      expect(records.tests[`server/${failing}`]).toMatchObject({ unknown: true, why: 'vitest exited 1' });
+      expect(records.tests[`server/${slow}`]).toMatchObject({ unknown: true, why: 'timeout after 8s' });
+      const green = spawnSync(process.execPath, [cli, '--repo', repoRoot, '--files', path.join(dir, 'none.txt'),
+        '--out', path.join(dir, 'green.json'), '--timeout', '120'], { encoding: 'utf8' });
+      expect(green.status).toBe(0);
+    }, 180_000);
   });
 });
 ```
@@ -4241,6 +4843,10 @@ Error: Cannot find module '../../.github/ci/trace-run.mjs' imported from …/ser
 // because the baseline is subtracted per side (see `trace-to-deps.mjs`'s header for why). The root pid is
 // captured by running vitest through `sh -c 'echo $$ > "$0"; exec "$@"'`: sh writes its own pid, then execs
 // vitest as that same pid.
+//
+// The CLI exits 3 — after writing the records — when any traced test FAILED or timed out, so the trace shard
+// shows red on the commit (spec §5.4: a refresh's test failures show red on main); map-build still runs on a
+// failed shard and builds, since those tests are recorded `unknown`.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -4269,8 +4875,8 @@ const ROOT_PID_SH = 'echo $$ > "$0"; exec "$@"';
  */
 export function traceArgv(traceDir) {
   return [
-    'strace', '-f', '-ff', '-y', '-qq',
-    '-e', 'trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,clone,clone3',
+    'strace', '-f', '-ff', '-ttt', '-y', '-qq',
+    '-e', 'trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3',
     '-o', path.join(traceDir, 't'),
   ];
 }
@@ -4293,12 +4899,14 @@ export function tracedCommand(traceDir, pidFile) {
 /**
  * The traced child's environment. `UV_USE_IO_URING=0` keeps libuv on its threadpool: with io_uring, Node's
  * asynchronous fs can be submitted through the ring, and none of it would appear as a syscall strace can see.
+ * `CCRC_TRACING=1` tells a test it is being traced — this module's own suite skips its nested-strace cases then,
+ * since strace cannot attach under an outer strace.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} listFile
  * @returns {NodeJS.ProcessEnv}
  */
 export function tracedEnv(env, listFile) {
-  return { ...env, CCRC_TEST_LIST: listFile, CI: 'true', UV_USE_IO_URING: '0' };
+  return { ...env, CCRC_TEST_LIST: listFile, CI: 'true', UV_USE_IO_URING: '0', CCRC_TRACING: '1' };
 }
 
 /** Runs `argv[0]` with the rest as args, under a `timeout --kill-after` wrapper, WITHOUT inheriting stdio.
@@ -4312,15 +4920,13 @@ export function tracedEnv(env, listFile) {
  *  itself terminates, independent of any fd a descendant still holds open; `stdio: 'ignore'` removes the pipe a
  *  descendant could hold open in the first place, for the direct child at least.
  *
- *  Measured (this module's own test suite, Review Focus): a fixture test that spawns a detached `sleep 300`
- *  with `stdio: 'inherit'` still returns from `traceAll` well inside its bound, recorded `unknown`, on this
- *  repo's actual vitest pool (`forks`) -- which turns out to give the leaked grandchild its OWN worker's stdio
- *  pipe, not literally this function's, so the specific hang this comment describes was not reproduced by
- *  mutating `'exit'`/`'ignore'` back to `'close'`/`'pipe'` here (that mutation still returned in ~35s in this
- *  environment). The guard is kept anyway -- it is correct, free, and the property that IS load-bearing and
- *  IS proven by the test (the runner returns despite a leaked, inheriting-stdio descendant) does not depend on
- *  which topology made it true. */
-function runTraced(argv, opts) {
+ *  Measured (this module's own suite): a unit case spawns a shell that backgrounds a `sleep` holding the
+ *  shell's stdio and exits; `runTraced` must resolve on that exit. Mutating BOTH halves (`'pipe'` and
+ *  `'close'`) hangs it until the case's own timeout; either half alone still passes, because either one
+ *  suffices. Through `traceAll`, the leak fixture (a detached `sleep 300` with `stdio: 'inherit'`) returns
+ *  inside its bound either way on this repo's `forks` pool, which gives the grandchild its worker's own stdio
+ *  pipe rather than this function's. */
+export function runTraced(argv, opts) {
   return new Promise((resolve) => {
     const child = spawn(argv[0], argv.slice(1), { ...opts, stdio: 'ignore' });
     let settled = false;
@@ -4373,7 +4979,7 @@ export function recordOf(workDir, repoRoot, exit, timeoutSec) {
  * @param {number} timeoutSec
  * @returns {Promise<SplitRecord>}
  */
-async function traceOne(repoRoot, serverRelPath, timeoutSec) {
+async function traceOne(repoRoot, serverRelPath, timeoutSec, killAfterSec) {
   const workDir = mkdtempSync(path.join(tmpdir(), 'ccrc-trace-'));
   const traceDir = path.join(workDir, 'trace');
   mkdirSync(traceDir);
@@ -4381,7 +4987,7 @@ async function traceOne(repoRoot, serverRelPath, timeoutSec) {
   writeFileSync(listFile, serverRelPath + '\n', 'utf8');
 
   const argv = [
-    'timeout', `--kill-after=${KILL_AFTER_SEC}`, String(timeoutSec),
+    'timeout', `--kill-after=${killAfterSec}`, String(timeoutSec),
     ...tracedCommand(traceDir, path.join(workDir, 'root.pid')),
   ];
   const exit = await runTraced(argv, {
@@ -4394,8 +5000,9 @@ async function traceOne(repoRoot, serverRelPath, timeoutSec) {
   return record;
 }
 
-/** Runs `worker` over `items` with at most `concurrency` in flight at once. */
-async function runPool(items, concurrency, worker) {
+/** Runs `worker` over `items` with at most `concurrency` in flight at once.
+ *  @template T @param {T[]} items @param {number} concurrency @param {(item: T) => Promise<void>} worker */
+export async function runPool(items, concurrency, worker) {
   let next = 0;
   async function lane() {
     while (next < items.length) {
@@ -4413,15 +5020,19 @@ async function runPool(items, concurrency, worker) {
  * does that).
  * @param {string} repoRoot
  * @param {string[]} serverRelPaths server-relative paths, e.g. `test/bus.test.ts`
- * @param {{ jobs?: number, timeoutSec?: number }} [options]
+ * `baselineTimeoutSec` (default `timeoutSec`) bounds the baseline alone; `killAfterSec` (default 30) is the
+ * `timeout --kill-after` grace.
+ * @param {{ jobs?: number, timeoutSec?: number, baselineTimeoutSec?: number, killAfterSec?: number }} [options]
  * @returns {Promise<Records>}
  */
 export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const root = realpathSync(repoRoot);
   const jobs = options.jobs ?? DEFAULT_JOBS;
   const timeoutSec = options.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
+  const baselineTimeoutSec = options.baselineTimeoutSec ?? timeoutSec;
+  const killAfterSec = options.killAfterSec ?? KILL_AFTER_SEC;
 
-  const baselineResult = await traceOne(root, BASELINE_SERVER_REL, timeoutSec);
+  const baselineResult = await traceOne(root, BASELINE_SERVER_REL, baselineTimeoutSec, killAfterSec);
   if (baselineResult.unknown) {
     throw new Error(`trace-run: baseline trace failed: ${baselineResult.why}`);
   }
@@ -4431,14 +5042,14 @@ export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const tests = {};
   await runPool(serverRelPaths, jobs, async (serverRelPath) => {
     const repoRelKey = path.posix.join('server', serverRelPath);
-    tests[repoRelKey] = await traceOne(root, serverRelPath, timeoutSec);
+    tests[repoRelKey] = await traceOne(root, serverRelPath, timeoutSec, killAfterSec);
   });
 
   return { format: 2, baseline, tests };
 }
 
 function parseCliArgs(argv) {
-  const opts = { jobs: DEFAULT_JOBS, timeout: DEFAULT_TIMEOUT_SEC };
+  const opts = { jobs: DEFAULT_JOBS, timeout: DEFAULT_TIMEOUT_SEC, killAfter: KILL_AFTER_SEC };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--repo') opts.repo = argv[++i];
@@ -4446,6 +5057,7 @@ function parseCliArgs(argv) {
     else if (a === '--out') opts.out = argv[++i];
     else if (a === '--jobs') opts.jobs = Number(argv[++i]);
     else if (a === '--timeout') opts.timeout = Number(argv[++i]);
+    else if (a === '--kill-after') opts.killAfter = Number(argv[++i]);
     else throw new Error(`trace-run.mjs: unrecognized argument ${a}`);
   }
   for (const req of ['repo', 'files', 'out']) {
@@ -4458,8 +5070,12 @@ async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const serverRelPaths = readFileSync(opts.files, 'utf8')
     .split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-  const records = await traceAll(opts.repo, serverRelPaths, { jobs: opts.jobs, timeoutSec: opts.timeout });
+  const records = await traceAll(opts.repo, serverRelPaths, { jobs: opts.jobs, timeoutSec: opts.timeout, killAfterSec: opts.killAfter });
   writeFileSync(opts.out, JSON.stringify(records));
+  // Red on a traced test that failed or timed out — after the records are safely written.
+  const failed = Object.entries(records.tests).filter(([, r]) => r.unknown && /^(vitest exited|timeout after)/.test(r.why ?? ''));
+  for (const [file, r] of failed) process.stdout.write(`::error::trace-run: ${file}: ${r.why}\n`);
+  if (failed.length > 0) process.exitCode = 3;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
@@ -4476,32 +5092,41 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
 cd server && ./node_modules/.bin/vitest run test/ci-trace-run.test.ts --maxWorkers=1
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  8 passed (8)`, `Duration  38.68s`. Post-run: no
-  `server/test/ci-tracerun-fixture-*` left on disk, no leftover `sleep 300` (`pgrep -af '^sleep 300$'` → nothing).
+  Measured: `Test Files  1 passed (1)` / `Tests  12 passed (12)`, about 22 s. Post-run: no `server/.ci-tracerun-*`
+  left on disk, no leftover `sleep 300` (`pgrep -af '^sleep 300$'` → nothing).
 
-  The leak scenario's own mechanism was independently mutation-tested while drafting (bounded by an outer
-  `timeout`): with `runTraced` mutated to `stdio: 'pipe'` + `child.on('close', …)`, the call still returned in
-  ~35s here (vitest's `forks` pool gives the worker — and everything it spawns with `stdio: 'inherit'` — its OWN
-  stdio pipe to the CLI process). The `'exit'`/`'ignore'` choice is kept as defense in depth, and the header
-  comment says plainly that this mutation was NOT observed to hang.
+  `runTraced`'s `'exit'`/`'ignore'` choice is now pinned directly (operator's ruling X5): a unit case spawns a
+  shell that backgrounds a `sleep` holding the shell's stdio and exits, and `runTraced` must resolve on the exit.
+  Only BOTH halves mutated together (`stdio: 'pipe'` AND `'close'`) go red; either half alone stays green, because
+  either one suffices — measured, and kept as belt and braces.
 
   Wall-time overhead, measured while drafting (`test/ccd-rc-flag.test.ts`, untraced vs traced with the pre-
   integration syscall list, no baseline): untraced `real 0m4.210s` (repeat `0m3.939s`), traced `real 0m7.563s` —
   ≈1.80–1.92x, inside spec §5.3's measured 1.7–4.3x.
 
-- [ ] **Step 5: Measure the mutation table.** Each row re-measured in the integration clone (8 cases each; the
+- [ ] **Step 5: Measure the mutation table.** Each row re-measured in the integration clone (12 cases each; the
   real-run rows are bounded by the suite's own `it` timeouts):
 
   | Mutation | Test(s) that go red |
   |---|---|
   | Change `traceArgv`'s syscall list (drop `readlink`) | `traceArgv is exactly the pinned strace invocation` (1) |
-  | `recordOf`: a non-zero exit no longer sets `why` | `a non-zero exit, a timeout, or an unresolved path -> unknown with the reason` (1) |
-  | `recordOf`: a timeout no longer sets `why` | the same, plus `records a leaked detached background process as unknown, and the runner returns` (2) |
-  | `tracedEnv` without `UV_USE_IO_URING: '0'` | `tracedEnv: the exact list, CI, and libuv kept off io_uring`, `traces the baseline plus one tiny test…` (2) |
-  | The call site bypasses `tracedEnv` (builds the env inline, without the variable) | `traces the baseline plus one tiny test…` (1 — the fixture's own assertion fails inside the traced process) |
+  | `recordOf`: a non-zero exit no longer sets `why` | `a non-zero exit, a timeout, or an unresolved path -> unknown with the reason`, `the CLI exits 3 after writing the records…` (2) |
+  | `recordOf`: a timeout no longer sets `why` | the same two, plus `records a leaked detached background process as unknown, and the runner returns` and `a baseline that fails to trace is a hard stop…` (4) |
+  | `tracedEnv` without `UV_USE_IO_URING: '0'` | `tracedEnv: the exact list, CI, libuv kept off io_uring, and CCRC_TRACING marking a traced run`, `traces the baseline plus two files at jobs:2…` (2) |
+  | The call site bypasses `tracedEnv` (builds the env inline, without the variable) | `traces the baseline plus two files at jobs:2…` (1 — the fixture's own assertion fails inside the traced process) |
   | `recordOf`: drop the root-trace check | `no root.pid, or a root pid with no trace file -> unknown…` (1) |
-  | `tracedCommand` without the `sh -c` root-pid wrapper | `tracedCommand: strace, then a sh…`, `traces the baseline plus one tiny test…`, `records a leaked detached background process…` (3) |
-  | Drop the baseline-first hard stop (`if (baselineResult.unknown) throw`) | not separately pinned (a baseline that fails to trace needs a broken vitest to produce); Task 15's first refresh is the backstop — noted as a gap |
+  | `tracedCommand` without the `sh -c` root-pid wrapper | `tracedCommand: strace, then a sh…`, `traces the baseline plus two files at jobs:2…`, `records a leaked detached background process…`, `the CLI exits 3…` (4) |
+  | Drop the baseline-first hard stop (`if (baselineResult.unknown) throw`) | `a baseline that fails to trace is a hard stop for the whole run` (1 — a 0.05 s `baselineTimeoutSec` makes the baseline fail) |
+  | `traceArgv` without `-ttt` / without `chdir,fchdir` | `traceArgv is exactly the pinned strace invocation` (1 each) |
+  | `traceArgv` without `symlink,symlinkat` | the same, plus `traces the baseline plus two files at jobs:2: … the linked one reads through symlinks` (2) |
+  | `tracedEnv` without `CCRC_TRACING: '1'` | `tracedEnv: the exact list, CI, libuv kept off io_uring, and CCRC_TRACING marking a traced run` (1) |
+  | `runTraced` with `stdio: 'pipe'` AND `'close'` | `runTraced resolves when the process EXITS, even while a backgrounded descendant still holds its stdio` (1) |
+  | `runTraced` with only one of the two (`'pipe'`, or `'close'`) | none — either half alone suffices; measured, kept as belt and braces |
+  | `runPool` runs one lane / ignores its bound | `runPool visits every item once and never runs more than \`concurrency\` at a time` (1 each) |
+  | The baseline ignores `baselineTimeoutSec` | `a baseline that fails to trace is a hard stop for the whole run` (1) |
+  | `killAfterSec` ignored (always 30) | `records a leaked detached background process as unknown, and the runner returns` (1) |
+  | The CLI drops `--kill-after` at its `traceAll` call | none — measured green: `killAfterSec` itself is pinned through `traceAll` (row above); the CLI flag's pass-through is not |
+  | CLI: exit 0 on a failed test / always exit 3 / timeouts not counted / exit before writing the records | `the CLI exits 3 after writing the records when a traced test FAILED or TIMED OUT, and 0 on a clean run` (1 each) |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -4523,8 +5148,10 @@ git commit -F - <<'EOF'
 feat(ci): per-file trace runner
 
 .github/ci/trace-run.mjs runs the baseline test then every listed server
-test file, each under its own `timeout --kill-after=30`-wrapped
-strace/vitest invocation, with bounded concurrency (--jobs). vitest runs
+test file, each under its own `timeout --kill-after`-wrapped
+strace/vitest invocation, with bounded concurrency (--jobs) and
+CCRC_TRACING=1 in the traced environment. It exits 3 after writing the
+records when a traced test failed or timed out. vitest runs
 through `sh -c 'echo $$ > "$0"; exec "$@"'`, so the root pid is known and
 every record is split root/rest (records format 2). UV_USE_IO_URING=0
 keeps Node's async fs visible to strace. A non-zero exit, timeout, a
@@ -4546,14 +5173,21 @@ EOF
 **Interfaces:**
 - Consumes: GitHub Actions job-result strings for `select`/`server-typecheck`/`server-shard`
   (`success|failure|cancelled|skipped|''`, env `SELECT_RESULT`/`TYPECHECK_RESULT`/`SHARDS_RESULT` in `ci.yml`'s
-  `test (server)` job) plus the `select` job's own `tests`/`count` outputs (Task 9, env `TESTS`/`COUNT`); for
-  `fullVerdict`, a `needs` context object (`Record<string, { result: string }>`, env `NEEDS_JSON`, `ci.yml`'s
-  `full-suite` job, spec §8).
-- Produces: `serverVerdict({ select, typecheck, shards, tests, count }) : { ok, reason }`, `fullVerdict(needs) : {
-  ok, reason }`, the typedefs `JobResult`/`TestsMode`, and the CLI (`node .github/ci/verdict.mjs server|full`, exit
-  0 iff `ok`) — consumed by Task 11's `test (server)` and `full-suite` jobs.
-- Changed in integration: none in the module. The test's result tables are typed with `JobResult`/`TestsMode`
-  (they were `string`, which failed the tests-inclusive typecheck).
+  `test (server)` job) plus the `select` job's own `tests`/`count` outputs (Task 9, env `TESTS`/`COUNT`) and the
+  triggering event (env `EVENT`); for `fullVerdict`, one `name=result` pair per job `full-suite` needs (env
+  `RESULTS`, e.g. `select=success server=success …`, spec §8).
+- Produces: `serverVerdict({ select, typecheck, shards, tests, count, event }) : { ok, reason }`,
+  `fullVerdict(needs) : { ok, reason }`, the typedefs `JobResult`/`TestsMode`, and the CLI
+  (`node .github/ci/verdict.mjs server|full`, exit 0 iff `ok`) — consumed by Task 11's `test (server)` and
+  `full-suite` jobs.
+- Changed in integration: the test's result tables are typed with `JobResult`/`TestsMode` (they were `string`,
+  which failed the tests-inclusive typecheck).
+- Changed in integration (operator's rulings T1, T2, P5): the module FAILS CLOSED — `process.exitCode = 1` at load,
+  and only a `main()` that reaches an ok verdict sets 0, so a slip in the entry guard is red, not node's default 0
+  (Task 11 also fronts both verdicts with a script-free step). `serverVerdict` takes `event`: `tests: 'none'` on a
+  `pull_request` is red — a pull request always runs server tests. `fullVerdict` of no legs at all is red. The
+  `full` CLI reads `RESULTS` pairs instead of `toJSON(needs)` (which carries every select matrix and outgrows an
+  environment variable as the suite grows); an empty or malformed `RESULTS` is red.
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-verdict.test.ts`:
 
@@ -4578,9 +5212,11 @@ EOF
 // test) — a control derived from the same measurement it checks would be
 // tautological.
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
 import { serverVerdict, fullVerdict } from '../../.github/ci/verdict.mjs';
 import type { JobResult, TestsMode } from '../../.github/ci/verdict.mjs';
 
@@ -4590,14 +5226,16 @@ const repoRoot = path.resolve(here, '..', '..');
 const RESULTS: JobResult[] = ['success', 'failure', 'cancelled', 'skipped', ''];
 const TESTS: TestsMode[] = ['selected', 'full', 'none', ''];
 const COUNTS: Array<'0' | '3' | ''> = ['0', '3', ''];
+const EVENTS = ['pull_request', 'push'];
 
 /** Independent oracle, transcribed from the contract's own prose (not from
- *  verdict.mjs). Returns only the boolean the table asserts. */
-function expectedOk({ select, typecheck, shards, tests, count }: {
-  select: string; typecheck: string; shards: string; tests: string; count: string;
+ *  verdict.mjs), plus the operator's ruling that a pull request always runs
+ *  server tests. Returns only the boolean the table asserts. */
+function expectedOk({ select, typecheck, shards, tests, count, event }: {
+  select: string; typecheck: string; shards: string; tests: string; count: string; event: string;
 }): boolean {
   if (select !== 'success') return false;
-  if (tests === 'none') return true;
+  if (tests === 'none') return event !== 'pull_request';
   if (typecheck !== 'success') return false;
   if (count === '0') return shards === 'skipped';
   if (count === '3') return shards === 'success'; // "count > 0"
@@ -4605,25 +5243,25 @@ function expectedOk({ select, typecheck, shards, tests, count }: {
 }
 
 describe('serverVerdict — exhaustive table', () => {
-  const cases: Array<{ select: JobResult; typecheck: JobResult; shards: JobResult; tests: TestsMode; count: string }> = [];
+  const cases: Array<{ select: JobResult; typecheck: JobResult; shards: JobResult; tests: TestsMode; count: string; event: string }> = [];
   for (const select of RESULTS) {
     for (const typecheck of RESULTS) {
       for (const shards of RESULTS) {
         for (const tests of TESTS) {
           for (const count of COUNTS) {
-            cases.push({ select, typecheck, shards, tests, count });
+            for (const event of EVENTS) cases.push({ select, typecheck, shards, tests, count, event });
           }
         }
       }
     }
   }
 
-  it(`covers every combination (${RESULTS.length}^3 x ${TESTS.length} x ${COUNTS.length} = ${cases.length})`, () => {
-    expect(cases.length).toBe(RESULTS.length ** 3 * TESTS.length * COUNTS.length);
+  it(`covers every combination (${RESULTS.length}^3 x ${TESTS.length} x ${COUNTS.length} x ${EVENTS.length} = ${cases.length})`, () => {
+    expect(cases.length).toBe(RESULTS.length ** 3 * TESTS.length * COUNTS.length * EVENTS.length);
   });
 
   it.each(cases)(
-    'select=$select typecheck=$typecheck shards=$shards tests=$tests count=$count',
+    'select=$select typecheck=$typecheck shards=$shards tests=$tests count=$count event=$event',
     (c) => {
       const want = expectedOk(c);
       const got = serverVerdict(c);
@@ -4649,11 +5287,18 @@ describe('serverVerdict — the named scenarios from the plan brief', () => {
     expect(v.ok).toBe(false);
   });
 
-  it('tests none -> green, even if typecheck/shards never ran', () => {
+  it('tests none -> green, even if typecheck/shards never ran (a refresh, a skipped daily run)', () => {
     const v = serverVerdict({
-      select: 'success', typecheck: '', shards: '', tests: 'none', count: '',
+      select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event: 'push',
     });
     expect(v.ok).toBe(true);
+  });
+
+  it('tests none on a pull_request -> red: a pull request always runs server tests (ruling T2)', () => {
+    const v = serverVerdict({
+      select: 'success', typecheck: '', shards: '', tests: 'none', count: '', event: 'pull_request',
+    });
+    expect(v).toEqual({ ok: false, reason: expect.stringContaining('pull_request') });
   });
 
   it('the ordinary green path: count 3, shards success', () => {
@@ -4715,9 +5360,9 @@ describe('fullVerdict', () => {
     expect(v.ok).toBe(false);
   });
 
-  it('empty needs -> vacuously ok (nothing to fail)', () => {
+  it('no legs at all -> red: a verdict over nothing proves nothing', () => {
     const v = fullVerdict({});
-    expect(v.ok).toBe(true);
+    expect(v.ok).toBe(false);
   });
 });
 
@@ -4741,10 +5386,31 @@ describe('the CLI', () => {
   it('exits 0 and prints the reason on a green server verdict', () => {
     const { status, out } = runServer({
       SELECT_RESULT: 'success', TYPECHECK_RESULT: 'success', SHARDS_RESULT: 'success',
-      TESTS: 'selected', COUNT: '3',
+      TESTS: 'selected', COUNT: '3', EVENT: 'pull_request',
     });
     expect(status).toBe(0);
     expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('reads EVENT: tests none on a pull_request exits non-zero', () => {
+    const { status } = runServer({
+      SELECT_RESULT: 'success', TYPECHECK_RESULT: '', SHARDS_RESULT: '', TESTS: 'none', COUNT: '', EVENT: 'pull_request',
+    });
+    expect(status).not.toBe(0);
+    expect(runServer({
+      SELECT_RESULT: 'success', TYPECHECK_RESULT: '', SHARDS_RESULT: '', TESTS: 'none', COUNT: '', EVENT: 'push',
+    }).status).toBe(0);
+  });
+
+  it('fails CLOSED: loaded without its entry guard matching (main never runs), it exits 1, not 0', () => {
+    // A slip in the entry guard would make `node verdict.mjs server` do nothing; the exit code must not then
+    // be node's default 0, which every required check would read as green.
+    const dir = mkTmp('ccrc-verdict-noop-');
+    const wrapper = path.join(dir, 'wrapper.mjs');
+    writeFileSync(wrapper, `import ${JSON.stringify(pathToFileURL(cliPath).href)};\n`);
+    const r = spawnSync(process.execPath, [wrapper], { encoding: 'utf8' });
+    expect(r.stdout).toBe('');
+    expect(r.status).toBe(1);
   });
 
   it('exits non-zero on a red server verdict (select cancelled)', () => {
@@ -4763,23 +5429,26 @@ describe('the CLI', () => {
     expect(status).not.toBe(0);
   });
 
-  it('full subcommand: exits 0 on every-success NEEDS_JSON', () => {
-    const needs = JSON.stringify({ a: { result: 'success' }, b: { result: 'success' } });
-    const out = execFileSync(process.argv0, [cliPath, 'full'], {
-      cwd: repoRoot,
-      env: { ...process.env, NEEDS_JSON: needs },
-      encoding: 'utf8',
-    });
-    expect(out.length).toBeGreaterThan(0);
+  // `full` reads RESULTS, `name=result` pairs — not toJSON(needs), which carries every select matrix and
+  // outgrows an environment string's 128 KB as the suite grows (measured 110 KB with no durations).
+  function runFull(results: string | undefined) {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.RESULTS;
+    if (results !== undefined) env.RESULTS = results;
+    return spawnSync(process.argv0, [cliPath, 'full'], { cwd: repoRoot, env, encoding: 'utf8' });
+  }
+
+  it('full subcommand: exits 0 when every RESULTS pair is success', () => {
+    const r = runFull('select=success server=success test-macos=success');
+    expect(r.status).toBe(0);
+    expect(r.stdout.length).toBeGreaterThan(0);
   });
 
-  it('full subcommand: exits non-zero when one result is not success', () => {
-    const needs = JSON.stringify({ a: { result: 'success' }, b: { result: 'failure' } });
-    expect(() => execFileSync(process.argv0, [cliPath, 'full'], {
-      cwd: repoRoot,
-      env: { ...process.env, NEEDS_JSON: needs },
-      stdio: 'pipe',
-    })).toThrow();
+  it('full subcommand: exits non-zero when one result is not success, when RESULTS is empty or absent, or malformed', () => {
+    expect(runFull('select=success test-macos=failure').status).not.toBe(0);
+    expect(runFull('').status).not.toBe(0);
+    expect(runFull(undefined).status).not.toBe(0);
+    expect(runFull('select=success nonsense').status).not.toBe(0);
   });
 });
 ```
@@ -4812,8 +5481,16 @@ Error: Cannot find module '../../.github/ci/verdict.mjs' imported from …/serve
 // actually happened; `fullVerdict` is `full-suite` (spec §8)'s equivalent
 // for the daily/stable-gate run, where every leg must have actually
 // succeeded.
+//
+// FAILS CLOSED: the exit code is 1 from the moment this module loads, and
+// only a `main()` that reaches an ok verdict sets 0 — so a slip that stops
+// `main()` running at all (the entry guard, say) is red, not node's default
+// 0, which every required check would have read as green. ci.yml also puts
+// a script-free guard step in front of both verdicts that can only add red.
 
 import { pathToFileURL } from 'node:url';
+
+process.exitCode = 1;
 
 /**
  * @typedef {'success'|'failure'|'cancelled'|'skipped'|''} JobResult
@@ -4825,11 +5502,15 @@ import { pathToFileURL } from 'node:url';
  * the contract states the rule in, and `tests === 'none'` deliberately
  * short-circuits BEFORE the typecheck check: a `none` selection (the daily
  * schedule's "already green" short-circuit, spec §3) skips typecheck too,
- * so checking it there would read a `skipped` as a failure.
+ * so checking it there would read a `skipped` as a failure. A pull request
+ * can never answer `none` (it always runs server tests — ruling T2), so
+ * `none` with `event === 'pull_request'` is red; the event comes from the
+ * workflow's own context, not from select's outputs.
  *
  * Rules:
  *   1. `select` did not succeed -> fail.
- *   2. `tests === 'none'` -> ok (nothing was supposed to run).
+ *   2. `tests === 'none'` -> ok (nothing was supposed to run) — except on a
+ *      `pull_request`, which fails.
  *   3. `typecheck` did not succeed -> fail.
  *   4. `count === '0'` -> ok iff `shards` is `skipped` (nothing was
  *      supposed to run there either — anything else, including `success`,
@@ -4841,15 +5522,17 @@ import { pathToFileURL } from 'node:url';
  *      silently.
  *   6. anything else (an unrecognised `count`, e.g. `''`) -> fail.
  *
- * @param {{ select: JobResult, typecheck: JobResult, shards: JobResult, tests: TestsMode, count: string }} inputs
+ * @param {{ select: JobResult, typecheck: JobResult, shards: JobResult, tests: TestsMode, count: string, event?: string }} inputs
  * @returns {{ ok: boolean, reason: string }}
  */
-export function serverVerdict({ select, typecheck, shards, tests, count }) {
+export function serverVerdict({ select, typecheck, shards, tests, count, event }) {
   if (select !== 'success') {
     return { ok: false, reason: `select: ${select || '(did not run)'}` };
   }
   if (tests === 'none') {
-    return { ok: true, reason: 'tests: none — nothing was selected to run' };
+    return event === 'pull_request'
+      ? { ok: false, reason: 'tests: none on a pull_request — a pull request always runs server tests' }
+      : { ok: true, reason: 'tests: none — nothing was selected to run' };
   }
   if (typecheck !== 'success') {
     return { ok: false, reason: `typecheck: ${typecheck || '(did not run)'}` };
@@ -4875,6 +5558,7 @@ export function serverVerdict({ select, typecheck, shards, tests, count }) {
  * @returns {{ ok: boolean, reason: string }}
  */
 export function fullVerdict(needs) {
+  if (Object.keys(needs).length === 0) return { ok: false, reason: 'no legs to judge — a verdict over nothing proves nothing' };
   const notOk = Object.entries(needs).filter(([, v]) => v.result !== 'success');
   if (notOk.length === 0) return { ok: true, reason: 'every leg succeeded' };
   return {
@@ -4893,10 +5577,20 @@ function main() {
       shards: /** @type {JobResult} */ (process.env.SHARDS_RESULT ?? ''),
       tests: /** @type {TestsMode} */ (process.env.TESTS ?? ''),
       count: process.env.COUNT ?? '',
+      event: process.env.EVENT ?? '',
     });
   } else if (sub === 'full') {
-    const needs = JSON.parse(process.env.NEEDS_JSON ?? '{}');
-    verdict = fullVerdict(needs);
+    // RESULTS: `name=result` pairs, one per job full-suite needs — only the
+    // results, never toJSON(needs), which carries every select matrix.
+    /** @type {Record<string, { result: string }>} */
+    const needs = {};
+    let malformed = '';
+    for (const pair of (process.env.RESULTS ?? '').split(/\s+/).filter(Boolean)) {
+      const m = /^([\w-]+)=(\w*)$/.exec(pair);
+      if (m) needs[m[1]] = { result: m[2] };
+      else malformed = pair;
+    }
+    verdict = malformed ? { ok: false, reason: `RESULTS has a malformed pair: ${malformed}` } : fullVerdict(needs);
   } else {
     process.stderr.write('usage: node verdict.mjs server|full\n');
     process.exitCode = 2;
@@ -4915,19 +5609,26 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
 cd server && ./node_modules/.bin/vitest run test/ci-verdict.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  1517 passed (1517)` (1500 exhaustive-table cases + 1 coverage
-  count + 6 named scenarios + 5 `fullVerdict` cases + 5 CLI cases).
+  Measured: `Test Files  1 passed (1)` / `Tests  3020 passed (3020)` (3000 exhaustive-table cases — 5 results ×
+  5 × 5 × 4 `tests` × 3 counts × 2 events — + 1 coverage count + 7 named scenarios + 5 `fullVerdict` cases + 7 CLI
+  cases).
 
 - [ ] **Step 5: Measure the mutation table** (mutate → run Step 4's command → restore; re-measured red in the
-  integration clone, reverted and reconfirmed green at 1517/1517):
+  integration clone, reverted and reconfirmed green at 3020/3020):
 
   | # | Mutation | Test(s) that go RED |
   |---|---|---|
-  | A | Drop the `select !== 'success'` check entirely | 326 of the exhaustive cases (every case where `select` is not `success`) |
-  | B | Move the `tests === 'none'` short-circuit to AFTER the `typecheck` check | 61: the 60 exhaustive `tests === 'none'` cases where `typecheck` is not `success`, plus `tests none -> green, even if typecheck/shards never ran` |
-  | C | The silent-green trap itself: accept `shards === 'skipped'` as ok in the `count > 0` branch | 5, incl. `shards skipped with count > 0 -> red (the silent-green trap)` and `exits non-zero on the silent-green trap` (CLI) |
-  | D | The `count === '0'` branch accepts `shards === 'success'` too | 4, incl. `count 0 but shards actually ran (success) -> red, not a bonus green` |
+  | A | Drop the `select !== 'success'` check entirely | 350: 348 exhaustive cases whose `select` is not `success`, `select cancelled -> red…` and the CLI's `exits non-zero on a red server verdict (select cancelled)` |
+  | B | Move the `tests === 'none'` short-circuit to AFTER the `typecheck` check | 63: the 60 exhaustive non-pull-request `tests === 'none'` cases whose `select` succeeded and whose `typecheck` did not, plus `tests none -> green, even if typecheck/shards never ran`, `tests none on a pull_request -> red…` and the CLI's `reads EVENT…` |
+  | C | The silent-green trap itself: accept `shards === 'skipped'` as ok in the `count > 0` branch | 8, incl. `shards skipped with count > 0 -> red (the silent-green trap)` and `exits non-zero on the silent-green trap` (CLI) |
+  | D | The `count === '0'` branch accepts `shards === 'success'` too | 7, incl. `count 0 but shards actually ran (success) -> red, not a bonus green` |
   | E | `fullVerdict` treats `'skipped'` as success | `one skipped -> red` (1) |
+  | F | Break the entry guard (`.href` → `.pathname`: `main()` never runs) | 3 CLI cases that expect exit 0 or a printed reason — and the fail-closed default keeps every red one red |
+  | G | Drop the fail-closed default (`process.exitCode = 1` at load) | `fails CLOSED: loaded without its entry guard matching (main never runs), it exits 1, not 0` (1) |
+  | H | `tests: 'none'` green on a `pull_request` too | 77: the 75 exhaustive `pull_request` + `tests none` cases whose select succeeded, the named `tests none on a pull_request -> red…`, and the CLI's `reads EVENT…` |
+  | I | The CLI does not pass `EVENT` | `reads EVENT: tests none on a pull_request exits non-zero` (1) |
+  | J | `fullVerdict` of no legs is ok | `no legs at all -> red…`, and the CLI's empty-`RESULTS` case (2) |
+  | K | A malformed `RESULTS` pair ignored | `full subcommand: exits non-zero when one result is not success, when RESULTS is empty or absent, or malformed` (1) |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -4953,7 +5654,9 @@ job results plus the select job's tests/count outputs, closing the
 "skipped reads as success" and "shards skipped with a nonzero count"
 holes spec §4.2 names. fullVerdict is full-suite's green-iff-everything-
 succeeded check (spec §8). Both ship a CLI reading GitHub Actions env
-vars, exit 0 iff ok. Exhaustive table test over every
+vars (full-suite's as one name=result pair per need), exit 0 iff ok,
+and fail closed: the CLI sets exit code 1 before it decides anything. A
+pull request whose select answered tests=none is red. Exhaustive table test over every
 select/typecheck/shards job-result x tests x count combination, checked
 against an oracle transcribed independently from the contract's rule.
 
@@ -5003,6 +5706,18 @@ EOF
 - Changed in integration (release-stable's call): `decideMode` for `push` WITH `inputMode: 'full'` (a called
   ci.yml sees the caller's event, a push to `stable`) is pinned to `full`/`none`, directly and through the CLI;
   the CLI with `--input-mode` omitted on a push is the refresh case.
+- Changed in integration (operator's rulings T2-T4, P3): `decideMode` answers `full` for a `pull_request` given
+  `--input-mode full` — Task 11's plain-bash step passes it when the pull request changes `.github/`. Before
+  writing anything the CLI asserts the mode invariants (`export function modeInvariantViolation(event, inputMode,
+  tests)`): a `pull_request` never answers `tests: none`, and a `schedule`, a plain `push` or a `rebuild` never
+  answers `tests: selected` — a violation throws, so `select` fails and every verdict goes red. That call site is
+  shown only by a PAIRED mutation (make `decideMode` answer `none` for a pull request: with the check, exit 1;
+  without it, exit 0 with `tests=none count=0`), since no correct `decideMode` can reach it. A map is used only if
+  its commit is an ancestor of `HEAD` (`git merge-base --is-ancestor`) — `map: <sha> is not an ancestor of HEAD`
+  otherwise, a full run. The macOS budget follows the EVENT: a `pull_request` always plans with `macosSelected`
+  (at most 2 shards), even when it fell back to `full`, since the organisation's macOS slots are shared with every
+  other pull request; 4 only for a scheduled, dispatched or called full run. (A pull request's full fallback on 2
+  macOS shards may run long; `test-macos` is advisory on pull requests.)
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-select-cli.test.ts`:
 
@@ -5019,7 +5734,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decideMode } from '../../.github/ci/select.mjs';
+import { decideMode, modeInvariantViolation } from '../../.github/ci/select.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
 const SELECT_MJS = path.resolve(__dirname, '../../.github/ci/select.mjs');
@@ -5252,8 +5967,30 @@ describe('decideMode', () => {
       .toEqual({ tests: 'full', trace: 'none', skip: false });
   });
 
+  it("pull_request WITH inputMode 'full' (its own pipeline changed — ci.yml's plain-bash check) -> full/none", () => {
+    expect(decideMode({ event: 'pull_request', inputMode: 'full', fullGreen: false }))
+      .toEqual({ tests: 'full', trace: 'none', skip: false });
+  });
+
   it('anything else (no matching event, no inputMode) -> full/none', () => {
     expect(decideMode({ event: 'workflow_dispatch', fullGreen: false })).toEqual({ tests: 'full', trace: 'none', skip: false });
+  });
+});
+
+describe('modeInvariantViolation: what a trigger can never answer (ruling T2)', () => {
+  it('a pull_request never answers tests none', () => {
+    expect(modeInvariantViolation('pull_request', undefined, 'none')).toMatch(/pull_request/);
+    expect(modeInvariantViolation('pull_request', undefined, 'selected')).toBeNull();
+    expect(modeInvariantViolation('pull_request', 'full', 'full')).toBeNull();
+  });
+
+  it('a schedule, a refresh push and a rebuild never answer tests selected', () => {
+    expect(modeInvariantViolation('schedule', undefined, 'selected')).toMatch(/schedule/);
+    expect(modeInvariantViolation('push', undefined, 'selected')).toMatch(/push/);
+    expect(modeInvariantViolation('workflow_dispatch', 'rebuild', 'selected')).toMatch(/rebuild/);
+    expect(modeInvariantViolation('schedule', undefined, 'full')).toBeNull();
+    expect(modeInvariantViolation('push', undefined, 'none')).toBeNull();
+    expect(modeInvariantViolation('push', 'full', 'full')).toBeNull();
   });
 });
 
@@ -5313,7 +6050,7 @@ describe('select.mjs CLI — pull_request', () => {
 
     expect(status).toBe(0);
     expect(outputs.tests).toBe('full');
-    // Says what happened and where it looked — ci.yml always passes the cache
+    // Says what happened and where it looked — ci.yml always passes the fetch
     // path, so "no map restored" is the ordinary first-run answer, not an error.
     expect(outputs.fallback).toBe(`map: no map restored at ${missingMap}`);
     expect(outputs.map_sha).toBe('');
@@ -5323,8 +6060,8 @@ describe('select.mjs CLI — pull_request', () => {
   });
 
   it('a map file that exists but cannot be read (invalid JSON) -> full, the fallback names the read error', () => {
-    // The file-exists path reaches readMap; a corrupt cache entry must fall
-    // back to full, never be taken as an empty selection.
+    // The file-exists path reaches readMap; a corrupt map must fall back to
+    // full, never be taken as an empty selection.
     const { repo } = buildMainFixture();
     const corrupt = path.join(repo, 'corrupt-map.json');
     writeFileSync(corrupt, '{not json');
@@ -5391,6 +6128,47 @@ describe('select.mjs CLI — pull_request', () => {
     expect(stderr).toContain('server/test/has space.test.ts');
     expect(stderr).toContain('whitespace');
     expect(outputs).toEqual({});
+  });
+
+  it("--input-mode full on a pull_request (its pipeline changed) -> tests full, no map consulted", () => {
+    const { repo, mapFile } = buildMainFixture();
+    const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', inputMode: 'full', mapFile });
+    expect(status).toBe(0);
+    expect(outputs.tests).toBe('full');
+    expect(outputs.trace).toBe('none');
+    expect(outputs.count).toBe('4');
+    expect(summary).toContain('input mode: `full`');
+  });
+
+  it('a map whose commit is not an ancestor of HEAD -> full: a map from another line of history is not trusted', () => {
+    const repo = initRepo();
+    writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+    commitAll(repo, 'base');
+    git(repo, ['checkout', '-q', '-b', 'side']);
+    writeFile(repo, 'side.txt', 'x\n');
+    const sideSha = commitAll(repo, 'side');
+    git(repo, ['checkout', '-q', 'main']);
+    writeFile(repo, 'main.txt', 'y\n');
+    commitAll(repo, 'main moves on');
+    const mapFile = writeMapFile(repo, {
+      format: 1, sha: sideSha, baseline: depRecord(), tests: { 'server/test/a.test.ts': testRecord({}) },
+    });
+    const { status, outputs } = runSelect(repo, { event: 'pull_request', mapFile });
+    expect(status).toBe(0);
+    expect(outputs.tests).toBe('full');
+    expect(outputs.fallback).toBe(`map: ${sideSha} is not an ancestor of HEAD`);
+  });
+
+  it('macOS budget follows the EVENT: a pull request that fell back to full still gets at most 2 macOS shards', () => {
+    const { repo } = buildMainFixture();
+    const times = path.join(mkTmp('ccrc-ci-select-times-'), 'times.json');
+    writeFileSync(times, JSON.stringify(Object.fromEntries(['a', 'b', 'c', 'd'].map((n) => [`server/test/${n}.test.ts`, 10_000_000]))));
+    const pr = runSelect(repo, { event: 'pull_request', timesFile: times });
+    expect(pr.outputs.tests).toBe('full');
+    expect(JSON.parse(pr.outputs.macos_matrix).include).toHaveLength(2);
+    const daily = runSelect(repo, { event: 'schedule', timesFile: times });
+    expect(daily.outputs.tests).toBe('full');
+    expect(JSON.parse(daily.outputs.macos_matrix).include).toHaveLength(4);
   });
 
   it('a full trigger (package.json changed) -> full, fallback names the file', () => {
@@ -5545,6 +6323,7 @@ Error: Cannot find module '../../.github/ci/select.mjs' imported from …/server
 // zero files skips every shard, and a skip with count 0 is a pass), and a
 // live test path containing whitespace (every matrix joins its files with
 // spaces, so such a path would split into two filters that match nothing).
+import { execFileSync } from 'node:child_process';
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -5567,7 +6346,9 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  * misconfigured caller gets the SAFE answer, never a silent no-op.
  *
  * Order is significant, and matches the contract's own listing:
- *   1. `pull_request`                          -> selected / none
+ *   1. `pull_request`                          -> selected / none — or full / none with `inputMode === 'full'`,
+ *                                                 which ci.yml passes when the PR changes `.github/` (a plain-bash
+ *                                                 check, so a PR cannot talk its own selector out of a full run)
  *   2. `push` with no `inputMode`               -> none / refresh
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
  *   4. `inputMode === 'full'`                    -> full / none
@@ -5579,7 +6360,9 @@ import { planShards, toMatrix, PROFILES } from './shards.mjs';
  */
 export function decideMode({ event, inputMode, fullGreen }) {
   if (event === 'pull_request') {
-    return { tests: 'selected', trace: 'none', skip: false };
+    return inputMode === 'full'
+      ? { tests: 'full', trace: 'none', skip: false }
+      : { tests: 'selected', trace: 'none', skip: false };
   }
   if (event === 'push' && !inputMode) {
     return { tests: 'none', trace: 'refresh', skip: false };
@@ -5596,6 +6379,21 @@ export function decideMode({ event, inputMode, fullGreen }) {
     return { tests: 'none', trace: 'rebuild', skip: false };
   }
   return { tests: 'full', trace: 'none', skip: false };
+}
+
+/**
+ * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
+ * request always runs server tests (never `none`), and a schedule, a refresh push or a rebuild never runs a
+ * per-file SELECTION (they run everything or nothing). A violation is a bug in this module; the CLI refuses it.
+ * @param {string} event @param {string | undefined} inputMode @param {'selected'|'full'|'none'} tests
+ * @returns {string | null}
+ */
+export function modeInvariantViolation(event, inputMode, tests) {
+  if (event === 'pull_request' && tests === 'none') return 'a pull_request answered tests: none';
+  if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'rebuild')) {
+    return `a ${inputMode === 'rebuild' ? 'rebuild' : event} answered tests: selected`;
+  }
+  return null;
 }
 
 /** Every live server test file, or a thrown `Error` saying why there is no
@@ -5638,7 +6436,7 @@ function liveTestsOrRefuse(repoDir) {
  */
 function computeRealSelection(repoDir, mapFile, liveTests) {
   try {
-    // No map is the ordinary first-run state (the cache had none to restore),
+    // No map is the ordinary first-run state (no trusted main artifact yet),
     // not a read error: say so, and say where it looked.
     if (!mapFile) {
       return { selection: { mode: 'full', reason: 'map: no map restored (select.mjs was given no --map)' }, map: null };
@@ -5651,6 +6449,16 @@ function computeRealSelection(repoDir, mapFile, liveTests) {
       return { selection: { mode: 'full', reason: `map: ${mapResult.reason}` }, map: null };
     }
     const map = mapResult.map;
+    // Only a map from this tree's own history: its commit must be an ancestor of HEAD (exit 1 = it is not;
+    // anything else — an unknown commit — throws and falls back below).
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', map.sha, 'HEAD'], { cwd: repoDir, stdio: 'pipe' });
+    } catch (e) {
+      if (e && /** @type {{ status?: number }} */ (e).status === 1) {
+        return { selection: { mode: 'full', reason: `map: ${map.sha} is not an ancestor of HEAD` }, map: null };
+      }
+      throw e;
+    }
     const changes = readChanges(repoDir, map.sha, 'HEAD');
     const existsAt = gitExistsAt(repoDir);
     const selection = selectTests({ map, changes, liveTests, existsAt });
@@ -5751,6 +6559,8 @@ function main() {
   }
 
   const decide = decideMode({ event, inputMode, fullGreen });
+  const violation = modeInvariantViolation(event, inputMode, decide.tests);
+  if (violation) throw new Error(`select.mjs: ${violation} — refusing (ruling T2)`);
   const liveTestsAll = liveTestsOrRefuse(repoDir);
 
   const needsRealSelection = decide.tests === 'selected' || decide.trace === 'refresh';
@@ -5804,7 +6614,10 @@ function main() {
     traceList = [...liveTestsAll];
   }
 
-  const macosProfile = testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
+  // The macOS budget follows the EVENT: a pull request keeps to 2 shards even when it fell back to full (the
+  // organisation's 5 macOS slots are shared with every other PR); 4 only for the daily, dispatched or called
+  // full run.
+  const macosProfile = event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
 
   const serverPlan = planShards(testFileList, durations, PROFILES.linux);
   const macosPlan = planShards(testFileList, durations, macosProfile);
@@ -5857,11 +6670,11 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 cd server && ./node_modules/.bin/vitest run test/ci-select-cli.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  27 passed (27)`. (A `fatal: bad object aaaa…` line in the run's
+  Measured: `Test Files  1 passed (1)` / `Tests  33 passed (33)`. (A `fatal: bad object aaaa…` line in the run's
   stderr is `git`'s own message from inside the deliberately unreachable-sha case; that case passes.)
 
 - [ ] **Step 5: Measure the mutation table** (mutate → run Step 4's command → see red → restore → confirm green;
-  re-measured in the integration clone, 27 cases each):
+  re-measured in the integration clone, 33 cases each):
 
   | # | Mutation | Test(s) that go red |
   |---|---|---|
@@ -5876,6 +6689,13 @@ cd server && ./node_modules/.bin/vitest run test/ci-select-cli.test.ts --maxWork
   | 9 | `decideMode`: a push takes the refresh branch whatever its `inputMode` | `push WITH an inputMode does not take the refresh branch…`, `push WITH inputMode 'full' (release-stable's workflow_call…)`, `push WITH --input-mode full (release-stable's call)…` (3) |
   | 10 | Drop the "no map restored at <path>" branch (a missing file goes to readMap again) | `missing map -> full, non-empty fallback, matrices carry every live test` (1) |
   | 11 | Drop the "no `--map` given" branch | `no --map at all -> full, and the fallback says no map was given` (1) |
+  | 12 | `decideMode`: a `pull_request` ignores `--input-mode full` | `pull_request WITH inputMode 'full' (its own pipeline changed…) -> full/none`, `--input-mode full on a pull_request (its pipeline changed) -> tests full, no map consulted` (2) |
+  | 13 | `modeInvariantViolation` lets a `pull_request` answer `none` | `a pull_request never answers tests none` (1) |
+  | 14 | … lets a `schedule` answer `selected` | `a schedule, a refresh push and a rebuild never answer tests selected` (1) |
+  | 15 | The CLI does not act on a violation | none — no correct `decideMode` reaches it; the PAIRED mutation shows the call site matters: with `decideMode` answering `none` for a pull request, the CLI exits 1 (`select.mjs: a pull_request answered tests: none — refusing`); remove the call too and it exits 0 with `tests=none`, `count=0` (measured on a copy) |
+  | 16 | No ancestry check / a non-ancestor map used anyway | `a map whose commit is not an ancestor of HEAD -> full: a map from another line of history is not trusted` (1 each) |
+  | 17 | The macOS profile by mode (a pull request's full fallback gets 4) | `macOS budget follows the EVENT: a pull request that fell back to full still gets at most 2 macOS shards` (1) |
+  | 18 | The macOS profile by event alone (`event !== 'pull_request'`) | none — equivalent: every other event answers `full` or `none`, and `none` plans no macOS shard |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -5904,7 +6724,10 @@ planShards/toMatrix to write GITHUB_OUTPUT (tests, trace, shadow, count,
 macos_count, server_matrix, macos_matrix, trace_matrix, trace_count,
 map_sha, fallback), the trace list (--trace-list) and a job-summary
 reason table. Any map/git failure degrades to mode full with a reason
-("no map restored at <path>" on a first run).
+("no map restored at <path>" on a first run, or a map whose commit is
+not an ancestor of HEAD). The mode invariants are asserted before
+anything is written: a pull request never answers tests=none, and a
+schedule, push or rebuild never answers tests=selected.
 A live-test list that cannot be read, is empty, or holds a path with
 whitespace is refused outright — each would otherwise be a green run
 that tested nothing or the wrong thing.
@@ -5923,10 +6746,12 @@ EOF
 
 **Interfaces:** Consumes: Task 5's `selectTests` (imported, called directly — no rule logic duplicated) and Task 4's
 `readMap` (used only in the CLI's `main()`). Produces: `replayCase({map, changedFiles, failingTestFiles, existsAt}):
-{selected, missed, mode}` (the contract's exact signature), this module's own `summarizeReplay(outcomes)`
-aggregation, `liveCountFor(map, selected)` and `ReplayOutcome` typedef, and the CLI `node .github/ci/replay.mjs --repo DIR --map FILE --dataset
-FILE`, whose dataset is a JSON ARRAY of `{ id, changedFiles, failingTestFiles, inheritedSuspect? }` — the schema
-Task 14's dataset builder emits.
+{selected, missed, notProven, mode}` (the contract's signature plus `notProven`), this module's own
+`summarizeReplay(outcomes)` aggregation, `liveCountFor(map, selected)`, `runtimeShare({map, changedFiles, existsAt,
+durations}): number`, `summarizeShares(shares)` and the `ReplayOutcome` typedef, and the CLI
+`node .github/ci/replay.mjs --repo DIR --map FILE [--dataset FILE] [--prs FILE --times FILE]`, whose dataset is a
+JSON ARRAY of `{ id, changedFiles, failingTestFiles, inheritedSuspect? }` — the schema Task 14's dataset builder
+emits — and whose `--prs` file is `gh pr list --json number,files`'s own array.
 - Changed in integration: the JSDoc typedefs moved from `//` comments into `/** */` blocks, and the test fixtures
   are typed (`TestMap`, `ReplayOutcome`), for the tests-inclusive typecheck. The dataset schema above is now the one
   contract between this CLI and Task 14's builder (the builder used to write `{builtAt, repo, cases}`, which this
@@ -5936,6 +6761,12 @@ Task 14's dataset builder emits.
   selected ones — and can never exceed 100%. Dividing by the map's count alone did: a case selecting a failing test
   the map never traced read `max 200.0%` on a one-test map (measured before the change; `max 100.0%` after), and
   233.3% on Task 11's three-test composition map.
+- Changed in integration (operator's ruling M3): a failing test the map holds no record for is NOT PROVEN —
+  rule 1 selects it for being unmapped, not because the map predicted it — so it is reported on its own line and
+  kept out of recall, never counted as caught; a case with no proven failure is not scored. And the CLI adds
+  spec §11.3's runtime-share report: `--prs FILE --times FILE` prints, over the listed merged pull requests, the
+  share of the full suite's runtime (durations from `--times`, a missing file weighed at the median) each would
+  have run against today's map — min, median, max and mean; a full trigger counts as 1.
 
 - [ ] **Step 1: Write the failing test** — create `server/test/ci-replay.test.ts`:
 
@@ -5953,7 +6784,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { replayCase, summarizeReplay, liveCountFor } from '../../.github/ci/replay.mjs';
+import { replayCase, summarizeReplay, liveCountFor, runtimeShare, summarizeShares } from '../../.github/ci/replay.mjs';
 import type { ReplayOutcome } from '../../.github/ci/replay.mjs';
 import type { DepRecord, TestMap, TestRecord } from '../../.github/ci/testmap.mjs';
 
@@ -5971,7 +6802,7 @@ describe('replayCase', () => {
       map, changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/dep.test.ts'],
       existsAt: () => true, // the changed file existed at map.sha -> status M
     });
-    expect(result).toEqual({ selected: ['server/test/dep.test.ts'], missed: [], mode: 'selected' });
+    expect(result).toEqual({ selected: ['server/test/dep.test.ts'], missed: [], notProven: [], mode: 'selected' });
   });
 
   it('a genuine miss: the failing test has no recorded dependency on anything changed', () => {
@@ -6010,13 +6841,17 @@ describe('replayCase', () => {
     expect(asModified.missed).toEqual(['server/test/probes.test.ts']);
   });
 
-  it('a failing test absent from the map is still live (via failingTestFiles) and selected by rule 1', () => {
+  it('a failing test absent from the map is NOT PROVEN — never counted as caught', () => {
+    // Rule 1 selects it for being unmapped, not for any recorded dependency, so the case proves nothing about
+    // the map: it is reported apart and kept out of recall.
     const map: TestMap = { format: 1, sha: SHA_A, baseline: emptyDep(), tests: {} };
     const result = replayCase({
       map, changedFiles: ['server/src/unrelated.ts'], failingTestFiles: ['server/test/never-traced.test.ts'],
       existsAt: () => true,
     });
-    expect(result).toEqual({ selected: ['server/test/never-traced.test.ts'], missed: [], mode: 'selected' });
+    expect(result).toEqual({
+      selected: ['server/test/never-traced.test.ts'], missed: [], notProven: ['server/test/never-traced.test.ts'], mode: 'selected',
+    });
   });
 
   it('a brand-new test file among changedFiles (not in failingTestFiles) is live and selected', () => {
@@ -6041,14 +6876,14 @@ describe('replayCase', () => {
       existsAt: () => true,
     });
     expect(result).toEqual({
-      mode: 'full', missed: [], selected: ['server/test/a.test.ts', 'server/test/b.test.ts'],
+      mode: 'full', missed: [], notProven: [], selected: ['server/test/a.test.ts', 'server/test/b.test.ts'],
     });
   });
 });
 
 describe('summarizeReplay', () => {
   const outcome = (id: string, o: Partial<ReplayOutcome> = {}): ReplayOutcome => (
-    { id, mode: 'selected', selected: [], missed: [], failingTestFiles: [], liveCount: 10, inheritedSuspect: false, ...o }
+    { id, mode: 'selected', selected: [], missed: [], notProven: [], failingTestFiles: [], liveCount: 10, inheritedSuspect: false, ...o }
   );
 
   it('recall (micro) pools failing-test instances across cases; recall (by case) is the zero-miss fraction', () => {
@@ -6088,6 +6923,55 @@ describe('summarizeReplay', () => {
   });
 });
 
+describe('summarizeReplay: not-proven failures stay out of recall', () => {
+  const outcome = (id: string, o: Partial<ReplayOutcome> = {}): ReplayOutcome => (
+    { id, mode: 'selected', selected: [], missed: [], notProven: [], failingTestFiles: [], liveCount: 10, inheritedSuspect: false, ...o }
+  );
+  it('a case whose only failure is unmapped is not scored; a mixed case is scored on its proven failures only', () => {
+    const summary = summarizeReplay([
+      outcome('unmapped-only', { failingTestFiles: ['x'], notProven: ['x'] }),
+      outcome('mixed', { failingTestFiles: ['a', 'y'], notProven: ['y'], missed: ['a'] }),
+      outcome('clean', { failingTestFiles: ['b'] }),
+    ]);
+    expect(summary.recallMicro).toBeCloseTo(1 / 2); // a missed, b caught; x and y not proven
+    expect(summary.casesConsidered).toBe(2);
+    expect(summary.recallByCase).toBeCloseTo(1 / 2);
+    expect(summary.notProven).toEqual([{ id: 'unmapped-only', files: ['x'] }, { id: 'mixed', files: ['y'] }]);
+  });
+});
+
+describe('runtimeShare: the selected share of server RUNTIME (spec §11.3), not of file count', () => {
+  const map: TestMap = {
+    format: 1, sha: SHA_A, baseline: emptyDep(),
+    tests: {
+      'server/test/a.test.ts': rec({ read: ['server/src/a.ts'] }),
+      'server/test/b.test.ts': rec({ read: ['server/src/b.ts'] }),
+      'server/test/c.test.ts': rec({ read: ['ccd/ccd'] }),
+    },
+  };
+  const durations = { 'server/test/a.test.ts': 100, 'server/test/b.test.ts': 300, 'server/test/c.test.ts': 600 };
+
+  it('weights the selected files by their durations', () => {
+    expect(runtimeShare({ map, changedFiles: ['ccd/ccd'], existsAt: () => true, durations })).toBeCloseTo(0.6);
+    expect(runtimeShare({ map, changedFiles: ['server/src/a.ts'], existsAt: () => true, durations })).toBeCloseTo(0.1);
+    expect(runtimeShare({ map, changedFiles: ['README.md'], existsAt: () => true, durations })).toBe(0);
+  });
+
+  it('a full trigger is the whole runtime; a file with no duration gets the median of the known ones', () => {
+    expect(runtimeShare({ map, changedFiles: ['server/package.json'], existsAt: () => true, durations })).toBe(1);
+    // c unknown: median(100, 300) = 200 → c's share is 200 / 600.
+    const partial = { 'server/test/a.test.ts': 100, 'server/test/b.test.ts': 300 };
+    expect(runtimeShare({ map, changedFiles: ['ccd/ccd'], existsAt: () => true, durations: partial })).toBeCloseTo(200 / 600);
+  });
+
+  it('summarizeShares: min, median, max and mean', () => {
+    const s = summarizeShares([0.1, 0.6, 1, 0.3]);
+    expect(s).toMatchObject({ count: 4, min: 0.1, max: 1 });
+    expect(s.median).toBeCloseTo(0.45);
+    expect(s.mean).toBeCloseTo(0.5);
+  });
+});
+
 describe('the selected fraction never exceeds 100%', () => {
   // A selected test can be absent from the map (a failing test the map never
   // traced is live by replayCase's union, and rule 1 selects it). Dividing by
@@ -6115,6 +6999,22 @@ describe('the selected fraction never exceeds 100%', () => {
     const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
       '--dataset', path.join(dir, 'dataset.json')], { encoding: 'utf8', stdio: 'pipe' });
     expect(out).toContain('selected fraction of live server tests — min 100.0%, median 100.0%, max 100.0%');
+    // new.test.ts is not in the map: selected, but not proven.
+    expect(out).toContain('not proven (failing tests absent from the map, kept out of recall): 1 in 1 case(s)');
+  });
+
+  it('the CLI reports the runtime share over --prs weighed by --times', () => {
+    const dir = mkTmp('ccrc-ci-replay-share-');
+    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(map));
+    writeFileSync(path.join(dir, 'prs.json'), JSON.stringify([
+      { number: 1, files: [{ path: 'server/src/dep.ts', additions: 1, deletions: 0 }] },
+      { number: 2, files: [{ path: 'README.md', additions: 1, deletions: 0 }] },
+    ]));
+    writeFileSync(path.join(dir, 'times.json'), JSON.stringify({ 'server/test/dep.test.ts': 1000 }));
+    const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'replay.mjs');
+    const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
+      '--prs', path.join(dir, 'prs.json'), '--times', path.join(dir, 'times.json')], { encoding: 'utf8', stdio: 'pipe' });
+    expect(out).toContain('selected share of server runtime over 2 PRs — min 0.0%, median 50.0%, max 100.0%, mean 50.0%');
   });
 });
 
@@ -6178,7 +7078,10 @@ import { readMap } from './testmap.mjs';
 
 /**
  * @param {{ map: TestMap, changedFiles: string[], failingTestFiles: string[], existsAt: (ref: string, p: string) => boolean }} args
- * @returns {{ selected: string[], missed: string[], mode: 'selected' | 'full' }}
+ * `notProven`: the failing tests absent from the map. Rule 1 selects such a test for being unmapped, not for
+ * any recorded dependency, so it proves nothing about the map — it is reported apart and kept out of recall,
+ * never counted as caught.
+ * @returns {{ selected: string[], missed: string[], notProven: string[], mode: 'selected' | 'full' }}
  */
 export function replayCase({ map, changedFiles, failingTestFiles, existsAt }) {
   /** @type {Change[]} */
@@ -6208,14 +7111,15 @@ export function replayCase({ map, changedFiles, failingTestFiles, existsAt }) {
   }
 
   const selection = selectTests({ map, changes, liveTests: [...liveTests], existsAt });
+  const notProven = failingTestFiles.filter((f) => !Object.prototype.hasOwnProperty.call(map.tests, f)).sort();
 
   if (selection.mode === 'full') {
-    return { selected: [...liveTests].sort(), missed: [], mode: 'full' };
+    return { selected: [...liveTests].sort(), missed: [], notProven, mode: 'full' };
   }
   const selected = selection.tests.map((t) => t.file).sort();
   const selectedSet = new Set(selected);
   const missed = failingTestFiles.filter((f) => !selectedSet.has(f)).sort();
-  return { selected, missed, mode: 'selected' };
+  return { selected, missed, notProven, mode: 'selected' };
 }
 
 /**
@@ -6233,7 +7137,7 @@ export function liveCountFor(map, selected) {
 
 /**
  * One dataset case's outcome plus the identifying fields a report needs.
- * @typedef {{ id: string, mode: 'selected'|'full', selected: string[], missed: string[], failingTestFiles: string[], liveCount: number, inheritedSuspect: boolean }} ReplayOutcome
+ * @typedef {{ id: string, mode: 'selected'|'full', selected: string[], missed: string[], notProven: string[], failingTestFiles: string[], liveCount: number, inheritedSuspect: boolean }} ReplayOutcome
  */
 
 /**
@@ -6251,16 +7155,22 @@ export function summarizeReplay(outcomes) {
   const headline = outcomes.filter((o) => !o.inheritedSuspect);
   const excluded = outcomes.filter((o) => o.inheritedSuspect);
 
+  // Recall counts only PROVEN failures — those the map has a record for (see replayCase's `notProven`). A case
+  // is scored only when it has at least one.
   let totalFailing = 0;
   let totalCaught = 0;
+  let casesScored = 0;
   let casesClean = 0;
   for (const o of headline) {
-    totalFailing += o.failingTestFiles.length;
-    totalCaught += o.failingTestFiles.length - o.missed.length;
+    const proven = o.failingTestFiles.length - o.notProven.length;
+    if (proven === 0) continue;
+    casesScored += 1;
+    totalFailing += proven;
+    totalCaught += proven - o.missed.length;
     if (o.missed.length === 0) casesClean += 1;
   }
   const recallMicro = totalFailing === 0 ? 1 : totalCaught / totalFailing;
-  const recallByCase = headline.length === 0 ? 1 : casesClean / headline.length;
+  const recallByCase = casesScored === 0 ? 1 : casesClean / casesScored;
 
   const fractions = headline
     .map((o) => (o.liveCount === 0 ? 0 : o.selected.length / o.liveCount))
@@ -6273,15 +7183,58 @@ export function summarizeReplay(outcomes) {
     .filter((o) => o.missed.length > 0)
     .map((o) => ({ id: o.id, missed: o.missed }));
 
+  const notProven = headline
+    .filter((o) => o.notProven.length > 0)
+    .map((o) => ({ id: o.id, files: o.notProven }));
+
   return {
     recallMicro,
     recallByCase,
-    casesConsidered: headline.length,
+    casesConsidered: casesScored,
+    notProven,
     casesExcludedInheritedSuspect: excluded.length,
     selectedFraction: {
       min: fractions[0] ?? 0, median: pick(0.5), max: fractions[fractions.length - 1] ?? 0,
     },
     misses,
+  };
+}
+
+/**
+ * The selected share of server RUNTIME for one change (spec §11.3's "selected share of server runtime across
+ * the last 100 merged PRs"): the durations of the files `selectTests` picks against today's map, over the
+ * durations of every test in it. Historical per-commit durations do not exist, so today's table weighs every
+ * change; a file with no duration gets the median of the known ones (spec §7.1). A full trigger is 1.
+ * @param {{ map: TestMap, changedFiles: string[], existsAt: (ref: string, p: string) => boolean, durations: Record<string, number> }} args
+ * @returns {number}
+ */
+export function runtimeShare({ map, changedFiles, existsAt, durations }) {
+  const live = Object.keys(map.tests).sort();
+  /** @type {Change[]} */
+  const changes = changedFiles.map((p) => ({ status: existsAt(map.sha, p) ? 'M' : 'A', path: p, symlink: false }));
+  const selection = selectTests({ map, changes, liveTests: live, existsAt });
+  if (selection.mode === 'full') return 1;
+  const known = Object.values(durations).sort((a, b) => a - b);
+  const mid = known.length >> 1;
+  const median = known.length === 0 ? 1 : known.length % 2 === 1 ? known[mid] : (known[mid - 1] + known[mid]) / 2;
+  const weight = (f) => durations[f] ?? median;
+  const total = live.reduce((s, f) => s + weight(f), 0);
+  const chosen = selection.tests.reduce((s, t) => s + weight(t.file), 0);
+  return total === 0 ? 0 : chosen / total;
+}
+
+/** @param {number[]} shares @returns {{ count: number, min: number, median: number, max: number, mean: number }} */
+export function summarizeShares(shares) {
+  const s = [...shares].sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return { count: 0, min: 0, median: 0, max: 0, mean: 0 };
+  const mid = n >> 1;
+  return {
+    count: n,
+    min: s[0],
+    median: n % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2,
+    max: s[n - 1],
+    mean: s.reduce((a, b) => a + b, 0) / n,
   };
 }
 
@@ -6309,17 +7262,32 @@ async function main() {
     return;
   }
   const map = mapResult.map;
-  const dataset = JSON.parse(readFileSync(opt.dataset, 'utf8'));
   const existsAt = gitExistsAt(repoDir);
 
+  // The runtime-share report: --prs FILE (a JSON array of { number, files }, `files` paths or { path }, as
+  // `gh pr list --json number,files` gives them) weighed by --times FILE (a durations table).
+  if (opt.prs) {
+    if (!opt.times) throw new Error('--prs needs --times FILE (a durations table)');
+    const prs = JSON.parse(readFileSync(opt.prs, 'utf8'));
+    const durations = JSON.parse(readFileSync(opt.times, 'utf8'));
+    const shares = prs.map((pr) => runtimeShare({
+      map, existsAt, durations,
+      changedFiles: (pr.files ?? []).map((f) => (typeof f === 'string' ? f : f.path)),
+    }));
+    const s = summarizeShares(shares);
+    console.log(`selected share of server runtime over ${s.count} PRs — min ${formatPct(s.min)}, median ${formatPct(s.median)}, max ${formatPct(s.max)}, mean ${formatPct(s.mean)}`);
+  }
+  if (!opt.dataset) return;
+
+  const dataset = JSON.parse(readFileSync(opt.dataset, 'utf8'));
   /** @type {ReplayOutcome[]} */
   const outcomes = dataset.map((c) => {
-    const { selected, missed, mode } = replayCase({
+    const { selected, missed, notProven, mode } = replayCase({
       map, changedFiles: c.changedFiles, failingTestFiles: c.failingTestFiles, existsAt,
     });
     const liveCount = liveCountFor(map, selected);
     return {
-      id: c.id, mode, selected, missed, failingTestFiles: c.failingTestFiles,
+      id: c.id, mode, selected, missed, notProven, failingTestFiles: c.failingTestFiles,
       liveCount, inheritedSuspect: !!c.inheritedSuspect,
     };
   });
@@ -6330,6 +7298,9 @@ async function main() {
   console.log(`recall (micro, pooled over failing-test instances): ${formatPct(summary.recallMicro)}`);
   console.log(`recall (by case, zero-miss cases / scored cases):   ${formatPct(summary.recallByCase)}`);
   console.log(`selected fraction of live server tests — min ${formatPct(summary.selectedFraction.min)}, median ${formatPct(summary.selectedFraction.median)}, max ${formatPct(summary.selectedFraction.max)}`);
+  const unproven = summary.notProven.reduce((n, c) => n + c.files.length, 0);
+  console.log(`not proven (failing tests absent from the map, kept out of recall): ${unproven} in ${summary.notProven.length} case(s)`);
+  for (const c of summary.notProven) console.log(`  ${c.id}: ${c.files.join(', ')}`);
   if (summary.misses.length === 0) {
     console.log('misses: none');
   } else {
@@ -6351,21 +7322,25 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 cd server && ./node_modules/.bin/vitest run test/ci-replay.test.ts --maxWorkers=2
 ```
 
-  Measured: `Test Files  1 passed (1)` / `Tests  11 passed (11)`.
+  Measured: `Test Files  1 passed (1)` / `Tests  16 passed (16)`.
 
 - [ ] **Step 5: Measure the mutation table.** Same discipline as Task 4. Re-measured in the integration clone
-  (11 cases each):
+  (16 cases each):
 
   | mutation | test that goes red |
   |---|---|
   | `replayCase`: flip the A/M inference (`existsAt(...) ? 'A' : 'M'`) | `infers status A (absent at map.sha) vs M (present)...` (1) |
-  | `replayCase`: drop `failingTestFiles` from the `liveTests` union | `a failing test absent from the map is still live...` (1) |
+  | `replayCase`: drop `failingTestFiles` from the `liveTests` union | `a failing test absent from the map is NOT PROVEN — never counted as caught` (1) |
   | `replayCase`: drop the changed-test-file `liveTests` union clause | `a brand-new test file among changedFiles...` (1) |
   | `replayCase`: drop the `mode === 'full'` short-circuit | `a full-trigger change selects everything live...` (1) |
   | `summarizeReplay`: drop the `inheritedSuspect` filter on `headline` | `excludes inheritedSuspect cases from the headline recall...` (1) |
-  | `summarizeReplay`: count every failing test as caught (`totalCaught += o.failingTestFiles.length`) | `recall (micro) pools failing-test instances...` (1) |
+  | `summarizeReplay`: count every proven failing test as caught (`totalCaught += proven`) | `recall (micro) pools failing-test instances across cases…`, `a case whose only failure is unmapped is not scored…` (2) |
   | `liveCountFor`: the map's tests only (no union with the selected) | `liveCountFor: the map's tests plus any selected test the map lacks`, `the CLI reports at most 100%…` (2) |
   | CLI `main()` divides by the map's count again (bypasses `liveCountFor`) | `the CLI reports at most 100% for a case whose selection includes a test absent from the map` (1) |
+  | `summarizeReplay`: an unmapped failing test counted as caught | `a case whose only failure is unmapped is not scored; a mixed case is scored on its proven failures only` (1) |
+  | `replayCase`: `notProven` never computed | `a failing test absent from the map is NOT PROVEN — never counted as caught`, `the CLI reports at most 100%…` (2) |
+  | `runtimeShare`: a full trigger counts 0 / an unknown duration weighs 0 | `a full trigger is the whole runtime; a file with no duration gets the median of the known ones` (1 each) |
+  | `summarizeShares`: the lower middle for an even count | `summarizeShares: min, median, max and mean`, `the CLI reports the runtime share over --prs weighed by --times` (2) |
 
 - [ ] **Step 6: Run the neighbouring guards** (each file alone, from `server/`):
 
@@ -6392,7 +7367,10 @@ rule logic duplicated), inferring A/M status from the map's commit.
 summarizeReplay and the CLI report are this module's own design; the
 dataset is a JSON array of { id, changedFiles, failingTestFiles,
 inheritedSuspect? }. A case's selected fraction divides by the union of
-the map's tests and the selected ones, so it never exceeds 100%.
+the map's tests and the selected ones, so it never exceeds 100%. A
+failing test the map does not hold is reported NOT PROVEN, never
+counted as caught. --prs/--times adds a runtime-share report: the share
+of the full suite's runtime each merged pull request would have run.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -6404,11 +7382,15 @@ EOF
 ### Task 11: Composite action + `ci.yml` pipeline + pipeline pins
 
 Spec §3–§4, §7, §10, §14 and the contract's *Workflow names and wiring*. Built after Tasks 2–10: `ci.yml` calls
-`.github/ci/select.mjs`, `verdict.mjs`, `shards.mjs`, `trace-run.mjs`, `testmap.mjs` and
-`server/vitest.select.config.ts`. Most pins in this task read only the workflow text; one runs a step's own
-script (the "already green?" question) with a fake `gh`. The pipeline first runs for real in Task 14.
+`.github/ci/select.mjs`, `verdict.mjs`, `shards.mjs`, `trace-run.mjs`, `testmap.mjs`, this task's own
+`main-artifact.mjs` and `server/vitest.select.config.ts`. Most pins in this task read only the workflow text;
+several run a step's own script (the "already green?" question, the pipeline-change check, the artifact fetch,
+the compare-and-swap) with fake binaries on `PATH` or against a fixture repository. The pipeline first runs for
+real in Task 14.
 
 **Files:**
+- Create: `.github/ci/main-artifact.mjs`
+- Test: `server/test/ci-main-artifact.test.ts` (new)
 - Create: `.github/actions/server-deps/action.yml`
 - Modify (full rewrite): `.github/workflows/ci.yml`
 - Test: `server/test/ci-pipeline.test.ts` (new)
@@ -6417,40 +7399,359 @@ script (the "already green?" question) with a fake `gh`. The pipeline first runs
 - Consumes: `node .github/ci/select.mjs --repo DIR --event E [--input-mode M] --selection shadow|enforce
   --full-green true|false [--map FILE] [--times FILE] [--trace-list FILE]` and its `$GITHUB_OUTPUT` keys
   `tests trace shadow count macos_count server_matrix macos_matrix trace_matrix trace_count map_sha fallback`
-  (Task 9); `node .github/ci/verdict.mjs server` with env `SELECT_RESULT TYPECHECK_RESULT SHARDS_RESULT TESTS COUNT`
-  and `node .github/ci/verdict.mjs full` with env `NEEDS_JSON` (Task 8); `toMatrix` rows
+  (Task 9); `node .github/ci/verdict.mjs server` with env `SELECT_RESULT TYPECHECK_RESULT SHARDS_RESULT TESTS COUNT
+  EVENT` and `node .github/ci/verdict.mjs full` with env `RESULTS` (Task 8); `toMatrix` rows
   `{ shard, total, files /*space-joined SERVER-relative*/, vitest_shard }` (Task 6);
   `node .github/ci/shards.mjs times --out FILE <report.json>...` (Task 6, run from the repo root);
   `node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE --jobs 2 --timeout 900` (Task 7);
   `node .github/ci/testmap.mjs build --sha S --records DIR --out FILE` and `… refresh --sha S --old FILE --records
   DIR --live FILE --traced FILE --out FILE` (Task 4); `server/vitest.select.config.ts` + `CCRC_TEST_LIST` (Task 2).
-- Produces: jobs `select` (`select tests`), `server-shard` (`server i/n`), `server-typecheck` (`typecheck (server)`),
-  `server` (`test (server)`), `test` (`test (agent)`, `test (pwa)`), `probe-macos`, `build-pwa`, `test-macos`
-  (`test-macos i/n`), `trace-shard` (`trace i/n`), `map-build`, `times-build`, `full-suite`; top-level
-  `env: CCRC_SELECTION: shadow` (Task 15 flips it); caches `testmap-<sha>` / `testtimes-<sha>` under `.ci-cache/`;
-  artifacts `select-inputs` (`testmap.json`, `traced.txt`), `records-<shard>` (`records.json`), `times-<shard>`
-  (`times.json`) and `testmap` (the map a `map-build` wrote, kept 14 days); the `workflow_call` input `mode` and
-  output `verdict` (`green` iff `full-suite` ran green) that Task 12 reads.
+- Produces: `.github/ci/main-artifact.mjs` — `TRUSTED_EVENTS`, `CI_WORKFLOW_PATH`, `artifactCandidates(artifacts,
+  name, repoId)`, `isTrustedRun(run, repoId)`, `pickArtifact({artifacts, runs, name, repoId}): {artifactId, runId,
+  headSha, createdAt} | null`, and the CLI `node .github/ci/main-artifact.mjs --repo OWNER/NAME --repo-id ID --name
+  ARTIFACT` (REST API with `$GITHUB_TOKEN`; prints `artifact_id=`, `run_id=`, `head_sha=` — empty for none, and on
+  any API failure — to stdout and to `$GITHUB_OUTPUT` when set; exit 0). Jobs `select` (`select tests`),
+  `server-shard` (`server i/n`), `server-typecheck` (`typecheck (server)`), `server` (`test (server)`), `test`
+  (`test (agent)`, `test (pwa)`), `probe-macos`, `build-pwa`, `test-macos` (`test-macos i/n`), `trace-shard`
+  (`trace i/n`), `map-build`, `times-build`, `full-suite`; top-level `env: CCRC_SELECTION: shadow` (Task 15 flips
+  it); artifacts `select-inputs` (`testmap.json`, `traced.txt`, `testmap.artifact`), `records-<shard>`
+  (`records.json`), `times-<shard>` (`times.json`), `testmap` (the published map, 14 days) and `testtimes` (the
+  published durations, 14 days); the `workflow_call` input `mode` and output `verdict` (`green` iff `full-suite`
+  ran green) that Task 12 reads.
 - Changed in integration (trace sharding): `trace-shard` and `map-build` are guarded on
   `needs.select.outputs.trace_count != '0'` (Task 9's new output) instead of comparing the matrix string, and the
   `awk` every-n-th-file split is gone — the trace matrix is always an exact partition (Tasks 6, 9).
 - Changed in integration (a lost trace, and which map): `select` passes `--trace-list .ci-cache/traced.txt` and
   hands `map-build` both files in `select-inputs`; the refresh passes `--traced` from that artifact (Task 4 writes a
   traced-but-missing test `unknown`). Pinned: `map-build` refreshes against the map `select` diffed from and never
-  restores one from the cache — a refresh racing the daily rebuild's cache save would otherwise mix two maps.
+  fetches one of its own — a refresh racing the daily rebuild's publish would otherwise mix two maps.
 - Changed in integration (found by executing the run blocks): `full-suite`'s `verdict` output was never set. The
   draft wrote `verdict=green` from a later step, but a step's `$GITHUB_OUTPUT` is its own and the job output reads
   `steps.verdict.outputs.verdict` — so `release-stable.yml` could never promote on a called full run. The `Verdict`
   step now writes it once `verdict.mjs full` exits 0, and a pin holds the write inside that step.
 - Changed in integration (no map): `select` always passes `--map .ci-cache/testmap.json` — the conditional
-  `if [ -f … ]` is gone — so on a first run `select.mjs` can say `map: no map restored at .ci-cache/testmap.json`
-  (Task 9, operator's ruling); the args line is pinned exactly.
+  `if [ -f … ]` is gone — so when no map was fetched `select.mjs` can say `map: no map restored at
+  .ci-cache/testmap.json` (Task 9, operator's ruling); the args line is pinned exactly.
 - Changed in integration (pins): the daily "already green?" step answers `full_green=false` — never a skip — when
   `gh` fails (executed with a failing fake `gh`); `times-build` runs the `times` CLI from the workspace root; every
   `needs.select.outputs.X` any job reads is declared by `select`; `map-build` keeps the map as artifact `testmap`
   (how Tasks 14 and 15 fetch a map to replay against).
+- Changed in integration (trust, operator's ruling T4): no `actions/cache` step anywhere (`setup-node`'s
+  `cache: npm` stays: it holds npm's download cache, not a decision). A pull request's run reads and writes its own
+  cache scope first, so a pull request could plant a map that selects nothing — and a manual rebuild on a feature
+  branch would become that branch's pull requests' baseline. The map and the durations are artifacts of
+  trusted runs only: `select`'s fetch step asks `main-artifact.mjs` for the newest non-expired `testmap` and
+  `testtimes` whose run is `.github/workflows/ci.yml` on branch `main` of THIS repository (head repository id
+  equal to the repository id — a fork can name a branch `main`), triggered by `push`, `schedule` or
+  `workflow_dispatch`, and downloads each with `gh run download`; nothing found, or a failed download, is no map —
+  a full run. `select` needs `actions: read`. Task 9 refuses a map whose commit is not an ancestor of `HEAD`.
+  `map-build` uploads `testmap` and `times-build` uploads `testtimes` (main only). A refresh publishes only if the
+  map it was built on is STILL the newest trusted one — a compare-and-swap on the artifact id `select` recorded
+  (`testmap.artifact` in `select-inputs`); a rebuild, or a refresh that had no map, always publishes.
+- Changed in integration (the verdicts, operator's rulings T1, T2, P5): `test (server)` and `full-suite` each open
+  with a script-free step that can only ADD red — `if:` over the needed jobs' results, `run: exit 1` — so a
+  no-op `verdict.mjs` cannot turn a red leg green; `test (server)` passes `EVENT` (a pull request answering
+  `tests: none` is red); `full-suite` passes `RESULTS`, one `name=result` pair per need, pinned to name every
+  `needs:` entry — not `toJSON(needs)`, which carries every `select` matrix and outgrows an environment string.
+- Changed in integration (a pipeline change, operator's ruling T3): on a pull request a plain-bash step computes
+  `git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD -- .github/` and, when it is non-empty
+  (or the base cannot be diffed), `Select` runs with `--input-mode full`: the full run is decided before, and
+  without, the selector the pull request may be changing. The step's own script is executed against a fixture
+  repository in the pins (changed, unchanged, undiffable, and a `.github/` change `main` made after the branch
+  point, which a two-dot diff would wrongly count).
+- Changed in integration (operator's rulings M1, P6): `trace-shard` keeps its records `if: always()` — trace-run
+  exits 3 after writing them when a traced test failed, and `map-build` still builds; `probe-macos` runs only on
+  `pull_request` and `schedule`, never gating a called or dispatched full run. Both pinned.
 
-- [ ] **Step 1: Write the failing test** — `server/test/ci-pipeline.test.ts`:
+- [ ] **Step 1: Write the trusted-artifact picker's failing test** — `server/test/ci-main-artifact.test.ts`:
+
+<!-- file: server/test/ci-main-artifact.test.ts -->
+```ts
+// `.github/ci/main-artifact.mjs` (design 2026-09-23 §5.5, operator's ruling T4): the map and the duration table
+// come ONLY from an artifact of a trusted `ci.yml` run on `main`. The picker is pure and is tested here on
+// fixture listings shaped like the REST API's (`GET /repos/{r}/actions/artifacts`, `GET …/actions/runs/{id}`);
+// the CLI is run once against a local fake of that API, so the fetch-and-pick path is exercised as shipped.
+import { describe, it, expect } from 'vitest';
+import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { artifactCandidates, isTrustedRun, pickArtifact } from '../../.github/ci/main-artifact.mjs';
+import type { Artifact, Run } from '../../.github/ci/main-artifact.mjs';
+
+const REPO_ID = 1001;
+const FORK_ID = 2002;
+
+function artifact(id: number, runId: number, over: Partial<Artifact> & { branch?: string, headRepo?: number } = {}): Artifact {
+  return {
+    id, name: over.name ?? 'testmap', expired: over.expired ?? false, created_at: over.created_at ?? `2026-09-${String(10 + id).padStart(2, '0')}T00:00:00Z`,
+    workflow_run: { id: runId, repository_id: REPO_ID, head_repository_id: over.headRepo ?? REPO_ID, head_branch: over.branch ?? 'main', head_sha: `${runId}`.padStart(40, '0') },
+  };
+}
+function run(id: number, over: Partial<Run> & { headRepo?: number } = {}): Run {
+  return {
+    id, path: over.path ?? '.github/workflows/ci.yml', event: over.event ?? 'push', head_branch: over.head_branch ?? 'main',
+    repository: { id: REPO_ID }, head_repository: { id: over.headRepo ?? REPO_ID },
+  };
+}
+
+describe('pickArtifact: the newest artifact of a trusted main run', () => {
+  it('picks the newest candidate whose run is trusted', () => {
+    const artifacts = [artifact(1, 11), artifact(2, 12), artifact(3, 13)];
+    const runs = { 11: run(11), 12: run(12, { event: 'schedule' }), 13: run(13, { event: 'workflow_dispatch' }) };
+    expect(pickArtifact({ artifacts, runs, name: 'testmap', repoId: REPO_ID })).toEqual({
+      artifactId: 3, runId: 13, headSha: '13'.padStart(40, '0'), createdAt: '2026-09-13T00:00:00Z',
+    });
+  });
+
+  it('skips a run from a pull request, even one whose branch is named main', () => {
+    const artifacts = [artifact(1, 11), artifact(2, 12)];
+    const runs = { 11: run(11), 12: run(12, { event: 'pull_request' }) };
+    expect(pickArtifact({ artifacts, runs, name: 'testmap', repoId: REPO_ID })?.artifactId).toBe(1);
+  });
+
+  it('skips a fork (another head repository), another branch, another workflow, an expired artifact, another name', () => {
+    const runs = { 11: run(11), 12: run(12, { headRepo: FORK_ID }), 13: run(13, { head_branch: 'feature' }), 14: run(14, { path: '.github/workflows/other.yml' }), 15: run(15), 16: run(16) };
+    const artifacts = [
+      artifact(1, 11),
+      artifact(2, 12, { headRepo: FORK_ID }),
+      artifact(3, 13, { branch: 'feature' }),
+      artifact(4, 14),
+      artifact(5, 15, { expired: true }),
+      artifact(6, 16, { name: 'testtimes' }),
+    ];
+    expect(pickArtifact({ artifacts, runs, name: 'testmap', repoId: REPO_ID })?.artifactId).toBe(1);
+    // A forked run can name its branch `main`; the head repository is what tells it apart. And the run's own
+    // fields are checked, not only the artifact's copy of them.
+    expect(isTrustedRun(run(12, { headRepo: FORK_ID }), REPO_ID)).toBe(false);
+    expect(isTrustedRun(run(13, { head_branch: 'feature' }), REPO_ID)).toBe(false);
+    expect(isTrustedRun(run(11), REPO_ID)).toBe(true);
+    expect(artifactCandidates(artifacts, 'testmap', REPO_ID).map((a) => a.id)).toEqual([4, 1]);
+  });
+
+  it('answers null when nothing is trusted, or the run is unknown', () => {
+    expect(pickArtifact({ artifacts: [artifact(1, 11)], runs: {}, name: 'testmap', repoId: REPO_ID })).toBeNull();
+    expect(pickArtifact({ artifacts: [], runs: {}, name: 'testmap', repoId: REPO_ID })).toBeNull();
+  });
+});
+
+describe('the CLI, against a local fake of the REST API', () => {
+  const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'main-artifact.mjs');
+
+  async function withApi(routes: Record<string, unknown>, fn: (base: string) => Promise<void>): Promise<void> {
+    const server = createServer((req, res) => {
+      const body = routes[req.url ?? ''];
+      if (req.headers.authorization !== 'Bearer t0ken' || body === undefined) { res.statusCode = 404; res.end('{}'); return; }
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      await fn(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    } finally {
+      server.close();
+    }
+  }
+
+  const cli = (base: string) => promisify(execFile)(process.execPath, [CLI, '--repo', 'o/r', '--repo-id', String(REPO_ID), '--name', 'testmap'], {
+    env: { ...process.env, GITHUB_API_URL: base, GITHUB_TOKEN: 't0ken', GITHUB_OUTPUT: '' },
+  });
+
+  it('prints the picked artifact, run and sha', async () => {
+    await withApi({
+      '/repos/o/r/actions/artifacts?name=testmap&per_page=100': { artifacts: [artifact(2, 12), artifact(1, 11)] },
+      '/repos/o/r/actions/runs/12': run(12, { event: 'pull_request' }),
+      '/repos/o/r/actions/runs/11': run(11),
+    }, async (base) => {
+      const { stdout } = await cli(base);
+      expect(stdout).toContain(`artifact_id=1\nrun_id=11\nhead_sha=${'11'.padStart(40, '0')}\n`);
+    });
+  });
+
+  it('an API failure answers none (no map means a full run), and exits 0', async () => {
+    await withApi({}, async (base) => {
+      const { stdout } = await cli(base);
+      expect(stdout).toContain('artifact_id=\nrun_id=\nhead_sha=\n');
+      expect(stdout).toContain('::warning::');
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run it, expect FAIL**
+
+```bash
+cd server && ./node_modules/.bin/vitest run test/ci-main-artifact.test.ts --maxWorkers=2
+```
+
+  Measured:
+
+```
+Error: Cannot find module '../../.github/ci/main-artifact.mjs' imported from …/server/test/ci-main-artifact.test.ts
+ Test Files  1 failed (1)
+      Tests  no tests
+```
+
+- [ ] **Step 3: Implement** — create `.github/ci/main-artifact.mjs` (no dependencies: node's own `fetch`):
+
+<!-- file: .github/ci/main-artifact.mjs -->
+```js
+// Where the test map and the duration table come from (design 2026-09-23 §5.5, operator's ruling T4): ONLY
+// from an artifact a trusted run of `ci.yml` on `main` uploaded. Not from the Actions cache — a pull request's
+// run reads its own cache scope first, so a PR could plant a map that selects nothing, and a manual rebuild on
+// a feature branch would become that branch's PRs' baseline. An artifact is picked only when its run is on
+// branch `main`, of this repository (not a fork that names a branch `main`), of `.github/workflows/ci.yml`, and
+// triggered by `push`, `schedule` or `workflow_dispatch` — events only a merge or a maintainer can cause.
+//
+// The filtering is pure (`pickArtifact`, unit-tested); the CLI only fetches the two listings it needs from the
+// REST API with the job's own token and writes the answer to `$GITHUB_OUTPUT`. Any API failure answers "none":
+// no map means a full run, and a refresh that cannot confirm its base is still the newest does not publish —
+// both the safe direction.
+import { appendFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+export const TRUSTED_EVENTS = ['push', 'schedule', 'workflow_dispatch'];
+export const CI_WORKFLOW_PATH = '.github/workflows/ci.yml';
+
+/**
+ * @typedef {{ id: number, name: string, expired: boolean, created_at: string,
+ *   workflow_run?: { id: number, repository_id: number, head_repository_id: number, head_branch: string, head_sha: string } }} Artifact
+ * @typedef {{ id: number, path: string, event: string, head_branch: string,
+ *   repository?: { id: number }, head_repository?: { id: number } }} Run
+ * @typedef {{ artifactId: number, runId: number, headSha: string, createdAt: string }} Picked
+ */
+
+/** The artifacts that could be trusted, judged on the artifact's own fields, newest first.
+ *  @param {Artifact[]} artifacts @param {string} name @param {number} repoId @returns {Artifact[]} */
+export function artifactCandidates(artifacts, name, repoId) {
+  return artifacts
+    .filter((a) => a.name === name && !a.expired && a.workflow_run
+      && a.workflow_run.head_branch === 'main'
+      && a.workflow_run.repository_id === repoId
+      && a.workflow_run.head_repository_id === repoId)
+    .sort((a, b) => (b.created_at < a.created_at ? -1 : b.created_at > a.created_at ? 1 : b.id - a.id));
+}
+
+/** Whether a run is one of this repository's own `ci.yml` runs on `main`, from a trusted event.
+ *  @param {Run | undefined} run @param {number} repoId @returns {boolean} */
+export function isTrustedRun(run, repoId) {
+  return !!run
+    && run.path === CI_WORKFLOW_PATH
+    && run.head_branch === 'main'
+    && TRUSTED_EVENTS.includes(run.event)
+    && run.repository?.id === repoId
+    && run.head_repository?.id === repoId;
+}
+
+/** The newest artifact named `name` whose run is trusted, or null.
+ *  @param {{ artifacts: Artifact[], runs: Record<string, Run>, name: string, repoId: number }} args
+ *  @returns {Picked | null} */
+export function pickArtifact({ artifacts, runs, name, repoId }) {
+  for (const a of artifactCandidates(artifacts, name, repoId)) {
+    const run = runs[String(/** @type {NonNullable<Artifact['workflow_run']>} */ (a.workflow_run).id)];
+    if (isTrustedRun(run, repoId)) {
+      return {
+        artifactId: a.id,
+        runId: /** @type {NonNullable<Artifact['workflow_run']>} */ (a.workflow_run).id,
+        headSha: /** @type {NonNullable<Artifact['workflow_run']>} */ (a.workflow_run).head_sha,
+        createdAt: a.created_at,
+      };
+    }
+  }
+  return null;
+}
+
+async function api(route) {
+  const base = process.env.GITHUB_API_URL || 'https://api.github.com';
+  const res = await fetch(`${base}${route}`, {
+    headers: {
+      authorization: `Bearer ${process.env.GITHUB_TOKEN ?? ''}`,
+      accept: 'application/vnd.github+json',
+      'x-github-api-version': '2022-11-28',
+    },
+  });
+  if (!res.ok) throw new Error(`GET ${route}: HTTP ${res.status}`);
+  return res.json();
+}
+
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 0; i < argv.length; i += 2) {
+    if (argv[i]?.startsWith('--')) out[argv[i].slice(2)] = argv[i + 1];
+  }
+  return out;
+}
+
+async function main() {
+  const opt = parseArgs(process.argv.slice(2));
+  const repo = opt.repo;
+  const repoId = Number(opt['repo-id']);
+  const name = opt.name;
+  if (!repo || !name || !Number.isInteger(repoId)) {
+    throw new Error('usage: node main-artifact.mjs --repo OWNER/NAME --repo-id ID --name ARTIFACT');
+  }
+  /** @type {Picked | null} */
+  let picked = null;
+  try {
+    const listed = await api(`/repos/${repo}/actions/artifacts?name=${encodeURIComponent(name)}&per_page=100`);
+    /** @type {Record<string, Run>} */
+    const runs = {};
+    for (const a of artifactCandidates(listed.artifacts ?? [], name, repoId)) {
+      const id = String(/** @type {NonNullable<Artifact['workflow_run']>} */ (a.workflow_run).id);
+      if (!(id in runs)) runs[id] = await api(`/repos/${repo}/actions/runs/${id}`);
+      picked = pickArtifact({ artifacts: [a], runs, name, repoId });
+      if (picked) break;
+    }
+  } catch (e) {
+    process.stdout.write(`::warning::main-artifact: no ${name} artifact read (${e instanceof Error ? e.message : e}); answering none\n`);
+    picked = null;
+  }
+  const lines = [
+    `artifact_id=${picked ? picked.artifactId : ''}`,
+    `run_id=${picked ? picked.runId : ''}`,
+    `head_sha=${picked ? picked.headSha : ''}`,
+  ];
+  // The answer goes to stdout always (map-build's compare-and-swap reads it there) and to $GITHUB_OUTPUT when
+  // the step has one.
+  process.stdout.write(picked ? `${name}: artifact ${picked.artifactId} of run ${picked.runId} (${picked.headSha})\n` : `${name}: none\n`);
+  process.stdout.write(lines.join('\n') + '\n');
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, lines.join('\n') + '\n');
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch((e) => {
+    process.stderr.write(`main-artifact.mjs: ${e instanceof Error ? e.message : e}\n`);
+    process.exitCode = 2;
+  });
+}
+```
+
+- [ ] **Step 4: Run it, expect PASS, and measure its mutation table**
+
+```bash
+cd server && ./node_modules/.bin/vitest run test/ci-main-artifact.test.ts --maxWorkers=2
+```
+
+  Measured: `Test Files  1 passed (1)` / `Tests  6 passed (6)`. Then each row: apply the edit to
+  `.github/ci/main-artifact.mjs`, re-run, see red, restore byte-for-byte, re-run green (re-measured in the
+  integration clone):
+
+  | Mutation (in `main-artifact.mjs`) | Test(s) that go red |
+  |---|---|
+  | `artifactCandidates` keeps another branch | `skips a fork (another head repository), another branch, another workflow, an expired artifact, another name` (1) |
+  | … keeps another head repository (a fork) | the same (1) |
+  | … keeps an expired artifact | the same (1) |
+  | `isTrustedRun` accepts any event | `skips a run from a pull request, even one whose branch is named main`, `prints the picked artifact, run and sha` (2) |
+  | … `TRUSTED_EVENTS` admits `pull_request` | the same two (2) |
+  | … accepts any workflow file | `skips a fork …` (1) |
+  | … accepts any branch | `skips a fork …` (1 — its direct `isTrustedRun` assertion on a `feature` run) |
+  | … accepts any head repository | `skips a fork …` (1) |
+  | Candidates sorted oldest first | `picks the newest candidate whose run is trusted`, `skips a fork …` (2) |
+  | An API failure thrown out of the CLI instead of answering none | `an API failure answers none (no map means a full run), and exits 0` (1) |
+
+- [ ] **Step 5: Write the pipeline's failing test** — `server/test/ci-pipeline.test.ts`:
 
 <!-- file: server/test/ci-pipeline.test.ts -->
 ```ts
@@ -6473,8 +7774,8 @@ script (the "already green?" question) with a fake `gh`. The pipeline first runs
 // jobs at all, so a layout change cannot make every assertion vacuous.
 
 import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -6611,17 +7912,35 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     expect(jobKey(b, 'if')).toBe('always()');
     expect(needs(b)).toEqual(['select', 'server-shard', 'server-typecheck']);
     expect(b).toMatch(/^ {8}run: node \.github\/ci\/verdict\.mjs server$/m);
-    // The verdict reads these five and nothing else; a swapped pair (the
+    // The verdict reads these six and nothing else; a swapped pair (the
     // typecheck's result passed as the shards') would be green on a red shard.
+    // EVENT comes from the workflow's own context: a pull request never
+    // answers tests none (ruling T2).
     for (const line of [
       'SELECT_RESULT: ${{ needs.select.result }}',
       'TYPECHECK_RESULT: ${{ needs.server-typecheck.result }}',
       'SHARDS_RESULT: ${{ needs.server-shard.result }}',
       'TESTS: ${{ needs.select.outputs.tests }}',
       'COUNT: ${{ needs.select.outputs.count }}',
+      'EVENT: ${{ github.event_name }}',
     ]) {
       expect(b, `test (server) no longer passes ${line}`).toMatch(new RegExp(`^ {10}${line.replace(/[$.{}()|]/g, '\\$&')}$`, 'm'));
     }
+  });
+
+  it('both verdicts are fronted by a script-free step that can only ADD red (ruling T1)', () => {
+    // A no-op verdict.mjs (a slip in its entry guard) must not be able to turn
+    // a red leg green: these steps read the job results directly and fail.
+    const s = steps(job('server'))[0];
+    expect(s).toBe(
+      "      - name: Refuse a prerequisite that did not succeed (no script involved)\n"
+      + "        if: needs.select.result != 'success' || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-shard.result) || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-typecheck.result)\n"
+      + "        run: exit 1\n");
+    const f = steps(job('full-suite'))[0];
+    expect(f).toBe(
+      "      - name: Refuse any leg that did not succeed (no script involved)\n"
+      + "        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')\n"
+      + "        run: exit 1\n");
   });
 
   it('no workflow-level paths: or paths-ignore: filter', () => {
@@ -6671,8 +7990,13 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(job('select')).toContain('--selection "$CCRC_SELECTION"');
   });
 
-  it('select asks for contents: read and checks: read, and nothing else', () => {
-    expect(job('select')).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}checks: read\n(?! {6}[a-z-]+:)/m);
+  it('select asks for contents: read, checks: read and actions: read, and nothing else', () => {
+    // actions: read — to list and download the trusted main artifacts the map and durations come from.
+    expect(job('select')).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}checks: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+  });
+
+  it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
+    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || github.event_name == 'schedule'");
   });
 
   it('every job declares a deadline between 1 and 60 minutes', () => {
@@ -6699,20 +8023,28 @@ describe('ci.yml: every select output a job reads is one select declares (design
 });
 
 describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)', () => {
-  it('map-build refreshes against the map select diffed from (its select-inputs artifact), never a fresh cache restore', () => {
-    // A refresh racing the daily rebuild's cache save would otherwise diff one
+  it('map-build refreshes against the map select diffed from (its select-inputs artifact), never a fresh fetch', () => {
+    // A refresh racing the daily rebuild's publish would otherwise diff one
     // map and carry entries from another.
     const b = job('map-build');
-    expect(b, 'map-build must not restore the map from the cache').not.toContain('actions/cache/restore');
+    expect(b, 'map-build must not fetch a map of its own').not.toContain('main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name testmap\n            run_id');
     expect(step(b, 'Fetch the map select diffed from')).toMatch(/^ {10}name: select-inputs\n {10}path: \$\{\{ runner\.temp \}\}\/select-inputs$/m);
     const build = runScript(step(b, 'Build the map'));
     expect(build).toContain('--old "$RUNNER_TEMP/select-inputs/testmap.json"');
     // The refresh is told what select MEANT to trace, not what arrived: a test
     // whose trace went missing is written unknown, never carried stale.
     expect(build).toContain('--traced "$RUNNER_TEMP/select-inputs/traced.txt"');
-    // --map always names the cache path, so select.mjs can say "no map restored at <path>" on a first run.
+    // --map always names the fetch path, so select.mjs can say "no map restored at <path>" when none was fetched.
     expect(job('select')).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map .ci-cache/testmap.json --trace-list .ci-cache/traced.txt)');
-    expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\.ci-cache\/testmap\.json\n {12}\.ci-cache\/traced\.txt$/m);
+    expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\.ci-cache\/testmap\.json\n {12}\.ci-cache\/traced\.txt\n {12}\.ci-cache\/testmap\.artifact$/m);
+  });
+
+  it('map-build runs after a FAILED trace shard too (a traced test failed: recorded unknown, still built)', () => {
+    expect(jobKey(job('map-build'), 'if')).toContain("(needs.trace-shard.result == 'success' || needs.trace-shard.result == 'failure')");
+    expect(jobKey(job('map-build'), 'if')).toMatch(/^always\(\) && /);
+    // trace-run.mjs exits 3 after writing the records when a traced test failed (ruling M1): the records
+    // must still be uploaded, or map-build counts a missing shard and writes no map at all.
+    expect(step(job('trace-shard'), 'Keep the records')).toMatch(/^ {8}if: always\(\)$/m);
   });
 
   it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
@@ -6729,6 +8061,142 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     const st = step(job('times-build'), 'Merge the durations');
     expect(st, 'a working-directory would make every key server-relative').not.toMatch(/working-directory:/);
     expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out .ci-cache/testtimes.json "$RUNNER_TEMP"/times/*/times.json');
+  });
+});
+
+/** A scratch dir holding fake binaries, put first on PATH for a step's script. */
+function fakeBin(bins: Record<string, string>): string {
+  const dir = mkTmp('ccrc-ci-fakebin-');
+  for (const [name, body] of Object.entries(bins)) {
+    writeFileSync(join(dir, name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(dir, name), 0o755);
+  }
+  return dir;
+}
+
+/** Runs a step's own script under the runner's default shell, in `cwd`, with `env`. */
+function runStep(st: string, cwd: string, env: Record<string, string>): { status: number | null, output: string, stdout: string } {
+  const dir = mkTmp('ccrc-ci-step-');
+  const script = join(dir, 'step.sh');
+  writeFileSync(script, runScript(st));
+  const out = join(dir, 'out');
+  writeFileSync(out, '');
+  const r = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', script], {
+    cwd, env: { PATH: process.env.PATH ?? '', ...env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+  });
+  return { status: r.status, output: readFileSync(out, 'utf8'), stdout: r.stdout };
+}
+
+describe('ci.yml: maps and durations come ONLY from trusted main artifacts (ruling T4)', () => {
+  it('no Actions cache anywhere — a pull request can write its own cache scope', () => {
+    expect(read(CI)).not.toMatch(/actions\/cache/);
+  });
+
+  it('select fetches the newest trusted testmap and testtimes (main-artifact.mjs) and downloads them', () => {
+    const st = step(job('select'), 'Fetch the newest trusted map and durations');
+    const s = runScript(st);
+    expect(s).toContain('for name in testmap testtimes; do');
+    expect(s).toContain('node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name"');
+    expect(s).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D .ci-cache');
+    // Run it with fakes: node answers run 77 / artifact 5 for testmap and nothing for testtimes; gh "downloads".
+    const ws = mkTmp('ccrc-ci-fetch-');
+    const bin = fakeBin({
+      node: 'case "$*" in *"--name testmap"*) printf "testmap: artifact 5\\nartifact_id=5\\nrun_id=77\\nhead_sha=%s\\n" "$(printf a%.0s $(seq 40))";; *) printf "testtimes: none\\nartifact_id=\\nrun_id=\\nhead_sha=\\n";; esac',
+      gh: 'echo "gh $*" >> "$GH_LOG"; for d; do :; done; echo "{}" > "$d/testmap.json"',
+    });
+    const r = runStep(st, ws, { PATH: `${bin}:${process.env.PATH}`, REPO: 'o/r', REPO_ID: '1', GH_LOG: join(ws, 'gh.log') });
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(ws, '.ci-cache', 'testmap.artifact'), 'utf8')).toBe('5\n');
+    expect(existsSync(join(ws, '.ci-cache', 'testtimes.artifact'))).toBe(false);
+    expect(readFileSync(join(ws, 'gh.log'), 'utf8')).toBe('gh run download 77 --repo o/r -n testmap -D .ci-cache\n');
+    // A failed download is no map (a full run), never a failed select — and records no artifact id.
+    const ws2 = mkTmp('ccrc-ci-fetch-');
+    const failing = fakeBin({
+      node: 'printf "artifact_id=5\\nrun_id=77\\nhead_sha=x\\n"',
+      gh: 'echo "HTTP 410: artifact expired" >&2; exit 1',
+    });
+    const r2 = runStep(st, ws2, { PATH: `${failing}:${process.env.PATH}`, REPO: 'o/r', REPO_ID: '1' });
+    expect(r2.status).toBe(0);
+    expect(r2.stdout).toContain('::warning::could not download testmap from run 77');
+    expect(existsSync(join(ws2, '.ci-cache', 'testmap.artifact'))).toBe(false);
+    expect(existsSync(join(ws2, '.ci-cache', 'testmap.json'))).toBe(false);
+  });
+
+  function casStep(): string { return step(job('map-build'), 'Is the map this refresh was built on still the newest?'); }
+
+  it('a refresh publishes only if its base map is still the newest trusted one (compare-and-swap)', () => {
+    const ws = mkTmp('ccrc-ci-cas-');
+    mkdirSync(join(ws, 'rt', 'select-inputs'), { recursive: true });
+    writeFileSync(join(ws, 'rt', 'select-inputs', 'testmap.artifact'), '5\n');
+    const answer = (id: string) => fakeBin({ node: `printf "testmap\\nartifact_id=${id}\\nrun_id=9\\nhead_sha=x\\n"` });
+    const same = runStep(casStep(), ws, { PATH: `${answer('5')}:${process.env.PATH}`, RUNNER_TEMP: join(ws, 'rt'), REPO: 'o/r', REPO_ID: '1' });
+    expect(same.output).toBe('publish=true\n');
+    const moved = runStep(casStep(), ws, { PATH: `${answer('6')}:${process.env.PATH}`, RUNNER_TEMP: join(ws, 'rt'), REPO: 'o/r', REPO_ID: '1' });
+    expect(moved.output).toBe('publish=false\n');
+    expect(moved.stdout).toContain('::notice::');
+    const none = runStep(casStep(), ws, { PATH: `${answer('')}:${process.env.PATH}`, RUNNER_TEMP: join(ws, 'rt'), REPO: 'o/r', REPO_ID: '1' });
+    expect(none.output).toBe('publish=false\n');
+    // No recorded base and no newest map are not "the same map": an empty id never matches.
+    writeFileSync(join(ws, 'rt', 'select-inputs', 'testmap.artifact'), '\n');
+    const blank = runStep(casStep(), ws, { PATH: `${answer('')}:${process.env.PATH}`, RUNNER_TEMP: join(ws, 'rt'), REPO: 'o/r', REPO_ID: '1' });
+    expect(blank.output).toBe('publish=false\n');
+  });
+
+  it('map-build publishes testmap unless the compare-and-swap said no; times-build publishes testtimes', () => {
+    const b = job('map-build');
+    expect(b).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+    expect(jobKey(b, 'if')).not.toBeNull();
+    expect(casStep()).toMatch(/^ {8}if: needs\.select\.outputs\.trace == 'refresh' && needs\.select\.outputs\.map_sha != ''$/m);
+    expect(step(b, 'Keep the map as an artifact')).toMatch(/^ {8}if: steps\.cas\.outputs\.publish != 'false'$/m);
+    expect(step(job('times-build'), 'Keep the durations as an artifact')).toMatch(/^ {10}name: testtimes\n {10}path: \.ci-cache\/testtimes\.json\n/m);
+  });
+});
+
+describe('ci.yml: a pull request that changes the pipeline runs everything, decided in plain bash (ruling T3)', () => {
+  function pipelineStep(): string { return step(job('select'), 'Does this pull request change the pipeline?'); }
+  const gitEnv = {
+    GIT_AUTHOR_NAME: 'ccrc fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+    GIT_COMMITTER_NAME: 'ccrc fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+  };
+  /** A repo whose origin/main is its first commit, and whose HEAD changes `changed`. */
+  function prRepo(changed: string): string {
+    const dir = mkTmp('ccrc-ci-pipeline-change-');
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: dir, env: { ...process.env, ...gitEnv } });
+    g('init', '-q'); g('checkout', '-q', '-b', 'main');
+    mkdirSync(join(dir, 'server'), { recursive: true });
+    writeFileSync(join(dir, 'server', 'x.ts'), '1\n');
+    g('add', '-A'); g('commit', '-qm', 'base');
+    g('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    mkdirSync(path.dirname(join(dir, changed)), { recursive: true });
+    writeFileSync(join(dir, changed), '2\n');
+    g('add', '-A'); g('commit', '-qm', 'the pull request');
+    return dir;
+  }
+
+  it('runs only on pull_request, and hands select --input-mode full when it answers changed=true', () => {
+    expect(pipelineStep()).toMatch(/^ {8}if: github\.event_name == 'pull_request'$/m);
+    const sel = step(job('select'), 'Select');
+    expect(sel).toMatch(/^ {10}PIPELINE_CHANGED: \$\{\{ steps\.pipeline\.outputs\.changed \}\}$/m);
+    expect(runScript(sel)).toContain('elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi');
+  });
+
+  it('a change under .github/ -> changed=true; anything else -> false; a base it cannot diff against -> true', () => {
+    expect(runStep(pipelineStep(), prRepo('.github/ci/select-tests.mjs'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
+    expect(runStep(pipelineStep(), prRepo('server/y.ts'), { BASE_REF: 'nope' })).toMatchObject({ status: 0, output: 'changed=true\n' });
+  });
+
+  it('diffs from the merge base, so a pipeline change main made since the branch point is not this pull request\'s', () => {
+    const dir = prRepo('server/y.ts');
+    const g = (...a: string[]) => execFileSync('git', a, { cwd: dir, env: { ...process.env, ...gitEnv } });
+    // main moves on with a .github/ change of its own, after the pull request branched.
+    g('checkout', '-q', '-b', 'later-main', 'origin/main');
+    mkdirSync(join(dir, '.github'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'x.yml'), '1\n');
+    g('add', '-A'); g('commit', '-qm', 'main moves on');
+    g('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    g('checkout', '-q', 'main');
+    expect(runStep(pipelineStep(), dir, { BASE_REF: 'main' })).toMatchObject({ status: 0, output: 'changed=false\n' });
   });
 });
 
@@ -6768,7 +8236,12 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     const b = job('full-suite');
     expect(needs(b)).toEqual(['build-pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
     expect(jobKey(b, 'if')).toBe("always() && needs.select.outputs.tests == 'full'");
-    expect(b).toMatch(/^ {10}NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}$/m);
+    // RESULTS carries exactly one `name=result` pair per need — never toJSON(needs), which carries every select
+    // matrix and outgrows an environment string's 128 KB as the suite grows.
+    expect(b).not.toContain('toJSON(needs)');
+    const results = /^ {10}RESULTS: (.*)$/m.exec(b)?.[1] ?? '';
+    // A pair's expression holds spaces of its own; a pair starts where a space is followed by `name=`.
+    expect(results.split(/ (?=[\w-]+=)/).sort()).toEqual(needs(b).map((n) => `${n}=\${{ needs.${n}.result }}`).sort());
     expect(b).toMatch(/^ {6}verdict: \$\{\{ steps\.verdict\.outputs\.verdict \}\}$/m);
     // The output is written BY the step whose id the job output reads, and
     // only after verdict.mjs exits 0: a step's GITHUB_OUTPUT is its own, so a
@@ -6803,20 +8276,20 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
 });
 ```
 
-- [ ] **Step 2: Run it, expect FAIL**
+- [ ] **Step 6: Run it, expect FAIL**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorkers=2
 ```
 
-  Measured against today's `ci.yml`: `Tests  18 failed | 3 passed (21)`. The failures name the missing jobs —
-  ``ci.yml has no job `select` `` (4), `` `server-shard` `` (3), `` `server` `` (2), `` `map-build` `` (2),
-  `` `trace-shard` ``, `` `times-build` ``, `` `full-suite` `` — plus the missing `CCRC_LEG` switch, the missing
-  `schedule:`, `concurrency: not found at column 0`, and `CCRC_SELECTION` (`expected [] to have a length of 1`).
-  The three that pass already hold on today's file and are regression pins: no `paths:` filter, no job-level
-  `if:`/`needs:` on `test`/`build-pwa`, every job has a deadline ≤ 60.
+  Measured against today's `ci.yml`: `Tests  27 failed | 4 passed (31)`. The failures name the missing jobs —
+  ``ci.yml has no job `select` `` (8), `` `map-build` `` (5), `` `server-shard` `` (3), `` `server` `` (3),
+  `` `trace-shard` ``, `` `times-build` ``, `` `full-suite` `` — plus the missing `CCRC_LEG` switch,
+  `concurrency: not found at column 0`, and `CCRC_SELECTION` (a second definition would shadow it). The four
+  that pass already hold on today's file and are regression pins: no `paths:` filter, no job-level
+  `if:`/`needs:` on `test`/`build-pwa`, every job has a deadline ≤ 60, no Actions cache.
 
-- [ ] **Step 3: Implement the composite action** — `.github/actions/server-deps/action.yml`:
+- [ ] **Step 7: Implement the composite action** — `.github/actions/server-deps/action.yml`:
 
 <!-- file: .github/actions/server-deps/action.yml -->
 ```yaml
@@ -6913,7 +8386,7 @@ runs:
       run: npm ci
 ```
 
-- [ ] **Step 4: Implement the pipeline** — replace `.github/workflows/ci.yml` entirely with:
+- [ ] **Step 8: Implement the pipeline** — replace `.github/workflows/ci.yml` entirely with:
 
 <!-- file: .github/workflows/ci.yml -->
 ```yaml
@@ -6987,7 +8460,7 @@ on:
         value: ${{ jobs.full-suite.outputs.verdict }}
 
 # The switch that turns selection on (design 2026-09-23 §12 step 5). In
-# `shadow`, `select` computes, reports and caches everything, but the shards
+# `shadow`, `select` computes and reports everything, but the shards
 # still run every server test; `enforce` makes a pull request run only what
 # was selected. One line, defined once — server/test/ci-pipeline.test.ts.
 env:
@@ -7015,9 +8488,12 @@ jobs:
     timeout-minutes: 10
     # checks: read — the daily run asks whether main's head already carries a
     # green `full-suite` check before it spends an hour proving it again.
+    # actions: read — the map and the durations are artifacts of trusted
+    # main runs, listed and downloaded here.
     permissions:
       contents: read
       checks: read
+      actions: read
     outputs:
       tests: ${{ steps.select.outputs.tests }}
       trace: ${{ steps.select.outputs.trace }}
@@ -7039,21 +8515,54 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # The newest map and duration table. `restore-keys` by prefix yields the
-      # most recently created entry; a pull request may read caches its base
-      # branch created, so no token beyond the default is needed.
-      - name: Restore the test map
-        uses: actions/cache/restore@v4
-        with:
-          path: .ci-cache/testmap.json
-          key: testmap-${{ github.sha }}
-          restore-keys: testmap-
-      - name: Restore the test durations
-        uses: actions/cache/restore@v4
-        with:
-          path: .ci-cache/testtimes.json
-          key: testtimes-${{ github.sha }}
-          restore-keys: testtimes-
+      # A pull request that changes the pipeline runs the full suite — decided
+      # HERE, in plain bash, not by the selector the pull request may be
+      # changing (select-tests.mjs's own `.github/` trigger is a second line).
+      # A base it cannot diff against answers "changed": the safe direction.
+      - name: Does this pull request change the pipeline?
+        id: pipeline
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if base=$(git merge-base "origin/$BASE_REF" HEAD) && changed=$(git diff --name-only "$base" HEAD -- .github/); then
+            if [ -n "$changed" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              printf 'this pull request changes the pipeline:\n%s\n' "$changed"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "::warning::could not diff this pull request against origin/$BASE_REF; treating its pipeline as changed"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      # The newest map and duration table come ONLY from artifacts of trusted
+      # ci.yml runs on main (main-artifact.mjs: branch main, this repository,
+      # a push, schedule or dispatch) — never from the Actions cache, whose PR
+      # scope a pull request can write. Nothing found, or a failed download,
+      # means no map: a full run. The artifact id is kept for map-build's
+      # compare-and-swap.
+      - name: Fetch the newest trusted map and durations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          mkdir -p .ci-cache
+          for name in testmap testtimes; do
+            out=$(GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name")
+            printf '%s\n' "$out"
+            run_id=$(printf '%s\n' "$out" | sed -n 's/^run_id=//p')
+            artifact_id=$(printf '%s\n' "$out" | sed -n 's/^artifact_id=//p')
+            if [ -n "$run_id" ]; then
+              if gh run download "$run_id" --repo "$REPO" -n "$name" -D .ci-cache; then
+                echo "$artifact_id" > ".ci-cache/$name.artifact"
+              else
+                echo "::warning::could not download $name from run $run_id; going without it"
+              fi
+            fi
+          done
       # Any failure to read the checks answers "not green", which runs the
       # suite — the safe direction.
       - name: Does this commit already carry a green full-suite?
@@ -7077,16 +8586,18 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_MODE: ${{ inputs.mode }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
+          PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map .ci-cache/testmap.json --trace-list .ci-cache/traced.txt)
-          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); fi
+          if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
           if [ -f .ci-cache/testtimes.json ]; then args+=(--times .ci-cache/testtimes.json); fi
           node .github/ci/select.mjs "${args[@]}"
       # map-build refreshes against EXACTLY the map this job diffed from, not
-      # whatever the cache holds by the time it runs, and is told which tests
-      # this job MEANT to trace — a test whose trace never arrived is written
-      # unknown instead of keeping its stale entry. Hidden directory, so
-      # upload-artifact must be told to include it.
+      # whatever is newest by the time it runs, and is told which tests this
+      # job MEANT to trace — a test whose trace never arrived is written
+      # unknown instead of keeping its stale entry — and which artifact the
+      # map was, for its compare-and-swap. Hidden directory, so upload-artifact
+      # must be told to include it.
       - name: Hand the map to map-build
         if: steps.select.outputs.trace == 'refresh' && steps.select.outputs.map_sha != ''
         uses: actions/upload-artifact@v4
@@ -7095,6 +8606,7 @@ jobs:
           path: |
             .ci-cache/testmap.json
             .ci-cache/traced.txt
+            .ci-cache/testmap.artifact
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
@@ -7175,7 +8687,7 @@ jobs:
       # Positional file arguments are SUBSTRING filters (`a.test.ts` also runs
       # `xa.test.ts`), so the shard's list goes through vitest.select.config.ts,
       # whose include is exactly the listed paths. The JSON report is the
-      # per-file durations the daily run caches for the next plan.
+      # per-file durations the daily run publishes for the next plan.
       - name: Test
         working-directory: server
         env:
@@ -7221,7 +8733,11 @@ jobs:
   # `needs:` failed is SKIPPED, and GitHub reports a skipped job as SUCCESS
   # — written the obvious way, a crashed selector would be a green check.
   # verdict.mjs is red unless select succeeded, the typecheck succeeded, and
-  # the shards succeeded or were skipped because select counted zero.
+  # the shards succeeded or were skipped because select counted zero — and a
+  # pull request that answered tests none is red too (EVENT, from the
+  # workflow's own context). The first step reads the job results with no
+  # script at all and can only ADD red: a no-op verdict.mjs cannot turn a
+  # failed prerequisite green.
   server:
     name: test (server)
     needs: [select, server-shard, server-typecheck]
@@ -7229,6 +8745,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Refuse a prerequisite that did not succeed (no script involved)
+        if: needs.select.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.server-shard.result) || contains(fromJSON('["failure","cancelled"]'), needs.server-typecheck.result)
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -7240,6 +8759,7 @@ jobs:
           SHARDS_RESULT: ${{ needs.server-shard.result }}
           TESTS: ${{ needs.select.outputs.tests }}
           COUNT: ${{ needs.select.outputs.count }}
+          EVENT: ${{ github.event_name }}
         run: node .github/ci/verdict.mjs server
 
   # `test (agent)` and `test (pwa)` — required BY NAME, so this matrix keeps
@@ -7391,7 +8911,9 @@ jobs:
   # (each case carries `script`'s rc and stderr), and the default reporter
   # elides those for passing cases.
   probe-macos:
-    if: ${{ !((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') }}
+    # Pull requests and the daily run only: an advisory probe must not gate a
+    # dispatched full run, or release-stable's called one.
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
     runs-on: macos-latest
     # 25, not 10. The first run was cut at 10 with the auth suite still going,
     # and the reason is D-2661 rather than the suite being big: several cases
@@ -7503,9 +9025,10 @@ jobs:
   # listed server test in its own vitest process under strace. Scheduled
   # runs and manual rebuilds trace every file; a refresh traces what the
   # merge affected. Its test results are NOT a verdict — tracing perturbs
-  # the timing-budget tests — but a failure still shows red on the commit,
-  # and the test is recorded `unknown` so the map selects it until a clean
-  # trace replaces it.
+  # the timing-budget tests — but a failure still shows red on the commit
+  # (trace-run.mjs exits 3 AFTER writing the records, and the records are
+  # kept regardless), and the test is recorded `unknown` so the map selects
+  # it until a clean trace replaces it.
   trace-shard:
     name: trace ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
@@ -7553,19 +9076,24 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # Merges the trace shards into a map for this commit and caches it
+  # Merges the trace shards into a map for this commit and publishes it
   # (design 2026-09-23 §5.3-§5.5). Runs after a failed trace shard too — a
   # failing test is recorded `unknown`, which is safe — but refuses when a
   # shard left NO records file at all. A refresh is also told what select
   # MEANT to trace (`--traced`), so a test missing from the records that did
   # arrive is written `unknown` rather than keeping its old entry: those are
-  # exactly the tests the merge affected. The map is also kept as an artifact,
-  # which is how a replay (spec §11.3) fetches a run's map.
+  # exactly the tests the merge affected. The map is published as the
+  # `testmap` artifact — what select fetches next time, and what a replay
+  # (spec §11.3) fetches.
   map-build:
     needs: [select, trace-shard]
     if: always() && needs.select.result == 'success' && needs.select.outputs.trace_count != '0' && (needs.trace-shard.result == 'success' || needs.trace-shard.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # actions: read — the compare-and-swap asks which trusted map is newest.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -7607,11 +9135,29 @@ jobs:
           else
             node .github/ci/testmap.mjs build --sha "$GITHUB_SHA" --records "$RUNNER_TEMP/flat" --out .ci-cache/testmap.json
           fi
-      - uses: actions/cache/save@v4
-        with:
-          path: .ci-cache/testmap.json
-          key: testmap-${{ github.sha }}
+      # A refresh publishes only if the map it was built on is STILL the newest
+      # trusted map (a daily rebuild, or another refresh, may have published
+      # since select fetched it); otherwise it skips publishing — the next
+      # refresh diffs from the newer map, which is safe. A rebuild, or a
+      # refresh that had no map and traced everything, always publishes.
+      - name: Is the map this refresh was built on still the newest?
+        id: cas
+        if: needs.select.outputs.trace == 'refresh' && needs.select.outputs.map_sha != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+        run: |
+          base=$(cat "$RUNNER_TEMP/select-inputs/testmap.artifact")
+          newest=$(GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name testmap | sed -n 's/^artifact_id=//p')
+          if [ -n "$base" ] && [ "$newest" = "$base" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the map this refresh was built on (artifact $base) is no longer the newest trusted map (${newest:-none}); not publishing — the next refresh diffs from the newer one"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Keep the map as an artifact
+        if: steps.cas.outputs.publish != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: testmap
@@ -7621,8 +9167,8 @@ jobs:
           retention-days: 14
 
   # The per-file durations the shard planner packs by, from the untraced
-  # full run's JSON reports. Only on main, whose caches every pull request
-  # can read; a cache saved from any other ref is visible to that ref alone.
+  # full run's JSON reports, published as the `testtimes` artifact. Only on
+  # main: select reads durations only from trusted main runs anyway.
   times-build:
     needs: [select, server-shard]
     if: always() && needs.select.outputs.tests == 'full' && github.ref == 'refs/heads/main' && (needs.server-shard.result == 'success' || needs.server-shard.result == 'failure')
@@ -7641,10 +9187,14 @@ jobs:
         run: |
           mkdir -p .ci-cache
           node .github/ci/shards.mjs times --out .ci-cache/testtimes.json "$RUNNER_TEMP"/times/*/times.json
-      - uses: actions/cache/save@v4
+      - name: Keep the durations as an artifact
+        uses: actions/upload-artifact@v4
         with:
+          name: testtimes
           path: .ci-cache/testtimes.json
-          key: testtimes-${{ github.sha }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   # THE STABLE GATE'S EVIDENCE (design 2026-09-23 §8). Exists only in `full`
   # mode, and is green iff every leg is — the Linux shards through their
@@ -7660,16 +9210,23 @@ jobs:
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
+      # Script-free, and can only ADD red: any leg that did not succeed fails
+      # this job before verdict.mjs is even checked out.
+      - name: Refuse any leg that did not succeed (no script involved)
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       # The `verdict` output is written by THIS step, once verdict.mjs exits 0:
       # a step's GITHUB_OUTPUT is its own, and the job output reads this step's.
+      # RESULTS is one `name=result` pair per need — not the whole needs context, which
+      # carries every select matrix and outgrows an environment string's 128 KB.
       - name: Verdict
         id: verdict
         env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"
@@ -7701,20 +9258,23 @@ jobs:
   | 314–315 | build proven by its output | Kept verbatim. |
 
   New comments written in integration (not in the old file): `select`'s upload now says it also hands over the
-  traced list; `trace-shard`'s Trace step explains why there is no `i/n` split; `map-build`'s header adds the
-  `--traced` safety and the `testmap` artifact; `full-suite`'s Verdict step says why the output is written there.
+  traced list and the artifact id; `select`'s pipeline-change and fetch steps say why they exist and which way
+  each failure falls; `trace-shard`'s Trace step explains why there is no `i/n` split, and its header that a
+  failed trace shows red after its records are kept; `map-build`'s header adds the `--traced` safety and the
+  published `testmap`, and its compare-and-swap step says why a stale refresh does not publish; both verdict jobs'
+  script-free first steps; `full-suite`'s Verdict step says why the output is written there and why `RESULTS`.
 
-- [ ] **Step 5: Run it, expect PASS**
+- [ ] **Step 9: Run it, expect PASS**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorkers=2
 ```
 
-  Measured: `Tests  21 passed (21)`.
+  Measured: `Tests  31 passed (31)`.
 
-- [ ] **Step 6: Measure the mutation table.** Stage the three files first
+- [ ] **Step 10: Measure the mutation table.** Stage the three files first
   (`git add .github/actions/server-deps/action.yml .github/workflows/ci.yml server/test/ci-pipeline.test.ts`);
-  then for each row: apply the one edit, run Step 5's command, see the named test red, and restore with
+  then for each row: apply the one edit, run Step 9's command, see the named test red, and restore with
   `git checkout -- <file>` (which restores the staged version). Re-measured in the integration clone:
 
   | Mutation (in `ci.yml` unless noted) | Test that goes red |
@@ -7730,7 +9290,7 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   | `cancel-in-progress: true` | cancels superseded runs for pull requests only |
   | group without the `ci-` prefix | cancels superseded runs for pull requests only |
   | a second `CCRC_SELECTION: enforce` in select's step env | CCRC_SELECTION is defined exactly once |
-  | drop `checks: read` from select / add `actions: write` | select asks for contents: read and checks: read (both measured) |
+  | drop `checks: read` from select / make its `actions: read` a `write` | select asks for contents: read, checks: read and actions: read (both measured) |
   | `timeout-minutes: 90` on `trace-shard` | every job declares a deadline between 1 and 60 minutes |
   | drop `test-macos` from `full-suite`'s needs | full-suite needs every leg |
   | `if: needs.select.outputs.tests == 'full'` on `full-suite` (no `always()`) | full-suite needs every leg |
@@ -7743,7 +9303,7 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   | `platform: linux` on `test-macos` | every server-running job installs through server-deps |
   | (action.yml) `install -y tmux jq python3` (strace dropped) | every server-running job installs through server-deps |
   | drop `trace_count` from select's outputs | each needs.select.outputs.X is declared in select's outputs |
-  | a `cache/restore` step in `map-build` | map-build refreshes against the map select diffed from… |
+  | an `actions/cache/restore` step in `map-build` | no Actions cache anywhere |
   | refresh `--old .ci-cache/testmap.json` | map-build refreshes against the map select diffed from… |
   | refresh without `--traced` | map-build refreshes against the map select diffed from… |
   | `select-inputs` uploads the map only | map-build refreshes against the map select diffed from… |
@@ -7753,11 +9313,26 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   | `working-directory: server` on times-build's merge step | times-build merges the durations from the workspace root |
   | the "already green?" step's failure branch writes `full_green=true` | gh fails -> full_green=false, and the step itself succeeds |
   | its `gh api` call not guarded by `if` (a failure aborts the step) | gh fails -> full_green=false…, gh finds a green full-suite… (2) |
+  | delete `server`'s script-free first step / drop its `needs.select.result != 'success' \|\| ` clause | both verdicts are fronted by a script-free step that can only ADD red (1 each) |
+  | delete `full-suite`'s script-free first step / drop its `skipped` clause | both verdicts are fronted by a script-free step … (1 each) |
+  | drop `EVENT: ${{ github.event_name }}` from `test (server)` | test (server) is a summary that fails closed |
+  | `RESULTS` without the `test-macos` pair / `NEEDS_JSON: ${{ toJSON(needs) }}` back | full-suite needs every leg (1 each) |
+  | drop `actions: read` from `select` | select asks for contents: read, checks: read and actions: read |
+  | an `actions/cache/restore` step in `select` | no Actions cache anywhere |
+  | the fetch step records no artifact id / records it even when the download failed / lets a failed download fail `select` / fetches `testmap` only | select fetches the newest trusted testmap and testtimes … (1 each) |
+  | `select-inputs` without `testmap.artifact` | map-build refreshes against the map select diffed from… |
+  | the compare-and-swap always publishes / drops its empty-base guard | a refresh publishes only if its base map is still the newest trusted one (1 each) |
+  | the compare-and-swap step also runs on a rebuild / the `testmap` upload ignores it / uploads only on `publish == 'true'` (a rebuild would never publish) / `map-build` without `actions: read` / the `testtimes` artifact renamed | map-build publishes testmap unless the compare-and-swap said no; times-build publishes testtimes (1 each) |
+  | the pipeline step on every event / `Select` ignores `PIPELINE_CHANGED` | runs only on pull_request, and hands select --input-mode full … (1 each) |
+  | the pipeline diff over the whole tree / an undiffable base answering `false` | a change under .github/ -> changed=true; anything else -> false; … (1 each) |
+  | the pipeline diff two-dot against `origin/$BASE_REF` | diffs from the merge base, so a pipeline change main made since the branch point is not this pull request's |
+  | `probe-macos` on every event | probe-macos runs on pull requests and the daily schedule only … |
+  | `trace-shard`'s records kept only on success | map-build runs after a FAILED trace shard too … |
 
-  Every row measured red — one failing test each (`Tests  1 failed | 20 passed (21)`) except where noted — and
+  Every row measured red — one failing test each (`Tests  1 failed | 30 passed (31)`) except where noted — and
   green again after restore.
 
-- [ ] **Step 7: Validate YAML and expressions with actionlint** (Task 1 Step 3's binary, or download it the same way)
+- [ ] **Step 11: Validate YAML and expressions with actionlint** (Task 1 Step 3's binary, or download it the same way)
 
 ```bash
 "$AL/actionlint"; echo "rc=$?"
@@ -7766,7 +9341,7 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   Expected: no findings, `rc=0` (measured) — this checks every workflow in `.github/workflows/`, every `${{ }}`
   expression against its context, the `needs.*.outputs.*` references, and (with shellcheck on PATH) every `run:`.
 
-- [ ] **Step 8: Run the neighbouring guards** — every suite that reads a workflow or the action, each alone:
+- [ ] **Step 12: Run the neighbouring guards** — every suite that reads a workflow or the action, each alone:
 
 ```bash
 cd server
@@ -7785,22 +9360,30 @@ done
   ci.yml. `ccd-bounded-reads.test.ts:96-100` mentions `test-macos`'s `brew install … coreutils` in prose only; the
   job still installs coreutils (through the action), so the prose stays true.
 
-- [ ] **Step 9: Execute the pipeline's own `run:` blocks, composed** — the check no text pin can make: that the
+- [ ] **Step 13: Execute the pipeline's own `run:` blocks, composed** — the check no text pin can make: that the
   steps' real commands, fed each other's real outputs, compose. This scratch script (it lives outside the
   checkout and is never committed) reads `ci.yml` with PyYAML, runs each step's `run:` exactly as the runner does
   (`bash --noprofile --norc -eo pipefail`, the step's and job's `env:` with every `${{ }}` supplied by the
-  scenario — an unsupplied one stops it), and plays the upload/download/cache actions by their documented layout:
+  scenario — an unsupplied one stops it), plays the upload/download actions by their documented layout, and stands
+  in for GitHub's artifact store with a local fake of the two REST routes `main-artifact.mjs` reads plus a fake
+  `gh` whose `run download` copies from that store:
 
 <!-- scratch-file: compose.py -->
 ```python
 #!/usr/bin/env python3
 """Execute ci.yml's own `run:` blocks (extracted from the YAML, not retyped) that invoke a .github/ci script,
 against a fixture workspace, chaining their real outputs:
-  A   push, no map           select -> trace-shard (x N rows) -> map-build (build) -> cache testmap-<sha>
-  B   pull_request (enforce)  select(--map) -> server-shard (x N) -> test (server) verdict   (red: caught)
-  B2  the PR, fixed           select(--map) -> server-shard -> test (server) verdict          (green)
-  C   push after B2 merged    select(--map, refresh) -> trace-shard -> map-build (refresh --traced)
-  D   schedule                times-build (B2's times.json) -> select(--times) -> full-suite verdict
+  A   push, no map           fetch -> select -> trace-shard (x N rows) -> map-build (build) -> publish testmap
+  B   pull_request (enforce)  pipeline? -> fetch (a newer UNTRUSTED testmap planted) -> select(--map)
+                              -> server-shard (x N) -> test (server) verdict                    (red: caught)
+  B2  the PR, fixed           pipeline? -> fetch -> select -> server-shard -> test (server) verdict (green)
+  B3  a PR touching .github/  pipeline? says changed -> select --input-mode full                 (full)
+  C   push after B2 merged    fetch -> select(refresh) -> trace-shard -> map-build (refresh --traced)
+                              -> compare-and-swap (publish) ; the same CAS after a newer map lands (no publish)
+  D   schedule                times-build (B2's times.json) -> publish testtimes -> fetch -> select(--times)
+                              -> full-suite verdict
+Artifacts live in a local store behind a fake of the two REST routes main-artifact.mjs reads, and a fake `gh`
+whose `run download` copies from that store.
 Every expression a step's env uses must be supplied by the scenario, or the script stops.
 Usage: CCRC_COMPOSE_SRC=<checkout with server/node_modules> CCRC_COMPOSE_DIR=<scratch dir> python3 compose.py
 Scratch tooling: it lives outside the checkout and is never committed."""
@@ -7839,12 +9422,10 @@ def run_step(job, name, exprs, cwd_base, extra_env, runner_temp):
     env = dict(os.environ)
     env.update({k: str(v) for k, v in WF_ENV.items()})
     for k, v in {**CI['jobs'][job].get('env', {}), **st.get('env', {})}.items():
-        v = str(v)
-        m = re.fullmatch(r'\$\{\{ (.*) \}\}', v)
-        if m:
+        def sub(m):
             assert m.group(1) in exprs, f'{job}/{name}: no value for expression {m.group(1)!r}'
-            v = exprs[m.group(1)]
-        env[k] = v
+            return exprs[m.group(1)]
+        env[k] = re.sub(r'\$\{\{ (.*?) \}\}', sub, str(v))
     env.update(extra_env)
     env['RUNNER_TEMP'] = str(runner_temp)
     out = runner_temp / 'GITHUB_OUTPUT'
@@ -7854,6 +9435,9 @@ def run_step(job, name, exprs, cwd_base, extra_env, runner_temp):
     env['GITHUB_OUTPUT'] = str(out)
     env['GITHUB_STEP_SUMMARY'] = str(summ)
     env['GITHUB_WORKSPACE'] = str(WS)
+    env['PATH'] = f"{FAKEBIN}:{env['PATH']}"
+    env['GITHUB_API_URL'] = API
+    env['COMPOSE_STORE'] = str(STORE_FILE)
     script = runner_temp / 'step.sh'
     script.write_text(st['run'])
     cwd = WS / st['working-directory'] if 'working-directory' in st else WS
@@ -7899,28 +9483,96 @@ for f in git('ls-files', 'server/test').split('\n'):
 sh(['git', *GIT_ID, 'commit', '-qam', 'fixture: three live server test files'], WS)
 log('workspace:', WS, 'HEAD', git('rev-parse', 'HEAD')[:12], '| live tests:',
     ' '.join(sorted(x for x in git('ls-files', 'server/test').split('\n') if x.endswith('.test.ts'))))
-CACHE = W / 'cache'
-CACHE.mkdir()
+REPO, REPO_ID = 'o/r', 1001
+STORE = []                       # every uploaded artifact: what the REST API would list
+STORE_DIR = W / 'artifacts'
+STORE_DIR.mkdir()
+STORE_FILE = W / 'artifacts.json'
+RUNS = {}
+_tick = [0]
 
-def cache_restore(prefix, path):
-    """actions/cache/restore with restore-keys: <prefix> — the newest entry."""
-    entries = sorted(CACHE.glob(prefix + '*'), key=lambda p: p.stat().st_mtime)
-    (WS / '.ci-cache').mkdir(exist_ok=True)
-    tgt = WS / '.ci-cache' / path
-    if tgt.exists():
-        tgt.unlink()
-    if entries:
-        shutil.copy(entries[-1], tgt)
-        return entries[-1].name
-    return None
+def publish(name, src, event, branch='main', head_repo=REPO_ID, path='.github/workflows/ci.yml'):
+    """upload-artifact in a run of `path` for `event` on `branch`: a new run, a new artifact id, a newer time."""
+    _tick[0] += 1
+    aid, run_id = 100 + _tick[0], 9000 + _tick[0]
+    f = STORE_DIR / f'{aid}-{name}'
+    f.mkdir()
+    shutil.copy(src, f / pathlib.Path(src).name)
+    head = git('rev-parse', 'HEAD')
+    STORE.append({'id': aid, 'name': name, 'expired': False, 'created_at': f'2026-09-23T00:00:{_tick[0]:02d}Z',
+                  'workflow_run': {'id': run_id, 'repository_id': REPO_ID, 'head_repository_id': head_repo,
+                                   'head_branch': branch, 'head_sha': head}, '_dir': str(f)})
+    RUNS[run_id] = {'id': run_id, 'path': path, 'event': event, 'head_branch': branch,
+                    'repository': {'id': REPO_ID}, 'head_repository': {'id': head_repo}}
+    STORE_FILE.write_text(json.dumps(STORE))
+    log(f'    published {name}: artifact {aid} of run {run_id} ({event}, {branch}{", FORK" if head_repo != REPO_ID else ""}) at {head[:12]}')
+    return aid
 
-def select(event, input_mode='', full_green='false', label=''):
+import http.server, threading, urllib.parse
+class FakeApi(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(u.query)
+        body = None
+        if u.path == f'/repos/{REPO}/actions/artifacts':
+            name = q.get('name', [''])[0]
+            arts = [{k: v for k, v in a.items() if k != '_dir'} for a in STORE if a['name'] == name]
+            body = {'total_count': len(arts), 'artifacts': list(reversed(arts))}
+        m = re.fullmatch(rf'/repos/{REPO}/actions/runs/(\d+)', u.path)
+        if m and int(m.group(1)) in RUNS:
+            body = RUNS[int(m.group(1))]
+        self.send_response(200 if body is not None else 404)
+        self.send_header('content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(body if body is not None else {'message': 'Not Found'}).encode())
+srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeApi)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+API = f'http://127.0.0.1:{srv.server_address[1]}'
+FAKEBIN = W / 'fakebin'
+FAKEBIN.mkdir()
+(FAKEBIN / 'gh').write_text("""#!/usr/bin/env python3
+import json, os, shutil, sys
+a = sys.argv[1:]
+assert a[:2] == ['run', 'download'], a
+run_id, name, dest = int(a[2]), a[a.index('-n') + 1], a[a.index('-D') + 1]
+hits = [x for x in json.load(open(os.environ['COMPOSE_STORE'])) if x['workflow_run']['id'] == run_id and x['name'] == name]
+if not hits:
+    sys.exit('no artifact %s in run %d' % (name, run_id))
+os.makedirs(dest, exist_ok=True)
+for f in os.listdir(hits[0]['_dir']):
+    shutil.copy(os.path.join(hits[0]['_dir'], f), os.path.join(dest, f))
+""")
+(FAKEBIN / 'gh').chmod(0o755)
+GH_EXPRS = {'github.token': 't0ken', 'github.repository': REPO, 'github.repository_id': str(REPO_ID)}
+
+def fetch(label):
+    """`Fetch the newest trusted map and durations`, run as shipped against the store. The workspace starts with
+    no .ci-cache, as a fresh checkout does."""
+    shutil.rmtree(WS / '.ci-cache', ignore_errors=True)
+    r, _, _ = run_step('select', 'Fetch the newest trusted map and durations', GH_EXPRS, WS, {}, fresh(f'fetch-{label}'))
+    log(f'[{label}] fetch rc={r.returncode}:', ' / '.join(l for l in r.stdout.split('\n') if l.endswith(')') or l.endswith('none') or l.startswith('::')))
+    assert r.returncode == 0
+    have = sorted(os.listdir(WS / '.ci-cache'))
+    log(f'    .ci-cache: {have}', '| testmap.artifact =', (WS / '.ci-cache/testmap.artifact').read_text().strip() if (WS / '.ci-cache/testmap.artifact').exists() else None)
+
+def pipeline(label):
+    r, out, _ = run_step('select', 'Does this pull request change the pipeline?', {'github.base_ref': 'main'}, WS, {}, fresh(f'pipeline-{label}'))
+    log(f'[{label}] pipeline step rc={r.returncode} changed={out.get("changed")!r}', r.stdout.strip().replace('\n', ' / ')[:200])
+    assert r.returncode == 0
+    return out.get('changed', '')
+
+def select(event, input_mode='', full_green='false', label='', do_fetch=True):
+    changed = pipeline(label) if event == 'pull_request' else ''
+    if do_fetch:
+        fetch(label)
     rt = fresh(f'select-{label}')
     r, out, summ = run_step('select', 'Select', {
         'github.event_name': event, 'inputs.mode': input_mode, "steps.green.outputs.full_green || 'false'": full_green,
+        'steps.pipeline.outputs.changed': changed,
     }, WS, {}, rt)
     log(f'[{label}] select.mjs rc={r.returncode}', r.stderr.strip()[-300:])
-    assert r.returncode == 0
+    assert r.returncode == 0, r.stderr
     for k in ['tests', 'trace', 'shadow', 'count', 'macos_count', 'trace_count', 'map_sha', 'fallback']:
         log(f'    {k}={out.get(k)!r}')
     for k in ['server_matrix', 'macos_matrix', 'trace_matrix']:
@@ -7938,6 +9590,7 @@ def select_inputs_artifact(out, rt):
         return None
     art = fresh('artifact-select-inputs')
     for p in st['with']['path'].split():
+        assert (WS / p).exists(), f'select-inputs: {p} missing'
         shutil.copy(WS / p, art / pathlib.Path(p).name)
     log('    select-inputs artifact:', sorted(os.listdir(art)))
     return art
@@ -7976,9 +9629,21 @@ def map_build(out, arts, select_inputs, label):
     log(f'    testmap.json: format={m["format"]} sha={m["sha"][:12]} (HEAD {head[:12]}) baseline.listed={m["baseline"]["listed"]} tests:')
     for t, v in sorted(m['tests'].items()):
         log(f'      {t}: unknown={v["unknown"]}{" why=" + v["why"] if "why" in v else ""} listed={v["listed"]} git={v["git"]} read∋bus.ts={"server/src/bus.ts" in v["read"]} read∋SKILL.md={"ccd/worker-skill/SKILL.md" in v["read"]}')
-    # actions/cache/save key testmap-<sha>
-    shutil.copy(WS / '.ci-cache/testmap.json', CACHE / f'testmap-{head}')
-    return m
+    return m, rt
+
+def cas_and_publish(out, rt, label, event='push'):
+    """`Is the map this refresh was built on still the newest?` then `Keep the map as an artifact` under its if."""
+    publish_out = ''
+    if out['trace'] == 'refresh' and out['map_sha'] != '':
+        r, o, _ = run_step('map-build', 'Is the map this refresh was built on still the newest?', GH_EXPRS, WS, {}, rt)
+        assert r.returncode == 0, r.stderr
+        publish_out = o.get('publish', '')
+        log(f'[{label}] compare-and-swap: publish={publish_out!r}', ' / '.join(l for l in r.stdout.split('\n') if l.startswith('::')))
+    if publish_out != 'false':
+        publish('testmap', WS / '.ci-cache/testmap.json', event)
+    else:
+        log(f'[{label}] testmap NOT published')
+    return publish_out
 
 def server_shards(out, label):
     times = []
@@ -8000,16 +9665,19 @@ def verdict_server(out, label, shards):
         'needs.select.result': 'success', 'needs.server-typecheck.result': 'success',
         'needs.server-shard.result': shards,
         'needs.select.outputs.tests': out['tests'], 'needs.select.outputs.count': out['count'],
+        'github.event_name': 'pull_request',
     }, WS, {}, rt)
     log(f'[{label}] test (server) verdict rc={r.returncode}: {r.stdout.strip()}')
     return r.returncode
 
 # ── A: the first push to main — no map yet ──
 log('\n== A: push to main, no map ==')
-cache_restore('testmap-', 'testmap.json')
 outA, rtA = select('push', label='A')
+assert outA['fallback'] == 'map: no map restored at .ci-cache/testmap.json', outA['fallback']
 artsA = trace_shards(outA, 'A')
-mapA = map_build(outA, artsA, select_inputs_artifact(outA, rtA), 'A')
+mapA, rtAm = map_build(outA, artsA, select_inputs_artifact(outA, rtA), 'A')
+cas_and_publish(outA, rtAm, 'A')
+git('update-ref', 'refs/remotes/origin/main', 'HEAD')
 
 # ── B: a pull request touching server/src/bus.ts and adding a file to ccd/worker-skill ──
 log('\n== B: pull_request: M server/src/bus.ts, A ccd/worker-skill/NOTES.md ==')
@@ -8018,9 +9686,16 @@ with open(WS / 'server/src/bus.ts', 'a') as fh:
 (WS / 'ccd/worker-skill/NOTES.md').write_text('probe\n')
 sh(['git', *GIT_ID, 'add', '-A'], WS)
 sh(['git', *GIT_ID, 'commit', '-qm', 'PR: touch bus.ts, add a file to ccd/worker-skill'], WS)
-log('    restored map:', cache_restore('testmap-', 'testmap.json'))
+# Planted by pull-request runs, NEWER than main's map, and selecting nothing: never picked.
+empty = W / 'planted' / 'testmap.json'
+empty.parent.mkdir()
+empty.write_text(json.dumps({**mapA, 'tests': {}}))
+publish('testmap', empty, 'pull_request')
+publish('testmap', empty, 'push', head_repo=2002)
+publish('testmap', empty, 'workflow_dispatch', branch='feature')
 WF_ENV['CCRC_SELECTION'] = 'enforce'
 outB, _ = select('pull_request', label='B-enforce')
+assert (WS / '.ci-cache/testmap.artifact').read_text().strip() == str(STORE[0]['id']), 'fetched an untrusted map'
 WF_ENV['CCRC_SELECTION'] = 'shadow'
 outBs, _ = select('pull_request', label='B-shadow')
 timesB1 = server_shards(outB, 'B')
@@ -8036,12 +9711,30 @@ timesB = server_shards(outB2, 'B2')
 assert all(rc == 0 for _, _, rc in timesB)
 assert verdict_server(outB2, 'B2', 'success') == 0
 
+log('\n== B3: a pull request that also touches .github/ (checked, then dropped) ==')
+(WS / '.github/ci/NOTE.md').write_text('probe\n')
+sh(['git', *GIT_ID, 'add', '-A'], WS)
+sh(['git', *GIT_ID, 'commit', '-qm', 'PR: touch the pipeline'], WS)
+WF_ENV['CCRC_SELECTION'] = 'enforce'
+outB3, _ = select('pull_request', label='B3-enforce')
+assert outB3['tests'] == 'full', outB3['tests']
+WF_ENV['CCRC_SELECTION'] = 'shadow'
+sh(['git', *GIT_ID, 'reset', '-q', '--hard', 'HEAD~1'], WS)
+
 # ── C: that PR merged — the refresh ──
 log('\n== C: push to main after B merged (refresh) ==')
-log('    restored map:', cache_restore('testmap-', 'testmap.json'))
 outC, rtC = select('push', label='C')
+sel_inputs = select_inputs_artifact(outC, rtC)
 artsC = trace_shards(outC, 'C')
-mapC = map_build(outC, artsC, select_inputs_artifact(outC, rtC), 'C')
+mapC, rtCm = map_build(outC, artsC, sel_inputs, 'C')
+assert cas_and_publish(outC, rtCm, 'C') == 'true'
+log('\n== C2: the same refresh, had a newer trusted map landed after its select ==')
+shutil.copytree(sel_inputs, rtCm / 'select-inputs-C2')
+(rtCm / 'select-inputs').rename(rtCm / 'select-inputs-used')
+(rtCm / 'select-inputs-C2').rename(rtCm / 'select-inputs')
+(rtCm / 'select-inputs' / 'testmap.artifact').write_text(f"{STORE[0]['id']}\n")
+assert cas_and_publish(outC, rtCm, 'C2') == 'false'
+git('update-ref', 'refs/remotes/origin/main', 'HEAD')
 
 # ── D: the daily run — durations, then a select that packs by them, then full-suite ──
 log('\n== D: schedule: times-build, select --times, full-suite ==')
@@ -8052,16 +9745,19 @@ for name, f, _ in timesB:
 r, _, _ = run_step('times-build', 'Merge the durations', {}, WS, {}, rt)
 log(f'[D] times-build rc={r.returncode}', r.stderr.strip()[-300:], '->', (WS / '.ci-cache/testtimes.json').read_text().replace('\n', ' '))
 assert r.returncode == 0
-shutil.copy(WS / '.ci-cache/testtimes.json', CACHE / f'testtimes-{git("rev-parse", "HEAD")}')
-cache_restore('testmap-', 'testmap.json')
+publish('testtimes', WS / '.ci-cache/testtimes.json', 'schedule')
 outD, _ = select('schedule', label='D')
-rt = fresh('full-suite')
-needs = {k: {'result': 'success', 'outputs': {}} for k in ['select', 'server', 'server-shard', 'server-typecheck', 'test', 'build-pwa', 'test-macos']}
-r, o, _ = run_step('full-suite', 'Verdict', {'toJSON(needs)': json.dumps(needs)}, WS, {}, rt)
-log(f'[D] full-suite verdict rc={r.returncode}: {r.stdout.strip()} | step outputs={o}')
-needs['test-macos']['result'] = 'failure'
-r2, o2, _ = run_step('full-suite', 'Verdict', {'toJSON(needs)': json.dumps(needs)}, WS, {}, fresh('full-suite-red'))
-log(f'[D] full-suite verdict with test-macos=failure rc={r2.returncode}: {r2.stdout.strip()} | step outputs={o2}')
+assert (WS / '.ci-cache/testtimes.json').exists()
+RES = ['select', 'server', 'server-shard', 'server-typecheck', 'test', 'build-pwa', 'test-macos']
+def full_suite(label, results):
+    guard = CI['jobs']['full-suite']['steps'][0]
+    fires = any(v in ('failure', 'cancelled', 'skipped') for v in results.values())
+    log(f'[{label}] full-suite guard step ({guard["name"]}): {"exit 1" if fires else "skipped"}')
+    r, o, _ = run_step('full-suite', 'Verdict', {f'needs.{k}.result': v for k, v in results.items()}, WS, {}, fresh(f'full-suite-{label}'))
+    log(f'[{label}] full-suite verdict rc={r.returncode}: {r.stdout.strip()} | step outputs={o}')
+    return r.returncode
+assert full_suite('D', {k: 'success' for k in RES}) == 0
+assert full_suite('D-red', {**{k: 'success' for k in RES}, 'test-macos': 'failure'}) != 0
 (D / 'compose.transcript').write_text('\n'.join(LOG) + '\n')
 ```
 
@@ -8070,28 +9766,41 @@ CCRC_COMPOSE_SRC="$PWD" CCRC_COMPOSE_DIR="$(mktemp -d)" python3 <scratch>/compos
 ```
 
   Measured (this tree, trimmed to three live server test files — `bus`, `ci-baseline`, `worker-skill`):
-  - **A** (push, no map): `select` → `tests='none' trace='refresh' trace_count='3' map_sha=''`, fallback
-    `map: no map restored at .ci-cache/testmap.json`, one trace row with `vitest_shard: ''`; `trace-run` → `records.json` format 2,
+  - **A** (push, no map): the fetch step → `testmap: none`, `testtimes: none`, an empty `.ci-cache`; `select` →
+    `tests='none' trace='refresh' trace_count='3' map_sha=''`, fallback `map: no map restored at
+    .ci-cache/testmap.json`, one trace row with `vitest_shard: ''`; `trace-run` → `records.json` format 2,
     `baseline.root.listed=['server/test']`, `baseline.rest.listed=[]`, `worker-skill` `rest.listed=['ccd/worker-skill']`;
     `map-build` (the build path) → a map at `HEAD` whose `bus.test.ts` reads `server/src/bus.ts` and whose
-    `worker-skill.test.ts` lists `ccd/worker-skill` and reads `ccd/worker-skill/SKILL.md`; and the set of keys
-    `select.mjs` wrote equals the outputs `select` declares.
-  - **B** (a PR modifying `server/src/bus.ts` and adding `ccd/worker-skill/NOTES.md`): enforce selects `bus`
-    (rule 3, `server/src/bus.ts`) and `worker-skill` (rule 5, `ccd/worker-skill/NOTES.md`), `count='2'`; shadow
-    widens the matrices to all 3 with the same reason table; the shard runs them — `worker-skill` FAILS
-    (`carries no references of its own`: the added file), and `verdict.mjs server` says
-    `count: 2 but shards: failure (expected success)`, exit 1. The listed-directory rule caught a real break.
+    `worker-skill.test.ts` lists `ccd/worker-skill` and reads `ccd/worker-skill/SKILL.md`, published as `testmap`
+    (no compare-and-swap: there was no base map); and the set of keys `select.mjs` wrote equals the outputs
+    `select` declares.
+  - **B** (a PR modifying `server/src/bus.ts` and adding `ccd/worker-skill/NOTES.md`; three NEWER `testmap`
+    artifacts that select nothing are planted first — from a `pull_request` run, from a fork's `push` to a branch
+    named `main`, and from a `workflow_dispatch` on a feature branch): the pipeline step → `changed=false`; the
+    fetch step picks A's map (artifact id recorded), never a planted one; enforce selects `bus` (rule 3,
+    `server/src/bus.ts`) and `worker-skill` (rule 5, `ccd/worker-skill/NOTES.md`), `count='2'`; shadow widens the
+    matrices to all 3 with the same reason table; the shard runs them — `worker-skill` FAILS (`carries no
+    references of its own`: the added file), and `verdict.mjs server` says `count: 2 but shards: failure (expected
+    success)`, exit 1. The listed-directory rule caught a real break.
   - **B2** (the PR drops the file): `count='1'` (`bus` only), shard green, `count: 1, shards: success`.
-  - **C** (push after B2 merged): refresh `trace_count='1'`; `select-inputs` = `testmap.json`, `traced.txt`;
-    `map-build` takes the refresh path with `--traced` → a map at the new `HEAD`, other entries carried.
-  - **D** (schedule): `times-build` → `.ci-cache/testtimes.json` keyed `server/test/bus.test.ts` (from the root);
-    `select --times` → `tests='full' trace='rebuild'`, LPT rows with `vitest_shard: ''`; `full-suite`'s Verdict
-    step → `every leg succeeded`, step output `verdict=green`; with `test-macos` failed → exit 1, no output.
+  - **B3** (the PR also touches `.github/ci/`): the pipeline step → `changed=true` and prints the path; `Select`
+    runs with `--input-mode full` → `tests='full'`, `fallback=''`.
+  - **C** (push after B2 merged): the fetch step picks A's map; refresh `trace_count='1'`; `select-inputs` =
+    `testmap.artifact`, `testmap.json`, `traced.txt`; `map-build` takes the refresh path with `--traced` → a map
+    at the new `HEAD`, other entries carried; the compare-and-swap → `publish='true'` (A's map is still the
+    newest trusted one) and the map is published. **C2**: the same compare-and-swap once a newer trusted map has
+    landed → `publish='false'`, a `::notice::` naming both artifact ids, nothing published.
+  - **D** (schedule): `times-build` → `.ci-cache/testtimes.json` keyed `server/test/bus.test.ts` (from the root),
+    published as `testtimes`; the fetch step now finds both (C's map, D's durations); `select --times` →
+    `tests='full' trace='rebuild'`, LPT rows with `vitest_shard: ''`; `full-suite`'s script-free guard is skipped
+    and its Verdict step (`RESULTS` built from the seven results) → `every leg succeeded`, step output
+    `verdict=green`; with `test-macos` failed → the guard's `exit 1` fires, and the Verdict step alone exits 1
+    with `not green: test-macos=failure` and no output.
 
-- [ ] **Step 10: Commit**, then run the history guards (they read committed ranges):
+- [ ] **Step 14: Commit**, then run the history guards (they read committed ranges):
 
 ```bash
-git add .github/actions/server-deps/action.yml .github/workflows/ci.yml server/test/ci-pipeline.test.ts
+git add .github/ci/main-artifact.mjs server/test/ci-main-artifact.test.ts .github/actions/server-deps/action.yml .github/workflows/ci.yml server/test/ci-pipeline.test.ts
 git commit -F - <<'EOF'
 ci: one pipeline, several modes — select, sharded server tests, a summary test (server), daily full run
 
@@ -8100,6 +9809,11 @@ it runs; server tests run as shards behind a fail-closed `test (server)`
 summary (§4.2); the daily schedule runs every leg including macOS and
 rebuilds the traced map; merges refresh the map against exactly the map
 select diffed from; `full-suite` is the stable gate's evidence (§8).
+The map and the durations come ONLY from artifacts of trusted ci.yml runs
+on main (.github/ci/main-artifact.mjs), never the Actions cache, whose PR
+scope a pull request can write; a refresh publishes only if its base map
+is still the newest. A pull request that changes .github/ runs everything,
+decided in plain bash. Both verdicts are fronted by a script-free step.
 CCRC_SELECTION starts at shadow. Install steps move to the server-deps
 composite action. server/test/ci-pipeline.test.ts pins the shape.
 
@@ -8131,9 +9845,14 @@ Spec §8. A push to `stable` promotes only a commit the full suite passed on.
   `<caller job> / full-suite` (Task 11; the name shape confirmed by Task 1 Q5).
 - Produces: jobs `gate` (output `found`: `true|false`), `full` (calls `./.github/workflows/ci.yml` with
   `mode: full`), `promote` (unchanged steps, now gated).
-- Changed in integration: nothing in this task's files. What it depends on changed in Task 11: the called run's
-  `verdict` output is now actually written (the draft's `full-suite` never set it, so `promote` could never run on
-  the called path — `needs.full.outputs.verdict == 'green'` was always false).
+- Changed in integration: what it depends on changed in Task 11: the called run's `verdict` output is now
+  actually written (the draft's `full-suite` never set it, so `promote` could never run on the called path —
+  `needs.full.outputs.verdict == 'green'` was always false).
+- Changed in integration (operator's ruling T4): `full` grants `actions: read` as well. A called workflow's jobs can
+  never hold more than the calling job grants — a job asking for more fails the run before it starts — and
+  Task 11's `select` now needs `actions: read` to list and download the trusted main artifacts the map and the
+  durations come from. The forbidden-key scan drops `actions` and gains its own pin: `actions:` appears in `full`
+  and nowhere else in the file.
 
 - [ ] **Step 1: Write the failing test** — in `server/test/build-release.test.ts`, replace the whole
   `describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4)', …)` block (from that line up
@@ -8174,12 +9893,15 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     // `deployments: write` added here would stay green against a bare
     // substring pin.
     expect(stableJob('promote')).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
-    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests|actions):/);
+    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests):/);
     // design 2026-09-23 §8: the gate READS check runs and nothing else, and
     // the called ci.yml gets what its select job asks for — a called
-    // workflow's jobs can never hold more than the calling job grants.
+    // workflow's jobs can never hold more than the calling job grants, and
+    // select reads the trusted main artifacts (`actions: read`, ruling T4).
+    // `actions:` appears in `full` and nowhere else in this file.
     expect(stableJob('gate')).toMatch(/^    permissions:\n      checks: read(?!\n      [a-z-]+:)$/m);
-    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      checks: read(?!\n      [a-z-]+:)$/m);
+    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      checks: read\n      actions: read(?!\n      [a-z-]+:)$/m);
+    expect(src.replace(stableJob('full'), ''), 'actions: outside full').not.toMatch(/actions:/);
     expect(src.match(/: write$/gm), 'one write grant in the whole file — promote\'s').toHaveLength(1);
   });
 
@@ -8258,8 +9980,9 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     reads checks only*. The file-wide regex matched the first `permissions:` block that starts with
     `contents: write`; now there are three jobs with three permission blocks, so each is pinned in its own job
     (`promote`: `contents: write` alone — unchanged intent; `gate`: `checks: read` alone; `full`:
-    `contents: read` + `checks: read`), plus "exactly one `: write` in the file". The forbidden-key scan
-    (`id-token|attestations|packages|pull-requests|actions`) is kept file-wide.
+    `contents: read` + `checks: read` + `actions: read`), plus "exactly one `: write` in the file". The
+    forbidden-key scan (`id-token|attestations|packages|pull-requests`) is kept file-wide, and `actions:` is
+    pinned to `full` alone.
   - *checks out at full depth …*: `timeout-minutes: 10` is now read from `promote`'s block (the gate has its own 5);
     every other line of it is unchanged, including the forbidden-command scan.
   - *triggers on stable pushes and on NOTHING else* and *serialises under its own group*: unchanged. The
@@ -8344,13 +10067,16 @@ jobs:
   # A job that calls another workflow cannot declare timeout-minutes; the
   # called ci.yml's own jobs carry their deadlines. Its permissions are the
   # ceiling for every job in the called run, so they are what ci.yml's
-  # select job asks for.
+  # select job asks for — read access to Actions included, which select needs to
+  # find the newest trusted map and durations (main-artifact.mjs); a called
+  # job asking for more than this grants fails the run before it starts.
   full:
     needs: gate
     if: needs.gate.outputs.found == 'false'
     permissions:
       contents: read
       checks: read
+      actions: read
     uses: ./.github/workflows/ci.yml
     with:
       mode: full
@@ -8407,6 +10133,9 @@ cd server && ./node_modules/.bin/vitest run test/build-release.test.ts --maxWork
   | the gate's jq without `.app.slug == "github-actions" and ` | gate looks for a successful full-suite … exactly as ci.yml's |
   | gate's `timeout-minutes: 5` deleted | gate looks for a successful full-suite … |
   | `contents: write` added to `gate`'s permissions | promote asks for contents: write and nothing else …; the gate reads checks only |
+  | `full` without `actions: read` | promote asks for contents: write and nothing else …; the gate reads checks only |
+  | `actions: read` added to `gate` too | promote asks for contents: write and nothing else …; the gate reads checks only |
+  | `full`'s `actions: write` instead of `read` | promote asks for contents: write and nothing else …; the gate reads checks only |
 
   Every row re-measured in the integration clone: `Tests  1 failed | 28 passed (29)`.
 
@@ -8419,7 +10148,7 @@ for f in build-release ci-pipeline oss-metadata single-definition release-stable
 done
 ```
 
-  Measured: `build-release` 29 passed, `ci-pipeline` 21, `oss-metadata` 22, `single-definition` 160,
+  Measured: `build-release` 29 passed, `ci-pipeline` 31, `oss-metadata` 22, `single-definition` 160,
   `release-stable` 15, `verify-provenance` 24 (`release-stable.test.ts` tests the script, not the YAML; it is run
   because it names the file). `oss-metadata`'s timeout census does not cover `release-stable.yml`
   (`oss-metadata.test.ts:173`), which is what lets `full` — a job that calls a workflow and so may not declare
@@ -8435,7 +10164,8 @@ ci(release-stable): promote only on a green full suite — found on the commit, 
 A `gate` job looks for a successful `full-suite` check run on the pushed
 commit; when there is none, `full` calls ci.yml in full mode, and `promote`
 runs only on a found check or a called run whose verdict output is green
-(spec 2026-09-23 §8). build-release.test.ts's release-stable pins now read
+(spec 2026-09-23 §8). `full` grants the called run actions: read, which
+its select job needs to read the trusted main artifacts. build-release.test.ts's release-stable pins now read
 per job, and pin the gate ordering and the shared check-run matcher.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -8461,7 +10191,8 @@ two files.
 - Modify: `CLAUDE.md` (*Build / test / deploy*: a new *What CI runs* bullet; one clause in *Deploy = release + rollout*)
 
 **Interfaces:** Consumes: the modes, job names and gate of Tasks 11–12. Produces: prose only.
-- Changed in integration: nothing — both files are byte-identical to the draft's.
+- Changed in integration: `release-main.yml` is byte-identical to the draft's; the `CLAUDE.md` bullet also names
+  the full-run triggers Task 5 gained (`server/scripts/`, `.gitattributes`, `.npmrc` — operator's ruling P1).
 
 - [ ] **Step 1: Apply the edit** — from the repo root, run exactly this (three exact-text replacements; each refuses
   unless its old text is present exactly once; neither file is touched by any other task). Run on Task 12's tree it
@@ -8499,8 +10230,9 @@ swap('CLAUDE.md',
   `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
   from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
   summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
-  `test-macos` runs the same selection, advisory. A change under `.github/`, to any `package.json` or lockfile,
-  `vitest.config.*` or `tsconfig*.json`, or a missing map, runs the full suite instead — and **while
+  `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
+  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
+  map, runs the full suite instead — and **while
   `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
   runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
@@ -8526,8 +10258,8 @@ git diff --stat
 
   Expected: `applied`, then
 
-  `.github/workflows/release-main.yml |  9 +++++++--`, `CLAUDE.md | 19 ++++++++++++++++---`,
-  `2 files changed, 23 insertions(+), 5 deletions(-)`.
+  `.github/workflows/release-main.yml |  9 +++++++--`, `CLAUDE.md | 20 +++++++++++++++++---`,
+  `2 files changed, 24 insertions(+), 5 deletions(-)`.
 
 - [ ] **Step 2: Run the suites that read `CLAUDE.md` or `release-main.yml`**, each alone, plus the text guards
   (foreground; `grep -ln 'CLAUDE.md' test/*.ts` lists 32 files, including heavy ccd/ccrc suites — allow up to 50
@@ -8593,10 +10325,12 @@ repository root unless it says otherwise.
 
 **Interfaces:**
 - Consumes: `replayCase({ map, changedFiles, failingTestFiles, existsAt })` and the `replay.mjs` CLI
-  (`node .github/ci/replay.mjs --repo DIR --map FILE --dataset FILE`) from Task 10; `ci.yml`'s `workflow_dispatch`
-  input `mode` and `map-build`'s `testmap` artifact (Task 11).
+  (`node .github/ci/replay.mjs --repo DIR --map FILE [--dataset FILE] [--prs FILE --times FILE]`) from Task 10;
+  `ci.yml`'s `workflow_dispatch` input `mode`, `map-build`'s `testmap` artifact and `server-shard`'s `times-<shard>`
+  artifacts (Task 11); the `times` CLI (Task 6).
 - Produces: nothing shipped — a PR (title, body, base `main`, head `ws/ccrc-ci-runs-optimization`) and a report to
-  the operator (recall, misses, selected-fraction distribution) that gates Task 15's enforce flip.
+  the operator (recall over proven failures, the not-proven list, misses, the selected-fraction distribution and
+  the runtime share over the last 100 merged PRs) that gates Task 15's enforce flip.
 - Changed in integration (the dataset): the builder emits EXACTLY `replay.mjs`'s dataset — a JSON array of
   `{ id, changedFiles, failingTestFiles, inheritedSuspect }`, `id` the run's database id as a string or, for the
   six documented misses, a slug. The draft emitted `{builtAt, repo, cases: [...]}` with `runId`/`slug`, which
@@ -8604,7 +10338,12 @@ repository root unless it says otherwise.
 - Changed in integration (the branch map): no local full-suite trace — tracing all 376 files on the loaded fleet box
   is not acceptable. The branch-scoped map comes from the branch's own pipeline (`gh workflow run ci.yml --ref
   ws/ccrc-ci-runs-optimization -f mode=rebuild`), fetched from its `testmap` artifact; if GitHub refuses that
-  dispatch, the replay happens post-merge in Task 15 against `main`'s first map — spec §12's own order.
+  dispatch, the replay happens post-merge in Task 15 against `main`'s first map — spec §12's own order. That map
+  is an artifact of a run on a feature branch, so `select` never picks it (Task 11's trust filter wants `main`); it
+  serves this replay only.
+- Changed in integration (operator's ruling M3): the report adds the runtime share — `gh pr list --state merged
+  --limit 100 --json number,files` and the durations this PR's own full run measured, through `replay.mjs --prs
+  --times` — and a failing test the map holds no record for is reported NOT PROVEN, outside recall.
 
 - [ ] **Step 1: Confirm the branch is ready and git identity is clean**
 
@@ -8632,7 +10371,7 @@ done
   Then find every suite that reads a file this branch touched, and run each singly:
 
 ```bash
-git diff --name-only origin/main..HEAD | while read -r f; do
+git diff --name-only origin/main...HEAD | while read -r f; do
   grep -l "$(basename "$f")" server/test/*.ts 2>/dev/null
 done | sort -u > "$SCRATCH/ci-touched-suites.txt"
 cd server
@@ -8679,14 +10418,14 @@ git push -u origin ws/ccrc-ci-runs-optimization
 
 ## Spec and plan
 - Spec: https://github.com/Synapsium-Labs/ccrc-pwa/blob/main/docs/superpowers/specs/2026-09-23-ci-test-selection-design.md
-- Plan: https://github.com/Synapsium-Labs/ccrc-pwa/blob/main/docs/superpowers/plans/2026-09-23-ci-test-selection-plan.md
+- Plan: https://github.com/Synapsium-Labs/ccrc-pwa/blob/main/docs/superpowers/plans/2026-09-23-ci-test-selection.md
 - Until this PR merges those two links resolve only on `main`; read the plan in this PR's Files tab.
 
 ## Test plan
 - [ ] `topology-clean`, `source-bytes`, `single-definition`, `dtbd`, `deviation-refs` green
 - [ ] Every suite touching a changed file green (Task 14 Step 2 list, pasted below)
-- [ ] This PR's own CI (full pipeline — it touches `.github/`, so §6.3 forces `full`) green on all 4 required
-      checks plus `probe-macos`
+- [ ] This PR's own CI (full pipeline — it touches `.github/`, so `select`'s pipeline-change step runs it with
+      `--input-mode full`) green on all 4 required checks plus `probe-macos`
 - [ ] agent + pwa suites green
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
@@ -8723,9 +10462,11 @@ gh api repos/Synapsium-Labs/ccrc-pwa/actions/jobs/<jobDatabaseId>/logs
 
   **Decision rule:** this PR's CI must show all four required checks (`test (server)`, `test (agent)`,
   `test (pwa)`, `build-pwa`) green plus `probe-macos`; `test-macos` is read but is advisory (spec §3/§10) — a
-  `test-macos` failure does not block. Because this PR touches `.github/`, §6.3's fallback fires on its **own**
-  diff, so the `select tests` job summary must read `tests: full` with the fallback reason naming a `.github/`
-  path — confirm it there rather than assuming it.
+  `test-macos` failure does not block. Because this PR touches `.github/`, its **own** run is full, decided before
+  the selector runs: the `select tests` job's step *Does this pull request change the pipeline?* must print
+  `this pull request changes the pipeline:` followed by `.github/` paths, and `Select` then runs with
+  `--input-mode full` — so the job summary reads `tests: full` with an EMPTY `fallback` (a full run by input mode,
+  not a map fallback). Confirm both there rather than assuming them.
 
 - [ ] **Step 6: Build a branch-scoped map on the branch's own pipeline, and fetch it** — once the PR's pipeline is
   on the branch (Step 5 green):
@@ -8964,15 +10705,27 @@ function main() {
 main();
 ```
 
+  The durations come from this PR's own full run (Step 5's `<databaseId>`: `server-shard` keeps each shard's vitest
+  JSON report as `times-<shard>` in full mode). The reports name each file by the RUNNER's absolute path, and the
+  `times` CLI refuses keys outside `server/` relative to where it runs, so each report is re-rooted at this checkout
+  first:
+
 ```bash
 node "$SCRATCH/build-replay-dataset.mjs" --repo Synapsium-Labs/ccrc-pwa --limit 150 --out "$SCRATCH/dataset.json"
-node .github/ci/replay.mjs --repo "$PWD" --map "$SCRATCH/branch-map/testmap.json" --dataset "$SCRATCH/dataset.json"
+gh pr list --repo Synapsium-Labs/ccrc-pwa --state merged --limit 100 --json number,files > "$SCRATCH/prs.json"
+gh run download <databaseId> --repo Synapsium-Labs/ccrc-pwa -p 'times-*' -D "$SCRATCH/times"
+for f in "$SCRATCH"/times/*/times.json; do
+  node -e 'const fs=require("fs");const [f,root]=process.argv.slice(1);const r=JSON.parse(fs.readFileSync(f,"utf8"));for(const t of r.testResults)t.name=t.name.replace(/^.*?\/server\/test\//,root+"/server/test/");fs.writeFileSync(f,JSON.stringify(r))' "$f" "$PWD"
+done
+node .github/ci/shards.mjs times --out "$SCRATCH/testtimes.json" "$SCRATCH"/times/*/times.json
+node .github/ci/replay.mjs --repo "$PWD" --map "$SCRATCH/branch-map/testmap.json" --dataset "$SCRATCH/dataset.json" \
+  --prs "$SCRATCH/prs.json" --times "$SCRATCH/testtimes.json"
 ```
 
   Measured while integrating (read-only, this session): `--limit 12` → `0 real cases (from 12 ci.yml runs scanned)
   + 6 synthetic`; `--limit 40` (38 s) → `6 real cases (from 40 ci.yml runs scanned) + 6 synthetic`, every element
   exactly `["id","changedFiles","failingTestFiles","inheritedSuspect"]`. `replay.mjs` accepts that file
-  (against a small real map from the pipeline composition of Task 11 Step 9 — a schema check, not a recall
+  (against a small real map from the pipeline composition of Task 11 Step 13 — a schema check, not a recall
   number): `cases: 12 (12 scored, 0 excluded as inheritedSuspect)`, `selected fraction of live server tests —
   min 25.0%, median 50.0%, max 100.0%`, `misses: none`, exit 0; the draft's
   `{builtAt, repo, cases}` file fails with `TypeError: dataset.map is not a function`. The draft's own full run
@@ -8981,16 +10734,22 @@ node .github/ci/replay.mjs --repo "$PWD" --map "$SCRATCH/branch-map/testmap.json
   classifier was broader than this regex parser. The executing engineer reproduces it fresh (`--limit 150`), so its
   numbers are current for the map that actually ships. The selected fraction divides by the live tests (Task 10's
   `liveCountFor`: the map's tests plus the selected ones), so it never exceeds 100% — before that fix the same run
-  read `max 233.3%`.
+  read `max 233.3%`. Rehearsed with the runtime share (read-only `gh pr list … --limit 100` → 100 PRs; two shard
+  reports from Task 11 Step 13's composition, re-rooted and merged by the `times` CLI) against that three-test
+  map: `selected share of server runtime over 100 PRs — min 0.0%, median 36.1%, max 100.0%, mean 28.3%`, then the
+  replay — `cases: 12 (0 scored, …)` and `not proven (…): 15 in 12 case(s)`: on a three-test map every failing
+  test is unmapped, so nothing is scored rather than everything counted caught. Schema checks, not results.
 
-  **Decision rule** (spec §11.3's acceptance target, applied mechanically): every case where `inheritedSuspect` is
-  `false` must appear in `replayCase`'s `selected`, not its `missed`. A case in `missed` is either (a) fixed by
-  correcting the tracer/selector and re-running Steps 6–7, or (b) recorded as a known limitation under spec §9's
-  table with the row it falls under — never silently dropped from the report. Report to the operator, verbatim:
-  the recall (selected / (selected + missed) over non-`inheritedSuspect` cases), every miss with its explanation,
-  and the selected-fraction distribution across the last 100 merged PRs (run `selectTests` against each of those
-  merge commits' changed-file sets). This report is what Task 15's enforce flip is conditioned on — it does not
-  happen until the operator has seen these numbers.
+  **Decision rule** (spec §11.3's acceptance target, applied mechanically): every PROVEN failing test of a case
+  whose `inheritedSuspect` is `false` must appear in `replayCase`'s `selected`, not its `missed`. A case in
+  `missed` is either (a) fixed by correcting the tracer/selector and re-running Steps 6–7, or (b) recorded as a
+  known limitation under spec §9's table with the row it falls under — never silently dropped from the report. A
+  NOT PROVEN test (absent from the map: rule 1 selected it for being unmapped) proves nothing either way; a
+  not-proven list that holds most failing tests means the map is too thin to judge, and the replay is re-run
+  against a fuller map. Report to the operator, verbatim: the recall lines, the not-proven list, every miss with
+  its explanation, the selected-fraction distribution, and the runtime-share line over the last 100 merged PRs.
+  This report is what Task 15's enforce flip is conditioned on — it does not happen until the operator has seen
+  these numbers.
 
 **Mutation table:** Task 14 adds no new guard (it is verification of guards Tasks 1–13 shipped), so no mutation
 row is owed here — the mutation tables for §6.2's five selection rules, §6.3's fallbacks, and the workflow-shape
@@ -9035,9 +10794,10 @@ gh run view <databaseId> --repo Synapsium-Labs/ccrc-pwa --json jobs -q '.jobs[] 
 gh run download <databaseId> --repo Synapsium-Labs/ccrc-pwa -n testmap -D "$SCRATCH/main-map"
 ```
 
-  Expect one `event: push` run at the merge commit. Per spec §5.4/§12.3 this refresh finds **no map** (it is the
-  first) and traces every live server test file — a full traced rebuild wearing the `refresh` job set (`select`,
-  `trace-shard`, `map-build`; no agent/pwa/build/macOS legs). **Decision rule:** every `trace i/n` and `map-build`
+  Expect one `event: push` run at the merge commit. Per spec §5.4/§12.3 this refresh finds **no map** — no
+  trusted `testmap` artifact exists yet (`select`'s fetch step prints `testmap: none`) — and traces every live
+  server test file: a full traced rebuild wearing the `refresh` job set (`select`, `trace-shard`, `map-build`; no
+  agent/pwa/build/macOS legs), whose `map-build` publishes the first `testmap`. **Decision rule:** every `trace i/n` and `map-build`
   must be `success`. A trace-shard failure is a test that went `unknown` (spec §5.2) — read its log
   (`gh api repos/Synapsium-Labs/ccrc-pwa/actions/jobs/<id>/logs`) for which file and why: "either a real semantic
   merge conflict among the affected tests, or a timing test perturbed by tracing" (§5.4). It gates nothing.
@@ -9054,7 +10814,18 @@ gh run list --repo Synapsium-Labs/ccrc-pwa --workflow ci.yml --json databaseId,e
 gh run view <databaseId> --repo Synapsium-Labs/ccrc-pwa --json jobs -q '.jobs[] | select(.name=="full-suite")'
 ```
 
-  `mode` is on `main`'s own `ci.yml` now, so this dispatch validates against the file that declares it.
+  `mode` is on `main`'s own `ci.yml` now, so this dispatch validates against the file that declares it. This run is
+  on `main` from a dispatch, so its `times-build` publishes the first `testtimes`. Confirm the next `select` will
+  find both, with the same picker it runs (read-only; the token is `gh`'s own, never printed):
+
+```bash
+REPO_ID=$(gh api repos/Synapsium-Labs/ccrc-pwa -q .id)
+for name in testmap testtimes; do
+  GITHUB_TOKEN=$(gh auth token) GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo Synapsium-Labs/ccrc-pwa --repo-id "$REPO_ID" --name "$name"
+done
+```
+
+  Expected: each prints `artifact_id=<n>`, `run_id=<the run that published it>` and `head_sha=<its commit>`.
   **Decision rule:** `full-suite` must read `conclusion: success` — every leg, Linux shards, typechecks, agent,
   pwa, build **and the macOS shards**, green (spec §8). A red `full-suite` here is the safety net doing its job for
   the first time: don't flip enforce (Step 5); diagnose the leg with Task 14 Step 5's log read.
@@ -9063,17 +10834,22 @@ gh run view <databaseId> --repo Synapsium-Labs/ccrc-pwa --json jobs -q '.jobs[] 
   `stable` — that is a promotion decision outside this task):
 
 ```bash
-gh api repos/Synapsium-Labs/ccrc-pwa/commits/<mergeSha>/check-runs --jq '.check_runs[] | select(.name=="full-suite") | {name,conclusion}'
+DISPATCH_SHA=$(gh run view <databaseId> --repo Synapsium-Labs/ccrc-pwa --json headSha -q .headSha)   # Step 3's run
+gh api "repos/Synapsium-Labs/ccrc-pwa/commits/$DISPATCH_SHA/check-runs" --jq '.check_runs[] | select(.name=="full-suite") | {name,conclusion}'
 ```
 
-  Expected: one entry, `conclusion: success` (absent while Step 3's run is still in flight — re-check after it
-  completes). This is the exact query `gate` performs, so the gate is exercised rather than assumed.
+  The dispatch ran on `main`'s head AT DISPATCH TIME, which is the merge commit only if nothing merged since — so
+  the check is read on the commit that run actually tested. Expected: one entry, `conclusion: success` (absent
+  while Step 3's run is still in flight — re-check after it completes). This is the exact query `gate` performs,
+  so the gate is exercised rather than assumed.
 
 - [ ] **Step 5: The enforce flip — its own PR, merged only on the operator's approval**
 
 ```bash
 git clone -q https://github.com/Synapsium-Labs/ccrc-pwa.git "$SCRATCH/enforce" && cd "$SCRATCH/enforce"
 git checkout -q -b ws/ccrc-ci-enforce-selection origin/main
+git config user.name; git config user.email     # expect: the operator's GitHub noreply identity (Task 14 Step 1)
+(cd server && npm ci) && (cd agent && npm ci) && (cd pwa && npm ci)   # Task 14 Step 2's suites need all three
 sed -i 's/^  CCRC_SELECTION: shadow$/  CCRC_SELECTION: enforce/' .github/workflows/ci.yml
 git diff .github/workflows/ci.yml   # expect: exactly one changed line, shadow -> enforce
 git add .github/workflows/ci.yml
@@ -9086,6 +10862,7 @@ remain the safety net this flip is trusted against.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
+git log --format='%an <%ae>' origin/main..HEAD | sort -u   # expect: one line, that same identity
 git push -u origin ws/ccrc-ci-enforce-selection
 gh pr create --repo Synapsium-Labs/ccrc-pwa --base main --head ws/ccrc-ci-enforce-selection \
   --title "ci: enforce measured test selection (was shadow)" --body-file "$SCRATCH/enforce-pr-body.md"
@@ -9113,8 +10890,10 @@ already assert on both sides (`CCRC_SELECTION: (shadow|enforce)`); no new assert
 
 ## Deviations found
 
-None at planning time. The departures from the spec's first text that the planning measured — the process-side split
-of traces, the baseline's directory listings not being full-run triggers, the refresh never carrying an entry it meant
-to replace, the skip-day and promotion behaviours, the two loud refusals, and the added syscalls — are written into the
-spec itself as §15, so this plan implements the spec as amended. A departure found while EXECUTING a task is recorded
-here under a number minted by the ledger API (`POST /api/ledger/deviations`), allocated and defined in the same act.
+None at planning time. The departures from the spec's first text that planning and its adversarial review measured —
+the process-side split of traces, the baseline's directory listings not being full-run triggers, the refresh never
+carrying an entry it meant to replace, trusted-artifact maps instead of the Actions cache, the pipeline-change check
+that does not trust the selector, fail-closed verdicts, symlink and working-directory tracing, and the rest — are
+written into the spec itself as §15, so this plan implements the spec as amended. A departure found while EXECUTING a
+task is recorded here under a number minted by the ledger API (`POST /api/ledger/deviations`), allocated and defined in
+the same act.

@@ -71,8 +71,8 @@ the server leg is sharded, so selecting them buys nothing worth their risk.
 
 ### 4.1 Jobs
 
-- **`select`** — checks out at `fetch-depth: 0`, restores the newest map and duration table from the Actions cache
-  (§5.5), runs `.github/ci/select-tests.mjs`, and outputs: the mode actually taken (a `selected` run can fall back
+- **`select`** — checks out at `fetch-depth: 0`, downloads the newest map and duration table from artifacts of trusted
+  `main` runs (§5.5, §15.7), runs `.github/ci/select-tests.mjs`, and outputs: the mode actually taken (a `selected` run can fall back
   to `full`, §6.3), the selected file count, the Linux and macOS shard matrices, and a per-test reason table written to
   the job summary. Dependency-free Node, so it runs before any `npm ci`.
 - **`server-shard`** — matrix from `select`'s output. Each shard installs as the server leg does today (tmux, jq,
@@ -81,15 +81,16 @@ the server leg is sharded, so selecting them buys nothing worth their risk.
 - **`test (server)`** — the summary job that carries the required name. See §4.2.
 - **`test`** matrix `package: [agent, pwa]` — unchanged, so `test (agent)` and `test (pwa)` keep their names.
   `server` leaves this matrix.
-- **`build-pwa`**, **`probe-macos`** — unchanged.
+- **`build-pwa`** — unchanged. **`probe-macos`** — unchanged, but runs only on pull requests and the daily schedule, so
+  an advisory probe never gates a called full run (§15.10).
 - **`test-macos`** — sharded from `select`'s macOS matrix; advisory in `selected` mode.
 - **`trace-shard`**, **`map-build`** — `full` (scheduled) and `refresh` modes only: run the chosen tests under trace and
   merge the result into a new map (§5).
 - **`full-suite`** — `full` mode only: green iff every leg, macOS included, is green (§8).
 
 Per mode: `selected` and `full` run everything above except `trace-shard` and `map-build`; `full` adds
-`full-suite`. The traced rebuild (`trace-shard` + `map-build` over every file) runs only on `schedule`, not on a
-manual or called `full` run, which is a verdict only. `refresh` runs `select`, `trace-shard` and `map-build` and
+`full-suite`. The traced rebuild (`trace-shard` + `map-build` over every file) runs on `schedule` and on a manual dispatch with
+`mode: rebuild` (§15.11), never on a manual or called `full` run, which is a verdict only. `refresh` runs `select`, `trace-shard` and `map-build` and
 nothing else.
 
 ### 4.2 The summary job is the whole safety of the required check
@@ -102,7 +103,9 @@ checks"; the matrix expansion order is documented in the workflow syntax referen
 
 - `test (server)` declares `if: always()` and `needs: [select, server-shard, server-typecheck]`, and **fails unless**
   `select` succeeded, `server-typecheck` succeeded, and `server-shard` either succeeded or was skipped **with
-  `select`'s count equal to 0**. Any other combination — cancelled, failed, skipped with a non-zero count — is red.
+  `select`'s count equal to 0**. Any other combination — cancelled, failed, skipped with a non-zero count — is red,
+  and so is `tests: none` on a pull request. A first step that reads only job results, and runs no repository script,
+  can only add red to that verdict (§15.8).
 - No workflow-level `paths:` / `paths-ignore:` filter, ever. No job-level `if:` on a matrix that carries a required name.
 - Selection happens inside the pipeline, never by not running it.
 
@@ -121,11 +124,12 @@ checks"; the matrix expansion order is documented in the workflow syntax referen
 ### 5.1 What is traced
 
 Each server test file runs in **its own** vitest process under
-`strace -f -ff -y -qq` (per-thread output files; file descriptors printed as their paths), restricted to the
-file-shaped syscalls: `openat`, `openat2`, `open`, `newfstatat`, `statx`, `access`, `faccessat2`, `readlink`,
-`readlinkat`, `getdents64`, `execve`, `execveat`, plus `clone`/`clone3` to rebuild thread groups (§15.1). `chdir` is
-not needed: `-y` prints the current directory on every `*at` call. One vitest process per file makes attribution
-exact. Per-thread output removes the split `<unfinished …>` / `<… resumed>` lines, and `-y` removes fd-to-path bookkeeping — the two
+`strace -f -ff -ttt -y -qq` (per-thread output files, microsecond timestamps; file descriptors printed as their paths),
+restricted to the file-shaped syscalls: `openat`, `openat2`, `open`, `newfstatat`, `statx`, `access`, `faccessat2`,
+`readlink`, `readlinkat`, `getdents64`, `execve`, `execveat`, `symlink`, `symlinkat`, `chdir`, `fchdir`, plus
+`clone`/`clone3` to rebuild thread groups (§15.1). `-y` prints the current directory on every `*at` call; the
+timestamps order a thread group's files so a relative path in a call without a directory argument resolves against
+the right directory (§15.9). One vitest process per file makes attribution exact. Per-thread output removes the split `<unfinished …>` / `<… resumed>` lines, and `-y` removes fd-to-path bookkeeping — the two
 defects the prototype's post-processor had (it dropped successful opens and misattributed a reused fd, *measured*).
 
 ### 5.2 What is recorded
@@ -134,17 +138,17 @@ Per test file, **repository paths only** (anything outside the checkout, and `no
 
 | Kind | Recorded when | Selects the test when |
 |---|---|---|
-| `read` | a file is opened or executed, by the test or any descendant (bash, git, tmux, node) | that path is modified, deleted or renamed |
+| `read` | a file is opened or executed, by the test or any descendant (bash, git, tmux, node) — under the path the kernel resolved as well as the path asked for, so a read through a symlink planted outside the repo counts — or is the in-repo target of a symlink the test creates (§15.9) | that path is modified, deleted or renamed |
 | `probed` | a stat/access/open of a path fails with `ENOENT` | that path is added |
 | `listed` | a directory is enumerated (`getdents64`) | a file directly inside it is added, deleted or renamed |
 | `git` | any path under the repository's `.git/` is opened | **always** — the test reads the whole tracked tree or its history (`git ls-files`, `git grep`, a range scan) |
-| `unknown` | the traced run failed, timed out, or was killed | **always**, until a clean trace replaces it |
+| `unknown` | the traced run failed, timed out, or was killed, or a relative path could not be resolved | **always**, until a clean trace replaces it |
 
 - **Recursive walks** enumerate every subdirectory they descend into, so each is recorded in `listed` on its own.
 - **`git` is derived, not hand-kept.** It is expected to contain at least `source-bytes`, `topology-clean`,
   `deviation-refs`, `dtbd`, `providers`, `modelenv-single-writer`, `install-census` and `gitignore-secrets` — the
-  repo-wide guards the study found, about 2% of runtime together with the two below. A test pins that floor, so a tracer regression that stops seeing `.git` reads goes
-  red instead of silently narrowing the guards. `single-definition` and `typecheck-tests` are repo-wide too, but
+  repo-wide guards the study found, about 2% of runtime together with the two below. `map-build` refuses a map in which that floor is broken, so a tracer regression that stops seeing
+  `.git` reads goes red instead of silently narrowing the guards (§15.10). `single-definition` and `typecheck-tests` are repo-wide too, but
   through directory walks and `tsc` project reads rather than `.git`; their breadth arrives through `listed` and
   `read`, and the same pin names them.
 - **`unknown` exists because a test that dies early reads less.** Its record would be too small, which is the one
@@ -169,7 +173,7 @@ per-file durations; the traced run's results are not a verdict, because tracing 
 
 ### 5.4 The per-merge refresh
 
-On a push to `main` (a merge): restore the newest map (commit `c`); compute the changed set from `c` to the new head;
+On a push to `main` (a merge): take the newest trusted map (commit `c`, §5.5); compute the changed set from `c` to the new head;
 select exactly as §6 would; trace those tests on the new head; write a map for the new head whose entries are the fresh
 traces for the traced tests and **the old entries for every other test**. Tests deleted from the tree are dropped; new
 test files are, by §6.2, selected and so traced.
@@ -180,15 +184,19 @@ traces everything. A test the refresh meant to trace but got no record for — i
 cancelled — is written `unknown`, never carried: carrying is sound only for tests that read none of the changed paths
 (§15.3). A refresh's test failures show red on the `main` commit — they are either a real semantic merge
 conflict among the affected tests, or a timing test perturbed by tracing — and mark those tests `unknown`. They gate
-nothing.
+nothing. A refresh publishes its map only if the map it started from is still the newest trusted one (§15.7); a
+rebuild always publishes.
 
 ### 5.5 Storage
 
-The map is JSON: its commit sha, a format version, the baseline set, and the per-test records. It is saved in the
-GitHub Actions cache under `testmap-<sha>`, and restored by the prefix `testmap-`, which yields the newest. Pull-request
-runs — including forks, which get a read-only token — may restore caches created on the default branch, so no token
-beyond the default is needed. The daily untraced run saves per-file durations the same way (`testtimes-<sha>`).
-A map older than the cache's 7-day eviction simply disappears, and §6.3 falls back to full.
+The map is JSON: its commit sha, a format version, the baseline set, and the per-test records. It is published as an
+artifact named `testmap` by `map-build`, and the daily untraced run publishes per-file durations as `testtimes`.
+`select` takes the newest non-expired artifact of that name whose run is `ci.yml` on `main` **of this repository**
+(not a fork's branch of the same name), triggered by `push`, `schedule` or `workflow_dispatch` — and nothing else.
+It deliberately does not use the Actions cache: a pull request's runs read their own cache scope before `main`'s, so
+a pull request (or a rebuild dispatched on a feature branch) could plant the map its own selection is computed from
+(§15.7). Reading artifacts needs `actions: read` on the jobs that fetch them. A map whose commit is not an ancestor of
+the tree under test, or no map at all, falls back to full (§6.3).
 
 ## 6. Selection
 
@@ -210,11 +218,15 @@ modified and deleted, which §5.2's table needs.
 
 ### 6.3 The full suite runs instead when
 
-- the map is missing, unreadable, of an unknown format version, or its commit is not in the checkout;
+- the map is missing, unreadable, of an unknown format version, or its commit is not an ancestor of the tree under
+  test;
+- on a pull request, anything under `.github/` changed — decided by a plain `git diff` against the merge base BEFORE the
+  selector runs, so a pull request that edits the selector is never judged by it (§15.8);
 - the changed set touches any `package.json` or `package-lock.json`, any `vitest.config.*`, any `tsconfig*.json`,
   anything under `.github/` (the pipeline, the selector and the tracer live there), or `shared/package.json`'s module
   marker (already covered by the `package.json` rule — named because `CLAUDE.md` calls it load-bearing), a symlink,
-  or any path in the map baseline's `read` or `probed` (the files every test's startup reads);
+  any `.gitattributes` or `.npmrc`, anything under `server/scripts/` (consumed by checkout and `npm ci`, outside any
+  trace), or any path in the map baseline's `read` or `probed` (the files every test's startup reads);
 - the selector itself hits any internal error. It then **emits mode `full` with the reason** — it never answers
   "nothing". Only if the `select` job dies outright does `test (server)` go red (§4.2) — loud, never silent. Two
   conditions deliberately make it die rather than fall back, because "full" would run the wrong thing too: a live test
@@ -230,15 +242,17 @@ this table, not reconstructed.
 
 ### 7.1 How many, and what goes where
 
-- Durations come from the newest `testtimes-` cache entry; a file with no duration is given the median.
+- Durations come from the newest trusted `testtimes` artifact (§5.5); a file with no duration is given the median.
 - Files are packed longest-first onto the least-loaded shard (LPT). A single file longer than the target gets a shard
   of its own; the file itself is never split.
 - Linux shard count = the selected total divided by a per-shard target of about four minutes of wall-clock at two
   workers, clamped to **1–5**.
-- macOS: at most **2** shards in `selected` mode and **4** in `full`, so the organisation's 5-job macOS cap still leaves
-  room for `probe-macos`. Each macOS shard still runs one vitest worker — sharding across machines is the lever,
+- macOS: at most **2** shards on any pull request — even one that fell back to full — and **4** on a scheduled,
+  dispatched or called full run, so the organisation's 5-job macOS cap still leaves room for `probe-macos` and a
+  second pull request (§15.10). Each macOS shard still runs one vitest worker — sharding across machines is the lever,
   and `maxWorkers: '40%'` is left alone.
-- If the cache holds no durations, sharding falls back to vitest's own `--shard=i/n` (hash-partitioned by path).
+- If there are no durations at all, test shards fall back to vitest's own `--shard=i/n` (hash-partitioned by path);
+  trace shards, which run an exact list, are packed with the default weight instead.
 
 ### 7.2 Running an exact list
 
@@ -250,13 +264,15 @@ variable. Literal include patterns match exactly (*measured*). The same config s
 ## 8. The stable gate
 
 - A `full`-mode run ends with a job named **`full-suite`**, green iff every leg — Linux shards, typechecks, agent, pwa,
-  build, **and the macOS shards** — is green. It exists only in `full` mode.
+  build, **and the macOS shards** — is green. It exists only in `full` mode. Like `test (server)`, it starts with a step
+  that reads only job results and can only add red, and its verdict script fails closed (§15.8).
 - `release-stable.yml`, on a push to `stable`, gains a first job, `gate`, that asks the checks API whether the pushed
   commit carries a successful `full-suite` check run (named `full-suite`, or `<caller> / full-suite` when it came from a
   called workflow).
   - **Found** — from the daily run, a manual full run, or an earlier gate: the existing `promote` job runs at once. The
     usual path, if the operator promotes the commit the daily run tested.
-  - **Not found** — a second job calls `ci.yml` with `mode: full` (`uses: ./.github/workflows/ci.yml`), and `promote`
+  - **Not found** — a second job calls `ci.yml` with `mode: full` (`uses: ./.github/workflows/ci.yml`, granting the
+    called run `actions: read` for its artifact fetches), and `promote`
     runs only if it succeeded AND its `full-suite` job reported `verdict: green` — a called run that succeeded without
     ever reaching `full-suite` must not promote (§15.4).
 - **Why the gate is in the workflow and not in the `stable` ruleset.** GitHub does not let checks from `schedule` or
@@ -330,17 +346,19 @@ Before enforcing, the selector runs over the study's dataset — **114 real CI t
 documented misses** (the `deploy/build-release.sh` → `compact-card-ship`, `ccd/ccrc-doctor-checks` →
 `ccrc-install` + `pool-name-parity`, `COORD_SCHEMA_VERSION` → `asks-store`, `closeReviewRun`'s `sweepDec(` sites →
 `unattended-actor`, `dispatch.ts`'s `cap-concurrency` frame → `coordinator-skill`, and the NUL byte → `source-bytes`
-cases) — against the first real traced map. Target: **every failure not inherited from `main` is selected**; each miss
-is explained and either fixed in the tracer or recorded as a known limit (§9). Reported alongside: the selected share of
-server runtime across the last 100 merged PRs.
+cases) — against the first real traced map. Target: **every failure not inherited from `main`, whose test is in the
+map, is selected**; a failing test absent from today's map proves nothing either way and is reported separately, never
+counted as caught. Each miss is explained and either fixed in the tracer or recorded as a known limit (§9). Reported
+alongside: the selected share of server runtime across the last 100 merged PRs.
 
 ## 12. Rollout
 
 1. **Spike, stop-or-go.** The branch's first CI run checks, on a real `ubuntu-latest` runner: that `strace -f` works
-   there, its overhead on the heaviest files (`ccd-ws-audit`, `ccrc-doctor`, `ccd-ws-reap`), vitest's startup footprint
+   there, its overhead on the heaviest files (`ccd-ws-audit`, `ccrc-doctor`, `ccd-ws-reap`, `session-hook`) against the
+   runner's per-file trace timeout, that `clone` lines and the process-side split come out as measured locally, vitest's startup footprint
    for the baseline, the check-run name a called workflow's job gets, and how a concurrency group evaluates inside a
    called workflow. If `strace` cannot run there, the design stops and comes back to the operator.
-2. **Land in shadow mode.** `select` computes, reports and caches everything, but `selected` mode still runs the full
+2. **Land in shadow mode.** `select` computes and reports everything, but `selected` mode still runs the full
    suite. This PR touches `.github/`, so §6.3 would force a full run on it anyway. The daily run, the refresh, the
    stable gate, the concurrency groups and the macOS sharding go live at once — none of them depends on selection
    being trusted.
@@ -399,3 +417,34 @@ tightens the design above in the direction of safety or of the saving it exists 
 6. **Syscalls added:** `readlink` (Node's `fs.realpathSync.native` of a missing path emits only `readlink`, measured),
    recorded like `access`; `EINVAL` from `readlink` means the path exists and records a read. Traced runs set
    `UV_USE_IO_URING=0` so libuv performs every file operation as a visible syscall.
+
+The adversarial review of the written plan (four lenses, each finding reproduced by an independent refuter; 43
+confirmed, none refuted) added the following.
+
+7. **The map and durations come only from trusted `main` artifacts, never the Actions cache** (§5.5). A pull request's
+   runs read their own cache scope first, so a planted cache entry — or a rebuild dispatched on the pull request's own
+   branch — would have become that pull request's selection baseline, with a final diff that shows nothing. The
+   artifact picker accepts only `ci.yml` runs on this repository's `main`, triggered by `push`, `schedule` or
+   `workflow_dispatch`; `select` also refuses a map whose commit is not an ancestor of the tree under test. A refresh
+   publishes only if its starting map is still the newest trusted one, so a refresh racing the daily rebuild can never
+   hide the rebuild's corrections.
+8. **A pull request is never judged only by the code it changes.** A plain-bash `git diff` against the merge base
+   forces the full suite when `.github/` changed, before the selector runs. `verdict.mjs` exits 1 unless it reaches a
+   successful verdict, and both `test (server)` and `full-suite` start with a script-free step over the job results that
+   can only add red. `select` refuses to answer `tests: none` for a pull request, and the server verdict independently
+   rejects it.
+9. **Symlinks and working directories.** Test fixtures reach repository scripts through symlinks planted in temporary
+   homes (the `ccrc` suites); the tracer records the path the kernel resolved for every successful open, and the
+   in-repo target of every symlink a test creates — measured: without it, a change to `ccd/ccrc-models-probe` skipped a
+   suite in which 28 cases fail. `chdir`/`fchdir` and `-ttt` timestamps are traced so relative paths in calls without a
+   directory argument resolve against the directory in force at that moment (git changes directory before reading
+   `.git/config`; resolving only when a process never changed directory left 3 of 8 measured files permanently
+   `unknown`). Two calls in the same microsecond as a directory change cannot be ordered and count as unresolved.
+10. **Smaller corrections.** `.gitattributes`, `.npmrc` and `server/scripts/` are full-run triggers; a refresh's traced
+    failures make its trace shard red on `main`, as §5.4 says; `map-build` refuses a map whose `git` floor or walk floor
+    is broken; macOS shards are capped by event, not by mode; `probe-macos` runs only on pull requests and the schedule.
+11. **A dispatched `mode: rebuild`** runs the traced rebuild on demand — used to build a branch-scoped map for the
+    pre-merge replay, which the artifact picker never serves to anyone else.
+12. **Known trace-time pressure.** `session-hook` traced in 823 s on the loaded development box against a 900 s per-file
+    budget; its tests also fail under tracing (timing budgets), so it stays `unknown` and always selected. The spike
+    measures the heaviest traced times on a real runner and the plan raises the budget or isolates the file if needed.
