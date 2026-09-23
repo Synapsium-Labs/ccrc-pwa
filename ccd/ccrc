@@ -1580,6 +1580,12 @@ already running).
             reads; [--from <who>] names who started it
             (${UPD_FROM_WORDS[*]}; default cli), and restore, rollback and
             watchdog may go below the floor, which stays.
+            --detach (Linux only, and it needs --to) hands the run to a
+            transient systemd --user unit and returns at once, so the
+            update survives the restart of the unit that asked for it; the
+            detached run gets the user manager's environment, not yours
+            (its argv is the whole contract), and its progress is
+            ~/.ccrc/update.json.
             Per box; across a fleet,
             'ccrc rollout' runs it in order
   rollout   move BOTH boxes of a fleet to one published release, in order,
@@ -11345,7 +11351,7 @@ _inst_installed() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 from="" from_set=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -11357,6 +11363,7 @@ cmd_update() {
       --force) force=1 ;;
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
+      --detach) detach=1 ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
         from="$2"; from_set=1; shift ;;
@@ -11408,6 +11415,18 @@ cmd_update() {
     echo "$PROG: update: --check and --from are exclusive — --check measures and writes nothing, --from attributes a run that moves this box; pick one" >&2
     exit 2
   fi
+  if [ "$check" -eq 1 ] && [ "$detach" -eq 1 ]; then
+    echo "$PROG: update: --check and --detach are exclusive — --check measures and writes nothing, --detach hands a run that moves this box to a transient unit; pick one" >&2
+    exit 2
+  fi
+  # D-3229: design §10's re-exec argv always carries `--to`,
+  # and a detached run that resolved a channel itself would print its
+  # `following stable` sentence — or its refusal — into a unit nobody reads.
+  if [ "$detach" -eq 1 ] && [ -z "$to" ]; then
+    echo "$PROG: update: --detach needs --to <tag> — a detached run never resolves a channel; it has nobody to print its sentence to" >&2
+    usage >&2
+    exit 2
+  fi
 
   if [ "$check" -eq 1 ]; then
     command -v curl >/dev/null 2>&1 || _ccrc_die "curl is required by 'ccrc update --check' but is not on PATH"
@@ -11435,6 +11454,20 @@ cmd_update() {
       behind)     echo "this box: $box ($sha) · $label: $UPD_VERSION — behind"; return 1 ;;
       *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
     esac
+  fi
+
+  # THE RE-EXEC POINT (design §10): after every argument refusal and BEFORE
+  # `_upd_lock`, so this parent never holds a lock descriptor the transient
+  # unit could inherit. `--from` rides the argv (the child attributes its own
+  # report); so does every flag typed with it, in one fixed order — dropping
+  # one would be D-3139's "silently drop the flag you also typed".
+  if [ "$detach" -eq 1 ]; then
+    local -a dflags=()
+    [ "$force" -eq 1 ] && dflags+=(--force)
+    [ "$downgrade" -eq 1 ] && dflags+=(--downgrade)
+    [ "$allow_unsigned" -eq 1 ] && dflags+=(--allow-unsigned)
+    _upd_detach update "$to" "$UPD_FROM" ${dflags[@]+"${dflags[@]}"}
+    return 0
   fi
 
   # ── ONE UPDATE AT A TIME (design §10) ───────────────────────────────────
@@ -11613,6 +11646,55 @@ _upd_fleet_warn() {
   return 0
 }
 
+# ── --detach (design §10, W4 Task 3) ───────────────────────────────────────
+# A run that restarts `ccrc.service` / `ccrc-agent.service` from INSIDE that
+# unit's cgroup dies with it: `_inst_enable`'s `systemctl --user restart` is a
+# full restart and neither unit sets KillMode. `systemd-run --user --collect`
+# (`_svc_run_detached`'s Linux arm) gives the real run a cgroup of its own —
+# the one idiom in this tree measured to survive a unit restart (ccd's
+# detached swap tail). macOS's arm is `nohup … &`, which promises less (its
+# own comment), so macOS refuses by name and never writes the `detach` cap.
+_upd_detach_os_check() {
+  [ "$CCD_OS" = darwin ] && _ccrc_die "--detach is Linux-only (decision 17)"
+  return 0
+}
+
+# `_upd_detach <verb> <tag> <from> [flag…]` — queue the run, hand it to a
+# transient unit, return. Called with `update` by `cmd_update` and with
+# `rollback` by `cmd_rollback`, both BEFORE `_upd_lock`: the parent never
+# holds the lock, so the unit it spawns inherits no descriptor that could pin
+# the lock after this process has gone (a bash lock fd is inherited by every
+# child — measured 2026-09-13). The busy check is a PROBE, never an acquire,
+# and it runs before the `queued` write: a queued report written over a live
+# run's would erase what that run is doing. The flags are the caller's, in
+# the caller's fixed order; the argv is the child's whole contract, because
+# it runs under the user manager's environment, not this shell's.
+_upd_detach() {
+  local verb="$1" tag="$2" from="$3" prc=0 rc=0
+  shift 3
+  _upd_detach_os_check
+  _upd_lock_probe || prc=$?
+  # Every probe answer has its own arm (ruling R16). An UNMEASURED lock (rc 3,
+  # or any rc the probe does not define) is neither held nor free. Folding it
+  # into busy would print a holder nobody measured. Folding it into free would
+  # spawn past a lock this box cannot see.
+  case "$prc" in
+    0) ;;
+    1) _upd_busy_die ;;
+    2) _upd_flock_die ;;
+    *) _ccrc_die "update: ~/.ccrc/update.lock could not be measured (probe rc $prc) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed" ;;
+  esac
+  UPD_REPORT_TARGET="$tag"
+  UPD_FROM="$from"
+  _upd_phase queued
+  _svc_run_detached "$HOME/.local/bin/ccrc" "$verb" --to "$tag" --from "$from" "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _upd_phase failed "detach: systemd-run exited $rc"
+    _ccrc_die "update: could not start the detached run (systemd-run exited $rc) — nothing on this box was changed"
+  fi
+  echo "update: detached — '$verb --to $tag' runs as a transient systemd --user unit; its progress is ~/.ccrc/update.json"
+}
+
 # ── _upd_phase <phase> [detail] — the node reports (design 2026-09-20 §10) ─
 # One JSON line, keys in a fixed order — target, phase, startedAt, updatedAt,
 # detail, from, pid (plan D-3237) — staged beside the file and
@@ -11715,6 +11797,18 @@ _upd_lock_holder() {
   printf 'pid %s, target %s' "$pid" "$target"
 }
 
+# The refusals `_upd_lock` (Task 2) and `_upd_detach` (Task 3) share — ONE
+# spelling each, because a sentence an operator greps for must not have two
+# copies free to drift. flock absent is the MECHANISM missing, which is not
+# the same finding as a lock somebody holds, so the two stay two functions.
+_upd_flock_die() {
+  if [ "$CCD_OS" = darwin ]; then
+    _ccrc_die "flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it. Install it: brew install flock. Nothing on this box was changed"
+  fi
+  _ccrc_die "flock (util-linux) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed"
+}
+_upd_busy_die() { _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"; }
+
 # `_upd_lock` → rc 0 holding the lock (or legitimately inheriting it), or it
 # dies (exit 1) — BEFORE `cmd_update` sets UPD_REPORTING=1, so a refused run
 # writes nothing to update.json and cannot overwrite the holder's report.
@@ -11724,12 +11818,7 @@ _upd_lock() {
   # `cmd_rollback` takes the lock and then calls `cmd_update` in-process.
   [ -n "$UPD_LOCK_FD" ] && return 0
   [ "$UPD_LOCK_INHERITED" -eq 1 ] && return 0
-  if ! command -v flock >/dev/null 2>&1; then
-    if [ "$CCD_OS" = darwin ]; then
-      _ccrc_die "flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it. Install it: brew install flock. Nothing on this box was changed"
-    fi
-    _ccrc_die "flock (util-linux) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed"
-  fi
+  command -v flock >/dev/null 2>&1 || _upd_flock_die
   # THE RESTORE CHILD'S EXEMPTION, DECIDED ON A MEASUREMENT (design §10).
   # `_upd_restore`'s arm 2 runs `ccrc update` as a synchronous, reaped,
   # direct child that inherits the parent's descriptor; it skips acquisition
@@ -11765,7 +11854,7 @@ _upd_lock() {
     { exec {UPD_LOCK_FD}>&-; } 2>/dev/null
     UPD_LOCK_FD=""
     if [ "$frc" -eq 1 ]; then
-      _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"
+      _upd_busy_die
     fi
     _ccrc_die "update: cannot lock ~/.ccrc/update.lock (flock rc $frc) — this is not another update holding it; nothing on this box was changed"
   fi

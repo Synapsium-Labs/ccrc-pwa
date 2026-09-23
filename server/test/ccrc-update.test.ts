@@ -191,6 +191,38 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   ].join('\n') + '\n');
   plant('plutil', '#!/bin/sh\nexit 0\n');
 
+  // W4 Task 3: `--detach` re-execs through `_svc_run_detached`, whose Linux
+  // arm is `systemd-run --user --collect --quiet "$@"`. RECORDED, never real:
+  // `ghContainedEnv` above is called WITHOUT `{ systemd: true }`, so before
+  // this line a detached run would have reached this box's own user manager.
+  // Knobs are FILES, this harness's rule: `fixture-systemd-run-exit` is the
+  // job-creation answer, and `fixture-systemd-run-linger` makes the recorder
+  // leave a `sleep` behind — stdio closed so `spawnSync` does not wait on it,
+  // every OTHER descriptor inherited — which is how the "no lock fd at the
+  // spawn" pin observes a descriptor the parent must not have held.
+  // `fixture-systemd-run-exec` RUNS the handed argv, minus the three manager
+  // flags, in a session of its own (`setsid`, stdio to `detached.log`). That
+  // is what the transient unit gives the real run: a kill aimed at the
+  // parent's process group cannot reach it (§16's parent-kill fixture). It
+  // runs in the CALLER's environment, which the real unit does not, so it
+  // measures the process chain and not the environment contract.
+  plant('systemd-run', [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$*" >> "$HOME/systemd-run-argv"',
+    'if [ -f "$HOME/fixture-systemd-run-exec" ]; then',
+    '  [ "$1 $2 $3" = "--user --collect --quiet" ] || { echo "fixture systemd-run: unexpected argv: $*" >&2; exit 90; }',
+    '  shift 3',
+    '  setsid "$@" </dev/null >"$HOME/detached.log" 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-exec-pid"',
+    'fi',
+    'if [ -f "$HOME/fixture-systemd-run-linger" ]; then',
+    '  sleep 20 </dev/null >/dev/null 2>&1 &',
+    '  echo "$!" > "$HOME/systemd-run-linger-pid"',
+    'fi',
+    'code=0; [ -f "$HOME/fixture-systemd-run-exit" ] && IFS= read -r code < "$HOME/fixture-systemd-run-exit"',
+    'exit "$code"',
+  ].join('\n') + '\n');
+
   plant('systemctl', [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
@@ -495,6 +527,11 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
     // for 30 s.
     + 'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" > "$HOME/staged-ccrc-lockenv"\n'
     + 'if [ -f "$HOME/fixture-spine-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/spine-linger-pid"; fi\n'
+    // Task 3 (§16's parent-kill fixture): a spine that records its argv and
+    // then WAITS, at most 20 s, for the test's go file. The run is parked
+    // mid-install while the parent's process group is killed, so whether the
+    // detached run survived is not a race against how fast it finishes.
+    + 'if [ -f "$HOME/fixture-install-wait" ]; then i=0; while [ ! -f "$HOME/fixture-install-go" ] && [ "$i" -lt 400 ]; do sleep 0.05; i=$((i+1)); done; fi\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -633,6 +670,18 @@ function announcedBackupDir(stdout: string): string {
   const m = /^update: backup: (\S+)/m.exec(stdout);
   if (m === null) throw new Error(`no "update: backup:" line in:\n${stdout}`);
   return m[1]!;
+}
+
+/** ONE ccrc function, run in a shell that SOURCED the checkout's ccd/ccrc (its
+ *  dispatch is guarded by `BASH_SOURCE[0] == $0`, so sourcing defines and
+ *  runs nothing), against the fixture box's environment. For the functions
+ *  whose arms the verb cannot reach on this platform — `CCD_OS` is computed
+ *  from `$OSTYPE` at source time, so an assignment AFTER the `.` is the one
+ *  way a Linux run measures a Darwin arm. */
+function sourcedCcrc(home: string, script: string): Result {
+  const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')],
+    { env: updateEnv(home), encoding: 'utf8' });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 describe('ccrc update: the argument surface', () => {
@@ -1857,11 +1906,14 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // that writes it; Task 6 deletes the literal, and the union assertion below
   // becomes total.
   const PENDING = new Set<string>([
-    'queued',     // Task 3 — `--detach` writes it before the spawn
     'checking',   // Task 5 — the health gate
     'restoring',  // Task 6 — `_upd_restore`
     'reverted',   // Task 6 — `_upd_restore`'s last word
   ]);
+  // `queued` is written only by `--detach`, which macOS refuses (decision 17),
+  // so on Darwin it can never be written. Kept apart from PENDING because Task 6
+  // deletes PENDING, and this set must outlive it.
+  const DARWIN_UNREACHABLE = new Set<string>(process.platform === 'darwin' ? ['queued'] : []);
   const phases = (home: string): string[] => reportWrites(home).map((w) => String(w['phase']));
   const plantFloor = (home: string, v: string): void => {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
@@ -1897,12 +1949,25 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code).toBe(1);
     expect(phases(refused)).toEqual(['resolving', 'fetching', 'verifying', 'failed']);
 
-    const written = new Set([...phases(moved), ...phases(same), ...phases(refused)]);
+    // 4. A detached parent (W4 Task 3): `queued`, written before the spawn and
+    //    nothing after it. The recorder stands in for systemd-run.
+    const detached = freshUpdateBox('ccrc-update-json-detached-');
+    plantOldBox(detached, { version: 'v1.0.0' });
+    r = runUpdate(detached, ['--detach', '--to', 'v2.0.0']);
+    if (process.platform === 'darwin') {
+      expect(r.code).toBe(1);
+      expect(phases(detached)).toEqual([]);
+    } else {
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(phases(detached)).toEqual(['queued']);
+    }
+
+    const written = new Set([...phases(moved), ...phases(same), ...phases(refused), ...phases(detached)]);
     expect(written.has('unknown'), 'a writer wrote the reader\'s word').toBe(false);
     for (const p of PENDING) expect(written.has(p), `${p} is written but still listed PENDING`).toBe(false);
-    expect([...new Set([...written, ...PENDING])].sort()).toEqual([...WRITTEN_PHASES].sort());
+    expect([...new Set([...written, ...PENDING, ...DARWIN_UNREACHABLE])].sort()).toEqual([...WRITTEN_PHASES].sort());
 
-    for (const home of [moved, same, refused]) {
+    for (const home of [moved, same, refused, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
       for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS);
       // The file on disk IS the last rename, and no staged copy is left beside it.
@@ -2310,5 +2375,245 @@ describe('ccrc update: one update at a time (the lock)', () => {
     expect(second.code).toBe(1);
     expect(second.stderr).not.toMatch(/another update holds/);
     expect(second.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
+  });
+});
+
+describe('ccrc update --detach (design §10; W4 Task 3)', () => {
+  const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+  const report = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+  const detachArgv = (home: string): string[] => (existsSync(join(home, 'systemd-run-argv'))
+    ? readFileSync(join(home, 'systemd-run-argv'), 'utf8').split('\n').filter((l) => l !== '')
+    : []);
+  /** A REAL holder of ~/.ccrc/update.lock — `flock <lock> sleep 30` in a
+   *  process group of its own — returned only once a fresh `flock -n` from
+   *  here FAILS, so "held" is measured, never assumed from the spawn. */
+  const holdLock = (home: string): ChildProcess => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const p = spawn('flock', [lockPath(home), 'sleep', '30'], { stdio: 'ignore', detached: true });
+    for (let i = 0; i < 100; i++) {
+      if (spawnSync('flock', ['-n', lockPath(home), 'true']).status === 1) return p;
+      spawnSync('sleep', ['0.05']);
+    }
+    try { process.kill(-p.pid!, 'SIGKILL'); } catch { /* already gone */ }
+    throw new Error('the fixture holder never took ~/.ccrc/update.lock');
+  };
+  const release = (p: ChildProcess): void => {
+    try { process.kill(-p.pid!, 'SIGKILL'); } catch { /* already gone */ }
+  };
+  const detachedBox = (prefix: string): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    // A release the parent COULD fetch — so "nothing was fetched" below is a
+    // measurement of the parent's restraint, not of an empty URL space.
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    return home;
+  };
+
+  itLinux('the re-exec goes through _svc_run_detached with the ABSOLUTE launcher and the spec argv, writes queued, and returns 0 having done none of the work (§18 "--detach escapes the cgroup")', () => {
+    const home = detachedBox('ccrc-update-detach-');
+    const t0 = Date.now();
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    const elapsed = Date.now() - t0;
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(elapsed, 'the parent waited on the run it detached').toBeLessThan(10_000);
+    expect(detachArgv(home)).toEqual([
+      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from cli`,
+    ]);
+    expect(r.stdout).toMatch(/^update: detached — 'update --to v2\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
+    const rep = report(home);
+    expect(rep).toMatchObject({ target: 'v2.0.0', phase: 'queued', detail: null, from: 'cli' });
+    // Unix SECONDS (ruling R14), read through Task 1's file-scope REPORT_TIME,
+    // never a second hand-written unit here.
+    expect(String(rep['startedAt'])).toMatch(REPORT_TIME);
+    expect(String(rep['updatedAt'])).toMatch(REPORT_TIME);
+    expect(typeof rep['pid']).toBe('number');
+    // The parent did NONE of the update's work — no fetch, no backup, no spine.
+    expect(existsSync(join(home, 'curl-argv')), 'the parent fetched').toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups')), 'the parent backed up').toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the parent installed').toBe(false);
+  });
+
+  // §16's first W4 fixture: "kills the parent after `queued` and asserts the
+  // grandchild finishes". The parent is a process-group leader. Once the
+  // detached run is parked mid-install, the WHOLE group is killed, which is
+  // what a unit restart does to every process left in the unit's cgroup. A
+  // run that escaped (setsid here, a transient unit on a real box) finishes.
+  // A run that stayed in the group (`nohup … &`, the mutation) dies parked
+  // and never writes `done`.
+  itLinux('a parent whose whole process group is killed after queued leaves the detached run to finish — done, from another pid, the lock free after it (§16 the parent-kill fixture; §18 "--detach escapes the cgroup")', async () => {
+    const home = detachedBox('ccrc-update-detach-parentkill-');
+    writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
+    writeFileSync(join(home, 'fixture-install-wait'), '');
+    // The absolute launcher in the argv is the checkout's ccrc, the code under test.
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'),
+      `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
+    const pause = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = {
+      ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+    };
+    replantDoctorStubs(home);
+    const parent = spawn(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--detach', '--to', 'v2.0.0'],
+      { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    parent.stdout!.on('data', (b: Buffer) => { out += b.toString(); });
+    parent.stderr!.on('data', (b: Buffer) => { err += b.toString(); });
+    const parentCode = new Promise<number>((res) => parent.on('close', (c) => res(c ?? -1)));
+    const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
+      ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
+    let final: Record<string, unknown> = {};
+    try {
+      const code = await Promise.race([parentCode, pause(15_000).then(() => -2)]);
+      expect(code, `the parent did not return on its own\nstderr: ${err}\nstdout: ${out}`).toBe(0);
+      expect(out).toMatch(/^update: detached — 'update --to v2\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
+      // Parked: the staged spine has recorded its argv and is waiting for the go file.
+      for (let until = Date.now() + 15_000; Date.now() < until && !existsSync(join(home, 'staged-ccrc-argv'));) await pause(50);
+      expect(existsSync(join(home, 'staged-ccrc-argv')), `the detached run never reached its install\n${detachedLog()}`).toBe(true);
+      const parked = report(home);
+      expect(parked['phase']).toBe('installing');
+      // CONTROL: the run is alive at the kill. A `done` below then means it
+      // survived, not that it had already finished before the kill.
+      expect(() => process.kill(Number(parked['pid']), 0), 'the run was gone before the kill — the pin below would be vacuous').not.toThrow();
+      // THE KILL: every process still in the parent's group, the parent's own
+      // pid as pgid. ESRCH is the escaped case, an empty group.
+      try { process.kill(-parent.pid!, 'SIGKILL'); } catch { /* an empty group: nothing stayed behind */ }
+      await pause(200);
+      writeFileSync(join(home, 'fixture-install-go'), '');
+      for (let until = Date.now() + 20_000; Date.now() < until;) {
+        try { final = report(home); } catch { final = {}; }
+        if (final['phase'] === 'done' || final['phase'] === 'failed') break;
+        await pause(50);
+      }
+    } finally {
+      writeFileSync(join(home, 'fixture-install-go'), '');
+      try { process.kill(-parent.pid!, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    expect(final, `the detached run did not finish after its parent's group was killed\n${detachedLog()}`)
+      .toMatchObject({ phase: 'done', target: 'v2.0.0', detail: null, from: 'cli' });
+    const seq = reportWrites(home);
+    expect(seq.slice(0, 2).map((w) => w['phase'])).toEqual(['queued', 'resolving']);
+    expect(seq.map((w) => w['phase'])).toContain('installing');
+    expect(seq[0]!['pid'], 'queued is the parent\'s write').toBe(parent.pid);
+    const runPids = new Set(seq.slice(1).map((w) => w['pid']));
+    expect(runPids.size, 'the detached run wrote from more than one process').toBe(1);
+    expect(runPids.has(parent.pid), 'the parent did the run itself').toBe(false);
+    expect(readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n')[1]).toBe('install');
+    // The run's own lock goes with the run: free once it has exited.
+    for (let until = Date.now() + 10_000; Date.now() < until
+      && spawnSync('flock', ['-n', lockPath(home), 'true']).status !== 0;) await pause(50);
+    expect(spawnSync('flock', ['-n', lockPath(home), 'true']).status, 'the finished run left the lock held').toBe(0);
+  }, 60_000);
+
+  itLinux('--from and every typed flag ride the detached argv in ONE fixed order, whatever order they were typed in (D-3238)', () => {
+    const home = detachedBox('ccrc-update-detach-flags-');
+    const r = runUpdate(home,
+      ['--allow-unsigned', '--detach', '--from', 'pwa', '--downgrade', '--to', 'v2.0.0', '--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(detachArgv(home)).toEqual([
+      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from pwa --force --downgrade --allow-unsigned`,
+    ]);
+    expect(report(home)).toMatchObject({ phase: 'queued', from: 'pwa', target: 'v2.0.0' });
+  });
+
+  itLinux('with a LIVE holder the parent is refused by the lock sentence and update.json is byte-identical — a queued write would overwrite a live run\'s report', () => {
+    const home = detachedBox('ccrc-update-detach-busy-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const live = '{"target":"v1.9.0","phase":"installing","startedAt":1,"updatedAt":2,"detail":null,"from":"cli","pid":4321}\n';
+    writeFileSync(join(home, '.ccrc', 'update.json'), live);
+    const holder = holdLock(home);
+    let r: Result;
+    try {
+      r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    } finally {
+      release(holder);
+    }
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(pid 4321, target v1\.9\.0\)$/m);
+    expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(live);
+    expect(detachArgv(home), 'a refused parent spawned anyway').toEqual([]);
+  });
+
+  itLinux('a lock the parent cannot MEASURE refuses the detach with its own sentence — neither the holder sentence nor a spawn, and no report (ruling R16)', () => {
+    const home = detachedBox('ccrc-update-detach-unmeasured-');
+    // A DIRECTORY where the lock file goes: it exists, and `exec {p}>>` on it
+    // fails, so `_upd_lock_probe` answers 3. This holds at every uid, unlike a
+    // `chmod 000` file, which root opens anyway.
+    mkdirSync(lockPath(home), { recursive: true });
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: ~\/\.ccrc\/update\.lock could not be measured \(probe rc 3\) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed$/m);
+    expect(r.stderr, 'rc 3 was folded into "held"').not.toMatch(/another update holds/);
+    expect(existsSync(join(home, '.ccrc', 'update.json')), 'a queued report was written past an unmeasured lock').toBe(false);
+    expect(detachArgv(home), 'rc 3 was folded into "free"').toEqual([]);
+  });
+
+  itLinux('the parent holds NO lock descriptor at the spawn: a child that lingers after the parent exits pins nothing (§18 "--detach precedes the lock")', () => {
+    const home = detachedBox('ccrc-update-detach-nofd-');
+    writeFileSync(join(home, 'fixture-systemd-run-linger'), '');
+    let lingerPid = 0;
+    try {
+      const r1 = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+      expect(r1.code, `stderr: ${r1.stderr}\nstdout: ${r1.stdout}`).toBe(0);
+      lingerPid = Number(readFileSync(join(home, 'systemd-run-linger-pid'), 'utf8').trim());
+      rmSync(join(home, 'fixture-systemd-run-linger'));
+      // CONTROL: the inheritor is alive, so a free lock below is a finding
+      // about the parent, not about a child that already exited.
+      expect(() => process.kill(lingerPid, 0), 'the lingering child is gone — the pin below would be vacuous').not.toThrow();
+      expect(spawnSync('flock', ['-n', lockPath(home), 'true']).status,
+        'the detached child inherited a lock descriptor from its parent').toBe(0);
+      const r2 = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+      expect(r2.code, `stderr: ${r2.stderr}`).toBe(0);
+    } finally {
+      if (lingerPid > 0) { try { process.kill(lingerPid, 'SIGKILL'); } catch { /* already gone */ } }
+    }
+  });
+
+  itLinux('a user manager that refuses to create the job is a failed report and exit 1 — nothing on the box changed', () => {
+    const home = detachedBox('ccrc-update-detach-rc-');
+    writeFileSync(join(home, 'fixture-systemd-run-exit'), '1\n');
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: could not start the detached run \(systemd-run exited 1\) — nothing on this box was changed$/m);
+    expect(report(home)).toMatchObject({ phase: 'failed', detail: 'detach: systemd-run exited 1', target: 'v2.0.0' });
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('--detach without --to is a usage error at exit 2 — nothing written, nothing spawned (D-3229)', () => {
+    const home = detachedBox('ccrc-update-detach-noto-');
+    const r = runUpdate(home, ['--detach']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: update: --detach needs --to <tag> — a detached run never resolves a channel; it has nobody to print its sentence to$/m);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+    expect(detachArgv(home)).toEqual([]);
+    expect(existsSync(join(home, 'curl-argv'))).toBe(false);
+  });
+
+  it('--check and --detach are exclusive — the D-3139 shape, exit 2, nothing fetched', () => {
+    const home = detachedBox('ccrc-update-detach-check-');
+    const r = runUpdate(home, ['--check', '--detach', '--to', 'v2.0.0']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/update: --check and --detach are exclusive/);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+    expect(detachArgv(home)).toEqual([]);
+  });
+
+  it('the Darwin arm refuses BEFORE it probes, writes or spawns — measured on any platform through the sourced function (§18 "--detach refuses on Darwin")', () => {
+    const home = detachedBox('ccrc-update-detach-darwin-src-');
+    const r = sourcedCcrc(home, 'CCD_OS=darwin; _upd_detach update v2.0.0 cli');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: --detach is Linux-only \(decision 17\)$/m);
+    expect(existsSync(join(home, '.ccrc', 'update.json')), 'the Darwin arm wrote a report').toBe(false);
+    expect(detachArgv(home)).toEqual([]);
+  });
+
+  itDarwin('on macOS the full verb refuses at exit 1 with the decision-17 sentence, nothing written', () => {
+    const home = detachedBox('ccrc-update-detach-darwin-');
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: --detach is Linux-only \(decision 17\)$/m);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+    expect(existsSync(join(home, 'curl-argv'))).toBe(false);
   });
 });
