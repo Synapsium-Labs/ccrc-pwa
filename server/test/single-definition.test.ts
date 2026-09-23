@@ -3516,25 +3516,79 @@ describe('the update ring — nothing under server/src/update holds the handle (
 // APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
 // file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
 describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
+  /** The eight basenames NODE_FILES declares (shared/agent-protocol.ts),
+   *  spelled here as plain strings for the two scans below — the same
+   *  tradeoff the QUOTED case already makes for three of them. */
+  const EIGHT_BASENAMES = ['build.json', 'installed', 'ccrc-caps', 'floor', 'previous', 'node-id', 'update.json', 'update-intent'];
+
   it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
     const holders = ALL.filter((f) => /^\s*export const NODE_FILES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
+
+  /** Comment lines blanked before the QUOTED scan runs — this codebase's own
+   *  convention is to name these basenames in BACKTICK-quoted PROSE inside a
+   *  docstring (`` `update-intent` is in the agent's read set `` and the
+   *  like), and F16's widened, quote-agnostic regex would otherwise read
+   *  every one of those mentions as a second CODE definition. Same shape as
+   *  `update-writer-groups.test.ts`'s `blankComments`, copied rather than
+   *  imported — a test file does not import another test file's internals. */
+  const blankComments = (src: string): string =>
+    src.split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
 
   it('the three names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
     // `build.json`, `installed`, `floor` and `previous` are ordinary words older
     // code already spells (`config.ts`'s `buildInfoPath`, the agent's own stamp
     // reader), and `node-id` is also a W1 CAP word (`ccd/ccrc`'s
     // `CCRC_CAP_WORDS`) a later task may test for; these three are new with the
-    // control plane, so a second quoted copy is a second definition.
-    const QUOTED = /'(?:ccrc-caps|update\.json|update-intent)'/;
-    const holders = ALL.filter((f) => QUOTED.test(readFileSync(f, 'utf8'))).map(rel);
+    // control plane, so a second quoted copy is a second definition. F16: a
+    // BACKREFERENCE, not a fixed `'…'` — a double-quoted or backtick re-list
+    // is the same second definition, and the un-widened regex missed both.
+    const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
+    const holders = ALL.filter((f) => QUOTED.test(blankComments(readFileSync(f, 'utf8')))).map(rel);
     expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
-  it("the agent's read grant derives from it, never re-lists it", () => {
+  it("CONTROL: the QUOTED case reads all three quote styles, not just single-quoted (F16)", () => {
+    const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
+    expect(QUOTED.test('const x = "ccrc-caps";'), 'double-quoted went unseen').toBe(true);
+    expect(QUOTED.test('const x = `update-intent`;'), 'backtick-quoted went unseen').toBe(true);
+    expect(QUOTED.test("const x = 'update.json';"), 'single-quoted (the original case) regressed').toBe(true);
+    expect(QUOTED.test('const x = "update.json`;'), 'mismatched quote characters falsely matched').toBe(false);
+  });
+
+  it("the agent's read grant imports NODE_FILE_BASENAMES", () => {
+    // Renamed (F16): this checks only the import. Whether agent/src ALSO
+    // carries a second, re-typed list beside it is the next case's job — a
+    // title claiming "never re-lists it" was never itself checked here.
     const wl = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
     expect(wl).toMatch(/import\s*\{[^}]*\bNODE_FILE_BASENAMES\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
+  /** Every file under `agent/src` (any depth) that spells ALL EIGHT basenames
+   *  as string literals (any quote style) — a file that does is a second
+   *  list, whether or not it also imports `NODE_FILE_BASENAMES`. Takes
+   *  fixture pairs so the CONTROL below can drive it without touching a real
+   *  file (F16). */
+  const agentBasenameHolders = (files: readonly { path: string; src: string }[]): string[] =>
+    files
+      .filter(({ src }) => EIGHT_BASENAMES.every((n) => new RegExp(`(['"\`])${n.replace('.', '\\.')}\\1`).test(src)))
+      .map((f) => f.path);
+
+  it('no file in agent/src re-lists all eight basenames beside the NODE_FILE_BASENAMES import (F16)', () => {
+    const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
+      .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
+    expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);
+    expect(agentBasenameHolders(files)).toEqual([]);
+  });
+
+  it('CONTROL: a planted re-list of all eight basenames beside the import reds the check above (F16)', () => {
+    const real = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent"];\n`;
+    expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: planted }]),
+      'a planted re-list of all eight went unseen').toEqual(['agent/src/whitelist.ts']);
+    expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: real }]),
+      'the real file false-reds with no re-list planted').toEqual([]);
   });
 
   it("the ready frame's ops field has ONE reader in server/src", () => {
