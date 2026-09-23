@@ -761,7 +761,7 @@ cannot miss it. Found by the Task 3 review.
   that owns cutover.** Tasks 3, 4 and 7 placed, removed and deployed the pair under the Architecture sentence
   "installs but does not enable … installed and inert". That was true of the installer and false in effect: on the
   operator's fleet box the name is occupied — `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` belong to
-  the OpenClaw repository, and `ccgpt-usage@gpt2.timer` is ENABLED against that template (measured read-only by the
+  the OpenClaw repository, and an instance of that template — one of the operator's live Codex lanes — is ENABLED (measured read-only by the
   controller, 2026-09-23). The next rollout would have replaced a live, enabled timer's definition, and
   `ccrc uninstall` would have deleted another repository's live unit — against the standing ruling that ccrc writes
   only what it owns. Every fixture HOME is empty, so no suite and no per-task review could see it; the final
