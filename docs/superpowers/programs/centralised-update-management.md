@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **fix round 2, the last full round** (run 128, PR #176); review run 143 at `2b5d4ce1`: 16 findings (6 important); plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **final review** (run 128, PR #176 at `1258a57a` after fix round 2); review run 146 dispatched 2026-09-23 22:5x UTC; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -267,6 +267,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   named halt.
 
   `main` moved to `a3a93b41` (#177) during the review. The tip merges clean onto it, and `MIGRATIONS[13]` still holds.
+
+- **Wave 2's fix round 2 is done (2026-09-23), at `1258a57a`, after merging #177.**
+  - **D-3218 (R1):** every catalogue request stamps the budget clock, and the refresh door's interval is derived from
+    the per-poll maximum, the 60/h budget and the scheduled poll's own share: 200 s today.
+  - **Amended in place:** D-3213 through D-3217, for R2, R4, R5, R7, R9 and R11.
+  - **The worker's own review also caught S1:** the probe and the tag fetch never stamped the clock, and a throwing
+    store read rejected `poll()`. Both are fixed.
+  - **Mutation reds measured:** R3, R11, R12, R13 and R14's controls.
+  - **Carried to wave 5 under the round-3 rule:** C-a (the tag check's own clock stamp is unpinned), C-b (the second
+    `measuredCurrentK` site is unpinned), C-d (the warning is never re-armed after recovery, now documented), and
+    three plan nits.
+  - Review run 146, the final one, classifies each finding as behaviour or coverage/prose.
+  - In parallel, the coordinator's second re-pointing pass (R6) runs against `1258a57a`. It covers every
+    `NodeMeasurement`/`NodeRow`/`NodeWire` literal in waves 3 and 5, fix round 2's changes (including wave 3's copy
+    for the refresh door, which is no longer "a minute"), and an addendum for wave 4.
 
 ## Carried constraints
 
