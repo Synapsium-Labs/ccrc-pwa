@@ -8,7 +8,7 @@
 // suite to mean anything: every case writes the marker file itself, into a
 // fixture registry, exactly as `_reg_set` would (`printf '%s'`, no newline).
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -106,9 +106,16 @@ describe('SessionRecord.child — three answers, never a boolean', () => {
     expect((await record(unreadableField(ID, 'child'))).child).toEqual({ kind: 'none' });
   });
 
-  it('a PROVEN ENOENT on a listed marker (a purge racing the read) → none', async () => {
+  it('a PROVEN ENOENT on a listed marker (a purge racing the read, or a ' +
+     'dangling symlink) → unreadable, never none (F4, D-3348)', async () => {
     mark('17');
-    expect((await record(absentField(ID, 'child'))).child).toEqual({ kind: 'none' });
+    expect((await record(absentField(ID, 'child'))).child).toEqual({ kind: 'unreadable' });
+  });
+
+  it('a REAL dangling symlink — the concrete shape the case above stands in ' +
+     'for — reads absent, is listed, and answers unreadable', async () => {
+    symlinkSync(path.join(reg, `${ID}.child-target-does-not-exist`), path.join(reg, `${ID}.child`));
+    expect((await record()).child).toEqual({ kind: 'unreadable' });
   });
 
   it('the whole-fleet read carries the same field — one parser, two callers', async () => {

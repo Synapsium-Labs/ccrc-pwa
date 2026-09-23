@@ -315,28 +315,44 @@ export interface SessionRecord {
    * will DEFER on one. Collapsing `unreadable` into either neighbour is a
    * fail-open in one of those two directions.
    *
-   *   `none`       — no marker: a MEASURED absence (a proven ENOENT), or a
-   *                  failed read of a file the directory listing this record
-   *                  was built from does NOT name — the listing rung `held`,
-   *                  `substrate` and `stranded` already apply. An agent older
-   *                  than the wire's `absent` marker answers "unreadable" for
-   *                  every missing file; without this rung every workspace on
-   *                  such a box would read as an unreadable child.
+   *   `none`       — no marker: a proven ENOENT (a MEASURED absence) of a
+   *                  file the directory listing this record was built from
+   *                  does NOT name — the listing rung `held`, `substrate` and
+   *                  `stranded` already apply. An agent older than the wire's
+   *                  `absent` marker answers "unreadable" for every missing
+   *                  file; without this rung every workspace on such a box
+   *                  would read as an unreadable child.
    *   `child`      — the marker read back as a run id in ccd's own grammar
    *                  (`CHILD_RUN_ID`, `shared/api.ts`: at most ten ASCII
    *                  digits, no leading zero — spec §5.1), over the bytes
    *                  ccd's `$(_reg_get …)` sees: NUL bytes dropped, trailing
    *                  newlines stripped, nothing else trimmed. So the server
-   *                  and the box call exactly the same markers children.
+   *                  and the box call exactly the same markers children —
+   *                  EXCEPT a symlinked or non-regular marker (F5): ccd's
+   *                  `_reg_get` (`ccd/ccd`, `[[ -f … && ! -L … ]]`) refuses
+   *                  any symlink outright and answers `""` (not a child),
+   *                  while this read follows a LIVE link through to its
+   *                  target — a symlink to a file holding `17` reads
+   *                  `{kind:'child', runId:17}` here. The server is the
+   *                  STRICTER side of that one divergence: it sees a child
+   *                  ccd does not, and refuses MORE. A DANGLING link is a
+   *                  different rung entirely — `unreadable`, below.
    *   `unreadable` — the listing names the marker and its bytes did not come
-   *                  back, OR they came back as anything outside that grammar
-   *                  (empty, `0`, `017`, eleven digits, ` 17`, text).
-   *                  Something wrote the file; a malformed marker is not "no
-   *                  marker".
+   *                  back — including a listed marker whose read comes back
+   *                  ABSENT (F4/D-3348: a dangling symlink, or a file removed
+   *                  between the listing and this read) — OR they came back
+   *                  as anything outside that grammar (empty, `0`, `017`,
+   *                  eleven digits, ` 17`, text). Something wrote the file; a
+   *                  malformed marker is not "no marker".
    *
    * NO second-listing reconfirm, unlike `held`: nothing but `_reg_purge`
    * removes a marker, and a purge removes `<id>.uuid` with it, which the
    * identity reconfirm in `readRegistryMeasured` already retires the row for.
+   * A listed marker that reads back absent — the exact race this paragraph
+   * is about — now answers `unreadable` (F4/D-3348), not `none`, so even a
+   * purge landing in the gap between the listing and this read refuses the
+   * bind (retryably) rather than permitting it before the identity reconfirm
+   * has a chance to retire the row.
    *
    * ATTRIBUTION, NOT AUTHENTICATION. Any process on the fleet box can write
    * this file (CLAUDE.md, "Identity on the fleet"). It is the box's half of
@@ -513,6 +529,11 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * nothing else trimmed — so a value with a leading space or a trailing `\r`
  * reads the same on both sides of the wire. Its one caller is `.child`
  * (spec §5.1); the default keeps every other caller's `.trim()` byte for byte.
+ * That equivalence is over CONTENT, once ccd's own guard lets the file be
+ * read at all (F5): a symlinked marker never reaches `$(cat …)` on ccd's
+ * side at all — `_reg_get`'s `[[ ! -L … ]]` refuses it outright — while this
+ * read follows the link through to its target, so the two sides can decide
+ * differently on that one shape (see `SessionRecord.child`'s `child` bullet).
  */
 export async function fieldMeasured(
   io: FleetIO, dir: string, id: string, name: string, as: 'trimmed' | 'shell' = 'trimmed',
@@ -541,7 +562,12 @@ function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
       ? { kind: 'child', runId: Number(read.content) }
       : { kind: 'unreadable' };
   }
-  if (read.reason === 'absent') return { kind: 'none' };
+  // F4 (D-3348): a `listed`-but-`absent` read — a dangling symlink, or a file
+  // gone between the listing and this read — used to fall through to `none`,
+  // permitting a bind on evidence that could not be read. Both failure
+  // reasons now share the same listing rung: `listed` refuses (`unreadable`,
+  // retryable), and only a read that is BOTH absent AND unlisted answers
+  // `none`.
   return listed ? { kind: 'unreadable' } : { kind: 'none' };
 }
 
