@@ -768,7 +768,7 @@ if [ "$TARGET" = "agent" ]; then
   # the fix is the box-side idiom `ccrc install` has always used for these same
   # unit files (`ccd/ccrc`'s `_inst_atomic`: temp, chmod, `mv -f` = rename(2)) —
   # one ssh, no extra round trips, and the two lanes stop disagreeing about the
-  # same thirteen files. A stray `<unit>.incoming.<pid>` from a dead run is
+  # same unit files. A stray `<unit>.incoming.<pid>` from a dead run is
   # inert to systemd (it ends in neither a unit suffix nor `.conf`) and the next
   # successful copy of that file sweeps it, exactly as `install_atomic`'s own
   # trailing `rm -f` does. The mode is stated (644) rather than inherited: `cp`
@@ -814,6 +814,32 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+  # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
+  # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
+  # edit cites this file's lines by number above this point, and an insert
+  # above them would move what they cite.
+  #
+  # The chain above places NO `ccgpt-usage@.{service,timer}`, and neither does
+  # `ccd/ccrc`'s `_inst_units`: a live fleet box already has a unit pair at those
+  # names, owned by another repository and with an instance enabled, so placing
+  # ours is the cutover, which is Plan 3's. The files ship in the tree only.
+  #
+  # The two executables, on this agent lane only: `ccd/ccrc`'s `_inst_bins`
+  # places them on every role but server. The rsync above already lands them at
+  # ~/ccrc/ccd/; without these two lines a fallback deploy never put them on
+  # PATH. After the build and before the stamp, so a failed copy aborts the
+  # lane before this box's build record can claim it. Only the two that exist
+  # in the tree today: `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE
+  # SAME COMMIT that writes them, because this helper on a missing source
+  # aborts the lane mid-chain, and every commit on `main` must deploy.
+  #
+  # `server/test/install-census.test.ts` reds when a binary or unit file
+  # `ccrc install` places is placed by NEITHER lane of this file (it reads the
+  # union of the two, so a name placed only in the wrong lane passes there),
+  # when anything in this file enables a template or an instance of one, and
+  # when a source either helper here copies is not tracked in the repository.
+  install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
+  install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
   # now) let a failed remote `npm ci && npm run build` — a registry hiccup,

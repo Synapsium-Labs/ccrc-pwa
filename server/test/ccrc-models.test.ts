@@ -457,6 +457,47 @@ describe('ccrc models <id> init', () => {
   });
 });
 
+// Spec §5.4: `~/.ccrc/codex/<id>/lane.json`, the one manifest the lane's
+// launcher, shim and usage publisher read so none of them re-derives a path
+// from a naming convention. Its writer is the materialiser, so rule 3 of
+// `deploy/models-op.mjs`'s header ("MATERIALISE ON SUCCESS") is what re-renders
+// it — which is what this case drives, through the verb as a box runs it:
+// `init`, then a reclassification. The payload's every field is
+// `models-op.test.ts`'s; this file owns the claim that the VERB reaches it.
+describe('lane.json — the codex lane manifest (spec §5.4)', () => {
+  const CODEX_LANE = {
+    id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
+    exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.codex-a-auth' },
+    homeAble: false, telemetry: 'codex',
+  };
+  const laneOf = (): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(join(home, '.ccrc', 'codex', 'codex-a', 'lane.json'), 'utf8'));
+  const haikuOf = (): unknown => (registryOf('codex-a')['classes'] as Record<string, unknown>)['haiku'];
+
+  beforeEach(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    home = box({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_LANE] });
+  });
+
+  it('init writes it, and a later reclassification re-renders probeModel from the registry', () => {
+    expect(run(['models', 'codex-a', 'init', 'codex']).code).toBe(0);
+    const lane = laneOf();
+    expect(lane['id']).toBe('codex-a');
+    expect(lane['authDir']).toBe('.codex-a-auth');
+    // D-3158: the key name is a cross-plan contract — ccd/ccgpt-usage.py reads
+    // exactly `probeModel`, and its own fixture cannot prove the producer
+    // agrees. The value is the REGISTRY's haiku class, read back off the file.
+    expect(typeof haikuOf()).toBe('string');
+    expect(lane['probeModel']).toBe(haikuOf());
+    // Rule 3: an accepted mutation re-renders it. The id is one `init`'s seed
+    // does not carry, so a writer that read the seed rather than the registry
+    // on disk stays on the old value and reds here.
+    expect(run(['models', 'codex-a', 'set-class', 'haiku', 'gpt-x-mini']).code).toBe(0);
+    expect(haikuOf()).toBe('gpt-x-mini');
+    expect(laneOf()['probeModel']).toBe('gpt-x-mini');
+  });
+});
+
 // Round 1 review, Important 2: `_models_answer`'s seam had no test at all —
 // `grep -n no-answer server/test/ccrc-models.test.ts` found nothing. These
 // three drop a STUB `deploy/models-op.mjs` into the fixture box, through
