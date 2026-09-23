@@ -381,32 +381,42 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // parent is $HOME and is not whitelisted): fall back to the canonical
       // path, which for a directory is the same answer.
       //
-      // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C):
-      // `~/.ccrc` itself is NEVER independently whitelisted (`checkPath`
-      // refuses it — it is not one of the eight node files), so for a node
-      // file `parent === null` always fires above, and the fallback subject
-      // would be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
+      // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C).
+      // `~/.ccrc` is not itself independently whitelisted in the common case
+      // (only its eight literal node-file paths are), so `parent === null`
+      // usually fires for a node-file request, and the fallback subject would
+      // then be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
       // answer. That is correct when the node file is admitted through
       // `isCcrcNodeFile` (that grant requires canonical === `<ccrc>/<literal
       // basename>`, so canonical already equals the literal path). But a node
       // file can ALSO be admitted through a DIFFERENT whitelist arm: a live
-      // symlink pointing OUT of `~/.ccrc` into another admitted prefix
-      // (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root)
-      // canonicalises onto a regular file there, which that OTHER prefix's
-      // arm admits on its own — and then `p` names that other file, not the
-      // link. Scoped narrowly so every other request's answer stays
-      // byte-for-byte unchanged: only when the request literally names
-      // `<canonical ~/.ccrc>/<one of the eight basenames>` does the subject
-      // become that literal path directly, never the parent-probe fallback.
-      const canonicalCcrc = await canonicalize(path.join(ctx.cfg.home, CCRC_DIR_NAME));
+      // symlink whose FULLY RESOLVED target lies in another admitted prefix
+      // (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
+      // that target is a regular file the OTHER prefix's own arm admits on
+      // its own — and then `p` names that other file, not the link. Scoped
+      // narrowly so every other request's answer stays byte-for-byte
+      // unchanged, whether or not `~/.ccrc` itself happens to be
+      // independently admitted (e.g. `~/.ccrc` itself under another prefix):
+      // only when the request literally names `<canonical
+      // ~/.ccrc>/<one of the eight basenames>` does the subject become that
+      // literal path directly, never the parent-probe fallback. The basename
+      // check runs FIRST — a cheap array lookup — so the two `canonicalize`
+      // calls (realpath walks) below run only when it can possibly matter,
+      // never on every `lstat`.
       const literalBasename = path.basename(req.path);
-      const literalParent = await canonicalize(path.dirname(req.path));
-      let subject: string;
-      if (literalParent === canonicalCcrc && NODE_FILE_BASENAMES.includes(literalBasename)) {
-        subject = path.join(canonicalCcrc, literalBasename);
-      } else {
+      const viaParentProbe = async (): Promise<string> => {
         const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
-        subject = parent === null ? p : path.join(parent, path.basename(req.path));
+        return parent === null ? p : path.join(parent, path.basename(req.path));
+      };
+      let subject: string;
+      if (NODE_FILE_BASENAMES.includes(literalBasename)) {
+        const canonicalCcrc = await canonicalize(path.join(ctx.cfg.home, CCRC_DIR_NAME));
+        const literalParent = await canonicalize(path.dirname(req.path));
+        subject = literalParent === canonicalCcrc
+          ? path.join(canonicalCcrc, literalBasename)
+          : await viaParentProbe();
+      } else {
+        subject = await viaParentProbe();
       }
       send(ws, ok(req.id, lstatPayload(await lstatMeasured(subject))));
       return;

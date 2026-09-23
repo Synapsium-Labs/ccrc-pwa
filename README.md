@@ -1533,8 +1533,8 @@ general remote-shell:
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
   fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
-  name (`NODE_FILES`, `shared/agent-protocol.ts`) — never a live symlink inside
-  `$HOME/.ccrc` carrying one, never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
+  name (`NODE_FILES`, `shared/agent-protocol.ts`) — a live symlink inside
+  `$HOME/.ccrc` carrying one is never read AS that file (refused, or `lstat` reports `symlink`), never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
   rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
