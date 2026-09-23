@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **last fix round** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); review 141 at `e5238719`: 2 important + 6 minor |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **in scoped review** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); tip `80dbafd8`; review 141 (2 important + 6 minor), scoped review 142 on `ccrc-pwa-amber-delta` |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -61,6 +61,14 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
   - **The rest.** A stale comment fixed in place (F6). "Not a slug" means "does not blame the slug", so no
     change (F7). The full mutation table goes in the PR body (F8).
   - **Named in advance as the last full fix round.**
+
+- **2026-09-23 — the last fix round done (`80dbafd8`); scoped review 142 dispatched.**
+  - **Measured before any code (git 2.43).** The worker checked each shape the review named. It also found
+    that git removes an EMPTY directory at a ref path and succeeds; the helper still answers taken there,
+    which fails safe (it only skips a slug) and is stated in the header and in D-3476.
+  - **Tests.** 21 mutation rows, spelled out in PR #177's body. Control 107/107; every row red.
+  - **Citation bookkeeping.** README re-pointed. Census unmoved (147/195/53/35). Corpus frozen. Re-stamped.
+  - **Suites.** 67 ws-add-touching server files green, except one load race that was green alone twice.
 
 ## Carried constraints
 
