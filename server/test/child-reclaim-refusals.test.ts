@@ -246,6 +246,39 @@ describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
     expect(w.coord.runEvents(id).map((e) => e.detail).join('\n')).not.toContain('session-unbound');
   });
 
+  it('a successful ws-release whose run left `planned` before clearSession answers unbound:false, ' +
+     'naming the act that ran (F3+F6, D-3349)', async () => {
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    let id = 0;
+    const run: Runner = async (_cmd, args) => {
+      const verb = args[0] ?? '';
+      if (verb === 'ws-release') {
+        // The race `clearSession`'s own guard exists to catch, reached
+        // directly rather than through a second concurrent route call (which
+        // `coordMutex` would serialize away, review 144 whole-branch pass
+        // (b)): the run leaves `planned` between `runCcd` returning and
+        // `clearSession`'s read.
+        const adv = coord.advance(id, 'failed', 'operator');
+        if (!adv.ok) throw new Error('fixture advance failed');
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      if (verb === 'pr-state') return { code: 0, stdout: `${noPrLine(CHILD)}\n`, stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const w = await openApp(home, run, { coord }); app = w.app;
+    id = await openOn(app, 2);
+    spend(home, CHILD, 42);
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, refused: 'workspace-spent', pr: 42, unbound: false });
+    const detail = (res.json() as { detail: string }).detail;
+    expect(detail, 'the detail must name the act that ran, not read as "nothing changed"')
+      .toContain('ws-release');
+    expect(detail).toContain('no longer planned');
+  });
+
   it('a box whose ccd does not advertise ws-release changes nothing', async () => {
     const home = mkTmp('ccrc-child-dispatch-');
     seed(home, CHILD, { child: '5' });

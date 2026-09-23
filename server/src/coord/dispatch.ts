@@ -19,6 +19,7 @@ import {
   holdReasonVerdict,
   queueSystemMail,
   releaseIsSafe,
+  survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
@@ -178,9 +179,16 @@ export type DispatchOutcome =
    *  CHANGE something: on `workspace-spent` the spent child's claim is
    *  released — or handed to a surviving sibling — and the run is unbound, and
    *  `unbound` says whether that happened. `true`: dispatch again and a fresh
-   *  child is minted. `false`: nothing changed (`detail` says why) and the
-   *  same dispatch may be retried. `spent-unmeasured` never unbinds — unknown
-   *  is not spent. `pr` and `detail` distinguish by PRESENCE. */
+   *  child is minted. `false`: ALWAYS carries a `detail` (D-3349, F3+F6) —
+   *  either the fleet act never ran (a PERMANENT cause named in the text:
+   *  this box's ccd does not support the verb, the surviving run's claim
+   *  could not be written, or the other runs naming the workspace could not
+   *  be read) and the caller must STOP AND REPORT, or the act DID run
+   *  (`ws-release`, or the `ws-hold` hand-over, named) and `clearSession`
+   *  found the run no longer `planned` and bound — that `detail` is NOT
+   *  permanent: retry the same dispatch once, and if it repeats, stop and
+   *  report. `spent-unmeasured` never unbinds — unknown is not spent. `pr`
+   *  and `detail` distinguish by PRESENCE. */
   | { ok: false; kind: 'childSpent'; code: 'workspace-spent' | 'spent-unmeasured'; pr?: number; detail?: string; unbound: boolean };
 
 /**
@@ -244,10 +252,18 @@ interface RunBinding { id: number; sessionId: string }
  *     workspace (a coordinator that dispatched N+1 before closing N), a
  *     release would drop that live run's claim; the claim is HANDED OVER
  *     instead, re-held with the surviving run's own reason.
- *   - An unreadable sibling list, an invalid survivor hold, a ccd that lacks
- *     the verb, or a failed act answers `unbound: false` and changes nothing.
- *   - The act spends `dispatchDec` — this lane undoing its own open-time
- *     claim, under the same actor — never a second `sweepDec` label.
+ *   - An unreadable sibling list, an invalid survivor hold, or a ccd that
+ *     lacks the verb answers `unbound: false`, with a `detail` naming that
+ *     PERMANENT cause, and changes nothing — stop and report (F3).
+ *   - A failed act answers `unbound: false` the same way — retryable, not
+ *     permanent.
+ *   - A successful act whose `clearSession` finds the run no longer `planned`
+ *     and bound also answers `unbound: false`, with a `detail` naming the act
+ *     that DID run (F6) — retryable, not "nothing changed".
+ *   - The act spends `dispatchDec` — this dispatch's OWN actor (F7), not the
+ *     open's: the open placed its hold under `` sweepDec(…, `run:${opened.id}
+ *     open`) `` (`routes.ts`), so the journal shows two actors, the open's and
+ *     the dispatch's, never one label reused.
  * A crash between the act and `clearSession` leaves a released run still
  * bound; the next dispatch re-asks the gate, re-releases (idempotent) and
  * unbinds.
@@ -263,7 +279,7 @@ async function refuseSpentChild(
     ({ ok: false, kind: 'childSpent', code: 'workspace-spent', pr, detail, unbound: false });
   const sibRead = deps.coord.openRunsForSession(run.sessionId, run.id);
   if (!sibRead.ok) return keep(`the other runs naming this workspace could not be read: ${sibRead.detail}`);
-  const survivor = sibRead.siblings[sibRead.siblings.length - 1] ?? null;
+  const survivor = survivorOf(sibRead.siblings);
   let handoff: HoldReasonVerdict | null = null;
   if (!releaseIsSafe(sibRead.siblings) && survivor !== null) {
     handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
@@ -276,7 +292,21 @@ async function refuseSpentChild(
   const res = await deps.runCcd(argv);
   if (!res.ok) return keep(`${argv[0]} failed: ${res.stderr.trim()}`);
   const cleared = deps.coord.clearSession(run.id, pr);
-  return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: cleared.cleared };
+  // F3 + F6 (D-3349): the fleet act above DID run — `argv[0]` names which,
+  // `ws-release` or the hand-over's `ws-hold` — but `clearSession` guards on
+  // the run still being `planned` and bound, and a crash or a second dispatch
+  // winning a race can leave that no longer true. `unbound:false` here is NOT
+  // one of the three PERMANENT causes `keep` above reports (unsupported verb,
+  // invalid survivor hold, unrepresentable sibling): the act already ran, so
+  // this `detail` means retry the same dispatch once, and if it repeats, stop
+  // and report — never "nothing changed", which would be a lie about the act
+  // that just happened.
+  if (!cleared.cleared) {
+    return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: false,
+      detail: `${argv[0]} ran, but run ${run.id} was no longer planned and bound by the time it ` +
+        'completed, so nothing was unbound' };
+  }
+  return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: true };
 }
 
 export async function dispatchRun(
@@ -489,8 +519,10 @@ export async function dispatchRun(
   //
   // AND A THIRD SPEND, on a refusal path only (child-reclamation wave 2):
   // `refuseSpentChild` releases — or hands to a surviving sibling — the claim
-  // THIS lane's open placed on a spent child, under the same actor, because
-  // it is this lane undoing its own hold rather than a new act by a new one.
+  // an earlier open placed on a spent child, under THIS dispatch's own
+  // actor (F7) rather than minting a second label: the open placed its hold
+  // under `` sweepDec(…, `run:${opened.id} open`) `` (`routes.ts`), so the
+  // journal shows two actors for the two acts, the open's and the dispatch's.
   const dispatchDec = sweepDec(deps.fleetState, `run:${run.id} dispatch`);
 
   if (run.sessionId === null) {
