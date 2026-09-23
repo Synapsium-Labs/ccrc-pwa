@@ -358,12 +358,16 @@ not after.
      zero open runs, and the server retires a program with none — silently
      breaking every `toId:'coordinator'` mail from that point on. Opening first
      never lets the count reach zero.
-     **One PR per child decides `sessionId` before the project does:** a
-     producer whose workspace opened a PR is SPENT, so wave N+1 opens without
-     its `sessionId` and the producer closes as the cross-project arm closes it,
-     even inside one project — naming a spent workspace is refused
-     `workspace-spent` (`references/wave-lifecycle.md` §5). The same-project arm
-     is for a producer whose workspace opened no PR.
+     **One PR per child decides `sessionId` before the project does:** a fresh
+     child always branches from the project's default branch and carries none
+     of the previous producer's unmerged commits, so a producer whose
+     workspace opened a PR is SPENT: wave N+1 opens without its `sessionId`
+     and the producer closes as the cross-project arm closes it, even inside
+     one project — naming a spent workspace is refused `workspace-spent`
+     (`references/wave-lifecycle.md` §5). When wave N+1 builds on wave N's
+     code, dispatch it only once wave N's PR is proven merged, exactly as
+     that arm requires. The same-project arm is for a producer whose
+     workspace opened no PR.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,
