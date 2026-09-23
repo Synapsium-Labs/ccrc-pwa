@@ -24,9 +24,9 @@ numbers; the spec wave each one implements is named beside it.
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **second review** (run 128, PR #176 at `2b5d4ce1` after fix round 1); review run 143 dispatched 2026-09-23 19:4x UTC; plan `1288beec` |
-| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
+| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
-| 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
+| 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
@@ -217,6 +217,33 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - to the second review: the tag re-read's 200 path does not check that the answer names K.
 
   Review run 143 carries the panel plus a security lens, over the whole wave, weighted to the fix round.
+
+- **The later plans are re-pointed against W2 as executed (2026-09-23, at `2b5d4ce1`).** A workflow split the plans of
+  waves 3 and 5 by task. 22 units were each scanned by an Opus agent against W2's tip tree, patched by a Sonnet agent,
+  and checked by an Opus agent against the tree, with a Sonnet fixup where the check found something. That was 75
+  agents and about 190 items in all:
+  - names that moved (`UNIX_SECONDS_MAX`, `RekeyNodeResult.revived`, `NodeMeasurement`'s `floorRead`/`previousRead`);
+  - code that would not compile or would red;
+  - two silent catches the plans would have reintroduced;
+  - behaviour the fix round changed;
+  - about 85 shifted line anchors.
+
+  **Wave 3:** `08cecd10`, cherry-picked after `d638c602`.
+
+  **Wave 5:** `287caa07`, cherry-picked after `6acbff6d`. It carries four new departures, issued to run 132, the same
+  day:
+  - D-3492: a coordinator ruling. An update on a never-measured floor is refused with its OWN word, `floor-unread`.
+    Reusing `stamp-unread` would have told the operator a stamp could not be read when the floor was the problem.
+  - D-3493: the dispatch lane warns on a rejection.
+  - D-3494: the move routes use the intent route's ingress tag gate.
+  - D-3495: rollback's `no-previous` says when the previous file was never measured.
+
+  It also carries R21's residue as a Global Constraint.
+
+  **Wave 6:** unaffected; no task names W2.
+
+  **Wave 4:** its plan is held by its worker, so it got a report only: 28 items, every one verified against the tree.
+  That report is the artifact of its wake mail.
 
 ## Carried constraints
 
