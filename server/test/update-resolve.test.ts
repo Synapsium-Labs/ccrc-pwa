@@ -22,7 +22,7 @@ const intent = (channel: UpdateChannel | null, pinnedTag: string | null = null, 
   ({ channel, pinnedTag, auto });
 /** A node at v0.0.9 with floor v0.0.9, following the fleet row on stable, no releases, no refusals. */
 const input = (o: Partial<ResolveInput> = {}): ResolveInput => ({
-  currentVersion: 'v0.0.9', highestVersion: 'v0.0.9', nodeIntent: null, fleetIntent: intent('stable'),
+  currentVersion: 'v0.0.9', highestVersion: 'v0.0.9', floorRead: 'measured', nodeIntent: null, fleetIntent: intent('stable'),
   releases: [], refusedByThisNode: new Set<string>(), ...o,
 });
 
@@ -41,6 +41,45 @@ describe('the four floor sentences are §9\'s, verbatim', () => {
   });
   it('no floor and no measured version', () => {
     expect(RESOLVE_DETAIL.noFloor()).toBe('no floor and no measured version — nothing to compare against');
+  });
+  it('floor unmeasured (fix round 1, D-3213)', () => {
+    expect(RESOLVE_DETAIL.floorUnmeasured())
+      .toBe("this node's floor file could not be read — nothing resolves until it can be measured");
+  });
+});
+
+describe('the floor read-state (fix round 1, D-3213): unmeasured is never absent', () => {
+  it('an unmeasured floor with nothing carried resolves NOTHING — never falls back to currentVersion', () => {
+    const r = resolveNodeIntent(input({
+      highestVersion: null, floorRead: 'unmeasured', currentVersion: 'v0.0.9', releases: [rel('v0.0.10')],
+    }));
+    expect(r.desiredTag).toBeNull();
+    expect(r.resolveDetail).toBe(RESOLVE_DETAIL.floorUnmeasured());
+    expect(r.desiredStable).toBeNull();
+    expect(r.desiredDev).toBeNull();
+  });
+
+  it('a pin does not rescue an unmeasured floor with nothing carried either', () => {
+    const r = resolveNodeIntent(input({
+      highestVersion: null, floorRead: 'unmeasured', currentVersion: null,
+      fleetIntent: intent('stable', 'v0.0.10'), releases: [rel('v0.0.10')],
+    }));
+    expect(r.desiredTag).toBeNull();
+    expect(r.resolveDetail).toBe(RESOLVE_DETAIL.floorUnmeasured());
+  });
+
+  it('a carried floor (highestVersion set) still constrains, even though floorRead says unmeasured', () => {
+    const r = resolveNodeIntent(input({
+      highestVersion: 'v0.0.9', floorRead: 'unmeasured', currentVersion: 'v0.0.9', releases: [rel('v0.0.10')],
+    }));
+    expect(r.desiredTag).toBe('v0.0.10');
+  });
+
+  it('an absent floor (determined this sweep) is unconstrained exactly as before', () => {
+    const r = resolveNodeIntent(input({
+      highestVersion: null, floorRead: 'absent', currentVersion: 'v0.0.5', releases: [rel('v0.0.7')],
+    }));
+    expect(r.desiredTag).toBe('v0.0.7');
   });
 });
 

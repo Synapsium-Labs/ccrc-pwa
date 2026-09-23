@@ -10,7 +10,9 @@
 // `vX.Y.Z`; the `v` is stripped only inside shared/semver.ts. A value that
 // fails `isReleaseTag` is never ordered: it is not a floor, not a
 // catalogue entry and not a pin that can resolve.
-import { FLEET_SCOPE, UNIX_SECONDS_MAX, isReleaseTag, type AutoMode, type UpdateChannel } from '../../../shared/api.js';
+import {
+  FLEET_SCOPE, UNIX_SECONDS_MAX, isReleaseTag, type AutoMode, type TagFileRead, type UpdateChannel,
+} from '../../../shared/api.js';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver.js';
 
 /** The ccrc-caps word a node needs before `auto ≠ off` may reach it (§9; written by W4's spine). */
@@ -22,6 +24,13 @@ export interface EligibilityRow { tag: string; channel: UpdateChannel | null; bu
 export interface IntentView { channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode }
 export interface ResolveInput {
   currentVersion: string | null; highestVersion: string | null;
+  /** fix round 1, D-3213: THIS sweep's read state of the floor file. A NULL
+   *  `highestVersion` is unconstrained only when this is `absent`
+   *  (determined THIS sweep that there is no floor); when it is `unmeasured`
+   *  and `highestVersion` is still NULL (nothing was ever carried forward),
+   *  nothing resolves — never the `currentVersion` fallback an absent file
+   *  would license. */
+  floorRead: TagFileRead;
   /** update_intent[nodeId]; null = no row → the fleet row decides. */
   nodeIntent: IntentView | null;
   /** update_intent['*']; null = the seed row is gone → nothing resolves. */
@@ -59,6 +68,8 @@ export const RESOLVE_DETAIL = {
   rolledBack: (current: string, floor: string): string =>
     `this node was rolled back to ${current} and its floor is ${floor} — auto stays off this tag until a release above ${floor} exists (decision 8)`,
   noFloor: (): string => 'no floor and no measured version — nothing to compare against',
+  floorUnmeasured: (): string =>
+    "this node's floor file could not be read — nothing resolves until it can be measured",
   pinnedIneligible: (pin: string, why: PinnedIneligibleWhy): string =>
     `pinned ${pin} is not eligible on this node — ${PINNED_WHY_TEXT[why]}`,
   noEligible: (channel: UpdateChannel): string =>
@@ -104,6 +115,14 @@ export function eligibleTags(releases: readonly EligibilityRow[], channel: Updat
 interface ChannelAnswer { desiredTag: string | null; resolveDetail: string | null }
 
 function resolveOnChannel(channel: UpdateChannel, pin: string | null, input: ResolveInput): ChannelAnswer {
+  // fix round 1, D-3213: a NULL floor with nothing ever measured is NOT the
+  // same fact as a NULL floor this sweep determined to be absent — only the
+  // latter is unconstrained (§9). Checked before `floorOf`, which cannot
+  // itself tell the two apart: it would otherwise fall back to
+  // `currentVersion` here exactly as it does for a genuinely absent floor.
+  if (input.highestVersion === null && input.floorRead === 'unmeasured') {
+    return { desiredTag: null, resolveDetail: RESOLVE_DETAIL.floorUnmeasured() };
+  }
   const floor = floorOf(input.highestVersion, input.currentVersion);
   if (floor === null) return { desiredTag: null, resolveDetail: RESOLVE_DETAIL.noFloor() };
   if (pin !== null) {

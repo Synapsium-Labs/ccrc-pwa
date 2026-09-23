@@ -72,7 +72,8 @@ function row(label: string, role: NodeRole, stamp: BuildInfo | null, over: Parti
     currentVersion: stamp?.version ?? null, currentSha: stamp?.sha ?? null, currentRef: stamp?.ref ?? null,
     currentBuiltAt: stamp?.builtAt ?? null, currentDirty: stamp?.dirty ?? null,
     stampRead: stamp ? 'ok' : 'absent', installState: 'unknown', provenance: 'unknown',
-    caps: [], agentOps: role === 'fleet' ? [] : null, highestVersion: null, previousVersion: null, os: 'linux',
+    caps: [], agentOps: role === 'fleet' ? [] : null, highestVersion: null, previousVersion: null,
+    floorRead: 'absent', previousRead: 'absent', os: 'linux',
     measuredAt: 1_758_000_000_000, report: null,
     ...over,
   };

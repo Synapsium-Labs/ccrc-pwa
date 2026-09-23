@@ -105,7 +105,8 @@ const listed = (tag: string, channel: UpdateChannel = 'stable'): ReleaseListingR
 const meas = (o: Partial<NodeMeasurement> & Pick<NodeMeasurement, 'nodeId' | 'label' | 'role'>): NodeMeasurement => ({
   currentVersion: 'v0.0.9', currentSha: 'a'.repeat(40), currentRef: 'main', currentBuiltAt: '2026-09-22T00:00:00Z',
   currentDirty: false, stampRead: 'ok', installState: 'complete', provenance: 'verified', caps: ['verify', 'node-id', 'floor'],
-  agentOps: null, highestVersion: 'v0.0.9', previousVersion: null, os: 'linux', measuredAt: NOW, report: null, ...o,
+  agentOps: null, highestVersion: 'v0.0.9', previousVersion: null, floorRead: 'measured', previousRead: 'absent',
+  os: 'linux', measuredAt: NOW, report: null, ...o,
 });
 
 /** A coord.db on a fixture home holding the server row (floor v0.0.9), the fleet row (floor v0.0.10) and

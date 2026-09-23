@@ -44,6 +44,7 @@ export function resolveInputFor(store: Omit<ProjectStore, 'resolveNode' | 'nodes
   return {
     currentVersion: node.stampRead === 'ok' ? node.currentVersion : null,
     highestVersion: node.highestVersion,
+    floorRead: node.floorRead,
     nodeIntent: intentView(store.intentFor(node.nodeId)),
     fleetIntent: intentView(store.intentFor(FLEET_SCOPE)),
     releases: store.releases().map((r) => ({ tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked })),

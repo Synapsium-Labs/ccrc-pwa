@@ -31,6 +31,8 @@ import {
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
   BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
   isUpdatePhase, isUpdateState, SETTLED_UPDATE_STATES, validCapWords,
+  // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
+  isTagFileRead,
   // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
   // shared/api.ts (ruling R4), imported here and never spelled.
   FLEET_SCOPE, isAutoMode, isNotifyMode,
@@ -61,7 +63,7 @@ import {
   type SetAccountPoolsRefuseCode,
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
-  type SettledUpdateState, type StampRead, type UpdatePhase, type UpdateState,
+  type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -250,7 +252,14 @@ export interface NodeMeasurement {
   /** `null` = no agent by construction (the server's own row, decision 11);
    *  `[]` = an agent too old to say. Stored NULL and `''` — never folded. */
   agentOps: readonly string[] | null;
-  highestVersion: string | null; previousVersion: string | null; os: NodeOs;
+  highestVersion: string | null; previousVersion: string | null;
+  /** fix round 1, D-3213: THIS sweep's read state of the floor/previous
+   *  files. `highestVersion`/`previousVersion` NULL means "no floor" only
+   *  when the matching `*Read` is `absent`; `unmeasured` means this sweep
+   *  could not tell, and the caller (`applyMeasurement`) carries the row's
+   *  own previous value forward rather than let this write null it out. */
+  floorRead: TagFileRead; previousRead: TagFileRead;
+  os: NodeOs;
   measuredAt: number;
   /** `null` = no `update.json` on the node. */
   report: NodeReport | null;
@@ -267,7 +276,8 @@ export interface NodeRow {
   currentVersion: string | null; currentSha: string | null; currentRef: string | null;
   currentBuiltAt: string | null; currentDirty: boolean | null;
   stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
-  caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null; os: NodeOs;
+  caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null;
+  floorRead: TagFileRead; previousRead: TagFileRead; os: NodeOs;
   measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
   reportedPhase: UpdatePhase | null; reportedTarget: string | null; reportedStartedAt: number | null;
   reportedUpdatedAt: number | null; reportedDetail: string | null;
@@ -370,7 +380,7 @@ interface RawNodeRow {
   currentVersion: string | null; currentSha: string | null; currentRef: string | null;
   currentBuiltAt: string | null; currentDirty: number | null;
   stampRead: string; installState: string; provenance: string; caps: string; agentOps: string | null;
-  highestVersion: string | null; previousVersion: string | null; os: string;
+  highestVersion: string | null; previousVersion: string | null; floorRead: string; previousRead: string; os: string;
   measuredAt: number | null; reachable: number; unreachableSince: number | null;
   reportedPhase: string | null; reportedTarget: string | null; reportedStartedAt: number | null;
   reportedUpdatedAt: number | null; reportedDetail: string | null;
@@ -398,6 +408,10 @@ function nodeRowOf(r: RawNodeRow): NodeRow {
     provenance: isProvenanceState(r.provenance) ? r.provenance : 'unknown',
     caps: wordsOf(r.caps) ?? [], agentOps: wordsOf(r.agentOps),
     highestVersion: r.highestVersion, previousVersion: r.previousVersion,
+    // fix round 1, D-3213: an out-of-vocabulary token reads `unmeasured` — the
+    // direction that never licenses a floor this build cannot vouch for.
+    floorRead: isTagFileRead(r.floorRead) ? r.floorRead : 'unmeasured',
+    previousRead: isTagFileRead(r.previousRead) ? r.previousRead : 'unmeasured',
     os: isNodeOs(r.os) ? r.os : 'unknown',
     measuredAt: r.measuredAt, reachable: r.reachable === 1, unreachableSince: r.unreachableSince,
     reportedPhase: r.reportedPhase === null ? null : (isUpdatePhase(r.reportedPhase) ? r.reportedPhase : 'unknown'),
@@ -790,7 +804,8 @@ const ACK_DETAIL = 'acknowledged by the operator';
  *  file's rule, stated above `CoordStore`). */
 const NODE_COLUMNS =
   'nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, currentDirty, stampRead, ' +
-  'installState, provenance, caps, agentOps, highestVersion, previousVersion, os, measuredAt, reachable, ' +
+  'installState, provenance, caps, agentOps, highestVersion, previousVersion, floorRead, previousRead, os, ' +
+  'measuredAt, reachable, ' +
   'unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, reportedUpdatedAt, reportedDetail, ' +
   'updateState, updateTarget, updateStartedAt, updateDetail, channel, desiredTag, resolveDetail, ' +
   'requestedTag, requestedKind, requestedAt, supersededBy';
@@ -5907,6 +5922,7 @@ export class CoordStore {
       m.role, m.label, m.currentVersion, m.currentSha, m.currentRef, m.currentBuiltAt,
       m.currentDirty === null ? null : (m.currentDirty ? 1 : 0), m.stampRead, m.installState, m.provenance,
       m.caps.join(' '), m.agentOps === null ? null : m.agentOps.join(' '), m.highestVersion, m.previousVersion,
+      m.floorRead, m.previousRead,
       m.os, m.measuredAt,
       r === null ? null : r.phase, r === null ? null : r.target, r === null ? null : r.startedAt,
       r === null ? null : r.updatedAt, r === null ? null : r.detail,
@@ -5914,16 +5930,18 @@ export class CoordStore {
     return tx(this.db, (): UpsertNodeResult => {
       const ins = this.db.prepare(
         'INSERT INTO nodes (nodeId, role, label, currentVersion, currentSha, currentRef, currentBuiltAt, ' +
-        'currentDirty, stampRead, installState, provenance, caps, agentOps, highestVersion, previousVersion, os, ' +
+        'currentDirty, stampRead, installState, provenance, caps, agentOps, highestVersion, previousVersion, ' +
+        'floorRead, previousRead, os, ' +
         'measuredAt, reachable, unreachableSince, reportedPhase, reportedTarget, reportedStartedAt, ' +
         'reportedUpdatedAt, reportedDetail) VALUES (' +
-        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
+        '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?) ON CONFLICT(nodeId) DO NOTHING',
       ).run(m.nodeId, ...vals);
       if (Number(ins.changes) > 0) return { ok: true, created: true };
       const upd = this.db.prepare(
         'UPDATE nodes SET role = ?, label = ?, currentVersion = ?, currentSha = ?, currentRef = ?, ' +
         'currentBuiltAt = ?, currentDirty = ?, stampRead = ?, installState = ?, provenance = ?, caps = ?, ' +
-        'agentOps = ?, highestVersion = ?, previousVersion = ?, os = ?, measuredAt = ?, reachable = 1, ' +
+        'agentOps = ?, highestVersion = ?, previousVersion = ?, floorRead = ?, previousRead = ?, ' +
+        'os = ?, measuredAt = ?, reachable = 1, ' +
         'unreachableSince = NULL, reportedPhase = ?, reportedTarget = ?, reportedStartedAt = ?, ' +
         'reportedUpdatedAt = ?, reportedDetail = ? WHERE nodeId = ? AND supersededBy IS NULL',
       ).run(...vals, m.nodeId);
@@ -5953,8 +5971,10 @@ export class CoordStore {
         return { ok: true, nodeId: row.nodeId, created: false, since: row.unreachableSince! };
       }
       const ins = this.db.prepare(
-        'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, agentOps, os, ' +
-        "reachable, unreachableSince) VALUES (?, ?, ?, 'unreadable', 'unknown', 'unknown', '', ?, 'unknown', 0, ?) " +
+        'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, agentOps, ' +
+        'floorRead, previousRead, os, ' +
+        "reachable, unreachableSince) VALUES (?, ?, ?, 'unreadable', 'unknown', 'unknown', '', ?, " +
+        "'unmeasured', 'unmeasured', 'unknown', 0, ?) " +
         'ON CONFLICT(nodeId) DO NOTHING',
       ).run(label, role, label, role === 'fleet' ? '' : null, at);
       if (Number(ins.changes) > 0) return { ok: true, nodeId: label, created: true, since: at };

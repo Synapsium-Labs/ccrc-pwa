@@ -37,7 +37,7 @@ const measured = (nodeId: string, label: string): NodeMeasurement => ({
   currentBuiltAt: '2026-09-22T00:00:00Z', currentDirty: false,
   stampRead: 'ok', installState: 'complete', provenance: 'verified',
   caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
-  os: 'linux', measuredAt: NOW, report: null,
+  floorRead: 'measured', previousRead: 'absent', os: 'linux', measuredAt: NOW, report: null,
 });
 const withNode = (store: CoordStore, nodeId: string, label = 'fleet'): void => {
   expect(store.upsertNodeMeasurement(measured(nodeId, label)).ok).toBe(true);

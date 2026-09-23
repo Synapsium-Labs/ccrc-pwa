@@ -57,6 +57,7 @@ const measured = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
   currentBuiltAt: '2026-09-22T00:00:00Z', currentDirty: false,
   stampRead: 'ok', installState: 'complete', provenance: 'verified',
   caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
   os: 'linux', measuredAt: 1_000, report: null,
   ...over,
 });

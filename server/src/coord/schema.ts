@@ -1026,8 +1026,12 @@ export const MIGRATIONS: readonly string[] = [
   // `commitSha NULL` = `target_commitish` was a branch name; `notifiedAt NULL`
   // = no release push sent; `currentVersion NULL` with `stampRead = 'ok'` = an
   // unversioned build; `measuredAt NULL` = never measured; `highestVersion
-  // NULL` = no floor file = UNCONSTRAINED; `previousVersion NULL` = nothing to
-  // roll back to; `agentOps NULL` = no agent by construction (a server-role
+  // NULL` = UNCONSTRAINED only when `floorRead = 'absent'` (this sweep
+  // determined there is no floor file, or a garbled one) — a NULL beside
+  // `floorRead = 'unmeasured'` means nothing was ever measured, and the
+  // resolver refuses to treat that as unconstrained (fix round 1, D-3213);
+  // `previousVersion NULL` = nothing to roll back to, by the same
+  // `previousRead` distinction; `agentOps NULL` = no agent by construction (a server-role
   // row) while `''` = an agent too old to say; `unreachableSince NULL` iff
   // reachable; `reportedPhase NULL` = no report file, distinct from
   // `'unknown'`, a phase outside the vocabulary; `desiredTag NULL` carries
@@ -1082,7 +1086,18 @@ export const MIGRATIONS: readonly string[] = [
     -- measurement columns: upsertNodeMeasurement, markUnreachable
     currentVersion TEXT, currentSha TEXT, currentRef TEXT, currentBuiltAt TEXT, currentDirty INTEGER,
     stampRead TEXT NOT NULL, installState TEXT NOT NULL, provenance TEXT NOT NULL, caps TEXT NOT NULL,
-    agentOps TEXT, highestVersion TEXT, previousVersion TEXT, os TEXT NOT NULL, measuredAt INTEGER,
+    agentOps TEXT, highestVersion TEXT, previousVersion TEXT,
+    -- floorRead / previousRead: fix round 1, D-3213 -- the read-STATE beside
+    -- each tag column ('measured' | 'absent' | 'unmeasured'). An unreadable
+    -- read carries the column's value forward from the row's own previous
+    -- measurement rather than overwriting it with NULL, so highestVersion
+    -- alone can no longer tell "no floor file" (unconstrained, section 9)
+    -- apart from "this sweep could not read the floor file" (never
+    -- unconstrained). This slot is still UNMERGED (entry 14 as written), so
+    -- the two columns join the measurement group's DDL directly rather than
+    -- a later migration.
+    floorRead TEXT NOT NULL, previousRead TEXT NOT NULL,
+    os TEXT NOT NULL, measuredAt INTEGER,
     reachable INTEGER NOT NULL, unreachableSince INTEGER,
     -- report columns: upsertNodeMeasurement
     reportedPhase TEXT, reportedTarget TEXT, reportedStartedAt INTEGER, reportedUpdatedAt INTEGER, reportedDetail TEXT,

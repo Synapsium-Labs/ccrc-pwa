@@ -1038,7 +1038,10 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
       ['stampRead', 'TEXT', 1, null, 0], ['installState', 'TEXT', 1, null, 0],
       ['provenance', 'TEXT', 1, null, 0], ['caps', 'TEXT', 1, null, 0],
       ['agentOps', 'TEXT', 0, null, 0], ['highestVersion', 'TEXT', 0, null, 0],
-      ['previousVersion', 'TEXT', 0, null, 0], ['os', 'TEXT', 1, null, 0], ['measuredAt', 'INTEGER', 0, null, 0],
+      ['previousVersion', 'TEXT', 0, null, 0],
+      // fix round 1, D-3213: the read-state beside each tag column.
+      ['floorRead', 'TEXT', 1, null, 0], ['previousRead', 'TEXT', 1, null, 0],
+      ['os', 'TEXT', 1, null, 0], ['measuredAt', 'INTEGER', 0, null, 0],
       ['reachable', 'INTEGER', 1, null, 0], ['unreachableSince', 'INTEGER', 0, null, 0],
       // report group
       ['reportedPhase', 'TEXT', 0, null, 0], ['reportedTarget', 'TEXT', 0, null, 0],
@@ -1130,8 +1133,8 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     // the writer-group scan forbids it.
     const db = openCoordDb(plantedAt13('ccrc-mig14-idle-'));
     db.exec(
-      'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) ' +
-      "VALUES ('01234567-89ab-cdef-0123-456789abcdef', 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'linux', 1)",
+      'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, floorRead, previousRead, os, reachable) ' +
+      "VALUES ('01234567-89ab-cdef-0123-456789abcdef', 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'absent', 'absent', 'linux', 1)",
     );
     expect(db.prepare('SELECT updateState, updateTarget, measuredAt, requestedTag, supersededBy FROM nodes').get())
       .toEqual({ updateState: 'idle', updateTarget: null, measuredAt: null, requestedTag: null, supersededBy: null });

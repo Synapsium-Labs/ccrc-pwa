@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS, isTagFileRead,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
@@ -3323,7 +3323,7 @@ describe('the update control plane — one definition per vocabulary and wire ty
   // same second copy with one fewer keyword.
   const TYPES = [
     'UpdateChannel', 'UpdateState', 'BusyUpdateState', 'SettledUpdateState', 'UpdatePhase', 'InstallState',
-    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs',
+    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs', 'TagFileRead',
     'CatalogueErrorReason', 'ReleaseRefusalWire', 'ReleaseWire', 'NodeRequestWire', 'NodeReportWire',
     'NodeUpdateWire', 'NodeWire', 'UpdateIntentWire', 'CatalogueState', 'UpdatesView', 'UpdateRouteError',
     'UpdateRouteRefusal', 'IntentWriteAnswer', 'AckAnswer',
@@ -3353,13 +3353,13 @@ describe('the update control plane — one definition per vocabulary and wire ty
   const VALUES = [
     'UPDATE_CHANNELS', 'UPDATE_STATES', 'BUSY_UPDATE_STATES', 'SETTLED_UPDATE_STATES', 'UPDATE_PHASES',
     'IN_FLIGHT_UPDATE_PHASES', 'INSTALL_STATES', 'PROVENANCE_STATES', 'AUTO_MODES', 'NOTIFY_MODES',
-    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
+    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
     'FLEET_SCOPE',   // ruling R4: shared/api.ts only — store.ts (Task 6) and resolve.ts/project.ts (Task 12) import it
     'UNIX_SECONDS_MAX',   // C5, final fix wave: resolve.ts and inventory.ts both import it; neither declares its own
   ] as const;
   const GUARDS = [
     'isUpdateChannel', 'isUpdateState', 'isUpdatePhase', 'isInstallState', 'isProvenanceState', 'isAutoMode',
-    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isReleaseTag', 'validCapWords',
+    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
   ] as const;
   it('defines every array, pattern and guard exactly once, in shared/api.ts', () => {
     for (const name of VALUES) {
@@ -3418,7 +3418,7 @@ describe('the update control plane — one definition per vocabulary and wire ty
     ['UpdateChannel', UPDATE_CHANNELS], ['UpdateState', UPDATE_STATES], ['UpdatePhase', UPDATE_PHASES],
     ['InstallState', INSTALL_STATES], ['ProvenanceState', PROVENANCE_STATES], ['AutoMode', AUTO_MODES],
     ['NotifyMode', NOTIFY_MODES], ['RequestKind', REQUEST_KINDS], ['StampRead', STAMP_READS],
-    ['NodeRole', NODE_ROLES], ['NodeOs', NODE_OSES],
+    ['NodeRole', NODE_ROLES], ['NodeOs', NODE_OSES], ['TagFileRead', TAG_FILE_READS],
   ];
 
   it('the tuple fingerprint catches a copy in any order and leaves non-copies alone', () => {

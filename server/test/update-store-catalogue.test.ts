@@ -28,8 +28,8 @@ const rel = (tag: string, publishedAt: number, over: Partial<ReleaseListingRow> 
  *  refusal's only precondition is that its node IS a row. */
 const plantNode = (store: CoordStore, nodeId: string, supersededBy: string | null = null): void => {
   store.db.prepare(
-    'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable, supersededBy) ' +
-    "VALUES (?, 'fleet', 'fleet', 'ok', 'complete', 'verified', '', 'linux', 1, ?)",
+    'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, floorRead, previousRead, os, reachable, supersededBy) ' +
+    "VALUES (?, 'fleet', 'fleet', 'ok', 'complete', 'verified', '', 'absent', 'absent', 'linux', 1, ?)",
   ).run(nodeId, supersededBy);
 };
 

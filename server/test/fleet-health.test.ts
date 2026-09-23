@@ -158,7 +158,8 @@ describe('GET /api/fleet/health — the inventory-derived `builds` degrades, nev
     currentVersion: STAMP.version ?? null, currentSha: STAMP.sha, currentRef: STAMP.ref,
     currentBuiltAt: STAMP.builtAt, currentDirty: STAMP.dirty,
     stampRead: 'ok', installState: 'unknown', provenance: 'unknown', caps: [], agentOps: null,
-    highestVersion: null, previousVersion: null, os: 'linux', measuredAt: 1_758_000_000_000, report: null,
+    highestVersion: null, previousVersion: null, floorRead: 'absent', previousRead: 'absent',
+    os: 'linux', measuredAt: 1_758_000_000_000, report: null,
   });
 
   it('an inventory that cannot be read answers builds null per side and build unknown — the route stays up', async () => {

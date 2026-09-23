@@ -23,7 +23,8 @@ const meas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
   nodeId: 'fleet', role: 'fleet', label: 'fleet',
   currentVersion: 'v0.0.9', currentSha: 'a'.repeat(40), currentRef: 'main', currentBuiltAt: '2026-09-20T00:00:00Z',
   currentDirty: false, stampRead: 'ok', installState: 'complete', provenance: 'verified',
-  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null, os: 'linux',
+  caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent', os: 'linux',
   measuredAt: T0, report: null, ...over,
 });
 
@@ -64,7 +65,8 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
       nodeId: 'fleet', role: 'fleet', label: 'fleet',
       currentVersion: 'v0.0.9', currentSha: 'a'.repeat(40), currentRef: 'main', currentBuiltAt: '2026-09-20T00:00:00Z',
       currentDirty: false, stampRead: 'ok', installState: 'complete', provenance: 'verified',
-      caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null, os: 'linux',
+      caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+      floorRead: 'measured', previousRead: 'absent', os: 'linux',
       measuredAt: T0, reachable: true, unreachableSince: null,
       reportedPhase: null, reportedTarget: null, reportedStartedAt: null, reportedUpdatedAt: null, reportedDetail: null,
       updateState: 'idle', updateTarget: null, updateStartedAt: null, updateDetail: null,
@@ -182,8 +184,8 @@ describe('markUnreachable — written on the sweep it happens', () => {
     // A row whose nodeId happens to equal this label, but whose own label
     // (and connection) is a different one entirely — not this label's heir.
     store.db.prepare(
-      "INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) " +
-      "VALUES ('fleet', 'fleet', 'other-connection', 'ok', 'complete', 'verified', '', 'linux', 1)",
+      "INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, floorRead, previousRead, os, reachable) " +
+      "VALUES ('fleet', 'fleet', 'other-connection', 'ok', 'complete', 'verified', '', 'absent', 'absent', 'linux', 1)",
     ).run();
     expect(store.markUnreachable('fleet', 'fleet', T0))
       .toEqual({ ok: false, why: 'label-key-taken', supersededBy: null });
