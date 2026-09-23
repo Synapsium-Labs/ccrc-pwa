@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **fix round** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **in review** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 at `31c11916`; review run 135 on `ccrc-pwa-amber-summit` |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -39,10 +39,16 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131**.
+Run ids: wave 1 = **131** (review **135**).
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 1's fix round done; review dispatched.** Tip `31c11916` (the marker ruling line-neutral,
+  its new case red 5/5 on the old test; the eight numbers defined; `origin/main`'s #174 merged in, no
+  rebase, citation corpus re-measured unchanged). Suite red only on the carried `tmp-sweep` case. Review
+  run 135 dispatched on the held-out panel plus the plan's three lenses (six Opus lenses). Two things the
+  worker flagged are the coordinator's and are owed after the merge: the contract's §1 "non-empty" wording
+  (superseded by the marker ruling) and the gap below for live children.
 - **2026-09-23 — wave 1's first wave-done, sent back before review for two rulings.** PR #175, tip
   `08442ef4`, re-measured and accepted by the server (`awaiting-review`, 6/6 items). Its report asked
   two rulings, both ruled and sent back in one fix round so the held-out review reads the final tip once:
@@ -113,7 +119,9 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   corrupt or degraded journal; a reviewer who finds a real producer of clockless lines reopens this.
 - **A child's temp root outlives a human verb until wave 4.** `ws-rm`/`ws-reap`/`ws-gc --prune`/`forget` on
   a child drop its marker and keep `~/.cc-tmp/<id>`; wave 4's sweep is its owner (ruled 2026-09-23 on
-  wave 1's report). Wave 4's plan gains that task before its dispatch.
+  wave 1's report). Wave 4's plan gains that task before its dispatch. And from wave 1's deploy until
+  wave 3's, NO child's temp root is collected, live or finished: they accumulate, still marked, and wave 3's
+  reclaim and wave 4's sweep take them.
 - **`tmp-sweep.test.ts`'s "FAILS CLOSED" case reds on the fleet box on an untouched main** (wave 1,
   2026-09-23) and passes in CI. A reviewer who meets it measures it against the base before calling it a
   wave's.
