@@ -964,7 +964,7 @@ describe('the spawn chip (§1.6b)', () => {
 
   it.each([
     ['blocked', 'blocked'], ['login', 'login'], ['vanished', 'vanished'],
-    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'],
+    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'], ['narrow', 'narrow'],
   ] as const)('renders %s as %s', (state, word) => {
     render(<SessionLine session={s({ spawnState: state, started: true })}
                         onOpen={() => {}} onActions={() => {}} />);

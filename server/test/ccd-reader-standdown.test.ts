@@ -206,8 +206,13 @@ describe('the two stand-downs outside the phrase population', () => {
       `${panesRecording(`1 ${NARROW}`)} _accept_first_run_prompts() { return 6; };`
       + ' _spawn_settle demo 0 2>"$HOME/ccd-err" >/dev/null; cat "$HOME/ccd-err"');
     expect(out).toContain(`demo: pane is under ${READER_MIN_COLS} columns`);
+    // The remedy names the CAUSE as measured on a private tmux 3.4 server: a
+    // narrow client attached to ANY session narrows the window a new session
+    // is born into — not a drawer on this one, which re-pins 220x50 on open
+    // and on close (server.ts).
     expect(out, 'the sentence must name the remedy, not just the refusal')
-      .toContain('close the terminal drawer');
+      .toContain('any narrow terminal attached to this tmux server narrows new panes: close it');
+    expect(out, 'the sentence must say how to widen this pane').toContain('open and close its terminal drawer');
   });
 
   it('_inject_spawn_effort types nothing into a narrow pane (edit 4h)', () => {

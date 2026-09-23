@@ -307,3 +307,40 @@ describe('ws-add was this file\'s negative control, and D-410\'s remedy turned i
     expect(decOf(created[0]!)).toEqual({ surface: 'none' });
   });
 });
+
+describe('the child the server composes is the child real ccd records (child-workspace reclamation wave 1)', () => {
+  it('wsAddWorker with a run id: the marker holds exactly that id, beside the declared dec', () => {
+    // THE SAME CROSSING as the describe above, for the flag that makes a
+    // workspace a CHILD. `whitelist-subset.test.ts` proves the tokens cross the
+    // agent's bare `['ws-add']` grant, which they would whatever ccd made of
+    // them; this proves the binary on the fleet box READS them — as the marker,
+    // and not as a slug or a project (D-410, one flag to the left).
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+    const rows = uuidRows();
+    expect(rows, 'the child-marked ws-add created no workspace — the flag was bound as a positional')
+      .toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.child`), 'utf8')).toBe('7');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    // And the first spawn already made its root: `_spawn_start` ran before the
+    // fixture's contained tmux refused, and the root is made before the pane.
+    const root = path.join(h.home, '.cc-tmp', id);
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(fs.statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {
+    h.makeRepo(PROJECT);
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC));
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null));
+    const rows = uuidRows();
+    expect(rows).toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.child`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp'))).toBe(false);
+  });
+});

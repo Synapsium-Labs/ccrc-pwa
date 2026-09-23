@@ -111,8 +111,11 @@ describe('dispatchRun, called directly with no CoordMutex in the loop (D-46, at 
     expect(second).toMatchObject({ ok: false, kind: 'bad-transition', from: 'dispatched', to: 'dispatched' });
     expect(calls.length).toBe(callsAfterFirst);   // no second ws-add/ensure/ws-hold
     // Still only the FIRST dispatch's own rows: its transition, plus the skill
-    // preflight every successful dispatch records (wave 2, F2).
-    expect(coord.runEvents(opened.id).length).toBe(2);
+    // preflight every successful dispatch records (wave 2, F2), plus the
+    // `child-omitted:no-child-argv-cap` row a fresh spawn journals on a box
+    // with no `child-argv-v1` (`fleetState: undefined` is no evidence, so
+    // `capSupported` refuses — child-workspace reclamation wave 1).
+    expect(coord.runEvents(opened.id).length).toBe(3);
   });
 });
 

@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault, type FleetSession } from '../../../shared/api';
+import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
@@ -362,6 +362,21 @@ export function SessionActionsSheet({
               The tmux session disappeared while the last spawn was still waiting on
               it. Restart session builds a new pane; the conversation is resumed
               from the transcript, not from that pane.
+            </p>
+          )}
+          {/* rc 6 answers only for a pane that was LIVE at spawn. While it still
+              is, Restart session (ensure) finds it alive and spawns nothing, so
+              the remedy is widening it. Once it has died, Restart session IS the
+              respawn — the second arm. The width is the constant ccd stands
+              down at. */}
+          {session.spawnState === 'narrow' && session.status !== 'dead' && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. This marker stays until the session next spawns, and a narrow terminal attached to any session makes that spawn narrow too — close it first.`}
+            </p>
+          )}
+          {session.spawnState === 'narrow' && session.status === 'dead' && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one — close any narrow terminal attached to any session first, or the new pane is born narrow too.`}
             </p>
           )}
 

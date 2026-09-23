@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4827318c7159a933a4f54931d9063c7bca52ef26f6ca3460bc1d89cd8b06d4cc
+# ccrc:generated 1 sha256=9c582002e635ba9702b8d24e6b5d77c01c123f85ad9e229e004c64b49bb1727e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,11 +2885,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 155
-# invocations across 131 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 156
+# invocations across 132 non-comment lines.
 #
-# THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
-# archive fields, so the next reader is not hunting a refactor for the +2.
+# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
+# `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3637,14 +3637,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38, by that same addition — NOT a fresh census of every
-  # per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
+  # floors): 38; CCR-15's `child` made 39 — by addition, NOT a fresh census of
+  # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 38: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
-  # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
+  # The 39: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -6654,7 +6654,7 @@ _ws_disk_free_gb() {   # dir -> whole GiB available on the filesystem holding it
   echo $(( kb / 1024 / 1024 ))
 }
 
-cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
+cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
   # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
   # binds — `cmd_ws_hold`'s shape (ccd:3891) and its reason: a run like
   # `ws-add --no-rc <project> --surface agent --actor '…'` must not bind
@@ -6684,7 +6684,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
   # ccd:4801-4807, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
-  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
+  local norc=0 lc_child='' lc_gc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -6698,18 +6698,22 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
-      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_route+=("$2"); shift 2 ;;
       --route=*)   lc_route+=("${1#--route=}"); shift ;;
+      # The minting run (spec §5.1) — what makes this workspace a CHILD; see `_child_runid_valid`.
+      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+                   lc_gc=1; lc_child="$2"; shift 2 ;;
+      --child=*)   lc_gc=1; lc_child="${1#--child=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -6746,11 +6750,12 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # `--route` value is an argv a coordinator composed; this verb refuses it with
   # the box exactly as it found it (spec §5.3).
   (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
+  (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -7109,6 +7114,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # reap via _reg_purge's shape match. Absent = follow the box (D-99's
   # fail-safe direction, per session).
   (( norc )) && _reg_set "$id" rc off
+  (( lc_gc )) && { _reg_set "$id" child "$lc_child" || echo "ccd: warn: could not write $REG/$id.child — $id is NOT a child of run $lc_child and nothing will ever reclaim it as one" >&2; }
   # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
   # Here rather than at the pre-flight because every one of these is a WRITE
   # against `$id`, and `$id` does not exist until the lines above. The argv wins
@@ -8364,6 +8370,8 @@ EOF
   # wrong for one that never did. An un-upgraded agent simply leaves the window
   # pinned: wave 1 behaviour, no fallback path, no second mechanism.
   echo win-size-v1
+  # child-argv-v1 — `ws-add --child` and a child's own TMPDIR, one inode; argued at `_child_tmpdir`.
+  echo child-argv-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -19102,7 +19110,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   # return the moment the live marker shows, so the common path stays fast.
   # rc 0 = a live marker appeared (the TUI is up); 2 = an auth screen (below); 3 = the tmux session
   # vanished mid-poll; 4 = the window expired with no marker; 5 = a hard block (limit/spend banner,
-  # or lost auth): waiting longer cannot fix it. 3 and 4 both used to be "0 after ~15
+  # or lost auth): waiting longer cannot fix it; 6 = a live pane under READER_MIN_COLS, or of unreadable width, so every gate stood down. 3 and 4 both used to be "0 after ~15
   # minutes" (M6): the caller printed `started`/`ensured` over a session that was never there.
   local t="$1" fromswap="${2:-0}" bound i pane t0
   # A WALL-CLOCK bound as well as the iteration cap. The cap alone is not a
@@ -19426,6 +19434,79 @@ _resume_env() {   # -> one line of KEY=value assignments for `env`, switching on
   printf '%s' "$out"
 }
 
+# ── A CHILD'S TEMP ROOT (child-workspace reclamation, spec §5.2) ─────────────
+# A workspace minted by `ws-add --child <runId>` carries `$REG/<id>.child`, and
+# ONLY such a workspace spawns with TMPDIR pointed at `$HOME/.cc-tmp/<id>` — a
+# directory the reclaim tail removes, so tool scratch that follows TMPDIR
+# (`cdk.out` foremost) dies with the child by construction instead of by a
+# second collector chasing paths. Every other session keeps the box's own
+# TMPDIR: exporting this fleet-wide would move uncollected scratch out of an
+# OS-reclaimed /tmp into $HOME for sessions that have no collector, which is a
+# different spec (§5.2, "Children only").
+#
+# DRIVEN BY THE MARKER, NEVER BY ws-add's ARGV, and read in the one function
+# every spawn path funnels through — `cmd_ws_add`, `cmd_ws_restore`,
+# `cmd_start`, `cmd_ensure` (so every `Restart=always` respawn), `_spawn` (swap
+# and friends) and both `_supervised_start` fallbacks. A decision taken in
+# `cmd_ws_add` alone would be lost at the first respawn.
+#
+# WHETHER CLAUDE CODE'S OWN SCRATCHPAD FOLLOWS TMPDIR is a claim about another
+# program; it is measured by the wave that shipped this and recorded in the
+# programme ledger, never assumed here. If it does not, that scratchpad stays
+# under `/tmp/claude-<uid>/`, where `ccd-tmp-sweep` already collects it.
+#
+# THREE ANSWERS, NOT TWO, because the caller acts on two of them differently
+# and must be able to tell the third apart:
+#   0  a child, and its leaf is a real directory, ours, at 0700 — path on stdout;
+#   1  not a child (no marker, or one that is not a run id) — spawn exactly as before this existed;
+#   2  a child whose leaf is not that — warned on stderr, and the caller spawns
+#      WITHOUT TMPDIR rather than refusing (spec §5.2, a ruled arm): a refusal
+#      would leave a swap or a supervisor restart with no session at all.
+# THE LEAF MUST NOT BE A SYMLINK: wave 3's tail removes it, and a planted link
+# would aim that removal elsewhere — so that tail unlinks a link or file leaf
+# with `rm -f --`, never following it. OWNERSHIP is the `chmod`: it fails EPERM
+# on a leaf another user owns. `$HOME/.cc-tmp` itself MAY be a symlink (a data
+# volume, `$HOME/projects`'s shape) — the root is followed, only the leaf refused.
+_child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, leaf unusable (warned)
+  local id="$1" root="$HOME/.cc-tmp" dir
+  _child_runid_valid "$(_reg_get "$id" child)" || return 1
+  dir="$root/$id"
+  if [[ -L "$dir" ]] || ! mkdir -p -m 0700 -- "$root" "$dir" 2>/dev/null \
+     || [[ ! -d "$dir" ]] || ! chmod 0700 -- "$dir" 2>/dev/null; then
+    echo "ccd: warn: $id is a child but $dir could not be made a private directory — spawning with the box's own TMPDIR, so this session's scratch is not contained" >&2
+    return 2
+  fi
+  printf '%s' "$dir"
+}
+
+# ── `ws-add --child <runId>` (child-workspace reclamation, spec §5.1) ────────
+# The dispatch path declares, at creation — the only moment it is known — which
+# run minted this workspace, and `cmd_ws_add` stamps it into `$REG/<id>.child`
+# before the first spawn (so `_child_tmpdir` above already contains that pane).
+# That marker is what makes a workspace a CHILD, and it is never inferred from
+# anything else: not `--no-rc`, not a dec string, not a run row alone.
+#
+# The flag is parsed in `cmd_ws_add`'s strip-then-bind loop, positionless like
+# its siblings, and REFUSED above every mint — for `--route`'s reason: nothing
+# exists yet, so a bad value leaves the box exactly as it found it. A marker
+# that fails to LAND is the opposite case: the worktree and the row exist by
+# then, so a `die` would strand both with no pane; it WARNS instead, and the
+# workspace is simply not a child — the fallback every pre-policy workspace
+# already takes. The marker holds the run id and nothing else (`_reg_set`
+# writes no newline), because every later reader compares it string-exact.
+#
+# `cmd_ws_add` carries one-line pointers only: it sits above line-cited corpus
+# anchors, and every comment line added there would move them.
+#
+# THE ONE RUN-ID GRAMMAR IN ccd, by programme ruling: the `--child-of` parse and the
+# marker reads of wave 3 call THIS, never a re-spelt pattern (a test counts it),
+# and the server's marker reader accepts exactly this set: a positive decimal of
+# at most ten digits, no sign, no leading zero — `String(run.id)` of a rowid.
+# ASCII BY `LC_ALL=C` (D-2522, see `_pool_name_valid`): `=~` bracket ranges are
+# COLLATION ranges; under en_US.UTF-8 (bash 5.2.21 / glibc 2.39, measured) the
+# bare pattern ACCEPTS `²`, `½`, `٣` and `१` — none a run id any server composed.
+_child_runid_valid() { local LC_ALL=C; [[ "${1-}" =~ ^[1-9][0-9]{0,9}$ ]]; }   # value -> 0 iff it is a legal --child run id
+
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -19728,7 +19809,16 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     rm -f -- "$REG/$id.routeapplied"
     _route_tries_clear "$id"
   fi
-  resenv="$resenv${routeenv:+ $routeenv}"
+  # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
+  # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
+  # retry may not spawn a differently-contained pane than the attempt it
+  # replaces. EMPTY for every non-child, so a non-child's spawn line is
+  # byte-identical to what it was before (`ccd-spawn-split.test.ts` pins it).
+  # `_child_tmpdir`'s rc 2 has already said on stderr why a child spawns
+  # uncontained; the spawn proceeds either way.
+  local tmpenv="" ctmp
+  ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
+  resenv="$resenv${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
@@ -19928,7 +20018,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
-    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns, so the startup gates stood down — close the terminal drawer on this session and retry." >&2 ;;
+    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns (or its width could not be read), so the startup gates stood down — any narrow terminal attached to this tmux server narrows new panes: close it, then widen this one (open and close its terminal drawer) and answer any startup prompt." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the external backends — gpt/Codex today — which don't take it, so the

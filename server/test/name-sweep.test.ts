@@ -211,7 +211,7 @@ describe('the naming sweep', () => {
   });
 
   // THE ONE THAT IS EASY TO GET WRONG. `FleetSession.branch` is
-  // `sl?.branch ?? r.branch` (fleet.ts:268) — the statusline WINS, deliberately
+  // the pane's branch, else the worktree HEAD's, else the registry's (fleet.ts) — the statusline WINS, deliberately
   // — and it only moves when Claude Code re-renders, so it still reports the
   // born branch for some number of ticks after a successful rename. A sweep
   // reading the assembled value would rename the workspace a second time, to a

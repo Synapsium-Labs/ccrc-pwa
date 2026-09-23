@@ -464,6 +464,12 @@ export async function assembleFleet(
    *  lane), same pattern as `hookStates`: absent on a cold start and in every
    *  older test, which is why the field defaults to null. */
   usageReadings?: Map<string, SessionUsage>,
+  /** The branch each worktree's own HEAD names, as the watcher's divergence
+   *  sweep last measured it (`FleetWatcher.currentHeadBranches()`), keyed by
+   *  session id; `null` for a detached or unreadable HEAD. Absent on a cold
+   *  start, on callers that do not carry it, and in every older test — the
+   *  registry fallback below covers all three. */
+  headBranches?: ReadonlyMap<string, string | null>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
@@ -566,6 +572,7 @@ export async function assembleFleet(
     }
     const acct = limits[r.wrapper];
     const sl = statuslines?.get(r.id);
+    const head = headBranches?.get(r.id) ?? null;
     // A running Workflow leaves the orchestrator reporting idle while it waits
     // on subagents — surface it as busy so it doesn't read as finished.
     if (sl?.workflowActive && status === 'idle') status = 'busy';
@@ -643,9 +650,17 @@ export async function assembleFleet(
       // hook event, so without this arm they reached the wire as `working`.
       dialogPending: (pendingDialogs?.has(r.id) ?? false) || hs?.state === 'waiting' || liveWaiting, version,
       model: sl?.model ?? null, effort: sl?.effort ?? null,
-      // The statusline wins: it is a live pane capture and knows about a manual
-      // checkout. The registry fills the gap before the first capture lands.
-      ultracode: sl?.ultracode ?? false, branch: sl?.branch ?? r.branch ?? null,
+      // A statusline branch read THIS tick wins: it is a live pane capture and
+      // knows about a manual checkout. When the pane gave no fresh full branch
+      // — no capture yet, a dead pane, a narrow one that cut the `⎇` segment,
+      // or a tick that measured nothing and kept the last reading (`retained`)
+      // — the worktree's own HEAD, as the divergence sweep last measured it,
+      // knows the same thing. A retained pane branch comes next, and the
+      // registry's `.branch` last: ccd writes it only at ws-add/ws-rename, so a
+      // manual checkout leaves it naming a branch the worktree is no longer on
+      // (measured 2026-09-23 on three of the four narrow rows that surfaced this).
+      ultracode: sl?.ultracode ?? false,
+      branch: (sl?.retained ? undefined : sl?.branch) ?? head ?? sl?.branch ?? r.branch ?? null,
       // D-2011: the pane's own `▓ ctx` reading, no registry fallback (nothing
       // else on the record ever measured this). `?? null`, not `?? 0` —
       // `Statusline.ctxPct` is `undefined` on a session with no fresh
