@@ -825,6 +825,38 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     expect(b.store.node(U1)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.12' });
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    'a done report while the stamp is unreadable restores THIS ROW\'S OWN previous report — never a bare '
+    + 'placeholder that would erase a real one (fix round 2, R11: D-3214\'s restore half)', async () => {
+      const b = await busyBox();
+      // Establish a REAL previous report on the row first — 'installing' is
+      // in-flight, so this sweep alone never touches the lease, but it DOES
+      // leave `reportedPhase` non-null on the row before the stamp-unmeasured
+      // sweep below.
+      plant(b.ccrcDir, { report: reportJson({ phase: 'installing', detail: null }) });
+      expect(await sweepInventory(localDeps(b), NOW)).toEqual([
+        { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'none', refused: false },
+      ]);
+      expect(b.store.node(U1)?.reportedPhase).toBe('installing');
+
+      // Now the SAME lease sees a 'done' report while the stamp cannot be
+      // read. The restore (`applyMeasurement`) must recover the row's OWN
+      // previous report ('installing') — never `UNKNOWN_REPORT`'s bare
+      // placeholder, which would overwrite a real, already-stored verdict the
+      // row was carrying. (Read literally, `previousReportOf(preRow) ??
+      // UNKNOWN_REPORT` collapsed to plain `UNKNOWN_REPORT` leaves every
+      // OTHER case in this file green — only a preRow that already carries a
+      // report, as this one now does, tells the two apart.)
+      plant(b.ccrcDir, { report: reportJson() });   // back to phase: 'done', same target
+      chmodSync(path.join(b.ccrcDir, 'build.json'), 0o000);
+      expect(await sweepInventory(localDeps(b), NOW + 60_000)).toEqual([
+        { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'none', refused: false },
+      ]);
+      expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'installing', updateState: 'applying' });
+      chmodSync(path.join(b.ccrcDir, 'build.json'), 0o644);
+    },
+  );
+
   it('a previous run\'s done leaves a fresh lease busy', async () => {
     const b = await busyBox();
     plant(b.ccrcDir, { report: reportJson({ startedAt: T_S - 3600 }) });
