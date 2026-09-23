@@ -258,7 +258,8 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
      `session-hook.test.ts`'s "skips a scratch slug" case reds inside every marked child (its `os.tmpdir()`
      is that root). All three guards must learn the `$HOME/.cc-tmp/` shape; the second and third files may be
      claimed by the update programme. Until then, a child runs that suite with `TMPDIR=/tmp` and names the case.
-  2. **ccd's PR ownership read folds a failed git read into "not ours".** `is_ours` (ccd ~5423) folds a failed
+  2. **(MOVED TO WAVE 4 by the wave 3 pre-flight's R-5: since R28, `childSpent` never reads `ours`.)**
+     **ccd's PR ownership read folds a failed git read into "not ours".** `is_ours` (ccd ~5423) folds a failed
      `git cat-file`/`merge-base` into False. A transient git failure therefore reads a real PR as absent,
      and wave 2's `childSpent` answers `unspent`, which permits a bind. The read becomes three-valued: an
      unreadable answer is `unmeasured`, which already refuses. This is the programme's no-boolean rule, one
@@ -270,6 +271,22 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   fresh child is never gated. Wave 3 adds `createdAt` to ccd's `PR_JSON_FIELDS`, and a same-branch row then
   counts only if it was created at or after this incarnation's birth. A row with no readable `createdAt` still
   counts.
+- **Wave 3 is amended before dispatch** (pre-flight, 2026-09-23; the plan's appended "Pre-dispatch amendments",
+  contract R30 and R31). Among them:
+  - the incarnation rule, as a new Task 7b;
+  - the close reclaims on `spent` only when this incarnation's PR is dated;
+  - the reclaim never follows a symlinked workdir, nor acts on a workdir another registry row names;
+  - the scratch-slug guards, as a new Task 10b;
+  - claims proceed as in wave 2.
+- **Wave 4 inherits, from wave 3's pre-flight:**
+  - `is_ours` three-valued;
+  - a `ws-reap` guard mirroring R31's symlinked-workdir refusal (`ws-reap` is human-gated but follows the link the
+    same way);
+  - the sweep as the owner of a child whose close trigger was lost to a server restart, or that wave 2's dispatch
+    refusal released.
+- **Wave 5 inherits:** the PWA's abandon confirmation says the child's workspace will be reclaimed. The ungated
+  abandon door (D-282) reaching a destructive act is inside the single-user trust model; it is recorded, not
+  changed.
 - **Wave 4 also carries ws-slug-collision's review residue** (that programme's ledger, "Residue"). It is two
   unpinned arms of `_ws_slug_git_state`, plus header and plan wording, plus two fail-closed narrowings. It is
   ccd-only and below the frozen boundary, and it rides wave 4 because wave 4 edits ccd anyway.
@@ -287,11 +304,9 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 2.** Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave2-spent-refusals.md`, Tasks 1–7,
-stopping at Task 7 Step 5 (PR open, wave-done sent); Steps 6–7 are the coordinator's. Dispatch fresh (rule 3),
-deploy class **server**, but the rollout keeps the default fleet-box-first order: the two skill files ship on
-the fleet box before the server can send either refusal. One more declared item: wave 1's six prose leftovers
-(Carried constraints). Claims: the centralised-update-management workers may hold `shared/api.ts` and
-`server/src/coord/schema.ts`; the claim protocol is the answer. Wave 1 is merged and, once rolled out, the
-`.child` marker is live, so Task 7 Step 7's measurement is real at wave 3's open: naming wave 2's own workspace
-as `sessionId` must answer `409 workspace-spent` with wave 2's PR, and leave no run row.
+**Wave 3.** Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md`, Tasks 1–11
+plus the new 7b and 10b. Its appended **Pre-dispatch amendments** bind every task. Dispatch fresh, AGENT-FIRST, and
+only after wave 2 (#178) is merged and rolled out, because wave 3 builds on wave 2's shipped shapes. Re-measure the
+pre-flight's A1/A2 citations if review 145 changed `childSpent` or `childBind`. It is the only destructive wave,
+so its review panel keeps the plan's mandatory xhigh safety lens. Claims: R-3 (proceed; tell run 128's and 129's
+coordinator).

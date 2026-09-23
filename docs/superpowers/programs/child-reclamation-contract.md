@@ -448,9 +448,11 @@ leave a wave undispatchable pending a ruling below.
 
 - **R24 — the marker is judged, not merely present (D-3336).** `_child_tmpdir` answers "a child" only when
   `_child_runid_valid "$(_reg_get "$id" child)"` holds. A marker that is present but is not a run id gets no
-  child temp root. Its scratch stays under the box's own TMPDIR, where `ccd-tmp-sweep` collects it, and wave 3's
-  rung 2 still defers its reclaim as unreadable. Every ccd reader of the marker speaks the one grammar of R2.
-  Shipped in wave 1 (#175).
+  child temp root. Its scratch stays under the box's own TMPDIR, where `ccd-tmp-sweep` collects it. Its reclaim
+  is DEFERRED by the SERVER: wave 2's `childMarkOf` reads a malformed marker as `unreadable`, and the executor
+  defers `marker-unreadable` before any ccd call. ccd's own rung 2 stays a terminal `not-a-child` (re-worded
+  2026-09-23 on wave 3's pre-flight; it once said wave 3's rung 2 defers). Every ccd reader of the marker speaks
+  the one grammar of R2. Shipped in wave 1 (#175).
 - **R25 — an orphaned child temp root has an owner, and it is wave 4 (D-3337).** A child disposed of by a
   human verb (`ws-rm`, `ws-reap`, `ws-gc --prune`, `forget`) loses its marker and its registry row, but keeps
   `$HOME/.cc-tmp/<id>`, which no marker-driven path can find again. Wave 4 collects such a leaf only when all
@@ -478,11 +480,34 @@ leave a wave undispatchable pending a ruling below.
   tip. So `childSpent`'s live rung answers `spent`, with that row's number, when ANY same-repository PR row names
   the child's branch as its head, in any state and whatever its base or ancestry. `unspent` needs no such row.
   Measured on the real ccd: it can, because ccd lists `gh pr list --head <branch> --state all`. Consequence,
-  accepted: a recycled slug inherits its head name's PR history and reads `spent`. Wave 3 separates
-  incarnations by each row's `createdAt` against the child's birth, and a row with no readable
-  `createdAt` still counts.
+  accepted for BINDS: a recycled slug inherits its head name's PR history and reads `spent`. It is split by
+  consumer in R30, because wave 3's close reads `spent` as permission to reclaim.
 - **R29 — a listed marker that reads absent is `unreadable`** (wave 2, review 144). This amends the marker's
   listing rung. When the registry listing names `$REG/<id>.child` but the read answers absent (a dangling link,
   or a file removed between list and read), `ChildMark` is `unreadable`, so a bind is refused and a reclaim is
   deferred. ccd's `_reg_get` reads any symlinked field as empty (not a child). The server refusing where ccd
   answers "not a child" is the safe direction, and it is stated as the one place the two readings differ.
+- **R30 — incarnation placement, split by consumer** (wave 3 pre-flight, 2026-09-23).
+  - **Birth.** A child's birth is its minting run's `dispatchStartedAt` (the server's clock, stamped just before
+    the minting `ws-add`, never cleared). It is unplaceable when that row is absent or unreadable, when the stamp
+    is null, or when the run's `sessionId` is not this session.
+  - **Placement.** Skew is ±120 s. ccd adds `createdAt` to `PR_JSON_FIELDS`. Every same-repository row whose head
+    is the child's branch is placed as one of:
+    - `this` (created at or after birth + skew);
+    - `inherited` (before birth − skew);
+    - `unplaced` (no or unparseable `createdAt`, an unplaceable birth, or within the skew).
+  - **The BIND** refuses on `this` or `unplaced` (R28 unchanged for binds).
+  - **The CLOSE** treats `spent` as finished ONLY when a dated live row proves `this`. `unplaced` and `inherited`
+    HOLD. A fast-path `.prnumber`/`.prhistory` spent is re-dated through the live rung before the close decides.
+  - **Why the two differ.** A bind that refuses wrongly costs one round. A close that reclaims wrongly destroys a
+    held child's clips, temp root, ignored files and pane context. On this repository, merge-commit merges bound
+    old PRs to recycled slugs (`quiet-meadow`, `brisk-meadow`).
+- **R31 — the reclaim never follows a symlinked workdir, and never acts on a workdir another row names** (wave 3
+  pre-flight, 2026-09-23). ccd's ladder, pin and tail each refuse `containment-unproven` when the child's workdir
+  LEAF is a symbolic link. An ancestor link, such as a mounted projects volume, stays legal. The tail re-tests at
+  removal time. The ladder also refuses `containment-unproven` when any other registry row names the same workdir,
+  literally or by resolved path. An unlistable registry refuses too.
+
+  Measured on git 2.43.0: with the child's directory replaced by a link to a dirty sibling worktree, the planned
+  WIP commit lands on the sibling's branch. With the child's worktree record gone, `git worktree remove --force`
+  deletes the sibling outright.

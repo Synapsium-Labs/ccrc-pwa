@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` (§5.5, §5.6, §5.7 in full; §4 for naming; §6 and Appendix A for every site this wave moves; §8's row for wave 3; §9 for the load-bearing pins). **Programme ledger:** `docs/superpowers/programs/child-reclamation.md` (its **Carried constraints** section is part of this plan's requirements).
 
-**Contract:** `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings)
+**Contract:** `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings; §9 R24–R31) — and **the Pre-dispatch amendments at the end of this file bind every task and win over any task text they contradict**
 
 ---
 
@@ -7181,3 +7181,287 @@ Four lenses for this wave, all `opus`. The first is MANDATORY at effort **`xhigh
 3. **The server seams (opus, high).** `childReclaim.ts` is L1 reached through declared ports and `childReclaimDecision` is pure; no adapter narrows a distinction it received (an unlistable registry is `marker-unreadable`, never `none`; an unreadable sibling list is ineligible, never empty; an unmeasured spent verdict is never spent); the `CloseOutcome` fields are additive, `FLEET_PROTO` untouched, and absent `childReclaimWhy` has one meaning; `cancelDeliveriesTo` is a single-line-signature writer guarded by `OUTSTANDING_STATES_SQL` that returns its count, and its park is DELIBERATE (the `requeueAbandonedMail` walk admits it); `programOpenRunCount`'s exclusion is D-51's one query; the port runs on `deps.queue` keyed by session id and reads its deps when the job runs; `verb-gate`, `unattended-actor` and the kebab scanner were widened by exactly this wave's surface; `CCD_ARGV.wsReclaim` crosses the agent's real whitelist in every test that composes it. Also: `ChildReclaimRequest.deferredSinceMs` is `null` on every close request and decides nothing in the executor — it only renders the wait in the feed row, for a deferral and for a ceiling-expired attempt (R4); `review-report-live` is decided on the reviewed run's row read in the same mutex section as the siblings (R16), and the pure decision's `isChildReclaimTerminalState` (over `TERMINAL_RUN_STATES`) is the only reading of "terminal" it uses — the reviewed row carries its `RunState`, never a pre-folded boolean. `readSessionRecord`'s `absent` is read TWICE (R12) before the executor calls a child `gone` and cancels its mail (`childReclaimRowListing`: a second listing that still names `<id>.uuid` or `<id>.child` defers `marker-unreadable`; a failed second listing defers too) — a row the reader merely dropped is never treated as gone. ANY `ws-audit --reclaim` exit 1 — its `"verdict":"unmeasured"` document, or even a token-bearing one — is the `failed` outcome, and the verb is never called on it (R11′); the audit's `childOf` is read through wave 2's `CHILD_RUN_ID`, never a wider numeric parse (R2); and the review decision's two edges hold (R16′): an unreadable reviewed-run row defers `marker-unreadable`, an absent one keeps the child, `review-report-live`.
 4. **Prose contracts (opus, high).** Coordinator clause 3 keeps its three verbs exactly once and its verbatim pin moved in the same commit; no skill corpus names `ws-reclaim`; step 6 is byte-identical to its shipped text and every existing pin on it is green unchanged (R16 — no copy-before-close instruction anywhere in the corpus); step 7 and wave-lifecycle §6 describe `childReclaim`/`childReclaimWhy` — all six words, `review-report-live` among them — exactly as `sendCloseOutcome` sends them, and the reviewer's sentence says its report stays while the run it reviewed is open; the worker and reviewer sentences sit outside the contract and name no `ws-*` verb or run route; CLAUDE.md still forbids all five verbs and keeps `ws-reap` human-only, and it and README narrow that rule by exactly the server's child reclaim.
 
+---
+
+## Pre-dispatch amendments (coordinator, 2026-09-23) — binding
+
+Wave 3's plan was written before contract §9 (R24–R31) existed and before three ccd items were carried into this wave. A
+pre-flight on 2026-09-23 read the plan against those rulings, against wave 2's shipped shapes (`76594fec`, PR #178) and
+against `origin/main` (`a3a93b41`). It ran four Opus lenses and an Opus·xhigh synthesizer that re-checked every claim and
+refuted eight. It found three blocking defects. The rulings below settle every question it raised. The amendments that
+follow are part of the plan: where one contradicts a task's text, the amendment wins. Plan line citations inside this
+section (`plan:NNNN`) refer to this file as it stood before this section was appended; every line above it is unchanged
+except line 13's pointer. The pre-flight's full record is the coordinator's scratch `wave3-preflight.json`, summarised here.
+
+### Rulings (the coordinator's, 2026-09-23; contract §9 R24 as re-worded, R30, R31)
+
+- **R-1 — a child's birth** is its MINTING run's `dispatchStartedAt`: the server's own clock, stamped immediately before
+  the `ws-add` that minted the session, and never cleared. Birth is UNPLACEABLE when:
+  - the minting run's row is absent or unreadable;
+  - its `dispatchStartedAt` is null;
+  - its `sessionId` is not this session (a retry orphan).
+
+  Clock skew allowance: ±120 s (named once, as a constant).
+- **R-2 — three-way placement, split by consumer.** Every same-repository PR row whose head is the child's branch is
+  placed as one of:
+  - `this`: its `createdAt` parses and is at or after birth + skew;
+  - `inherited`: its `createdAt` parses and is before birth − skew;
+  - `unplaced`: anything else — no or unparseable `createdAt`, an unplaceable birth, or within ±skew.
+
+  Only `inherited` rows are dropped. How each consumer reads the placement:
+  - **The BIND** (`childBindGate`) refuses on `this` OR `unplaced`. That is R28 unchanged for binds, and binds do not
+    date the fast-path numbers.
+  - **The CLOSE** reclaims on `spent` ONLY when a dated live row proves `this`. `unplaced` and `inherited` HOLD, and
+    the child is still reclaimed at a final close or when the programme retires.
+  - The close never reclaims on `.prnumber`/`.prhistory` alone: a fast-path spent is re-dated through the live rung
+    before the close decides.
+- **R-3 — claims.** Proceed on paths runs 128 and 129 hold (`shared/api.ts`, `server/src/coord/store.ts`, `README.md`,
+  `server/test/session-hook.test.ts`, `ccd/ccrc`, `ccd/ccrc-doctor-checks`), as wave 2 did. Edits stay narrow and
+  additive. Whichever PR merges second merges main (never rebases), resolves, and re-runs S6-R11. The coordinator
+  tells run 128's and 129's coordinator.
+- **R-4 — the scratch-slug guards stay in this wave** (A4).
+- **R-5 — `is_ours` three-valued moves to wave 4.** Since R28, `childSpent` never reads `ours`, so its reason in
+  this wave is gone.
+- **R-6 — R24's deferral is the SERVER's.** ccd's rung 2 stays a terminal `not-a-child` on both arms. A malformed
+  marker is `unreadable` to wave 2's `childMarkOf`, and the executor defers `marker-unreadable` before any ccd call.
+- **R-7 — a symlinked workdir refuses `containment-unproven`** (terminal). Its sentence says ccd cannot prove the tree
+  at that path is the child's own.
+- **R-8 — one more guard, from the pre-flight's completeness critic.** The ladder refuses `containment-unproven` when
+  ANY other registry row names the same workdir, compared literally and by resolved path (A10).
+
+### A1 — NEW Task 7b: incarnation placement (after Task 7, before Task 8) — BLOCKING
+
+Add a task that does all of the following.
+
+(1) ccd/ccd: change `PR_JSON_FIELDS=…,title,isDraft` to `…,title,isDraft,createdAt` IN PLACE (a3a93b41:ccd/ccd:5141). The line sits above the 19131 boundary, the line count does not change, and no S6-R11 move follows. Re-stamp. In the same commit, move the two exact-string pins, server/test/ccd-pr-state.test.ts:95-96 and server/test/ccd-pr-open.test.ts:352-354, to `…isDraft,createdAt,statusCheckRollup`. The toContain at ccd-pr-state.test.ts:279-280 stays green. `_pr_py` emits rows whole (`'rows': rows`, :5970), so it needs no edit.
+
+(2) server/src/prstate.ts: `CcdPrRow` gains `createdAt?: string` (76594fec:server/src/prstate.ts:7-12).
+
+(3) childSpent: takes the birth ruled in R-1 as a REQUIRED input. Suggested shape: `{kind:'at', ms} | {kind:'unplaceable', detail}`. Never make it optional, because every caller that omitted it would silently change meaning. Place every same-repo, same-branch live row:
+- `this`: createdAt parses and is at or after birth + skew;
+- `inherited`: createdAt parses and is before birth − skew;
+- `unplaceable`: createdAt is absent or unparseable, the birth is unplaceable, or createdAt falls within ±skew.
+
+Only `inherited` rows are dropped. The spent arm states which kind of evidence spoke, for example `spent{pr, source, incarnation:'this'|'unplaced'}`. Rungs 1–2 (`rec.prNumber`, `.prhistory`) answer `incarnation:'unplaced'`: they cannot be dated, and rung 1 is where the merge-commit bind lands. When every same-branch row is `inherited`, fall through to `phaseFor` and answer unspent.
+
+(4) childBind (the bind consumer): refuses on spent of either incarnation, which keeps R28's fail-shut behaviour. It reads the birth through a consumer-declared port over `CoordStore.run(mark.runId)`, so store.ts, which run 128 claims, is untouched.
+
+(5) Tests in child-reclaim-spent.test.ts:
+- a pre-birth row alone gives unspent;
+- a row after birth + skew gives spent/this;
+- a missing or unparseable createdAt gives spent/unplaced;
+- an unplaceable birth gives spent/unplaced;
+- old and new rows together give spent/this, naming the highest `this` row;
+- a row inside ±skew gives unplaced;
+- a bind of an inherited-only child passes, and a bind of an unplaced child refuses.
+
+Mutation rows:
+- delete the placement filter: the pre-birth case goes red;
+- read an unparseable createdAt as inherited: the unplaced case goes red;
+- flip the skew sign: the boundary case goes red;
+- drop createdAt from PR_JSON_FIELDS: the two exact pins go red.
+
+Deploy is tolerant: a server that meets an older ccd sees no createdAt, the rows read as unplaced, the bind refuses as it does today, and the close holds (A2).
+
+*Why:* The ledger assigns this to wave 3. Wave 3 is where `spent` starts to authorise destruction.
+
+*Evidence (pre-flight):* ledger docs/superpowers/programs/child-reclamation.md:266-273; contract child-reclamation-contract.md:475-483 (R28); plan grep createdAt/PR_JSON_FIELDS/incarnation = 0; plan:5285; 76594fec:server/src/coord/childSpent.ts:94-95, :102-148; 76594fec:server/src/coord/childBind.ts:62; callers 76594fec:dispatch.ts:729, routes.ts:1356; a3a93b41:ccd/ccd:5141, :5212-5214; a3a93b41:server/test/ccd-pr-state.test.ts:95-96, :279-280; a3a93b41:server/test/ccd-pr-open.test.ts:352-354
+
+### A2 — Task 8 (`childReclaimDecision`) and Task 9 (`childGateAtClose`) — BLOCKING
+
+Task 8:
+- `ChildReclaimMinting`'s row arm (plan:5206-5209) gains `dispatchStartedAt: number | null`, so the close can pass the birth.
+- The finished conjunct (plan:5285) accepts ONLY `input.spent.kind==='spent' && input.spent.incarnation==='this'`. An `unplaced` spent answers not-finished (HOLD).
+- Add a decision case 'spent by an unplaced or inherited row HOLDS on a non-final close', plus a mutation row: deleting `&& …incarnation==='this'` must turn that case red.
+
+Task 9:
+- `mintingRowOf` carries `r.run.dispatchStartedAt`, and `childGateAtClose` (plan:6384-6397) passes the birth to `childSpent`.
+- When the fast path answers spent/unplaced, the close asks the LIVE rung to date that number before it decides. The close never reclaims on `.prnumber` or `.prhistory` alone.
+- The docstring states that this gh round trip runs inside the coordination mutex, bounded by pr-state's 20 s budget.
+
+New cases in child-reclaim-close.test.ts. For each of these, a non-final close with the programme still open must HOLD (`childReclaimWhy:'not-finished'`, `ws-hold` only):
+- (i) the child's only same-branch row predates the minting run's dispatchStartedAt;
+- (ii) that row has no createdAt;
+- (iii) the registry `.prnumber` names an old merged PR whose live row predates birth, which is the merge-commit path.
+
+The PR_OPEN fixture (plan:6064) carries a createdAt after the minting run's dispatchStartedAt, under a fixed clock, so 'a NON-final close of a SPENT child releases it too' (plan:6082-6090) still releases.
+
+*Why:* Without this, the bind fix in A1 leaves the destructive consumer reading R28's fail-shut direction as permission to reclaim, and leaves the rung-1 merge-commit path open.
+
+*Evidence (pre-flight):* plan:5206-5209, :5285, :5666 (mutation row 13 guards only unmeasured), :6384-6397, :6064-6066, :6082-6100; 76594fec:server/src/coord/childSpent.ts:103, :109; a3a93b41:ccd/ccd:5423-5429, :5956-5957; 76594fec:server/src/coord/store.ts:356, :2033-2055 (dispatchStartedAt: stamped before ws-add, never cleared)
+
+### A3 — Tasks 2, 3, 4 and review lens 1: never follow a symlinked workdir — BLOCKING (R-7)
+
+Task 2: directly after the vanished-worktree fork (plan:1170-1173) and before `[[ -d "$workdir" ]]` (plan:1174), add `[[ ! -L "$workdir" ]] || { _reap_refuse <R-7 token> "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete"; return 1; }`. Test only the leaf, with no trailing slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal.
+
+Task 3: `_ws_reclaim_pin`'s guard (plan:1841) also requires `! -L`. A link there fails with pin-failed and destroys nothing. This also covers the settle re-pin.
+
+Task 4: tail step (4) (plan:2768) fails with `worktree-remove-failed` and deletes nothing further when `-L "$workdir"` holds at removal time. This covers the fresh arm and every resumed arm, because `_ws_reclaim_resume_eval` never reads the tree.
+
+Tests in ccd-child-reclaim-ladder and verb, in a fixture HOME. Build a sibling worktree `other` of the same repo, dirty, and replace the child dir with a link to it:
+- (a) with the child's record present, and (b) with `.git/worktrees/<child>` removed. Both must refuse at the ladder. `other`'s tree, record, branch tip and status must be byte-unchanged, and there must be no 'ccrc: WIP pinned' commit on its branch.
+- (c) a resume at phase `worktree` with the link planted fails and removes nothing.
+
+Mutation rows: deleting each `-L` test must turn its case red. Row (b) must show `other` deleted, reproducing the measurement.
+
+Review lens 1 (plan:7179) names the workdir leaf beside the temp-root leaf.
+
+*Why:* Measured: this deletes another worktree, or commits into one. The fix is three one-line guards.
+
+*Evidence (pre-flight):* plan:1097-1098, :1170-1174, :1212, :1806, :1841, :1869, :2768-2769; a3a93b41:ccd/ccd:7381-7390; my scratch measurement on git 2.43.0: (a) rc 128 'validation failed … does not point back'; (b) rc 0, ../other and its record removed, ws/other left; contract:466-469 (R26)
+
+### A4 — NEW Task 10b: the scratch-slug guards learn a child's temp root (R-4), before Task 11
+
+Add the infix alternative `*--cc-tmp-*` to the `case` at all three sites. Each edit must be length-neutral on the same line, with the neighbouring comment rewritten in place, because session-hook.sh and ccd/ccrc are cited files. The sites are:
+- a3a93b41:ccd/session-hook.sh:712
+- ccd/ccrc:3486 (`_mem_is_scratch`)
+- ccd/ccrc-doctor-checks:4670
+
+In the same commit, move these pins:
+- single-definition.test.ts:3114 `PRED` and its arm-equality row;
+- the mirror row at :3184-3195, which strips a trailing `*` and asserts `toHaveLength(4)`, so the infix needs its own list;
+- scratchSlugs.ts:19-30 (`isScratchSlug`, the fixture slugs).
+
+Put fixtures under /var/tmp (for example `/var/tmp/<x>/.cc-tmp/7/proj` → `-var-tmp-…--cc-tmp-7-proj`). Under /tmp the existing `-tmp*` arm already matches, and the mutation would stay green.
+
+Tests:
+- the hook skips such a root;
+- the census omits the slug;
+- the doctor omits the slug.
+
+Controls:
+- `PERSISTENT_SLUGS` stays unskipped;
+- a `.cc-tmpx` root is not skipped.
+
+Mutation: deleting the alternative at each site must turn that site's own case red, and turn the single-definition equality row red.
+
+*Why:* The ledger assigns this item to wave 3 (ledger:254-260), and the plan has no step for it. Every marked child's full suite goes red on 'skips a scratch slug' until it lands.
+
+*Evidence (pre-flight):* ledger child-reclamation.md:255-260; a3a93b41:ccd/session-hook.sh:688-712 (pwd -P slug; the case); a3a93b41:ccd/ccrc:3486-3489; a3a93b41:ccd/ccrc-doctor-checks:4670; a3a93b41:server/test/single-definition.test.ts:3114, :3184-3213; a3a93b41:server/test/scratchSlugs.ts:19-37; plan grep session-hook.sh/private-tmp = 0
+
+### A5 — Task 11 Step 1 and the brief: what "PASS everywhere" means inside a marked child
+
+Replace 'Expected: PASS everywhere' with an expectation that fits a worker running inside a marked child:
+- `session-hook.test.ts` 'skips a scratch slug' goes red under a child's TMPDIR unless A4 landed. Run that suite with `TMPDIR=/tmp` and name the case (ledger:258-260).
+- `tmp-sweep.test.ts` 'FAILS CLOSED' goes red on the fleet box on an untouched main (ledger:281-282). Measure it against the base before calling it this wave's.
+
+State how either case appears on the wave-done `suite:` line under worker clause 15.
+
+*Why:* The wave 3 worker is a marked child, because wave 1 is deployed. As written, the step's expectation is unreachable, and clause 15 forbids `suite: green`.
+
+*Evidence (pre-flight):* plan:7031; ledger child-reclamation.md:258-260, :281-282; a3a93b41:ccd/ccd:19593-19602 (_child_tmpdir sets TMPDIR to $HOME/.cc-tmp/<id>)
+
+### A6 — Tasks 8 and 9: the close re-lists a marker that reads absent
+
+Replace `read.reason === 'absent' ? { kind: 'none' } : …` (plan:6385-6386) with the executor's own second listing:
+- export `childReclaimRowListing` (plan:5476-5496);
+- on `absent`, answer `unreadable` when `.child` is listed or the listing fails, and `none` only when `.child` is not listed;
+- name close as the third caller in that function's docstring.
+
+Add a close case: a dropped row (`.workdir` emptied) with `.child` still listed answers `childReclaimWhy:'marker-unreadable'`. Add a mutation row: restoring the fold turns that case red.
+
+*Why:* `absent` covers two populations. At close, a live marked child whose row could not be built reads `not-a-child`, a remedy-bearing word it is not entitled to. This is a fold across the no-boolean seam (safe direction: nothing is reclaimed).
+
+*Evidence (pre-flight):* plan:6384-6386, :5404-5415, :5476-5496, :6515 (mutation row 7 pins only unlistable); 76594fec:server/src/coord/childBind.ts:45-55; 76594fec:server/src/registry.ts:1223-1239
+
+### A7 — Task 8 Step 1(d): the kebab-union ordinal, measured
+
+Locate the kebab-union disjunct by content and write the ordinal as measured.
+
+If PR #176 (run 128) merges first, the replace-from text is gone. That PR rewrites these exact lines to add `isUpdateStoreRefuseCode` as 'the TENTH union', so in that case:
+- append `|| isChildReclaimKebab(tok)` after it;
+- call it the ELEVENTH union;
+- the failure message lists `UpdateStoreRefuseCode or child-reclaim word`.
+
+*Why:* This is a textual collision with an open PR that holds claims on neighbouring files.
+
+*Evidence (pre-flight):* 76594fec:server/test/mail-routes.test.ts:775-776; git diff a3a93b41 origin/ws/warm-river -- server/test/mail-routes.test.ts (@@ -775,2 +789,10: 'the TENTH union … isUpdateStoreRefuseCode'); plan:5008-5030
+
+### A8 — Task 8 tests: R29 pinned at this wave's consumer
+
+Add a case that pins R29 at wave 3's consumer: a `.child` that is a DANGLING symlink, with `.uuid` present, defers `marker-unreadable` with no ccd call and the child's delivery still `queued`.
+
+Optionally add a second case: a LIVE symlink to a file holding the run id reads as `child` on the server, and the audit then answers `not-a-child`, which is terminal and safe.
+
+*Why:* The executor's marker cases cover none, 'seven' and another run's id (plan:4770-4777), but no symlink.
+
+*Evidence (pre-flight):* plan:4770-4777; 76594fec:server/src/registry.ts:567-583 (childMarkOf, listed→unreadable); contract:484-488 (R29); a3a93b41:ccd/ccd:2884 (_reg_get refuses -L)
+
+### A9 — the plan header, rung-2 prose and review lens 1: §9 by reference; the fourth run-id site
+
+Header: add a §9 line that settles R24–R29 by reference.
+- R24: the deferral is the server's, per R-6.
+- R25: orphaned temp roots are wave 4's.
+- R26: the tail's removal-time check is THE defence, with no second `-L` in wave-1 code.
+- R27: four sites.
+- R28: Task 7b plus A2.
+- R29: the registry reader plus A6/A8.
+
+Plan:335 and lens 1 say 'all three wave-3 sites'. Name the FOURTH run-id site, the audit's `childOf` print (plan:3615). Lens 1 names R26 as the reason the temp-root block matters, on the fresh, resumed and vanished arms, and adds the workdir leaf (A3).
+
+*Why:* The plan predates §9 (0 hits for R24–R29). Under R27, a reviewer's reading is the only check on the run-id sites, and the lens as written lists three of the four.
+
+*Evidence (pre-flight):* plan:23-24, :335, :1130, :1366, :2928, :3615, :7179; contract:447-488
+
+### A10 — Task 2: no second registry row may name this workdir — BLOCKING (R-8)
+
+In `_ws_reclaim_eval`, beside A3's `-L` rung and before any pin, refuse `containment-unproven` when another registry
+row's `.workdir` names the child's workdir, compared both as the literal path and as its resolved (`pwd -P`) path.
+An UNLISTABLE registry refuses too, as `registry-unlistable` or the plan's existing unmeasurable token; it never
+proceeds.
+
+The reason: registry corruption or an old slug collision can make a child's row name another live session's
+worktree with no symlink involved, and nothing in the ladder checks that today.
+
+Tests, in a fixture HOME:
+- two rows naming one workdir: refuse, and nothing is pinned or deleted;
+- a control of one row: proceeds.
+
+Mutation row: deleting the check turns the two-row case red, with the other session's tree deleted.
+
+### Brief notes the coordinator settled (binding on the worker and the reviewers)
+
+- R26: the tail's `pwd -P` equality, then `rm -rf` on the resolved path, with a literal-leaf `rm -f --` for a link or
+  file, is THE defence R26 names. Wave-1 code gets no second `-L`. Accepted residue: a `chmod` on an entry `find`
+  selected follows a link swapped in during the walk. It can change only permission bits and deletes nothing.
+- R27: the reviewers confirm by reading that all four ccd run-id sites call `_child_runid_valid`
+  (plan:1130, :1366, :2928, :3615) and that no other new ccd code parses a run id. Waves 4 and 5 parse the mirror's
+  `meas.childOf` through `CHILD_RUN_ID`.
+- R29 and a LIVE symlinked `.child`: the server reads `child` and ccd reads empty. The close queues, the audit answers
+  `not-a-child` (terminal), and the child reaches the attention list. That is the safe direction, not a defect.
+- A spent child that wave 2's `refuseSpentChild` released and unbound from a planned run is never reached by the close
+  trigger; its minting run's close already answered `siblings-open`. Wave 4's sweep owns it, so it is not a defect here.
+- The close's live gh round trip (A2) runs inside the coordination mutex, bounded by pr-state's 20 s budget. State it
+  in the docstring.
+- Anchors are snapshots. The frozen boundary still answers `ccd/ccd:19131`. Since 507aefe9, `ccd/ccd` has grown +8
+  lines above it (wave 1), so hints written against f5dc495b are off by that much. Locate by content.
+- If PR #176 (run 128) merges first, A7's replace-from text is gone, and A7 says what to do instead.
+
+### Carried out of this wave (recorded in the programme ledger)
+
+- `is_ours` three-valued goes to wave 4 (R-5).
+- A human-gated `ws-reap` follows a symlinked workdir the same way (B2): wave 4 mirrors A3's guard there.
+- The PWA's abandon confirmation should say that a child's workspace will be reclaimed: wave 5. The ungated abandon
+  door (D-282) reaching a destructive act through `state:'failed'` is inside the single-user trust model, and it is
+  recorded, not changed.
+- A server restart between a close committing and its queued executor running loses the one close trigger. The child
+  stays released but unreclaimed until wave 4's sweep, which is the safe direction.
+
+### Task order with the amendments
+
+1. Task 1: journal act.
+2. Task 2: ladder, plus A3's `-L` rung and A10.
+3. Task 3: pin, plus A3.
+4. Task 4: verb and tail, plus A3's removal-time re-test.
+5. Task 5: audit, caps and dispatcher.
+6. Task 6: grant, argv and budget.
+7. Task 7: store.
+8. NEW Task 7b (A1).
+9. Task 8, plus A2, A6, A7 and A8.
+10. Task 9, plus A2 and A6.
+11. Task 10: prose.
+12. NEW Task 10b (A4).
+13. Task 11, with A5.
+
+The destructive tasks (2–5) never read a spent verdict. The incarnation rule gates Tasks 8 and 9: the close's decision
+to reclaim.
