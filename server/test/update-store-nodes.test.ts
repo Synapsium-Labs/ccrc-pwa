@@ -137,6 +137,13 @@ describe('upsertNodeMeasurement — the measurement and report groups only', () 
       provenance: 'unknown', os: 'unknown', updateState: 'unknown', reportedPhase: 'unknown', channel: null,
       requestedKind: null });
   });
+
+  it('an invalid stored caps or agentOps word list reads as [] — one bad word drops the whole file (validCapWords)', () => {
+    const store = fresh();
+    store.upsertNodeMeasurement(meas({ nodeId: UUID_A }));
+    store.db.prepare("UPDATE nodes SET caps = 'BAD_WORD', agentOps = 'also bad!' WHERE nodeId = ?").run(UUID_A);
+    expect(store.node(UUID_A)).toMatchObject({ caps: [], agentOps: [] });
+  });
 });
 
 describe('markUnreachable — written on the sweep it happens', () => {
@@ -164,10 +171,29 @@ describe('markUnreachable — written on the sweep it happens', () => {
     const store = fresh();
     store.upsertNodeMeasurement(meas());                          // the label-keyed row
     store.upsertNodeMeasurement(meas({ nodeId: UUID_A }));
-    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'superseded', retired: 0 });
-    expect(store.rekeyNode('fleet', UUID_B)).toEqual({ ok: true, how: 'no-label-row', retired: 1 });   // UUID_A retired
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'superseded', retired: 0, revived: false });
+    expect(store.rekeyNode('fleet', UUID_B)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: false });   // UUID_A retired
     expect(store.markUnreachable('fleet', 'fleet', T0 + 5))
       .toEqual({ ok: false, why: 'label-key-taken', supersededBy: UUID_A });
+  });
+
+  it('refuses with supersededBy: null when the label key is held by a LIVE row under another label', () => {
+    const store = fresh();
+    // A row whose nodeId happens to equal this label, but whose own label
+    // (and connection) is a different one entirely — not this label's heir.
+    store.db.prepare(
+      "INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) " +
+      "VALUES ('fleet', 'fleet', 'other-connection', 'ok', 'complete', 'verified', '', 'linux', 1)",
+    ).run();
+    expect(store.markUnreachable('fleet', 'fleet', T0))
+      .toEqual({ ok: false, why: 'label-key-taken', supersededBy: null });
+  });
+
+  it("the placeholder's agentOps is null for a non-fleet role — no agent by construction — and '' only for fleet", () => {
+    const store = fresh();
+    expect(store.markUnreachable('server', 'both', T0)).toEqual({ ok: true, nodeId: 'server', created: true, since: T0 });
+    expect(raw(store, 'server', 'agentOps')).toBeNull();
+    expect(store.node('server')).toMatchObject({ role: 'both', label: 'server', agentOps: null });
   });
 });
 
@@ -186,7 +212,7 @@ describe('rekeyNode — the identity group', () => {
     plantLease(store, 'fleet', 'failed', T0);
     plantRequest(store, 'fleet');
     expect(store.refuseRelease('fleet', 'v0.0.10', T0 + 1, 'provenance: x')).toEqual({ ok: true, inserted: true });
-    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'rekeyed', retired: 0 });
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'rekeyed', retired: 0, revived: false });
     expect(store.node('fleet')).toBeNull();
     expect(store.node(UUID_A)).toMatchObject({ label: 'fleet', measuredAt: T0, updateState: 'failed',
       updateTarget: 'v0.0.10', requestedTag: 'v0.0.10', supersededBy: null });
@@ -194,14 +220,14 @@ describe('rekeyNode — the identity group', () => {
     expect(store.refusalsFor('fleet')).toEqual([]);
     expect(store.nodes().map((n) => n.nodeId)).toEqual([UUID_A]);   // one node, not two
     // The next sweep's re-key finds no label row and changes nothing.
-    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 0 });
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 0, revived: false });
   });
 
   it('with a uuid row already present the label row is superseded, and every reader but node() excludes it (§18 "a superseded row is invisible")', () => {
     const store = fresh();
     store.upsertNodeMeasurement(meas({ measuredAt: T0 }));
     store.upsertNodeMeasurement(meas({ nodeId: UUID_A, measuredAt: T0 + 10 }));
-    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'superseded', retired: 0 });
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'superseded', retired: 0, revived: false });
     expect(store.node('fleet')!.supersededBy).toBe(UUID_A);
     expect(store.nodes().map((n) => n.nodeId)).toEqual([UUID_A]);
     expect(store.nodeByLabel('fleet')!.nodeId).toBe(UUID_A);
@@ -217,7 +243,7 @@ describe('rekeyNode — the identity group', () => {
     const store = fresh();
     store.upsertNodeMeasurement(meas({ nodeId: UUID_S, label: 'server', role: 'both', agentOps: null }));
     store.upsertNodeMeasurement(meas({ nodeId: UUID_A }));
-    expect(store.rekeyNode('fleet', UUID_B)).toEqual({ ok: true, how: 'no-label-row', retired: 1 });
+    expect(store.rekeyNode('fleet', UUID_B)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: false });
     expect(store.node(UUID_A)!.supersededBy).toBe(UUID_B);
     expect(store.upsertNodeMeasurement(meas({ nodeId: UUID_B }))).toEqual({ ok: true, created: true });
     expect(store.nodes().map((n) => n.nodeId)).toEqual([UUID_B, UUID_S]);
@@ -225,6 +251,23 @@ describe('rekeyNode — the identity group', () => {
     // the retired identity (the lower id) from answering for the label.
     expect(store.nodeByLabel('fleet')!.nodeId).toBe(UUID_B);
     expect(store.node(UUID_S)!.supersededBy).toBeNull();   // another connection's row is not this label's
+  });
+
+  it('a node-id that returns after it was retired is revived, never a cycle (D-3208)', () => {
+    const store = fresh();
+    store.upsertNodeMeasurement(meas());                                     // the label-keyed row
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'rekeyed', retired: 0, revived: false });
+    store.upsertNodeMeasurement(meas({ nodeId: UUID_A }));
+    // A is re-installed under B: A is retired.
+    expect(store.rekeyNode('fleet', UUID_B)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: false });
+    store.upsertNodeMeasurement(meas({ nodeId: UUID_B }));
+    // A's ~/.ccrc is restored from a snapshot and reconnects: A must be
+    // revived, not left superseded by B while B is superseded by A.
+    expect(store.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: true });
+    expect(store.upsertNodeMeasurement(meas({ nodeId: UUID_A }))).toEqual({ ok: true, created: false });
+    expect(store.node(UUID_A)!.supersededBy).toBeNull();
+    expect(store.node(UUID_B)!.supersededBy).toBe(UUID_A);
+    expect(store.nodes().map((n) => n.nodeId)).toEqual([UUID_A]);
   });
 });
 

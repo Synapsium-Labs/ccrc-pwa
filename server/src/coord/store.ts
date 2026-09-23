@@ -284,9 +284,11 @@ export type UpsertNodeResult =
  *  rows carrying the same label under a different node id, now superseded by
  *  this one — a box uninstalled and re-installed mints a new id, and its old
  *  identity must not stay live beside the new one for ever
- *  (D-3193). */
+ *  (D-3193). `revived` is true only when the `nodeId` row itself was
+ *  superseded and this call cleared it — a retired identity that comes back
+ *  is revived, never left to close a cycle with the id that superseded it. */
 export type RekeyNodeResult =
-  | { ok: true; how: 'rekeyed' | 'superseded' | 'no-label-row'; retired: number }
+  | { ok: true; how: 'rekeyed' | 'superseded' | 'no-label-row'; retired: number; revived: boolean }
   | { ok: false; why: 'bad-node-id' };
 
 /** `label-key-taken` = no live row carries the label AND the label-keyed
@@ -5878,10 +5880,15 @@ export class CoordStore {
   /** The identity group (§8). A measured node-id on a connection whose label
    *  keys a row re-keys that row IN PLACE — history, lease, request and its
    *  refusal rows carried — unless a row with that id already exists, when the
-   *  label row is superseded by it instead. Then every OTHER live row carrying
-   *  the label under a different id is superseded too: the same connection
-   *  answering a new id is a re-installed box, and its old identity is retired
-   *  (D-3193). One transaction; idempotent. */
+   *  label row is superseded by it instead. The id measured NOW is the node's
+   *  identity (D-3208): if the `nodeId` row itself is currently superseded —
+   *  a retired identity has come back, e.g. a `~/.ccrc` restored from a
+   *  snapshot — it is REVIVED here, before every OTHER live row carrying the
+   *  label is superseded toward it; without the revive the two rows would
+   *  point at each other and both read as superseded forever. Then every
+   *  OTHER live row carrying the label under a different id is superseded
+   *  too: the same connection answering a new id is a re-installed box, and
+   *  its old identity is retired (D-3193). One transaction; idempotent. */
   rekeyNode(label: string, nodeId: string): RekeyNodeResult {
     if (!NODE_ID_RE.test(nodeId)) return { ok: false, why: 'bad-node-id' };
     return tx(this.db, (): RekeyNodeResult => {
@@ -5900,10 +5907,14 @@ export class CoordStore {
           how = 'rekeyed';
         }
       }
+      const rev = this.db.prepare(
+        'UPDATE nodes SET supersededBy = NULL WHERE nodeId = ? AND supersededBy IS NOT NULL',
+      ).run(nodeId);
+      const revived = Number(rev.changes) > 0;
       const retired = this.db.prepare(
         'UPDATE nodes SET supersededBy = ? WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? AND nodeId <> ?',
       ).run(nodeId, label, nodeId, label);
-      return { ok: true, how, retired: Number(retired.changes) };
+      return { ok: true, how, retired: Number(retired.changes), revived };
     });
   }
 
