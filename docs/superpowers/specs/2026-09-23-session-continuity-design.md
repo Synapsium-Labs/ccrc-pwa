@@ -2,7 +2,8 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
-rulings on the written spec (C9, C10) and the measurements behind the three decisions still open (§11 items 3–5) ·
+rulings on the written spec (C9–C11, C13, C14; every §11 decision ruled 2026-09-23) and the measurements behind
+them ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -180,7 +181,7 @@ auto-home at 04:17 UTC the next day.
 |---|---|---|
 | C1 | Two specs, landing and continuity (operator). | This spec. |
 | C2 | Rescue timing: "least time interruption and max recovery potential so that we do not waste tokens and do not lose work, but also don't wait too long" (operator). | Stage 4. |
-| C3 | Reaper: "is there no more elegant way?" — no heuristic sweep (operator). | Stage 6: one variable plus the scope boundary the kernel enforces. |
+| C3 | Reaper: "is there no more elegant way?" — no heuristic sweep (operator). | Stage 6: one variable plus the scope boundary the kernel enforces. Amended by C11. |
 | C4 | Headroom estimation dropped (operator). | No fan-out gate. Target choice keeps using the limits files it already reads. |
 | C5 | "Enhance recovery during account swap similar to how Claude Code itself does it" (operator). | Stage 2 spike decides stage 3's mechanism. |
 | C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue waits instead of swapping when the reset is near or no target has room. | Stage 4. Slug for minting at plan time: `rescue-waits-near-reset`. |
@@ -188,13 +189,15 @@ auto-home at 04:17 UTC the next day.
 | C8 | REVERSES the carry's "an existing destination is LEFT ALONE rather than merged". | Stage 1. Slug: `sidecar-carry-merges`. |
 | C9 | No backfill of the historical backlog unless a programme needs one (operator, 2026-09-23, on the written spec). | §11 item 1. |
 | C10 | Re-seed the route records seeded under the pre-#169 default: yes, one-off (operator, 2026-09-23, on the written spec). | §11 item 2: executed by hand the same day; no code. |
-| C11 | **Proposed, awaiting the operator (§11 item 4).** AMENDS C3: beside the variable and the scope boundary, a sweep stops dead ccd scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
+| C11 | AMENDS C3 (operator, 2026-09-23, on §11 item 4's measurements): beside the variable and the scope boundary, a sweep stops dead ccd pane scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
 | C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). | Stage 4 rule 1. Slug: `carried-in-banner-is-not-a-block`. |
+| C13 | The rescue-wait bound is 10 minutes (operator, 2026-09-23). | Stage 4 rule 2; §11 item 3. |
+| C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. |
 
 ## 4. Roles and authority
 
 - **ccd** carries, stops gracefully, writes the manifest, spreads rescues, reports dead scopes of its own panes
-  and, if C11 is ruled in, stops the inert ones, honours the route record. It never resumes anything itself and never types beyond the existing
+  and stops the inert ones (C11), honours the route record. It never resumes anything itself and never types beyond the existing
   redrive fallback's constant text.
 - **The session (the model)** decides whether to resume. It is told what was in flight and the literal call that
   resumes it; that is a request, and §9 measures whether it is honoured.
@@ -265,7 +268,11 @@ and a plain background agent running:
 5. resume a workflow by run id after the swap with a current-root script path, to explain the five scriptPath
    refusals;
 6. with the two-agent workflow paused on a five-hour limit, let the parent itself hit the limit, and observe whether
-   the paused run survives a stage-4 wait, and whether it survives a swap followed by a resume by run id.
+   the paused run survives a stage-4 wait, and whether it survives a swap followed by a resume by run id;
+7. set `OOMPolicy=continue` on the scratch session's pane scope with `systemctl --user set-property`, run a
+   background process past a small scope `MemoryMax`, and observe that only that process is killed and the session
+   lives (C14). If `set-property` refuses the property on a transient scope, record it: the remaining route is the
+   user manager's `DefaultOOMPolicy`, which needs a re-exec of the fleet's user manager and returns to the operator.
 
 **Decision rule.** Native handoff is primary for stage 3 only if it fires with both gates set, the next wake
 adopts across the account change, and no second restart authority engages (or it can be switched off). Otherwise
@@ -411,7 +418,7 @@ accepting transcript loss.
    background shells of a live, idle Claude Code, and every process in a dead scope has already lost its Claude
    Code, so no collector frees memory the reap would have freed (§1.3). Watchers can already opt out today by using
    the Monitor tool instead of Bash `run_in_background`; stage 5's worker clause says so.
-2. **Report every dead scope; stop only the inert ones** (C11, awaiting the operator, §11 item 4). Every ccd pane
+2. **Report every dead scope; stop only the inert ones** (C11). Every ccd pane
    runs in its own transient scope under the session slice, and its processes stay there unless something
    deliberately moves them to another unit (`systemd-run --user --unit …`), which is how a service a session wants
    to outlive its pane must leave.
@@ -439,7 +446,6 @@ accepting transcript loss.
    - Every other dead scope is **reported**, never stopped: doctor lists scope, processes, age, sockets and memory,
      and the operator stops it or moves the service into a unit. Doctor also lists every process older than a day
      in a live pane scope, other than the pane's own process and its Claude Code's MCP servers.
-   - Under report-only (§11 item 4), the same record and report ship and nothing is stopped.
    - Measured against the 12 dead scopes of 2026-09-23: 5 stop (22 processes, 20 MB, all test and probe leaks, no
      CPU over 42 minutes); 7 are reported, among them both services a live session still used, which listen or
      poll. The named cost: a process that waits more than six hours with no CPU and no inet or listening socket — a
@@ -483,9 +489,9 @@ a swap; an operator `/model opus` survives an auto-home.
 
 - **No revival.** Nothing starts, restarts or swaps a session ccd would not already restart. The one new stop
   behaviour is a graceful signal before the existing kill; the typed fallback text is unchanged.
-- **A new, named process-stop authority, bounded.** Stage 6 stops the scopes of panes ccd itself ends and, if C11
-  is ruled in, dead ccd pane scopes that have done nothing for six hours and serve nothing; never a scope of
-  another live tmux server, and never a scope that is not a pane's.
+- **A new, named process-stop authority, bounded.** Stage 6 stops the scopes of panes ccd itself ends and (C11)
+  dead ccd pane scopes that have done nothing for six hours and serve nothing; never a scope of another live tmux
+  server, and never a scope that is not a pane's.
 - **ccd is the authority** on files and sessions; nobody but the operator, acting on doctor's report, touches
   `~/.cc-sessions`, tmux or a unit outside ccd, and doctor's next run records what the operator stopped.
 - **The server never runs git or Claude Code** and never parses journal formats.
@@ -499,7 +505,7 @@ a swap; an operator `/model opus` survives an auto-home.
 | Area | Change |
 |---|---|
 | `ccd/ccd` | carry merge; the carry and scan slot and budgets; graceful stop; keystroke journal `.typed`; manifest writer and scan; composed prompt; `.landed` stamp and the carried-in-banner check; rescue wait near reset, spread, no-bounce; in-flight refusal and its refusal word; `--cut-delegated`; the pressure-reap variable in the spawn environment; scope stop on pane end; route write from `/model`/`/effort`; re-stamp and citation-corpus procedure |
-| `ccd/ccd-scope-sweep` (new) | per-scope verdict record `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`; inert stop (C11, pending); report. `ccd/ccd-cap-scopes` is unchanged |
+| `ccd/ccd-scope-sweep` (new) | per-scope verdict record `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`; inert stop (C11); report. `ccd/ccd-cap-scopes` is unchanged |
 | `deploy/systemd/ccd-scope-sweep.{service,timer}`, `deploy/deploy.sh`, `ccd/ccrc` install spine, `agent/test/deploy-verify.test.ts` | the unit and timer, their install and uninstall, and the pins that enumerate each ccd timer |
 | `ccd/ccrc-doctor-checks` | reads the sweep's verdict record; lists dead scopes and long-lived pane processes; records operator stops |
 | `ccd/session-hook.sh`, `server/test/session-hook.test.ts` | PostToolUse launch record with validation; SessionStart manifest subject with its own ceiling, re-pinned under the 10,000-character spill |
@@ -530,7 +536,7 @@ a swap; an operator `/model opus` survives an auto-home.
 - **The slice ceiling kills a live session** once the pressure reap is off: named in §5.6, measured in §9 by the
   reap's own class, undone by removing the variable.
 - **A dead-scope stop kills a wanted service:** only a scope inert for six hours, with no inet or listening socket
-  and no child elsewhere, is stopped (C11, pending; under report-only nothing is); everything else is reported.
+  and no child elsewhere, is stopped (C11); everything else is reported.
 - **The sweep mistakes a server scope for a dead pane:** only `tmux-spawn-*.scope` units with a pane `Description`
   are read; ccd's `ccrc-tmux-server.scope` sits in the same slice.
 
@@ -547,7 +553,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
 | 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; — | 0; 0; 0; 0; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
-| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day (C11 only); OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0 (under report-only: reported, no target); at most B + 2 a week, reported |
+| 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
 
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
@@ -556,7 +562,7 @@ redesigned.
 ## 10. Sequencing
 
 1 → 2 → 3 → {4, 5}. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
-the dead-scope report, the inert stop if C11 is ruled in, and the harness fix — needs nothing from stages 1–5 and
+the dead-scope report, the inert stop, and the harness fix — needs nothing from stages 1–5 and
 can ship any time. Before stage 3 no handoff record exists, so a handed-over waiter with no CPU and no socket can be
 stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
 3 and the stage-2 decision on native handoff, whose record it reads. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
@@ -564,7 +570,7 @@ stage 1. The landing spec's stage 5 needs this spec's stage 1.
 
 ## 11. Operator decisions
 
-Decided on the written spec, 2026-09-23:
+Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on the measurements recorded under each:
 
 1. **No backfill of the historical backlog** (C9) unless a programme needs one. Workflow journals and agent
    transcripts stranded on source accounts by past `(kept)` carries stay where they are; a first pass counted about
@@ -575,9 +581,7 @@ Decided on the written spec, 2026-09-23:
    session — and it was reset through `cmd_route` with `actor=operator-ruling`. The one other record saying Fable,
    claude-rp-llm, was set by the operator from the PWA and is untouched. No code ships for it.
 
-Left open, with the measurements behind them:
-
-3. **The rescue-wait bound** (§5.4 rule 2). Against the 168 rescues of §1.2 on a five-hour window (150 on a session
+3. **The rescue-wait bound is 10 minutes** (C13; §5.4 rule 2). Against the 168 rescues of §1.2 on a five-hour window (150 on a session
    banner, 18 on a monthly-spend banner), of 248:
 
    | `RESCUE_WAIT_BOUND` | Rescues that would have waited | Minutes waited, total | Swaps avoided / round trips avoided | Live delegated work kept |
@@ -591,23 +595,28 @@ Left open, with the measurements behind them:
 
    No bound at or under 30 minutes avoids a bounce, and the one near-reset rescue recorded as dropping live work
    was an agent that had already died on the limit four seconds before the rescue. A wait almost never saves wall
-   clock: one rescue in 248 fired closer to its reset than its swap took. Recommended: 10 minutes. It costs almost
-   nothing — 13 minutes of waiting across the window — and avoids 3 swaps and their carries; no bound under 15
-   minutes avoids a round trip. The carried-in-banner check (rule 1) touches ten times as many rescues. A longer
+   clock: one rescue in 248 fired closer to its reset than its swap took. Ten minutes costs almost nothing — 13
+   minutes of waiting across the window — and avoids 3 swaps and their carries; no bound under 15 minutes avoids a
+   round trip. The carried-in-banner check (rule 1) touches ten times as many rescues. A longer
    bound for delegated work waits on stage 2's sixth measurement.
-4. **The inert-scope sweep (C11), which amends C3.** Either stage 6 stops dead ccd scopes that have done nothing for
-   six hours and serve nothing, and reports the rest (§5.6 item 2 as written), or it only reports and the operator
-   stops each scope. On 2026-09-23 the first stops 5 scopes, 22 processes, 20 MB, all test and probe leaks; both
-   reports list the other 7, including the two services live sessions still use. Recommended: the sweep, because it
-   collects the orphaned and zombied without ever touching anything that runs, serves or forks. Either way the
-   pressure-reap variable ships first (§10), and the operator decides on the 7 reported scopes: the DynamoDB Local
-   server listens on every interface and belongs in its own unit bound to 127.0.0.1, or stopped.
-5. **The slice ceiling.** 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on, while
-   the host had memory to spare (§1.3). Whether to raise the slice's `MemoryMax` toward the host's, or to give pane
-   scopes `OOMPolicy=continue` so a background worker's kill no longer ends the session, is unmeasured: neither
-   setting has been tried on a transient scope here. Recommended: measure both in the stage-2 spike's scratch
-   session. Stage 6 does not wait for it: the reap fires below about 3 GiB of host memory, after the slice has
-   already reached its ceiling, so the variable barely moves this risk; its own kill rule (§5.6) guards the rest.
+4. **The inert-scope sweep (C11), which amends C3.** Stage 6 stops dead ccd pane scopes that have done nothing for
+   six hours and serve nothing, and reports the rest (§5.6 item 2), rather than only reporting. On 2026-09-23 it
+   stops 5 scopes, 22 processes, 20 MB, all test and probe leaks, and reports the other 7, including the two
+   services live sessions still used; it collects the orphaned and zombied without touching anything that runs,
+   serves or forks. The pressure-reap variable ships first (§10). The operator stopped the DynamoDB Local server the
+   same day (2026-09-23 21:13 UTC, data file unchanged); MekWarLive restarts it from its own script when it needs it.
+5. **The slice ceiling** (C14). 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on,
+   while the host had memory to spare (§1.3). The kill itself chose sensibly, usually a background worker; what
+   turns it into a session death is `OOMPolicy=stop` on every pane scope, the user manager's `DefaultOOMPolicy`.
+   Stage 2 step 7 measures `OOMPolicy=continue` on a scratch pane scope. Two alternatives are closed:
+   - **An aggregate soft cap** (`MemoryHigh` on the slice or on `user@`) kills nothing and throttles every session
+     at once. It froze the fleet on 2026-08-14 (`user@`) and on 2026-09-09 and three times on 2026-09-10 (the
+     slice), and `deploy/assert-slice-policy.sh` refuses it at deploy.
+   - **A higher hard cap** gains little: `user@1000` is capped at 26G on a 30.6 GiB host, so a slice `MemoryMax`
+     above that is never reached, and the parent's limit or the host's OOM killer acts instead, with less say over
+     the victim.
+   Stage 6 does not wait for step 7: the reap fires below about 3 GiB of host memory, after the slice has already
+   reached its ceiling, so the variable barely moves this risk; its own kill rule (§5.6) guards the rest.
 
 ## 12. Out of scope, named
 

@@ -2,7 +2,7 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
-written spec's break-glass question recorded 2026-09-23 (R9); strict-protection removal still open (§11) · **Date:**
+written spec's two open decisions recorded 2026-09-23 (R9, R10) · **Date:**
 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -113,6 +113,7 @@ repositories are on plans that exclude it.
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
 | R9 | Break-glass: the repository-admin role stays the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). | Stage 2; §4's operator row; §11. |
+| R10 | Strict protection comes off intake-platform and data-internal after a week of coordinator landings with composition tests there (operator, 2026-09-23, on the written spec). | Stage 5; §11. |
 
 ## 4. Roles and authority
 
@@ -452,9 +453,8 @@ Decided on the written spec, 2026-09-23:
    actor. The hook stops fleet sessions using `--admin`; the operator keeps a direct door for a broken CI or
    release lane.
 
-Left open:
-
-2. **Strict-protection removal** on intake-platform and data-internal after a week of coordinator landings there.
+2. **Strict-protection removal** — R10: on intake-platform and data-internal, after a week of coordinator landings
+   with composition tests there.
 
 ## 12. Failure modes named
 
