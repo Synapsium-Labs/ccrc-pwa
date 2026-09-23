@@ -1730,6 +1730,12 @@ describe('POST /api/runs/:id/dispatch', () => {
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
+      // Child-workspace reclamation wave 1: this fixture's fleet advertises no
+      // `child-argv-v1`, so the fresh spawn omits `--child` and says so on the
+      // run, BEFORE the transition — recorded while the run still rests at
+      // `planned`, which is why both states read `planned`.
+      { at: expect.any(Number), fromState: 'planned', toState: 'planned', causedBy: 'coordinator',
+        detail: 'child-omitted:no-child-argv-cap' },
       { at: expect.any(Number), fromState: 'planned', toState: 'dispatched', causedBy: 'coordinator', detail: null },
       // wave 2, F2: every successful dispatch also records its skill preflight,
       // after the commit — so the row rests in the state the transition just
@@ -1759,9 +1765,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Two rows from the FIRST dispatch (its transition plus its skill
+    // Three rows from the FIRST dispatch (its `child-omitted` row — this
+    // fixture advertises no `child-argv-v1` — its transition, and its skill
     // preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(2);
+    expect(w.coord.runEvents(opened.id).length).toBe(3);
   });
 
   it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {
