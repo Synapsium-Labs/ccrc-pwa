@@ -249,6 +249,30 @@ describe('each unattended label is pinned to its own call site', () => {
  * for real and reads the id back out of the argv `runCcd` actually received,
  * for a run id nobody hand-picked to make the label look right.
  */
+/**
+ * Fix round B, F2: the two `SITES` entries above (`refuseSpentChild — hand a
+ * spent child's claim…` / `…release a spent child…`) capture the PARAMETER
+ * named `dispatchDec` inside `refuseSpentChild`'s own body — which pins that
+ * the function reads its own parameter, not that the RESUME ARM'S CALL SITE
+ * (`dispatch.ts:692`) actually passes the hoisted `dispatchDec` rather than
+ * `null` or a second, freshly-minted `sweepDec`. Measured (review 144, F2):
+ * both those mutants of the call site's last argument left `unattended-
+ * actor.test.ts` fully green, because nothing here read that line. This is
+ * the missing pin, anchored on the call itself rather than on the
+ * parameter's name inside the callee.
+ */
+describe('refuseSpentChild is called with the hoisted dispatchDec, not a fresh actor (F2)', () => {
+  it('the resume arm\'s call site passes dispatchDec as the 4th argument, literally', () => {
+    const src = readFileSync(path.join(srcRoot, 'coord/dispatch.ts'), 'utf8');
+    const m = /return refuseSpentChild\(deps, \{ id: run\.id, sessionId \}, childGate, ([^)]*)\);/.exec(src);
+    expect(m, 'the refuseSpentChild call site was not found in coord/dispatch.ts — it moved or was '
+      + 'rewritten; update the anchor before trusting this guard again').not.toBeNull();
+    expect(m![1], 'the call site\'s 4th argument must be exactly the hoisted `dispatchDec` — a `null` '
+      + 'or a second, freshly-minted actor here would silently pass an unattended-actor review')
+      .toBe('dispatchDec');
+  });
+});
+
 describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely the right shape', () => {
   it("dispatchRun's hold argv names the concrete run id, measured at runtime", async () => {
     const home = mkTmp('ccrc-unattended-actor-');
