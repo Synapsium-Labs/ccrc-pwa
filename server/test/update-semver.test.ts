@@ -22,9 +22,14 @@ const SEMVER = path.join(REPO, 'shared', 'semver.ts');
 // on purpose — an input already in order proves nothing about a sort.
 const DISTINCT = ['v1.0.0', 'v0.0.10', 'v10.0.0', 'v0.1.0', 'v0.0.9', 'v2.0.0', 'v0.10.0', 'v1.9.10', 'v1.9.9'];
 
+// Coordinator addendum (fix round 1, dispatch E): a bounded timeout and a
+// hard kill signal on every spawnSync in this file, so a stuck child fails
+// its one case instead of freezing the whole vitest worker.
+const SPAWN_OPTS = { timeout: 30_000, killSignal: 'SIGKILL' as const };
+
 const sortV = (list: readonly string[]): string[] =>
   spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list],
-    { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).stdout.trim().split('\n');
+    { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, ...SPAWN_OPTS }).stdout.trim().split('\n');
 
 /** `_ver_newer`, extracted from the shipped `ccd/ccrc` by regex — the W1 Task
  *  10 shape (`ccrc-install.test.ts`, "_ver_newer agrees with sort -V") — so a
@@ -57,10 +62,10 @@ describe('compareReleaseTags agrees with ccd/ccrc\'s _ver_newer on every ordered
     const fn = verNewerSrc();
     for (const a of PAIRS) {
       for (const b of PAIRS) {
-        const r = spawnSync('bash', ['-c', `${fn}\n_ver_newer "$1" "$2"`, '--', a, b], { encoding: 'utf8' });
+        const r = spawnSync('bash', ['-c', `${fn}\n_ver_newer "$1" "$2"`, '--', a, b], { encoding: 'utf8', ...SPAWN_OPTS });
         expect(r.status === 0 || r.status === 1, `_ver_newer ${a} ${b} exited ${r.status}: ${r.stderr}`).toBe(true);
         expect(isNewerTag(a, b), `${a} newer than ${b}?`).toBe(r.status === 0);
-        const back = spawnSync('bash', ['-c', `${fn}\n_ver_newer "$1" "$2"`, '--', b, a], { encoding: 'utf8' });
+        const back = spawnSync('bash', ['-c', `${fn}\n_ver_newer "$1" "$2"`, '--', b, a], { encoding: 'utf8', ...SPAWN_OPTS });
         const neither = r.status !== 0 && back.status !== 0;
         expect(compareReleaseTags(a, b) === 0, `${a} vs ${b}: equal iff neither is newer`).toBe(neither);
       }

@@ -190,7 +190,11 @@ describe('eligibility (§9, decision 16)', () => {
 
   it('eligibleTags orders newest first, agreeing with `sort -V -r` (the comparator, not string order)', () => {
     const tags = ['v0.0.10', 'v0.1.0', 'v0.0.9', 'v1.0.0', 'v0.0.100', 'v0.10.0', 'v0.2.0'];
-    const sortV = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V -r', '--', ...tags], { encoding: 'utf8' });
+    // Coordinator addendum (fix round 1, dispatch E): a bounded timeout and a
+    // hard kill signal, so a stuck child fails this one case instead of
+    // freezing the whole vitest worker.
+    const sortV = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V -r', '--', ...tags],
+      { encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
     expect(sortV.status, sortV.stderr).toBe(0);
     expect(eligibleTags(tags.map((t) => rel(t)), 'stable', new Set())).toEqual(sortV.stdout.trim().split('\n'));
     // And the resolver reads that head: v0.0.10 beats v0.0.9, which a string sort gets backwards.

@@ -87,7 +87,12 @@ except Exception as ex:
 `;
 
 function validate(doc: string): { ok: boolean; err: string } {
-  const r = spawnSync('python3', ['-c', VALIDATOR], { input: doc, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C.UTF-8' } });
+  // Coordinator addendum (fix round 1, dispatch E): a bounded timeout and a
+  // hard kill signal, so a stuck python3 fails this one case instead of
+  // freezing the whole vitest worker.
+  const r = spawnSync('python3', ['-c', VALIDATOR], {
+    input: doc, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C.UTF-8' }, timeout: 30_000, killSignal: 'SIGKILL',
+  });
   return { ok: r.status === 0 && r.stdout === 'ok\n', err: r.stderr };
 }
 

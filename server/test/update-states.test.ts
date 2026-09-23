@@ -131,8 +131,11 @@ describe('the release tag (decision 2): one shape, the same as the bash twin', (
     // LC_ALL=C: bash's `=~` follows the locale, and `[0-9]` is only ASCII
     // digits in C — the JS class is ASCII-only unconditionally.
     for (const f of FIXTURES) {
+      // Coordinator addendum (fix round 1, dispatch E): a bounded timeout and
+      // a hard kill signal, so a stuck child fails this one case instead of
+      // freezing the whole vitest worker.
       const r = spawnSync('bash', ['-c', '[[ $1 =~ $2 ]]', '--', f, shape],
-        { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
+        { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 30_000, killSignal: 'SIGKILL' });
       expect(r.status === 0, `bash SHAPE on ${JSON.stringify(f)}`).toBe(isReleaseTag(f));
     }
   });
