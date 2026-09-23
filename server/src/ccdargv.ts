@@ -615,6 +615,29 @@ export const ROUTE_CAP = 'route-v1';
  *  different parse paths in `ccd/ccd`, landed in separate commits. */
 export const ROUTE_ARGV_CAP = 'route-argv-v1';
 
+/** The `ccd caps` token that says this box parses `--child <runId>` on
+ *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
+ *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
+ *  §5.1–§5.2, wave 1). One token for both halves, because they ship in one ccd
+ *  inode. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's
+ *  own `echo child-argv-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` line holds this one equal to them.
+ *
+ *  IT GATES THE D-410 HAZARD, ONE FLAG TO THE LEFT. An older `cmd_ws_add` has
+ *  no `--child` arm, so its strip loop hands the flag to the positionals: the
+ *  argv `wsAddWorker` composes would bind `--child` as the PROJECT and every
+ *  dispatched spawn on that box would refuse before a worktree existed. So the
+ *  flag is OMITTED, and the omission journalled on the run
+ *  (`child-omitted:no-child-argv-cap`), unless this token is advertised — and
+ *  read with `capSupported` (null → REFUSE), never `verbSupported`, whose
+ *  null → PERMIT is the right default for a verb that always existed and the
+ *  wrong one for a flag that never did. What an omission costs is stated
+ *  rather than hidden: the workspace is minted WITHOUT the marker and is
+ *  therefore simply not a child — the same thing every workspace minted before
+ *  this token existed already is (spec §6, "Deploy"). */
+export const CHILD_ARGV_CAP = 'child-argv-v1';
+
 /** The `ccd caps` token that says this box takes `--apply` on `ccd route` and
  *  re-applies a pending routing record from its supervise tick, with the
  *  SESSION-ONLY keystrokes and the acknowledgement read back before anything is
