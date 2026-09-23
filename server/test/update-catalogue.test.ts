@@ -190,6 +190,14 @@ describe('apiBaseProblem — validated once, at poller creation (D-3209, fix rou
       else expect(problem, url).not.toBeNull();
     }
   });
+
+  it('B1: a credentials-bearing base is refused with the password redacted from the message', () => {
+    const problem = apiBaseProblem('https://user:hunter2@api.example.com');
+    expect(problem).not.toBeNull();
+    expect(problem).not.toMatch(/hunter2/);
+    expect(problem).not.toMatch(/user:hunter2/);
+    expect(problem).toContain('***@api.example.com');
+  });
 });
 
 describe('capNotes — plain text, 4096 UTF-8 bytes, then the marker (§7, §18 "notes are capped and plain")', () => {
@@ -304,6 +312,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     expect(seen[0]!.headers['user-agent']).toBe('ccrc-server');
     expect(seen[0]!.headers.authorization).toBeUndefined();
     expect(seen[0]!.headers['if-none-match']).toBeUndefined();
+  });
+
+  it('B2: a whitespace-padded base is trimmed to the SAME base the gate accepted, and the request lands on the right path', async () => {
+    const { port } = fixture();
+    script = [{ status: 200, etag: '"e1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
+    const padded = `  ${base}  `;
+    expect(await poller(port, { apiUrl: padded }).poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases?per_page=30');
   });
 
   it('a second poll sends If-None-Match, and a 304 writes no rows but is an answer', async () => {
@@ -580,9 +597,49 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     script = [
       { status: 200, etag: '"e1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
       { status: 200, etag: '"e2"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+      { status: 304 },
     ];
     expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
     await expect(p.poll(2000)).resolves.toEqual({ lastOkAt: 1000, lastError: { at: 2000, reason: 'malformed' } });
+    // B5: the store's throw on poll 2 must not adopt "e2" — the NEXT request
+    // still carries the ETag of the last ACCEPTED listing ("e1"), never the
+    // one the throwing call was handed.
+    await p.poll(3000);
+    expect(seen.at(-1)!.headers['if-none-match']).toBe('"e1"');
+  });
+
+  it('B6: a store throw is warned ONCE per distinct message, quiet on a repeat, and re-armed after a success', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let mode: 'boom' | 'ok' | 'other' = 'boom';
+      const throwingPort: CatalogueStore = {
+        applyReleaseListing() {
+          if (mode === 'boom') throw new Error('boom');
+          if (mode === 'other') throw new Error('other cause');
+          return { ok: true, upserted: 1, yanked: 0, unyanked: 0 };
+        },
+      };
+      const p = poller(throwingPort);
+      script = [
+        { status: 200, etag: '"e1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+        { status: 200, etag: '"e2"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+        { status: 200, etag: '"e3"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+        { status: 200, etag: '"e4"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+      ];
+      // Two identical failures ("boom") → one warn.
+      await p.poll(1000);
+      await p.poll(2000);
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('boom'))).toHaveLength(1);
+      // A success resets the dedupe.
+      mode = 'ok';
+      await p.poll(3000);
+      // The SAME message again after a success is warned again.
+      mode = 'other';
+      await p.poll(4000);
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('other cause'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('D-3209: a poller built on a bad apiUrl sends no request, ever', async () => {

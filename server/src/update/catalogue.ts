@@ -57,6 +57,15 @@ export interface CatalogueStore {
 
 export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
 
+/** Redacts `user:pass@` (or a bare `user@`) out of a URL-shaped string before
+ *  it reaches a log line. Regex, not `new URL(...)`: the string this guards
+ *  (an operator-supplied `apiUrl`) may be exactly the kind of malformed value
+ *  `URL` refuses to parse, and the boot log must still say SOMETHING safe
+ *  about it. */
+function redactUserinfo(raw: string): string {
+  return raw.replace(/:\/\/[^/?#]*@/, '://***@');
+}
+
 /** D-3209: validated ONCE when the poller is created, never per poll. `null`
  *  = fine. Delegates to `shared/base-url.ts`'s `BASE_URL_OK` — the SAME gate
  *  (parses, empty query/fragment, `https:` anywhere or `http:` only to its
@@ -65,15 +74,19 @@ export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; stor
  *  `single-definition.test.ts` polices ("the loopback SET … is the other
  *  value a second copy would be spelled from"). A refused base answers every
  *  poll `no-release-source` with no request — the same reason a missing
- *  release source reports, since a bad base is just as unusable. */
+ *  release source reports, since a bad base is just as unusable. The message
+ *  never carries userinfo in clear (B1) — a base that WAS refused precisely
+ *  for carrying credentials must not then print them. */
 export function apiBaseProblem(apiUrl: string): string | null {
   const verdict = BASE_URL_OK(apiUrl);
-  return verdict.ok ? null : `apiUrl refused (${verdict.reason}): ${apiUrl}`;
+  return verdict.ok ? null : `apiUrl refused (${verdict.reason}): ${redactUserinfo(apiUrl)}`;
 }
 
 export interface CataloguePoller {
   /** Single-flight: a poll during a poll returns the in-flight promise. Resolves
-   *  with the state after this poll; rejects only if the store's writer throws. */
+   *  with the state after this poll; never rejects — every failure, including
+   *  the store's writer throwing, is folded into the resolved state's
+   *  `lastError` (see the `applyReleaseListing` call site below). */
   poll(now: number): Promise<CatalogueState>;
   /** `{lastOkAt: null, lastError: null}` until the first answer — "never checked". A copy. */
   state(): CatalogueState;
@@ -201,6 +214,14 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   /** D-3209: computed once, not per poll — an unusable base is a boot-time
    *  fact, not a per-request one. */
   const baseProblem = apiBaseProblem(deps.apiUrl);
+  /** B2: `BASE_URL_OK`'s own `ok` arm is the base the gate ACCEPTED —
+   *  `u.href`, trimmed and normalised — never `deps.apiUrl` raw, which a
+   *  whitespace-padded value would carry, unparsed, straight into the
+   *  request URL. `.href` adds a trailing slash to a bare origin
+   *  (`new URL('http://h:1').href === 'http://h:1/'`), stripped here so the
+   *  concatenation below never doubles it. `null` iff `baseProblem !== null`. */
+  const baseVerdict = BASE_URL_OK(deps.apiUrl);
+  const validatedBase = baseVerdict.ok ? baseVerdict.url.replace(/\/$/, '') : null;
   let lastOkAt: number | null = null;
   let lastError: { at: number; reason: CatalogueErrorReason } | null = null;
   /** The ETag of the last listing the store ACCEPTED — never of one it refused,
@@ -208,6 +229,11 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   let etag: string | null = null;
   let requestedAt: number | null = null;
   let inflight: Promise<CatalogueState> | null = null;
+  /** B6: a store throw inside a poll is otherwise silent — `lastError` says
+   *  'malformed' but names no cause. Warned ONCE per distinct message, so a
+   *  wedged store does not spam the log every 30 minutes; reset on the next
+   *  answered poll, so a NEW cause after a recovery is warned again. */
+  let lastWarnedStoreError: string | null = null;
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -218,16 +244,19 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   const answered = (now: number): CatalogueState => {
     lastOkAt = now;
     lastError = null;
+    lastWarnedStoreError = null;   // B6: a recovery re-arms the next distinct cause
     return snapshot();
   };
 
   async function pollOnce(now: number): Promise<CatalogueState> {
     // D-3209: an unusable base is exactly as unusable as a missing release
     // source — same reason, no request, `requestedAt` untouched.
-    if (baseProblem !== null) return failed(now, 'no-release-source');
+    if (baseProblem !== null || validatedBase === null) return failed(now, 'no-release-source');
     const source = deps.source;
     if (!source.ok) return failed(now, 'no-release-source');
-    const url = `${deps.apiUrl}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
+    // B2: built from `validatedBase` — the SAME trimmed/normalised base the
+    // gate accepted — never `deps.apiUrl` raw.
+    const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
     const headers: Record<string, string> = { accept: 'application/vnd.github+json', 'user-agent': USER_AGENT };
@@ -277,7 +306,15 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
       // `pollOnce` — a rejection is exactly what left `lastOkAt` reading
       // "up to date" after a failed poll before this fix.
       applied = deps.store.applyReleaseListing(parsed.rows, now, parsed.coverage);
-    } catch {
+    } catch (err) {
+      // B6: the cause was otherwise silent — `lastError` said 'malformed'
+      // and nothing else. Warned once per distinct message; a repeat of the
+      // same message (e.g. a wedged coordination database, every 30 minutes) stays quiet.
+      const message = err instanceof Error ? err.message : String(err);
+      if (message !== lastWarnedStoreError) {
+        console.warn(`ccrc-server: update catalogue store threw: ${message}`);
+        lastWarnedStoreError = message;
+      }
       return failed(now, 'malformed');
     }
     if (!applied.ok) return failed(now, 'malformed');
