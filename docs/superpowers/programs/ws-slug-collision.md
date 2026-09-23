@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | — | planned |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | — | **dispatched** 2026-09-23 to `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40) |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.

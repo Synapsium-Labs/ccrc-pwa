@@ -17,8 +17,8 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **merged** `bbb5e714` 2026-09-23 (run 131 on `keen-hollow`; reviews 135, 136); rollout pending |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | **dispatched** 2026-09-23 to `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40) — the first child minted with a marker |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
@@ -39,10 +39,32 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138**. Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 1 deployed; its two measurements; wave 2 dispatched.**
+  - **Rollout.** `ccrc rollout --to v0.0.19`, default order (fleet box first), exit 3. Both boxes moved from
+    v0.0.15 and agree at `bbb5e714`. The release also carried #171, #173 and #174, which had never been
+    rolled out.
+    - Fleet box doctor: 0 failed, 5 warned, all pre-existing kinds.
+    - Server box doctor: its one FAIL is the old inactive `ccrc-agent.service` unit on a server-role box,
+      which is the operator's to clear and predates this programme.
+    - Before moving, #171's two new files (`ccgpt-proxy.py`, `ccgpt-usage.py`) were checked on the fleet
+      box: neither path was occupied, and no live OpenClaw file names them. The shared unit pair stays
+      unplaced (D-3172).
+  - **Measurement (a): the scratchpad FOLLOWS `TMPDIR`.** Wave 1's quiescent probe found Claude Code's
+    per-uid root under `TMPDIR`, with nothing under `/tmp/claude-<uid>` for that cwd. A child's harness
+    scratch therefore dies with its temp root.
+  - **Measurement (b): the pre-policy stock.**
+    - Pre-merge snapshot, 2026-09-23T12:49:56Z: 27 workspaces, 0 marked.
+    - **Shipping figure, 2026-09-23T15:52:17Z, right after the rollout: 31 workspaces, 0 with a `.child`
+      marker, 31 pre-policy, 5 of them archived.** That is the stock this programme never reclaims.
+    - It includes this programme's own earlier children (`keen-hollow`, `amber-summit`, `plain-ridge`),
+      minted before the ccd shipped, and `warm-hollow` (ws-slug-collision, dispatched minutes before the
+      rollout). They keep the human ceremony.
+  - **Wave 2's dispatch is the first marked child.** `ccrc-pwa-plain-river.child` holds `138`, and
+    `~/.cc-tmp/ccrc-pwa-plain-river` exists at 0700.
 - **2026-09-23 — wave 1 accepted and merged (`bbb5e714`, #175).** Scoped review 136 over `31c11916..4c23fa25`:
   the held-out panel, 30 agents, nine raw findings, none refuted, merged into six. None is a shipped-behaviour
   defect. Two are false prose in the new `wave-lifecycle.md` sentence: its remedy does not fit the causes it
