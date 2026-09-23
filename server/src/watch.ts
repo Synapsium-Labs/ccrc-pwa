@@ -746,9 +746,14 @@ export class FleetWatcher {
   }
 
   /** For a caller that must not wait: the `ready` hook runs inside the
-   *  client's handshake handler. */
+   *  client's handshake handler. A rejection here is a BUG (`sweepInventory`
+   *  fails soft internally, same reasoning as the catalogue poller's own
+   *  `.catch` below) — logged, never swallowed silently. */
   triggerInventory(): void {
-    void this.inventoryNow().catch(() => { /* one bad sweep must not kill the caller */ });
+    void this.inventoryNow().catch((err: unknown) => {
+      console.warn('ccrc-server: the inventory sweep rejected — this is a bug, sweepInventory should ' +
+        `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    });
   }
 
   /** Builds the sweep's deps and holds this file's one call to sweepInventory
@@ -870,16 +875,21 @@ export class FleetWatcher {
 
       // The inventory lane (design 2026-09-20 §8) is gated HERE, beside the
       // catalogue lane and above the registry read and its fail-shut return
-      // (`:828`), because it is not registry-sourced — it reads ~/.ccrc — and
+      // below, because it is not registry-sourced — it reads ~/.ccrc — and
       // the one state it exists to record on the sweep it happens, a fleet
       // link that is down, is exactly the state in which
       // `readRegistryMeasured` answers `listed: false` and that return skips
       // every lane below it (D-3198, which covers
       // both update lanes).
       // NEVER awaited: seven reads per node over the agent must not stall the
-      // dialog detector or the busy->idle push.
+      // dialog detector or the busy->idle push. A rejection is a BUG
+      // (`sweepInventory` fails soft internally) — logged, same idiom as the
+      // catalogue lane just above, never swallowed silently.
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
-        void this.inventoryNow().catch(() => { /* one bad sweep must not kill the poll */ });
+        void this.inventoryNow().catch((err: unknown) => {
+          console.warn('ccrc-server: the inventory sweep rejected — this is a bug, sweepInventory should ' +
+            `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+        });
       }
 
       // Read once, share with the two lanes that would otherwise each read it

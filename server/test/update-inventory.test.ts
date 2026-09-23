@@ -316,7 +316,11 @@ describe('measurementFrom and buildInfoOfRow (§18 "a full BuildInfo round-trips
 
   it('no node-id keys by label with installState unknown; agentOps is validated again and [] when refused', () => {
     const m = measurementFrom(reads({ nodeId: ABSENT }), { label: FLEET_LABEL, role: 'fleet', agentOps: ['update'] }, NOW);
-    expect(m).toMatchObject({ nodeId: FLEET_LABEL, installState: 'unknown', agentOps: ['update'] });
+    // D-3200/finding 3: installFrom alone would answer 'verified' here (the
+    // marker's sha matches and caps say 'verify') — installState 'unknown'
+    // must still force provenance 'unknown', never a verdict about a tree
+    // this row cannot even name.
+    expect(m).toMatchObject({ nodeId: FLEET_LABEL, installState: 'unknown', provenance: 'unknown', agentOps: ['update'] });
     expect(measurementFrom(reads(), { label: FLEET_LABEL, role: 'fleet', agentOps: ['Bad Word'] }, NOW).agentOps).toEqual([]);
     expect(measurementFrom(reads(), { label: FLEET_LABEL, role: 'fleet', agentOps: [] }, NOW).agentOps).toEqual([]);
   });
@@ -460,16 +464,18 @@ describe('sweepInventory — the server row, rows and keys (§8 "Row identity, r
     expect(b.store.refusalsFor(U1).map((r) => r.tag)).toEqual(['v0.0.9']);
   });
 
-  it('a UUID row already present supersedes the label row, which no live reader sees', async () => {
+  it('a node-id already keyed to a live row under a DIFFERENT label is a collision, never a merge (D-3211)', async () => {
     const b = box('ccrc-inv-supersede-');
     plant(b.ccrcDir, NO_ID);
     await sweepInventory(localDeps(b), NOW - 60_000);
-    // The node was re-installed elsewhere and its own row already exists.
+    // A live row under a DIFFERENT label already owns this node-id — indistinguishable,
+    // from this sweep's own evidence, from the two-connections-one-node-id case D-3211 covers.
     expect(b.store.upsertNodeMeasurement(meas({ nodeId: U1, label: 'reinstalled', role: 'both' }))).toMatchObject({ ok: true });
     plant(b.ccrcDir, { nodeId: `${U1}\n` });
-    await sweepInventory(localDeps(b), NOW);
-    expect(b.store.node(SERVER_LABEL)?.supersededBy).toBe(U1);
-    expect(b.store.nodes().map((n) => [n.nodeId, n.label])).toEqual([[U1, SERVER_LABEL]]);
+    const [out] = await sweepInventory(localDeps(b), NOW);
+    expect(out).toMatchObject({ label: SERVER_LABEL, result: 'node-id-collision', nodeId: SERVER_LABEL });
+    expect(b.store.node(SERVER_LABEL)?.supersededBy).toBeNull();
+    expect(b.store.nodes().map((n) => [n.nodeId, n.label]).sort()).toEqual([[U1, 'reinstalled'], [SERVER_LABEL, SERVER_LABEL]]);
   });
 
   it('a node-id that vanishes after a re-key keeps measuring into the UUID row, never a second live row (D-3201)', async () => {
@@ -543,6 +549,24 @@ describe('sweepInventory — the fleet connection (§18 "unreachable is written 
     expect(out[1]).toEqual({ label: FLEET_LABEL, result: 'refused', why: `label-key-taken: ${U1}` });
     expect(b.store.node(U1)).toMatchObject({ label: 'elsewhere', reachable: true });
   });
+
+  it('two connections measuring one node-id keep two rows and name the collision (D-3211)', async () => {
+    const b = box('ccrc-inv-collision-');
+    // A cloned/restored ~/.ccrc, or an agent pointed at the server's own box:
+    // BOTH connections read the SAME directory and measure the SAME node-id.
+    plant(b.ccrcDir, FULL);
+    const deps: InventoryDeps = { store: b.store, localIo: localIO, ccrcDir: b.ccrcDir, role: 'both', fleet: { io: localIO, state: fleetState() } };
+    const out1 = await sweepInventory(deps, NOW);
+    expect(out1[0]).toMatchObject({ label: SERVER_LABEL, result: 'measured', nodeId: U1 });
+    expect(out1[1]).toMatchObject({ label: FLEET_LABEL, result: 'node-id-collision', nodeId: FLEET_LABEL, lease: 'none', refused: false });
+    expect(b.store.nodes().map((n) => [n.nodeId, n.label]).sort()).toEqual([[U1, SERVER_LABEL], [FLEET_LABEL, FLEET_LABEL]]);
+    // The server's connection swept first, so it keeps the id every sweep —
+    // the collision persists rather than resolving itself silently.
+    const out2 = await sweepInventory(deps, NOW + 60_000);
+    expect(out2[0]).toMatchObject({ result: 'measured', nodeId: U1 });
+    expect(out2[1]).toMatchObject({ result: 'node-id-collision', nodeId: FLEET_LABEL });
+    expect(b.store.nodes().map((n) => [n.nodeId, n.label]).sort()).toEqual([[U1, SERVER_LABEL], [FLEET_LABEL, FLEET_LABEL]]);
+  });
 });
 
 describe('sweepInventory — the phase table through the store (§18 "the phase table is applied", "a stale report never moves the lease")', () => {
@@ -612,6 +636,30 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     await sweepInventory(localDeps(b), NOW + 120_000);
     expect(b.store.refusalsFor(U1)).toEqual([]);
     expect(b.store.node(U1)?.updateState).toBe('idle');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('ack, an unreadable sweep, then the same standing report → the refusal stays cleared (D-3210)', async () => {
+    const b = await busyBox();
+    const detail = 'provenance: the bundle names another workflow';
+    plant(b.ccrcDir, { report: reportJson({ phase: 'failed', detail }) });
+    expect(await sweepInventory(localDeps(b), NOW)).toEqual([
+      { label: SERVER_LABEL, result: 'measured', nodeId: U1, lease: 'release', refused: true },
+    ]);
+    expect(b.store.refusalsFor(U1)).toHaveLength(1);
+    expect(b.store.ackNode(U1)).toMatchObject({ ok: true, clearedRefusals: 1 });
+    expect(b.store.refusalsFor(U1)).toEqual([]);
+    // update.json goes unreadable — a link hiccup, an EACCES, a budget
+    // timeout — not a real change; an unmeasured read must not fold to
+    // `unknown` and re-open the changed-report gate on the NEXT readable sweep.
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o000);
+    const [unreadableOut] = await sweepInventory(localDeps(b), NOW + 60_000);
+    expect(unreadableOut).toMatchObject({ result: 'measured', lease: 'none', refused: false });
+    expect(b.store.node(U1)?.reportedPhase).toBe('failed');   // unchanged, D-3210
+    expect(b.store.refusalsFor(U1)).toEqual([]);
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o644);
+    const [readableOut] = await sweepInventory(localDeps(b), NOW + 120_000);
+    expect(readableOut).toMatchObject({ result: 'measured', lease: 'none', refused: false });
+    expect(b.store.refusalsFor(U1)).toEqual([]);
   });
 });
 

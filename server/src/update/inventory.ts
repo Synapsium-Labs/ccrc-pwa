@@ -11,10 +11,13 @@
 // `statMeasured`'s size against NODE_FILE_CAP_BYTES, then the read, then the
 // content's UTF-8 length again. The agent's text read has no cap of its own
 // (`readWhole`, `agent/src/fileops.ts:75`), so a file that grows between the
-// stat and the read crosses the wire once, bounded by the WS frame limit, and
-// still reads `too-large` here (D-3177). One `openPoolReadDeadline`
-// bounds all seven reads of a node, exactly as `readObservedEpochFromRegistry`
-// (`pools.ts:415-430`) bounds its one.
+// stat and the read still reads `too-large` here (D-3177), but the residual
+// this reads honestly differs by path: over the agent, the grown file crosses
+// the wire once, bounded by the WS frame limit; read locally (the server's
+// own row, no wire in the way), the same race is bounded only by however
+// large the file has grown by the time `readFile` runs. One
+// `openPoolReadDeadline` bounds all seven reads of a node, exactly as
+// `readObservedEpochFromRegistry` (`pools.ts:415-430`) bounds its one.
 //
 // NOTHING READ FROM A NODE REACHES A ROW UN-VALIDATED: each file has one pure
 // validator below, and a value that fails it becomes the column's named
@@ -265,6 +268,12 @@ export function measurementFrom(reads: NodeFileReads, conn: NodeConnection, now:
   const nodeId = nodeIdFrom(reads.nodeId);
   const install = installFrom(reads.installed, stamp, caps);
   const build = stamp.build;
+  // No node-id forces installState 'unknown' regardless of what the marker
+  // itself says (§8, a pre-W1 node) — D-3200's own invariant ("provenance is
+  // 'unknown' unless installState is 'complete'") must hold on the OUTPUT
+  // pair, not just on installFrom's own answer, so provenance is re-gated on
+  // the installState this function actually returns, not on install's.
+  const installState: InstallState = nodeId === null ? 'unknown' : install.installState;
   return {
     nodeId: nodeId ?? conn.label,
     role: conn.role,
@@ -275,8 +284,8 @@ export function measurementFrom(reads: NodeFileReads, conn: NodeConnection, now:
     currentBuiltAt: build?.builtAt ?? null,
     currentDirty: build === null ? null : build.dirty,
     stampRead: stamp.stampRead,
-    installState: nodeId === null ? 'unknown' : install.installState,
-    provenance: install.provenance,
+    installState,
+    provenance: installState === 'complete' ? install.provenance : 'unknown',
     caps,
     agentOps: conn.agentOps === null ? null : (validCapWords(conn.agentOps) ?? []),
     highestVersion: tagLineFrom(reads.floor),
@@ -383,11 +392,48 @@ export interface InventoryDeps {
 }
 export type SweepOutcome =
   | { label: string; result: 'measured'; nodeId: string; lease: LeaseAction['kind']; refused: boolean }
+  /** D-3211: this connection's node-id was measured, but it already keys a
+   *  LIVE row under a different label — merging would name two boxes as one,
+   *  so this sweep keyed the measurement as if no node-id had been read and
+   *  says so, rather than reporting `measured`. */
+  | { label: string; result: 'node-id-collision'; nodeId: string; lease: LeaseAction['kind']; refused: boolean }
   | { label: string; result: 'unreachable'; nodeId: string }
   | { label: string; result: 'refused'; why: string };
 
 /** Read through a function so a check after an `await` reads the live field. */
 const linkUp = (state: FleetState): boolean => state.connected;
+
+/** D-3211: true when `nodeId` is already the key of a LIVE row (not
+ *  superseded) carrying a connection label OTHER than this one — the state
+ *  that would otherwise let `rekeyNode`/`upsertNodeMeasurement` merge two
+ *  boxes' rows into one because both happen to read the same UUID (a cloned
+ *  or restored `~/.ccrc`, a same-user write of `node-id`, or a remote agent
+ *  pointed at the server's own box). */
+function nodeIdCollides(store: InventoryStore, nodeId: string, label: string): boolean {
+  const existing = store.node(nodeId);
+  return existing !== null && existing.supersededBy === null && existing.label !== label;
+}
+
+/** D-3210: the row's own report columns, reconstructed as the `NodeReport`
+ *  they represent — `null` when the row has none (never measured, or its
+ *  last WRITTEN report was itself absent, `reportedPhase === null`). */
+function previousReportOf(row: NodeRow | null): NodeReport | null {
+  if (row === null || row.reportedPhase === null) return null;
+  return {
+    phase: row.reportedPhase, target: row.reportedTarget, startedAt: row.reportedStartedAt,
+    updatedAt: row.reportedUpdatedAt, detail: row.reportedDetail,
+  };
+}
+
+/** D-3210: `unreadable` is the only `NodeFileRead` failure this sweep treats
+ *  as UNMEASURED rather than a real report — it is `readNodeFile`'s one fold
+ *  for a plain read failure, the D-3178 unmeasured-lstat fold, and a per-file
+ *  budget timeout alike. `absent` is a real absence (the report stays NULL,
+ *  unchanged below); `too-large` was READ and is bad, so §8's `unknown` for
+ *  it is unchanged. */
+function reportUnmeasured(read: NodeFileRead): boolean {
+  return !read.ok && read.reason === 'unreadable';
+}
 
 /** `label-key-taken` (Task 5): no live row carries the label AND a row
  *  already holds the label-keyed placeholder's key — superseded (its heir
@@ -399,22 +445,40 @@ function unreachable(store: InventoryStore, now: number): SweepOutcome {
   return { label: FLEET_LABEL, result: 'unreachable', nodeId: r.nodeId };
 }
 
-/** One measurement into the store, in the order §8 fixes: re-key, plan
- *  against the pre-upsert row, upsert, refuse, lease. */
-function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, now: number): SweepOutcome {
+/** One measurement into the store, in the order §8 fixes: collision check,
+ *  re-key, plan against the pre-upsert row (report override included),
+ *  upsert, refuse, lease. */
+function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unmeasuredReport: boolean, now: number): SweepOutcome {
   const label = measured.label;
   let m = measured;
+  let collision = false;
+  if (m.nodeId !== label && nodeIdCollides(store, m.nodeId, label)) {
+    // D-3211: this connection's node-id already keys a LIVE row under
+    // another label — treat it exactly as a MISSING node-id (below) rather
+    // than rekey/upsert onto that other box's row, and name the collision.
+    collision = true;
+    m = { ...m, nodeId: label };
+  }
   if (m.nodeId !== label) {
     const rekeyed = store.rekeyNode(label, m.nodeId);
     if (!rekeyed.ok) return { label, result: 'refused', why: rekeyed.why };
   } else {
-    // D-3201: no node-id this sweep, but the live row carrying
-    // this label was already re-keyed to one — keep measuring into it rather
-    // than open a second live row for the same connection.
+    // D-3201 (also the D-3211 collision's fallback path): no node-id this
+    // sweep, but the live row carrying this label was already re-keyed to
+    // one — keep measuring into it rather than open a second live row for
+    // the same connection.
     const live = store.nodeByLabel(label);
     if (live !== null && live.nodeId !== label) m = { ...m, nodeId: live.nodeId };
   }
-  const plan = sweepPlanFor(store.node(m.nodeId), m);
+  const preRow = store.node(m.nodeId);
+  if (unmeasuredReport) {
+    // D-3210: an unmeasured report read must never overwrite a previously
+    // measured one — reuse the row's own report columns unchanged so the
+    // changed-report gate below sees no change, and the same unchanged value
+    // is what gets written back by the upsert two lines down.
+    m = { ...m, report: previousReportOf(preRow) };
+  }
+  const plan = sweepPlanFor(preRow, m);
   const upserted = store.upsertNodeMeasurement(m);
   if (!upserted.ok) return { label, result: 'refused', why: `${upserted.why}: ${upserted.supersededBy}` };
   let refused = false;
@@ -429,7 +493,7 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, now:
   } else if (plan.lease.kind === 'release') {
     if (store.releaseLease(m.nodeId, plan.lease.to, plan.lease.detail, latest).ok) lease = 'release';
   }
-  return { label, result: 'measured', nodeId: m.nodeId, lease, refused };
+  return { label, result: collision ? 'node-id-collision' : 'measured', nodeId: m.nodeId, lease, refused };
 }
 
 /**
@@ -442,8 +506,12 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, now:
 export async function sweepInventory(deps: InventoryDeps, now: number): Promise<SweepOutcome[]> {
   const budget = deps.budgetMs ?? INVENTORY_BUDGET_MS;
   const out: SweepOutcome[] = [];
-  const own = await measureNode(deps.localIo, deps.ccrcDir, budget, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
-  out.push(applyMeasurement(deps.store, own, now));
+  // Reads inlined (rather than through `measureNode`) so the raw report read
+  // survives past validation — D-3210's fold decision needs to know whether
+  // it was `unreadable`, not just what `reportFrom` turned it into.
+  const ownReads = await readNodeFiles(deps.localIo, deps.ccrcDir, budget);
+  const own = measurementFrom(ownReads, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
+  out.push(applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now));
   if (deps.fleet !== null) {
     const { io, state } = deps.fleet;
     if (!linkUp(state)) {
@@ -451,8 +519,9 @@ export async function sweepInventory(deps: InventoryDeps, now: number): Promise<
     } else {
       // `agentOps` is read inside the connected arm only: the field keeps the
       // last `ready`'s answer across a drop (Task 8).
-      const m = await measureNode(io, deps.ccrcDir, budget, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
-      out.push(linkUp(state) ? applyMeasurement(deps.store, m, now) : unreachable(deps.store, now));
+      const fleetReads = await readNodeFiles(io, deps.ccrcDir, budget);
+      const m = measurementFrom(fleetReads, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
+      out.push(linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now));
     }
   }
   return out;
