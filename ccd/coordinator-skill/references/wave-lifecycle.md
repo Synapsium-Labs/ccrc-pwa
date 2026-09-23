@@ -214,9 +214,19 @@ unlike the two `route-omitted` events. The same event also records a
 dispatch the server could not measure: it held no capability list for the
 box — the local-mode boot window, a failed local caps probe unmeasured
 until the server restarts, or a remote ready frame with no usable list.
-`ccd caps` on the box tells the two apart: a list naming `child-argv-v1`
-puts the remedy on the server (reconnect the agent, or restart it), not on
-a ccd deploy. It is not an error and asks nothing
+Each cause has its own remedy. The local-mode boot window clears on its
+own, within seconds, once the box's one bounded boot-time probe resolves;
+a remote ready frame with no usable list clears the same way with no
+action from you, inside about a minute, on the watcher's own 60 s caps
+lane, which re-asks regardless of what the last frame said. A failed
+local caps probe does not retry itself — only a server restart re-probes
+it. An agent whose caps stay list-less past that 60 s lane needs its ccd
+or the agent process itself looked at. `ccd caps` run on the box tells
+the fifth cause, the old ccd, apart from all of these: a list already
+naming `child-argv-v1` means the box's ccd is fine and the fix is one of
+the remedies just given, never a ccd deploy; a list that omits it, or a
+`ccd caps` that fails outright, means the box's ccd predates the
+capability and a ccd deploy is the fix. It is not an error and asks nothing
 of you: that workspace is simply not a child, exactly like every workspace
 minted before the token existed, and nothing will ever reclaim it as one. A
 resumed workspace mints nothing and never carries the row.
