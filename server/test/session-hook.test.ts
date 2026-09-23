@@ -8287,8 +8287,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   Task 1 (`ChildMark`, `CHILD_RUN_ID`): a clean +18 insertion at
       //   `:37` (`git diff -U0` — one hunk, `@@ -36,0 +37,18 @@`), so every
       //   line below shifts by +18: the `RoutingArm` referent this entry
-      //   already tracks goes `:5691` -> `:5709`. Still not `:5644`, so the
-      //   entry stays 1 -> 1.
+      //   already tracks — MEASURED by its own bytes ("into `arm === null`.
+      //   Rows after the first well-formed `arm:` are never"), not derived by
+      //   adding the delta — sits at `:5779` in base `4b6bdaa7` and `:5797` at
+      //   this commit (`git show 4b6bdaa7:shared/api.ts | grep -n` and the
+      //   same grep on the working tree). Still not `:5644`, so the entry
+      //   stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
