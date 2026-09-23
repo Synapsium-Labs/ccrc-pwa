@@ -14362,9 +14362,14 @@ cmd_rollout() {
   # resolved no `--channel` target is admitted only when it already runs the
   # pinned tag (plan D-3234: `none` may be a
   # rollback, a refused tag or a pin the control plane chose not to move —
-  # --force and --downgrade do not lift it); a box below its floor moves
-  # only when --downgrade was typed, and then --downgrade rides its update
-  # below.
+  # --force and --downgrade do not lift it); a box whose floor is a tag
+  # ABOVE the pinned target moves only when --downgrade was typed, and then
+  # --downgrade rides its update below (D-3281: this is checked on the FLOOR
+  # ITSELF, whatever the state word — `cmd_update` checks the floor before
+  # its converged no-op, and `--check` never answers `below-floor` for a
+  # `current` box, so a box rolled back below its own floor — current on an
+  # older tag, its floor still above the pinned target — would otherwise die
+  # at its own floor check after the OTHER box had already moved).
   for i in "${!boxes[@]}"; do
     case "${floors[$i]}" in
       unreadable|malformed)
@@ -14378,7 +14383,8 @@ cmd_rollout() {
           exit 2
         fi ;;
     esac
-    if [ "${states[$i]}" = below-floor ] && [ "$downgrade" -eq 0 ]; then
+    if [[ "${floors[$i]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _ver_newer "${floors[$i]}" "$ROLLOUT_VERSION" \
+       && [ "$downgrade" -eq 0 ]; then
       echo "$PROG: rollout: the ${labels[$i]} box's floor is ${floors[$i]:-unstated}, above $ROLLOUT_VERSION — pass --downgrade to move it down; nothing was touched" >&2
       exit 2
     fi

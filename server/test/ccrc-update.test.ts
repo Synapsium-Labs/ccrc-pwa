@@ -2122,6 +2122,25 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     }
   });
 
+  // F2 (fix round 1): the malformed note itself was asserted by no case
+  // (only unreadable's, which skips as root) — and the brief's own `read …
+  // || floor=""` clause says a floor line with no trailing newline is
+  // malformed too, on both paths.
+  it('a malformed floor (garbage, or a tag with no trailing newline) prints its own note, never the unreadable one', () => {
+    const cases: Array<[string, string]> = [['three\n', 'garbage'], ['v3.0.0', 'no trailing newline']];
+    for (const [content, why] of cases) {
+      const home = freshUpdateBox(`ccrc-update-check-floorword-malformed-${why.replace(/\s+/g, '-')}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      writeFileSync(join(home, '.ccrc', 'floor'), content);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+      expect(r.code, why).toBe(1);
+      expect(parse(r.stdout), why).toMatchObject({ floor: 'malformed', state: 'behind' });
+      expect(r.stdout, why).toMatch(/^this box's floor \(~\/\.ccrc\/floor\) is malformed — 'ccrc update' refuses until it is fixed by hand$/m);
+      expect(r.stdout, why).not.toMatch(/floor.*is unreadable/);
+    }
+  });
+
   it.skipIf(process.getuid?.() === 0)('an unreadable floor reads floor=unreadable — its own word, never folded into none or malformed', () => {
     const home = freshUpdateBox('ccrc-update-check-floorword-unreadable-');
     plantOldBox(home, { version: 'v1.0.0' });

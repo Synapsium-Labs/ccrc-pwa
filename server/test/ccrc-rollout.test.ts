@@ -549,6 +549,32 @@ describe('ccrc rollout: the W4 check line, a box one wave older, the floor and t
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --downgrade`, `${SERVER} ccrc update --to v2.0.0 --downgrade`]);
   });
 
+  // F1 (fix round 1, D-3281): a box CURRENT on the target with a floor
+  // ABOVE it (a rolled-back box — W2's `rolledBack`, which `--check` reads
+  // `current` for, never `below-floor`) must refuse BEFORE either box moves,
+  // exactly like a `below-floor` box — `cmd_update` checks the floor before
+  // its converged no-op, so this box's own update would die after the other
+  // box had already moved.
+  it('a box CURRENT on the target but whose floor is above it (rolled back) refuses at exit 2 before either box moves, --downgrade lets it proceed, --server-first too (D-3281)', () => {
+    const home = twoBoxFleet('ccrc-rollout-rolledback-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v2.0.0', floor: 'v3.0.0' });
+    let r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stdout).toMatch(/^rollout: fleet: v2\.0\.0 \(oldsha00\) → v2\.0\.0 \[current\]$/m);
+    expect(r.stderr).toMatch(/rollout: the fleet box's floor is v3\.0\.0, above v2\.0\.0 — pass --downgrade to move it down; nothing was touched/);
+    expect(updates(home)).toEqual([]);
+
+    r = run(home, ['--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --downgrade`, `${SERVER} ccrc update --to v2.0.0 --downgrade`]);
+
+    const home2 = twoBoxFleet('ccrc-rollout-rolledback-serverfirst-');
+    plantHost(home2, FLEET, { role: 'fleet', version: 'v2.0.0', floor: 'v3.0.0' });
+    r = run(home2, ['--server-first']);
+    expect(r.code).toBe(2);
+    expect(updates(home2)).toEqual([]);
+  });
+
   it('--allow-unsigned passes through; typed together, the flags ride in one fixed order before --from rollout (M4)', () => {
     let home = twoBoxFleet('ccrc-rollout-unsigned-');
     let r = run(home, ['--allow-unsigned']);
