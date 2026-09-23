@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **dispatched** 2026-09-23 to `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40) |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **fix round** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -43,6 +43,24 @@ Run ids: wave 1 = **131**.
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 1's first wave-done, sent back before review for two rulings.** PR #175, tip
+  `08442ef4`, re-measured and accepted by the server (`awaiting-review`, 6/6 items). Its report asked
+  two rulings, both ruled and sent back in one fix round so the held-out review reads the final tip once:
+  (a) `_child_tmpdir` judges the marker with `_child_runid_valid`, not a non-empty test — one run-id
+  grammar for every ccd reader of the marker, and a corrupt marker's scratch stays where `ccd-tmp-sweep`
+  collects it (a contract change: §1's "non-empty" is superseded); (b) a child's `~/.cc-tmp/<id>` left
+  behind by a human verb has no collector — it gets one in wave 4 (a leaf with no registry row,
+  twice-observed, only on a clean listing, `reclaim-paused` honoured, never following a link), and the
+  interim leak until wave 4 deploys is accepted. Eight numbers of the block are assigned for these two and
+  six departures the worker named (probe location; the probe re-run; two test-hygiene fixes from its own
+  final review; stopping at Step 6 per the brief; an out-of-scope README anchor repair), defined in the
+  wave-1 plan by the fix round. The measurements: the scratchpad **follows** `TMPDIR` (a second,
+  quiescent probe; the first was confounded by a concurrent subagent and a probe directory under a path
+  containing `/scratchpad/`); a pre-merge snapshot counts 27 workspaces, none marked (5 archived) — the
+  shipping figure is owed after rollout. First full suite: red (`failure: unclear`) — a `boot.test.ts`
+  load flake, a `typecheck-tests` install-order artifact, and `tmp-sweep.test.ts`'s "FAILS CLOSED" case,
+  which the worker measured red on an untouched `aed80210` while CI's test-server leg passed on main:
+  box-environment, not this wave's. No routing change: the red is not the worker's.
 - **2026-09-23 — documents merged, wave 1 dispatched.** Spec, contract, ledger and plans reached main as
   `aed80210` (#173; the non-required macOS leg was cancelled at its time limit with no test failed). Run 131
   dispatched into a fresh child; `skillState: present`.
@@ -93,6 +111,12 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   refusal journaled without `at` keeps its child out of the sweep but off the attention list, and a clockless
   `create` cannot fence a recycled slug. ccd writes `at` from one clock read on every line, so both need a
   corrupt or degraded journal; a reviewer who finds a real producer of clockless lines reopens this.
+- **A child's temp root outlives a human verb until wave 4.** `ws-rm`/`ws-reap`/`ws-gc --prune`/`forget` on
+  a child drop its marker and keep `~/.cc-tmp/<id>`; wave 4's sweep is its owner (ruled 2026-09-23 on
+  wave 1's report). Wave 4's plan gains that task before its dispatch.
+- **`tmp-sweep.test.ts`'s "FAILS CLOSED" case reds on the fleet box on an untouched main** (wave 1,
+  2026-09-23) and passes in CI. A reviewer who meets it measures it against the base before calling it a
+  wave's.
 - **Anchors in these plans are snapshots.** Two other programmes (centralised-update-management W2–W5,
   gpt-lane 2b/3) are live against the same files. Every plan locates code by content; its line numbers are
   not addresses. `ccd/ccd` edits re-stamp and pay the citation-corpus tax.
