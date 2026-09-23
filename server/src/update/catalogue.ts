@@ -538,11 +538,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  could reject `poll()` itself, breaking its own "Never rejects"
    *  docstring and silently freezing the catalogue lane (the listing never
    *  ran either, since it comes after in `pollOnce`). A throw here is read
-   *  as "K unknown this poll": no tag check is attempted and nothing is
-   *  yanked or advanced on its account, but that is NOT the same outcome as
-   *  a legitimate `null` (no unyanked stable release exists) — the caller
-   *  tells the two apart (`threw` vs `k: null`) so a throwing store cannot
-   *  masquerade as "no stable release" and clear a real, still-standing K. */
+   *  as "K unknown this poll": no moved-away tag check is attempted, so
+   *  nothing is yanked on its account (a `/latest` 200 still advances the
+   *  kept tag to the tag it just confirmed, as without a K), and the listing
+   *  still runs. The store is read only when no tag is kept, so `threw` and
+   *  `k: null` lead to the same next step today; they stay two values so a
+   *  later caller cannot mistake a failed read for "no stable release".
+   *  The warning is deduped on the message and not re-armed on recovery. */
   const measuredCurrentK = (): { threw: true } | { threw: false; k: string | null } => {
     try {
       return { threw: false, k: currentK() };
