@@ -810,6 +810,55 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
+  // Final review F-7: the authDir refusal named `ccrc doctor --fix`, which
+  // renders no lane.json. It now names a `ccrc models` mutation, and this case
+  // proves that remedy WORKS rather than pinning its text alone: the real
+  // materialiser writes the manifest, `authDir` is then stripped from it (a
+  // hand edit, or a writer that predates the field), the publisher refuses,
+  // one mutation through the real writer re-renders it, and the publisher then
+  // publishes. The ABSENT-file refusal and its `doctor --fix` pin above are
+  // deliberately untouched (deferred to Plan 3).
+  it('final review F-7: a lane.json with no authDir is refused naming a models mutation, and that mutation cures it', async () => {
+    const home = mkTmp('ccgpt-usage-no-authdir-');
+    const id = mintId();
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'gpt-x-mini']]);
+    const lanePath = join(home, '.ccrc', 'codex', id, 'lane.json');
+    const manifest = JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, unknown>;
+    expect(typeof manifest['authDir'], 'the real writer wrote no authDir to strip').toBe('string');
+    delete manifest['authDir'];
+    writeFileSync(lanePath, `${JSON.stringify(manifest, null, 2)}\n`);
+    let ep = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, ep.url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/carries no usable authDir/);
+      expect(r.stderr).toContain(`ccrc models ${id} set-class haiku <modelId>`);
+      expect(r.stderr).not.toMatch(/doctor --fix/);
+      expect(ep.requests.length).toBe(0);
+    } finally {
+      await ep.close();
+    }
+    // The remedy, through the real writer — the same verb and flags the
+    // refusal names — then the same publisher, unchanged.
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const m = spawnSync(process.execPath,
+      [MODELS_OP, 'set-class', '--file', roster, '--id', id, '--class', 'haiku', '--model', 'gpt-x-mini'],
+      { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(m.status, `models-op set-class: ${m.stdout}${m.stderr}`).toBe(0);
+    expect(typeof (JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, unknown>)['authDir'],
+      'the mutation did not re-render authDir').toBe('string');
+    ep = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, ep.url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(ep.requests.length).toBe(1);
+    } finally {
+      await ep.close();
+    }
+  });
+
   // -------------------------------------------------------------------
   // Task 11 — the pinned default endpoint, and the seam's own guard.
   //
