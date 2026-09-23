@@ -9856,6 +9856,26 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # that is the DEFAULT path on a platform is not the no-op `ccd-cap-scopes`'
   # own comment warns about.
   _inst_atomic "$tree/ccd/ccd-account-auth" "$bin/ccd-account-auth" 755
+  # Plan 2b-1: the two GPT-lane files that exist in the tree today, BEFORE
+  # the platform `if` below, so on BOTH arms — but ROLE-gated, `!= server`,
+  # which no other name in this function is (spec §11 says so, and why): the
+  # lane they serve needs a converged per-account launcher, and a server-role
+  # box converges nothing per account (D-3111). `_uninst_tree_bins` removes
+  # them on every role, as it does every name here. `ccgpt` and
+  # `ccgpt-runtime` join this gate in Plan 2b-2, IN THE SAME COMMIT that
+  # writes the real files at `ccd/ccgpt` and `ccd/ccgpt-runtime` —
+  # `_inst_atomic` dies on a missing source by design (never soften that
+  # here), and every commit on `main` must be installable.
+  # `ccgpt-usage.py` is placed on BOTH arms so an operator can run it by
+  # hand; its timer is placed by no installer yet (`_inst_units` says why),
+  # and whether macOS gets a launchd equivalent is Plan 3's decision too.
+  # `lane_bins` is what the closing line claims, set under the same gate.
+  local lane_bins="" lane_note=" (no GPT-lane executables: a server box converges nothing per account)"
+  if [ "$INST_ROLE" != server ]; then
+    _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
+    _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
+    lane_bins=", ccgpt-proxy.py, ccgpt-usage.py" lane_note=""
+  fi
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
   # macOS has neither cgroups nor scopes, and `_inst_units`' Darwin arm
   # installs no timer to run it — so placing the binary there would put a file
@@ -9914,9 +9934,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep and no ccd-pool-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep and no ccd-pool-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-pool-sync${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -10365,6 +10385,12 @@ _inst_units() {
     # left the timer enabled and orphaned.
     _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
+    # NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}` pair, which
+    # ships in `deploy/systemd/` and is placed by no installer yet: a live fleet
+    # box already has a unit pair at those two names, owned by another
+    # repository, with an instance ENABLED. Writing ours there would replace a
+    # running timer's definition, so placing it is the cutover, and that is
+    # Plan 3's (spec §15 step 3), never an install's side effect.
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
@@ -12497,6 +12523,9 @@ _uninst_units() {
   else
     echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
   fi
+  # NOT `ccgpt-usage@.{service,timer}`: `_inst_units` places neither (its own
+  # comment says why), and on a live fleet box those names hold another
+  # repository's enabled unit pair. An uninstall removes only what ccrc placed.
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
@@ -12718,9 +12747,15 @@ _uninst_tree_bins() {
   # prevent) and the
   # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
   # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
-  # must therefore be removed as two. (`graphify`, below, keeps its own rule
-  # and its own paragraph: it is the one name in this census that is not
-  # ccrc's own binary.)
+  # must therefore be removed as two. Plan 2b-1 Task 4 adds the GPT-lane's
+  # two placed executables, `ccgpt-proxy.py` and `ccgpt-usage.py` — Task 2
+  # narrowed `_inst_bins` to exactly these two: the lane's launcher and
+  # runtime binaries are not in the tree yet, `_inst_atomic` dies on a
+  # missing source, so nothing places them and this census names none of
+  # them either. They are placed on both `_inst_bins` arms, so this census
+  # removes them on every platform — the same orphan this rule already exists
+  # to prevent. (`graphify`, below, keeps its own rule and its own paragraph:
+  # it is the one name in this census that is not ccrc's own binary.)
   #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the
@@ -12737,8 +12772,9 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-pool-sync" \
+    "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
