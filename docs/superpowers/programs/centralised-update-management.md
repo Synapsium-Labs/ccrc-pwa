@@ -25,7 +25,7 @@ numbers; the spec wave each one implements is named beside it.
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **dispatched** (run 128, 2026-09-23); plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | planned |
-| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatching** (2026-09-23), concurrent with wave 2; tasks 15–16 wait for wave 2's merge |
+| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | planned |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | planned |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
@@ -78,6 +78,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   wave 2 does not touch (wave 2 only appends describes and edits the import line); wave 4's README/CLAUDE.md edits are
   all in Tasks 15–16, which begin only after wave 2 has merged and its claims are released. Wave 2 merges first; wave 4
   merges `origin/main` in before Task 15.
+
+- **Wave 4's deviation block.** The plan's forty-seven departures are D-3227 through D-3273, issued to run 129 and
+  defined in its plan; a reserve of twenty more, from 3274 (bare here, none defined yet), was issued beside it.
+- **Found dispatching wave 4 (for the operator; not this programme's to fix).** The first dispatch of run 129 answered
+  a bare 502: `ccd ws-add` chose the workspace name `amber-mesa`, whose branch `ws/amber-mesa` still exists from an
+  archived workspace, and `git worktree add` refused. Nothing was spawned or held (measured: no worktree, no registry
+  rows, no tmux session, run still `planned`), so the retry was safe and landed on `keen-meadow`. The name picker does
+  not check for an existing branch.
 
 ## Carried constraints
 
