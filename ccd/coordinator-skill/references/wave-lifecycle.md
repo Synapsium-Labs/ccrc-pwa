@@ -138,7 +138,7 @@ lands after a plain resume: nothing was minted, so nothing can be stranded.)
 | field | meaning |
 |---|---|
 | `adopted` | `true` when the workspace was **adopted from a killed `ws-add`**, not created by a clean one. The HTTP call that made it timed out and the server killed `ccd`; the workspace, the claim and the supervisor all exist, but nothing confirmed the session's TUI came up. |
-| `spawnState` | how the last spawn attempt ended: `ready`, `login`, `vanished`, `expired`, `blocked`, `unrecognised`, or `null` for *not recorded*. `null` is not `ready` and is not a warning — it means no spawn fact was written. |
+| `spawnState` | how the last spawn attempt ended: `ready`, `login`, `vanished`, `expired`, `blocked`, `narrow`, `unrecognised`, or `null` for *not recorded*. `null` is not `ready` and is not a warning — it means no spawn fact was written. |
 | `skillState` | whether the worker session this dispatch bound has the `ccrc-worker` skill installed on the home it is running from: `present`, `absent`, or `unmeasurable`. MEASURED at dispatch, and never a refusal — the preflight never refuses a dispatch, so an `absent` dispatch is a real dispatch. `unmeasurable` is not `absent`: it means no answer was obtained, so nothing was proven about the fleet either way. Three ways that happens — this box's roster does not carry that account; the session has no registry row, so there is no account to look under and no read is attempted; or the read itself would not complete. |
 
 **What to do with them.** On `adopted: true`, or on any `spawnState` other than `ready` or `null`,
@@ -151,6 +151,14 @@ arrives within the wave's ordinary window, read the session's own screen before 
   cannot fix it. Say so to the operator; do not re-dispatch onto the same lane.
 - `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
   the next sweep.
+- `spawnState: 'narrow'` — the pane was under 120 columns (`READER_MIN_COLS`) when it spawned, or
+  ccd could not read its width, so ccd answered none of its startup prompts, skipped its `/effort`
+  and its re-drive of an interrupted turn, and keeps its pane readers stood down while it stays
+  narrow. The server's mail lane is not width-aware: it still types into this pane, and cannot see
+  an armed auto-continue whose line has wrapped. Waiting does not fix it. Ask the operator to widen
+  it (opening and closing its terminal drawer re-pins it) and to check its screen for an unanswered
+  startup prompt before you re-dispatch — and to close any narrow terminal first, because one
+  attached to any session makes the next spawn narrow too.
 - `skillState: 'absent'` — the worker will read your brief without its standing protocol, because
   the skill installer has not run on that account's home. The dispatch still happened and the brief
   still works, degraded: it carries the branch-discipline sentence in its own text for exactly this
