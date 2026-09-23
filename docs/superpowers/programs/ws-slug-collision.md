@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **in scoped review** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); tip `80dbafd8`; review 141 (2 important + 6 minor), scoped review 142 on `ccrc-pwa-amber-delta` |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **merged** `a3a93b41` 2026-09-23 (run 137 on `warm-hollow`; reviews 141, 142); rollout with v0.0.20 |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -69,6 +69,30 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
   - **Tests.** 21 mutation rows, spelled out in PR #177's body. Control 107/107; every row red.
   - **Citation bookkeeping.** README re-pointed. Census unmoved (147/195/53/35). Corpus frozen. Re-stamped.
   - **Suites.** 67 ws-add-touching server files green, except one load race that was green alone twice.
+
+- **2026-09-23 — accepted and merged (`a3a93b41`, #177).**
+  - **Scoped review 142 over `80dbafd8`.** Three Opus lenses, 39 agents, 10 confirmed, 2 refuted. The frozen
+    corpus, the refusal ahead of every mint and the free-slug path all held. None of the findings is a
+    shipped-behaviour defect on this fleet.
+  - **Accepted as committed before the round.** The residue is recorded below and carried. Required checks
+    green. Merged with `--admin --match-head-commit`. Run 137 closed `done`, released, and the programme
+    retired.
+
+## Residue, carried into child-reclamation wave 4 (the next wave that edits ccd after wave 3)
+
+From review 142, all coverage or wording; none bites on this fleet today:
+- **Two new arms have no test of their own:** the `for-each-ref` failure arm, and the `$WORKTREES_ROOT` element
+  of the parent-searchability loop. Each stays green when removed. Add one case per arm (a `git` stub failing
+  only `for-each-ref`; `$WORKTREES_ROOT` itself unsearchable) and a mutation row each.
+- **Header wording.** The contract block lists every `taken` shape and every `free` condition. "an unreadable
+  or corrupt `packed-refs`". "the directories above it" narrowed to the two levels checked, the rest named as
+  residual.
+- **Plan wording.** D-3474's mechanism sentence says masking, not ordering. D-3476 cites rows 13–21 and adds one
+  sentence on reftable. The false show-ref premise in the Global Constraints gets a "(false; see D-3476)"
+  pointer.
+- **Two narrowings that fail closed.** An absent `refs/heads` is no evidence of a loose ref: skip it or say
+  "absent". A stale `refs/heads/ws/<slug>.lock` is named in the header's residual paragraph (git's own
+  message tells the operator to remove it), or probed as `unmeasurable`.
 
 ## Carried constraints
 

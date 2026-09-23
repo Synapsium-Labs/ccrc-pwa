@@ -235,6 +235,9 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
      and wave 2's `childSpent` answers `unspent`, which permits a bind. The read becomes three-valued: an
      unreadable answer is `unmeasured`, which already refuses. This is the programme's no-boolean rule, one
      layer down.
+- **Wave 4 also carries ws-slug-collision's review residue** (that programme's ledger, "Residue"). It is two
+  unpinned arms of `_ws_slug_git_state`, plus header and plan wording, plus two fail-closed narrowings. It is
+  ccd-only and below the frozen boundary, and it rides wave 4 because wave 4 edits ccd anyway.
 - **Wave 3 inherits two readings from wave 1's review.** Every run-id parse wave 3 adds calls
   `_child_runid_valid` — the census only catches a verbatim second copy, so the reviewers check it by
   reading. And `_child_tmpdir` checks the leaf for a symlink once, before `chmod` (contract R1, check-once
