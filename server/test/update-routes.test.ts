@@ -438,6 +438,21 @@ describe('POST /api/updates/intent', () => {
     expect(f.coord.intentFor('*')!.auto).toBe('off');
   });
 
+  // fix round 1, F7: the docstring above this route used to claim the node
+  // list "is made non-empty first, so 'no node lacks it' is never an
+  // empty-set answer" — false. `ensureInventory` returns at once with no
+  // watcher (this fixture's default), so `nodes()` is genuinely `[]` here,
+  // and `autoGateBlockers('*', [])` is `[]`: the advisory gate PASSES over an
+  // inventory that has never measured anything. The dispatcher (wave 5) is
+  // the real enforcement.
+  it('an empty inventory passes the auto gate vacuously — advisory, not "never an empty-set answer" (fix round 1, F7)', async () => {
+    const f = await open();
+    expect(f.coord.nodes()).toEqual([]);
+    const r = await post(f.app, '/api/updates/intent', { scope: '*', auto: 'stable' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(f.coord.intentFor('*')!.auto).toBe('stable');
+  });
+
   // fix round 1, findings 1+2: the OLD fixture here was a directory at the
   // journal path, whose EISDIR message carries no path at all — a fixture
   // that could never have caught a leak. `chmodSync(…, 0o000)` gives a REAL

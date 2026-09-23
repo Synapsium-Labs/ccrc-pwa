@@ -253,10 +253,15 @@ export function registerUpdateRoutes(
 
   /**
    * The operator's desired state. The auto gate is ADVISORY (spec §9 — the
-   * dispatcher is the enforcement, W4): `auto ≠ off` is refused while any node
-   * in scope, reachable or not, lacks `update-gate` in its measured caps —
-   * which in W2 is every node, since no W2 spine writes the word. The node list
-   * is made non-empty first, so "no node lacks it" is never an empty-set answer.
+   * dispatcher is the enforcement, at dispatch time, programme wave 5):
+   * `auto ≠ off` is refused while any node in scope, reachable or not, lacks
+   * `update-gate` in its measured caps — which in W2 is every node, since no
+   * W2 spine writes the word. This is a 409 on the WRITE, nothing more: an
+   * EMPTY inventory (`ensureInventory` returned with no watcher, or a sweep's
+   * server-row throw) passes `autoGateBlockers` vacuously — `nodes()` can be
+   * `[]`, and `autoGateBlockers('*', [])` is `[]` — so `auto` can still be set
+   * before any node has ever been measured (fix round 1, F7). Nothing here
+   * enforces the gate again later; that is the dispatcher's job.
    */
   app.post('/api/updates/intent', async (req, reply) => {
     if (!deps.coord || !deps.updateIntentLog) return refuse(reply, 501, { error: 'not-configured' });
