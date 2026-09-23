@@ -27,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -620,45 +620,41 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
   // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
   // `_inst_bins` to these — the lane's launcher and runtime binaries are not
   // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
-  // places them and this census names none of them either) and the
-  // usage-window publisher's TEMPLATE unit pair (Task 3, systemd arm only —
-  // `_inst_units`' Darwin branch never installs it, so there is nothing for
-  // the Darwin arm of `_uninst_units` to remove; hence `itLinux` below,
-  // matching every other systemd-argv assertion in this file). A template
-  // unit is never itself enabled — only an INSTANCE is, and nothing in this
-  // plan creates one (Plan 3's job) — so removal must be a bare `rm -f`,
-  // never `systemctl --user disable --now` naming the bare template.
-  // MEASURED, not guessed: a plain `disable` on a never-enabled unit returns
-  // 0 SILENTLY — "nothing to disable" is not a systemd failure. What DOES
-  // fail is `--now`'s stop half: the manager refuses a bare template name
-  // for any runtime operation at all, so `disable --now ccgpt-usage@.timer`
-  // fails at the stop, not the disable — and that loop tolerates a failing
-  // call by design, so a bare template name in it would print a spurious
-  // "failed (continuing …)" line on every uninstall, for a call that was
-  // always going to fail that one way.
-  itLinux('uninstall removes the two GPT-lane executables and the usage unit pair, and never tries to disable the bare template', () => {
+  // places them and this census names none of them either). The usage-window
+  // publisher's `ccgpt-usage@.{service,timer}` pair is the other half of this
+  // case since the final review's F-1: no installer places it, because on a
+  // live fleet box those two names hold ANOTHER repository's pair with an
+  // instance enabled, so an uninstall that removed them would delete a live
+  // unit ccrc never wrote. They must survive byte for byte, their enabled
+  // instance's wants link too, and no systemctl verb may name them. `itLinux`,
+  // as every other systemd-argv assertion in this file.
+  itLinux('uninstall removes the two GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');
     writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
     writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
     const units = join(home, '.config', 'systemd', 'user');
-    writeFileSync(join(units, 'ccgpt-usage@.service'), '[Unit]\nDescription=fixture ccgpt-usage@.service\n');
-    writeFileSync(join(units, 'ccgpt-usage@.timer'), '[Unit]\nDescription=fixture ccgpt-usage@.timer\n');
+    const foreignSvc = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.service, not ccrc\'s\n';
+    const foreignTimer = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.timer, not ccrc\'s\n';
+    writeFileSync(join(units, 'ccgpt-usage@.service'), foreignSvc);
+    writeFileSync(join(units, 'ccgpt-usage@.timer'), foreignTimer);
+    mkdirSync(join(units, 'timers.target.wants'), { recursive: true });
+    const wants = join(units, 'timers.target.wants', 'ccgpt-usage@codex-a.timer');
+    symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
       expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
     }
-    expect(existsSync(join(units, 'ccgpt-usage@.service')), 'the template .service survived').toBe(false);
-    expect(existsSync(join(units, 'ccgpt-usage@.timer')), 'the template .timer survived').toBe(false);
+    expect(readFileSync(join(units, 'ccgpt-usage@.service'), 'utf8'), 'the foreign .service was removed or changed')
+      .toBe(foreignSvc);
+    expect(readFileSync(join(units, 'ccgpt-usage@.timer'), 'utf8'), 'the foreign .timer was removed or changed')
+      .toBe(foreignTimer);
+    expect(lstatSync(wants).isSymbolicLink(), 'the enabled instance\'s wants link was removed').toBe(true);
+    expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
-    // The BARE TEMPLATE only (a literal dot right after `@`) — never an
-    // INSTANCE (`ccgpt-usage@codex-a.timer`), which Plan 3 will legitimately
-    // enable and disable one day; a broader match would red that future case
-    // with this assertion naming the wrong cause.
-    expect(calls, 'a bare template name (ccgpt-usage@.timer/.service), not an instance, reached a systemctl verb')
-      .not.toMatch(/ccgpt-usage@\.(service|timer)\b/);
+    expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
     expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
       .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
     expect(r.stdout, 'the bin census does not name ccgpt-usage.py')

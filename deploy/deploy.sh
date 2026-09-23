@@ -812,20 +812,17 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccgpt-usage@.service ~/.config/systemd/user/ccgpt-usage@.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccgpt-usage@.timer ~/.config/systemd/user/ccgpt-usage@.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
-  # Plan 2b-1 Task 7: the GPT-lane files. Two unit links end the chain above and
-  # the rest sits HERE, not beside the ccd-usage-sweep pair it belongs with: a
-  # citation corpus this plan may not edit cites this file's lines by number
-  # above this point, and an insert above them would move what they cite.
+  # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
+  # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
+  # edit cites this file's lines by number above this point, and an insert
+  # above them would move what they cite.
   #
-  # The per-lane GPT-usage publisher's TEMPLATE pair is the last two links of
-  # the chain above, on the same terms as `ccd/ccrc`'s `_inst_units`, and it is
-  # PLACEMENT ONLY: the enable chain below arms nothing for it. A bare template
-  # cannot be enabled, and arming one instance per lane is the job of the step
-  # that adopts that lane (Plan 3), which `ccrc install` leaves alone too.
+  # The chain above places NO `ccgpt-usage@.{service,timer}`, and neither does
+  # `ccd/ccrc`'s `_inst_units`: a live fleet box already has a unit pair at those
+  # names, owned by another repository and with an instance enabled, so placing
+  # ours is the cutover, which is Plan 3's. The files ship in the tree only.
   #
   # The two executables, unconditional, as `ccd/ccrc`'s `_inst_bins` places them
   # on every role. The rsync above already lands them at ~/ccrc/ccd/; without

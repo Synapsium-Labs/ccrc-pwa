@@ -9865,8 +9865,8 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # missing source by design (never soften that here), and every commit on
   # `main` must be installable.
   # `ccgpt-usage.py` is placed on BOTH arms so an operator can run it by
-  # hand; its TIMER (`ccgpt-usage@.timer`) is systemd-only, and whether
-  # macOS gets a launchd equivalent is Plan 3's decision, not this one's.
+  # hand; its timer is placed by no installer yet (`_inst_units` says why),
+  # and whether macOS gets a launchd equivalent is Plan 3's decision too.
   _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
   _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
   # `ccd-cap-scopes` FINDS UNCAPPED tmux pane CGROUP SCOPES and caps them.
@@ -10378,16 +10378,12 @@ _inst_units() {
     # left the timer enabled and orphaned.
     _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
-    # Plan 2b-1 Task 3: the per-lane GPT-usage-window publisher's TEMPLATE
-    # pair, role-gated on the same terms as the four pairs above it — a
-    # server box holds no account lanes and no wrapper HOMEs, so a per-lane
-    # Codex template there could never be instantiated. This is placement
-    # ONLY: nothing below (`_inst_enable`) ever enables an INSTANCE of this
-    # template, on any role — a rostered lane with no session has no
-    # processes to poll, so arming one per lane is deliberately left to the
-    # step that adopts that lane (Plan 3), not to this install.
-    _inst_atomic "$tree/deploy/systemd/ccgpt-usage@.service" "$dir/ccgpt-usage@.service" 644
-    _inst_atomic "$tree/deploy/systemd/ccgpt-usage@.timer" "$dir/ccgpt-usage@.timer" 644
+    # NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}` pair, which
+    # ships in `deploy/systemd/` and is placed by no installer yet: a live fleet
+    # box already has a unit pair at those two names, owned by another
+    # repository, with an instance ENABLED. Writing ours there would replace a
+    # running timer's definition, so placing it is the cutover, and that is
+    # Plan 3's (spec §15 step 3), never an install's side effect.
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
@@ -12520,32 +12516,9 @@ _uninst_units() {
   else
     echo "uninstall: units: systemctl is not on PATH — the unit files are removed but nothing was stopped or disabled"
   fi
-  # Plan 2b-1 Task 4: the GPT-lane usage-window publisher's TEMPLATE pair
-  # (`_inst_units` Task 3) is removed HERE ONLY, by `rm -f`, and deliberately
-  # absent from the `disable --now` loop above — unlike every sibling pair in
-  # that loop. A template unit is never itself enabled; only an INSTANCE
-  # (`ccgpt-usage@<lane>.timer`) is, and nothing in this plan (or in
-  # `_inst_enable`) ever enables one on any role — Plan 3's job, when a lane
-  # is adopted.
-  #
-  # MEASURED, not guessed: `systemctl --user disable ccgpt-usage@.timer`
-  # against a never-enabled unit returns 0 SILENTLY — "nothing to disable" is
-  # not a systemd failure, and a first draft of this comment claimed
-  # otherwise. What DOES fail is the `--now` half: `--now` runs its stop only
-  # after a successful disable, and the manager refuses a bare template name
-  # for any runtime operation at all ("is neither a valid invocation ID nor
-  # unit name"), so `disable --now ccgpt-usage@.timer` fails at the stop, not
-  # the disable — and that loop tolerates a failing call BY DESIGN (removal
-  # must continue under a wedged systemd), so a bare template name in it
-  # would print a spurious "failed (continuing …)" line on EVERY uninstall,
-  # forever, for a call that was always going to fail that one way. Sweeping
-  # a template's INSTANCES is a separate, open question this task does not
-  # answer: removing the template does not remove
-  # `timers.target.wants/ccgpt-usage@<id>.timer` symlinks, and that belongs to
-  # whichever plan writes the `enable` that creates one — exactly the reason
-  # `claude-session@<id>` instances are left alone above ("an operator stops
-  # sessions through ccd, not through an uninstall's side effect"), applied to
-  # a name this task's own placement step never enables.
+  # NOT `ccgpt-usage@.{service,timer}`: `_inst_units` places neither (its own
+  # comment says why), and on a live fleet box those names hold another
+  # repository's enabled unit pair. An uninstall removes only what ccrc placed.
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
@@ -12555,7 +12528,6 @@ _uninst_units() {
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
-    "$dir/ccgpt-usage@.service" "$dir/ccgpt-usage@.timer" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
     || _ccrc_die "removing the drop-in directories under $dir failed"
@@ -12563,7 +12535,7 @@ _uninst_units() {
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
   fi
-  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape); the ccgpt-usage@ template pair was only ever removed, never disabled — nothing on this box enables the bare template"
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
 }
 
 # THE TREE'S OWN installer, in `--remove` mode — never the INSTALLED copy at
@@ -12773,11 +12745,10 @@ _uninst_tree_bins() {
   # narrowed `_inst_bins` to exactly these two: the lane's launcher and
   # runtime binaries are not in the tree yet, `_inst_atomic` dies on a
   # missing source, so nothing places them and this census names none of
-  # them either — and `_uninst_units` above gained the usage publisher's
-  # unit pair in the same plan — the same orphan this rule already exists to
-  # prevent, for a binary planted on both `_inst_bins` arms regardless of
-  # role. (`graphify`, below, keeps its own rule and its own paragraph: it is
-  # the one name in this census that is not ccrc's own binary.)
+  # them either. They are placed on both `_inst_bins` arms, so this census
+  # removes them on every platform — the same orphan this rule already exists
+  # to prevent. (`graphify`, below, keeps its own rule and its own paragraph:
+  # it is the one name in this census that is not ccrc's own binary.)
   #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the

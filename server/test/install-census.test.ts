@@ -1109,7 +1109,9 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
     // arm: a session's is `ccd`'s, and a GPT lane's is the step that adopts the
     // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
     // are DERIVED from the templates the two installers place, not typed, so
-    // this binds `ccgpt-usage@` and `claude-session@` alike.
+    // this binds `claude-session@` today and any template either installer
+    // places later. (`ccgpt-usage@` is placed by neither — `_inst_units` says
+    // why — so it is no family here.)
     const enabled = deployEnabled();
     expect(enabled.size,
       'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
