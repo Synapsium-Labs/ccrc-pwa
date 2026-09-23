@@ -2392,6 +2392,32 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  // W1 minor M7: the floor precedes `--force`'s converged-skip in the call
+  // order, so nothing can bypass it today — and nothing pinned that. `--force`
+  // reinstalls a converged box; it is never a way below the floor
+  // (§18 "the floor is checked on every path").
+  it('--force cannot take a box below its floor, by --to or by latest/download: W1\'s refusal, no backup, nothing staged (M7)', () => {
+    const home = freshUpdateBox('ccrc-update-floor-force-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    let r = runUpdate(home, ['--to', 'v2.0.0', '--force']);
+    expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0 .* moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    const latest = freshUpdateBox('ccrc-update-floor-force-latest-');
+    plantOldBox(latest, { version: 'v3.0.0' });
+    plantFloor(latest, 'v3.0.0');
+    packRelease(latest, stubTree(latest, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(latest, ['--force']);
+    expect(r.code, `stdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by latest\/download\) is below this box's floor v3\.0\.0/);
+    expect(existsSync(join(latest, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(latest, 'staged-ccrc-argv'))).toBe(false);
+    expect(readFileSync(join(latest, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
+  });
+
   it('--downgrade proceeds, warns, and the floor is NOT lowered (§18 "--downgrade is the only way below the floor")', () => {
     const home = freshUpdateBox('ccrc-update-floor-downgrade-');
     plantOldBox(home, { version: 'v3.0.0' });
