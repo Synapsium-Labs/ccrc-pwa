@@ -512,6 +512,30 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
+  /** C2 (final fix wave): the last inventory-sweep REJECTION message warned
+   *  about, so a standing cause (a locked or corrupt coord.db held past one
+   *  sweep) warns once, not every tick/ready — reset to null the moment a
+   *  sweep completes without rejecting. Never the source of truth for
+   *  WHETHER a sweep failed; C1's per-row isolation means `sweepInventory`
+   *  itself should not reject any more except for a bug outside either
+   *  connection's own try/catch (e.g. inside `resolveAndProject`'s own
+   *  queueing, which `sweepThenProject` already handles separately). */
+  private lastInventoryRejectWarn: string | null = null;
+  /** C4 (final fix wave): set when a caller of `triggerInventory()` (the
+   *  `ready` hook) JOINS a sweep already in flight rather than starting one.
+   *  The joiner's own connection state may be exactly what changed since the
+   *  in-flight sweep read it — joining that promise alone would silently
+   *  measure the join as though nothing had happened. ONE rerun, not a
+   *  queue: every joiner while a run is in flight sets this SAME flag, and
+   *  the first settle after it clears the flag and fires exactly one more
+   *  sweep. */
+  private inventoryRerunPending = false;
+  /** C3 (final fix wave): the (label,nodeId,why) tuples this lane already
+   *  warned about — a `node-id-collision` or a `refused` sweep outcome is
+   *  otherwise named nowhere but the discarded `SweepOutcome[]` (D-3211's
+   *  own gap). Warned once when a tuple first appears, silent while it
+   *  repeats, and warned again if it clears and later recurs. */
+  private lastInventoryIssues: ReadonlySet<string> = new Set();
   /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
    *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
   private lastProjectionWhy: string | null = null;
@@ -769,15 +793,83 @@ export class FleetWatcher {
     return run;
   }
 
+  /** C2: `sweepInventory` throwing is not a bug in the ordinary sense — it is
+   *  a synchronous `node:sqlite` call hitting a locked or corrupt coord.db —
+   *  but it is also not silent: warned once per DISTINCT message, quiet
+   *  while the same cause repeats, and re-armed (by the caller, on the next
+   *  clean settle) after a recovery. */
+  private warnInventoryRejected(err: unknown): void {
+    // Deduped on the MESSAGE, never the stack: two throws of the very same
+    // condition from two different call sites (or two turns of one retry
+    // loop) carry two different stacks, which would defeat the dedupe.
+    const message = err instanceof Error ? err.message : String(err);
+    if (message !== this.lastInventoryRejectWarn) {
+      const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      console.warn('ccrc-server: the inventory sweep rejected — sync node:sqlite throws on a locked ' +
+        `or corrupt coord.db, which is environmental, not a code bug: ${detail}`);
+      this.lastInventoryRejectWarn = message;
+    }
+  }
+
+  /** Fire-and-forget `inventoryNow()`, shared by `tick()`'s minute gate and
+   *  `triggerInventory()`: a rejection is POSSIBLE — sync `node:sqlite`
+   *  throws on a locked or corrupt coord.db, and C1's per-row isolation in
+   *  `sweepInventory` only covers the two connections' own measurement+apply,
+   *  not e.g. a throw inside `resolveAndProject`'s own queueing — warned,
+   *  deduped (C2), never swallowed silently; the dedupe key clears on the
+   *  next clean settle, so a NEW cause after a recovery warns again. */
+  private dispatchInventorySweep(): Promise<void> {
+    return this.inventoryNow().then(
+      () => { this.lastInventoryRejectWarn = null; },
+      (err: unknown) => { this.warnInventoryRejected(err); },
+    );
+  }
+
   /** For a caller that must not wait: the `ready` hook runs inside the
-   *  client's handshake handler. A rejection here is a BUG (`sweepInventory`
-   *  fails soft internally, same reasoning as the catalogue poller's own
-   *  `.catch` below) — logged, never swallowed silently. */
+   *  client's handshake handler.
+   *
+   *  C4: a caller that JOINS a sweep already in flight sets a one-shot rerun
+   *  flag rather than trusting the joined run to reflect whatever changed
+   *  between the join and the in-flight sweep's own read of it (the case
+   *  this exists for: a `ready` arriving while a sweep that already read the
+   *  connection as disconnected is still running its resolve/project tail).
+   *  The flag is checked and cleared ONCE the run settles, so a run of
+   *  joiners produces exactly one rerun, never a queue. */
   triggerInventory(): void {
-    void this.inventoryNow().catch((err: unknown) => {
-      console.warn('ccrc-server: the inventory sweep rejected — this is a bug, sweepInventory should ' +
-        `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    if (this.inventoryRun !== null) this.inventoryRerunPending = true;
+    void this.dispatchInventorySweep().finally(() => {
+      if (this.inventoryRerunPending) {
+        this.inventoryRerunPending = false;
+        this.triggerInventory();
+      }
     });
+  }
+
+  /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
+   *  sweep's `SweepOutcome[]` was discarded by both callers — nothing ever
+   *  printed it. Warns each `node-id-collision` and each `refused` outcome
+   *  ONCE per (label, nodeId-or-why) tuple: a tuple already warned about
+   *  stays quiet while it repeats, and warns again if it clears (the row
+   *  measures cleanly for at least one sweep) and later recurs. Called from
+   *  `sweepThenProject`, the one place both `tick()`'s minute gate and
+   *  `triggerInventory()`'s `ready` hook funnel through (both reach it via
+   *  `inventoryNow()` -> `runInventory()`). */
+  private warnInventoryIssues(outcomes: readonly SweepOutcome[]): void {
+    const keys = new Map<string, string>();
+    for (const o of outcomes) {
+      if (o.result === 'node-id-collision') {
+        keys.set(`collision:${o.label}:${o.nodeId}`,
+          `ccrc-server: update inventory — ${o.label}'s connection measured node-id ${o.nodeId}, already ` +
+          'the key of a live row under another label; kept as two rows rather than merged (D-3211)');
+      } else if (o.result === 'refused') {
+        keys.set(`refused:${o.label}:${o.why}`,
+          `ccrc-server: update inventory — ${o.label}'s sweep was refused: ${o.why}`);
+      }
+    }
+    for (const [key, message] of keys) {
+      if (!this.lastInventoryIssues.has(key)) console.warn(message);
+    }
+    this.lastInventoryIssues = new Set(keys.keys());
   }
 
   /** Builds the sweep's deps and calls sweepThenProject, the file's one caller
@@ -806,6 +898,7 @@ export class FleetWatcher {
    *  which for an `unwritable` result embeds the tmp path's pid and timestamp and so never repeats. */
   private async sweepThenProject(inv: InventoryDeps, now: number): Promise<SweepOutcome[]> {
     const outcomes = await sweepInventory(inv, now);
+    this.warnInventoryIssues(outcomes);
     const coord = this.deps.coord;
     if (!coord) return outcomes;
     let warn: { key: string; message: string } | null;
@@ -938,14 +1031,12 @@ export class FleetWatcher {
       // every lane below it (D-3198, which covers
       // both update lanes).
       // NEVER awaited: seven reads per node over the agent must not stall the
-      // dialog detector or the busy->idle push. A rejection is a BUG
-      // (`sweepInventory` fails soft internally) — logged, same idiom as the
-      // catalogue lane just above, never swallowed silently.
+      // dialog detector or the busy->idle push. A rejection here IS POSSIBLE
+      // — sync `node:sqlite` throws on a locked or corrupt coord.db, which is
+      // environmental, not a code bug (C2) — logged, deduped, same idiom as
+      // the catalogue lane just above, never swallowed silently.
       if (this.deps.coord && Date.now() - this.lastInventoryAt >= UPDATE_INVENTORY_MS) {
-        void this.inventoryNow().catch((err: unknown) => {
-          console.warn('ccrc-server: the inventory sweep rejected — this is a bug, sweepInventory should ' +
-            `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-        });
+        void this.dispatchInventorySweep();
       }
 
       // Read once, share with the two lanes that would otherwise each read it

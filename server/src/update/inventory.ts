@@ -29,7 +29,7 @@
 // sweep's own clock.
 import path from 'node:path';
 import {
-  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, isReleaseTag, isUpdatePhase, validCapWords,
+  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
 } from '../../../shared/api.js';
 import { NODE_FILES, type NodeFileKey } from '../../../shared/agent-protocol.js';
@@ -55,8 +55,9 @@ export const REPORT_DETAIL_MAX = 200;
  *  contract). Eleven digits reach the year 5138; a thirteen-digit value is a
  *  millisecond stamp written by mistake, and it is REFUSED (null), never
  *  divided — a guess about units is the C1 defect `server.ts`'s pool-epoch
- *  route records, the other way round. */
-export const REPORT_TIME_MAX_S = 99_999_999_999;
+ *  route records, the other way round. `UNIX_SECONDS_MAX` (`shared/api.ts`)
+ *  is the one declaration of this bound — `resolve.ts`'s `MAX_UNIX_S` used to
+ *  be a second copy (C5, final fix wave). */
 /** A seconds stamp names a whole second: `startedAt = s` covers
  *  [s*1000, s*1000 + 999] ms. The precedence below compares the LATEST instant
  *  the report's run could have started with the lease's ms stamp, so a run
@@ -229,7 +230,7 @@ export function printableDetail(raw: string): string {
 }
 
 function secondsToMs(v: unknown): number | null {
-  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 && v <= REPORT_TIME_MAX_S ? v * 1000 : null;
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0 && v <= UNIX_SECONDS_MAX ? v * 1000 : null;
 }
 
 /** update.json `{target, phase, startedAt, updatedAt, detail, from}` → the
@@ -398,7 +399,14 @@ export type SweepOutcome =
    *  says so, rather than reporting `measured`. */
   | { label: string; result: 'node-id-collision'; nodeId: string; lease: LeaseAction['kind']; refused: boolean }
   | { label: string; result: 'unreachable'; nodeId: string }
-  | { label: string; result: 'refused'; why: string };
+  | { label: string; result: 'refused'; why: string }
+  /** C1 (final fix wave): this connection's own measurement+apply threw —
+   *  `coord.db` is a synchronous `node:sqlite` handle, and a lock or
+   *  corruption throws mid-transaction. Isolated per connection so a throw
+   *  on one row still lets the OTHER row's measurement run and still lets
+   *  the resolver/projection run after both (never an overloaded null on an
+   *  existing arm — this is a distinct outcome, not a `refused`). */
+  | { label: string; result: 'error'; message: string };
 
 /** Read through a function so a check after an `await` reads the live field. */
 const linkUp = (state: FleetState): boolean => state.connected;
@@ -496,33 +504,55 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
   return { label, result: collision ? 'node-id-collision' : 'measured', nodeId: m.nodeId, lease, refused };
 }
 
+/** C1 (final fix wave): the server row's own measurement+apply, isolated in
+ *  its own try/catch — a throw here (a locked or corrupt `coord.db`, most
+ *  likely) must not stop the fleet connection's row, below, from being
+ *  measured on the same sweep. */
+async function sweepOwn(deps: InventoryDeps, budget: number, now: number): Promise<SweepOutcome> {
+  try {
+    // Reads inlined (rather than through `measureNode`) so the raw report read
+    // survives past validation — D-3210's fold decision needs to know whether
+    // it was `unreadable`, not just what `reportFrom` turned it into.
+    const ownReads = await readNodeFiles(deps.localIo, deps.ccrcDir, budget);
+    const own = measurementFrom(ownReads, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
+    return applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now);
+  } catch (err) {
+    return { label: SERVER_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** C1's twin for the one agent connection. Same isolation, same reason. */
+async function sweepFleet(deps: InventoryDeps, fleet: NonNullable<InventoryDeps['fleet']>, budget: number, now: number): Promise<SweepOutcome> {
+  try {
+    const { io, state } = fleet;
+    if (!linkUp(state)) return unreachable(deps.store, now);
+    // `agentOps` is read inside the connected arm only: the field keeps the
+    // last `ready`'s answer across a drop (Task 8).
+    const fleetReads = await readNodeFiles(io, deps.ccrcDir, budget);
+    const m = measurementFrom(fleetReads, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
+    return linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now);
+  } catch (err) {
+    return { label: FLEET_LABEL, result: 'error', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * One sweep over every node this server can name: its own row through the
  * local io, and — in remote mode — the one agent connection. A connection that
  * is down on this sweep is written unreachable ON THIS SWEEP (§8), never left
  * at its last value; one that drops while its reads are in flight is too,
  * because seven `unreadable`s across a drop describe the link, not the node.
+ *
+ * PER-ROW ISOLATION (C1, final fix wave): the server row and the fleet
+ * connection are measured+applied in their OWN try/catch — a throw on one
+ * (a locked or corrupt `coord.db`, most likely, since every write here is a
+ * synchronous `node:sqlite` call) still lets the other row's outcome land,
+ * and this function itself never rejects on that account, so its caller's
+ * resolve-and-project step always runs after both rows.
  */
 export async function sweepInventory(deps: InventoryDeps, now: number): Promise<SweepOutcome[]> {
   const budget = deps.budgetMs ?? INVENTORY_BUDGET_MS;
-  const out: SweepOutcome[] = [];
-  // Reads inlined (rather than through `measureNode`) so the raw report read
-  // survives past validation — D-3210's fold decision needs to know whether
-  // it was `unreadable`, not just what `reportFrom` turned it into.
-  const ownReads = await readNodeFiles(deps.localIo, deps.ccrcDir, budget);
-  const own = measurementFrom(ownReads, { label: SERVER_LABEL, role: deps.role, agentOps: null }, now);
-  out.push(applyMeasurement(deps.store, own, reportUnmeasured(ownReads.report), now));
-  if (deps.fleet !== null) {
-    const { io, state } = deps.fleet;
-    if (!linkUp(state)) {
-      out.push(unreachable(deps.store, now));
-    } else {
-      // `agentOps` is read inside the connected arm only: the field keeps the
-      // last `ready`'s answer across a drop (Task 8).
-      const fleetReads = await readNodeFiles(io, deps.ccrcDir, budget);
-      const m = measurementFrom(fleetReads, { label: FLEET_LABEL, role: 'fleet', agentOps: state.agentOps ?? [] }, now);
-      out.push(linkUp(state) ? applyMeasurement(deps.store, m, reportUnmeasured(fleetReads.report), now) : unreachable(deps.store, now));
-    }
-  }
+  const out: SweepOutcome[] = [await sweepOwn(deps, budget, now)];
+  if (deps.fleet !== null) out.push(await sweepFleet(deps, deps.fleet, budget, now));
   return out;
 }

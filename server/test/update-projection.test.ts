@@ -20,6 +20,7 @@ import {
   PROJECTION_FILE_MODE, resolveAndProject, resolveInputFor, writeOwnProjection, type ProjectStore,
 } from '../src/update/project.js';
 import { FleetWatcher } from '../src/watch.js';
+import type { Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { NodeRole, UpdateChannel } from '../../shared/api.js';
@@ -375,6 +376,41 @@ describe('the inventory run resolves and projects (§9: "at every resolution AND
     expect(text).toContain('channel stable\ndesired v0.0.10\n');
     const v = validate(text);
     expect(v.ok, v.err).toBe(true);
+  });
+
+  it('C1 (final fix wave): a throw on the server row\'s apply still measures the fleet row and still writes the projection', async () => {
+    const home = mkTmp('ccrc-update-watch-isolate-');
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+    expect(coord.applyReleaseListing([listed('v0.0.10')], NOW, 'complete')).toMatchObject({ ok: true });
+    mkdirSync(base.cfg.ccrcDir, { recursive: true });
+    writeFileSync(path.join(base.cfg.ccrcDir, NODE_FILES.floor), 'v0.0.9\n');
+    // A same-box "fleet" connection over localIO, reading the same ccrcDir —
+    // the same shape update-inventory.test.ts's D-3211 collision case uses to
+    // exercise both rows without a real agent.
+    const deps: Deps = {
+      ...base, coord, cfg: { ...base.cfg, fleetMode: 'remote' },
+      fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null },
+    };
+    const w = new FleetWatcher(deps, new Bus(), 2000, path.join(home, 'state-cache.json'));
+    // First sweep, clean: both rows exist and the projection is written.
+    await w.inventoryNow();
+    expect(coord.nodeByLabel(SERVER_LABEL)).not.toBeNull();
+    expect(coord.nodeByLabel(FLEET_LABEL)).not.toBeNull();
+    expect(readFileSync(projectionPath(base.cfg.ccrcDir), 'utf8').length).toBeGreaterThan(0);
+    // Second sweep: the server row's OWN apply throws (a locked coord.db,
+    // say) — the fleet row must still be measured this sweep, and
+    // resolveAndProject must still run and still write the projection
+    // (off the server row's still-live, if stale, columns).
+    const original = coord.upsertNodeMeasurement.bind(coord);
+    coord.upsertNodeMeasurement = (m) => {
+      if (m.label === SERVER_LABEL) throw new Error('boom: coord.db locked');
+      return original(m);
+    };
+    const fleetMeasuredBefore = coord.nodeByLabel(FLEET_LABEL)!.measuredAt;
+    await w.inventoryNow();
+    expect(coord.nodeByLabel(FLEET_LABEL)!.measuredAt).not.toBe(fleetMeasuredBefore);
+    expect(readFileSync(projectionPath(base.cfg.ccrcDir), 'utf8').length).toBeGreaterThan(0);
   });
 });
 

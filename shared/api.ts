@@ -8453,3 +8453,12 @@ export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
   return typeof v === 'string' && (UPDATE_STORE_REFUSE_CODES as readonly string[]).includes(v);
 }
+
+/** C5 (final fix wave): the single declaration of "unix SECONDS stay below
+ *  this until the year 5138; a 13-digit ms value never does" — was
+ *  `server/src/update/resolve.ts`'s `MAX_UNIX_S` and
+ *  `server/src/update/inventory.ts`'s `REPORT_TIME_MAX_S`, two copies of the
+ *  same bound (the L1 resolver's own comment said it was "restated because
+ *  this L1 file may not import an L3 one" — but both are free to import this
+ *  L0 file). Both now import this one constant; neither declares its own. */
+export const UNIX_SECONDS_MAX = 99_999_999_999;

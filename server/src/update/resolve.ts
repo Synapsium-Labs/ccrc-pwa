@@ -10,16 +10,13 @@
 // `vX.Y.Z`; the `v` is stripped only inside shared/semver.ts. A value that
 // fails `isReleaseTag` is never ordered: it is not a floor, not a
 // catalogue entry and not a pin that can resolve.
-import { FLEET_SCOPE, isReleaseTag, type AutoMode, type UpdateChannel } from '../../../shared/api.js';
+import { FLEET_SCOPE, UNIX_SECONDS_MAX, isReleaseTag, type AutoMode, type UpdateChannel } from '../../../shared/api.js';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver.js';
 
 /** The ccrc-caps word a node needs before `auto ≠ off` may reach it (§9; written by W4's spine). */
 export const UPDATE_GATE_CAP = 'update-gate';
 /** pool_epoch's lease, in SECONDS: the projection is re-rendered every sweep, so a live server keeps it fresh. */
 export const PROJECTION_LEASE_S = 15 * 60;
-/** Unix SECONDS stay below this until the year 5138; a 13-digit ms value never does. The same bound as
- *  inventory.ts's REPORT_TIME_MAX_S, restated because this L1 file may not import an L3 one. */
-const MAX_UNIX_S = 99_999_999_999;
 
 export interface EligibilityRow { tag: string; channel: UpdateChannel | null; bundleListed: boolean; yanked: boolean }
 export interface IntentView { channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode }
@@ -179,7 +176,7 @@ export function renderProjection(r: Resolution, epoch: number, issuedAtS: number
   if (!Number.isSafeInteger(epoch) || epoch < 0) {
     throw new RangeError(`renderProjection: epoch must be a non-negative integer, got ${epoch}`);
   }
-  if (!Number.isSafeInteger(issuedAtS) || issuedAtS < 0 || issuedAtS > MAX_UNIX_S) {
+  if (!Number.isSafeInteger(issuedAtS) || issuedAtS < 0 || issuedAtS > UNIX_SECONDS_MAX) {
     throw new RangeError(`renderProjection: issuedAtS must be unix SECONDS, got ${issuedAtS}`);
   }
   for (const t of [r.desiredTag, r.desiredStable, r.desiredDev]) {

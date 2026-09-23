@@ -23,7 +23,7 @@ import {
   FLEET_LABEL, NODE_FILE_CAP_BYTES, REPORT_DETAIL_MAX, SERVER_LABEL,
   buildInfoOfRow, capsFrom, installFrom, measurementFrom, nodeIdFrom, printableDetail, readNodeFile, readNodeFiles,
   reportFrom, stampFrom, sweepInventory, sweepPlanFor, tagLineFrom,
-  type InventoryDeps, type NodeFileRead, type NodeFileReads,
+  type InventoryDeps, type NodeFileRead, type NodeFileReads, type SweepOutcome,
 } from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
@@ -569,6 +569,54 @@ describe('sweepInventory — the fleet connection (§18 "unreachable is written 
   });
 });
 
+describe('sweepInventory — per-row isolation (C1, final fix wave)', () => {
+  /** Wraps a real store so exactly ONE connection's `upsertNodeMeasurement`
+   *  throws — modelling `coord.db` locked/corrupt mid-write for that row's
+   *  apply, while the other connection's store calls go through untouched. */
+  function throwingOn(store: CoordStore, label: string): InventoryDeps['store'] {
+    return {
+      upsertNodeMeasurement: (m) => {
+        if (m.label === label) throw new Error(`boom: coord.db locked (${label})`);
+        return store.upsertNodeMeasurement(m);
+      },
+      markUnreachable: (...a) => store.markUnreachable(...a),
+      rekeyNode: (...a) => store.rekeyNode(...a),
+      releaseLease: (...a) => store.releaseLease(...a),
+      settleNode: (...a) => store.settleNode(...a),
+      refuseRelease: (...a) => store.refuseRelease(...a),
+      node: (...a) => store.node(...a),
+      nodeByLabel: (...a) => store.nodeByLabel(...a),
+    };
+  }
+
+  it('a throw on the server row\'s apply still measures the fleet row, and reports an "error" outcome for the server row', async () => {
+    const b = box('ccrc-inv-isolate-server-');
+    plant(b.ccrcDir, FULL);
+    const deps: InventoryDeps = {
+      store: throwingOn(b.store, SERVER_LABEL), localIo: localIO, ccrcDir: b.ccrcDir, role: 'both',
+      fleet: { io: localIO, state: fleetState() },
+    };
+    const out = await sweepInventory(deps, NOW);
+    expect(out[0]).toMatchObject({ label: SERVER_LABEL, result: 'error' });
+    expect((out[0] as { message: string }).message).toContain('boom');
+    expect(out[1]).toMatchObject({ label: FLEET_LABEL, result: 'measured', nodeId: U1 });
+    expect(b.store.node(U1)).toMatchObject({ reachable: true });
+  });
+
+  it('a throw on the fleet row\'s apply still measures the server row', async () => {
+    const b = box('ccrc-inv-isolate-fleet-');
+    plant(b.ccrcDir, FULL);
+    const deps: InventoryDeps = {
+      store: throwingOn(b.store, FLEET_LABEL), localIo: localIO, ccrcDir: b.ccrcDir, role: 'both',
+      fleet: { io: localIO, state: fleetState() },
+    };
+    const out = await sweepInventory(deps, NOW);
+    expect(out[0]).toMatchObject({ label: SERVER_LABEL, result: 'measured' });
+    expect(out[1]).toMatchObject({ label: FLEET_LABEL, result: 'error' });
+    expect((out[1] as { message: string }).message).toContain('boom');
+  });
+});
+
 describe('sweepInventory — the phase table through the store (§18 "the phase table is applied", "a stale report never moves the lease")', () => {
   const T0 = T_S * 1000 + 500;
   async function busyBox(stampVersion = 'v0.0.12'): Promise<ReturnType<typeof box>> {
@@ -723,6 +771,76 @@ describe('the inventory lane in FleetWatcher (§18 "measurement is a sweep")', (
     const home = mkTmp('ccrc-inv-nocoord-');
     const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
     await expect(w.inventoryNow()).resolves.toEqual([]);
+  });
+
+  it('C2: a rejected sweep is warned ONCE per distinct message, quiet on a repeat, re-armed after a clean settle', async () => {
+    const home = mkTmp('ccrc-inv-reject-warn-');
+    const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const runInventorySpy = vi.spyOn(
+      w as unknown as { runInventory(): Promise<SweepOutcome[]> }, 'runInventory',
+    );
+    // The private helper both `tick()`'s gate and `triggerInventory()` share
+    // — called and awaited directly, sequentially, so this case is about the
+    // warn/dedupe logic alone, never about the join/rerun scheduling (C4 has
+    // its own case for that).
+    const dispatch = (): Promise<void> =>
+      (w as unknown as { dispatchInventorySweep(): Promise<void> }).dispatchInventorySweep();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const boomWarns = (): number => warn.mock.calls.filter((c) => String(c[0]).includes('boom')).length;
+    try {
+      runInventorySpy.mockRejectedValueOnce(new Error('boom'));
+      await dispatch();
+      expect(boomWarns()).toBe(1);
+      runInventorySpy.mockRejectedValueOnce(new Error('boom'));
+      await dispatch();
+      expect(boomWarns()).toBe(1);   // the SAME message, still standing — quiet
+      runInventorySpy.mockResolvedValueOnce([]);
+      await dispatch();               // a clean settle re-arms the dedupe
+      runInventorySpy.mockRejectedValueOnce(new Error('boom'));
+      await dispatch();
+      expect(boomWarns()).toBe(2);   // the SAME message again, after a recovery — warns again
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('C3: a standing node-id collision is warned once, and stays quiet while it repeats', async () => {
+    const home = mkTmp('ccrc-inv-collision-warn-');
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+    plant(base.cfg.ccrcDir, FULL);
+    const deps: Deps = { ...base, coord, cfg: { ...base.cfg, fleetMode: 'remote' }, fleetState: fleetState() };
+    const w = new FleetWatcher(deps, new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await w.inventoryNow();   // both connections read node-id U1 -> a collision
+      const collisionWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes('node-id-collision') || String(c[0]).includes('already the key of a live row'));
+      expect(collisionWarns()).toHaveLength(1);
+      await w.inventoryNow();   // the SAME collision, still standing
+      expect(collisionWarns()).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('C4: a ready that joins an in-flight sweep is not swallowed — exactly one rerun fires after it settles', async () => {
+    const home = mkTmp('ccrc-inv-rerun-');
+    const w = new FleetWatcher(testDeps(home), new Bus(), 60_000, path.join(home, 'state-cache.json'));
+    let calls = 0;
+    const deferred: { resolve: (v: SweepOutcome[]) => void }[] = [];
+    vi.spyOn(w as unknown as { runInventory(): Promise<SweepOutcome[]> }, 'runInventory').mockImplementation(() => {
+      calls += 1;
+      return new Promise<SweepOutcome[]>((resolve) => { deferred.push({ resolve }); });
+    });
+    w.triggerInventory();                 // sweep #1 starts, in flight
+    expect(calls).toBe(1);
+    w.triggerInventory();                 // joins #1 — must NOT start a second run yet
+    expect(calls).toBe(1);
+    deferred[0]!.resolve([]);             // sweep #1 settles
+    await vi.waitFor(() => { expect(calls).toBe(2); });   // the swallowed ready's rerun fires
+    deferred[1]!.resolve([]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toBe(2);                // and no further, un-requested rerun
   });
 });
 
