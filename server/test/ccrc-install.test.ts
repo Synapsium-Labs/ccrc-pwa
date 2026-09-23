@@ -1912,11 +1912,26 @@ describe('ccrc install: the order is stated in one place', () => {
     // "THE ROSTER LANDS BEFORE ccd" rule, and it is the reason `cmd_install`
     // is a fixed sequence rather than a set of steps.
     const src = read(join(REPO, 'ccd', 'ccrc'));
+    // D-3241 (W4 Task 4): the sequence is `CCRC_INST_SPINE`,
+    // declared ONCE, because `cmd_update`'s spine-death classifier must know
+    // which steps precede `_inst_tree` and a second hand list of the spine
+    // would be the two-copies defect single-definition.test.ts refuses.
+    // `cmd_install` iterates it through `_inst_step`, which writes the
+    // install-step marker before each step.
+    const spine = /^CCRC_INST_SPINE=\(([\s\S]*?)\n\)/m.exec(src);
+    expect(spine, 'ccd/ccrc has no CCRC_INST_SPINE').toBeTruthy();
+    const steps = spine![1]!.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    // Every line of the array is exactly one step name — a line the order
+    // assertion below could not read is a step it would not see.
+    expect(steps.filter((l) => !/^_inst_[a-z_]+$/.test(l))).toEqual([]);
+    for (const s of steps) expect(src, `${s} is in the spine but never defined`).toMatch(new RegExp(`^${s}\\(\\) \\{`, 'm'));
     const body = /cmd_install\(\) \{([\s\S]*?)\n\}/.exec(src);
     expect(body, 'ccd/ccrc has no cmd_install').toBeTruthy();
-    const steps = body![1]!.split('\n')
-      .map((l) => l.trim())
-      .filter((l) => /^_inst_[a-z_]+$/.test(l));
+    // No step is called outside the array: a bare call runs with no
+    // install-step marker, so a death in it would be misclassified.
+    expect(body![1]!.split('\n').map((l) => l.trim()).filter((l) => /^_inst_[a-z_]+$/.test(l)),
+      'cmd_install calls a step outside CCRC_INST_SPINE').toEqual([]);
+    expect(body![1]).toMatch(/^\s*for inst_fn in "\$\{CCRC_INST_SPINE\[@\]\}"; do _inst_step "\$inst_fn"; done$/m);
     expect(steps).toEqual([
       '_inst_banner',
       '_inst_roster',
@@ -4160,5 +4175,40 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
     // No orphaned temp file either — the redirect itself never created one.
     expect(readdirSync(join(home, '.ccrc'))).toEqual([]);
+  });
+});
+
+describe('ccrc install: install-step names the step the spine is entering (design §11; W4 Task 4)', () => {
+  it('a completed install leaves NO install-step — _inst_installed removes it once the record is placed', () => {
+    const home = freshBox('ccrc-install-step-done-');
+    gitInit(treeRoot(home));
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(dotCcrc(home, 'installed')), 'no record was placed — the absence below would be vacuous').toBe(true);
+    expect(existsSync(dotCcrc(home, 'install-step')), 'a completed spine left its step marker').toBe(false);
+  });
+
+  it('a spine that dies leaves install-step naming the step it died IN — not the one before it', () => {
+    const home = freshBox('ccrc-install-step-died-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(dotCcrc(home, 'node-id'), 'not-a-uuid\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/node-id exists but is not a uuid/);
+    expect(read(dotCcrc(home, 'install-step'))).toBe('_inst_node_id\n');
+  });
+
+  it('a marker that cannot be written refuses BEFORE its step runs — nothing of that step happens', () => {
+    const home = freshBox('ccrc-install-step-blocked-');
+    // A directory at the marker's path: `_plat_mv_notdir` refuses to place a
+    // file over it, where a bare `mv -f` would drop the temp INSIDE it and
+    // answer 0.
+    mkdirSync(join(dotCcrc(home, 'install-step'), 'in-the-way'), { recursive: true });
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: could not record the install step marker ~\/\.ccrc\/install-step before _inst_banner — nothing of _inst_banner ran$/m);
+    expect(r.stdout, 'a step ran after its marker failed').not.toMatch(/^install: /m);
+    expect(existsSync(dotCcrc(home, 'accounts.json'))).toBe(false);
   });
 });

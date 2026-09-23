@@ -1154,6 +1154,13 @@ BOX_UPDATE_JSON="$HOME/.ccrc/update.json"
 # D-3230): the holder's pid and target are read from
 # update.json, never from the lock file's bytes.
 BOX_UPDATE_LOCK="$HOME/.ccrc/update.lock"
+# `install-step` (design §11, W4 Task 4) — the spine step `ccrc install` is
+# ENTERING, written before each step by `_inst_step` and removed by
+# `_inst_installed` once the completed-install record is placed. A spine that
+# died leaves it naming the step it died in; `cmd_update` reads it to tell a
+# death before `_inst_tree` (nothing replaced) from one at or after it (the
+# tree IS replaced — the unit may already run new code).
+BOX_INSTALL_STEP_FILE="$HOME/.ccrc/install-step"
 # Who started a run that moves this box — the closed vocabulary `--from`
 # accepts (plan D-3228), declared ONCE: `cli` a hand-typed run
 # (the default), `pwa` the console's detached spawn, `restore` the automatic
@@ -9094,6 +9101,61 @@ cmd_models() {
   _models_lane_sub "$first" "$sub" "$@"
 }
 
+# ── THE SPINE, STATED ONCE (D-3241, W4 Task 4) ────────────
+# `cmd_install` runs these in this order through `_inst_step`, and
+# `cmd_update`'s spine-death classifier (`_upd_step_moved`) reads the same
+# array to know which steps precede `_inst_tree`. One list: a step added here
+# runs on install and on update, and is classified, without anyone
+# remembering a second copy. One name per line and nothing else inside the
+# parentheses — `ccrc-install.test.ts`'s order pin, the graphify step census
+# and `runbook-holds.test.ts` read it line by line.
+CCRC_INST_SPINE=(
+  _inst_banner
+  _inst_roster
+  _inst_accounts_sh
+  _inst_env
+  _inst_agent_env
+  _inst_rc
+  _inst_node_id
+  _inst_tree
+  _inst_bins
+  _inst_files
+  _inst_stamp
+  _inst_caps
+  _inst_units
+  _inst_enable
+  _inst_linger
+  _inst_dirs
+  _inst_graphify_engine
+  _inst_hooks
+  _inst_skills
+  _inst_graphify_skill
+  _inst_graph_always_on_off
+  _inst_graph_noise
+  _inst_graph_excludes
+  _inst_ws_build_excludes
+  _inst_graph_hooks_off
+  _inst_wrappers
+  _inst_installed
+)
+
+# `_inst_step <fn>` — record the step, then run it. The marker is placed
+# BEFORE the step, so a spine that dies leaves the name of the step it died
+# IN; a marker that cannot be written dies here, before `<fn>` does anything,
+# which classifies right as well — the surviving marker names the step
+# before, and that is before-the-tree exactly when `_inst_tree` had not run.
+# `_plat_mv_notdir`, not `mv -f`: a bare `mv -f` onto a directory standing at
+# the path moves the temp INSIDE it and answers 0.
+_inst_step() {   # <fn>
+  local fn="$1" tmp="$BOX_INSTALL_STEP_FILE.tmp.$$"
+  if ! { mkdir -p "$HOME/.ccrc" && printf '%s\n' "$fn" > "$tmp" && chmod 644 "$tmp" \
+         && _plat_mv_notdir "$tmp" "$BOX_INSTALL_STEP_FILE"; }; then
+    rm -f -- "$tmp" 2>/dev/null
+    _ccrc_die "could not record the install step marker ~/.ccrc/install-step before $fn — nothing of $fn ran"
+  fi
+  "$fn"
+}
+
 cmd_install() {
   # `cmd_wrappers`' loop (:1144-1152), minus the three flags it has and this
   # verb does not have yet. `-h`/`--help` prints usage at exit 0 rather than
@@ -9213,33 +9275,10 @@ cmd_install() {
   fi
 
   INST_DEGRADED=()
-  _inst_banner
-  _inst_roster
-  _inst_accounts_sh
-  _inst_env
-  _inst_agent_env
-  _inst_rc
-  _inst_node_id
-  _inst_tree
-  _inst_bins
-  _inst_files
-  _inst_stamp
-  _inst_caps
-  _inst_units
-  _inst_enable
-  _inst_linger
-  _inst_dirs
-  _inst_graphify_engine
-  _inst_hooks
-  _inst_skills
-  _inst_graphify_skill
-  _inst_graph_always_on_off
-  _inst_graph_noise
-  _inst_graph_excludes
-  _inst_ws_build_excludes
-  _inst_graph_hooks_off
-  _inst_wrappers
-  _inst_installed
+  # The spine, one step at a time, each announced in ~/.ccrc/install-step
+  # before it runs (`CCRC_INST_SPINE` above states the order and why).
+  local inst_fn
+  for inst_fn in "${CCRC_INST_SPINE[@]}"; do _inst_step "$inst_fn"; done
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
   # Every step above either converged or died, so "done" is a statement about
@@ -11261,7 +11300,24 @@ _inst_installed() {
   } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it${verified:+; provenance verified})"
+  _inst_floor
+  # THE SPINE ENDED (design §11, W4 Task 4): the record is placed and the floor
+  # step returned, so no step is in flight — `_inst_step`'s marker goes. Only
+  # HERE: the no-stamp return above keeps it (no record was placed), and a die
+  # in `_inst_floor` exits before this line, so the marker still names
+  # `_inst_installed` — which is how `cmd_update` tells a floor-write death
+  # from a doctor FAIL (Task 14, M1). A failed removal is one WARN: the next
+  # `ccrc update` clears the marker before its own staged install.
+  rm -f -- "$BOX_INSTALL_STEP_FILE" \
+    || echo "install: installed: WARN: could not remove ~/.ccrc/install-step — the next ccrc update clears it before its own staged install"
+}
 
+# ── _inst_floor — `_inst_installed`'s second half, split out (W4 Task 4) ───
+# so that every one of the floor's early returns lands on the ONE line in
+# the caller that removes the install-step marker. Reads `BOX_BUILD`, which
+# `_inst_installed` has just filled. Its body is the floor block as it was,
+# byte for byte.
+_inst_floor() {
   # THE FLOOR (design §9): the stamped tag, when it is above the file's
   # current line; a restore or rollback never lowers it, because nothing
   # here can — it is only ever raised. A stamp with no version raises nothing.
