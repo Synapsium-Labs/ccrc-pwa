@@ -1750,6 +1750,50 @@ describe('ccrc install: the executables and files it installs', () => {
     }
   });
 
+  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the two .py on both and fleet, neither on server', () => {
+    // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
+    // line were pinned only by `itDarwin`/`process.platform` branches, and no
+    // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
+    // (ccd/ccrc's platform block), and bash keeps an OSTYPE it inherits, so
+    // the child runs the Darwin arm here — `install: units:` naming
+    // `$HOME/Library/LaunchAgents` is the control that it did.
+    //
+    // FORCED THROUGH `_inst_bins`, NOT THROUGH THE VERB. A later step of a
+    // `both`/`fleet` install (the wrapper converger's `stat`) speaks BSD
+    // userland on that arm, which a Linux box does not have, so the run exits
+    // nonzero AFTER this function's work is done (measured: `stat answered for
+    // 85 of the 17 id-shaped files`). The exit code is therefore not asserted:
+    // what is asserted is everything `_inst_bins` did, which a step failing
+    // later cannot undo.
+    for (const role of ['both', 'fleet', 'server'] as const) {
+      const home = freshBox(`ccrc-install-darwin-arm-${role}-`);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      const r = runInstall(home, ['install', '--role', role], { OSTYPE: 'darwin23' });
+      expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
+        .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
+      const lane = role === 'server' ? [] : ['ccgpt-proxy.py', 'ccgpt-usage.py'];
+      const bins = readdirSync(join(home, '.local', 'bin'))
+        .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
+      expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
+        .toEqual(['ccd', 'ccd-account-auth', ...lane, 'ccrc'].sort());
+      for (const name of lane) {
+        const bin = join(home, '.local', 'bin', name);
+        expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+        expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+      }
+      const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+      expect(line, `--role ${role}: no \`install: bins:\` line`).toBeDefined();
+      expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
+      if (role === 'server') {
+        expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
+      } else {
+        expect(line!).toMatch(/(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/);
+      }
+    }
+  });
+
   itLinux('ccd-tmp-sweep lands beside it too (the temp-dir reaper) — every role, but not Darwin', () => {
     // Mirrors the `ccd-graph-sweep` case above: `_inst_bins` ships it on every
     // role, on the same darwin carve-out (its only runner is a systemd timer
