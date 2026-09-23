@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **awaiting review** (run 128, PR #176, tip `a35f5e7c`); review run 134 dispatched 2026-09-23; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **fix round 1** (run 128, PR #176); review run 134 at `a35f5e7c`: 21 findings survived; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
@@ -120,6 +120,43 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   newest. At about three merges a day, GitHub's first page of 30 stops showing it in about four days, and the seeded
   `'*'` → stable default would then resolve to "no eligible release". That fails safe but is wrong, so it must be fixed
   before rollout.
+
+- **Review run 134 on wave 2 (2026-09-23), at `a35f5e7c`.** The held-out panel ran with two wave-specific lenses: 86
+  agents, no lens unverified, no finding unexamined. 21 findings survived, 6 important and 15 minor; 4 were killed and
+  kept. Survivors per lens:
+  - correctness 4, spec 2, security 5, does-it-reproduce 3, interface fidelity 8;
+  - one finding (F3, a credential in the boot log) was found by two lenses.
+
+  Ruled **send back** (fix round 1; rulings in the `fix-round` mail's artifact). Every finding in W2's own code is
+  fixed in this round:
+  - the unmeasured-read-as-absent collapse (floor, previous, first-sweep report);
+  - a stamp judged unread;
+  - the credential leak;
+  - redirects;
+  - the download-URL check;
+  - the tag length and leading-zero rule;
+  - the symlink guarantee;
+  - the route census's verbs;
+  - the writer-group scan's literal-only check;
+  - the basename-list pin.
+
+  The worker's raised items are also in this round: the catalogue's page window (a conditional `releases/latest` per
+  poll), a NULL-`startedAt` report never moving a lease, and a CLAUDE.md line on `req.log` being a no-op.
+
+  **Not in the round:** F4–F6, F17–F19 and K4 are the committed plans of waves 3–6 drifting from what W2 shipped (a
+  widened result arm, one constant replacing two, a catch and a dedupe key the fix rounds improved). W2 is right in
+  every case. The coordinator re-points those plans against the merged tree after W2 merges, and sends wave 4's
+  worker its K4 re-pointing with the merge sha.
+
+  Recorded and outside this programme: no `setErrorHandler` anywhere in `server/src` (predates this wave, affects
+  every route).
+- **A review run's close needs `working` first (found 2026-09-23).** Run 134 was still `dispatched` when its
+  `review-done` arrived. `REVIEW_RUN_TRANSITIONS` has no `dispatched` → `done` edge, so the close answered
+  `bad-transition`.
+  - Advancing it to `working` succeeded only with the WORK fingerprint shape (`branchTip`…); the review shape
+    (`reviewedTip`, `report`) answered a bare `400`.
+  - The work run 128 likewise sat at `dispatched` through its whole execution.
+  - The coordinator skill's step 6 names neither. That is a skill/mechanism gap, reported to the operator.
 
 ## Carried constraints
 
