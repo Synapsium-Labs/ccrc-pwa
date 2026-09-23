@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **fix round 1** (run 128, PR #176); review run 134 at `a35f5e7c`: 21 findings survived; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **second review** (run 128, PR #176 at `2b5d4ce1` after fix round 1); review run 143 dispatched 2026-09-23 19:4x UTC; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
@@ -190,6 +190,33 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   Global Constraints' reserve-number rule over Task 15's slug wording. It shares `session-hook.test.ts` narrow hunks
   with runs 131 and 138 under its claim 733; whichever merges second re-measures the census. Its wake mail carries W2's
   merge sha and the K4 re-pointing: `REPORT_TIME_MAX_S`/`MAX_UNIX_S` became `shared/api.ts`'s `UNIX_SECONDS_MAX`.
+
+- **Wave 2's fix round 1 is done (2026-09-23), at `2b5d4ce1`.** Five reserve numbers are spent:
+  - D-3213: an unmeasured floor, previous or report is never stored as absent. Two NOT NULL read-state columns join
+    `MIGRATIONS[13]`, and an unmeasured floor with no carried value resolves nothing.
+  - D-3214: a lease verdict never rests on an unread stamp or an undated report.
+  - D-3215: the `releases/latest` probe, plus ruling R21's `releases/tags/K` re-read when the probe moves away from K.
+    K is derived from the store, so it survives a restart.
+  - D-3216: the download-URL and tag ingress bounds. The intent route did accept non-catalogue `pinnedTag`s, so the
+    same predicate now guards it (R20).
+  - D-3217: the plan's Interfaces blocks match what ships.
+
+  Two branches were chosen: F12 was made true (node-file `lstat` scoped to the eight basenames), and F15 was narrowed
+  (store.ts has 65 interpolated `prepare(` sites, so a literal-only check would red the whole file).
+
+  **R21:** a withdrawn or demoted off-page stable is re-read by tag when the latest probe moves away from it. Residue
+  carried to wave 5: an older off-page stable demoted while a newer stable is latest stays invisible, which matters
+  only for rollback targets.
+
+  The gate's reds are `tmp-sweep`, which predates the wave, and `boot.test.ts`'s timing case, which alternated green
+  and red alone at a load average of 25–38. CI arbitrates.
+
+  **Carried from the worker's parked minors:**
+  - wave 3: its *Check now* plus the 30-minute polls must stay inside GitHub's unauthenticated 60/h budget;
+  - wave 3 or wave 6: `NodeWire` carries no floor read-state, so a PWA reader would show a carried floor as measured;
+  - to the second review: the tag re-read's 200 path does not check that the answer names K.
+
+  Review run 143 carries the panel plus a security lens, over the whole wave, weighted to the fix round.
 
 ## Carried constraints
 
