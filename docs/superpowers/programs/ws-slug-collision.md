@@ -15,7 +15,7 @@ citation corpus never moves.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **in review** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); tip `e5238719`; review run 141 on `ccrc-pwa-swift-cove` |
+| 1 | `_ws_slug_git_state` (free / taken / unmeasurable); the random loop, the `CCD_WS_SLUG` arm and the named-slug refusal consult it; S6-R11 | AGENT-FIRST (ccd only) | #177 | **last fix round** 2026-09-23 — `ccrc-pwa-warm-hollow` (run 137; Opus·high, Sonnet subagents, workflows off, compact 40); review 141 at `e5238719`: 2 important + 6 minor |
 
 **Deviation block: five numbers, the first of them 3473** (allocated at run-open, 2026-09-23; floor now
 3478). No number of it is spelled as a `D-` token here until the plan defines one.
@@ -45,6 +45,22 @@ overlapping claims. It ships in the release after its own merge, rolled out flee
     An empty directory at the worktree path now counts as taken. The plan's table specified that, so it is
     not a departure.
   - **Next.** One docs-only commit defines the numbers; then the held-out review.
+
+- **2026-09-23 — review 141 at `e5238719`: two important findings, one of them the plan's own premise.**
+  - **The panel.** Three lenses plus a git-first lens, 52 agents, 16 confirmed, none refuted. Frozen corpus
+    unmoved, the refusal ahead of every mint, a free slug unchanged, `_ws_slug_free` untouched, fixture
+    HOMEs only: all held.
+  - **The plan was wrong.** It said `show-ref --verify` exits 1 only on an absent ref. Measured on git
+    2.43.0, it also exits 1 for an unreadable or corrupt loose ref and for an unsearchable `refs/heads/ws/`,
+    so "can't tell" folded into free (F2). Directory/file ref conflicts also read as free (F3), and an
+    unsearchable worktree parent reads as free (F4). All three are fixed as D-3476.
+  - **Test strength (F1).** Three existing tests now pass without a repo for the wrong reason. They get a
+    repo, inside D-3474.
+  - **Accepted as residual (F5).** The race between the judgement and `git worktree add`. git's own
+    refusal stays the backstop, documented in the header.
+  - **The rest.** A stale comment fixed in place (F6). "Not a slug" means "does not blame the slug", so no
+    change (F7). The full mutation table goes in the PR body (F8).
+  - **Named in advance as the last full fix round.**
 
 ## Carried constraints
 
