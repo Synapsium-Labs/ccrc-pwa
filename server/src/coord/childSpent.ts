@@ -4,7 +4,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import type { SessionRecord } from '../registry.js';
 import { CCD_ARGV, verbSupported } from '../ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, type CcdPrLine } from '../prstate.js';
+import { isFullLine, parsePrLines, phaseFor, type CcdPrLine, type CcdPrRow } from '../prstate.js';
 import { readPrHistory } from './prhistory.js';
 import type { PrLineageEntry } from './store.js';
 import type { PrPhase } from '../../../shared/api.js';
@@ -26,11 +26,14 @@ export type ChildSpentVerdict =
 export interface ChildSpentDeps { io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState }
 
 /**
- * What a LIVE lookup's measured phase proves. Total over `PrPhase`, so a
- * phase added to the vocabulary is a compile error here until someone decides
- * what it proves. `none` and `no-commits` are gh's positive answer that no PR
- * is bound to this branch; `unknown` (including `merge-unproven`, where gh
- * said MERGED and a conjunct failed) and `unchecked` prove nothing.
+ * The FALLBACK mapping, reached only when no row of `line.rows` names the
+ * child's branch as its head in the same repository (the any-same-branch-row
+ * check above `childSpent` runs first). What a LIVE lookup's measured phase
+ * proves. Total over `PrPhase`, so a phase added to the vocabulary is a
+ * compile error here until someone decides what it proves. `none` and
+ * `no-commits` are gh's positive answer that no PR is bound to this branch;
+ * `unknown` (including `merge-unproven`, where gh said MERGED and a conjunct
+ * failed) and `unchecked` prove nothing.
  */
 const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> = {
   open: 'spent', draft: 'spent', merged: 'spent', closed: 'spent',
@@ -54,9 +57,21 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  *  3. A LIVE `ccd pr-state --session <id>` — nothing in this system learns of
  *     a PR by push, and the sweep's cadence is minutes while a coordinator
  *     opens wave N+1 seconds after the worker's done mail. Gated like every
- *     other caller of the verb (`verbSupported`). A bound open/draft/merged/
- *     closed PR answers `spent`; gh's "none bound" answers `unspent`; every
- *     other answer — `branch-drift` (the lookup provably did not look for this
+ *     other caller of the verb (`verbSupported`). The operator's rule (D-3347):
+ *     a PR OPENED FROM THE CHILD'S BRANCH SPENDS IT, in any state, whatever its
+ *     base, whether or not it BINDS — binding (`boundRow`'s base/`ours`
+ *     conjuncts) is a fact about which PR a workspace's control renders, not
+ *     about whether the branch has been spent. So this rung reads every row of
+ *     `line.rows` — measured 2026-09-23 to survive ccd's own `--head` filter
+ *     unfiltered, base and `ours` included — for one whose `isCrossRepository`
+ *     is exactly `false` (the same field ccd itself annotates) and whose
+ *     `headRefName` names `line.branch`; ANY such row answers `spent`, naming
+ *     the highest-numbered one. A same-branch row whose repository could not
+ *     be established (`isCrossRepository` absent) is not guessed into either
+ *     bucket — it answers `unmeasured` unless a genuine same-repo row also
+ *     exists. Only when NO same-branch row exists at all does gh's measured
+ *     phase decide: `none`/`no-commits` answers `unspent`; every other
+ *     answer — `branch-drift` (the lookup provably did not look for this
  *     branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
  *     foreign line — answers `unmeasured`, with the reason in `detail`.
  *
@@ -88,6 +103,34 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
       ? 'pr-state answered no line for this session'
       : `pr-state answered ${failure.reason ?? 'unknown'}` };
   }
+  // D-3347: a PR opened from the child's branch spends it, whatever its base
+  // and whether or not it binds — `boundRow`'s base/`ours` conjuncts decide
+  // which PR a workspace's CONTROL renders, not whether the branch is spent.
+  // `line.branch` (not `rec.branch`) is the string ccd itself compared
+  // `headRefName` against to build `--head` and to fill this same field, so a
+  // full line already speaks for that comparison — branch-drift answers
+  // `unmeasured` above, before a full line is ever found.
+  const sameBranch = line.rows.filter((r) => r.headRefName === line.branch);
+  const sameRepo = sameBranch.filter((r) => r.isCrossRepository === false);
+  // Neither `false` (same-repo, handled above) nor `true` (a stranger's fork,
+  // which never counts): `isCrossRepository` absent means ccd's own gh read
+  // did not establish which repository this row's PR lives in, and a row this
+  // wave cannot place is not spent by guess.
+  const unestablished = sameBranch.filter((r) => r.isCrossRepository !== false && r.isCrossRepository !== true);
+  if (sameRepo.length > 0) {
+    const named = sameRepo.filter((r): r is CcdPrRow & { number: number } => typeof r.number === 'number');
+    if (named.length === 0) {
+      return { kind: 'unmeasured',
+        detail: 'pr-state named a same-branch PR with no number to report as spent' };
+    }
+    const highest = named.reduce((a, b) => (b.number > a.number ? b : a));
+    return { kind: 'spent', pr: highest.number, source: 'live' };
+  }
+  if (unestablished.length > 0) {
+    return { kind: 'unmeasured',
+      detail: 'pr-state named a same-branch PR whose repository could not be established' };
+  }
+
   const measured = phaseFor(line);
   const proves = LIVE_PHASE[measured.phase];
   if (proves === 'spent' && measured.number !== null) return { kind: 'spent', pr: measured.number, source: 'live' };
