@@ -148,6 +148,8 @@ describe('_child_tmpdir — three answers, told apart', () => {
       expect(r.out).toContain('ccd: warn: usr is a child but');
       expect(mode(FOREIGN_DIR!), 'a foreign directory was re-moded').toBe(before);
     } finally {
+      // A runner holding CAP_FOWNER could have re-moded it; never leave that behind.
+      if (mode(FOREIGN_DIR!) !== before) { try { fs.chmodSync(FOREIGN_DIR!, before); } catch { /* not ours to fix */ } }
       // Never leave a link to `/` for the harness's recursive cleanup to meet.
       fs.unlinkSync(tmpRoot());
     }

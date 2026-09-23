@@ -85,7 +85,7 @@ describe('--child on ws-add writes the marker the first spawn reads', () => {
 describe('--child refuses anything but a run id, before anything exists', () => {
   it('as the FINAL token it refuses with the usage line rather than hanging', () => {
     const r = wsAdd('--no-rc demo --child');
-    expect(r.status, 'a valueless --child never terminated — the arity check is gone').not.toBe(124);
+    expect(r.status, 'a valueless --child ran past the wall clock (timeout rc 124)').not.toBe(124);
     expect(r.status).toBe(1);
     expect(r.out).toContain('usage: ccd ws-add [--no-rc] [--child <runId>]');
     nothingCreated();
