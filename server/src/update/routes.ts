@@ -8,7 +8,7 @@ import { autoGateBlockers, isIngestibleReleaseTag, renderProjection, resolveNode
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import {
-  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel,
+  isAutoMode, isNotifyMode, isUpdateChannel,
   type AckAnswer, type CatalogueState, type IntentWriteAnswer, type NodeWire, type ReleaseWire,
   type UpdateIntentWire, type UpdateRouteRefusal, type UpdatesView,
 } from '../../../shared/api.js';
@@ -122,7 +122,9 @@ export function parseIntentBody(body: unknown): ParsedIntentBody {
     const pinnedTag = o.pinnedTag;
     if (pinnedTag === null) patch.pinnedTag = null;
     else if (typeof pinnedTag !== 'string') return bad('pinnedTag');
-    else if (!isReleaseTag(pinnedTag) || !isIngestibleReleaseTag(pinnedTag)) {
+    // Fix round 1, review round 2 (minor): `isIngestibleReleaseTag` calls
+    // `isReleaseTag` itself, so checking both here was redundant.
+    else if (!isIngestibleReleaseTag(pinnedTag)) {
       return { ok: false, error: 'bad-tag', field: 'pinnedTag' };
     } else patch.pinnedTag = pinnedTag;
   }

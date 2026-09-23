@@ -59,15 +59,20 @@ export const CATALOGUE_BODY_MAX_BYTES = 8 * 1024 * 1024;
  *  rather than send the runtime's default. */
 const USER_AGENT = 'ccrc-server';
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
-const DOWNLOAD_URL_MAX = 2048;
+export const DOWNLOAD_URL_MAX = 2048;
 /** F10 (fix round 1, D-3216): every byte of a download URL must be printable
  *  ASCII (`\x21`-`\x7e`) — no control byte, no non-ASCII byte a naive
  *  terminal or log line would mis-render. */
 const PRINTABLE_ASCII_URL = /^[\x21-\x7e]+$/;
 
-/** The port this module needs, declared by the consumer (L2). */
+/** The port this module needs, declared by the consumer (L2). `keepTags`
+ *  (fix round 1, review round 2, I3) is optional so an older test double
+ *  written against the three-argument shape still type-checks; the real
+ *  store always accepts it. */
 export interface CatalogueStore {
-  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage): ApplyReleaseListingResult;
+  applyReleaseListing(
+    listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage, keepTags?: readonly string[],
+  ): ApplyReleaseListingResult;
 }
 
 export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
@@ -94,6 +99,25 @@ function safeSchemeHost(raw: string): string {
   }
 }
 
+/** I1 (fix round 1, review round 2): `'@'` ANYWHERE in the raw base is
+ *  refused before `BASE_URL_OK` even runs, with its own word and NO
+ *  scheme/host suffix at all. A GitHub API base never legitimately contains
+ *  one. This is not redundant with `BASE_URL_OK`'s own credential check: a
+ *  `'@'` preceded by a `/`, `?` or `#` sits OUTSIDE the URL's authority (WHATWG
+ *  ends the authority at the first such delimiter), so `u.username`/
+ *  `u.password` both read empty and `BASE_URL_OK` never sees it as
+ *  credentials — instead the text BEFORE the delimiter parses as the
+ *  hostname (or, past a leading `/`, the path), and printing "the host"
+ *  would print the secret's own head (measured: `https://se?cret@host`
+ *  parses with `hostname: 'se'`). It also refuses
+ *  `https://ghp_TOKEN/@api.github.com`, which `BASE_URL_OK` alone ACCEPTS
+ *  (hostname `ghp_token`, `https:` needs no loopback check) and which would
+ *  send a live token out as a DNS lookup every poll — closed here, without
+ *  touching the shared gate. */
+function apiBaseHasAt(raw: string): boolean {
+  return raw.includes('@');
+}
+
 /** D-3209: validated ONCE when the poller is created, never per poll. `null`
  *  = fine. Delegates to `shared/base-url.ts`'s `BASE_URL_OK` — the SAME gate
  *  (parses, empty query/fragment, `https:` anywhere or `http:` only to its
@@ -103,20 +127,26 @@ function safeSchemeHost(raw: string): string {
  *  value a second copy would be spelled from"). A refused base answers every
  *  poll `no-release-source` with no request — the same reason a missing
  *  release source reports, since a bad base is just as unusable. The message
- *  never carries the base's userinfo, query, fragment or path in clear (F3,
- *  fix round 1) — only the refusal word and, when the value parses at all
- *  with a real host, its scheme and host; an unparseable base, or one with no
- *  real host, prints neither. */
+ *  never carries any fragment of the base's userinfo, query, fragment or
+ *  path in clear (F3, fix round 1; hardened I1, review round 2) — a raw base
+ *  containing `'@'` anywhere prints the refusal word alone; otherwise, when
+ *  the value parses at all with a real host, its scheme and host; an
+ *  unparseable base, or one with no real host, prints neither. */
 export function apiBaseProblem(apiUrl: string): string | null {
+  if (apiBaseHasAt(apiUrl)) return 'apiUrl refused (base-url-has-at)';
   const verdict = BASE_URL_OK(apiUrl);
   return verdict.ok ? null : `apiUrl refused (${verdict.reason})${safeSchemeHost(apiUrl)}`;
 }
 
 export interface CataloguePoller {
-  /** Single-flight: a poll during a poll returns the in-flight promise. Resolves
-   *  with the state after this poll; never rejects — every failure, including
-   *  the store's writer throwing, is folded into the resolved state's
-   *  `lastError` (see the `applyReleaseListing` call site below). */
+  /** Single-flight: a poll during a poll returns the in-flight promise.
+   *  Resolves only after BOTH the listing request and the latest-release
+   *  probe (D-3215) have fully settled (fix round 1, review round 2, I2),
+   *  with the state AS IT STANDS THEN — never a snapshot captured before the
+   *  probe ran. Never rejects — every failure, including the store's writer
+   *  throwing, is folded into the resolved state's `lastError` (see the
+   *  `applyReleaseListing` call site below), except the latest probe's own
+   *  failures, which are warned, never reflected in `lastError`/`lastOkAt`. */
   poll(now: number): Promise<CatalogueState>;
   /** `{lastOkAt: null, lastError: null}` until the first answer — "never checked". A copy. */
   state(): CatalogueState;
@@ -345,6 +375,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  next time the probe answers (200 applied, 304, or 404 — all three are
    *  answers, not failures). */
   let lastWarnedLatestError: string | null = null;
+  /** I3 (fix round 1, review round 2): the tag of the latest probe's own last
+   *  SUCCESSFUL upsert — process memory, like the ETags (D-3182), never
+   *  cleared by a 304, a 404 or any failure. The LISTING's yank statement
+   *  excludes it (`pollListing`'s `keepTags`), so a `complete`/`newest-page`
+   *  listing that omits it (the off-page-stable shape D-3215 exists for)
+   *  never marks it absent out from under the probe that just confirmed it. */
+  let lastLatestTag: string | null = null;
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -398,8 +435,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
       // D-3209: a throw from the store (e.g. a still-oversized listing that
       // slips past the length gate above) must set `lastError`, never reject
       // `pollOnce` — a rejection is exactly what left `lastOkAt` reading
-      // "up to date" after a failed poll before this fix.
-      applied = deps.store.applyReleaseListing(parsed.rows, now, parsed.coverage);
+      // "up to date" after a failed poll before this fix. I3: `lastLatestTag`
+      // rides along as the yank exclusion — `null` becomes `[]` inside the
+      // store, changing nothing when the latest probe has never succeeded.
+      applied = deps.store.applyReleaseListing(
+        parsed.rows, now, parsed.coverage, lastLatestTag === null ? [] : [lastLatestTag],
+      );
     } catch (err) {
       // B6: the cause was otherwise silent — `lastError` said 'malformed'
       // and nothing else. Warned once per distinct message; a repeat of the
@@ -423,7 +464,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * LISTING's alone, per the ruling in the module docstring); every failure
    * is a `console.warn`, deduped on its cause and re-armed on the next
    * answer. A 404 (no stable release exists yet) and a 304 (unchanged) are
-   * both answers, never failures.
+   * both answers, never failures. Fix round 1, review round 2: a `draft` or
+   * `prerelease` element is out of GitHub's own contract for this endpoint
+   * (`/releases/latest` never answers either) and is treated as a FAILED
+   * latest — warned, deduped, `latestEtag` and `lastLatestTag` both left
+   * exactly where they were — never written, so it can neither yank nor
+   * alter an existing row.
    */
   async function pollLatest(now: number, source: { owner: string; repo: string }): Promise<void> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
@@ -446,6 +492,9 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     }
     const row = parseReleaseElement(body);
     if (row === null) return warnLatest('malformed-element');
+    // Fix round 1, review round 2: out of contract for this endpoint — never
+    // written, so it can neither yank nor un-yank, nor become `lastLatestTag`.
+    if (row.draft || row.channel === 'dev') return warnLatest('latest-not-stable');
     let applied: ApplyReleaseListingResult;
     try {
       // D-3215: the ONE catalogue writer, under 'single' coverage — no
@@ -456,6 +505,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     }
     if (!applied.ok) return warnLatest(`store-refused-${applied.why}`);
     latestEtag = answer.etag;   // never advanced on any failure arm above
+    lastLatestTag = row.tag;    // I3: the LISTING's yank exclusion from now on
     latestAnswered();
   }
 
@@ -466,10 +516,22 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     const source = deps.source;
     if (!source.ok) return failed(now, 'no-release-source');
     const listingState = await pollListing(now, source);
-    // D-3215: independent of the listing's outcome, and never allowed to
-    // change what pollListing already decided.
-    await pollLatest(now, source);
-    return listingState;
+    // Fix round 1, review round 2 (minor): a rate-limited listing has already
+    // spent this box's share of an exhausted budget — do not spend a second
+    // request against it.
+    if (listingState.lastError?.reason !== 'rate-limited') {
+      // D-3215: independent of the listing's outcome, and never allowed to
+      // change what pollListing already decided.
+      await pollLatest(now, source);
+    }
+    // Fix round 1, review round 2 (I2): resolved only after BOTH requests
+    // have fully settled, with the state AS IT STANDS THEN — never a
+    // snapshot captured before `pollLatest` ran, which hid a state-touching
+    // bug in `pollLatest` from every caller of `poll()` (the ruling that
+    // `pollLatest` never touches `lastOkAt`/`lastError` is enforced by
+    // `pollLatest` itself; this return makes any future violation of it
+    // OBSERVABLE here instead of silently absorbed).
+    return snapshot();
   }
 
   return {

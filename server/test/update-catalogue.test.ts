@@ -21,7 +21,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type ListingCoverage, type ReleaseListingRow } from '../src/coord/store.js';
 import type { ReleaseSourceRead } from '../src/config.js';
 import {
-  CATALOGUE_BODY_MAX_BYTES, NOTES_CAP_BYTES, NOTES_MARKER, RELEASES_PER_PAGE,
+  CATALOGUE_BODY_MAX_BYTES, DOWNLOAD_URL_MAX, NOTES_CAP_BYTES, NOTES_MARKER, RELEASES_PER_PAGE,
   apiBaseProblem, capNotes, createCataloguePoller, parseReleaseListing,
   type CatalogueStore, type CataloguePoller,
 } from '../src/update/catalogue.js';
@@ -30,6 +30,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { resolveNodeIntent, type EligibilityRow, type ResolveInput } from '../src/update/resolve.js';
+import { BASE_URL_OK } from '../../shared/base-url.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const SOURCE: ReleaseSourceRead = { ok: true, owner: 'fixture-owner', repo: 'fixture-repo', from: 'env' };
@@ -207,6 +208,20 @@ describe('safeDownloadUrl / F10 (fix round 1, D-3216) — a bad download URL wit
     expect(p!.rows[0]!.tarballUrl).toBe('https://example.invalid/ccrc-v0.0.9.tar.gz');
   });
 
+  // Fix round 1, review round 2 (minor m3): DOWNLOAD_URL_MAX was unpinned.
+  // A URL at exactly the cap is kept; one byte over is refused to NULL.
+  // Mutation (measured by hand): removing `raw.length > DOWNLOAD_URL_MAX`
+  // from `safeDownloadUrl` reds the second case (`over` would be kept).
+  it('the length cap: exactly DOWNLOAD_URL_MAX is kept, one byte over is NULL', () => {
+    const prefix = 'https://example.invalid/';
+    const atCap = prefix + 'a'.repeat(DOWNLOAD_URL_MAX - prefix.length);
+    const over = atCap + 'a';
+    expect(atCap.length).toBe(DOWNLOAD_URL_MAX);
+    expect(over.length).toBe(DOWNLOAD_URL_MAX + 1);
+    expect(parseReleaseListing([withUrl(atCap)])!.rows[0]!.tarballUrl).toBe(atCap);
+    expect(parseReleaseListing([withUrl(over)])!.rows[0]!.tarballUrl).toBeNull();
+  });
+
   // Mutation: accepting http again (reverting to the old `DOWNLOAD_URL` regex)
   // reds the first case — measured by hand: swapping `safeDownloadUrl`'s
   // `u.protocol !== 'https:'` for the old `/^https?:\/\/\S+$/.test` accepts
@@ -288,46 +303,59 @@ describe('apiBaseProblem — validated once, at poller creation (D-3209, fix rou
     }
   });
 
-  it('B1/F3: a credentials-bearing base is refused with NO userinfo at all in the message — scheme and host only', () => {
+  it('B1/I1: a credentials-bearing base is refused with NO userinfo, scheme or host at all — the base-url-has-at word alone', () => {
     const problem = apiBaseProblem('https://user:hunter2@api.example.com');
     expect(problem).not.toBeNull();
     expect(problem).not.toMatch(/hunter2/);
     expect(problem).not.toMatch(/user:hunter2/);
     expect(problem).not.toContain('***@');   // F3: never a working URL, redacted or not
-    expect(problem).toBe('apiUrl refused (base-url-credentials): https://api.example.com');
+    expect(problem).toBe('apiUrl refused (base-url-has-at)');
   });
 
-  // F3 (fix round 1, review run 134): the reviewer's four inputs. Each must
-  // reach the log with neither the password fragment nor a `user:`/`u:`
-  // prefix off the RAW input — checked as the exact contiguous fragments the
-  // input carries, never the single letter-pair `se` alone, which also
-  // occurs inside the unrelated, fixed refusal words `base-url-unparseable`
-  // and `base-url-insecure` and would be a false positive. Three of the four
-  // fail to parse as a URL at all (the userinfo's own `/`, `?` or `#`
-  // terminates the authority before an `@` is found, so `new URL` throws
-  // "Invalid URL" on an unparseable host:port), so `apiBaseProblem` prints
-  // the refusal word alone, no URL fragment at all.
-  it('F3: none of the reviewer\'s four inputs ever put the secret, or a user-looking prefix, in the message', () => {
-    const cases: [string, RegExp[]][] = [
-      ['https://user:se/cret@api.example.invalid', [/se\/cret/, /user:/]],
-      ['https://user:se?cret@api.example.invalid', [/se\?cret/, /user:/]],
-      ['https://user:se#cret@api.example.invalid', [/se#cret/, /user:/]],
-      ['u:pw@host', [/pw@/, /u:pw/]],
+  // F3 (fix round 1, review run 134) + I1 (fix round 1, review round 2): a
+  // raw base containing '@' ANYWHERE is refused before BASE_URL_OK even
+  // runs, with its own word and no scheme/host suffix — regardless of where
+  // WHATWG's own authority parsing would have put the '@'. This closes the
+  // reviewer's finding that three of the ORIGINAL four inputs merely
+  // happened to be unparseable (their userinfo's own `/`, `?` or `#`
+  // terminates the authority before an `@` is found) while a sibling with no
+  // such delimiter — a token used as a bare username, or one with no
+  // password — parses FINE, puts the token's own head into `hostname`, and
+  // would have printed part of it as "the host".
+  it('I1: every base carrying \'@\' anywhere is refused base-url-has-at, with no scheme, host or secret fragment in the message', () => {
+    const cases: string[] = [
+      // The original four (F3), now moot as a parseability question — none
+      // of them ever reach BASE_URL_OK.
+      'https://user:se/cret@api.example.invalid',
+      'https://user:se?cret@api.example.invalid',
+      'https://user:se#cret@api.example.invalid',
+      'u:pw@host',
+      // The reviewer's I1 findings: no password, or a delimiter placing the
+      // secret's head where BASE_URL_OK's own credential check cannot see
+      // it (it inspects `u.username`/`u.password`, both empty here).
+      'https://se?cret@api.example.invalid',
+      'https://se#cret@api.example.invalid',
+      'https://se\\cret@host?',
+      'http://ghp_TOKEN/@api.example.invalid',
+      'http://user:1234/x@host',
+      // The related, closed-here-without-touching-base-url.ts case: BASE_URL_OK
+      // alone ACCEPTS this (hostname `ghp_token`, https needs no loopback
+      // check), which would send a live token out as a DNS lookup every poll.
+      'https://ghp_TOKEN/@api.example.invalid',
     ];
-    for (const [raw, bad] of cases) {
+    for (const raw of cases) {
       const problem = apiBaseProblem(raw);
-      expect(problem, raw).not.toBeNull();
-      expect(problem, raw).not.toBe(raw);         // never the raw input verbatim
-      for (const rx of bad) expect(problem, `${raw} -> ${problem}`).not.toMatch(rx);
+      expect(problem, raw).toBe('apiUrl refused (base-url-has-at)');
     }
-    // The first three are unparseable outright (the userinfo's delimiter cuts
-    // the authority before any `@`): no scheme/host suffix at all.
-    expect(apiBaseProblem('https://user:se/cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
-    expect(apiBaseProblem('https://user:se?cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
-    expect(apiBaseProblem('https://user:se#cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
-    // The fourth parses (an opaque, non-`http(s)` scheme) but names no real
-    // host — hostname is '' — so the suffix is withheld too.
-    expect(apiBaseProblem('u:pw@host')).toBe('apiUrl refused (base-url-insecure)');
+  });
+
+  // Mutation (measured by hand): dropping the `'@'` check reds this case —
+  // `https://ghp_TOKEN/@api.example.invalid` is then handed to `BASE_URL_OK`,
+  // which ACCEPTS it (verified separately against the live `BASE_URL_OK`),
+  // so `apiBaseProblem` would answer `null` and the poller would build a
+  // request whose hostname IS the token.
+  it('mutation control: BASE_URL_OK alone accepts the ghp_TOKEN base I1 refuses', () => {
+    expect(BASE_URL_OK('https://ghp_TOKEN/@api.example.invalid').ok).toBe(true);
   });
 });
 
@@ -424,13 +452,21 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     await new Promise<void>((r) => { server.close(() => r()); });
   });
 
-  function fixture(): { store: CoordStore; port: CatalogueStore; calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage }[] } {
+  function fixture(): {
+    store: CoordStore; port: CatalogueStore;
+    calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[] }[];
+  } {
     const store = new CoordStore(openCoordDb(path.join(mkTmp('update-catalogue-'), 'coord.db')));
-    const calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage }[] = [];
+    const calls: { listing: readonly ReleaseListingRow[]; now: number; coverage: ListingCoverage; keepTags: readonly string[] }[] = [];
     const port: CatalogueStore = {
-      applyReleaseListing(listing, now, coverage) {
-        calls.push({ listing, now, coverage });
-        return store.applyReleaseListing(listing, now, coverage);
+      // Fix round 1, review round 2 (I3): forwards `keepTags` — a fixture
+      // wrapper that silently dropped it would hide the whole mechanism
+      // from every test in this file (measured: this WAS the bug on first
+      // write, found by the I3 pin failing while the direct store-level
+      // test passed).
+      applyReleaseListing(listing, now, coverage, keepTags = []) {
+        calls.push({ listing, now, coverage, keepTags });
+        return store.applyReleaseListing(listing, now, coverage, keepTags);
       },
     };
     return { store, port, calls };
@@ -810,13 +846,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
   // (measured by hand): removing `redirect: 'error'` from the listing's
   // `fetch(...)` call makes node's `fetch` FOLLOW the 302 instead — this
   // case reds because `seen` gets no second entry from this fixture (the
-  // follow goes to `https://example.invalid/`, off this loopback server)
-  // and the poll instead resolves `no-egress` (or hangs past the deadline),
-  // never `redirect`.
+  // follow goes off this loopback server) and the poll instead resolves
+  // `no-egress` (or hangs past the deadline), never `redirect`. The
+  // `Location` is a LOOPBACK address (fix round 1, review round 2, minor
+  // m6) — under the mutation this really is followed, so a real external
+  // host here would make a genuine DNS lookup / network hop from this test.
   it('F9: a redirect on the listing is its own reason — never folded into no-egress — no row written, lastOkAt unmoved', async () => {
     const { store, port } = fixture();
     const p = poller(port);
-    script = [{ status: 302, headers: { location: 'https://example.invalid/' } }];
+    script = [{ status: 302, headers: { location: 'http://127.0.0.1:9/' } }];
     expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'redirect' } });
     expect(store.releases()).toEqual([]);
   });
@@ -827,7 +865,7 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       const { port } = fixture();
       const p = poller(port);
       script = [{ status: 200, etag: '"eL"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
-      scriptLatest = [{ status: 302, headers: { location: 'https://example.invalid/' } }];
+      scriptLatest = [{ status: 302, headers: { location: 'http://127.0.0.1:9/' } }];
       expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
       expect(warn.mock.calls.some((c) => String(c[0]).includes('redirect'))).toBe(true);
     } finally {
@@ -903,12 +941,25 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       expect(seen[1]!.headers['if-none-match']).toBe('"eL1"');
     });
 
-    it('a 404 on the latest probe is an ANSWER, not an error — lastError stays null, lastOkAt moves with the listing', async () => {
-      const { port } = fixture();
-      const p = poller(port);
-      script = [{ status: 200, etag: '"eL"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
-      scriptLatest = [{ status: 404 }];
-      expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+    // I2 (fix round 1, review round 2): a 404 must warn NOTHING — the only
+    // observable difference between "correctly answered" and "wrongly
+    // treated as a failure" is the warn (both leave lastError/lastOkAt
+    // alone), so the warn assertion is the one that actually reds under the
+    // reviewer's M14 mutation (`warnLatest('http-404')` instead of
+    // `latestAnswered()`).
+    it('a 404 on the latest probe is an ANSWER, not an error — lastError stays null, lastOkAt moves with the listing, and NOTHING is warned', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { port } = fixture();
+        const p = poller(port);
+        script = [{ status: 200, etag: '"eL"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
+        scriptLatest = [{ status: 404 }];
+        expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+        expect(p.state()).toEqual({ lastOkAt: 1000, lastError: null });   // I2: post-probe state, not just the return
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('a failed latest fetch with an OK listing: lastOkAt moves, lastError null, ONE warn per distinct cause, re-armed by the next latest success', async () => {
@@ -927,7 +978,9 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
           { status: 200, etag: '"eS"', body: rel('v0.0.2', '2026-09-02T00:00:00Z') },
         ];
         expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+        expect(p.state()).toEqual({ lastOkAt: 1000, lastError: null });   // I2
         expect(await p.poll(2000)).toEqual({ lastOkAt: 2000, lastError: null });
+        expect(p.state()).toEqual({ lastOkAt: 2000, lastError: null });   // I2
         expect(warn.mock.calls.filter((c) => String(c[0]).includes('http-500'))).toHaveLength(1);
         await p.poll(3000);   // the latest answers 200 this time — re-arms the dedupe
         scriptLatest = [{ status: 500 }];
@@ -938,15 +991,124 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       }
     });
 
+    // I2 (fix round 1, review round 2), M17: a FAILURE answer that itself
+    // carries an `etag` header must never advance `latestEtag` — only a
+    // successfully-applied 200 does. Proven by sending an etag on a 500 and
+    // checking the NEXT request still carries the LAST GOOD etag (here,
+    // none yet, so no `if-none-match` at all — never the 500's).
+    it('a failure answer that carries an etag does not advance latestEtag', async () => {
+      const { port } = fixture();
+      const p = poller(port);
+      script = [
+        { status: 200, etag: '"eL1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+        { status: 200, etag: '"eL2"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+      ];
+      scriptLatest = [
+        { status: 500, etag: '"bad"' },
+        { status: 200, etag: '"eS"', body: rel('v0.0.2', '2026-09-02T00:00:00Z') },
+      ];
+      await p.poll(1000);   // seenLatest[0]: the 500 that carries "bad"
+      await p.poll(2000);   // seenLatest[1]: must NOT carry the 500's etag
+      expect(seenLatest[1]!.headers['if-none-match']).toBeUndefined();   // never '"bad"'
+    });
+
+    // I3 (fix round 1, review round 2): the reviewer's measured yank-flap
+    // sequence. A release whose `publishedAt` sits INSIDE the listing's own
+    // window (>= the oldest listed one) but is not itself listed (it sorted
+    // off page 1 by whatever order GitHub used) would, before this fix, be
+    // yanked by poll 2's listing (a real observation) and never recover once
+    // the latest probe stops sending a fresh 200 (a 304 writes nothing) —
+    // exactly the failure D-3215 exists to fix, reappearing one layer down.
+    it('I3: the listing never yanks the tag the latest probe last confirmed, across a 304 that writes nothing', async () => {
+      const { store, port } = fixture();
+      const p = poller(port);
+      // 30 dev releases published every minute from :00 to :29; the stable
+      // release published INSIDE that span (:15:30) but never listed.
+      const listingBody = Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.1.${i + 1}`, new Date(Date.UTC(2026, 8, 2, 0, i)).toISOString(), { prerelease: true }));
+      const stableAt = new Date(Date.UTC(2026, 8, 2, 0, 15, 30)).toISOString();
+      script = [
+        { status: 200, etag: '"eL1"', body: listingBody },
+        { status: 200, etag: '"eL2"', body: listingBody },
+        { status: 200, etag: '"eL3"', body: listingBody },
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eS"', body: rel('v0.0.1', stableAt) },
+        { status: 304, etag: '"eS"' },
+        { status: 304, etag: '"eS"' },
+      ];
+      await p.poll(1000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      await p.poll(2000);   // listing 200 (does NOT list v0.0.1), latest 304
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      await p.poll(3000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      // And it still resolves — the whole point of D-3215.
+      const eligibility: EligibilityRow[] = store.releases().map((r) => ({
+        tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked,
+      }));
+      const input: ResolveInput = {
+        currentVersion: 'v0.0.0', highestVersion: null, floorRead: 'absent',
+        nodeIntent: null, fleetIntent: { channel: 'stable', pinnedTag: null, auto: 'off' },
+        releases: eligibility, refusedByThisNode: new Set<string>(),
+      };
+      expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
+    });
+
+    // Fix round 1, review round 2, item 4: `/releases/latest` never legally
+    // answers a draft or a prerelease — treated as a failed latest (warned,
+    // deduped; ETag and lastLatestTag both left alone), never written, so it
+    // can neither yank nor alter an existing row.
+    it('a draft or prerelease answer from /releases/latest is not written, and does not touch an existing row', async () => {
+      const { store, port, calls } = fixture();
+      const p = poller(port);
+      script = [
+        { status: 200, etag: '"eL1"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+        { status: 200, etag: '"eL2"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eS1"', body: rel('v0.0.1', '2026-08-01T00:00:00Z', { draft: true }) },
+        { status: 200, etag: '"eS2"', body: rel('v0.0.2', '2026-08-01T00:00:00Z', { prerelease: true }) },
+      ];
+      await p.poll(1000);
+      expect(calls).toHaveLength(1);   // the listing only — the draft was never applied
+      expect(store.releases().map((r) => r.tag)).toEqual(['v0.0.9']);
+      await p.poll(2000);
+      expect(calls).toHaveLength(2);   // the listing again — the prerelease was never applied either
+      expect(store.releases().map((r) => r.tag)).toEqual(['v0.0.9']);
+    });
+
+    // Fix round 1, review round 2 (minor): a rate-limited listing has spent
+    // this box's share of an already-exhausted budget; the latest probe is
+    // skipped rather than spending a second request against it.
+    it('minor: the latest probe is skipped when the listing itself answers rate-limited', async () => {
+      const { port } = fixture();
+      const p = poller(port);
+      script = [{ status: 403 }];
+      expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'rate-limited' } });
+      expect(seenLatest).toHaveLength(0);
+    });
+
     // Mutations (measured by hand, each reds a case above):
     // (1) dropping the `pollLatest` call in `pollOnce` reds the off-page pin
     //     (the store never learns v0.0.1) and the 304/ETag case (no second
     //     `seenLatest` entry at all).
     // (2) passing 'complete' (a yanking coverage) instead of 'single' to
     //     `applyReleaseListing` for the latest row reds the off-page pin's
-    //     first assertion outright: a 'complete' listing of ONE row would
-    //     mark every OTHER known release yanked = 1, since none of the 30
-    //     dev prereleases already in the store are named in it.
+    //     dev-release assertion — a 'complete' listing of ONE row would mark
+    //     every OTHER known release yanked = 1, since none of the 30 dev
+    //     prereleases already in the store are named in it.
+    // (3) `warnLatest` also setting `lastError` reds the failed-latest case's
+    //     `p.state()` assertions (I2).
+    // (4) `answer.status === 404` returning `warnLatest('http-404')` instead
+    //     of `latestAnswered()` reds the 404 case's warn-count assertion (I2).
+    // (5) advancing `latestEtag` before the status checks reds the
+    //     failure-etag case (I2).
+    // (6) dropping the `keepTags` exclusion (or the `lastLatestTag` update)
+    //     reds the I3 case at poll 2 (yanked flips true).
+    // (7) dropping the `row.draft || row.channel === 'dev'` guard reds the
+    //     draft/prerelease case (`calls` would be 2 on poll 1, and the draft
+    //     tag would appear in `store.releases()`).
   });
 });
 

@@ -8458,11 +8458,17 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    default is never substituted — fail-open.
  *    journal-unreadable — `UpdateIntentLog.maxEpoch()` threw; nothing written.
  *    journal-unwritable — `UpdateIntentLog.append()` threw; the transaction
- *                    rolled back. */
+ *                    rolled back.
+ *    single-not-one — `applyReleaseListing` under `'single'` coverage was
+ *                    handed a listing whose length is not exactly 1 (fix
+ *                    round 1, review round 2): the coverage name is a
+ *                    promise about its own argument, not just about what
+ *                    happens next. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
+  'single-not-one',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {

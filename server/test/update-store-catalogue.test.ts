@@ -212,6 +212,51 @@ describe('applyReleaseListing — the one writer of the catalogue columns', () =
         .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 1 });
       expect(yankedOf(store, 'v0.0.1')).toBe(false);
     });
+
+    // Fix round 1, review round 2 (minor): 'single' is a promise about its
+    // own argument, not just about what happens next — a listing of any
+    // length but 1 is refused outright, before the transaction opens.
+    // Mutation (measured by hand): dropping this check reds both cases (a
+    // multi-row 'single' call would upsert every row with no yank at all).
+    it("'single' coverage refuses a listing whose length is not exactly 1", () => {
+      const store = fresh();
+      expect(store.applyReleaseListing([], T0, 'single')).toEqual({ ok: false, why: 'single-not-one', count: 0 });
+      expect(store.applyReleaseListing([rel('v0.1.1', T0), rel('v0.1.2', T0 + 1)], T0, 'single'))
+        .toEqual({ ok: false, why: 'single-not-one', count: 2 });
+      expect(store.releases()).toEqual([]);
+    });
+  });
+
+  // I3 (fix round 1, review round 2): `keepTags` is the LISTING's own yank
+  // exclusion — never itself upserted, never counted in `upserted`.
+  describe('applyReleaseListing keepTags (D-3215, I3) — the listing never yanks a kept tag', () => {
+    it('excludes a keptTag from the yank even though it is absent from the listing and inside the window', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      // A 'complete' listing that omits v0.0.1 would ordinarily yank it —
+      // the control below proves that; keepTags stops it.
+      expect(store.applyReleaseListing([rel('v0.1.1', T0 + 500)], T0 + 2, 'complete', ['v0.0.1']))
+        .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 0 });
+      expect(yankedOf(store, 'v0.0.1')).toBe(false);
+    });
+
+    it('control: the identical listing with NO keepTags DOES yank it', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      expect(store.applyReleaseListing([rel('v0.1.1', T0 + 500)], T0 + 2, 'complete'))
+        .toEqual({ ok: true, upserted: 1, yanked: 1, unyanked: 0 });
+    });
+
+    it('a keptTag that is not a real release tag, or that duplicates a listed one, is silently dropped — never a refusal', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      expect(store.applyReleaseListing([rel('v0.1.1', T0 + 500)], T0 + 2, 'complete', ['not-a-tag', 'v0.1.1']).ok)
+        .toBe(true);
+      // 'not-a-tag' dropped (not a release tag); 'v0.1.1' dropped as a
+      // duplicate of the listing's own — v0.0.1 was never named, so it is
+      // still yanked here (this call carries no real keepTag for it).
+      expect(yankedOf(store, 'v0.0.1')).toBe(true);
+    });
   });
 
   // F10 (fix round 1, D-3216): a null tarballUrl is the caller's honest "no

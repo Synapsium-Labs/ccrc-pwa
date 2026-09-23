@@ -194,7 +194,10 @@ export interface ReleaseListingRow {
  *  `single` (fix round 1, D-3215) = ONE release upserted with NO absence
  *  judgment at all — the `/releases/latest` probe, which names one release
  *  outside any window and proves nothing about any other row's presence;
- *  the yank `UPDATE` below never runs under it. */
+ *  the yank `UPDATE` below never runs under it. A listing of any length
+ *  other than 1 under `single` is refused outright (`single-not-one`) —
+ *  the coverage name is a promise about its own argument, not just about
+ *  what happens next (fix round 1, review round 2, minor). */
 export type ListingCoverage = 'complete' | 'newest-page' | 'single';
 
 /** `applyReleaseListing`'s answers. `yanked` counts rows THIS listing newly
@@ -206,7 +209,8 @@ export type ApplyReleaseListingResult =
   | { ok: false; why: 'bad-tag'; tag: string }
   | { ok: false; why: 'duplicate-tag'; tag: string }
   | { ok: false; why: 'bad-row'; tag: string; field: 'channel' | 'publishedAt' | 'tarballUrl' }
-  | { ok: false; why: 'empty-listing'; known: number };
+  | { ok: false; why: 'empty-listing'; known: number }
+  | { ok: false; why: 'single-not-one'; count: number };
 
 /** One `releases` row on the way OUT. `channel` is `null` for a stored token
  *  outside `UpdateChannel` — the ClaimState stance (`ClaimEndResult`, below):
@@ -5805,13 +5809,23 @@ export class CoordStore {
    *  every known, un-yanked row absent from the listing — all of them under
    *  `complete`, only those inside the listed window under `newest-page`
    *  (D-3185), NONE at all under `single` (D-3215: one release, no absence
-   *  judgment). NEVER deletes: a node may be running a yanked
-   *  release, and rollback may target one. An empty listing while rows are
-   *  known is refused rather than read as "everything was yanked". "Absent"
-   *  is absent from THIS argument: an element the poller could not parse is
-   *  not here, so its known row is marked too, and it unyanks on the next
-   *  poll that parses it (D-3206). */
-  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage): ApplyReleaseListingResult {
+   *  judgment; a `listing` of any length but 1 under `single` is refused
+   *  `single-not-one` before anything else runs). NEVER deletes: a node may
+   *  be running a yanked release, and rollback may target one. An empty
+   *  listing while rows are known is refused rather than read as "everything
+   *  was yanked". "Absent" is absent from THIS argument: an element the
+   *  poller could not parse is not here, so its known row is marked too, and
+   *  it unyanks on the next poll that parses it (D-3206). `keepTags` (fix
+   *  round 1, review round 2, I3) is the LISTING's own exception list, never
+   *  itself upserted here — the poller passes the tag its OWN last
+   *  successful `single` upsert named, so a `complete`/`newest-page` listing
+   *  that omits it (the off-page-stable shape D-3215 exists for) never marks
+   *  it `yanked = 1` out from under the latest probe; an invalid entry is
+   *  silently dropped, never a reason to refuse the whole listing. */
+  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage, keepTags: readonly string[] = []): ApplyReleaseListingResult {
+    if (coverage === 'single' && listing.length !== 1) {
+      return { ok: false, why: 'single-not-one', count: listing.length };
+    }
     const seen = new Set<string>();
     for (const r of listing) {
       if (!isReleaseTag(r.tag)) return { ok: false, why: 'bad-tag', tag: r.tag };
@@ -5834,7 +5848,11 @@ export class CoordStore {
       return known > 0 ? { ok: false, why: 'empty-listing', known } : { ok: true, upserted: 0, yanked: 0, unyanked: 0 };
     }
     const since = coverage === 'complete' ? Number.MIN_SAFE_INTEGER : Math.min(...listing.map((r) => r.publishedAt));
-    const marks = listing.map(() => '?').join(', ');
+    // I3: the kept tags join the listing's own in the yank exclusion, never
+    // in `seen`/upserted — they are excluded from the WHERE, not written.
+    const keep = keepTags.filter((t) => isReleaseTag(t) && !seen.has(t));
+    const excludeTags = [...listing.map((r) => r.tag), ...keep];
+    const marks = excludeTags.map(() => '?').join(', ');
     return tx(this.db, (): ApplyReleaseListingResult => {
       const wasYanked = new Set((this.db.prepare('SELECT tag FROM releases WHERE yanked = 1')
         .all() as { tag: string }[]).map((r) => r.tag));
@@ -5855,7 +5873,7 @@ export class CoordStore {
       if (coverage === 'single') return { ok: true, upserted: listing.length, yanked: 0, unyanked };
       const res = this.db.prepare(
         `UPDATE releases SET yanked = 1 WHERE yanked = 0 AND publishedAt >= ? AND tag NOT IN (${marks})`,
-      ).run(since, ...listing.map((r) => r.tag));
+      ).run(since, ...excludeTags);
       return { ok: true, upserted: listing.length, yanked: Number(res.changes), unyanked };
     });
   }
