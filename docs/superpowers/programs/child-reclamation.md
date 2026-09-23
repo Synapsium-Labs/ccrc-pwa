@@ -43,6 +43,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138**. Numbers 
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 2 stalled on claims; ruled to proceed.**
+  - **The stall.** At about 17:00 UTC run 138 had Task 4 and the carried prose done, and was blocked on
+    Tasks 1, 2, 3, 5 and 6. run 128 (centralised-update-management W2, `warm-river`, PR #176) holds claims
+    735 and 736 over `shared/api.ts`, `store.ts`, `watch.ts`, `server.ts`, `README.md` and
+    `fleet-health.test.ts`. The worker's mail to warm-river had sat queued for about 45 minutes behind its
+    not-idle gate. #176 was still `working` at 22,880 lines.
+  - **The ruling.** Proceed with narrow, additive hunks. Claims are advisory: they buy an early answer
+    instead of an end-of-wave conflict, and waiting would have stalled all five waves for hours. Whichever
+    PR merges second merges main (never rebase), resolves, re-points and re-measures. warm-river's
+    coordinator, `bright-river`, was told and invited to object (mail 2235).
+  - **Two worker findings carried to wave 3** (see Carried constraints).
 - **2026-09-23 — wave 1 deployed; its two measurements; wave 2 dispatched.**
   - **Rollout.** `ccrc rollout --to v0.0.19`, default order (fleet box first), exit 3. Both boxes moved from
     v0.0.15 and agree at `bbb5e714`. The release also carried #171, #173 and #174, which had never been
@@ -166,7 +177,9 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   centralised-update-management workers (runs 128, 129) held claims covering `shared/api.ts`,
   `server/src/coord/schema.ts`, `ccd/ccrc` and `ccd/ccrc-doctor-checks`. Wave 1 touches none of them. From
   wave 2 a worker's `POST /api/claims` may answer 409 naming that holder; the claim protocol (worker clause 11)
-  is the answer — mail the holder, work what is uncontested — and a long stall is reported, never forced.
+  is the answer — mail the holder, work what is uncontested — and a long stall is reported, never forced by
+  the worker. The COORDINATOR may rule it to proceed (done for wave 2, 2026-09-23), telling the holder's
+  coordinator; the second PR to merge pays the conflict.
 - **A journal line with no `at` is invisible to the generation fence and the attention list** (contract §8
   R22′, D8: the ingest time is never an event time). Two consequences are accepted, not fixed: a terminal
   refusal journaled without `at` keeps its child out of the sweep but off the attention list, and a clockless
@@ -190,6 +203,18 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - The wave-1 plan's census over-claim is narrowed wherever it is stated: :49, :843, :984 and :1344 (row 9's
     old title). D-3339 says so.
   - Task 2 Step 7's "13/13" becomes 18/18, and D-3336 names the five invalid-marker cases it added.
+- **Two declared items for wave 3, found by wave 2's worker.** Wave 3 is the next wave that edits ccd.
+  1. **The scratch-slug guards do not know a child's temp root.** `-tmp*|-private-tmp*|-var-folders*|-private-var-folders*`
+     is spelled at `ccd/session-hook.sh:712`, `ccd/ccrc:3486` and `ccd/ccrc-doctor-checks:4670`. A claude
+     session rooted under `$HOME/.cc-tmp/<id>` therefore gets a durable memory store, and
+     `session-hook.test.ts`'s "skips a scratch slug" case reds inside every marked child (its `os.tmpdir()`
+     is that root). All three guards must learn the `$HOME/.cc-tmp/` shape; the second and third files may be
+     claimed by the update programme. Until then, a child runs that suite with `TMPDIR=/tmp` and names the case.
+  2. **ccd's PR ownership read folds a failed git read into "not ours".** `is_ours` (ccd ~5423) folds a failed
+     `git cat-file`/`merge-base` into False. A transient git failure therefore reads a real PR as absent,
+     and wave 2's `childSpent` answers `unspent`, which permits a bind. The read becomes three-valued: an
+     unreadable answer is `unmeasured`, which already refuses. This is the programme's no-boolean rule, one
+     layer down.
 - **Wave 3 inherits two readings from wave 1's review.** Every run-id parse wave 3 adds calls
   `_child_runid_valid` — the census only catches a verbatim second copy, so the reviewers check it by
   reading. And `_child_tmpdir` checks the leaf for a symlink once, before `chmod` (contract R1, check-once
