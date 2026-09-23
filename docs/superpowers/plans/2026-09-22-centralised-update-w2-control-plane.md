@@ -7292,7 +7292,7 @@ export async function sweepInventory(deps: InventoryDeps, now: number): Promise<
 
 // server/src/watch.ts — FleetWatcher gains:
 inventoryNow(): Promise<SweepOutcome[]>;   // single-flight: joins the run in flight, else starts one; [] without deps.coord
-triggerInventory(): void;                  // void this.inventoryNow().catch(() => {})
+triggerInventory(): void;                  // fire-and-forget dispatchInventorySweep() (warns rejects, deduped, C2); a caller that JOINS a run already in flight sets a one-shot rerun flag rather than trusting the join alone (C4, final fix wave)
 private async runInventory(): Promise<SweepOutcome[]>;   // builds the InventoryDeps and holds the file's ONE sweepInventory( call — Task 12 swaps that callee
 ```
 
@@ -8719,7 +8719,7 @@ Stage first (`git add` Step 9's paths), so each restore comes from the INDEX: ma
 | a stale report never moves the lease (the planner's half) | delete the `if (latest !== null && row.updateStartedAt !== null && latest < row.updateStartedAt) …` line | `a previous run's report never moves the lease` (the store's own WHERE still holds the through-store case green — Task 5 measures that half) |
 | the report's second is the current run | change `r.startedAt + REPORT_TIME_RESOLUTION_MS - 1` to `r.startedAt` | `a previous run's report …` on the same-second assertion (`stale-report` instead of `settle`), and `done at the stamped version → idle via settleNode` (the planner now reads the lease's own second as a previous run) |
 | only a changed report acts | delete `if (row !== null && sameReport(row, r)) return …;` in `sweepPlanFor` | `a provenance failure refuses … ack clears it and the standing report does not re-insert it` (a second refusal after ack) |
-| a label row re-keys | in `applyMeasurement` delete the `const rekeyed = …` line and the `if (!rekeyed.ok) …` line after it (keep the empty `if` block) | `a node-id appearing on a labelled row re-keys it in place` (two rows) and `a UUID row already present supersedes the label row` |
+| a label row re-keys | in `applyMeasurement` delete the `const rekeyed = …` line and the `if (!rekeyed.ok) …` line after it (keep the empty `if` block) | `a node-id appearing on a labelled row re-keys it in place` (two rows) and `a node-id already keyed to a live row under a DIFFERENT label is a collision, never a merge` (renamed and reversed by D-3211: the row is now KEPT as two, never superseded) |
 | a vanished node-id keeps its row | delete the `if (live !== null && live.nodeId !== label) m = …;` line | `a node-id that vanishes after a re-key …` (two live rows) |
 | unreachable is written on the sweep it happens | in `sweepInventory` replace `out.push(unreachable(deps.store, now));` (the first, disconnected arm) with nothing | `a missing connection is unreachable on THAT sweep` |
 | unreachable across a drop | change `out.push(linkUp(state) ? applyMeasurement(deps.store, m, now) : unreachable(deps.store, now));` to `out.push(applyMeasurement(deps.store, m, now));` | `a link that drops while the reads are in flight …` |

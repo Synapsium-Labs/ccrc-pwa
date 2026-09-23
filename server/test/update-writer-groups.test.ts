@@ -168,18 +168,30 @@ const writeOf = (sql: string): Write | null => {
  *  duplicate the scan's own machinery for a shape store.ts is proven (below)
  *  never to contain. */
 const CANONICAL_VERB_RE = /^(?:INSERT(?:\s+OR\s+[A-Z]+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+[A-Z]+)?|DELETE\s+FROM)$/;
+// D4 (final fix wave): the qualifier's OWN quote is now inside the qualifier
+// group (`(?:"|\x60|\[)?main(?:"|\x60|\])?\.`), so `main."nodes"` and
+// `"main".nodes` — a table quoted AND qualified, either side quoted — are
+// caught, not just an unquoted `main.nodes` or a quoted-unqualified
+// `"nodes"`. The quote characters inside the qualifier are non-capturing:
+// this scan is a loose net (it never required the open/close quote to
+// match), and "was there a qualifier at all" is the only thing `qualifier`
+// needs to answer for the canonical check below.
 const NONCANONICAL_WRITE_RE = new RegExp(
   String.raw`\b(INSERT(?:\s+OR\s+[A-Za-z]+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?|DELETE\s+FROM)\s+` +
-  String.raw`("|\x60|\[)?(main\.)?(${TABLES.join('|')})("|\x60|\])?\b`,
+  String.raw`((?:"|\x60|\[)?main(?:"|\x60|\])?\.)?("|\x60|\[)?(${TABLES.join('|')})("|\x60|\])?\b`,
   'gi',
 );
+/** D4: comments blanked FIRST, the same `blankComments` the main scan uses —
+ *  so a docstring naming a non-canonical shape as an EXAMPLE (this very
+ *  function's own comment, above, does) cannot false-red this analyser. */
 const nonCanonicalWrites = (src: string): string[] => {
   const out: string[] = [];
-  for (const m of src.matchAll(NONCANONICAL_WRITE_RE)) {
-    const [whole, verb, openQ, qualifier, table, closeQ] = m;
-    const canonical = CANONICAL_VERB_RE.test(verb!) && !openQ && !qualifier && !closeQ && isTable(table!);
+  const code = blankComments(src).join('\n');
+  for (const m of code.matchAll(NONCANONICAL_WRITE_RE)) {
+    const [whole, verb, qualifier, openQ, table, closeQ] = m;
+    const canonical = CANONICAL_VERB_RE.test(verb!) && !qualifier && !openQ && !closeQ && isTable(table!);
     if (!canonical) {
-      const line = src.slice(0, m.index!).split('\n').length;
+      const line = code.slice(0, m.index!).split('\n').length;
       out.push(`store.ts:${line}: non-canonical write shape ${JSON.stringify(whole)} — spell it as the scan requires (uppercase verb, bare table name)`);
     }
   }
@@ -447,6 +459,34 @@ describe('CONTROL: two shapes the review found the scan silently passing (fix ro
       'store.ts:2: non-canonical write shape "UPDATE \\"nodes" — spell it as the scan requires (uppercase verb, bare table name)',
       'store.ts:3: non-canonical write shape "UPDATE main.nodes" — spell it as the scan requires (uppercase verb, bare table name)',
     ]);
+  });
+
+  // D4 (final fix wave): a table both QUOTED and QUALIFIED, either side (or
+  // both) quoted — `main."nodes"`, `"main".nodes`, `"main"."nodes"` — none of
+  // which the un-widened regex could see (it only combined a leading quote OR
+  // a bare `main.`, never both).
+  it('CONTROL: a table quoted AND qualified is caught, quote and main. combined (D4)', () => {
+    const fixture = [
+      'UPDATE main."nodes" SET requestedTag = NULL',
+      'UPDATE "main".nodes SET requestedTag = NULL',
+      'UPDATE "main"."nodes" SET requestedTag = NULL',
+    ].join('\n');
+    expect(nonCanonicalWrites(fixture)).toEqual([
+      'store.ts:1: non-canonical write shape "UPDATE main.\\"nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+      'store.ts:2: non-canonical write shape "UPDATE \\"main\\".nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+      'store.ts:3: non-canonical write shape "UPDATE \\"main\\".\\"nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+    ]);
+  });
+
+  // D4: a comment naming one of these shapes as PROSE must not false-red —
+  // `nonCanonicalWrites` now blanks comment lines first, the same
+  // `blankComments` the main scan uses.
+  it('CONTROL: a comment-line EXAMPLE of a non-canonical shape does not false-red (D4)', () => {
+    const fixture = [
+      '  // e.g. UPDATE main."nodes" SET x = NULL — a shape this scan catches',
+      '  UPDATE nodes SET updateState = ?',
+    ].join('\n');
+    expect(nonCanonicalWrites(fixture)).toEqual([]);
   });
 
   it('store.ts names no INSERT against any of the five tables that names only its row key (finding 2)', () => {

@@ -270,6 +270,33 @@ describe('setIntent — every refusal is its own arm, decided before the transac
       .toEqual({ ok: false, why: 'no-channel', scope: NODE_A, base: NODE_A });
     expect(store.updateEpoch().epoch).toBe(1);
   });
+
+  // D3 (final fix wave): a refusal decided BEFORE `tx()` opens must never
+  // touch the journal at all — not `maxEpoch()`, not `append()`. A log that
+  // COUNTS and THROWS on both proves it more strongly than `existsSync`
+  // above: `existsSync` cannot tell "never called" from "called and its
+  // throw was swallowed". Mutation: move the refusal checks (empty-patch,
+  // bad-field, unknown-scope, no-channel) to AFTER `log.maxEpoch()` inside
+  // the transaction — this reds on the first case (`maxEpochCalls` becomes 1).
+  class CountingThrowingLog {
+    readonly logPath = path.join('never-used', 'update-intent.log');
+    maxEpochCalls = 0;
+    appendCalls = 0;
+    maxEpoch(): number | null { this.maxEpochCalls += 1; throw new Error('must not be called'); }
+    append(): void { this.appendCalls += 1; throw new Error('must not be called'); }
+  }
+
+  it('an empty patch and an unknown scope never call the journal — a counting/throwing log proves it', () => {
+    const { store } = fresh();
+    const log = new CountingThrowingLog() as unknown as UpdateIntentLog;
+    expect(store.setIntent(FLEET_SCOPE, {}, log, NOW)).toEqual({ ok: false, why: 'empty-patch' });
+    expect((log as unknown as CountingThrowingLog).maxEpochCalls).toBe(0);
+    expect((log as unknown as CountingThrowingLog).appendCalls).toBe(0);
+    expect(store.setIntent(NODE_A, { channel: 'dev' }, log, NOW))
+      .toEqual({ ok: false, why: 'unknown-scope', scope: NODE_A });
+    expect((log as unknown as CountingThrowingLog).maxEpochCalls).toBe(0);
+    expect((log as unknown as CountingThrowingLog).appendCalls).toBe(0);
+  });
 });
 
 // A journal fake that WRITES inside the still-open transaction and then fails:

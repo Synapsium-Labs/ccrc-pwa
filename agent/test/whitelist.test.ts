@@ -225,17 +225,6 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(path.join(ccrc, 'installed'), cfg, 'read'), 'the real file keeps its own grant').not.toBeNull();
     });
 
-    it("lstat's parent probe finds ~/.ccrc refused, so its subject for a node file is the admitted path itself", async () => {
-      // agent/src/server.ts's `lstat` arm answers about `<checkPath(dirname)>/<basename>`
-      // and falls back to the CANONICAL path when the parent is refused.
-      // `~/.ccrc` IS refused (above), so for the eight the subject is the
-      // canonical path — and the literal-basename rule is what makes that the
-      // path the caller named rather than a link's target.
-      const ccrc = seedCcrc();
-      const cfg = { home, projectsRoot };
-      expect(await checkPath(path.dirname(path.join(ccrc, 'build.json')), cfg, 'read')).toBeNull();
-    });
-
     it('a ~/.ccrc that is itself a symlink admits its own eight and nothing else', async () => {
       seed();
       const cfg = { home, projectsRoot };

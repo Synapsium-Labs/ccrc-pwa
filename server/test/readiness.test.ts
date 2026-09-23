@@ -227,8 +227,8 @@ describe('projectReadiness — the per-project compose', () => {
 // lives elsewhere, so the read would answer `absent` -> `blocked`, which is a
 // lie rather than an unknown.
 describe('the box token is measured on the SERVER box, not across the fleet', () => {
-  /** The production shape: a fleet io that refuses `.ccrc` exactly as the
-   *  agent whitelist does, beside a local io that can read the file. */
+  /** The production shape: a fleet io that refuses `.ccrc`'s secret files as
+   *  the agent does (which now admits the eight node files), beside a local io that can read the file. */
   const fleetRefusingCcrc: ReadDouble = {
     readFileMeasured: async (p: string) => (p.includes('.ccrc')
       ? { ok: false, reason: 'unreadable' } : { ok: true, content: 'x' }),

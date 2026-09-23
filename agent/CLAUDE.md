@@ -44,8 +44,8 @@ get wrong when editing `src/whitelist.ts`.
   realpath-resolved (closes symlink escapes): `~/.cc-sessions/`, `~/.cc-limits/`, `~/.cc-clips/`, `~/.claude*`,
   and the fleet projects root — plus ONE non-prefix grant: exactly the eight `~/.ccrc` node files
   (`NODE_FILES`, `shared/agent-protocol.ts`: `build.json`, `installed`, `ccrc-caps`, `floor`, `previous`,
-  `node-id`, `update.json`, `update-intent`), by canonical-path EQUALITY, a live symlink carrying one of those
-  names refused (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
+  `node-id`, `update.json`, `update-intent`), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
+  carrying one of those names refused (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.

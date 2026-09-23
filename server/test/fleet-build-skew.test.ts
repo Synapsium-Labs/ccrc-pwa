@@ -333,7 +333,7 @@ function writeStamp(home: string, stamp: BuildInfo): void {
   writeFileSync(path.join(home, '.ccrc', 'build.json'), `${JSON.stringify(stamp)}\n`);
 }
 
-describe('end to end — a stamp on the fleet host\'s disk becomes an answer on the route', () => {
+describe('end to end (the NO-COORD FALLBACK path) — a stamp on the fleet host\'s disk becomes an answer on the route', () => {
   // WHY THIS IS NOT REDUNDANT with the two describes above. Everything this
   // field touches is optional: `AgentReady.build` is optional so an older agent
   // stays legal, and `FleetHealth.build` is optional so an older server's
@@ -343,6 +343,15 @@ describe('end to end — a stamp on the fleet host\'s disk becomes an answer on 
   // it. Only a test that runs the whole path can fail on that, so this one
   // boots a REAL `ccrc-agent` against a fixture $HOME, connects a REAL
   // `connectFleet` client over a real loopback socket, and hands that live
+  //
+  // D9 (final fix wave): `healthOverWire`'s `buildServer(...)` call below
+  // wires NO `coord` — production always wires one (design 2026-09-20 §14),
+  // so `GET /api/fleet/health`'s `builds` is derived from the INVENTORY there
+  // (`inventoryBuilds`, `update-inventory.test.ts`), never from this
+  // handshake-stamp comparison. This describe's cases exercise the OLDER,
+  // still-live fallback — `FleetHealth.build`'s three-way `buildAgreement`
+  // over `fleetState.build` alone — which answers when `coord` is undefined
+  // (a server that has not migrated to the update control plane's schema).
   // `fleet.state` to a REAL `buildServer` — no fakes anywhere between the file
   // on disk and the JSON on the route.
   let agent: RunningAgent | undefined;

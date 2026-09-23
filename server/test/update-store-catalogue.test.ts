@@ -83,7 +83,13 @@ describe('applyReleaseListing — the one writer of the catalogue columns', () =
       .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 0 });
   });
 
-  it('a yanked release listed again comes back, and so does a draft that is published', () => {
+  // D2 (final fix wave): the previous title, "a yanked release listed again
+  // comes back, and so does a draft that is published", read as two claims;
+  // this case tests exactly one — a release inserted as a draft is marked
+  // yanked AT BIRTH (`yanked = r.draft ? 1 : 0` on the upsert, never a real
+  // vanish-then-reappear), and un-yanks the moment it is re-listed without
+  // `draft`, i.e. once it is published.
+  it('a release that starts as a draft (yanked at birth) is un-yanked once it is listed as published', () => {
     const store = fresh();
     store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000, { draft: true })], T0 + 5000, 'complete');
     store.applyReleaseListing([rel('v0.0.10', T0 + 2000)], T0 + 6000, 'complete');
@@ -91,6 +97,22 @@ describe('applyReleaseListing — the one writer of the catalogue columns', () =
     expect(store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000)], T0 + 7000, 'complete'))
       .toEqual({ ok: true, upserted: 2, yanked: 0, unyanked: 1 });
     expect(yankedOf(store, 'v0.0.9')).toBe(false);
+  });
+
+  // D2: the store's unyank count guards `&& !r.draft` — a release RE-LISTED
+  // AS A DRAFT must never count as coming back, even though its tag was
+  // previously yanked. Mutation: delete `&& !r.draft` in store.ts's unyank
+  // count → this reds (unyanked becomes 1).
+  it('a yanked release re-listed as a draft does not count as unyanked', () => {
+    const store = fresh();
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000)], T0 + 5000, 'complete');
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2000)], T0 + 6000, 'complete');   // v0.0.9 vanishes -> yanked
+    expect(yankedOf(store, 'v0.0.9')).toBe(true);
+    expect(store.applyReleaseListing(
+      [rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000, { draft: true })], T0 + 7000, 'complete',
+    )).toEqual({ ok: true, upserted: 2, yanked: 0, unyanked: 0 });
+    // Still yanked: the draft upsert writes `yanked = 1` directly (birth rule).
+    expect(yankedOf(store, 'v0.0.9')).toBe(true);
   });
 
   it('under newest-page only rows inside the listed window are yank candidates (D-3185)', () => {

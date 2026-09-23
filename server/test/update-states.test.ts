@@ -106,7 +106,7 @@ describe('the release tag (decision 2): one shape, the same as the bash twin', (
   const FIXTURES = [
     'v0.0.9', 'v0.0.10', 'v1.2.3', 'v10.20.30', 'v0.0.010', 'v0.0.0',
     '0.0.9', 'v0.0.9 ', ' v0.0.9', 'v0.0.9\n', 'v0.0', 'v0.0.9.1', 'V0.0.9', 'v0..9', 'v.0.0.9',
-    'v0.0.9-rc1', 'v0.0.9+meta', 'vv0.0.9', 'v-1.0.0', 'v1e3.0.0', 'v0x1.0.0', 'v١.0.0', '',
+    'v0.0.9-rc1', 'v0.0.9+meta', 'vv0.0.9', 'v-1.0.0', 'v1e3.0.0', 'v0x1.0.0', 'v\u0661.0.0', '',
   ];
 
   it('refuses the five shapes the plan names', () => {
