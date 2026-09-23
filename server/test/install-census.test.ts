@@ -91,6 +91,18 @@
 // array `ccd/ccrc` declares. A third hand-kept copy of the census is the defect
 // this guard exists to delete.
 //
+// AND THE SOURCES. The last describe reads the other argument of the same
+// calls: every file `_inst_bins`, `_inst_units`, `_inst_files` and
+// `_inst_units_darwin` copy OUT OF the placed tree (`"$tree/<path>"`, with
+// `$role_unit` resolving to both its values), and every file `deploy.sh`'s
+// `install_atomic` and `_unit_atomic` copy, must be TRACKED in this
+// repository. `_inst_atomic` dies on a missing source by design, so a
+// placement whose source no commit carries is an install that dies on every
+// real tree — a release, `ccrc update`, a fresh checkout — while a fixture
+// that stubs the file stays green. That is how D-3165's shape hid: two
+// placements of files Plan 2b-2 has not written, green here and in the
+// install suite, because the fixture tree stubbed both.
+//
 // STATED SCOPE — what this file does NOT read. Each is a declared limit, not a
 // hidden one:
 //   - Bodies. Placements are read from `_inst_bins` and `_inst_graphify_engine`
@@ -229,12 +241,35 @@
 //     for this boot without enabling it), an operand after a mid-command
 //     redirect (`enable --now 2>/dev/null x@y.timer`: argument reading stops at
 //     the redirect), and an escaped `@` (`x\@y.timer`, read with its backslash).
+//
+// READING THE SOURCES (the last describe). The same machinery again, and:
+//   - Bodies. In `ccd/ccrc`, the SOURCE argument of each `_inst_atomic` call in
+//     the four functions named above. Other install steps copy out of the tree
+//     too (`_inst_skills` through a loop variable, `_inst_graph_noise`,
+//     `_inst_graphify_skill`, `_inst_stamp_shipped`, `_exp_ddns_units`) and are
+//     not read. In `deploy.sh`, the first argument of every `install_atomic`
+//     and `_unit_atomic` call, under the same no-silent-drops rule at the verb.
+//   - What a source must be. In `ccd/ccrc`, it resolves under `$BOX_TREE_DIR/`
+//     (the function binds `tree` to exactly that, or binds no `tree` at all), or
+//     it carries `$$` — a per-process staging file the function generated in
+//     that run (the launcher, the Darwin plist). In `deploy.sh`, it is a path
+//     relative to the checkout (`install_atomic`, which runs from the repository
+//     root) or under `~/ccrc/` (`_unit_atomic`, on the box, out of the tree the
+//     rsync landed), or it is ONE variable the file assigns `"$(mktemp)"` — a
+//     file the script generates (the stamp, the launcher, `accounts.sh`).
+//     Anything else THROWS, naming the word: no silent drops.
+//   - Tracked means listed by `git ls-files`: the index, which is HEAD on a
+//     clean checkout (CI). On a working box a file `git add`ed but not yet
+//     committed counts too. The case refuses to run, rather than pass, when
+//     `git ls-files` fails.
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO = path.resolve(here, '..', '..');
 const CCRC_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc');
 const CCRC = readFileSync(CCRC_PATH, 'utf8');
 const DEPLOY_PATH = path.resolve(here, '..', '..', 'deploy', 'deploy.sh');
@@ -903,6 +938,104 @@ function deployEnabled(): Set<string> {
   return out;
 }
 
+// ── reading the sources (header: AND THE SOURCES) ────────────────────────
+
+/** The placed tree's root, as `ccd/ccrc` spells it: a file-scope global, so it
+ *  stays a literal root exactly as `UNIT_DIR` does. */
+const TREE_DIR = '$BOX_TREE_DIR';
+/** The four bodies whose `_inst_atomic` sources are read (header: READING THE SOURCES). */
+const SOURCE_FNS = ['_inst_bins', '_inst_units', '_inst_files', '_inst_units_darwin'];
+
+/**
+ * Every repository path the `_inst_atomic` SOURCE argument in `SOURCE_FNS`
+ * reads out of the placed tree — `"$tree/<path>"` resolved through the
+ * function's own assignments, so `$role_unit` counts as both its values. A
+ * source with `$$` in it is a per-process staging file the function wrote in
+ * that run, excluded by that rule alone; any other source that does not land
+ * under the tree THROWS.
+ */
+function ccrcTreeSources(): Set<string> {
+  const out = new Set<string>();
+  for (const fn of SOURCE_FNS) {
+    const body = fnBody(fn);
+    const local = assignments(body);
+    if (local.has('tree')) bindsExactlyOnce(fn, local, 'tree', TREE_DIR);
+    for (const word of argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 0)) {
+      for (const raw of resolveWord(word, local)) {
+        const p = path.posix.normalize(raw);
+        if (p.startsWith(`${TREE_DIR}/`)) {
+          const rel = p.slice(TREE_DIR.length + 1);
+          if (rel === '' || rel.includes('$') || rel.startsWith('../')) {
+            throw new Error(
+              `install-census.test.ts: unresolvable source "${word}" in ${fn}: it resolves to "${p}", whose path in `
+              + 'the tree does not resolve from that function\'s assignments. Spell it literally, or teach this '
+              + 'extractor — a source it cannot read is a placement nobody checks ships.',
+            );
+          }
+          out.add(rel);
+        } else if (!p.includes('$$')) {
+          throw new Error(
+            `install-census.test.ts: source "${word}" in ${fn} resolves to "${p}", which is neither under `
+            + `${TREE_DIR}/ (\`tree\`) nor a per-process \`$$\` staging file that function generates. Spell it `
+            + 'as a path in the placed tree, or teach this extractor.',
+          );
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** The two roots a deploy.sh source may be read from (header: READING THE
+ *  SOURCES): `install_atomic` runs on this machine from the repository root,
+ *  `_unit_atomic` on the box, out of the tree the rsync landed at `~/ccrc`. */
+const DEPLOY_SOURCE_ROOTS: Array<['install_atomic' | '_unit_atomic', string]> = [
+  ['install_atomic', ''],
+  ['_unit_atomic', '~/ccrc/'],
+];
+
+/**
+ * Every repository path deploy.sh's `install_atomic` and `_unit_atomic` read
+ * as a SOURCE. Resolution is NONE, as for its destinations: a source that is
+ * ONE variable the file assigns `"$(mktemp)"` is a file the script generates
+ * and is excluded by that rule alone; any other `$`, and any path outside its
+ * root, THROWS.
+ */
+function deployTreeSources(): Set<string> {
+  const code = deployCode();
+  const out = new Set<string>();
+  for (const [cmd, root] of DEPLOY_SOURCE_ROOTS) {
+    everyMentionRead(cmd, (g) => calls(g, cmd).length, 'call(s) of it');
+    for (const word of argAt(DEPLOY_WHERE, cmd, calls(code, cmd), 0)) {
+      const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(word);
+      if (v !== null && new RegExp(`(?:^|\\s)${v[1]!}="\\$\\(mktemp\\)"`, 'm').test(code)) continue;
+      const p = path.posix.normalize(word);
+      if (word.includes('$') || !p.startsWith(root) || /^(?:\/|~|\.\.\/|\.$)/.test(p.slice(root.length))) {
+        throw new Error(
+          `install-census.test.ts: unresolvable source "${word}" of a \`${cmd}\` call in ${DEPLOY_WHERE}: it is `
+          + `neither a literal path ${root === '' ? 'relative to the repository root' : `under ${root}`} nor ONE `
+          + 'variable this file assigns `"$(mktemp)"`. Spell it literally, or teach this reader.',
+        );
+      }
+      out.add(p.slice(root.length));
+    }
+  }
+  return out;
+}
+
+/** Every path `git ls-files` lists in this repository. It refuses to answer —
+ *  never answers "nothing is tracked" — when git cannot read the index. */
+function trackedFiles(): Set<string> {
+  const r = spawnSync('git', ['-C', REPO, 'ls-files', '-z'], { encoding: 'utf8' });
+  if (r.status !== 0) {
+    throw new Error(
+      `install-census.test.ts: \`git -C ${REPO} ls-files\` exited ${String(r.status)} (${(r.stderr || '').trim()}). `
+      + 'The tracked-source case needs this repository\'s index; it will not read a tree it cannot measure as tracked.',
+    );
+  }
+  return new Set(r.stdout.split('\0').filter(Boolean));
+}
+
 // ── the floors ────────────────────────────────────────────────────────────
 //
 // A FLOOR GUARDS AGAINST AN EXTRACTOR THAT MATCHES NOTHING, or next to nothing
@@ -925,6 +1058,12 @@ const UNIT_FLOOR = 8;
 // Task 7: 14 binaries under `.local/bin`, 19 unit files), and its enables take
 // a third, 4 against the 9 it makes.
 const ENABLE_FLOOR = 4;
+// The source readers (measured 2026-09-23, after the final review's fixes:
+// 39 tree sources in `ccd/ccrc`'s four bodies, 48 in deploy.sh; `git ls-files`
+// lists 1153 paths) take a fourth, and the tracked set a fifth, so an index
+// git answered from the wrong directory cannot pass as one that tracks nothing.
+const SOURCE_FLOOR = 15;
+const TRACKED_FLOOR = 200;
 
 const PLACED_BINS_READ = "_inst_bins' `_inst_atomic` destinations and _inst_graphify_engine's `ln -s` destinations";
 
@@ -1127,5 +1266,58 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       + `instance of one an installer places (${families.join(', ')}). Remove them from the enable chain: a template `
       + 'is placed and never enabled, and its instances are armed per session or per lane, not by a deploy.')
       .toEqual([]);
+  });
+});
+
+describe('every file either installer copies out of the tree is tracked in this repository', () => {
+  // Header: AND THE SOURCES. A placement whose source no commit carries dies
+  // on every real tree; a fixture that stubs the file hides that (D-3165).
+  const tracked = (): Set<string> => {
+    const t = trackedFiles();
+    expect(t.size, `\`git ls-files\` in ${REPO} listed too few paths — this is not the repository's index`)
+      .toBeGreaterThan(TRACKED_FLOOR);
+    return t;
+  };
+
+  it('every `$tree/<path>` source _inst_bins, _inst_units, _inst_files and _inst_units_darwin read is tracked', () => {
+    const t = tracked();
+    const sources = ccrcTreeSources();
+    expect(sources.size,
+      `the source extractor over ${SOURCE_FNS.join(', ')} found too few tree sources — it has gone stale, unless those functions really stopped placing most of them`)
+      .toBeGreaterThan(SOURCE_FLOOR);
+
+    expect([...sources].filter((p) => !t.has(p)).sort(),
+      `these are \`_inst_atomic\` sources in ${SOURCE_FNS.join(', ')} under the placed tree, and \`git ls-files\` `
+      + 'does not list them. `_inst_atomic` dies on a missing source, so every real tree — a release, `ccrc update`, '
+      + 'a fresh checkout — fails the install there, while a fixture that stubs the file stays green. Commit the file '
+      + 'in the same change that places it, or remove the placement.')
+      .toEqual([]);
+
+    // Anchors, after the comparison: the tool itself, and `$role_unit`'s two
+    // values — the row where the source is not a literal, so a resolver that
+    // lost it would lose it silently.
+    expect(sources, 'the source census does not contain `ccd/ccd`: this extractor no longer reads _inst_bins\' placement of it')
+      .toContain('ccd/ccd');
+    for (const u of arrayElements('BOX_UNIT_NAMES')) {
+      expect(sources, `the source census does not contain deploy/${u} (a BOX_UNIT_NAMES element): \`$role_unit\` no longer resolves to it in _inst_units' source`)
+        .toContain(`deploy/${u}`);
+    }
+  });
+
+  it('every source deploy.sh\'s `install_atomic` and `_unit_atomic` read is tracked', () => {
+    const t = tracked();
+    const sources = deployTreeSources();
+    expect(sources.size,
+      'the deploy.sh source extractor found too few sources — it has gone stale, unless deploy.sh really stopped placing most of them')
+      .toBeGreaterThan(SOURCE_FLOOR);
+
+    expect([...sources].filter((p) => !t.has(p)).sort(),
+      `these are sources of \`install_atomic\` (repository-relative) or \`_unit_atomic\` (under ~/ccrc/) in ${DEPLOY_WHERE}, `
+      + 'and `git ls-files` does not list them. Either helper aborts the lane on a missing source, so a fallback deploy '
+      + 'from any clean checkout dies there. Commit the file in the same change that places it, or remove the placement.')
+      .toEqual([]);
+
+    expect(sources, 'the deploy.sh source census does not contain `ccd/ccd`: this reader no longer reads its placement')
+      .toContain('ccd/ccd');
   });
 });

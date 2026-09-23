@@ -1139,14 +1139,20 @@ describe('ccrc install: the fixture tree', () => {
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
   });
 
-  it('the fixture tree carries the four GPT-lane common executables', () => {
+  it('the fixture tree carries the two GPT-lane executables that ship today', () => {
+    // The two `.py` files only. `ccgpt` and `ccgpt-runtime` are not in the
+    // repository until Plan 2b-2, and the fixture no longer stubs them: a stub
+    // is what let a placement of them pass here while a real tree would die.
     const home = mkTmp('ccrc-tree-ccgpt-');
     const root = installFixtureTree(home);
-    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime', 'ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
+    for (const rel of ['ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
       const p = join(root, rel);
       expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
-      // 0o111 — every one of these is exec'd or placed 755 by `_inst_bins`.
+      // 0o111 — both are placed 755 by `_inst_bins`, and copied at the repo's mode.
       expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
+    }
+    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime']) {
+      expect(existsSync(join(root, rel)), `${rel} is in the fixture tree, and the repository has no such file`).toBe(false);
     }
   });
 });

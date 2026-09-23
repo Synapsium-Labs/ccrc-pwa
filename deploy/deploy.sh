@@ -836,7 +836,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # `server/test/install-census.test.ts` reds when a binary or unit file
   # `ccrc install` places is placed by NEITHER lane of this file (it reads the
   # union of the two, so a name placed only in the wrong lane passes there),
-  # and when anything in this file enables a template or an instance of one.
+  # when anything in this file enables a template or an instance of one, and
+  # when a source either helper here copies is not tracked in the repository.
   install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
   install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
   # STAMP HERE — after the build that can fail, before the restart that makes
