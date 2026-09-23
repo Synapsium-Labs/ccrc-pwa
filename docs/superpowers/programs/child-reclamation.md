@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | planned |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the unreclaimable-child divergence | **AGENT-FIRST** | — | planned |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -71,6 +71,10 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   fails open into deletion.
 - **`ws-reclaim` never resumes `ws-reap`'s work and vice versa.** The breadcrumb value is `reclaim:<phase>`;
   a mismatched flavour refuses.
+- **Every CITED file pays the citation tax.** An insertion into `ccd/ccd` or `shared/api.ts` (the files the
+  README and the frozen compaction-card corpus cite by line) pays S6-R11 in the same task, and edit length
+  above the frozen corpus's highest `ccd/ccd` anchor is a decision: prose there stays length-neutral, long
+  comments go below it.
 - **Anchors in these plans are snapshots.** Two other programmes (centralised-update-management W2–W5,
   gpt-lane 2b/3) are live against the same files. Every plan locates code by content; its line numbers are
   not addresses. `ccd/ccd` edits re-stamp and pay the citation-corpus tax.

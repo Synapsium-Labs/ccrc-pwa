@@ -192,6 +192,12 @@ Two honesty constraints, both load-bearing:
   `/tmp/claude-<uid>/` and `ccd-tmp-sweep` already collects it by session id — **never** by deleting a
   directory keyed on the workspace path, which two live sessions can share.
 
+**A temp root that cannot be made private is not used.** If `$HOME/.cc-tmp/<id>` already exists as a symlink
+or a regular file, or cannot be created mode 0700, the child spawns *without* `TMPDIR` and ccd warns. Refusing
+the spawn would leave a swap or a supervisor restart with no session at all, and pointing `TMPDIR` through a
+planted link is worse. That child's scratch lands under `/tmp` instead, where `ccd-tmp-sweep` collects it, and
+the reclaim tail unlinks the odd leaf itself — `rm -f` on the exact path, never following it.
+
 **Two collectors, disjoint roots.** `ccd-tmp-sweep` refuses any root that does not resolve strictly inside
 `/tmp` or its own `TMPDIR`, and as a systemd user unit its `TMPDIR` is the box default. A child's temp root
 under `$HOME/.cc-tmp/<id>` is therefore invisible to it, and is collected only by reclaim, at once rather
@@ -247,7 +253,9 @@ opened on the child). Dispatch's refusal therefore does not merely fail: it **cl
 dispatch already sits, so no backwards state transition is invented. The next dispatch mints a fresh child
 and the run proceeds. A refusal with no automated exit would need a human, which rule 4 forbids.
 
-**Non-children are untouched by all of this.** A workspace with no marker binds exactly as today.
+**Non-children are untouched by all of this, with one fail-shut exception.** A workspace with no marker binds
+exactly as today — unless the registry cannot be listed at all. Then no bind can prove it is not naming a
+spent child, so every bind answers `spent-unmeasured`, retryably, rather than guessing.
 
 ### 5.5 `ws-reclaim`: its own verb, its own token
 
@@ -381,6 +389,13 @@ designing. A non-final close with no open sibling drops the program's open-run c
 server retires it on the spot; nothing in the HTTP API reactivates a retired program. The hold that close
 writes claims the child for a wave that can never be opened, and a hold defers reclaim for ever. So for a
 child, and only for a child, that close releases rather than holds, and the child is reclaimed.
+
+**A review child is finished later than its own run.** The reviewer keeps its report in its own clips
+directory and the coordinator cites that path in fix-round mail for as long as the reviewed work is open, so
+a review child is not reclaimed when its review run closes. It is reclaimed once the run it reviewed is
+terminal, by whichever trigger sees that first. And an archive request on an eligible child is overruled: the
+close releases and reclaims instead, because an archived child would wait on a human's `ws-reap`, which
+rule 4 forbids. A non-child's archive is unchanged.
 
 **Close decides; it does not wait.** The eligibility above is decided inside the mutex, and the act —
 `ws-audit --reclaim` → token → `ws-reclaim` — runs on the session's own queue immediately *after* close has
