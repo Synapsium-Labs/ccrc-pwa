@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4827318c7159a933a4f54931d9063c7bca52ef26f6ca3460bc1d89cd8b06d4cc
+# ccrc:generated 1 sha256=4f6e66761f5bfded8c53b25b0c0c446ed8c7efaddded0434582d2ca2a166abc4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,11 +2885,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 155
-# invocations across 131 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 156
+# invocations across 132 non-comment lines.
 #
-# THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
-# archive fields, so the next reader is not hunting a refactor for the +2.
+# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
+# `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -19426,6 +19426,51 @@ _resume_env() {   # -> one line of KEY=value assignments for `env`, switching on
   printf '%s' "$out"
 }
 
+# ── A CHILD'S TEMP ROOT (child-workspace reclamation, spec §5.2) ─────────────
+# A workspace minted by `ws-add --child <runId>` carries `$REG/<id>.child`, and
+# ONLY such a workspace spawns with TMPDIR pointed at `$HOME/.cc-tmp/<id>` — a
+# directory the reclaim tail removes, so tool scratch that follows TMPDIR
+# (`cdk.out` foremost) dies with the child by construction instead of by a
+# second collector chasing paths. Every other session keeps the box's own
+# TMPDIR: exporting this fleet-wide would move uncollected scratch out of an
+# OS-reclaimed /tmp into $HOME for sessions that have no collector, which is a
+# different spec (§5.2, "Children only").
+#
+# DRIVEN BY THE MARKER, NEVER BY ws-add's ARGV, and read in the one function
+# every spawn path funnels through — `cmd_ws_add`, `cmd_ws_restore`,
+# `cmd_start`, `cmd_ensure` (so every `Restart=always` respawn), `_spawn` (swap
+# and friends) and both `_supervised_start` fallbacks. A decision taken in
+# `cmd_ws_add` alone would be lost at the first respawn.
+#
+# WHETHER CLAUDE CODE'S OWN SCRATCHPAD FOLLOWS TMPDIR is a claim about another
+# program; it is measured by the wave that shipped this and recorded in the
+# programme ledger, never assumed here. If it does not, that scratchpad stays
+# under `/tmp/claude-<uid>/`, where `ccd-tmp-sweep` already collects it.
+#
+# THREE ANSWERS, NOT TWO, because the caller acts on two of them differently
+# and must be able to tell the third apart:
+#   0  a child, and its leaf is a real directory, ours, at 0700 — path on stdout;
+#   1  not a child (no marker) — spawn exactly as before this existed;
+#   2  a child whose leaf is not that — warned on stderr, and the caller spawns
+#      WITHOUT TMPDIR rather than refusing (spec §5.2, a ruled arm): a refusal
+#      would leave a swap or a supervisor restart with no session at all.
+# THE LEAF MUST NOT BE A SYMLINK: wave 3's tail removes it, and a planted link
+# would aim that removal elsewhere — so that tail unlinks a link or file leaf
+# with `rm -f --`, never following it. OWNERSHIP is the `chmod`: it fails EPERM
+# on a leaf another user owns. `$HOME/.cc-tmp` itself MAY be a symlink (a data
+# volume, `$HOME/projects`'s shape) — the root is followed, only the leaf refused.
+_child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, leaf unusable (warned)
+  local id="$1" root="$HOME/.cc-tmp" dir
+  [[ -n "$(_reg_get "$id" child)" ]] || return 1
+  dir="$root/$id"
+  if [[ -L "$dir" ]] || ! mkdir -p -m 0700 -- "$root" "$dir" 2>/dev/null \
+     || [[ ! -d "$dir" ]] || ! chmod 0700 -- "$dir" 2>/dev/null; then
+    echo "ccd: warn: $id is a child but $dir could not be made a private directory — spawning with the box's own TMPDIR, so this session's scratch is not contained" >&2
+    return 2
+  fi
+  printf '%s' "$dir"
+}
+
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -19728,7 +19773,16 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     rm -f -- "$REG/$id.routeapplied"
     _route_tries_clear "$id"
   fi
-  resenv="$resenv${routeenv:+ $routeenv}"
+  # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
+  # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
+  # retry may not spawn a differently-contained pane than the attempt it
+  # replaces. EMPTY for every non-child, so a non-child's spawn line is
+  # byte-identical to what it was before (`ccd-spawn-split.test.ts` pins it).
+  # `_child_tmpdir`'s rc 2 has already said on stderr why a child spawns
+  # uncontained; the spawn proceeds either way.
+  local tmpenv="" ctmp
+  ctmp=$(_child_tmpdir "$id") && tmpenv="TMPDIR='$ctmp'"
+  resenv="$resenv${routeenv:+ $routeenv}${tmpenv:+ $tmpenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
