@@ -324,6 +324,25 @@ describe('POST /api/updates/intent', () => {
     expect(f.coord.intentFor('*')!.pinnedTag).toBeNull();
   });
 
+  // F11 EXTENSION (fix round 1, D-3216, coordinator's ruling on mail 2210):
+  // this route accepts a pinnedTag whether or not it is already a catalogue
+  // row (neither `parseIntentBody` nor `setIntent` checks catalogue
+  // membership), so the catalogue's own ingress bound does not cover it —
+  // `isIngestibleReleaseTag` is applied here too, imported from `resolve.ts`.
+  it('F11: 400 bad-tag for a pinnedTag that passes isReleaseTag but fails the ingress bound (v0.0.010), and nothing is written', async () => {
+    const f = await open();
+    for (const pinnedTag of ['v0.0.010', 'v01.2.3', `v${'1'.repeat(60)}.0.0`]) {
+      const r = await post(f.app, '/api/updates/intent', { scope: '*', pinnedTag });
+      expect(r.statusCode, pinnedTag).toBe(400);
+      expect(r.json()).toEqual({ ok: false, error: 'bad-tag', field: 'pinnedTag' });
+    }
+    expect(f.coord.updateEpoch().epoch).toBe(0);
+    expect(f.coord.intentFor('*')!.pinnedTag).toBeNull();
+    // The control: the SAME shape at the ingress bound's boundary is accepted.
+    const ok = await post(f.app, '/api/updates/intent', { scope: '*', pinnedTag: 'v0.0.10' });
+    expect(ok.statusCode).toBe(200);
+  });
+
   it('400 bad-request naming the field for an unknown key or an out-of-vocabulary value', async () => {
     const f = await open();
     const cases: [unknown, string][] = [

@@ -9,7 +9,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  PINNED_INELIGIBLE_WHYS, RESOLVE_DETAIL, UPDATE_GATE_CAP, autoGateBlockers, eligibleTags, floorOf, resolveNodeIntent,
+  PINNED_INELIGIBLE_WHYS, RESOLVE_DETAIL, RELEASE_TAG_INGRESS_MAX_BYTES, UPDATE_GATE_CAP,
+  autoGateBlockers, eligibleTags, floorOf, isIngestibleReleaseTag, resolveNodeIntent,
   type EligibilityRow, type IntentView, type PinnedIneligibleWhy, type ResolveInput,
 } from '../src/update/resolve.js';
 import { FLEET_SCOPE, type UpdateChannel } from '../../shared/api.js';
@@ -245,6 +246,35 @@ describe('the floor (§9, decision 8)', () => {
     const r = resolveNodeIntent(input({ highestVersion: 'v0.0.9', currentVersion: 'v0.0.12', releases: [rel('v0.0.11')] }));
     expect(r.desiredTag).toBeNull();
     expect(r.resolveDetail).toBe(RESOLVE_DETAIL.notNewerThanFloor('v0.0.11', 'v0.0.12'));
+  });
+});
+
+describe('isIngestibleReleaseTag (fix round 1, D-3216, F11) — ingress-only, on top of isReleaseTag', () => {
+  it('a leading zero in any component but a bare 0 is refused', () => {
+    expect(isIngestibleReleaseTag('v0.0.010')).toBe(false);
+    expect(isIngestibleReleaseTag('v01.2.3')).toBe(false);
+    expect(isIngestibleReleaseTag('v1.02.3')).toBe(false);
+  });
+
+  it('a bare 0 component, and a multi-digit component with no leading zero, are both fine', () => {
+    expect(isIngestibleReleaseTag('v0.0.0')).toBe(true);
+    expect(isIngestibleReleaseTag('v10.20.30')).toBe(true);
+  });
+
+  it('a byte length over the cap is refused; one at exactly the cap is kept', () => {
+    expect(RELEASE_TAG_INGRESS_MAX_BYTES).toBe(64);
+    const at64 = `v${'1'.repeat(59)}.0.0`;
+    const at65 = `v${'1'.repeat(60)}.0.0`;
+    expect(Buffer.byteLength(at64, 'utf8')).toBe(64);
+    expect(Buffer.byteLength(at65, 'utf8')).toBe(65);
+    expect(isIngestibleReleaseTag(at64)).toBe(true);
+    expect(isIngestibleReleaseTag(at65)).toBe(false);
+  });
+
+  it('anything isReleaseTag itself refuses is refused here too', () => {
+    for (const bad of ['0.0.9', 'v0.0', 'v0.0.9 ', 'V0.0.9', 'v0.0.9\n', 9, null, undefined]) {
+      expect(isIngestibleReleaseTag(bad)).toBe(false);
+    }
   });
 });
 

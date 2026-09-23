@@ -92,6 +92,28 @@ export function floorOf(highestVersion: string | null, currentVersion: string | 
   return isNewerTag(current, highest) ? current : highest;
 }
 
+/** F11 (fix round 1, D-3216) — ingress-only, on TOP of `isReleaseTag`
+ *  (`shared/api.ts`, untouched: `update-states.test.ts` pins its `.source`
+ *  byte-equal to `deploy/release-main.sh`'s SHAPE). GitHub's `tag_name` is
+ *  untrusted text, and `[0-9]+` per component admits a leading zero
+ *  (`v0.0.010`) that `compareReleaseTags` would then treat as a SECOND
+ *  spelling of `v0.0.10` rather than the same release. Refuses a tag over
+ *  `RELEASE_TAG_INGRESS_MAX_BYTES` bytes or carrying a leading zero in any
+ *  component that is not itself the bare digit `0` — checked structurally
+ *  (a split and a per-part scan), never by a second copy of the tag-shape
+ *  regex `single-definition.test.ts` polices ("spells the tag shape once").
+ *  A tag this refuses is SKIPPED at the catalogue's element parse exactly
+ *  like any other malformed element (D-3206), and the SAME predicate gates
+ *  `POST /api/updates/intent`'s `pinnedTag` (imported there, never a second
+ *  copy) — see `update/routes.ts`. */
+export const RELEASE_TAG_INGRESS_MAX_BYTES = 64;
+export function isIngestibleReleaseTag(v: unknown): v is string {
+  if (!isReleaseTag(v)) return false;
+  if (Buffer.byteLength(v, 'utf8') > RELEASE_TAG_INGRESS_MAX_BYTES) return false;
+  const parts = v.slice(1).split('.');
+  return parts.every((p) => p === '0' || p[0] !== '0');
+}
+
 /** THE eligibility predicate — the unpinned list and the pin's reason are both this function, so the two can
  *  never disagree about what is eligible. null = eligible on `channel`. */
 function ineligibleWhy(row: EligibilityRow | undefined, channel: UpdateChannel, refused: ReadonlySet<string>): PinnedIneligibleWhy | null {

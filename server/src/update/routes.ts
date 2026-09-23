@@ -4,7 +4,7 @@ import type { FleetWatcher } from '../watch.js';
 import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from '../coord/token.js';
 import { NODE_ID_RE, type NodeRow, type ReleaseRow, type SetIntentResult, type UpdateIntentPatch, type UpdateIntentRow } from '../coord/store.js';
-import { autoGateBlockers, renderProjection, resolveNodeIntent } from './resolve.js';
+import { autoGateBlockers, isIngestibleReleaseTag, renderProjection, resolveNodeIntent } from './resolve.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import {
@@ -94,7 +94,15 @@ export type ParsedIntentBody =
  *  the tag shape is `bad-tag` (§12's own answer for it); every other malformed
  *  input — an unknown key, a non-string scope, a value outside its vocabulary,
  *  a body that is not an object — is `bad-request` naming the field. An EMPTY
- *  patch is not refused here: `setIntent` refuses it, and one refusal is enough. */
+ *  patch is not refused here: `setIntent` refuses it, and one refusal is enough.
+ *
+ *  F11 EXTENSION (fix round 1, D-3216, coordinator's ruling on mail 2210):
+ *  this route accepts a `pinnedTag` whether or not it is already a catalogue
+ *  row — nothing here or in `setIntent` checks catalogue membership, so the
+ *  catalogue's own ingress bound does NOT cover a pin. `isIngestibleReleaseTag`
+ *  (imported from `resolve.ts`, never a second copy) is applied here too, so
+ *  `v0.0.010` is refused `bad-tag` before it ever reaches the store, the same
+ *  way it is skipped at the catalogue's own element parse. */
 export function parseIntentBody(body: unknown): ParsedIntentBody {
   const bad = (field: string): ParsedIntentBody => ({ ok: false, error: 'bad-request', field });
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return bad('body');
@@ -114,8 +122,9 @@ export function parseIntentBody(body: unknown): ParsedIntentBody {
     const pinnedTag = o.pinnedTag;
     if (pinnedTag === null) patch.pinnedTag = null;
     else if (typeof pinnedTag !== 'string') return bad('pinnedTag');
-    else if (!isReleaseTag(pinnedTag)) return { ok: false, error: 'bad-tag', field: 'pinnedTag' };
-    else patch.pinnedTag = pinnedTag;
+    else if (!isReleaseTag(pinnedTag) || !isIngestibleReleaseTag(pinnedTag)) {
+      return { ok: false, error: 'bad-tag', field: 'pinnedTag' };
+    } else patch.pinnedTag = pinnedTag;
   }
   if ('auto' in o) {
     const auto = o.auto;
