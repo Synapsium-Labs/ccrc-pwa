@@ -34,6 +34,24 @@ export type SessionBucket =
  *  lines warning about. */
 export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
 
+/** Whether a registry row is a CHILD (spec §4, §5.1). Three answers, never two: an unreadable or malformed
+ *  marker is neither "a child" nor "not a child", and callers act on it in OPPOSITE directions — a bind
+ *  REFUSES, a reclaim DEFERS. */
+export type ChildMark =
+  | { readonly kind: 'none' }                                  // no marker file: not a child
+  | { readonly kind: 'child'; readonly runId: number }         // marker names the minting run
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not a decimal run id
+
+/** The run id a child marker may carry — the server's ONE spelling of the set
+ *  ccd's `_child_runid_valid` accepts under its shadowed `LC_ALL=C`
+ *  (child-reclamation spec §5.1): at most ten ASCII digits, no sign, no
+ *  leading zero. JavaScript's `[0-9]` is ASCII in every mode, and `$` without
+ *  the `m` flag anchors at the end of the input only, so the two sets are
+ *  equal; ten digits sit far below `Number.MAX_SAFE_INTEGER`, so `Number` of a
+ *  match is exact. No `g` flag: `.test` must carry no `lastIndex` between
+ *  calls. Anything else in a marker is `unreadable`, never a child. */
+export const CHILD_RUN_ID = /^[1-9][0-9]{0,9}$/;
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's

@@ -8273,6 +8273,22 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // content (+3) rather than counted, on the same ground the round before
       // this one used: README is the one corpus document this branch may repair,
       // so a rotted anchor there is a repair and never a debt.
+      //
+      // RE-MEASURED at child-reclamation wave 2 (S6-R11, no rule changed, no
+      // D-number), in EACH task that inserted lines into `shared/api.ts`: the
+      // programme ledger's carried constraint pays the citation tax in the
+      // task that incurs it, so this file is green at every commit. The inserts
+      // land above anchors the frozen spec/plan corpus cites by line, and
+      // neither document may be re-pointed (byte-identical to `origin/main`).
+      // README's four anchors into the same file were RE-ANCHORED BY CONTENT in
+      // the same commits (the three `LcRefusalToken` union arms and their three
+      // map keys, `diff`-proved byte-identical against the previous commit), so
+      // README contributes nothing here.
+      //   Task 1 (`ChildMark`, `CHILD_RUN_ID`): a clean +18 insertion at
+      //   `:37` (`git diff -U0` — one hunk, `@@ -36,0 +37,18 @@`), so every
+      //   line below shifts by +18: the `RoutingArm` referent this entry
+      //   already tracks goes `:5691` -> `:5709`. Still not `:5644`, so the
+      //   entry stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that

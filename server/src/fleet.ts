@@ -297,7 +297,7 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
   // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (a 24-session fleet's baseline is 721 agent-WS
+  // the whole registry (a 24-session fleet's baseline is 745 agent-WS
   // operations [registry-read-census:fleet] per `readRegistry` call, before
   // conditional reconfirmation, for a question about one session).
   const read = await readSessionRecord(io, cfg, id);
@@ -435,7 +435,7 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, 30 [registry-read-census:fields] field reads
+   * SEPARATE whole-fleet sweep, 31 [registry-read-census:fields] field reads
    * per session, a few hundred ms after the one `tick()` used for
    * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
