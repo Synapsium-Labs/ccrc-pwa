@@ -282,6 +282,80 @@ describe('ccrc-agent file ops', () => {
     expect(res.kind).toBeUndefined();
   });
 
+  // ── F12 (review run 134) / D-3195 — lstat of one of the eight ~/.ccrc node
+  // files must answer about that path's OWN directory entry, never about a
+  // target `checkPath` resolved into ANOTHER admitted prefix. Before the fix,
+  // `checkPath(dirname('~/.ccrc/…'))` refuses (`~/.ccrc` itself is not
+  // whitelisted), so the op fell back to the CANONICAL — already
+  // symlink-resolved — subject and reported the regular file at the other
+  // end of the link, not the link itself.
+  describe('lstat of a ~/.ccrc node file answers the literal entry, not a target resolved into another prefix', () => {
+    it('a node-file symlink into .cc-sessions still reports `symlink`', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.cc-sessions', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'installed');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under .cc-clips', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.cc-clips', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'floor');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under a .claude* dir', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.claude-personal', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'node-id');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under the fleet projects root', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.projectsRoot, 'proj', 'x');
+      mkdirSync(path.dirname(target), { recursive: true });
+      const link = path.join(fixture!.home, '.ccrc', 'build.json');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('control: a REGULAR node file still answers `regular`', async () => {
+      await open();
+      const ccrc = path.join(fixture!.home, '.ccrc');
+      mkdirSync(ccrc, { recursive: true });
+      const p = path.join(ccrc, 'installed');
+      writeFileSync(p, 'abc\n');
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: p }))
+        .toMatchObject({ ok: true, kind: 'regular' });
+    });
+
+    it('control: a DANGLING node-file symlink still answers `symlink`', async () => {
+      await open();
+      const ccrc = path.join(fixture!.home, '.ccrc');
+      mkdirSync(ccrc, { recursive: true });
+      const link = path.join(ccrc, 'previous');
+      symlinkSync(path.join(ccrc, 'no-such-target'), link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+  });
+
   it('stat rejects a path outside the whitelist', async () => {
     await open();
     const res = await client!.req<Res>(nextId(), { op: 'stat', path: fixture!.outside });

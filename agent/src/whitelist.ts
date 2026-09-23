@@ -73,9 +73,21 @@ export type PathMode = 'read' | 'write';
  * to the canonical path when the parent is not itself readable (the `lstat`
  * arm in `server.ts`) — and `~/.ccrc` is not. Requiring
  * canonical === `<canonical ~/.ccrc>/<the literal basename>` refuses every
- * live symlink carrying one of the eight names, wherever it points. A
- * DANGLING one canonicalises onto its own literal path and is admitted;
- * `lstat` then reports it as `symlink`, which the server's sweep refuses.
+ * live symlink carrying one of the eight names that points OUTSIDE every
+ * admitted prefix or AT another of the eight — this function returns `false`
+ * for both, so `checkPath` grants no other arm either. What this function
+ * alone CANNOT refuse: a live symlink carrying one of the eight names that
+ * points INTO a *different* admitted prefix (`.cc-sessions`, `.cc-clips`, a
+ * `.claude*` dir, the projects root) — its canonical target is a regular
+ * file that prefix's own arm in `checkPath` admits independently, so the
+ * request is granted, just not through this function. Nothing is disclosed
+ * by that grant (the target was already readable on its own path), but the
+ * INTEGRITY read is: `lstat`'s scoped literal-entry subject (F12/D-3195, fix
+ * round 1 dispatch C, `server.ts`'s `lstat` case) still reports it `symlink`
+ * for exactly that request, which the server's inventory sweep refuses to
+ * trust as the node file. A DANGLING symlink carrying one of the eight names
+ * canonicalises onto its own literal path and IS admitted by this function;
+ * `lstat` reports it as `symlink` too, which the sweep also refuses.
  *
  * `canonicalCcrc` is `canonicalize(<home>/.ccrc)`, not `<canonical home>/.ccrc`,
  * so a `~/.ccrc` that is itself a symlink admits its own eight and nothing else.
