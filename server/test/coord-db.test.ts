@@ -657,13 +657,15 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 13 — never hand-edited beside a growing array', () => {
-    // Bumped to 13 by three migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 14 — never hand-edited beside a growing array', () => {
+    // Bumped to 14 by four migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
-    // placement wave 1 Task 1) and MIGRATIONS[12] (pool_edges/pool_epoch,
-    // account-pool membership wave 1 Task 6).
-    expect(COORD_SCHEMA_VERSION).toBe(13);
-    expect(MIGRATIONS.length).toBe(13);
+    // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
+    // account-pool membership wave 1 Task 6) and MIGRATIONS[13] (releases,
+    // node_release_refusals, nodes, update_intent, update_epoch — centralised
+    // update management W2 Task 3).
+    expect(COORD_SCHEMA_VERSION).toBe(14);
+    expect(MIGRATIONS.length).toBe(14);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -718,7 +720,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    expect(COORD_SCHEMA_VERSION).toBe(13);
+    // 14 since MIGRATIONS[13] (the update control plane, centralised update
+    // management W2 Task 3); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(14);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -947,5 +951,204 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
     const p = path.join(dir, '.ccrc', 'coord.db');
     const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
     expect(() => openCoordDb(p).close()).not.toThrow();
+  });
+});
+
+describe('coord.db: migration 14 — the update control plane (design 2026-09-20 §6)', () => {
+  // [name, type, notnull, dflt_value, pk] — PRAGMA table_info's own fields, in
+  // declaration order. The WHOLE list per table, never arrayContaining: the
+  // writer-group scan (`update-writer-groups.test.ts`) binds each store method
+  // to a named column group, so a column that lands here without being placed
+  // in a group is a column no scan knows about — and a column dropped by a
+  // later edit to this entry would be a frozen migration changing under a box
+  // that already ran it.
+  //
+  // `notnull: 0` on the three TEXT PRIMARY KEYs (`releases.tag`,
+  // `nodes.nodeId`, `update_intent.scope`) is SQLite's rowid-table rule, the
+  // same shape `programs.slug` has had since entry 1: the store writers are
+  // the guard (every tag passes `isReleaseTag`, every nodeId is measured),
+  // not the column.
+  type Col = [name: string, type: string, notnull: number, dflt: string | null, pk: number];
+  const cols = (db: DatabaseSync, table: string): Col[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as
+      { name: string; type: string; notnull: number; dflt_value: string | null; pk: number }[])
+      .map((c) => [c.name, c.type, c.notnull, c.dflt_value, c.pk]);
+  const tableNames = (db: DatabaseSync): string[] =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[])
+      .map((r) => r.name);
+  const UPDATE_TABLES = ['node_release_refusals', 'nodes', 'releases', 'update_epoch', 'update_intent'];
+
+  /** A database at EXACTLY user_version 13 — the version just before this
+   *  one — carrying one pool edge and a raised pool epoch, so a case can show
+   *  this migration touched neither. Isolates THIS entry, not a chain. */
+  const plantedAt13 = (prefix: string): string => {
+    const p = dbPathIn(mkTmp(prefix));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 13; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 13');
+      raw.exec('INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+               "VALUES ('account', 'a', 'pool-a', 5, 'op')");
+      raw.exec("UPDATE pool_epoch SET epoch = 3, issuedAt = 7, digest = 'd' WHERE id = 1");
+    });
+    raw.close();
+    return p;
+  };
+
+  it('reaches a database ALREADY at user_version 13 and adds exactly the five tables', () => {
+    const p = plantedAt13('ccrc-mig14-');
+    const before = new DatabaseSync(p);
+    const had = tableNames(before);
+    before.close();
+    expect(had.filter((t) => UPDATE_TABLES.includes(t)), 'the plant already has an update table').toEqual([]);
+
+    const db = openCoordDb(p);                    // must migrate 13 -> current
+    // The reached version is COORD_SCHEMA_VERSION, never a hardcoded 14: the
+    // next entry appended after this one must not have to edit this case.
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    const added = tableNames(db).filter((t) => !had.includes(t)).sort();
+    expect(added).toEqual(UPDATE_TABLES);
+    db.close();
+  });
+
+  it('gives each table exactly the columns §6 names, with their nullability, defaults and keys', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-cols-'));
+    expect(cols(db, 'releases')).toEqual([
+      ['tag', 'TEXT', 0, null, 1], ['version', 'TEXT', 1, null, 0], ['channel', 'TEXT', 1, null, 0],
+      ['publishedAt', 'INTEGER', 1, null, 0], ['commitSha', 'TEXT', 0, null, 0],
+      ['tarballUrl', 'TEXT', 1, null, 0], ['bundleListed', 'INTEGER', 1, null, 0], ['notes', 'TEXT', 0, null, 0],
+      // A yanked release is KEPT (§7) — the column defaults to 0 and nothing deletes.
+      ['yanked', 'INTEGER', 1, '0', 0], ['observedAt', 'INTEGER', 1, null, 0],
+      ['notifiedAt', 'INTEGER', 0, null, 0],
+    ]);
+    expect(cols(db, 'node_release_refusals')).toEqual([
+      ['nodeId', 'TEXT', 1, null, 1], ['tag', 'TEXT', 1, null, 2],
+      ['at', 'INTEGER', 1, null, 0], ['detail', 'TEXT', 1, null, 0],
+    ]);
+    expect(cols(db, 'nodes')).toEqual([
+      // the row key, then role and label — which are the measurement group's
+      ['nodeId', 'TEXT', 0, null, 1], ['role', 'TEXT', 1, null, 0], ['label', 'TEXT', 1, null, 0],
+      // measurement group, continued
+      ['currentVersion', 'TEXT', 0, null, 0], ['currentSha', 'TEXT', 0, null, 0],
+      ['currentRef', 'TEXT', 0, null, 0], ['currentBuiltAt', 'TEXT', 0, null, 0],
+      ['currentDirty', 'INTEGER', 0, null, 0],
+      ['stampRead', 'TEXT', 1, null, 0], ['installState', 'TEXT', 1, null, 0],
+      ['provenance', 'TEXT', 1, null, 0], ['caps', 'TEXT', 1, null, 0],
+      ['agentOps', 'TEXT', 0, null, 0], ['highestVersion', 'TEXT', 0, null, 0],
+      ['previousVersion', 'TEXT', 0, null, 0], ['os', 'TEXT', 1, null, 0], ['measuredAt', 'INTEGER', 0, null, 0],
+      ['reachable', 'INTEGER', 1, null, 0], ['unreachableSince', 'INTEGER', 0, null, 0],
+      // report group
+      ['reportedPhase', 'TEXT', 0, null, 0], ['reportedTarget', 'TEXT', 0, null, 0],
+      ['reportedStartedAt', 'INTEGER', 0, null, 0], ['reportedUpdatedAt', 'INTEGER', 0, null, 0],
+      ['reportedDetail', 'TEXT', 0, null, 0],
+      // lease group — updateState's default is D-3186
+      ['updateState', 'TEXT', 1, "'idle'", 0], ['updateTarget', 'TEXT', 0, null, 0],
+      ['updateStartedAt', 'INTEGER', 0, null, 0], ['updateDetail', 'TEXT', 0, null, 0],
+      // resolved group
+      ['channel', 'TEXT', 0, null, 0], ['desiredTag', 'TEXT', 0, null, 0], ['resolveDetail', 'TEXT', 0, null, 0],
+      // request group
+      ['requestedTag', 'TEXT', 0, null, 0], ['requestedKind', 'TEXT', 0, null, 0],
+      ['requestedAt', 'INTEGER', 0, null, 0],
+      // identity group
+      ['supersededBy', 'TEXT', 0, null, 0],
+    ]);
+    expect(cols(db, 'update_intent')).toEqual([
+      ['scope', 'TEXT', 0, null, 1], ['channel', 'TEXT', 1, null, 0], ['pinnedTag', 'TEXT', 0, null, 0],
+      ['auto', 'TEXT', 1, null, 0], ['notify', 'TEXT', 1, null, 0],
+      ['setAt', 'INTEGER', 1, null, 0], ['setBy', 'TEXT', 1, null, 0],
+    ]);
+    // pool_epoch's single-row idiom WITHOUT its digest column (§6): nothing
+    // computes a digest for the projection — its torn-write detectors are the
+    // `end` terminator and the 65536-byte cap (§9).
+    expect(cols(db, 'update_epoch').map((c) => c[0]), 'update_epoch copied pool_epoch\'s digest').not.toContain('digest');
+    expect(cols(db, 'update_epoch')).toEqual([
+      ['id', 'INTEGER', 0, null, 1], ['epoch', 'INTEGER', 1, null, 0], ['issuedAt', 'INTEGER', 1, null, 0],
+    ]);
+    db.close();
+  });
+
+  it('seeds exactly two rows — the fleet-default intent and epoch 0 — so no reader handles absence', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-seed-'));
+    expect(db.prepare('SELECT scope, channel, pinnedTag, auto, notify, setAt, setBy FROM update_intent').all())
+      .toEqual([{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 0, setBy: 'migration' }]);
+    expect(db.prepare('SELECT id, epoch, issuedAt FROM update_epoch').all())
+      .toEqual([{ id: 1, epoch: 0, issuedAt: 0 }]);
+    for (const t of ['releases', 'node_release_refusals', 'nodes']) {
+      expect(db.prepare(`SELECT count(*) AS c FROM ${t}`).get(), `${t} is seeded`).toEqual({ c: 0 });
+    }
+    db.close();
+  });
+
+  it('a FRESH database reaches the same five tables and the same two seed rows', () => {
+    // The ordinary boot of a new box: migrations 0 -> current in one open.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig14-fresh-')));
+    expect(tableNames(db).filter((t) => UPDATE_TABLES.includes(t)).sort()).toEqual(UPDATE_TABLES);
+    expect(db.prepare('SELECT count(*) AS c FROM update_intent').get()).toEqual({ c: 1 });
+    expect(db.prepare('SELECT epoch FROM update_epoch WHERE id = 1').get()).toEqual({ epoch: 0 });
+    db.close();
+  });
+
+  it('update_epoch is a singleton — a second row is refused by the CHECK and by nothing else', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-single-'));
+    // Every value well-typed and every NOT NULL satisfied, so the ONLY thing
+    // that can refuse this insert is `CHECK (id = 1)` — the message is
+    // asserted, not just the throw (pool-edges-store.test.ts's "pool_epoch
+    // refuses a second row" passed with its CHECK deleted until it did).
+    expect(() => db.exec('INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (2, 1, 1)'))
+      .toThrow(/CHECK constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM update_epoch').get()).toEqual({ c: 1 });
+    db.close();
+  });
+
+  it('a node row whose INSERT names no lease column reads idle — the measurement writer never names updateState', () => {
+    // D-3186. `upsertNodeMeasurement` (Task 5) names only
+    // identity, measurement and report columns; without the DEFAULT this
+    // INSERT fails NOT NULL and the writer would have to name the lease column
+    // the writer-group scan forbids it.
+    const db = openCoordDb(plantedAt13('ccrc-mig14-idle-'));
+    db.exec(
+      'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) ' +
+      "VALUES ('01234567-89ab-cdef-0123-456789abcdef', 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'linux', 1)",
+    );
+    expect(db.prepare('SELECT updateState, updateTarget, measuredAt, requestedTag, supersededBy FROM nodes').get())
+      .toEqual({ updateState: 'idle', updateTarget: null, measuredAt: null, requestedTag: null, supersededBy: null });
+    db.close();
+  });
+
+  it('node_release_refusals holds one row per (node, tag) — a node\'s verdict, never fleet-wide', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-refusal-'));
+    const ins = db.prepare('INSERT INTO node_release_refusals (nodeId, tag, at, detail) VALUES (?, ?, ?, ?)');
+    ins.run('n1', 'v0.0.9', 1, 'provenance: bundle absent');
+    ins.run('n2', 'v0.0.9', 2, 'provenance: bundle absent');   // the same tag, another node: its own row
+    expect(() => ins.run('n1', 'v0.0.9', 3, 'again')).toThrow(/UNIQUE constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM node_release_refusals').get()).toEqual({ c: 2 });
+    db.close();
+  });
+
+  it('is ADDITIVE: migration 13\'s pool edge and pool epoch come through untouched', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-add-'));
+    expect(db.prepare('SELECT subjectKind, subjectId, pool, addedAt, addedBy FROM pool_edges').all())
+      .toEqual([{ subjectKind: 'account', subjectId: 'a', pool: 'pool-a', addedAt: 5, addedBy: 'op' }]);
+    expect(db.prepare('SELECT epoch, issuedAt, digest FROM pool_epoch WHERE id = 1').get())
+      .toEqual({ epoch: 3, issuedAt: 7, digest: 'd' });
+    db.close();
+  });
+
+  it('every entry carries its own banner, numbered 1..N in order — a textual double slot reds here', () => {
+    // `db.ts`'s loop keys on the ARRAY INDEX alone, so two entries both
+    // bannered `14: user_version 13 -> 14` (the shape a rebase of PR #40 onto
+    // this entry would leave if both kept their text) would run as 14 and 15
+    // while every comment in the file said otherwise. This counts the
+    // banners against MIGRATIONS.length and checks the numbering. It cannot
+    // see a slot another BRANCH holds — schema.ts's closing paragraph on
+    // entry 14 carries that re-measurement.
+    const src = readFileSync(path.join(root, 'server/src/coord/schema.ts'), 'utf8');
+    const banners = [...src.matchAll(/^ {2}\/\/ ── (\d+): user_version (\d+) -> (\d+) ─/gm)]
+      .map((m) => [Number(m[1]), Number(m[2]), Number(m[3])]);
+    expect(banners.length, 'one banner per MIGRATIONS entry').toBe(MIGRATIONS.length);
+    banners.forEach(([n, from, to], i) => {
+      expect([n, from, to], `banner ${i + 1}`).toEqual([i + 1, i, i + 1]);
+    });
   });
 });
