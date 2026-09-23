@@ -21,7 +21,11 @@ import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
-import { buildAgreement, type FleetState } from '../src/fleetstate.js';
+import { buildAgreement, derivedBuilds, type BuildSource, type FleetState } from '../src/fleetstate.js';
+import { CoordStore, type NodeMeasurement } from '../src/coord/store.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { FLEET_LABEL, sweepInventory } from '../src/update/inventory.js';
+import type { NodeRole } from '../../shared/api.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -58,6 +62,35 @@ const healthOf = async (deps: Deps): Promise<Record<string, unknown>> => {
     await app.close();
   }
 };
+
+/** One inventory row exactly as the sweep writes it (Task 11's `measurementFrom`), the stamp spread into the five
+ *  `current*` columns. `stamp: null` is a node with no stamp file (`stampRead: 'absent'`). No node-id was measured,
+ *  so the row is keyed by its label and its install state is `unknown` (spec §8). */
+function row(label: string, role: NodeRole, stamp: BuildInfo | null, over: Partial<NodeMeasurement> = {}): NodeMeasurement {
+  return {
+    nodeId: label, role, label,
+    currentVersion: stamp?.version ?? null, currentSha: stamp?.sha ?? null, currentRef: stamp?.ref ?? null,
+    currentBuiltAt: stamp?.builtAt ?? null, currentDirty: stamp?.dirty ?? null,
+    stampRead: stamp ? 'ok' : 'absent', installState: 'unknown', provenance: 'unknown',
+    caps: [], agentOps: role === 'fleet' ? [] : null, highestVersion: null, previousVersion: null, os: 'linux',
+    measuredAt: 1_758_000_000_000, report: null,
+    ...over,
+  };
+}
+
+/** Remote-mode deps WITH a coordination database holding `rows`, and with the two OLD sources (`fleetState.build`,
+ *  `deps.build`) set to `decoy` — so every case below can tell which source the route read. */
+function inventoryDeps(rows: readonly NodeMeasurement[], decoy: { fleet: BuildInfo | null; own: BuildInfo | null }): { deps: Deps; coord: CoordStore } {
+  const base = remoteDeps(decoy.fleet, decoy.own);
+  const coord = new CoordStore(openCoordDb(base.cfg.coordDbPath));
+  for (const m of rows) expect(coord.upsertNodeMeasurement(m), m.label).toMatchObject({ ok: true });
+  return { deps: { ...base, coord }, coord };
+}
+
+const FLEET: BuildInfo = { sha: 'abc1234', ref: 'release', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
+const SERVER: BuildInfo = { ...FLEET, builtAt: '2026-09-21T00:02:00Z' };
+const DECOY_FLEET: BuildInfo = { ...OWN, sha: 'dec0y01' };
+const DECOY_OWN: BuildInfo = { ...OWN, sha: 'dec0y02' };
 
 describe('buildAgreement — three answers, because "no evidence" is not "disagreement"', () => {
   it('is unknown when the agent reported nothing — an older agent is not a skewed one', () => {
@@ -158,6 +191,138 @@ describe('GET /api/fleet/health — the skew answer reaches the operator', () =>
     const h = await healthOf(remoteDeps(null, OWN));
     expect(h['build']).toBe('unknown');
     expect(h['builds']).toEqual({ own: OWN, fleet: null });
+  });
+});
+
+describe('derivedBuilds — the pair as a view of the node rows (design 2026-09-20 §14)', () => {
+  const A: BuildInfo = { ...OWN, sha: 'aaaaaaa' };
+  const B: BuildInfo = { ...OWN, sha: 'bbbbbbb' };
+  const C: BuildInfo = { ...OWN, sha: 'ccccccc' };
+
+  it('no rows is no evidence on either side', () => {
+    expect(derivedBuilds([])).toEqual({ own: null, fleet: null });
+  });
+
+  it('own is the server-role row, fleet the fleet-role row, whichever order they arrive in', () => {
+    const s: BuildSource = { role: 'server', build: A };
+    const f: BuildSource = { role: 'fleet', build: B };
+    expect(derivedBuilds([s, f])).toEqual({ own: A, fleet: B });
+    expect(derivedBuilds([f, s])).toEqual({ own: A, fleet: B });
+  });
+
+  it("a 'both' row is this box — the single-box shape records role both", () => {
+    expect(derivedBuilds([{ role: 'both', build: A }])).toEqual({ own: A, fleet: null });
+  });
+
+  it('the FIRST row of a role decides, and a later row never backfills its null', () => {
+    // The first live fleet-role row IS the fleet node (spec §14); a row after it is a second connection this
+    // build has no label for (D-3184), and borrowing its stamp would describe a node nobody asked about.
+    expect(derivedBuilds([{ role: 'fleet', build: B }, { role: 'fleet', build: C }])).toEqual({ own: null, fleet: B });
+    expect(derivedBuilds([{ role: 'fleet', build: null }, { role: 'fleet', build: C }])).toEqual({ own: null, fleet: null });
+    expect(derivedBuilds([{ role: 'server', build: null }, { role: 'both', build: A }])).toEqual({ own: null, fleet: null });
+  });
+
+  it('a row whose role is outside the vocabulary names neither side', () => {
+    // `nodes.role` reads `null` for a token a newer build wrote (D-3181); it is not this box and
+    // not the fleet box, so it must not be either.
+    expect(derivedBuilds([{ role: null, build: A }])).toEqual({ own: null, fleet: null });
+  });
+});
+
+describe('GET /api/fleet/health — `builds` is derived from the inventory when one is wired (design 2026-09-20 §14)', () => {
+  async function health(deps: Deps, coord: CoordStore): Promise<Record<string, unknown>> {
+    try { return await healthOf(deps); } finally { coord.db.close(); }
+  }
+
+  it('reads the two rows, not the boot stamp and the handshake stamp', async () => {
+    // The decoys disagree with each other (the OLD source would answer `skewed`); the rows agree. Only a route that
+    // reads the rows answers `agreed` with these stamps.
+    const { deps, coord } = inventoryDeps(
+      [row('server', 'server', SERVER), row(FLEET_LABEL, 'fleet', FLEET)],
+      { fleet: DECOY_FLEET, own: DECOY_OWN });
+    const h = await health(deps, coord);
+    expect(h['build']).toBe('agreed');
+    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+  });
+
+  it('a dirty fleet row reads skewed — dirty survives the five current* columns (§18 "a full BuildInfo round-trips")', async () => {
+    // Decoys agree and are clean: the old source would answer `agreed`. A dropped `currentDirty` column, or a
+    // `buildInfoOfRow` that forgets it, turns this back into `agreed`.
+    const dirty: BuildInfo = { ...FLEET, dirty: true };
+    const { deps, coord } = inventoryDeps(
+      [row('server', 'server', SERVER), row(FLEET_LABEL, 'fleet', dirty)],
+      { fleet: OWN, own: OWN });
+    const h = await health(deps, coord);
+    expect(h['build']).toBe('skewed');
+    expect(h['builds']).toEqual({ own: SERVER, fleet: dirty });
+  });
+
+  it('a row whose stamp did not read ok is null on that side, whatever its current* columns hold', async () => {
+    // `unreadable` (EACCES, a symlink, an agent that refuses the read) and `malformed` are both "no evidence":
+    // the answer is `unknown`, never a stamp and never `skewed`. The columns are planted non-null on purpose —
+    // the gate is `stampRead`, not the columns happening to be empty.
+    for (const stampRead of ['unreadable', 'malformed'] as const) {
+      const { deps, coord } = inventoryDeps(
+        [row('server', 'server', SERVER), row(FLEET_LABEL, 'fleet', FLEET, { stampRead })],
+        { fleet: SERVER, own: SERVER });
+      const h = await health(deps, coord);
+      expect(h['build'], stampRead).toBe('unknown');
+      expect(h['builds'], stampRead).toEqual({ own: SERVER, fleet: null });
+    }
+  });
+
+  it('no rows yet is unknown on both sides — the handshake stamp is never read as current (spec §8)', async () => {
+    // Before the first sweep writes a row. The decoys agree; a route that fell back to them would say `agreed`.
+    const { deps, coord } = inventoryDeps([], { fleet: OWN, own: OWN });
+    const h = await health(deps, coord);
+    expect(h['build']).toBe('unknown');
+    expect(h['builds']).toEqual({ own: null, fleet: null });
+  });
+
+  it('a superseded label row is invisible to `builds` (§18 "a superseded row is invisible")', async () => {
+    // The label row sorts FIRST (`nodes()` orders by label; 'a-…' < 'fleet'), so a reader that stopped filtering
+    // `supersededBy` would take the stale stamp as the fleet side.
+    const FLEET_ID = '3f2a9c1e-7b4d-4e8a-9f10-2c3d4e5f6a7b';
+    const stale: BuildInfo = { ...FLEET, sha: '0ldc0de', version: 'v0.0.3' };
+    const { deps, coord } = inventoryDeps(
+      [row('server', 'server', SERVER), row('a-old-connection', 'fleet', stale),
+        row(FLEET_LABEL, 'fleet', FLEET, { nodeId: FLEET_ID })],
+      { fleet: stale, own: SERVER });
+    // `retired: 0` — Task 5's `RekeyNodeResult` carries the count of OTHER live rows under this label it retired;
+    // the only other row here carries label `fleet`, not `a-old-connection`.
+    expect(coord.rekeyNode('a-old-connection', FLEET_ID)).toEqual({ ok: true, how: 'superseded', retired: 0, revived: false });
+    const h = await health(deps, coord);
+    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+    expect(h['build']).toBe('agreed');
+  });
+
+  it('an unreachable fleet row keeps its last measured stamp, as the handshake field did across a disconnect', async () => {
+    const { deps, coord } = inventoryDeps(
+      [row('server', 'server', SERVER), row(FLEET_LABEL, 'fleet', FLEET)],
+      { fleet: null, own: null });
+    expect(coord.markUnreachable(FLEET_LABEL, 'fleet', 1_758_000_060_000)).toMatchObject({ ok: true, created: false });
+    const h = await health(deps, coord);
+    expect(h['builds']).toEqual({ own: SERVER, fleet: FLEET });
+  });
+
+  it("an older PWA's reading of `builds` is unchanged — the same stamps through either source are the same JSON", async () => {
+    // The field's readers today are `BuildLine` and `FleetHostBanner`'s skewed arm (pwa/src/fleet/), both of which
+    // read `version` by type (`typeof b.version === 'string'`, `b.version ?? …`). `toStrictEqual` on the PARSED
+    // body is the whole contract they see: an unversioned stamp must arrive with NO `version` key — not
+    // `version: null` — and a versioned one with it, exactly as `parseBuildInfo` shapes the boot and handshake reads.
+    const unversioned: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-08-15T00:00:00Z', dirty: false };
+    for (const [ownStamp, fleetStamp] of [[SERVER, FLEET], [unversioned, FLEET], [SERVER, { ...unversioned, dirty: true }]] as const) {
+      const before = await healthOf(remoteDeps(fleetStamp, ownStamp));
+      const { deps, coord } = inventoryDeps(
+        [row('server', 'server', ownStamp), row(FLEET_LABEL, 'fleet', fleetStamp)],
+        { fleet: null, own: null });
+      const after = await health(deps, coord);
+      expect(after['builds'], JSON.stringify([ownStamp, fleetStamp])).toStrictEqual(before['builds']);
+      expect(after['build']).toBe(before['build']);
+    }
+    const { deps, coord } = inventoryDeps([row('server', 'server', unversioned)], { fleet: null, own: null });
+    const own = ((await health(deps, coord))['builds'] as { own: Record<string, unknown> }).own;
+    expect('version' in own).toBe(false);
   });
 });
 
@@ -306,5 +471,39 @@ describe('end to end — a stamp on the fleet host\'s disk becomes an answer on 
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(fleet!.state.build).toBeNull(), { timeout: 3000 });
     expect(await healthOverWire(fleet, OWN)).toMatchObject({ connected: true, build: 'unknown' });
+  });
+
+  it('the fleet host\'s stamp reaches `builds` through the INVENTORY — agent read, sweep, row, route', async () => {
+    // The whole W2 path with no fakes: a real agent admits `~/.ccrc/build.json` through the exact-basename read set
+    // (Task 8), `sweepInventory` measures it over the live socket (Task 11), the row lands in a real coord.db, and
+    // the route derives from the row. The server's config points at the agent's fixture HOME — the
+    // same-absolute-path assumption every remote read makes (Global Constraints) — so the server row measures the
+    // same file. `fleetState.build` is nulled and `deps.build` is null: the old sources would answer `unknown`.
+    const tagged: BuildInfo = { ...OWN, version: 'v0.0.9' };
+    fleet = await liveFleet(tagged);
+    seedRoster(fixture!.home);
+    const cfg = loadConfig({ CCRC_HOME: fixture!.home, CCRC_FLEET: 'remote' });
+    const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
+    try {
+      const outcomes = await sweepInventory({
+        store: coord, localIo: localIO, ccrcDir: cfg.ccrcDir, role: cfg.role,
+        fleet: { io: fleet.io, state: fleet.state },
+      }, Date.now());
+      expect(outcomes.find((o) => o.label === FLEET_LABEL)).toMatchObject({ result: 'measured' });
+      expect(coord.nodeByLabel(FLEET_LABEL)?.stampRead).toBe('ok');
+      const app = await buildServer({
+        cfg, build: null, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner),
+        io: localIO, fleetState: { ...fleet.state, build: null }, queue: new KeyedQueue(), coord,
+      });
+      try {
+        const h = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+        expect(h['build']).toBe('agreed');
+        expect(h['builds']).toEqual({ own: tagged, fleet: tagged });
+      } finally {
+        await app.close();
+      }
+    } finally {
+      coord.db.close();
+    }
   });
 });

@@ -3182,8 +3182,8 @@ export interface FleetHealth {
   build?: BuildAgreement;
   /**
    * The EVIDENCE beside the decision (release/rollout design §6): what THIS
-   * box's stamp says and what the fleet host's stamp said on its last
-   * `ready`, each `null` when that side has no readable stamp. `build`
+   * box's stamp and the fleet host's say, per the node inventory (design
+   * 2026-09-20 §14, `derivedBuilds`); `null` = no readable stamp. `build`
    * above still decides — a reader renders `skewed`/`agreed`/`unknown`
    * from it and uses these only to SAY which versions are involved
    * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
