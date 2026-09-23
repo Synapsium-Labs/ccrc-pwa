@@ -60,6 +60,7 @@ import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
@@ -201,6 +202,12 @@ const UPDATE_CATALOGUE_MS = 30 * 60_000;
  *  node, lstat-gated and budget-bounded, once a minute — and at once after a
  *  `ready` frame (`triggerInventory`, wired in `index.ts`). */
 const UPDATE_INVENTORY_MS = 60_000;
+
+/** null = written, or nothing to write by construction (a fleet-role server has no own projection). */
+function projectionWhy(p: ProjectionOutcome): string | null {
+  if (p.ok || p.why === 'not-server-role') return null;
+  return p.why === 'unwritable' || p.why === 'no-channel' ? `${p.why}: ${p.detail}` : p.why;
+}
 
 /** The third lane. 8 projects x 1 call / 120 s is ~240 GraphQL calls an hour
  *  against a 5000/hr budget with ~4900 free — about 5%. Measured latency
@@ -491,6 +498,9 @@ export class FleetWatcher {
    *  a `ready`-triggered sweep also defers the minute gate's next one. */
   private lastInventoryAt = 0;
   private inventoryRun: Promise<SweepOutcome[]> | null = null;
+  /** Task 12: the last reason the server's own projection was not written, so a box whose ~/.ccrc cannot
+   *  take the file warns once per change of reason, not once a minute. */
+  private lastProjectionWhy: string | null = null;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -756,8 +766,8 @@ export class FleetWatcher {
     });
   }
 
-  /** Builds the sweep's deps and holds this file's one call to sweepInventory
-   *  (Task 12 swaps that callee for the sweep-then-project step). The server's
+  /** Builds the sweep's deps and calls sweepThenProject, the file's one caller
+   *  of sweepInventory, inside inventoryNow()'s single flight. The server's
    *  own row is read through `localIO` in both modes — `deps.io` is the FLEET
    *  box's io in remote mode. */
   private async runInventory(): Promise<SweepOutcome[]> {
@@ -768,7 +778,32 @@ export class FleetWatcher {
       store: coord, localIo: localIO, ccrcDir: cfg.ccrcDir, role: cfg.role,
       fleet: cfg.fleetMode === 'remote' && fleetState !== undefined ? { io: this.deps.io, state: fleetState } : null,
     };
-    return sweepInventory(inv, Date.now());
+    return this.sweepThenProject(inv, Date.now());
+  }
+
+  /** One inventory run (design 2026-09-20 §9): the sweep, then the resolver over every live row and the
+   *  server-role projection — so the file's `lease` is refreshed on the sweep's 60 s beat. Called ONLY from
+   *  `runInventory()`, i.e. inside `inventoryNow()`'s single-flight promise, so a ready-triggered run and the
+   *  tick's are ONE sweep. The single-flight is not what orders the writers, though: the update routes'
+   *  `reproject` (Task 13) calls `resolveAndProject` without the watcher, and it is `resolveAndProject`'s own
+   *  per-directory queue that keeps this run and a route's from interleaving two writers of the resolved
+   *  columns or of the file. A resolve failure is warned and never loses the sweep's outcomes. */
+  private async sweepThenProject(inv: InventoryDeps, now: number): Promise<SweepOutcome[]> {
+    const outcomes = await sweepInventory(inv, now);
+    const coord = this.deps.coord;
+    if (!coord) return outcomes;
+    let why: string | null;
+    try {
+      const run = await resolveAndProject({ store: coord, role: this.deps.cfg.role, ccrcDir: this.deps.cfg.ccrcDir }, now);
+      why = projectionWhy(run.projection);
+    } catch (e) {
+      why = `the resolve run threw: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    if (why !== null && why !== this.lastProjectionWhy) {
+      console.warn(`update: this server's own ~/.ccrc/update-intent was not written (${why})`);
+    }
+    this.lastProjectionWhy = why;
+    return outcomes;
   }
 
   /**
