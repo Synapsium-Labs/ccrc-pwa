@@ -29,7 +29,9 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { resolveNodeIntent, type EligibilityRow, type ResolveInput } from '../src/update/resolve.js';
+import {
+  RELEASE_TAG_COMPONENT_MAX_DIGITS, resolveNodeIntent, type EligibilityRow, type ResolveInput,
+} from '../src/update/resolve.js';
 import { BASE_URL_OK } from '../../shared/base-url.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -226,6 +228,35 @@ describe('safeDownloadUrl / F10 (fix round 1, D-3216) — a bad download URL wit
   // reds the first case — measured by hand: swapping `safeDownloadUrl`'s
   // `u.protocol !== 'https:'` for the old `/^https?:\/\/\S+$/.test` accepts
   // the http case above and turns its `tarballUrl` non-null.
+
+  // R7 (fix round 2, D-3216, review 143): a `\` before an authority-shaped
+  // `@` is a measured parser differential — WHATWG (this process's own
+  // parse) folds `\` to `/` on a special scheme and reads the whole
+  // `\@evil.example/x` as PATH, with an empty username/password, while curl
+  // 8.5.0 given the identical raw text connects to the host AFTER the `@`.
+  // Refused outright — never parsed around, and never stored raw.
+  it("R7: a backslash before an authority-shaped '@' is refused outright (github.com\\@evil.example)", () => {
+    const p = parseReleaseListing([withUrl('https://github.com\\@evil.example/x')]);
+    expect(p!.rows[0]!.tarballUrl).toBeNull();
+  });
+
+  // R7: the PARSED, NORMALISED form is stored — never the raw string. A
+  // default port is the cleanest differential: WHATWG's `href` drops it,
+  // so a raw string that still carries it proves `safeDownloadUrl` did not
+  // just pass the raw value through.
+  it('R7: the stored form is u.href, not the raw string — a default port is dropped', () => {
+    const raw = 'https://example.invalid:443/ccrc-v0.0.9.tar.gz';
+    const p = parseReleaseListing([withUrl(raw)]);
+    expect(p!.rows[0]!.tarballUrl).toBe('https://example.invalid/ccrc-v0.0.9.tar.gz');
+    expect(p!.rows[0]!.tarballUrl).not.toBe(raw);
+  });
+
+  // Mutations (measured by hand, each reds against this describe):
+  // (1) removing `if (raw.includes('\\')) return null;` reds the backslash
+  //     case above (WHATWG's own empty username/password checks do not
+  //     catch it — `tarballUrl` would be non-null).
+  // (2) reverting `return u.href` to `return raw` reds the default-port
+  //     case above (`tarballUrl` would equal the raw string, port included).
 });
 
 describe('F11 (fix round 1, D-3216) — the tag ingress bound, on top of isReleaseTag', () => {
@@ -248,16 +279,24 @@ describe('F11 (fix round 1, D-3216) — the tag ingress bound, on top of isRelea
     expect(p!.skipped).toBe(1);
   });
 
-  it('a tag over 64 bytes is skipped; one at exactly 64 is kept', () => {
-    const at64 = `v${'1'.repeat(59)}.0.0`;
-    const at65 = `v${'1'.repeat(60)}.0.0`;
-    expect(Buffer.byteLength(at64, 'utf8')).toBe(64);
-    expect(Buffer.byteLength(at65, 'utf8')).toBe(65);
+  // R9 (fix round 2, D-3216, review 143) changed what this pins: a
+  // single-component tag AT the byte cap (the original `at64`, one
+  // 59-digit component) is now ALSO skipped by the new per-component digit
+  // cap (`RELEASE_TAG_COMPONENT_MAX_DIGITS`) — three components at that cap
+  // is only 57 bytes, so the 64-byte cap is unreachable on its own for a
+  // well-formed tag. The kept tag here is the true effective maximum under
+  // BOTH caps; the skipped one still overshoots both.
+  it('a grossly oversized single component is skipped; the effective maximum under both caps is kept', () => {
+    const maxPart = '1'.repeat(RELEASE_TAG_COMPONENT_MAX_DIGITS);
+    const atEffectiveMax = `v${maxPart}.${maxPart}.${maxPart}`;
+    const over = `v${'1'.repeat(60)}.0.0`;
+    expect(Buffer.byteLength(atEffectiveMax, 'utf8')).toBe(3 * RELEASE_TAG_COMPONENT_MAX_DIGITS + 3);
+    expect(Buffer.byteLength(over, 'utf8')).toBe(65);
     const p = parseReleaseListing([
-      rel(at64, '2026-09-20T10:00:00Z'),
-      rel(at65, '2026-09-20T10:01:00Z'),
+      rel(atEffectiveMax, '2026-09-20T10:00:00Z'),
+      rel(over, '2026-09-20T10:01:00Z'),
     ]);
-    expect(p!.rows.map((r) => r.tag)).toEqual([at64]);
+    expect(p!.rows.map((r) => r.tag)).toEqual([atEffectiveMax]);
     expect(p!.skipped).toBe(1);
   });
 
@@ -276,8 +315,11 @@ describe('F11 (fix round 1, D-3216) — the tag ingress bound, on top of isRelea
   //     v01.2.3 above — the first two cases in this describe go from
   //     skipped=2/1 to skipped=0.
   // (2) removing the byte-length bound (dropping the `Buffer.byteLength`
-  //     check) keeps the 65-byte tag — the third case's skipped count goes
-  //     from 1 to 0.
+  //     check) does NOT by itself change the third case's outcome (R9, fix
+  //     round 2: the per-component digit cap alone already refuses a
+  //     60-digit component) — see the dedicated mutation note on
+  //     `RELEASE_TAG_COMPONENT_MAX_DIGITS` in update-resolve.test.ts, whose
+  //     removal DOES flip the third case's skipped count from 1 to 0.
 });
 
 describe('apiBaseProblem — validated once, at poller creation (D-3209, fix round 1 finding 3)', () => {
@@ -357,6 +399,25 @@ describe('apiBaseProblem — validated once, at poller creation (D-3209, fix rou
   it('mutation control: BASE_URL_OK alone accepts the ghp_TOKEN base I1 refuses', () => {
     expect(BASE_URL_OK('https://ghp_TOKEN/@api.example.invalid').ok).toBe(true);
   });
+
+  // R13 (fix round 2, review 143): `safeSchemeHost`'s docstring promises
+  // "scheme and host only, never query/fragment/path" for a base that
+  // parses fine but is refused for another reason (a query or a fragment) —
+  // unpinned before this. A refused
+  // `https://api.github.com/orgs/x?access_token=SECRET#frag` reaches it.
+  it('R13: a refused base with a real host prints scheme and host ONLY — never its query, fragment or path', () => {
+    const problem = apiBaseProblem('https://api.github.com/orgs/x?access_token=SECRET#frag');
+    expect(problem).not.toBeNull();
+    expect(problem).toBe('apiUrl refused (base-url-query): https://api.github.com');
+    expect(problem).not.toContain('access_token');
+    expect(problem).not.toContain('SECRET');
+    expect(problem).not.toContain('orgs');
+    expect(problem).not.toContain('frag');
+  });
+
+  // Mutation (measured by hand, on a scratch copy): appending `u.pathname` or
+  // `u.search`/`u.hash` to `safeSchemeHost`'s return value reds the case
+  // above — the message would then contain 'orgs', 'access_token' or 'frag'.
 });
 
 describe('capNotes — plain text, 4096 UTF-8 bytes, then the marker (§7, §18 "notes are capped and plain")', () => {
@@ -925,10 +986,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       expect(stableRow).toMatchObject({ tag: 'v0.0.1', channel: 'stable', yanked: false });
       // The load-bearing half of 'single': the latest upsert must not yank
       // ANY of the 30 dev releases the listing just wrote in the SAME poll.
-      // Mutation (measured by hand): passing 'complete' instead of 'single'
-      // for the latest upsert reds exactly this assertion — every dev
-      // release ends up yanked — while leaving every assertion above it
-      // (which look only at the stable row) green.
+      // R3 (fix round 2, review 143) CORRECTS the claim this comment used to
+      // make: passing 'complete' here does NOT red this assertion — N1's
+      // reordering (the probe runs BEFORE the listing) means the listing
+      // that follows, in this SAME poll, re-upserts the 30 dev rows with
+      // `yanked = 0` before this assertion ever looks, masking a wrong
+      // coverage word here. The guard IS real; it just cannot be seen from
+      // this vantage — see the dedicated case below, which asserts on a
+      // poll where the listing itself fails, so nothing can re-upsert
+      // anything afterward.
       expect(releases.filter((r) => r.tag !== 'v0.0.1').every((r) => !r.yanked)).toBe(true);
       expect(releases).toHaveLength(RELEASES_PER_PAGE + 1);
 
@@ -955,6 +1021,39 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       await p.poll(2000);
       expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ tag: 'v0.0.1', yanked: false });
     });
+
+    // R3 (fix round 2, review 143): the guard the case above could no
+    // longer catch, made red again — assert on a poll where the LISTING
+    // ITSELF FAILS, so nothing can re-upsert anything after the /latest
+    // probe's own upsert runs, and the coverage word it used is directly
+    // observable.
+    it("R3: the latest upsert's 'single' coverage is provable on a poll where the listing fails — nothing can mask it afterward", async () => {
+      const { store, port } = fixture();
+      const p = poller(port);
+      // Poll 1: 30 known dev releases, no stable yet (latest unscripted -> 404, an answer).
+      const listingBody = Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.2.${i + 1}`, new Date(Date.UTC(2026, 8, 2, 0, i)).toISOString(), { prerelease: true }));
+      script = [{ status: 200, etag: '"eL1"', body: listingBody }];
+      await p.poll(1000);
+      expect(store.releases()).toHaveLength(RELEASES_PER_PAGE);
+
+      // Poll 2: the latest probe confirms a NEW stable release, but the
+      // LISTING FAILS this same poll (500) — its own re-upsert, which
+      // masked the mutant above, cannot run here.
+      script = [{ status: 500 }];
+      scriptLatest = [{ status: 200, etag: '"eS"', body: rel('v0.0.1', '2026-08-01T00:00:00Z') }];
+      await p.poll(2000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+      expect(store.releases().filter((r) => r.tag !== 'v0.0.1').every((r) => !r.yanked)).toBe(true);
+      expect(store.releases()).toHaveLength(RELEASES_PER_PAGE + 1);
+    });
+
+    // Mutation (measured by hand, on a scratch copy): passing 'complete'
+    // instead of 'single' to `pollLatest`'s OWN `applyReleaseListing` call
+    // reds the case above — with 30 known dev releases already in the store
+    // and none of them named in `[row]`, a 'complete' coverage yanks every
+    // one of them, and the listing's own 500 this poll never gets a chance
+    // to re-upsert them.
 
     it('a 304 on the latest probe writes nothing, and it carries its OWN ETag — independent of the listing\'s', async () => {
       const { store, port, calls } = fixture();
@@ -997,6 +1096,51 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         warn.mockRestore();
       }
     });
+
+    // R12 (fix round 2, review 143): the 404-WITH-A-KEPT-K branch also calls
+    // `latestAnswered()` (D-3215's own claim: a 404 is a clean answer,
+    // re-arming the probe's warning dedupe) — but nothing pinned it, since
+    // every existing 404 case had NO kept tag yet (the `k === null` branch
+    // above, which already has its own warn assertion). This proves the
+    // dedupe genuinely resets: a warned cause, then a kept-K 404, then the
+    // SAME cause again — a second warn only fires if the reset really ran.
+    it("R12: a 404 with a kept K re-arms the probe's warning dedupe — the same cause warns again after it", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { port } = fixture();
+        const p = poller(port);
+        script = [
+          { status: 200, etag: '"eL1"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+          { status: 200, etag: '"eL2"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+          { status: 200, etag: '"eL3"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+          { status: 200, etag: '"eL4"', body: [rel('v0.0.9', '2026-09-01T00:00:00Z')] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS"', body: rel('v0.0.1', '2026-08-01T00:00:00Z') },   // establishes K
+          { status: 500 },    // poll 2: warns 'http-500' — dedupe armed
+          { status: 404 },    // poll 3: a kept-K 404 — an ANSWER; should re-arm the dedupe
+          { status: 500 },    // poll 4: the SAME cause — must warn again if the dedupe reset
+        ];
+        // A DIFFERENT failure code than the /latest probe's own — the two
+        // dedupe keys are independent, and a 'http-500' from THIS check
+        // would otherwise collide with the assertion below.
+        scriptWithdrawn = [{ status: 502 }];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('http-500'))).toHaveLength(1);
+        await p.poll(3000);
+        expect(warn.mock.calls.some((c) => String(c[0]).includes('http-404'))).toBe(false);   // still an answer, never a failure
+        await p.poll(4000);
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('http-500'))).toHaveLength(2);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // Mutation (measured by hand, on a scratch copy): removing the
+    // `latestAnswered()` call from the 404-with-kept-K branch reds the case
+    // above — poll 4's 'http-500' warn count stays at 1, since the dedupe
+    // key from poll 2 was never cleared.
 
     it('a failed latest fetch with an OK listing: lastOkAt moves, lastError null, ONE warn per distinct cause, re-armed by the next latest success', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1247,10 +1391,33 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       // reintroduce the ORIGINAL I3 failure it is layered on top of.
 
       // Mutations (measured by hand, each reds a case above):
-      // (1) reverting to the old order (`pollListing` before `pollLatest`,
-      //     reading last poll's `lastLatestTag`) reds (a) — S2 stays
-      //     un-yanked on poll 2, since poll 2's listing still reads S2 as
-      //     the kept tag from poll 1.
+      // (1) R15 (fix round 2, review 143) CORRECTS this entry: reverting to
+      //     the old order (`pollListing` before `pollLatest`) does NOT red
+      //     case (a) — measured, on a scratch copy, against this file's
+      //     FULL suite. Ruling A's own tag-check mechanism yanks S2 anyway
+      //     once the check resolves, regardless of which request ran first
+      //     this poll, so (a)'s own assertions stay green. The mutation
+      //     reds three OTHER, pre-existing cases instead, and the mechanism
+      //     is the SAME one in both: the `etag = null` reset (item 3 below)
+      //     was written to run BEFORE the listing, so a kept-tag change
+      //     this poll forces the listing's NEXT request fresh; flipped, it
+      //     now runs AFTER a listing that already sent its own (stale-keep)
+      //     request and set its own `etag` — so the reset wipes the value
+      //     the listing JUST fetched, and the very next poll's listing
+      //     carries no If-None-Match at all ('a 304 on the latest probe
+      //     writes nothing … independent of the listing's' reds on its
+      //     `seen[1]` header assertion). The SAME reordering also means a
+      //     fresh poller's very first listing call now runs BEFORE any
+      //     stable release is known, so its own 'complete' upsert plants
+      //     the store's first stable row itself — `currentK()` then reads
+      //     that row back on the SAME poll's `pollLatest`, so a bare 404
+      //     with genuinely nothing known yet is wrongly read as a
+      //     moved-away signal and fires an extra, unscripted confirming
+      //     request that warns ('a 404 on the latest probe is an ANSWER …
+      //     NOTHING is warned' reds on its warn-count assertion; ruling A's
+      //     own '(e) after a restart …' reds the same way, on its
+      //     confirming-request-count assertion). The ordering IS pinned —
+      //     just not by case (a).
       // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
       //     stays kept (and un-yanked) forever.
       // (3) removing the `etag = null` reset when the kept tag changes reds
@@ -1259,6 +1426,62 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     (b) if the fixture's own scripted answers depended on the sent
       //     ETag — they do not here, so the header assertion in (a)/(c) is
       //     what actually catches it in this fixture shape.
+    });
+
+    // R2 (fix round 2, review 143): "never yank on the evidence of a
+    // repository that is not answering." Before this fix, `pollLatest`'s
+    // 404 arm derived K from `newestUnyankedStable()` and the confirming
+    // check's OWN 404 arm yanked it immediately — one release per poll, on no
+    // evidence the repository was answering at all (a misconfigured,
+    // private or deleted repo answers every endpoint 404). The reviewer
+    // measured this walking a whole catalogue down to nothing, one release
+    // per poll. Now the withdrawal judgment acts ONLY when the SAME poll's
+    // listing itself answered 200 with a parseable body; a listing that
+    // never does defers forever, harmlessly.
+    describe('R2 — never yank on the evidence of a repository that is not answering', () => {
+      it('every endpoint 404s for three whole polls: nothing is yanked, and the SAME newest stable is retried every time', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        // Three known stables, planted directly — the shape an already
+        // populated coord.db presents to a repository that has gone dark
+        // (misconfigured owner/repo, made private, or deleted).
+        const mk = (tag: string, at: string): ReleaseListingRow => ({
+          tag, channel: 'stable', publishedAt: Date.parse(at),
+          commitSha: null, tarballUrl: null, bundleListed: true, notes: null, draft: false,
+        });
+        const s1 = mk('v0.0.1', '2026-08-01T00:00:00Z');
+        const s2 = mk('v0.0.2', '2026-08-02T00:00:00Z');
+        const s3 = mk('v0.0.3', '2026-08-03T00:00:00Z');
+        store.applyReleaseListing([s1, s2, s3], 500, 'complete');
+        expect(store.newestUnyankedStable()).toBe('v0.0.3');
+
+        // Every endpoint 404s, every poll — the listing's own explicit
+        // script (its unscripted default is a 500, never an answer at all).
+        script = [{ status: 404 }, { status: 404 }, { status: 404 }];
+        scriptLatest = [{ status: 404 }, { status: 404 }, { status: 404 }];
+        scriptWithdrawn = [{ status: 404 }, { status: 404 }, { status: 404 }];
+        await p.poll(1000);
+        await p.poll(2000);
+        await p.poll(3000);
+
+        expect(store.releases().filter((r) => r.yanked)).toHaveLength(0);
+        // Every deferred withdrawal was DISCARDED, never remembered: K was
+        // never advanced off v0.0.3, so every poll's tag check asked about
+        // the SAME release, never v0.0.2 or v0.0.1 (which the ungated
+        // mechanism would have reached by poll 2 and poll 3 respectively).
+        expect(seenWithdrawn.map((s) => s.url)).toEqual([
+          '/repos/fixture-owner/fixture-repo/releases/tags/v0.0.3',
+          '/repos/fixture-owner/fixture-repo/releases/tags/v0.0.3',
+          '/repos/fixture-owner/fixture-repo/releases/tags/v0.0.3',
+        ]);
+      });
+
+      // Mutation (measured by hand): dropping `pendingWithdrawal !== null &&
+      // listing.freshOk` back to an unconditional `applyWithdrawn(now,
+      // pendingWithdrawal)` inside `pollOnce` (the shape before this fix)
+      // reds the case above — v0.0.3 is yanked after poll 1, v0.0.2 after
+      // poll 2, v0.0.1 after poll 3, and `seenWithdrawn`'s three URLs are
+      // three DIFFERENT tags rather than the same one three times.
     });
 
     // Fix round 1, item 5 (ruling A): N1 above still left a residual —
@@ -1270,8 +1493,12 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       it('(a) a full page of 30 newer dev prereleases; K confirmed, then /latest 404s and the tag-check 404s -> K yanked', async () => {
         const { store, port } = fixture();
         const p = poller(port);
+        // R10 (fix round 2, review 143): a THREE-component tag — the shape
+        // `isIngestibleReleaseTag` admits — or the whole page parses to zero
+        // rows and the listing is refused `empty-listing`, never exercising
+        // any real newest-page yank judgment at all.
         const devPage = (day: number) => Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
-          rel(`v0.1.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
+          rel(`v0.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
         const k = rel('v0.0.1', '2026-08-01T00:00:00Z');
         script = [
           { status: 200, etag: '"eL1"', body: devPage(2) },
@@ -1284,12 +1511,19 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         scriptWithdrawn = [{ status: 404 }];   // confirms K is truly gone
         await p.poll(1000);
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+        // R10: the window this case's title describes is REAL — day 2's page
+        // actually landed as 30 stored dev rows, not zero.
+        expect(store.releases().filter((r) => r.channel === 'dev')).toHaveLength(RELEASES_PER_PAGE);
         await p.poll(2000);
         expect(seenWithdrawn).toHaveLength(1);
         expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
-        // Every dev release the listing wrote stays untouched by any of this.
-        expect(store.releases().filter((r) => r.tag !== 'v0.0.1').every((r) => !r.yanked)).toBe(true);
+        // Every dev release the listing wrote stays untouched by any of this
+        // — day 3's fresh page (RELEASES_PER_PAGE rows) AND day 2's now-older,
+        // off-window page (RELEASES_PER_PAGE rows) both survive.
+        const devRows = store.releases().filter((r) => r.tag !== 'v0.0.1');
+        expect(devRows).toHaveLength(RELEASES_PER_PAGE * 2);
+        expect(devRows.every((r) => !r.yanked)).toBe(true);
       });
 
       it("(b) /latest moves to an OLDER stable S (a demotion) -> K ends channel: 'dev', not yanked, and '*' resolves to S", async () => {
@@ -1302,8 +1536,11 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         // 'single' coverage, never the ordinary listing, that can touch
         // either of them, so a mutation of the check's coverage word is
         // caught here even though the general listing never runs dry.
+        // R10 (fix round 2, review 143): a THREE-component tag, the shape
+        // `isIngestibleReleaseTag` admits — the original four-component
+        // `v0.1.${day}.${i+1}` failed it, so every page parsed to zero rows.
         const devPage = (day: number) => Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
-          rel(`v0.1.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
+          rel(`v0.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
         script = [
           { status: 200, etag: '"eL1"', body: devPage(2) },
           { status: 200, etag: '"eL2"', body: devPage(3) },
@@ -1316,6 +1553,8 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         scriptWithdrawn = [{ status: 200, etag: '"eK-dev"', body: { ...k, prerelease: true } }];
         await p.poll(1000);
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
+        // R10: the window is REAL — day 2's page landed as 30 stored dev rows.
+        expect(store.releases().filter((r) => r.channel === 'dev')).toHaveLength(RELEASES_PER_PAGE);
         await p.poll(2000);
         expect(seenWithdrawn).toHaveLength(1);
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'dev' });
@@ -1409,6 +1648,47 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
       });
 
+      // R8 (fix round 2, review 143): `/releases/tags/{k}`'s 200 arm is an
+      // IDENTITY check, not just a shape check. An untrusted upstream (or a
+      // mirror behind CCRC_RELEASE_API_URL) answering ABOUT k with a
+      // DIFFERENT tag's element must never be upserted in k's place —
+      // measured by the reviewer: asked about v0.0.2, answered v0.0.7.
+      it('(f) the tag-check answers 200 naming a DIFFERENT tag than K — refused as a failed check, K untouched, retried', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const wrongTag = rel('v0.0.7', '2026-08-20T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k, s] },
+          { status: 200, etag: '"eL2"', body: [k, s] },
+          { status: 200, etag: '"eL3"', body: [s] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: s },   // moved away — poll 2's check
+          { status: 200, etag: '"eS3"', body: s },   // still away — poll 3's RETRY
+        ];
+        scriptWithdrawn = [
+          { status: 200, etag: '"eWrong"', body: wrongTag },   // poll 2: answers about a DIFFERENT tag
+          { status: 404 },                                     // poll 3: retried against the SAME K, now confirmed
+        ];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        // Neither the wrong tag nor K itself was disturbed by the mismatch.
+        expect(store.releases().find((r) => r.tag === 'v0.0.7')).toBeUndefined();
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
+        await p.poll(3000);
+        // A mismatch never advances latestEtag either — poll 3's /latest
+        // request still carries K's OWN original etag, exactly like any
+        // other failed check.
+        expect(seenLatest[2]!.headers['if-none-match']).toBe('"eS1"');
+        expect(seenWithdrawn).toHaveLength(2);
+        expect(seenWithdrawn[1]!.url).toBe(seenWithdrawn[0]!.url);   // the SAME K, retried
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: true });
+      });
+
       // Mutations (measured by hand, each reds a case above):
       // (1) passing a NEWER /latest tag through the moved-away comparison
       //     (dropping the `compareReleaseTags(row.tag, k) < 0` guard, or
@@ -1424,6 +1704,8 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     reds (d) — the retry in poll 3 never fires (`seenWithdrawn`
       //     stays at 1), because the next `/latest` request would carry T's
       //     etag and could get a cheap 304 in its place.
+      // (5) removing R8's `row.tag !== k` guard reds (f) — v0.0.7 would be
+      //     upserted and K would move on as if confirmed.
     });
 
     // Fix round 1, review round 2, item 4: `/releases/latest` never legally

@@ -109,13 +109,30 @@ export function floorOf(highestVersion: string | null, currentVersion: string | 
  *  A tag this refuses is SKIPPED at the catalogue's element parse exactly
  *  like any other malformed element (D-3206), and the SAME predicate gates
  *  `POST /api/updates/intent`'s `pinnedTag` (imported there, never a second
- *  copy) — see `update/routes.ts`. */
+ *  copy) — see `update/routes.ts`.
+ *
+ *  R9 (fix round 2, D-3216, review 143): the byte cap alone does not bound a
+ *  SINGLE component's digit count — `v9999999999999999999.0.0` is 25 bytes,
+ *  well under the cap, but its first component is a 20-digit number `ccd`'s
+ *  bash twin (`_ver_newer`'s `10#` arithmetic, 64-bit signed) overflows
+ *  SILENTLY: `compareReleaseTags` (`shared/semver.ts`) orders arbitrary-
+ *  precision digit strings and would agree with the twin on every tag this
+ *  bound admits, but the two would order a tag ABOVE it in opposite
+ *  directions. Refuses any component longer than
+ *  `RELEASE_TAG_COMPONENT_MAX_DIGITS` (18) — every such value is safely
+ *  under a 64-bit signed integer's range, with margin. NOTE: for `v`'s
+ *  fixed three-component grammar this makes `RELEASE_TAG_INGRESS_MAX_BYTES`
+ *  itself unreachable ON ITS OWN (three components at 18 digits each is 57
+ *  bytes, under the 64-byte cap) — kept anyway as a defensive backstop
+ *  against a future grammar with more or longer components, where the two
+ *  bounds would again disagree. */
 export const RELEASE_TAG_INGRESS_MAX_BYTES = 64;
+export const RELEASE_TAG_COMPONENT_MAX_DIGITS = 18;
 export function isIngestibleReleaseTag(v: unknown): v is string {
   if (!isReleaseTag(v)) return false;
   if (Buffer.byteLength(v, 'utf8') > RELEASE_TAG_INGRESS_MAX_BYTES) return false;
   const parts = v.slice(1).split('.');
-  return parts.every((p) => p === '0' || p[0] !== '0');
+  return parts.every((p) => (p === '0' || p[0] !== '0') && p.length <= RELEASE_TAG_COMPONENT_MAX_DIGITS);
 }
 
 /** THE eligibility predicate — the unpinned list and the pin's reason are both this function, so the two can

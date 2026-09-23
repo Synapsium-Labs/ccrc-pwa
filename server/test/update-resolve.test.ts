@@ -9,7 +9,8 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  PINNED_INELIGIBLE_WHYS, RESOLVE_DETAIL, RELEASE_TAG_INGRESS_MAX_BYTES, UPDATE_GATE_CAP,
+  PINNED_INELIGIBLE_WHYS, RESOLVE_DETAIL, RELEASE_TAG_INGRESS_MAX_BYTES, RELEASE_TAG_COMPONENT_MAX_DIGITS,
+  UPDATE_GATE_CAP,
   autoGateBlockers, eligibleTags, floorOf, isIngestibleReleaseTag, resolveNodeIntent,
   type EligibilityRow, type IntentView, type PinnedIneligibleWhy, type ResolveInput,
 } from '../src/update/resolve.js';
@@ -294,20 +295,47 @@ describe('isIngestibleReleaseTag (fix round 1, D-3216, F11) — ingress-only, on
     expect(isIngestibleReleaseTag('v10.20.30')).toBe(true);
   });
 
-  it('a byte length over the cap is refused; one at exactly the cap is kept', () => {
+  // R9 (fix round 2, D-3216, review 143) changed what this pins: a
+  // single-component tag AT the 64-byte cap (the original `at64`, one
+  // 59-digit component) is now refused by the NEW per-component digit cap
+  // before the byte cap is even relevant — `RELEASE_TAG_INGRESS_MAX_BYTES`
+  // is unreachable on its own for `v`'s fixed three-component grammar, since
+  // three components at `RELEASE_TAG_COMPONENT_MAX_DIGITS` digits each is
+  // only 57 bytes. This pins the byte cap against the shape that still
+  // reaches it — a single grossly oversized component, which the digit cap
+  // ALSO refuses — and the true effective maximum under both caps together.
+  it('the effective maximum under both caps (three max-digit components) is kept; a grossly oversized component is refused', () => {
     expect(RELEASE_TAG_INGRESS_MAX_BYTES).toBe(64);
-    const at64 = `v${'1'.repeat(59)}.0.0`;
-    const at65 = `v${'1'.repeat(60)}.0.0`;
-    expect(Buffer.byteLength(at64, 'utf8')).toBe(64);
-    expect(Buffer.byteLength(at65, 'utf8')).toBe(65);
-    expect(isIngestibleReleaseTag(at64)).toBe(true);
-    expect(isIngestibleReleaseTag(at65)).toBe(false);
+    const maxPart = '1'.repeat(RELEASE_TAG_COMPONENT_MAX_DIGITS);
+    const atEffectiveMax = `v${maxPart}.${maxPart}.${maxPart}`;
+    expect(Buffer.byteLength(atEffectiveMax, 'utf8')).toBe(3 * RELEASE_TAG_COMPONENT_MAX_DIGITS + 3);
+    expect(isIngestibleReleaseTag(atEffectiveMax)).toBe(true);
+    const grosslyOversized = `v${'1'.repeat(60)}.0.0`;
+    expect(Buffer.byteLength(grosslyOversized, 'utf8')).toBe(65);
+    expect(isIngestibleReleaseTag(grosslyOversized)).toBe(false);
   });
 
   it('anything isReleaseTag itself refuses is refused here too', () => {
     for (const bad of ['0.0.9', 'v0.0', 'v0.0.9 ', 'V0.0.9', 'v0.0.9\n', 9, null, undefined]) {
       expect(isIngestibleReleaseTag(bad)).toBe(false);
     }
+  });
+
+  // R9 (fix round 2, D-3216, review 143): a component the bash twin's 64-bit
+  // `10#` arithmetic (ccd/ccrc's `_ver_newer`) cannot order without silent
+  // overflow — the two tags the reviewer measured, both well under the
+  // 64-byte cap.
+  it('R9: a component over 18 digits is refused — the reviewer\'s two overflow tags', () => {
+    expect(RELEASE_TAG_COMPONENT_MAX_DIGITS).toBe(18);
+    expect(isIngestibleReleaseTag('v0.0.9223372036854775808')).toBe(false);
+    expect(isIngestibleReleaseTag('v0.0.18446744073709551617')).toBe(false);
+  });
+
+  it('R9: a component at exactly 18 digits is kept; one at 19 is refused', () => {
+    const at18 = `v${'1'.repeat(18)}.0.0`;
+    const at19 = `v${'1'.repeat(19)}.0.0`;
+    expect(isIngestibleReleaseTag(at18)).toBe(true);
+    expect(isIngestibleReleaseTag(at19)).toBe(false);
   });
 });
 

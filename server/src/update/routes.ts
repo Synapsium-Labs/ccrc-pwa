@@ -5,6 +5,7 @@ import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from '../coord/token.js';
 import { NODE_ID_RE, type NodeRow, type ReleaseRow, type SetIntentResult, type UpdateIntentPatch, type UpdateIntentRow } from '../coord/store.js';
 import { autoGateBlockers, isIngestibleReleaseTag, renderProjection, resolveNodeIntent } from './resolve.js';
+import { CATALOGUE_MAX_REQUESTS_PER_POLL, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET } from './catalogue.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import {
@@ -45,7 +46,17 @@ import {
 const refuse = (reply: FastifyReply, code: number, body: Omit<UpdateRouteRefusal, 'ok'>): FastifyReply =>
   reply.code(code).send({ ok: false, ...body } satisfies UpdateRouteRefusal);
 
-export const REFRESH_MIN_INTERVAL_MS = 60_000;
+/** Fix round 2 (R1, D-3218): DERIVED, never a hand-typed interval. D-3215's
+ *  own text claimed "one request a minute" was well under the unauthenticated
+ *  60/hour budget, but a poll now costs up to `CATALOGUE_MAX_REQUESTS_PER_POLL`
+ *  requests (the latest-release probe, the listing, and the rare moved-away
+ *  tag check) — admitting a poll once a MINUTE let a thumb spend up to
+ *  180 requests an hour, three times the budget. The derived gap admits one
+ *  poll's WORST CASE once per gap, which lands exactly on the budget:
+ *  `CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET`
+ *  of an hour, in ms. */
+export const REFRESH_MIN_INTERVAL_MS =
+  (CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET) * 60 * 60_000;
 export const INTENT_BODY_KEYS = ['scope', 'channel', 'pinnedTag', 'auto', 'notify'] as const;
 
 export function toReleaseWire(row: ReleaseRow): ReleaseWire {
@@ -303,11 +314,17 @@ export function registerUpdateRoutes(
   });
 
   /**
-   * An on-demand catalogue poll. RATE-LIMITED to one request a minute (spec §7:
-   * the unauthenticated budget is 60/hour and a 304 still spends one), measured
-   * against the poller's own `lastRequestAt()` — so the scheduled 30-minute
-   * poll counts too, and a refresh inside a minute of it answers 429
-   * (D-3203). A
+   * An on-demand catalogue poll. RATE-LIMITED to one POLL per
+   * `REFRESH_MIN_INTERVAL_MS` (spec §7: the unauthenticated budget is
+   * 60/hour and a 304 still spends one), measured against the poller's own
+   * `lastRequestAt()` — so the scheduled 30-minute poll counts too, and a
+   * refresh inside the interval of it answers 429 (D-3203). Fix round 2
+   * (R1, D-3218): D-3215's own text called this "one request a minute" — but
+   * a single poll now costs up to `CATALOGUE_MAX_REQUESTS_PER_POLL`
+   * requests, so a door open once a minute admitted up to 180 requests an
+   * hour, three times the budget. `REFRESH_MIN_INTERVAL_MS` is DERIVED from
+   * that same per-poll maximum and the hourly budget (never a hand-typed
+   * interval), landing exactly on it. The 429 answer shape is unchanged. A
    * `lastRequestAt` in the FUTURE (the clock stepped back) does not lock the
    * door: only an elapsed time in `[0, REFRESH_MIN_INTERVAL_MS)` refuses.
    */

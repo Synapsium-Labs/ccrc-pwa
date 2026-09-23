@@ -24,21 +24,33 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * withdrawn stable release stay un-yanked indefinitely; see `pollOnce`. Fix
  * round 1, item 5 (ruling A): a withdrawn or demoted stable OFF the
  * listing's own window was still never re-judged by any of the above —
- * `checkWithdrawn` confirms the moment `/latest` moves away from the kept
+ * `measureWithdrawn` confirms the moment `/latest` moves away from the kept
  * tag K (a 404, or a 200 naming a tag OLDER than K) with a THIRD request,
- * `GET /releases/tags/{K}`, before anything yields; see `pollLatest`.
+ * `GET /releases/tags/{K}`, before anything yields; see `pollLatest`. Fix
+ * round 2 (R2, review 143): the check's own 404/200 answer is measured
+ * immediately, but its WRITE — the yank, or the demotion/still-stable
+ * upsert — is applied only once THIS SAME POLL's listing has itself
+ * answered with a fresh 200 body. A repository that is not answering at all
+ * (every endpoint 404s — misconfigured, private or deleted) must never be
+ * read as evidence that one specific release is gone, or the poller would
+ * walk the whole known catalogue down to nothing, one release per poll, on
+ * no real evidence. See `pollOnce`'s `pendingWithdrawal`.
  *
  * Quota (§7, measured; D-3215 doubles it): unauthenticated, 60 requests an
- * hour per IP, and a 304 still counts — the ETag saves bytes, not budget.
- * Each poll sends TWO requests (the latest-release probe, then the listing),
- * plus a THIRD only on the poll(s) where `/latest` has moved away from K and
- * the check has not yet resolved — rare, and bounded to one extra request
- * per poll, never a loop within one poll. The watcher's steady-state
- * 30-minute cadence spends 4 requests an hour, well under the 60/hour
- * budget. `POST /api/updates/refresh` reads
- * `lastRequestAt()` for its one-a-minute guard, measured against the LISTING
- * request only. No token is ever sent (decision 4: the repo carries no
- * secrets, and the server holds none for GitHub).
+ * hour per IP (`UNAUTHENTICATED_HOURLY_REQUEST_BUDGET`), and a 304 still
+ * counts — the ETag saves bytes, not budget. Each poll sends AT MOST
+ * `CATALOGUE_MAX_REQUESTS_PER_POLL` (3) requests: the latest-release probe,
+ * the listing, and — only on a poll where `/latest` has moved away from K and
+ * the check has not yet resolved — one further tag fetch, rare and bounded to
+ * one extra request per poll, never a loop within one poll. The watcher's
+ * steady-state 30-minute cadence therefore spends at most 6 requests an
+ * hour, well under the 60/hour budget. Fix round 2 (R1, D-3218):
+ * `POST /api/updates/refresh` (`routes.ts`) gates `lastRequestAt()` at an
+ * interval DERIVED from these same two constants, never a hand-typed one —
+ * admitting a poll once a MINUTE (fix round 1's own text) let a thumb spend
+ * up to 180 requests an hour, three times the budget, since each admitted
+ * poll could itself cost three requests. No token is ever sent (decision 4:
+ * the repo carries no secrets, and the server holds none for GitHub).
  *
  * Fail-soft, and the failure is an answer: every LISTING error arm sets
  * `lastError` and never `lastOkAt`, so no consumer can render a failed poll
@@ -61,6 +73,18 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * verification — the node verifies (§5) and reports `provenance` (§8).
  */
 export const RELEASES_PER_PAGE = 30;
+/** Fix round 2 (R1, D-3218): the max HTTP requests a single `poll()` can
+ *  issue — the latest-release probe, the listing, and the rare moved-away
+ *  tag check (never a loop within one poll; see the module docstring's
+ *  Quota paragraph). `routes.ts`'s refresh door derives its interval from
+ *  THIS constant and `UNAUTHENTICATED_HOURLY_REQUEST_BUDGET`, never a
+ *  hand-typed interval — the two constants are the only place either number
+ *  is spelled. */
+export const CATALOGUE_MAX_REQUESTS_PER_POLL = 3;
+/** Fix round 2 (R1, D-3218): spec §7's unauthenticated budget, GitHub's own
+ *  limit for the whole server process's IP — one named constant so the
+ *  refresh door's interval is computed, never re-typed. */
+export const UNAUTHENTICATED_HOURLY_REQUEST_BUDGET = 60;
 /** A GitHub listing that has not answered in 10 s is not going to; the lane
  *  is void-dispatched, so this bounds a request, not the tick. */
 export const CATALOGUE_TIMEOUT_MS = 10_000;
@@ -212,9 +236,23 @@ function assetNamed(assets: readonly unknown[], name: string): Json | null {
  *  byte must be printable ASCII, and it must carry no userinfo. `null` on
  *  ANY failure, including no matching asset at all (`raw === undefined`) —
  *  the caller stores that as `tarballUrl: null` and keeps the release
- *  listed; only this one untrusted field is withheld. */
+ *  listed; only this one untrusted field is withheld.
+ *
+ *  R7 (fix round 2, D-3216, review 143): the raw string is untrusted TEXT a
+ *  DIFFERENT client — not this process's own WHATWG parser — will read. A
+ *  `\` before an authority-shaped `@` is a measured parser differential:
+ *  `https://github.com\@evil.example/x` parses here with `hostname`
+ *  `github.com` and empty `username`/`password` (WHATWG folds `\` to `/` on
+ *  a special scheme, so the whole `\@evil.example/x` lands in the PATH), but
+ *  curl 8.5.0 given the same raw text connects to the host AFTER the `@` —
+ *  refused outright, never parsed around. What is stored is the PARSED,
+ *  NORMALISED form (`u.href`), never the raw string: a raw value that
+ *  survives here unexamined (a default port, an unnormalised path) is
+ *  exactly the shape a different client could read differently than this
+ *  parse did — the same lesson `safeSchemeHost` applies one layer up. */
 function safeDownloadUrl(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw.length > DOWNLOAD_URL_MAX || !PRINTABLE_ASCII_URL.test(raw)) return null;
+  if (raw.includes('\\')) return null;
   let u: URL;
   try {
     u = new URL(raw);
@@ -222,7 +260,7 @@ function safeDownloadUrl(raw: unknown): string | null {
     return null;
   }
   if (u.protocol !== 'https:' || u.username !== '' || u.password !== '') return null;
-  return raw;
+  return u.href;
 }
 
 /** One listing element → one row, or null when any field this module relies on
@@ -401,14 +439,22 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   let lastWarnedLatestError: string | null = null;
   /** I3 (fix round 1, review round 2): the stable tag the listing must not
    *  yank — process memory, like the ETags (D-3182). Set by a 200 the probe
-   *  applied; unchanged by a 304 or any probe failure; on a move AWAY from
-   *  K (a 404 or an older tag, ruling A) it moves only once K's own tag
-   *  fetch resolves (to the new tag, or to null after a bare 404 or a
-   *  confirmed withdrawal) and stays at K while that fetch fails. When it is
-   *  null, `currentK()` re-derives K from the store (restart). The LISTING's yank statement
-   *  excludes it (`pollListing`'s `keepTags`), so a `complete`/`newest-page`
-   *  listing that omits it (the off-page-stable shape D-3215 exists for)
-   *  never marks it absent out from under the probe that just confirmed it. */
+   *  applied UNCONDITIONALLY (T is real regardless of K); unchanged by a 304
+   *  or any probe failure; on a move AWAY from K (a 404 or an older tag,
+   *  ruling A) it moves only once BOTH K's own tag fetch has resolved AND —
+   *  fix round 2 (R2, review 143) — the SAME poll's listing has itself
+   *  answered with a fresh 200 body (see `pollOnce`'s `pendingWithdrawal`),
+   *  and stays at K until then. R16 (fix round 2, review 143) corrects what
+   *  it moves TO: `applyWithdrawn` sets it to T, the `/latest` answer that
+   *  triggered the check — `null` only when `/latest` itself answered a
+   *  bare 404, never on a confirmed demotion, where T is the real, older
+   *  tag `/latest` named (a previous version of this comment claimed
+   *  "to null after a bare 404 or a confirmed withdrawal", which was true
+   *  only for the 404 arm). When it is null, `currentK()` re-derives K from
+   *  the store (restart). The LISTING's yank statement excludes it
+   *  (`pollListing`'s `keepTags`), so a `complete`/`newest-page` listing
+   *  that omits it (the off-page-stable shape D-3215 exists for) never
+   *  marks it absent out from under the probe that just confirmed it. */
   let lastLatestTag: string | null = null;
   /** Fix round 1, item 5 (ruling A): the moved-away tag-fetch's own dedupe
    *  key — separate from `lastWarnedLatestError` so a check that keeps
@@ -449,34 +495,44 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   const currentK = (): string | null =>
     lastLatestTag !== null ? lastLatestTag : (deps.store.newestUnyankedStable?.() ?? null);
 
-  async function pollListing(now: number, source: { owner: string; repo: string }): Promise<CatalogueState> {
+  /** `freshOk` (fix round 2, R2, review 143): true iff THIS call answered
+   *  with a fresh 200 body the store accepted — never on a 304 (no body at
+   *  all) and never on any failure. `pollOnce` reads it as the ONLY evidence
+   *  a pending withdrawal (a yank, or a demotion upsert) may act on: a
+   *  repository that is not answering must never be read as proof that one
+   *  specific release is gone. */
+  async function pollListing(
+    now: number, source: { owner: string; repo: string },
+  ): Promise<{ state: CatalogueState; freshOk: boolean }> {
     // B2: built from `validatedBase` — the SAME trimmed/normalised base the
     // gate accepted — never `deps.apiUrl` raw.
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
     requestedAt = now;
+    const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean } => ({ state, freshOk: false });
     const answer = await fetchOne(url, sentEtag, timeoutMs);
-    if (answer === null) return failed(now, 'no-egress');
-    if (answer === 'over-cap') return failed(now, 'malformed');   // D-3209
-    if (answer === 'redirect') return failed(now, 'redirect');    // F9
+    if (answer === null) return notFresh(failed(now, 'no-egress'));
+    if (answer === 'over-cap') return notFresh(failed(now, 'malformed'));   // D-3209
+    if (answer === 'redirect') return notFresh(failed(now, 'redirect'));   // F9
     // A 304 is an answer only to a question that carried an ETag; unsolicited,
-    // nothing was held to be "not modified".
-    if (answer.status === 304) return sentEtag === null ? failed(now, httpReason(304)) : answered(now);
-    if (answer.status === 403 || answer.status === 429) return failed(now, 'rate-limited');
-    if (answer.status !== 200) return failed(now, httpReason(answer.status));
+    // nothing was held to be "not modified". Either way it carries no fresh
+    // body, so it is never evidence for a pending withdrawal.
+    if (answer.status === 304) return notFresh(sentEtag === null ? failed(now, httpReason(304)) : answered(now));
+    if (answer.status === 403 || answer.status === 429) return notFresh(failed(now, 'rate-limited'));
+    if (answer.status !== 200) return notFresh(failed(now, httpReason(answer.status)));
     let body: unknown;
     try {
       body = JSON.parse(answer.text);
     } catch {
-      return failed(now, 'malformed');
+      return notFresh(failed(now, 'malformed'));
     }
     // D-3209: the request's own `per_page` makes a longer raw array out of
     // contract — refuse it rather than hand `Math.min(...)`/`tag NOT IN (…)`
     // (one SQL parameter per row) an unbounded listing.
-    if (Array.isArray(body) && body.length > RELEASES_PER_PAGE) return failed(now, 'malformed');
+    if (Array.isArray(body) && body.length > RELEASES_PER_PAGE) return notFresh(failed(now, 'malformed'));
     const parsed = parseReleaseListing(body);
-    if (parsed === null) return failed(now, 'malformed');
+    if (parsed === null) return notFresh(failed(now, 'malformed'));
     let applied: ApplyReleaseListingResult;
     try {
       // D-3209: a throw from the store (e.g. a still-oversized listing that
@@ -497,11 +553,11 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
         console.warn(`ccrc-server: update catalogue store threw: ${message}`);
         lastWarnedStoreError = message;
       }
-      return failed(now, 'malformed');
+      return notFresh(failed(now, 'malformed'));
     }
-    if (!applied.ok) return failed(now, 'malformed');
+    if (!applied.ok) return notFresh(failed(now, 'malformed'));
     etag = answer.etag;
-    return answered(now);
+    return { state: answered(now), freshOk: true };
   }
 
   /**
@@ -526,17 +582,27 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * naming a tag OLDER than K (`compareReleaseTags`) — is not itself proof
    * that K is gone (a listing window or a transient probe answer proves
    * nothing about a release outside itself, exactly D-3215's own lesson one
-   * layer up), so `checkWithdrawn` fetches K's own tag before `lastLatestTag`
+   * layer up), so `measureWithdrawn` fetches K's own tag before `lastLatestTag`
    * or `latestEtag` move at all. A NEWER tag implies nothing about K and is
    * adopted immediately, with no extra request — the ordinary forward case.
+   *
+   * Fix round 2 (R2, review 143): a MOVE-AWAY (the 404 arm with a kept K, or
+   * the older-tag arm) no longer WRITES anything itself — it MEASURES the
+   * confirming tag fetch (`measureWithdrawn`) and returns what it would do
+   * as a `PendingWithdrawal`, for `pollOnce` to apply only once this same
+   * poll's listing has itself answered fresh. A repository that answers
+   * every endpoint 404 (misconfigured, private or deleted) must never be
+   * read as proof that one specific release is gone.
    */
-  async function pollLatest(now: number, source: { owner: string; repo: string }): Promise<void> {
+  async function pollLatest(
+    now: number, source: { owner: string; repo: string },
+  ): Promise<PendingWithdrawal | null> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
     const sentEtag = latestEtag;
     const answer = await fetchOne(url, sentEtag, timeoutMs);
-    if (answer === null) return warnLatest('no-egress');
-    if (answer === 'over-cap') return warnLatest('over-cap');
-    if (answer === 'redirect') return warnLatest('redirect');
+    if (answer === null) { warnLatest('no-egress'); return null; }
+    if (answer === 'over-cap') { warnLatest('over-cap'); return null; }
+    if (answer === 'redirect') { warnLatest('redirect'); return null; }
     // Ruling A: a 404 means "no stable release exists" ONLY when there was
     // no kept tag to begin with — otherwise it is the clean "moved away"
     // signal, confirmed against K's own endpoint before anything yields.
@@ -545,50 +611,66 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
       if (k === null) {
         lastLatestTag = null;
         latestEtag = null;
-        return latestAnswered();
+        latestAnswered();
+        return null;
       }
       latestAnswered();   // the /latest fetch itself is a clean answer
-      return checkWithdrawn(now, source, k, null, null);
+      return measureWithdrawn(source, k, null, null);
     }
     if (answer.status === 304) {
-      if (sentEtag === null) return warnLatest(httpReason(304));
-      return latestAnswered();
+      if (sentEtag === null) { warnLatest(httpReason(304)); return null; }
+      latestAnswered();
+      return null;
     }
-    if (answer.status !== 200) return warnLatest(httpReason(answer.status));
+    if (answer.status !== 200) { warnLatest(httpReason(answer.status)); return null; }
     let body: unknown;
     try {
       body = JSON.parse(answer.text);
     } catch {
-      return warnLatest('malformed-json');
+      warnLatest('malformed-json');
+      return null;
     }
     const row = parseReleaseElement(body);
-    if (row === null) return warnLatest('malformed-element');
+    if (row === null) { warnLatest('malformed-element'); return null; }
     // Fix round 1, review round 2: out of contract for this endpoint — never
     // written, so it can neither yank nor un-yank, nor become `lastLatestTag`.
-    if (row.draft || row.channel === 'dev') return warnLatest('latest-not-stable');
+    if (row.draft || row.channel === 'dev') { warnLatest('latest-not-stable'); return null; }
     let applied: ApplyReleaseListingResult;
     try {
       // D-3215: the ONE catalogue writer, under 'single' coverage — no
       // absence judgment, so this call can never yank another release. T
       // (this row) is real regardless of what happens to K below, so it is
-      // upserted unconditionally.
+      // upserted unconditionally — this write is never deferred: it never
+      // judges any OTHER release absent, so R2's evidence gate does not
+      // apply to it.
       applied = deps.store.applyReleaseListing([row], now, 'single');
     } catch (err) {
-      return warnLatest(err instanceof Error ? err.message : String(err));
+      warnLatest(err instanceof Error ? err.message : String(err));
+      return null;
     }
-    if (!applied.ok) return warnLatest(`store-refused-${applied.why}`);
+    if (!applied.ok) { warnLatest(`store-refused-${applied.why}`); return null; }
     latestAnswered();   // the /latest fetch itself succeeded
     const k = currentK();
     if (k !== null && compareReleaseTags(row.tag, k) < 0) {
       // Ruling A: moved AWAY from K to an OLDER tag T. `latestEtag`/
-      // `lastLatestTag` stay pointed at K until the check resolves — never
-      // advanced to T here — so a failed check cannot earn a cheap 304 in
-      // T's place next poll and is retried in full against the SAME K.
-      return checkWithdrawn(now, source, k, row.tag, answer.etag);
+      // `lastLatestTag` stay pointed at K until the check resolves AND this
+      // poll's listing answers fresh (R2) — never advanced to T here — so a
+      // failed or deferred check cannot earn a cheap 304 in T's place next
+      // poll and is retried in full against the SAME K.
+      return measureWithdrawn(source, k, row.tag, answer.etag);
     }
     latestEtag = answer.etag;   // never advanced on any failure arm above
     lastLatestTag = row.tag;    // I3: the LISTING's yank exclusion from now on
+    return null;
   }
+
+  /** Fix round 2 (R2): what a confirmed moved-away transition WOULD do to
+   *  the store, computed by `measureWithdrawn` but not yet applied. `t`/
+   *  `tEtag` are always the triggering `/latest` answer (R16: `t` is `null`
+   *  only when `/latest` itself answered a bare 404). */
+  type PendingWithdrawal =
+    | { kind: 'yank'; k: string; t: string | null; tEtag: string | null }
+    | { kind: 'demote'; row: ReleaseListingRow; t: string | null; tEtag: string | null };
 
   /**
    * Fix round 1, item 5 (ruling A): the confirming half of the moved-away
@@ -597,61 +679,73 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * 'error'` the other two requests use, with NO ETag of its own (an ad-hoc
    * check, not a tracked poll). `t`/`tEtag` are the `/latest` answer that
    * triggered this call (the new, older-than-K tag and its etag), or both
-   * `null` when `/latest` itself answered 404. On EITHER a confirmed
-   * withdrawal (404) or a confirmed demotion (200, upserted through the same
-   * one writer under `'single'` — a prerelease flips K's channel to `dev`
-   * via the ordinary upsert, a draft yanks it via the ordinary birth rule),
-   * the reference tag moves on to T (or to nothing, on a bare `/latest`
-   * 404). Any failure of the check (no-egress, over-cap, a redirect, a
-   * non-2xx status, a malformed body, or the store refusing) changes
-   * NOTHING — `lastLatestTag`/`latestEtag` stay exactly where they were, so
-   * the check is retried, against the SAME K, on the next poll.
+   * `null` when `/latest` itself answered 404.
+   *
+   * Fix round 2 (R2, review 143): this function only MEASURES — it never
+   * writes. It returns the `PendingWithdrawal` a confirmed withdrawal (404)
+   * or a confirmed demotion (200) would apply, for `pollOnce` to hand to
+   * `applyWithdrawn` only once this same poll's listing has answered fresh.
+   * Any failure of the check (no-egress, over-cap, a redirect, a non-2xx
+   * status, a malformed body) or R8's identity check failing warns and
+   * returns `null` — nothing pending, so `lastLatestTag`/`latestEtag` stay
+   * exactly where they were and the check is retried, against the SAME K,
+   * on the next poll.
    */
-  async function checkWithdrawn(
-    now: number, source: { owner: string; repo: string }, k: string, t: string | null, tEtag: string | null,
-  ): Promise<void> {
+  async function measureWithdrawn(
+    source: { owner: string; repo: string }, k: string, t: string | null, tEtag: string | null,
+  ): Promise<PendingWithdrawal | null> {
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases/tags/${encodeURIComponent(k)}`;
     const answer = await fetchOne(url, null, timeoutMs);
-    if (answer === null) return warnWithdrawn('no-egress');
-    if (answer === 'over-cap') return warnWithdrawn('over-cap');
-    if (answer === 'redirect') return warnWithdrawn('redirect');
-    if (answer.status === 404) {
-      let applied: ApplyReleaseListingResult;
-      try {
-        // The one catalogue writer, under 'withdrawn' coverage — yanks
-        // EXACTLY k, never the general since/window judgment.
-        applied = deps.store.applyReleaseListing([], now, 'withdrawn', [], k);
-      } catch (err) {
-        return warnWithdrawn(err instanceof Error ? err.message : String(err));
-      }
-      if (!applied.ok) return warnWithdrawn(`store-refused-${applied.why}`);
-      latestEtag = tEtag;
-      lastLatestTag = t;
-      return withdrawnAnswered();
-    }
-    if (answer.status !== 200) return warnWithdrawn(httpReason(answer.status));
+    if (answer === null) { warnWithdrawn('no-egress'); return null; }
+    if (answer === 'over-cap') { warnWithdrawn('over-cap'); return null; }
+    if (answer === 'redirect') { warnWithdrawn('redirect'); return null; }
+    if (answer.status === 404) return { kind: 'yank', k, t, tEtag };
+    if (answer.status !== 200) { warnWithdrawn(httpReason(answer.status)); return null; }
     let body: unknown;
     try {
       body = JSON.parse(answer.text);
     } catch {
-      return warnWithdrawn('malformed-json');
+      warnWithdrawn('malformed-json');
+      return null;
     }
     const row = parseReleaseElement(body);
-    if (row === null) return warnWithdrawn('malformed-element');
+    if (row === null) { warnWithdrawn('malformed-element'); return null; }
+    // R8 (fix round 2, review 143): this is an IDENTITY check, not just a
+    // shape check — the endpoint is asked about k, and an untrusted upstream
+    // (or a mirror behind CCRC_RELEASE_API_URL) answering with a DIFFERENT
+    // tag's element must never be upserted in k's place, silently dropping
+    // k out of `keepTags`/eligibility with no judgment ever having been made
+    // about k itself. Treated exactly like any other failed check: nothing
+    // pending, retried against the SAME k next poll.
+    if (row.tag !== k) { warnWithdrawn('tag-mismatch'); return null; }
+    return { kind: 'demote', row, t, tEtag };
+  }
+
+  /** Fix round 2 (R2): applies a `PendingWithdrawal` the moved-away check
+   *  measured earlier this SAME poll, now that the listing has answered
+   *  fresh. A store failure here behaves exactly as a failed check did
+   *  before this fix: warned, nothing moved, retried next poll. */
+  function applyWithdrawn(now: number, pending: PendingWithdrawal): void {
     let applied: ApplyReleaseListingResult;
     try {
-      // The same one writer, under 'single' coverage: whatever K's own page
-      // reports now (a demotion to dev, or still stable) is upserted with no
-      // absence judgment; a draft answer yanks it via the ordinary birth
-      // rule (`applyReleaseListing`'s `yanked = r.draft ? 1 : 0`).
-      applied = deps.store.applyReleaseListing([row], now, 'single');
+      applied = pending.kind === 'yank'
+        // The one catalogue writer, under 'withdrawn' coverage — yanks
+        // EXACTLY k, never the general since/window judgment.
+        ? deps.store.applyReleaseListing([], now, 'withdrawn', [], pending.k)
+        // The same one writer, under 'single' coverage: whatever K's own
+        // page reports now (a demotion to dev, or still stable) is upserted
+        // with no absence judgment; a draft answer yanks it via the
+        // ordinary birth rule (`applyReleaseListing`'s
+        // `yanked = r.draft ? 1 : 0`).
+        : deps.store.applyReleaseListing([pending.row], now, 'single');
     } catch (err) {
-      return warnWithdrawn(err instanceof Error ? err.message : String(err));
+      warnWithdrawn(err instanceof Error ? err.message : String(err));
+      return;
     }
-    if (!applied.ok) return warnWithdrawn(`store-refused-${applied.why}`);
-    latestEtag = tEtag;
-    lastLatestTag = t;
+    if (!applied.ok) { warnWithdrawn(`store-refused-${applied.why}`); return; }
+    latestEtag = pending.tEtag;
+    lastLatestTag = pending.t;
     withdrawnAnswered();
   }
 
@@ -664,20 +758,38 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // N1 (fix round 2): the latest probe runs FIRST. `pollListing` reads
     // `lastLatestTag` as its `keepTags` argument, so running the probe first
     // makes that read THIS poll's answer (200 → the confirmed tag; 304 →
-    // unchanged; a move away → settled by K's tag fetch, ruling A; any other
-    // failure → unchanged) rather than
-    // the previous poll's, which is what let a genuinely withdrawn stable
-    // release stay un-yanked forever (the regression the re-review found).
+    // unchanged; any other failure → unchanged) rather than the previous
+    // poll's, which is what let a genuinely withdrawn stable release stay
+    // un-yanked forever (the regression the re-review found). A confirmed
+    // move-away is no longer among these immediate changes (R2): it is
+    // returned as `pendingWithdrawal` and applied below, only once this
+    // poll's own listing has answered fresh — so `lastLatestTag` still
+    // reads K here, exactly as a poll where the check had not yet resolved
+    // always has, and `keepTags` below still protects K for this poll.
     const prevLatestTag = lastLatestTag;
-    await pollLatest(now, source);
-    if (lastLatestTag !== prevLatestTag) {
+    const pendingWithdrawal = await pollLatest(now, source);
+    if (lastLatestTag !== prevLatestTag || pendingWithdrawal !== null) {
       // The stable identity CHANGED this poll (a fresh confirmation, or a
-      // 404 clearing it) — the listing's own absence judgment has to be
-      // re-run against the NEW keep set, which a 304 (writing nothing)
-      // would otherwise silently skip, leaving the old release listed.
+      // 404-with-no-kept-tag clearing it), OR a moved-away transition was
+      // just CONFIRMED and is waiting on this poll's own listing (R2) — either
+      // way a stale 304 here must not stand in for a real answer: a 304
+      // writes nothing, and R2's evidence gate only ever fires on a fresh
+      // 200, so a 304'd listing would needlessly defer a confirmed
+      // withdrawal to the NEXT poll even though this one could have applied
+      // it. Dropping the ETag forces a full re-answer.
       etag = null;
     }
-    await pollListing(now, source);
+    const listing = await pollListing(now, source);
+    // R2 (ruling on review 143's R2): a moved-away judgment acts ONLY when
+    // THIS poll's listing itself answered with a fresh 200 body — never on
+    // the evidence of a repository that might simply not be answering at
+    // all. If it did not, the withdrawal judgment is deferred: nothing
+    // changes, and the very next poll retries the same check against the
+    // same K (`measureWithdrawn` re-fetches; nothing here remembers the
+    // discarded `pendingWithdrawal`).
+    if (pendingWithdrawal !== null && listing.freshOk) {
+      applyWithdrawn(now, pendingWithdrawal);
+    }
     // Fix round 1, review round 2 (I2): resolved only after BOTH requests
     // have fully settled, with the state AS IT STANDS THEN — never a
     // snapshot captured before `pollLatest` ran, which hid a state-touching

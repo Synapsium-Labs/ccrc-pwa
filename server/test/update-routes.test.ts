@@ -24,7 +24,9 @@ import { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type NodeMeasurement, type ReleaseListingRow } from '../src/coord/store.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
-import type { CataloguePoller } from '../src/update/catalogue.js';
+import {
+  CATALOGUE_MAX_REQUESTS_PER_POLL, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET, type CataloguePoller,
+} from '../src/update/catalogue.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
 import { REFRESH_MIN_INTERVAL_MS, parseIntentBody, toNodeWire } from '../src/update/routes.js';
@@ -551,7 +553,7 @@ describe('POST /api/updates/intent', () => {
 });
 
 describe('POST /api/updates/refresh', () => {
-  it('polls once and answers the catalogue state; a second call inside the minute is 429 and sends nothing (§18 "refresh is rate-limited")', async () => {
+  it('polls once and answers the catalogue state; a second call inside the interval is 429 and sends nothing (§18 "refresh is rate-limited")', async () => {
     const p = scriptedPoller();
     const f = await open({ catalogue: p.poller });
     const a = await post(f.app, '/api/updates/refresh', {});
@@ -565,7 +567,7 @@ describe('POST /api/updates/refresh', () => {
     expect(retry).toBeLessThanOrEqual(REFRESH_MIN_INTERVAL_MS / 1000);
     expect(b.headers['retry-after']).toBe(String(retry));
     expect(p.polls(), 'the refused refresh reached the poller').toBe(1);
-    // A minute on, the door opens again — a minute, not a latch.
+    // The FULL derived interval on, the door opens again — an interval, not a latch.
     p.setLast(Date.now() - REFRESH_MIN_INTERVAL_MS - 1);
     const c = await post(f.app, '/api/updates/refresh', {});
     expect(c.statusCode).toBe(200);
@@ -577,6 +579,53 @@ describe('POST /api/updates/refresh', () => {
     const r = await post(f.app, '/api/updates/refresh', {});
     expect(r.statusCode).toBe(501);
   });
+
+  // R1 (fix round 2, D-3218, review 143): D-3215's own text called this door
+  // "one request a minute", but a single admitted poll can itself cost up
+  // to `CATALOGUE_MAX_REQUESTS_PER_POLL` (3) requests — so a door open once
+  // a minute let a thumb spend up to 180 requests an hour against spec §7's
+  // unauthenticated 60/hour budget, three times over. The door's interval
+  // is now DERIVED from that same per-poll maximum and the hourly budget
+  // (never a hand-typed 180000). This pins the actual DOOR BEHAVIOUR the
+  // derivation buys: three refreshes a minute apart admit only ONE poll,
+  // not three, and the door stays shut for the FULL derived interval after
+  // any admitted poll (worst case or not — the route has no way to know how
+  // many requests a poll actually sent, so it always assumes the worst).
+  it('REFRESH_MIN_INTERVAL_MS is derived, never hand-typed: three refreshes a minute apart admit one poll, not three', async () => {
+    expect(REFRESH_MIN_INTERVAL_MS).toBe(
+      (CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET) * 60 * 60_000,
+    );
+    expect(REFRESH_MIN_INTERVAL_MS).toBe(180_000);   // three minutes: 3 requests/poll, 60/hour budget
+
+    const p = scriptedPoller();
+    const f = await open({ catalogue: p.poller });
+    const a = await post(f.app, '/api/updates/refresh', {});
+    expect(a.statusCode).toBe(200);
+
+    // One minute elapsed — a bare one-minute gate (D-3215's own text) would
+    // have admitted this; the derived three-minute gate must not.
+    p.setLast(Date.now() - 60_000);
+    const b = await post(f.app, '/api/updates/refresh', {});
+    expect(b.statusCode).toBe(429);
+
+    // Two minutes elapsed — still inside the derived interval.
+    p.setLast(Date.now() - 120_000);
+    const c = await post(f.app, '/api/updates/refresh', {});
+    expect(c.statusCode).toBe(429);
+    expect(p.polls(), 'only the first refresh reached the poller across two full minutes').toBe(1);
+
+    // The door opens again only once the FULL derived interval has elapsed.
+    p.setLast(Date.now() - REFRESH_MIN_INTERVAL_MS - 1);
+    const d = await post(f.app, '/api/updates/refresh', {});
+    expect(d.statusCode).toBe(200);
+    expect(p.polls()).toBe(2);
+  });
+
+  // Mutations (measured by hand, on a scratch copy): hand-typing
+  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds the case above at both the
+  // exact-value assertion and the door-behaviour assertions (the second
+  // refresh, one minute in, would be admitted, and `p.polls()` would read 2
+  // where the case expects 1).
 });
 
 describe('POST /api/updates/ack', () => {
