@@ -15,9 +15,20 @@
 // the remedy is to spell the list in the statement, which is also what keeps
 // "no SELECT *" true in this file. A write that is not inside a
 // `this.db.prepare(` window at all (SQL in a const, an `exec`) reds as a stray
-// line, so a rewritten call shape cannot disarm the scan. A trailing `// …`
-// comment on a CODE line that names a write (`UPDATE nodes …`) also reds as a
-// stray: move that prose onto a comment line of its own.
+// line. A trailing `// …` comment on a CODE line that names a write
+// (`UPDATE nodes …`) also reds as a stray: move that prose onto a comment
+// line of its own. WRITE_VERB and TABLE_WRITE_LINE are both case-sensitive
+// and require a bare table name, so on their own a lowercase verb, a quoted
+// table name or a schema-qualified one (`update nodes …`, `UPDATE "nodes" …`,
+// `UPDATE main.nodes …`) would pass with no statement, no problem and no
+// violation (review fix round 1, finding 1) — `nonCanonicalWrites`, below,
+// closes that gap by requiring every write-shaped mention of the five tables
+// to be spelled in exactly this scan's canonical form. And `ROW_KEYS`
+// excludes a row's key from an INSERT's column list — naming it is the row's
+// creation, not a write to any group — so an INSERT naming ONLY the key left
+// nothing for `violations` to iterate and passed for any method silently
+// (finding 2); `violations` now attributes that shape too. Together, a
+// rewritten call shape cannot disarm the scan.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
@@ -144,6 +155,37 @@ const writeOf = (sql: string): Write | null => {
   return null;
 };
 
+/** Review fix round 1, finding 1. `WRITE_VERB` and `TABLE_WRITE_LINE` above
+ *  are both case-sensitive and require a bare, unqualified table name — a
+ *  DELIBERATE choice, kept as-is: they parse the canonical form the scan
+ *  attributes. This companion parses the same five verbs against the same
+ *  five tables CASE-INSENSITIVELY, with an optional quote (`"`, a backtick or
+ *  `[…]`) and an optional `main.` qualifier around the table name, and
+ *  reports every match that is not spelled in EXACTLY the canonical form
+ *  (an uppercase verb, a bare unquoted unqualified table name) — so a write
+ *  the scan above cannot see is still not silent. It does not attempt to
+ *  attribute a non-canonical write to a method or a column: that would
+ *  duplicate the scan's own machinery for a shape store.ts is proven (below)
+ *  never to contain. */
+const CANONICAL_VERB_RE = /^(?:INSERT(?:\s+OR\s+[A-Z]+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+[A-Z]+)?|DELETE\s+FROM)$/;
+const NONCANONICAL_WRITE_RE = new RegExp(
+  String.raw`\b(INSERT(?:\s+OR\s+[A-Za-z]+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?|DELETE\s+FROM)\s+` +
+  String.raw`("|\x60|\[)?(main\.)?(${TABLES.join('|')})("|\x60|\])?\b`,
+  'gi',
+);
+const nonCanonicalWrites = (src: string): string[] => {
+  const out: string[] = [];
+  for (const m of src.matchAll(NONCANONICAL_WRITE_RE)) {
+    const [whole, verb, openQ, qualifier, table, closeQ] = m;
+    const canonical = CANONICAL_VERB_RE.test(verb!) && !openQ && !qualifier && !closeQ && isTable(table!);
+    if (!canonical) {
+      const line = src.slice(0, m.index!).split('\n').length;
+      out.push(`store.ts:${line}: non-canonical write shape ${JSON.stringify(whole)} — spell it as the scan requires (uppercase verb, bare table name)`);
+    }
+  }
+  return out;
+};
+
 /** Every write to the five tables in `src`, attributed; plus every shape the
  *  attribution cannot vouch for. */
 const scan = (src: string): Scan => {
@@ -193,6 +235,17 @@ const violations = (s: Stmt): string[] => {
         out.push(`${s.method} (store.ts:${s.line}) writes every column of ${s.table} (a ${s.verb} with no column list) — the ${g.group} group's writers are ${g.writers.join(', ')}`);
       }
     }
+    return out;
+  }
+  // Review fix round 1, finding 2: `ROW_KEYS` excludes a row's key from an
+  // INSERT's column list ONLY (naming it there is the row's creation, not a
+  // write to any group), so an INSERT that names NOTHING ELSE — a
+  // `INSERT OR IGNORE INTO releases (tag) VALUES (?)` shape — left `columns`
+  // empty and this function had nothing to iterate below, passing for ANY
+  // method silently. It still creates a row, so the method making it must
+  // still be a writer of at least one of this table's groups.
+  if (s.verb === 'INSERT' && s.columns.length === 0 && !groups.some((g) => g.writers.includes(s.method))) {
+    out.push(`${s.method} (store.ts:${s.line}) inserts ${s.table} naming only its row key — no writer group of ${s.table} names ${s.method}`);
     return out;
   }
   for (const c of s.columns) {
@@ -367,5 +420,56 @@ describe('CONTROL: the analyser reports each planted shape (the mutation table, 
   it('a write outside any this.db.prepare( window reds as a stray line', () => {
     expect(problems).toContainEqual(expect.stringMatching(/writes an update table outside a this\.db\.prepare\( window/));
     expect(problems).toHaveLength(2);
+  });
+});
+
+// ── review fix round 1 — two silent-pass holes the review found ────────────
+// Finding 1: a lowercase verb, a quoted table name or a schema-qualified one
+// passed WRITE_VERB/TABLE_WRITE_LINE with no statement, no problem and no
+// violation — `nonCanonicalWrites`, above, closes it without touching either.
+// Finding 2: an INSERT naming only its row key left `violations` nothing to
+// iterate and passed for any method silently — `violations` above now
+// attributes that shape too. No D- number: this tightens a test, not a spec
+// departure.
+describe('CONTROL: two shapes the review found the scan silently passing (fix round 1)', () => {
+  it('store.ts has zero non-canonical write spellings (finding 1)', () => {
+    expect(nonCanonicalWrites(STORE_SRC)).toEqual([]);
+  });
+
+  it('CONTROL: a lowercase verb, a quoted table name and a schema-qualified one are each caught (finding 1)', () => {
+    const fixture = [
+      'update nodes set updateState = ?',
+      'UPDATE "nodes" SET desiredTag = NULL',
+      'UPDATE main.nodes SET requestedTag = NULL',
+    ].join('\n');
+    expect(nonCanonicalWrites(fixture)).toEqual([
+      'store.ts:1: non-canonical write shape "update nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+      'store.ts:2: non-canonical write shape "UPDATE \\"nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+      'store.ts:3: non-canonical write shape "UPDATE main.nodes" — spell it as the scan requires (uppercase verb, bare table name)',
+    ]);
+  });
+
+  it('store.ts names no INSERT against any of the five tables that names only its row key (finding 2)', () => {
+    const { stmts: realStmts } = scan(STORE_SRC);
+    expect(realStmts.filter((s) => s.verb === 'INSERT' && s.columns.length === 0)).toEqual([]);
+  });
+
+  it('CONTROL: a planted INSERT naming only its row key is attributed and reds against a method that owns no group of that table (finding 2)', () => {
+    const fixture = `export class CoordStore {
+  constructor(readonly db: DatabaseSync) {}
+
+  refuseRelease(nodeId: string, tag: string): RefuseReleaseResult {
+    this.db.prepare('INSERT OR IGNORE INTO releases (tag) VALUES (?)').run(tag);
+    return { ok: true, inserted: true };
+  }
+}
+`;
+    const { stmts: mine, problems: mineProblems } = scan(fixture);
+    expect(mineProblems).toEqual([]);
+    expect(mine.map((s) => ({ method: s.method, table: s.table, verb: s.verb, columns: s.columns })))
+      .toEqual([{ method: 'refuseRelease', table: 'releases', verb: 'INSERT', columns: [] }]);
+    expect(mine.flatMap(violations)).toEqual([
+      'refuseRelease (store.ts:5) inserts releases naming only its row key — no writer group of releases names refuseRelease',
+    ]);
   });
 });
