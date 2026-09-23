@@ -2,7 +2,7 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
-rulings on the written spec (C9–C11, C13, C14; every §11 decision ruled 2026-09-23) and the measurements behind
+rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-23, item 6 found at plan time and open) and the measurements behind
 them; rev 5 reconciles it with its first wave plans, 2026-09-24 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
@@ -381,11 +381,17 @@ is the move, the carry and a round trip.
    target has room (today's `stranded`). A wait is recorded once on entry and once on exit, in
    `$REG/<id>.rescuewait` and the swap log, never under the word `hold`, which is the workspace-reap hold. It ends:
    - at the reset, when Claude Code's own timer or the stale-phase Enter (D-2360) continues the turn;
-   - `RESCUE_WAIT_GRACE` (120 s, its own constant, not `STALE_PRESS_COOLDOWN`) after the reset: in a swap if a
-     rate-limit row newer than the reset exists; otherwise the window turned with nothing re-sent, and the
-     existing redrive fallback runs in place — never a swap away from an account that has just reset;
-   - for the no-room wait, also in a swap when a target gains room; it too ends at the reset under the first two
-     conditions.
+   - `RESCUE_WAIT_GRACE` (120 s, its own constant, not `STALE_PRESS_COOLDOWN`) after the reset, by what the pane
+     shows at that tick. Only an ARMED auto-continue ends a wait in place: Claude Code re-sends the turn itself, and
+     ccd never swaps away from an account that has just reset. A STALLED session is rescued as today, because
+     nothing on its own account will re-send the turn (the redrive fallback types only on an unsubmitted resume
+     pair): its near or chain wait closes and the tick swaps it to a target with room, skipping the accounts it
+     just left blocked, with no second chain wait on the same reset; its no-room wait stays open;
+   - for the no-room wait, in a swap when a target gains room.
+
+   No wait of any kind keys on a rate-limit row written at or after its own `resetsAt`: such a row is stale on
+   arrival, and a wait keyed on it would never end. A stalled session whose own account is the only one with room
+   idles until another target gains room, as it does today (§11 item 6).
 
    A longer bound for a session with delegated work in flight is not specified: no paused run has been seen under
    a blocked parent (§1.1), and the stage-2 spike measures whether one survives a wait (§11 item 3).
@@ -407,11 +413,13 @@ row predates `.landed` produces no rescue; no `.landed` with an old row rescues;
 transcript under a pane positive rescues; a `five_hour` row whose reset is 300 s out, with auto-continue armed,
 produces no dispatch, and deleting the bound check makes it dispatch; the same row on a stalled session
 dispatches; the same row on a non-Anthropic backend dispatches; a `seven_day` row 300 s out dispatches; a bound of
-0 dispatches; after the reset with no new row
-the fallback runs in place and nothing dispatches, and with a new row a dispatch follows; an auth-failure pane with
+0 dispatches; an armed pane after the reset with no new row ends the wait in place and nothing dispatches, and
+with a new row a dispatch follows; a stalled no-room wait across its own reset is rescued once a target has room; a
+stalled chain wait whose account reset closes and the tick rescues, with no second chain wait; a row written after
+its own `resetsAt` opens no wait; an auth-failure pane with
 an old rate-limit row carrying a near reset dispatches; a target set with no room gives no dispatch and a stranded
 record; a target just left blocked is skipped; a fourth rescue within the hour takes the chain wait; a chain wait
-whose account resets inside it does not swap. The two caching pins in `ccd-limit-banner.test.ts` that cached an
+whose account resets inside it does not swap on an armed pane. The two caching pins in `ccd-limit-banner.test.ts` that cached an
 absent or unreadable transcript as a negative verdict now expect unread (`2`). `.landed`, `.rescuewait` and
 `.carriednote` join the per-session registry field list and purge with the row; `.rescuewait` is read by ccd's own
 entry/exit dedupe and by doctor, whose reader ships with stage 6's first part and its doctor checks; §9's
@@ -566,8 +574,10 @@ a swap; an operator `/model opus` survives an auto-home.
 - **A real block on the target reads as carried-in** while the transcript lags the pane (the kind of lag D-2443 stands down for):
   the dating read is uncached and the next tick asks again; §9 counts pane positives rule 1 suppressed that became
   a rescue within five minutes.
-- **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in a
-  swap only if the account wrote a new limit row, otherwise in the redrive fallback in place.
+- **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in
+  place only on an armed pane, otherwise in a swap; a row stale on arrival opens no wait.
+- **A stalled session idles on a reset account:** a stalled session's waits end in a swap, never in place; the one
+  case left is a stalled session whose own account is the only one with room (§11 item 6).
 - **A chain wait on an account with a far reset:** bounded at 30 minutes, then a swap that skips the account just
   left blocked, or the no-room wait when no target has room.
 - **The slice ceiling kills a live session** once the pressure reap is off: named in §5.6, measured in §9 by the
@@ -662,6 +672,14 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
      the victim.
    Stage 6 does not wait for step 7: the reap fires below about 3 GiB of host memory, after the slice has already
    reached its ceiling, so the variable barely moves this risk; its own kill rule (§5.6) guards the rest.
+
+6. **Open — a stalled session whose own account is the only one with room.** Measured from the code on
+   2026-09-24: nothing re-sends a stalled session's turn on its own account after the reset, and the forced
+   target choice never offers the current account, so the session idles until another target gains room — today
+   and under stage 4 alike. A stop and resume on the same account would end that, because the landing's redrive
+   re-sends the turn, but it is a restart ccd does not make today, against §6's first invariant. Recommended:
+   leave it as today and count it — stage 4's instrument reports stalled no-room waits that outlive their own
+   reset — and rule on it with the count in hand.
 
 ## 12. Out of scope, named
 

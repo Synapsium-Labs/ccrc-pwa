@@ -61,6 +61,11 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 - **The fleet box is memory-bound.** A pane scope throttles at 8G and dies at 12G with its session
   (`OOMPolicy=stop`), and the session slice sits near its 24G ceiling. Run suites in the foreground, one at a time,
   sharded; never two full server suites at once from one pane.
+- **`deploy/measure-continuity.py` has one shape, whichever wave lands first.** One registry `STAGES = {N: stageN}`,
+  each `stageN(ctx)` returning named sections; `ctx` carries the home, the swap log, `since`/`until` as epochs
+  (swap-log stamps are local time), `all_copies` and `deployed`; the CLI is `--stage N` (repeatable), `--home`,
+  `--swap-log`, `--since`, `--until`, `--deployed`, `--all-copies`, `--json`. A wave that finds the file already
+  there keeps its header, helpers and parser and adds only its own stage block and registry entry.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; never print secret contents.
 
