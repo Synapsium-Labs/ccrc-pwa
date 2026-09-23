@@ -1061,7 +1061,10 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE releases (
     -- catalogue columns: writer = the poller (§7), method applyReleaseListing
-    tag TEXT PRIMARY KEY, version TEXT NOT NULL, channel TEXT NOT NULL, publishedAt INTEGER NOT NULL,
+    -- tag: NOT NULL PRIMARY KEY (D-3212) — SQLite's rowid-table rule admits a
+    -- NULL TEXT primary key otherwise; the writer's own guard (isReleaseTag)
+    -- was the only thing standing between a NULL key and more than one row.
+    tag TEXT NOT NULL PRIMARY KEY, version TEXT NOT NULL, channel TEXT NOT NULL, publishedAt INTEGER NOT NULL,
     commitSha TEXT, tarballUrl TEXT NOT NULL, bundleListed INTEGER NOT NULL, notes TEXT,
     yanked INTEGER NOT NULL DEFAULT 0, observedAt INTEGER NOT NULL,
     -- notification columns: writer = the notifier (W3), method markReleaseNotified
@@ -1073,7 +1076,9 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (nodeId, tag)
   );
   CREATE TABLE nodes (
-    nodeId TEXT PRIMARY KEY, role TEXT NOT NULL, label TEXT NOT NULL,
+    -- nodeId: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap as
+    -- releases.tag; the guard was NODE_ID_RE, not the column.
+    nodeId TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, label TEXT NOT NULL,
     -- measurement columns: upsertNodeMeasurement, markUnreachable
     currentVersion TEXT, currentSha TEXT, currentRef TEXT, currentBuiltAt TEXT, currentDirty INTEGER,
     stampRead TEXT NOT NULL, installState TEXT NOT NULL, provenance TEXT NOT NULL, caps TEXT NOT NULL,
@@ -1092,7 +1097,9 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE TABLE update_intent (
     -- writer = the intent route (§12), method setIntent
-    scope TEXT PRIMARY KEY, channel TEXT NOT NULL, pinnedTag TEXT, auto TEXT NOT NULL, notify TEXT NOT NULL,
+    -- scope: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap; the guard
+    -- was FLEET_SCOPE / a live nodeId, not the column.
+    scope TEXT NOT NULL PRIMARY KEY, channel TEXT NOT NULL, pinnedTag TEXT, auto TEXT NOT NULL, notify TEXT NOT NULL,
     setAt INTEGER NOT NULL, setBy TEXT NOT NULL
   );
   INSERT INTO update_intent VALUES ('*', 'stable', NULL, 'off', 'channel', 0, 'migration');

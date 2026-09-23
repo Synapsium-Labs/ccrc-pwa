@@ -963,11 +963,13 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
   // later edit to this entry would be a frozen migration changing under a box
   // that already ran it.
   //
-  // `notnull: 0` on the three TEXT PRIMARY KEYs (`releases.tag`,
-  // `nodes.nodeId`, `update_intent.scope`) is SQLite's rowid-table rule, the
-  // same shape `programs.slug` has had since entry 1: the store writers are
-  // the guard (every tag passes `isReleaseTag`, every nodeId is measured),
-  // not the column.
+  // `notnull: 1` on the three TEXT PRIMARY KEYs (`releases.tag`,
+  // `nodes.nodeId`, `update_intent.scope`) is explicit (D-3212): SQLite's
+  // rowid-table rule otherwise admits NULL in a non-`INTEGER` primary key —
+  // the same gap `programs.slug` has had since entry 1 — leaving only the
+  // store writers' guards (every tag passes `isReleaseTag`, every nodeId is
+  // measured, every scope is FLEET_SCOPE or a live nodeId) between a NULL key
+  // and a duplicate "row per key". The column itself now refuses it.
   type Col = [name: string, type: string, notnull: number, dflt: string | null, pk: number];
   const cols = (db: DatabaseSync, table: string): Col[] =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as
@@ -1015,7 +1017,7 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
   it('gives each table exactly the columns §6 names, with their nullability, defaults and keys', () => {
     const db = openCoordDb(plantedAt13('ccrc-mig14-cols-'));
     expect(cols(db, 'releases')).toEqual([
-      ['tag', 'TEXT', 0, null, 1], ['version', 'TEXT', 1, null, 0], ['channel', 'TEXT', 1, null, 0],
+      ['tag', 'TEXT', 1, null, 1], ['version', 'TEXT', 1, null, 0], ['channel', 'TEXT', 1, null, 0],
       ['publishedAt', 'INTEGER', 1, null, 0], ['commitSha', 'TEXT', 0, null, 0],
       ['tarballUrl', 'TEXT', 1, null, 0], ['bundleListed', 'INTEGER', 1, null, 0], ['notes', 'TEXT', 0, null, 0],
       // A yanked release is KEPT (§7) — the column defaults to 0 and nothing deletes.
@@ -1028,7 +1030,7 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     ]);
     expect(cols(db, 'nodes')).toEqual([
       // the row key, then role and label — which are the measurement group's
-      ['nodeId', 'TEXT', 0, null, 1], ['role', 'TEXT', 1, null, 0], ['label', 'TEXT', 1, null, 0],
+      ['nodeId', 'TEXT', 1, null, 1], ['role', 'TEXT', 1, null, 0], ['label', 'TEXT', 1, null, 0],
       // measurement group, continued
       ['currentVersion', 'TEXT', 0, null, 0], ['currentSha', 'TEXT', 0, null, 0],
       ['currentRef', 'TEXT', 0, null, 0], ['currentBuiltAt', 'TEXT', 0, null, 0],
@@ -1054,7 +1056,7 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
       ['supersededBy', 'TEXT', 0, null, 0],
     ]);
     expect(cols(db, 'update_intent')).toEqual([
-      ['scope', 'TEXT', 0, null, 1], ['channel', 'TEXT', 1, null, 0], ['pinnedTag', 'TEXT', 0, null, 0],
+      ['scope', 'TEXT', 1, null, 1], ['channel', 'TEXT', 1, null, 0], ['pinnedTag', 'TEXT', 0, null, 0],
       ['auto', 'TEXT', 1, null, 0], ['notify', 'TEXT', 1, null, 0],
       ['setAt', 'INTEGER', 1, null, 0], ['setBy', 'TEXT', 1, null, 0],
     ]);
@@ -1065,6 +1067,26 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
     expect(cols(db, 'update_epoch')).toEqual([
       ['id', 'INTEGER', 0, null, 1], ['epoch', 'INTEGER', 1, null, 0], ['issuedAt', 'INTEGER', 1, null, 0],
     ]);
+    db.close();
+  });
+
+  it('refuses a NULL key on each of the three TEXT PRIMARY KEYs (D-3212)', () => {
+    const db = openCoordDb(plantedAt13('ccrc-mig14-nullkey-'));
+    expect(() => db.exec(
+      "INSERT INTO releases (tag, version, channel, publishedAt, tarballUrl, bundleListed, observedAt) " +
+      "VALUES (NULL, 'v0.0.1', 'stable', 1, 'https://example.invalid/x.tar.gz', 1, 1)",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(() => db.exec(
+      "INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable) " +
+      "VALUES (NULL, 'fleet', 'fleet', 'ok', 'complete', 'unverified', '', 'linux', 1)",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(() => db.exec(
+      "INSERT INTO update_intent (scope, channel, auto, notify, setAt, setBy) " +
+      "VALUES (NULL, 'stable', 'off', 'channel', 1, 'op')",
+    )).toThrow(/NOT NULL constraint failed/);
+    expect(db.prepare('SELECT count(*) AS c FROM releases').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT count(*) AS c FROM nodes').get()).toEqual({ c: 0 });
+    expect(db.prepare('SELECT count(*) AS c FROM update_intent').get()).toEqual({ c: 1 }); // the seed row only
     db.close();
   });
 
