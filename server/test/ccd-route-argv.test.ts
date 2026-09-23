@@ -12,10 +12,15 @@
 //      to say so is to look at the composed argv.
 //   3. The coordinator row is seeded on EVERY lane (controller ruling R1,
 //      honouring S1-R10): the class alias IS honoured on a codex lane — the
-//      slice-4 probe measured `--model fable` resolving through that lane's
-//      own `ANTHROPIC_DEFAULT_FABLE_MODEL` (research doc §6, row `S1-R10,
+//      slice-4 probe measured `--model <class>` resolving through that lane's
+//      own `ANTHROPIC_DEFAULT_<CLASS>_MODEL` (research doc §6, row `S1-R10,
 //      slice 4`) — so the row is not gated on the backend. What degrades such
-//      a session is the SERVICEABILITY rule, not the alias.
+//      a session is the SERVICEABILITY rule, not the alias — and since the
+//      row's class became `opus` (operator instruction 2026-09-22, Fable is
+//      explicit-only), the codex lane no longer HAS anything to degrade for a
+//      default spawn: `opus` reads the same seven-day figure everywhere. The
+//      degrade arm is therefore measured below on an EXPLICIT `--route
+//      class=fable`, which is the only way a session reaches that class now.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -228,24 +233,27 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
   it('an operator ws-add (no --no-rc, no --route) gets the coordinator row, journaled as the default', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     const id = 'demo-quiet-mesa';
-    expect(record(id)).toEqual(['fable', 'ultracode', 'sonnet', 'on']);
+    // `opus`, not the top class: operator instruction 2026-09-22 — the class
+    // a human has to ask for cannot be what a session gets when nobody asked
+    // for anything. The other three fields of the row are unchanged.
+    expect(record(id)).toEqual(['opus', 'ultracode', 'sonnet', 'on']);
     const rows = routeRows();
     expect(rows).toHaveLength(4);
     expect(decOf(rows[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
-    // Nothing on this box has measured a Fable share, so `_serviceable` answers
+    // Nothing on this box has written a limits file, so `_serviceable` answers
     // UNMEASURED and nobody degrades on a fabricated fact — the intended class
     // is what the first spawn composes.
     expect(h.reg(id, 'degraded')).toBeNull();
     // FOUR swap.log lines, one per field of the row, all four naming the
     // default rather than an argv.
     expect(routeLog(id)).toEqual([
-      `route ${id}: class ∅ -> fable [actor=spawn] (coordinator row (default))`,
+      `route ${id}: class ∅ -> opus [actor=spawn] (coordinator row (default))`,
       `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
       `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
       `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,
     ]);
     expect(composed(newSessions()[0]!))
-      .toContain(`--model fable --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode`);
+      .toContain(`--model opus --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode`);
   });
 
   it('an explicit --route on an operator ws-add wins over the coordinator row, and the DECLARED actor is the one journaled', () => {
@@ -350,29 +358,32 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'claude-demo.uuid'))).toBe(false);
   });
 
-  it('an operator start with no --route gets the coordinator row on a NON-Anthropic lane too, and the serviceability rule — not the alias — degrades it', () => {
+  it('an operator start with no --route gets the coordinator row on a NON-Anthropic lane too, and its class needs no rung there', () => {
     // Controller ruling R1, on the slice-4 probe (research doc §6, row `S1-R10,
     // slice 4`): `--model <class>` IS honoured on the codex lane and resolves
     // through that lane's own `ANTHROPIC_DEFAULT_<CLASS>_MODEL` keys, so the row
-    // is seeded here exactly as it is on an Anthropic lane. What moves the class
-    // is slice 3's clause — `_serviceable` answers rc 1 `backend` for `fable` on
-    // a lane the roster does not call Anthropic — so the FIRST settle degrades
-    // one rung and composes `opus`.
+    // is seeded here exactly as it is on an Anthropic lane.
+    //
+    // WHAT THE 2026-09-22 INSTRUCTION CHANGED, MEASURED: this used to seed the
+    // top class and then degrade one rung at the FIRST settle, because
+    // `_serviceable` answers rc 1 `backend` for it on a lane the roster does not
+    // call Anthropic. The row's class is `opus` now, which reads the lane's
+    // seven-day figure like every other class — unmeasured here, so nothing
+    // degrades and the composed argv names the class the record intends. The
+    // backend arm it used to exercise is the `it` below, on the explicit route
+    // that is now the only way to that class.
     seedAccountsSh(h.home, GPT_PLACEABLE);
     install('gpt');
     h.sh(`${START_SPAWNLESS} cmd_start gpt demo`);
-    expect(record('gpt-demo')).toEqual(['fable', 'ultracode', 'sonnet', 'on']);
+    expect(record('gpt-demo')).toEqual(['opus', 'ultracode', 'sonnet', 'on']);
     const seeded = routeRows();
     expect(seeded).toHaveLength(4);
     expect(decOf(seeded[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
     expect(h.reg('gpt-demo', 'degraded')).toBeNull();
 
     h.sh(`${WS_ADD_REAL_SPAWN} _spawn_start gpt-demo resume`);
-    expect(h.reg('gpt-demo', 'degraded')).toBe('opus');
-    const rows = routeRows();
-    expect(rows).toHaveLength(5);
-    expect(decOf(rows[4]!)).toMatchObject({ actor: 'ccd' });
-    expect(rows[4]!['detail']).toBe('degraded: ∅ -> opus');
+    expect(h.reg('gpt-demo', 'degraded')).toBeNull();
+    expect(routeRows()).toHaveLength(4);
     // Slice 1's non-Anthropic arm, widened by slice 6 Task 3: the THREE fields this
     // backend cannot apply are stamped by NAME rather than silently dropped. The
     // coordinator row seeds all three (`ultracode`, `sonnet`, `on`), and the argv
@@ -383,6 +394,29 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     for (const tok of ['--settings', '--effort', 'CLAUDE_CODE_SUBAGENT_MODEL']) {
       expect(line, tok).not.toContain(tok);
     }
+  });
+
+  it('an EXPLICIT --route class=fable on that same lane is what the serviceability rule — not the alias — still degrades', () => {
+    // The arm the test above used to carry, moved to the door it now comes
+    // through. A human asking for the top class on a codex lane is still a
+    // legal record: ccd keeps the INTENDED class and stamps the rung it can
+    // actually serve, exactly as before. Nothing about the backend clause
+    // changed on 2026-09-22 — only who can ask for the class that trips it.
+    seedAccountsSh(h.home, GPT_PLACEABLE);
+    install('gpt');
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=fable gpt demo`);
+    expect(h.reg('gpt-demo', 'class')).toBe('fable');
+    expect(decOf(routeRows()[0]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(h.reg('gpt-demo', 'degraded')).toBeNull();
+
+    h.sh(`${WS_ADD_REAL_SPAWN} _spawn_start gpt-demo resume`);
+    expect(h.reg('gpt-demo', 'class')).toBe('fable');   // the INTENDED class is kept
+    expect(h.reg('gpt-demo', 'degraded')).toBe('opus'); // the class actually served
+    const rows = routeRows();
+    expect(rows).toHaveLength(2);
+    expect(decOf(rows[1]!)).toMatchObject({ actor: 'ccd' });
+    expect(rows[1]!['detail']).toBe('degraded: ∅ -> opus');
+    expect(composed(newSessions()[0]!)).toContain('--model opus');
   });
 });
 
