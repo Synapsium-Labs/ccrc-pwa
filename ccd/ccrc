@@ -1602,8 +1602,7 @@ already running).
             detached run gets the user manager's environment, not yours
             (its argv is the whole contract), and its progress is
             ~/.ccrc/update.json.
-            Per box; across a fleet,
-            'ccrc rollout' runs it in order
+            Per box; across a fleet, 'ccrc rollout' runs it in order
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
