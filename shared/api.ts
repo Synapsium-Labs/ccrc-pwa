@@ -5392,7 +5392,7 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * so, reporting `unbound` — while `spent-unmeasured` (with `detail`) says "the
  * evidence could not be read; retry, and do NOT drop the `sessionId` on this
  * account", because an unreadable marker or ledger is not a spent one. A
- * workspace with no marker is never refused by either.
+ * workspace with no marker is refused only when the registry cannot be listed.
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'

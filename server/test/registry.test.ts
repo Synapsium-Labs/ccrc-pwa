@@ -664,8 +664,9 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 30-field Promise.all `buildRecord` would — the
-    // whole point of checking the listing FIRST.
+    // A miss must not fire the full-field Promise.all `buildRecord` would —
+    // the whole point of checking the listing FIRST. (F15: untagged, so it
+    // does not hard-code a field count that goes stale as the census grows.)
     expect(fieldReads).toBe(0);
   });
 
