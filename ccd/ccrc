@@ -11755,10 +11755,19 @@ _upd_lock() {
   # open-failure diagnostic (`ccd/ccd:4381-4410` records why).
   { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null \
     || { UPD_LOCK_FD=""; _ccrc_die "cannot open ~/.ccrc/update.lock — nothing on this box was changed"; }
-  if ! flock -n "$UPD_LOCK_FD"; then
+  # D-3274 (found reviewing Task 2): contention told from a flock that could
+  # not run, the way D-3250's probe already does — `flock -n` rc 1 alone is
+  # "another update holds it"; any other non-zero rc (`Bad file descriptor`,
+  # `ENOLCK`, …) is not a holder and must not be reported as one.
+  local frc=0
+  flock -n "$UPD_LOCK_FD" || frc=$?
+  if [ "$frc" -ne 0 ]; then
     { exec {UPD_LOCK_FD}>&-; } 2>/dev/null
     UPD_LOCK_FD=""
-    _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"
+    if [ "$frc" -eq 1 ]; then
+      _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"
+    fi
+    _ccrc_die "update: cannot lock ~/.ccrc/update.lock (flock rc $frc) — this is not another update holding it; nothing on this box was changed"
   fi
   return 0
 }

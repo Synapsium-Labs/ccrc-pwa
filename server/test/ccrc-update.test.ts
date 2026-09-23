@@ -2265,6 +2265,21 @@ describe('ccrc update: one update at a time (the lock)', () => {
     expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
   });
 
+  it('a flock that could not RUN at all (e.g. rc 65, "Bad file descriptor") is refused as unlockable, never reported as a holder (fix round 1, D-3274)', () => {
+    const home = freshUpdateBox('ccrc-update-lock-flockfail-');
+    const bin = join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    // First on PATH (ahead of the real flock `updateEnv`'s harness leaves
+    // reachable): a flock that always fails for a reason that is not
+    // contention — rc 1 is reserved for "someone else holds it".
+    writeFileSync(join(bin, 'flock'), '#!/bin/sh\nexit 65\n', { mode: 0o755 });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: cannot lock ~\/\.ccrc\/update\.lock \(flock rc 65\) — this is not another update holding it; nothing on this box was changed$/m);
+    expect(r.stderr).not.toMatch(/another update holds/);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
   it('the staged spine inherits no lock descriptor: a process it leaves behind does not pin the lock once the run has exited', () => {
     const home = stubBox('ccrc-update-lock-spine-linger-');
     writeFileSync(join(home, 'fixture-spine-linger'), '');
