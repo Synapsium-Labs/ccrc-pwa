@@ -158,6 +158,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - The work run 128 likewise sat at `dispatched` through its whole execution.
   - The coordinator skill's step 6 names neither. That is a skill/mechanism gap, reported to the operator.
 
+- **Fix-round addenda for wave 2 (2026-09-23).**
+  - **F11 (R20).** `RELEASE_TAG`/`isReleaseTag` stay byte-equal to `deploy/release-main.sh`'s `SHAPE`, which
+    `update-states.test.ts` pins cross-side. The same pattern also lives in `deploy/*.sh` and `ccd/ccrc`, which are out
+    of scope. The untrusted ingress is bounded instead: the catalogue parse skips a tag over 64 bytes or with a
+    leading-zero component, and the intent route applies the same bounds if it takes a `pinnedTag` that is not a
+    catalogue row. Tightening the shared `SHAPE` is a follow-up for `deploy/` and `ccd/`, outside this programme.
+  - **macOS leg.** PR #176's `test-macos` was cancelled at the job's 55-minute cap, and so was `main`'s on each of its
+    last four pushes (runs 35866485855, 35854286310, 35846285819, 35772125485; since 2026-09-22 19:11 UTC). The cap is
+    main-wide, not this wave's.
+    - `main` requires no status check (its only rule is `pull_request`), so it blocks nothing. It also measures
+      nothing, on every PR.
+    - This programme judges macOS from the Linux legs plus `probe-macos`, and reports the cap to the operator. The fix
+      belongs to the CI-selection work.
+    - The wave-2 worker adds a `timeout` to every `spawnSync` its tests added (the correct shape regardless).
+  - **The fleet's gh API quota.** All 5000 calls an hour were used by 15:20 UTC. The coordinator's own CI reads now
+    stay few.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
