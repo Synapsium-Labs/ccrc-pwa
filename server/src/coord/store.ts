@@ -169,20 +169,33 @@ export type SetAccountPoolsResult =
 /** Design 2026-09-20 §7 (W2). One element of a release listing, in the shape
  *  the catalogue poller (`update/catalogue.ts`) has already parsed and
  *  defensively validated; `applyReleaseListing` re-checks what the TABLE needs
- *  (a tag, a channel, an integer `publishedAt`, a non-empty `tarballUrl`) and
- *  refuses the whole listing otherwise. `draft` is GitHub's own flag: a draft
- *  is stored `yanked = 1`, never offered. */
+ *  (a tag, a channel, an integer `publishedAt`) and refuses the whole listing
+ *  otherwise. `draft` is GitHub's own flag: a draft is stored `yanked = 1`,
+ *  never offered. `tarballUrl` is `null` (fix round 1, D-3216, F10) when the
+ *  poller's own parse refused the listed download URL — a scheme other than
+ *  `https:`, a non-ASCII or control byte, userinfo, or a length over
+ *  `DOWNLOAD_URL_MAX` — because a release itself is real even when its one
+ *  untrusted field is not; the release stays listed and this column alone
+ *  goes NULL, never `''`, which the table's `NOT NULL` column cannot hold
+ *  directly (`schema.ts`'s `tarballUrl TEXT NOT NULL` — untouched this wave):
+ *  `''` is the ONE on-disk sentinel for "no url", written and read back at
+ *  this single seam (the `INSERT` and `releases()` below) and never handed to
+ *  a caller as anything but `null`. */
 export interface ReleaseListingRow {
   tag: string; channel: UpdateChannel; publishedAt: number; commitSha: string | null;
-  tarballUrl: string; bundleListed: boolean; notes: string | null; draft: boolean;
+  tarballUrl: string | null; bundleListed: boolean; notes: string | null; draft: boolean;
 }
 
 /** What the listing COVERS (D-3185). `complete` = the listing is
  *  the whole catalogue (GitHub answered fewer elements than a page), so
  *  every known row missing from it was yanked. `newest-page` = a full page:
  *  only a known row published at or after the oldest LISTED one can have been
- *  observed missing; an older row fell off the page, it was not yanked. */
-export type ListingCoverage = 'complete' | 'newest-page';
+ *  observed missing; an older row fell off the page, it was not yanked.
+ *  `single` (fix round 1, D-3215) = ONE release upserted with NO absence
+ *  judgment at all — the `/releases/latest` probe, which names one release
+ *  outside any window and proves nothing about any other row's presence;
+ *  the yank `UPDATE` below never runs under it. */
+export type ListingCoverage = 'complete' | 'newest-page' | 'single';
 
 /** `applyReleaseListing`'s answers. `yanked` counts rows THIS listing newly
  *  marked absent; `unyanked` counts rows that were yanked and are listed again,
@@ -200,10 +213,13 @@ export type ApplyReleaseListingResult =
  *  no we-do-not-know member, so nothing, never the fleet default
  *  (D-3181). `refused` is a DISPLAY roll-up of
  *  `node_release_refusals` for live nodes — never an eligibility predicate;
- *  the resolver asks `refusalsFor(nodeId)` about the one node it resolves. */
+ *  the resolver asks `refusalsFor(nodeId)` about the one node it resolves.
+ *  `tarballUrl` is `null` for the on-disk `''` sentinel (D-3216, F10) — the
+ *  one place that folds it back, so nothing outside this file ever reads the
+ *  sentinel value itself. */
 export interface ReleaseRow {
   tag: string; version: string; channel: UpdateChannel | null; publishedAt: number; commitSha: string | null;
-  tarballUrl: string; bundleListed: boolean; notes: string | null; yanked: boolean; observedAt: number;
+  tarballUrl: string | null; bundleListed: boolean; notes: string | null; yanked: boolean; observedAt: number;
   notifiedAt: number | null;
   refused: { by: string; at: number }[];
 }
@@ -5788,7 +5804,8 @@ export class CoordStore {
   /** The one catalogue writer. Upserts every listed row and marks `yanked = 1`
    *  every known, un-yanked row absent from the listing — all of them under
    *  `complete`, only those inside the listed window under `newest-page`
-   *  (D-3185). NEVER deletes: a node may be running a yanked
+   *  (D-3185), NONE at all under `single` (D-3215: one release, no absence
+   *  judgment). NEVER deletes: a node may be running a yanked
    *  release, and rollback may target one. An empty listing while rows are
    *  known is refused rather than read as "everything was yanked". "Absent"
    *  is absent from THIS argument: an element the poller could not parse is
@@ -5803,7 +5820,11 @@ export class CoordStore {
       if (!Number.isSafeInteger(r.publishedAt) || r.publishedAt < 0) {
         return { ok: false, why: 'bad-row', tag: r.tag, field: 'publishedAt' };
       }
-      if (typeof r.tarballUrl !== 'string' || r.tarballUrl === '') {
+      // D-3216 (F10): `null` is the caller's honest "no usable url" — the
+      // release stays listed with this column alone withheld. `''` remains
+      // refused: it is the on-disk sentinel below, never a value a caller
+      // may hand in directly.
+      if (r.tarballUrl !== null && (typeof r.tarballUrl !== 'string' || r.tarballUrl === '')) {
         return { ok: false, why: 'bad-row', tag: r.tag, field: 'tarballUrl' };
       }
       seen.add(r.tag);
@@ -5825,10 +5846,13 @@ export class CoordStore {
           'version = excluded.version, channel = excluded.channel, publishedAt = excluded.publishedAt, ' +
           'commitSha = excluded.commitSha, tarballUrl = excluded.tarballUrl, bundleListed = excluded.bundleListed, ' +
           'notes = excluded.notes, yanked = excluded.yanked, observedAt = excluded.observedAt',
-        ).run(r.tag, r.tag, r.channel, r.publishedAt, r.commitSha, r.tarballUrl, r.bundleListed ? 1 : 0,
+        ).run(r.tag, r.tag, r.channel, r.publishedAt, r.commitSha, r.tarballUrl ?? '', r.bundleListed ? 1 : 0,
           r.notes, r.draft ? 1 : 0, now);
         if (wasYanked.has(r.tag) && !r.draft) unyanked += 1;
       }
+      // D-3215: `single` names one release outside any window — it judges no
+      // absence, so the yank statement never runs under it.
+      if (coverage === 'single') return { ok: true, upserted: listing.length, yanked: 0, unyanked };
       const res = this.db.prepare(
         `UPDATE releases SET yanked = 1 WHERE yanked = 0 AND publishedAt >= ? AND tag NOT IN (${marks})`,
       ).run(since, ...listing.map((r) => r.tag));
@@ -5880,7 +5904,7 @@ export class CoordStore {
     ).all() as unknown as RawReleaseRow[];   // an interface has no index signature — `RunRowDb`'s cast (`:2121`)
     return rows.map((r) => ({
       tag: r.tag, version: r.version, channel: isUpdateChannel(r.channel) ? r.channel : null,
-      publishedAt: r.publishedAt, commitSha: r.commitSha, tarballUrl: r.tarballUrl,
+      publishedAt: r.publishedAt, commitSha: r.commitSha, tarballUrl: r.tarballUrl === '' ? null : r.tarballUrl,
       bundleListed: r.bundleListed === 1, notes: r.notes, yanked: r.yanked === 1, observedAt: r.observedAt,
       notifiedAt: r.notifiedAt, refused: refused.get(r.tag) ?? [],
     }));

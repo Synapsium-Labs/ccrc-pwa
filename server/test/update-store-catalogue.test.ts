@@ -170,6 +170,76 @@ describe('applyReleaseListing — the one writer of the catalogue columns', () =
     expect(store.releases()).toEqual([]);
   });
 
+  // D-3215 (fix round 1): the latest-release probe's coverage — ONE release,
+  // no absence judgment at all. The control below is exactly D-3185's own
+  // "the store may mark absent now as yanked" mechanism: passing 'single'
+  // must never run it, even where 'newest-page'/'complete' unambiguously would.
+  describe('applyReleaseListing under \'single\' coverage (D-3215) — one release, no absence judgment', () => {
+    it('upserts the one row and yanks NOTHING else, however many other releases are known', () => {
+      const store = fresh();
+      store.applyReleaseListing(
+        [rel('v0.1.1', T0 + 1000), rel('v0.1.2', T0 + 2000), rel('v0.1.3', T0 + 3000)], T0 + 5, 'complete',
+      );
+      // The latest probe answers a release OLDER than all three known dev
+      // releases, and names none of them — exactly the off-page-stable shape.
+      expect(store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 10, 'single'))
+        .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 0 });
+      expect(store.releases().map((r) => [r.tag, r.yanked])).toEqual([
+        ['v0.1.3', false], ['v0.1.2', false], ['v0.1.1', false], ['v0.0.1', false],
+      ]);
+    });
+
+    // The control: the SAME single-row listing under 'complete' (never what
+    // the latest probe passes) yanks every other known release — proving the
+    // pin above is 'single' doing the work, not an accident of small numbers.
+    it('control: the identical single-row listing under \'complete\' DOES yank the others', () => {
+      const store = fresh();
+      store.applyReleaseListing(
+        [rel('v0.1.1', T0 + 1000), rel('v0.1.2', T0 + 2000), rel('v0.1.3', T0 + 3000)], T0 + 5, 'complete',
+      );
+      expect(store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 10, 'complete'))
+        .toEqual({ ok: true, upserted: 1, yanked: 3, unyanked: 0 });
+    });
+
+    it('un-yanks a previously-yanked release the same as any other coverage', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 1, 'complete');
+      // Seed a yank directly — the shape a 'complete'/'newest-page' listing
+      // would leave behind; 'single' never produces one on its own.
+      store.db.prepare("UPDATE releases SET yanked = 1 WHERE tag = 'v0.0.1'").run();
+      expect(yankedOf(store, 'v0.0.1')).toBe(true);
+      expect(store.applyReleaseListing([rel('v0.0.1', T0)], T0 + 3, 'single'))
+        .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 1 });
+      expect(yankedOf(store, 'v0.0.1')).toBe(false);
+    });
+  });
+
+  // F10 (fix round 1, D-3216): a null tarballUrl is the caller's honest "no
+  // usable url" — never the on-disk `''` sentinel a caller may not hand in.
+  describe('tarballUrl: null (D-3216, F10) — the release stays listed, only this field withheld', () => {
+    it('a null tarballUrl is accepted, stored, and read back as null (never the "" sentinel)', () => {
+      const store = fresh();
+      expect(store.applyReleaseListing([rel('v0.0.9', T0, { tarballUrl: null })], T0 + 1, 'complete'))
+        .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 0 });
+      expect(store.releases()[0]).toMatchObject({ tag: 'v0.0.9', tarballUrl: null, yanked: false });
+      // The raw column really does hold the sentinel, never SQL NULL (the
+      // column is NOT NULL, untouched this wave) — this is what makes the
+      // read-side fold-back in `releases()` load-bearing.
+      const raw = store.db.prepare("SELECT tarballUrl FROM releases WHERE tag = 'v0.0.9'").get() as { tarballUrl: string };
+      expect(raw.tarballUrl).toBe('');
+    });
+
+    it('a null tarballUrl survives a re-listing that supplies a real one, and vice versa', () => {
+      const store = fresh();
+      store.applyReleaseListing([rel('v0.0.9', T0, { tarballUrl: null })], T0 + 1, 'complete');
+      expect(store.releases()[0]!.tarballUrl).toBeNull();
+      store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 2, 'complete');   // now a real url
+      expect(store.releases()[0]!.tarballUrl).toBe(url('v0.0.9'));
+      store.applyReleaseListing([rel('v0.0.9', T0, { tarballUrl: null })], T0 + 3, 'complete');
+      expect(store.releases()[0]!.tarballUrl).toBeNull();
+    });
+  });
+
   it('a stored channel outside the vocabulary reads null, never the fleet default (D-3181)', () => {
     const store = fresh();
     store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 1, 'complete');

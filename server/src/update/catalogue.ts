@@ -3,6 +3,7 @@ import { BASE_URL_OK } from '../../../shared/base-url.js';
 import type { ReleaseSourceRead } from '../config.js';
 import type { ApplyReleaseListingResult, ListingCoverage, ReleaseListingRow } from '../coord/store.js';
 import { openPoolReadDeadline } from '../pools.js';
+import { isIngestibleReleaseTag } from './resolve.js';
 
 /**
  * L3 — the release-catalogue poller (design 2026-09-20 §7).
@@ -11,18 +12,29 @@ import { openPoolReadDeadline } from '../pools.js';
  * call to the store's one catalogue writer (`applyReleaseListing`, plan
  * D-3180). Nothing else here writes anything: the
  * port below has no delete and no per-row upsert, so "a yanked release is
- * kept" (§18) is a property of the only door this module holds.
+ * kept" (§18) is a property of the only door this module holds. Fix round 1
+ * (D-3215) adds a SECOND, independent conditional GET of
+ * `/releases/latest`, with its own ETag, upserted through the same one
+ * writer under `'single'` coverage (no absence judgment) — an off-page
+ * stable release (§7's window) is not silently unresolvable.
  *
- * Quota (§7, measured): unauthenticated, 60 requests an hour per IP, and a
- * 304 still counts — the ETag saves bytes, not budget. The watcher polls every
- * 30 minutes; `POST /api/updates/refresh` reads `lastRequestAt()` for its
- * one-a-minute guard. No token is ever sent (decision 4: the repo carries no
+ * Quota (§7, measured; D-3215 doubles it): unauthenticated, 60 requests an
+ * hour per IP, and a 304 still counts — the ETag saves bytes, not budget.
+ * Each poll now sends TWO requests (the listing and the latest-release
+ * probe), so the watcher's 30-minute cadence spends 4 requests an hour, well
+ * under the 60/hour budget. `POST /api/updates/refresh` reads
+ * `lastRequestAt()` for its one-a-minute guard, measured against the LISTING
+ * request only. No token is ever sent (decision 4: the repo carries no
  * secrets, and the server holds none for GitHub).
  *
- * Fail-soft, and the failure is an answer: every error arm sets `lastError`
- * and never `lastOkAt`, so no consumer can render a failed poll as "up to
- * date". `lastError` is the CURRENT failure — an answer clears it
- * (D-3197). The state and the ETag are this process's memory
+ * Fail-soft, and the failure is an answer: every LISTING error arm sets
+ * `lastError` and never `lastOkAt`, so no consumer can render a failed poll
+ * as "up to date". `lastError` is the CURRENT failure — an answer clears it
+ * (D-3197). `catalogueState`
+ * (`{lastOkAt, lastError}`) follows the LISTING alone (D-3215) — the
+ * latest-release probe never sets either: its own failure is warned once per
+ * distinct cause and re-armed on its own next success. The state and both
+ * ETags are this process's memory
  * (D-3182): a restarted server polls on its first
  * tick and says "never checked" until then; the rows themselves persist in
  * the store.
@@ -47,8 +59,11 @@ export const CATALOGUE_BODY_MAX_BYTES = 8 * 1024 * 1024;
  *  rather than send the runtime's default. */
 const USER_AGENT = 'ccrc-server';
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
-const DOWNLOAD_URL = /^https?:\/\/\S+$/;
 const DOWNLOAD_URL_MAX = 2048;
+/** F10 (fix round 1, D-3216): every byte of a download URL must be printable
+ *  ASCII (`\x21`-`\x7e`) — no control byte, no non-ASCII byte a naive
+ *  terminal or log line would mis-render. */
+const PRINTABLE_ASCII_URL = /^[\x21-\x7e]+$/;
 
 /** The port this module needs, declared by the consumer (L2). */
 export interface CatalogueStore {
@@ -57,13 +72,26 @@ export interface CatalogueStore {
 
 export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
 
-/** Redacts `user:pass@` (or a bare `user@`) out of a URL-shaped string before
- *  it reaches a log line. Regex, not `new URL(...)`: the string this guards
- *  (an operator-supplied `apiUrl`) may be exactly the kind of malformed value
- *  `URL` refuses to parse, and the boot log must still say SOMETHING safe
- *  about it. */
-function redactUserinfo(raw: string): string {
-  return raw.replace(/:\/\/[^/?#]*@/, '://***@');
+/** F3 (fix round 1): a REFUSED base must never put a working URL — with or
+ *  without credentials — into a log line. `new URL` is re-parsed here inside
+ *  a `try` (the base already failed `BASE_URL_OK`, so it may not parse at
+ *  all, and `redactUserinfo`'s old regex printed the raw string regardless);
+ *  when it DOES parse, only the scheme and `URL.hostname` are printed — never
+ *  `.host` (which would carry a port) and never `.username`/`.password` or
+ *  any other component, so userinfo, a query, a fragment or a path can never
+ *  reach the line through this function. An unparseable base, or one whose
+ *  scheme carries no real host (`u.hostname === ''` — an opaque, non-`http(s)`
+ *  scheme such as `u:pw@host`, where the colon after `u` is not a scheme
+ *  boundary a caller should trust), prints nothing at all: there is no safe
+ *  fragment to show, and showing the scheme alone risked printing
+ *  attacker-controlled text with no host to anchor it. */
+function safeSchemeHost(raw: string): string {
+  try {
+    const u = new URL(raw.trim());
+    return u.hostname === '' ? '' : `: ${u.protocol}//${u.hostname}`;
+  } catch {
+    return '';
+  }
 }
 
 /** D-3209: validated ONCE when the poller is created, never per poll. `null`
@@ -75,11 +103,13 @@ function redactUserinfo(raw: string): string {
  *  value a second copy would be spelled from"). A refused base answers every
  *  poll `no-release-source` with no request — the same reason a missing
  *  release source reports, since a bad base is just as unusable. The message
- *  never carries userinfo in clear (B1) — a base that WAS refused precisely
- *  for carrying credentials must not then print them. */
+ *  never carries the base's userinfo, query, fragment or path in clear (F3,
+ *  fix round 1) — only the refusal word and, when the value parses at all
+ *  with a real host, its scheme and host; an unparseable base, or one with no
+ *  real host, prints neither. */
 export function apiBaseProblem(apiUrl: string): string | null {
   const verdict = BASE_URL_OK(apiUrl);
-  return verdict.ok ? null : `apiUrl refused (${verdict.reason}): ${redactUserinfo(apiUrl)}`;
+  return verdict.ok ? null : `apiUrl refused (${verdict.reason})${safeSchemeHost(apiUrl)}`;
 }
 
 export interface CataloguePoller {
@@ -122,26 +152,51 @@ function assetNamed(assets: readonly unknown[], name: string): Json | null {
   return null;
 }
 
+/** F10 (fix round 1, D-3216): a listing's download URL is untrusted input a
+ *  node will eventually fetch a tarball from and run. `new URL` must parse
+ *  it, the protocol must be exactly `https:` (never plain `http:`), every
+ *  byte must be printable ASCII, and it must carry no userinfo. `null` on
+ *  ANY failure, including no matching asset at all (`raw === undefined`) —
+ *  the caller stores that as `tarballUrl: null` and keeps the release
+ *  listed; only this one untrusted field is withheld. */
+function safeDownloadUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > DOWNLOAD_URL_MAX || !PRINTABLE_ASCII_URL.test(raw)) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:' || u.username !== '' || u.password !== '') return null;
+  return raw;
+}
+
 /** One listing element → one row, or null when any field this module relies on
  *  is missing or out of shape. A `prerelease` that is not a boolean is refused,
- *  never defaulted: `stable` is the channel a dev build must not reach. */
+ *  never defaulted: `stable` is the channel a dev build must not reach.
+ *  F11 (fix round 1, D-3216): the tag bound is `isIngestibleReleaseTag`, not
+ *  the bare `isReleaseTag` — a byte-length cap and a same-value-twice guard
+ *  against a leading zero (`v0.0.010` beside `v0.0.10`), so `compareReleaseTags`
+ *  never has to arbitrate two spellings of one version; a tag that fails it
+ *  is SKIPPED here exactly like any other malformed element (D-3206). F10:
+ *  a bad or absent download URL no longer skips the whole element — see
+ *  `safeDownloadUrl`. */
 function parseReleaseElement(el: unknown): ReleaseListingRow | null {
   if (!isObject(el)) return null;
   const { tag_name: tag, prerelease, draft, published_at: published, target_commitish: commitish, assets, body } = el;
-  if (!isReleaseTag(tag)) return null;
+  if (!isIngestibleReleaseTag(tag)) return null;
   if (typeof prerelease !== 'boolean') return null;
   if (typeof published !== 'string') return null;
   const publishedAt = Date.parse(published);
   if (!Number.isFinite(publishedAt) || publishedAt < 0) return null;
   if (!Array.isArray(assets)) return null;
-  const url = assetNamed(assets, `ccrc-${tag}.tar.gz`)?.browser_download_url;
-  if (typeof url !== 'string' || url.length > DOWNLOAD_URL_MAX || !DOWNLOAD_URL.test(url)) return null;
+  const rawUrl = assetNamed(assets, `ccrc-${tag}.tar.gz`)?.browser_download_url;
   return {
     tag,
     channel: prerelease ? 'dev' : 'stable',
     publishedAt,
     commitSha: typeof commitish === 'string' && COMMIT_SHA.test(commitish) ? commitish : null,
-    tarballUrl: url,
+    tarballUrl: safeDownloadUrl(rawUrl),
     bundleListed: assetNamed(assets, `ccrc-${tag}.tar.gz.sigstore.json`) !== null,
     notes: capNotes(body),
     draft: draft === true,
@@ -175,8 +230,55 @@ export function parseReleaseListing(body: unknown): ParsedListing | null {
 
 /** The IIFE's raw answer, read inside the deadline race. `'over-cap'` (D-3209)
  *  is the sibling of the race's own `null` (no egress) — a distinct reason
- *  the poll reads as 'malformed', never conflated with a timeout. */
-type RawAnswer = { status: number; etag: string | null; text: string } | 'over-cap';
+ *  the poll reads as 'malformed', never conflated with a timeout. `'redirect'`
+ *  (F9, fix round 1) is the sibling for a 3xx: `fetch` under `redirect:
+ *  'error'` rejects rather than answering with a status, so it is caught and
+ *  named before the throw would otherwise reach `race`'s own catch and be
+ *  folded into the generic no-egress `null`. */
+type RawAnswer = { status: number; etag: string | null; text: string } | 'over-cap' | 'redirect';
+
+/** F9 (fix round 1): the shape Node's `fetch` (undici) throws for a redirect
+ *  under `redirect: 'error'` — a `TypeError` whose `cause` names the reason,
+ *  measured on this runtime as `cause.message === 'unexpected redirect'`.
+ *  Every other throw (refused connection, reset, DNS) does not match and is
+ *  re-thrown, so it still reaches `race`'s own `.catch(() => null)` as
+ *  no-egress. */
+function isRedirectRefusal(err: unknown): boolean {
+  return err instanceof TypeError && err.cause instanceof Error && err.cause.message === 'unexpected redirect';
+}
+
+/** One request against the loopback-or-GitHub base, shared by the listing
+ *  and the latest-release probe (D-3215): builds the headers from `etagIn`,
+ *  races it against `deadlineMs`, and reads the body under the same cap.
+ *  Never throws — a redirect, a cap breach and a genuine no-egress are all
+ *  read back as a `RawAnswer` (or `null` for no-egress) by the caller. */
+async function fetchOne(url: string, etagIn: string | null, deadlineMs: number): Promise<RawAnswer | null> {
+  const headers: Record<string, string> = { accept: 'application/vnd.github+json', 'user-agent': USER_AGENT };
+  if (etagIn !== null) headers['if-none-match'] = etagIn;
+  const deadline = openPoolReadDeadline(deadlineMs);
+  if (deadline === null) return null;   // unreachable: timeoutMs > 0
+  try {
+    // The body is read INSIDE the race: `close()` aborts the controller, and
+    // a body still streaming after it would be cut. A throw (refused, reset,
+    // DNS) and the deadline both arrive as null — both are no egress.
+    return await deadline.race((async (): Promise<RawAnswer> => {
+      let res: Response;
+      try {
+        res = await fetch(url, { headers, signal: deadline.signal, redirect: 'error' });
+      } catch (err) {
+        if (isRedirectRefusal(err)) return 'redirect';
+        throw err;
+      }
+      if (res.status !== 200) return { status: res.status, etag: res.headers.get('etag'), text: '' };
+      // D-3209: capped and streamed — never a bare `res.text()`.
+      const text = await readCappedBody(res);
+      if (text === null) return 'over-cap';
+      return { status: 200, etag: res.headers.get('etag'), text };
+    })());
+  } finally {
+    deadline.close();
+  }
+}
 
 /** D-3209: reads `res`'s body under `CATALOGUE_BODY_MAX_BYTES`. A declared
  *  `content-length` over the cap refuses without reading a byte; otherwise the
@@ -227,6 +329,9 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   /** The ETag of the last listing the store ACCEPTED — never of one it refused,
    *  or a 304 would pin the catalogue to a listing that was never written. */
   let etag: string | null = null;
+  /** D-3215: the LATEST probe's own ETag — independent of the listing's; a
+   *  304 here says nothing about the listing and vice versa. */
+  let latestEtag: string | null = null;
   let requestedAt: number | null = null;
   let inflight: Promise<CatalogueState> | null = null;
   /** B6: a store throw inside a poll is otherwise silent — `lastError` says
@@ -234,6 +339,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  wedged store does not spam the log every 30 minutes; reset on the next
    *  answered poll, so a NEW cause after a recovery is warned again. */
   let lastWarnedStoreError: string | null = null;
+  /** D-3215: the latest-release probe's own dedupe key. Ruled: a failed
+   *  latest fetch never touches `lastError`/`lastOkAt` (those follow the
+   *  LISTING alone) — it only warns, once per distinct cause, re-armed the
+   *  next time the probe answers (200 applied, 304, or 404 — all three are
+   *  answers, not failures). */
+  let lastWarnedLatestError: string | null = null;
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -247,41 +358,24 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     lastWarnedStoreError = null;   // B6: a recovery re-arms the next distinct cause
     return snapshot();
   };
+  const warnLatest = (cause: string): void => {
+    if (cause === lastWarnedLatestError) return;
+    console.warn(`ccrc-server: update catalogue latest-release probe failed (${cause})`);
+    lastWarnedLatestError = cause;
+  };
+  const latestAnswered = (): void => { lastWarnedLatestError = null; };
 
-  async function pollOnce(now: number): Promise<CatalogueState> {
-    // D-3209: an unusable base is exactly as unusable as a missing release
-    // source — same reason, no request, `requestedAt` untouched.
-    if (baseProblem !== null || validatedBase === null) return failed(now, 'no-release-source');
-    const source = deps.source;
-    if (!source.ok) return failed(now, 'no-release-source');
+  async function pollListing(now: number, source: { owner: string; repo: string }): Promise<CatalogueState> {
     // B2: built from `validatedBase` — the SAME trimmed/normalised base the
     // gate accepted — never `deps.apiUrl` raw.
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
-    const headers: Record<string, string> = { accept: 'application/vnd.github+json', 'user-agent': USER_AGENT };
-    if (sentEtag !== null) headers['if-none-match'] = sentEtag;
-    const deadline = openPoolReadDeadline(timeoutMs);
-    if (deadline === null) return failed(now, 'no-egress');   // unreachable: timeoutMs > 0
     requestedAt = now;
-    let answer: RawAnswer | null;
-    try {
-      // The body is read INSIDE the race: `close()` aborts the controller, and
-      // a body still streaming after it would be cut. A throw (refused, reset,
-      // DNS) and the deadline both arrive as null — both are no egress.
-      answer = await deadline.race((async (): Promise<RawAnswer> => {
-        const res = await fetch(url, { headers, signal: deadline.signal });
-        if (res.status !== 200) return { status: res.status, etag: res.headers.get('etag'), text: '' };
-        // D-3209: capped and streamed — never a bare `res.text()`.
-        const text = await readCappedBody(res);
-        if (text === null) return 'over-cap';
-        return { status: 200, etag: res.headers.get('etag'), text };
-      })());
-    } finally {
-      deadline.close();
-    }
+    const answer = await fetchOne(url, sentEtag, timeoutMs);
     if (answer === null) return failed(now, 'no-egress');
     if (answer === 'over-cap') return failed(now, 'malformed');   // D-3209
+    if (answer === 'redirect') return failed(now, 'redirect');    // F9
     // A 304 is an answer only to a question that carried an ETag; unsolicited,
     // nothing was held to be "not modified".
     if (answer.status === 304) return sentEtag === null ? failed(now, httpReason(304)) : answered(now);
@@ -320,6 +414,62 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (!applied.ok) return failed(now, 'malformed');
     etag = answer.etag;
     return answered(now);
+  }
+
+  /**
+   * D-3215: the second, independent conditional GET — GitHub's own answer to
+   * "what is the current stable release", which is not a function of any
+   * page window. Never touches `lastOkAt`/`lastError` (those are the
+   * LISTING's alone, per the ruling in the module docstring); every failure
+   * is a `console.warn`, deduped on its cause and re-armed on the next
+   * answer. A 404 (no stable release exists yet) and a 304 (unchanged) are
+   * both answers, never failures.
+   */
+  async function pollLatest(now: number, source: { owner: string; repo: string }): Promise<void> {
+    const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/releases/latest`;
+    const sentEtag = latestEtag;
+    const answer = await fetchOne(url, sentEtag, timeoutMs);
+    if (answer === null) return warnLatest('no-egress');
+    if (answer === 'over-cap') return warnLatest('over-cap');
+    if (answer === 'redirect') return warnLatest('redirect');
+    if (answer.status === 404) return latestAnswered();   // an answer: no stable release yet
+    if (answer.status === 304) {
+      if (sentEtag === null) return warnLatest(httpReason(304));
+      return latestAnswered();
+    }
+    if (answer.status !== 200) return warnLatest(httpReason(answer.status));
+    let body: unknown;
+    try {
+      body = JSON.parse(answer.text);
+    } catch {
+      return warnLatest('malformed-json');
+    }
+    const row = parseReleaseElement(body);
+    if (row === null) return warnLatest('malformed-element');
+    let applied: ApplyReleaseListingResult;
+    try {
+      // D-3215: the ONE catalogue writer, under 'single' coverage — no
+      // absence judgment, so this call can never yank another release.
+      applied = deps.store.applyReleaseListing([row], now, 'single');
+    } catch (err) {
+      return warnLatest(err instanceof Error ? err.message : String(err));
+    }
+    if (!applied.ok) return warnLatest(`store-refused-${applied.why}`);
+    latestEtag = answer.etag;   // never advanced on any failure arm above
+    latestAnswered();
+  }
+
+  async function pollOnce(now: number): Promise<CatalogueState> {
+    // D-3209: an unusable base is exactly as unusable as a missing release
+    // source — same reason, no request, `requestedAt` untouched.
+    if (baseProblem !== null || validatedBase === null) return failed(now, 'no-release-source');
+    const source = deps.source;
+    if (!source.ok) return failed(now, 'no-release-source');
+    const listingState = await pollListing(now, source);
+    // D-3215: independent of the listing's outcome, and never allowed to
+    // change what pollListing already decided.
+    await pollLatest(now, source);
+    return listingState;
   }
 
   return {

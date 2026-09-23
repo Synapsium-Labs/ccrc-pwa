@@ -29,6 +29,7 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { resolveNodeIntent, type EligibilityRow, type ResolveInput } from '../src/update/resolve.js';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 const SOURCE: ReleaseSourceRead = { ok: true, owner: 'fixture-owner', repo: 'fixture-repo', from: 'env' };
@@ -109,14 +110,21 @@ describe('parseReleaseListing — one GitHub element, one row (design §7)', () 
       rel('v0.0.3', '2026-09-20T10:00:00Z', { prerelease: 'yes' }), // never defaulted to stable
       rel('v0.0.4', 'not a date'),
       rel('v0.0.5', '2026-09-20T10:00:00Z', { assets: 'none' }),
+      // F10 (fix round 1, D-3216): neither of these two skips the ELEMENT any
+      // more — the release stays listed with tarballUrl withheld. See the
+      // `safeDownloadUrl` describe below for the dedicated pins.
       rel('v0.0.6', '2026-09-20T10:00:00Z', { assets: [] }),       // no tarball asset
       rel('v0.0.7', '2026-09-20T10:00:00Z', {
         assets: [{ name: 'ccrc-v0.0.7.tar.gz', browser_download_url: 'javascript:alert(1)' }],
       }),
       good,
     ]);
-    expect(p!.rows.map((r) => r.tag)).toEqual(['v0.0.9']);
-    expect(p!.skipped).toBe(12);
+    expect(p!.rows.map((r) => [r.tag, r.tarballUrl])).toEqual([
+      ['v0.0.6', null],
+      ['v0.0.7', null],
+      ['v0.0.9', 'https://example.invalid/releases/download/v0.0.9/ccrc-v0.0.9.tar.gz'],
+    ]);
+    expect(p!.skipped).toBe(10);
   });
 
   it('a body that is not an array is null — the poll reads it as malformed', () => {
@@ -168,6 +176,95 @@ describe('parseReleaseListing — one GitHub element, one row (design §7)', () 
   });
 });
 
+describe('safeDownloadUrl / F10 (fix round 1, D-3216) — a bad download URL withholds the field, never the release', () => {
+  const withUrl = (url: unknown) => rel('v0.0.9', '2026-09-20T10:00:00Z', {
+    assets: [{ name: 'ccrc-v0.0.9.tar.gz', browser_download_url: url }],
+  });
+
+  it('a plain http URL is refused: NULL, release still listed', () => {
+    const p = parseReleaseListing([withUrl('http://example.invalid/ccrc-v0.0.9.tar.gz')]);
+    expect(p!.rows).toEqual([expect.objectContaining({ tag: 'v0.0.9', tarballUrl: null })]);
+    expect(p!.skipped).toBe(0);
+  });
+
+  it('a C0 control character in the URL is refused: NULL', () => {
+    const p = parseReleaseListing([withUrl('https://example.invalid/ccrc\tv0.0.9.tar.gz')]);
+    expect(p!.rows[0]!.tarballUrl).toBeNull();
+  });
+
+  it('a non-ASCII byte in the URL is refused: NULL', () => {
+    const p = parseReleaseListing([withUrl('https://example.invalid/ccrc-v0.0.9-café.tar.gz')]);
+    expect(p!.rows[0]!.tarballUrl).toBeNull();
+  });
+
+  it('userinfo in the URL is refused: NULL', () => {
+    const p = parseReleaseListing([withUrl('https://user:pw@example.invalid/ccrc-v0.0.9.tar.gz')]);
+    expect(p!.rows[0]!.tarballUrl).toBeNull();
+  });
+
+  it('a good https URL is kept', () => {
+    const p = parseReleaseListing([withUrl('https://example.invalid/ccrc-v0.0.9.tar.gz')]);
+    expect(p!.rows[0]!.tarballUrl).toBe('https://example.invalid/ccrc-v0.0.9.tar.gz');
+  });
+
+  // Mutation: accepting http again (reverting to the old `DOWNLOAD_URL` regex)
+  // reds the first case — measured by hand: swapping `safeDownloadUrl`'s
+  // `u.protocol !== 'https:'` for the old `/^https?:\/\/\S+$/.test` accepts
+  // the http case above and turns its `tarballUrl` non-null.
+});
+
+describe('F11 (fix round 1, D-3216) — the tag ingress bound, on top of isReleaseTag', () => {
+  it('a leading zero in any component but a bare 0 is skipped: v0.0.010, v01.2.3', () => {
+    const p = parseReleaseListing([
+      rel('v0.0.010', '2026-09-20T10:00:00Z'),
+      rel('v01.2.3', '2026-09-20T10:01:00Z'),
+      rel('v0.0.9', '2026-09-20T10:02:00Z'),
+    ]);
+    expect(p!.rows.map((r) => r.tag)).toEqual(['v0.0.9']);
+    expect(p!.skipped).toBe(2);
+  });
+
+  it('a listing with both v0.0.10 and v0.0.010 stores one row — the malformed spelling never reaches the store', () => {
+    const p = parseReleaseListing([
+      rel('v0.0.10', '2026-09-20T10:00:00Z'),
+      rel('v0.0.010', '2026-09-20T10:01:00Z'),
+    ]);
+    expect(p!.rows.map((r) => r.tag)).toEqual(['v0.0.10']);
+    expect(p!.skipped).toBe(1);
+  });
+
+  it('a tag over 64 bytes is skipped; one at exactly 64 is kept', () => {
+    const at64 = `v${'1'.repeat(59)}.0.0`;
+    const at65 = `v${'1'.repeat(60)}.0.0`;
+    expect(Buffer.byteLength(at64, 'utf8')).toBe(64);
+    expect(Buffer.byteLength(at65, 'utf8')).toBe(65);
+    const p = parseReleaseListing([
+      rel(at64, '2026-09-20T10:00:00Z'),
+      rel(at65, '2026-09-20T10:01:00Z'),
+    ]);
+    expect(p!.rows.map((r) => r.tag)).toEqual([at64]);
+    expect(p!.skipped).toBe(1);
+  });
+
+  it('v0.0.0 and v10.20.30 are kept — a bare 0 component and a multi-digit component are not leading zeros', () => {
+    const p = parseReleaseListing([
+      rel('v0.0.0', '2026-09-20T10:00:00Z'),
+      rel('v10.20.30', '2026-09-20T10:01:00Z'),
+    ]);
+    expect(p!.rows.map((r) => r.tag)).toEqual(['v0.0.0', 'v10.20.30']);
+    expect(p!.skipped).toBe(0);
+  });
+
+  // Mutations (measured by hand, each reds against this describe):
+  // (1) removing the leading-zero rule from `isIngestibleReleaseTag`
+  //     (`return true` in place of the `.every(...)`) admits v0.0.010 and
+  //     v01.2.3 above — the first two cases in this describe go from
+  //     skipped=2/1 to skipped=0.
+  // (2) removing the byte-length bound (dropping the `Buffer.byteLength`
+  //     check) keeps the 65-byte tag — the third case's skipped count goes
+  //     from 1 to 0.
+});
+
 describe('apiBaseProblem — validated once, at poller creation (D-3209, fix round 1 finding 3)', () => {
   it('a table of bases: https anywhere is fine; http only to a loopback host', () => {
     const cases: [string, boolean][] = [
@@ -191,12 +288,46 @@ describe('apiBaseProblem — validated once, at poller creation (D-3209, fix rou
     }
   });
 
-  it('B1: a credentials-bearing base is refused with the password redacted from the message', () => {
+  it('B1/F3: a credentials-bearing base is refused with NO userinfo at all in the message — scheme and host only', () => {
     const problem = apiBaseProblem('https://user:hunter2@api.example.com');
     expect(problem).not.toBeNull();
     expect(problem).not.toMatch(/hunter2/);
     expect(problem).not.toMatch(/user:hunter2/);
-    expect(problem).toContain('***@api.example.com');
+    expect(problem).not.toContain('***@');   // F3: never a working URL, redacted or not
+    expect(problem).toBe('apiUrl refused (base-url-credentials): https://api.example.com');
+  });
+
+  // F3 (fix round 1, review run 134): the reviewer's four inputs. Each must
+  // reach the log with neither the password fragment nor a `user:`/`u:`
+  // prefix off the RAW input — checked as the exact contiguous fragments the
+  // input carries, never the single letter-pair `se` alone, which also
+  // occurs inside the unrelated, fixed refusal words `base-url-unparseable`
+  // and `base-url-insecure` and would be a false positive. Three of the four
+  // fail to parse as a URL at all (the userinfo's own `/`, `?` or `#`
+  // terminates the authority before an `@` is found, so `new URL` throws
+  // "Invalid URL" on an unparseable host:port), so `apiBaseProblem` prints
+  // the refusal word alone, no URL fragment at all.
+  it('F3: none of the reviewer\'s four inputs ever put the secret, or a user-looking prefix, in the message', () => {
+    const cases: [string, RegExp[]][] = [
+      ['https://user:se/cret@api.example.invalid', [/se\/cret/, /user:/]],
+      ['https://user:se?cret@api.example.invalid', [/se\?cret/, /user:/]],
+      ['https://user:se#cret@api.example.invalid', [/se#cret/, /user:/]],
+      ['u:pw@host', [/pw@/, /u:pw/]],
+    ];
+    for (const [raw, bad] of cases) {
+      const problem = apiBaseProblem(raw);
+      expect(problem, raw).not.toBeNull();
+      expect(problem, raw).not.toBe(raw);         // never the raw input verbatim
+      for (const rx of bad) expect(problem, `${raw} -> ${problem}`).not.toMatch(rx);
+    }
+    // The first three are unparseable outright (the userinfo's delimiter cuts
+    // the authority before any `@`): no scheme/host suffix at all.
+    expect(apiBaseProblem('https://user:se/cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
+    expect(apiBaseProblem('https://user:se?cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
+    expect(apiBaseProblem('https://user:se#cret@api.example.invalid')).toBe('apiUrl refused (base-url-unparseable)');
+    // The fourth parses (an opaque, non-`http(s)` scheme) but names no real
+    // host — hostname is '' — so the suffix is withheld too.
+    expect(apiBaseProblem('u:pw@host')).toBe('apiUrl refused (base-url-insecure)');
   });
 });
 
@@ -243,29 +374,46 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
   let seen: { method: string; url: string; headers: IncomingMessage['headers'] }[];
   /** What the fixture answers, one entry per request, in order. */
   let script: Answer[];
+  /** D-3215: the LATEST probe (`/releases/latest`) is a SECOND, independent
+   *  request every poll now sends, routed by URL into its own queue and its
+   *  own `seen` log — so `script`/`seen` above keep meaning "the listing"
+   *  for every pre-existing case, unedited. Unscripted, it defaults to 404
+   *  ("no stable release yet"), which is an ANSWER (D-3215): no store call,
+   *  no warn, nothing for an old assertion to see. */
+  let scriptLatest: Answer[];
+  let seenLatest: { method: string; url: string; headers: IncomingMessage['headers'] }[];
+
+  const respond = (res: ServerResponse, a: Exclude<Answer, 'hang'>): void => {
+    const headers: Record<string, string> = { 'content-type': 'application/json', ...(a.headers ?? {}) };
+    if (a.etag !== undefined) headers.etag = a.etag;
+    if (a.chunkedBody !== undefined) {
+      // Real chunked transfer-encoding: no content-length, written in 64
+      // KiB pieces so the reader's running count actually crosses the cap
+      // mid-stream rather than in one buffered `.end()` call.
+      res.writeHead(a.status, headers);
+      const text = JSON.stringify(a.chunkedBody);
+      const CHUNK = 65_536;
+      for (let i = 0; i < text.length; i += CHUNK) res.write(text.slice(i, i + CHUNK));
+      res.end();
+      return;
+    }
+    res.writeHead(a.status, headers);
+    res.end(a.body === undefined ? '' : typeof a.body === 'string' ? a.body : JSON.stringify(a.body));
+  };
 
   beforeEach(async () => {
     seen = [];
     script = [];
+    seenLatest = [];
+    scriptLatest = [];
     server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      seen.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers });
-      const a = script.shift() ?? { status: 500, body: 'fixture: no answer scripted' };
+      const isLatest = (req.url ?? '').endsWith('/releases/latest');
+      const entry = { method: req.method ?? '', url: req.url ?? '', headers: req.headers };
+      (isLatest ? seenLatest : seen).push(entry);
+      const queue = isLatest ? scriptLatest : script;
+      const a = queue.shift() ?? (isLatest ? { status: 404 } : { status: 500, body: 'fixture: no answer scripted' });
       if (a === 'hang') return;   // never answered — the deadline's case
-      const headers: Record<string, string> = { 'content-type': 'application/json', ...(a.headers ?? {}) };
-      if (a.etag !== undefined) headers.etag = a.etag;
-      if (a.chunkedBody !== undefined) {
-        // Real chunked transfer-encoding: no content-length, written in 64
-        // KiB pieces so the reader's running count actually crosses the cap
-        // mid-stream rather than in one buffered `.end()` call.
-        res.writeHead(a.status, headers);
-        const text = JSON.stringify(a.chunkedBody);
-        const CHUNK = 65_536;
-        for (let i = 0; i < text.length; i += CHUNK) res.write(text.slice(i, i + CHUNK));
-        res.end();
-        return;
-      }
-      res.writeHead(a.status, headers);
-      res.end(a.body === undefined ? '' : typeof a.body === 'string' ? a.body : JSON.stringify(a.body));
+      respond(res, a);
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -366,18 +514,21 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
   });
 
   // D-3206: GitHub still LISTS v0.0.1 on the
-  // second poll, but its element has lost its tarball asset, so the parser
-  // skips it and the store never sees it. The row reads absent for that poll
-  // and is yanked, which is fail-closed: it was not upserted, so its columns
-  // are the first poll's. It is kept, not rewritten, and it comes back on the
-  // first poll that parses it.
+  // second poll, but its element's `prerelease` flag is a string (F10, fix
+  // round 1: a lost/malformed tarball asset no longer skips the element —
+  // see the parser-level cases below — so a genuinely structural defect is
+  // what triggers a skip now), so the parser skips it and the store never
+  // sees it. The row reads absent for that poll and is yanked, which is
+  // fail-closed: it was not upserted, so its columns are the first poll's.
+  // It is kept, not rewritten, and it comes back on the first poll that
+  // parses it.
   it('a known release whose element is skipped is yanked for that poll, and comes back when it parses again', async () => {
     const { store, port, calls } = fixture();
     const p = poller(port);
     const v1 = rel('v0.0.1', '2026-09-01T00:00:00Z');
     script = [
       { status: 200, etag: '"e1"', body: [rel('v0.0.2', '2026-09-02T00:00:00Z'), v1] },
-      { status: 200, etag: '"e2"', body: [rel('v0.0.2', '2026-09-02T00:00:00Z'), { ...v1, assets: [] }] },
+      { status: 200, etag: '"e2"', body: [rel('v0.0.2', '2026-09-02T00:00:00Z'), { ...v1, prerelease: 'yes' }] },
       { status: 200, etag: '"e3"', body: [rel('v0.0.2', '2026-09-02T00:00:00Z'), v1] },
     ];
     await p.poll(1000);
@@ -653,6 +804,141 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     expect(seen).toHaveLength(0);
     expect(calls).toHaveLength(0);
     expect(p.lastRequestAt()).toBeNull();
+  });
+
+  // F9 (fix round 1): `redirect: 'error'` on the LISTING fetch. Mutation
+  // (measured by hand): removing `redirect: 'error'` from the listing's
+  // `fetch(...)` call makes node's `fetch` FOLLOW the 302 instead — this
+  // case reds because `seen` gets no second entry from this fixture (the
+  // follow goes to `https://example.invalid/`, off this loopback server)
+  // and the poll instead resolves `no-egress` (or hangs past the deadline),
+  // never `redirect`.
+  it('F9: a redirect on the listing is its own reason — never folded into no-egress — no row written, lastOkAt unmoved', async () => {
+    const { store, port } = fixture();
+    const p = poller(port);
+    script = [{ status: 302, headers: { location: 'https://example.invalid/' } }];
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'redirect' } });
+    expect(store.releases()).toEqual([]);
+  });
+
+  it('F9: a redirect on the latest probe only warns — never lastError, never lastOkAt', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { port } = fixture();
+      const p = poller(port);
+      script = [{ status: 200, etag: '"eL"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
+      scriptLatest = [{ status: 302, headers: { location: 'https://example.invalid/' } }];
+      expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('redirect'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  describe('D-3215 — the latest-release probe (an off-page stable is not silently unresolvable)', () => {
+    it('an off-page stable becomes a listed row via the latest probe, and resolve gives \'*\' -> that stable', async () => {
+      const { store, port } = fixture();
+      const p = poller(port);
+      // A full page of 30 dev prereleases, all newer than the stable release,
+      // which never appears on it (§7's window; the coordinator's measured facts).
+      const listingBody = Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.1.${i + 1}`, new Date(Date.UTC(2026, 8, 2, 0, i)).toISOString(), { prerelease: true }));
+      script = [{ status: 200, etag: '"eL"', body: listingBody }];
+      scriptLatest = [{ status: 200, etag: '"eS"', body: rel('v0.0.1', '2026-08-01T00:00:00Z') }];
+      expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+      const releases = store.releases();
+      const stableRow = releases.find((r) => r.tag === 'v0.0.1');
+      expect(stableRow).toMatchObject({ tag: 'v0.0.1', channel: 'stable', yanked: false });
+
+      const eligibility: EligibilityRow[] = releases.map((r) => ({
+        tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked,
+      }));
+      const input: ResolveInput = {
+        // A floor below the off-page stable — 'v0.0.0', not measured on this
+        // node's `~/.ccrc/floor` (`floorRead: 'absent'` = unconstrained) —
+        // so the stable release resolves as strictly newer than it.
+        currentVersion: 'v0.0.0', highestVersion: null, floorRead: 'absent',
+        nodeIntent: null, fleetIntent: { channel: 'stable', pinnedTag: null, auto: 'off' },
+        releases: eligibility, refusedByThisNode: new Set<string>(),
+      };
+      expect(resolveNodeIntent(input).desiredStable).toBe('v0.0.1');
+
+      // The pin: a LATER full-coverage-window listing that still omits the
+      // stable tag must not yank it — `since` (the oldest publishedAt in a
+      // `newest-page` listing) sits above the stable's own, older, publishedAt.
+      const listingBody2 = Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.1.${i + 31}`, new Date(Date.UTC(2026, 8, 3, 0, i)).toISOString(), { prerelease: true }));
+      script = [{ status: 200, etag: '"eL2"', body: listingBody2 }];
+      scriptLatest = [{ status: 304, etag: '"eS"' }];
+      await p.poll(2000);
+      expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ tag: 'v0.0.1', yanked: false });
+    });
+
+    it('a 304 on the latest probe writes nothing, and it carries its OWN ETag — independent of the listing\'s', async () => {
+      const { store, port, calls } = fixture();
+      const p = poller(port);
+      script = [
+        { status: 200, etag: '"eL1"', body: [rel('v0.0.5', '2026-09-05T00:00:00Z')] },
+        { status: 304, etag: '"eL1"' },
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eS1"', body: rel('v0.0.5', '2026-09-05T00:00:00Z') },
+        { status: 304, etag: '"eS1"' },
+      ];
+      await p.poll(1000);
+      expect(calls).toHaveLength(2);   // the listing AND the latest, both applied
+      const before = store.releases();
+      await p.poll(2000);
+      expect(calls).toHaveLength(2);   // neither request wrote again
+      expect(store.releases()).toEqual(before);
+      expect(seenLatest[1]!.headers['if-none-match']).toBe('"eS1"');
+      expect(seen[1]!.headers['if-none-match']).toBe('"eL1"');
+    });
+
+    it('a 404 on the latest probe is an ANSWER, not an error — lastError stays null, lastOkAt moves with the listing', async () => {
+      const { port } = fixture();
+      const p = poller(port);
+      script = [{ status: 200, etag: '"eL"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
+      scriptLatest = [{ status: 404 }];
+      expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+    });
+
+    it('a failed latest fetch with an OK listing: lastOkAt moves, lastError null, ONE warn per distinct cause, re-armed by the next latest success', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const { port } = fixture();
+        const p = poller(port);
+        script = [
+          { status: 200, etag: '"eL1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+          { status: 200, etag: '"eL2"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+          { status: 200, etag: '"eL3"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+        ];
+        scriptLatest = [
+          { status: 500 },
+          { status: 500 },
+          { status: 200, etag: '"eS"', body: rel('v0.0.2', '2026-09-02T00:00:00Z') },
+        ];
+        expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+        expect(await p.poll(2000)).toEqual({ lastOkAt: 2000, lastError: null });
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('http-500'))).toHaveLength(1);
+        await p.poll(3000);   // the latest answers 200 this time — re-arms the dedupe
+        scriptLatest = [{ status: 500 }];
+        await p.poll(4000);
+        expect(warn.mock.calls.filter((c) => String(c[0]).includes('http-500'))).toHaveLength(2);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // Mutations (measured by hand, each reds a case above):
+    // (1) dropping the `pollLatest` call in `pollOnce` reds the off-page pin
+    //     (the store never learns v0.0.1) and the 304/ETag case (no second
+    //     `seenLatest` entry at all).
+    // (2) passing 'complete' (a yanking coverage) instead of 'single' to
+    //     `applyReleaseListing` for the latest row reds the off-page pin's
+    //     first assertion outright: a 'complete' listing of ONE row would
+    //     mark every OTHER known release yanked = 1, since none of the 30
+    //     dev prereleases already in the store are named in it.
   });
 });
 

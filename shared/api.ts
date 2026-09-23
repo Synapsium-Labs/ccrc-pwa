@@ -8339,8 +8339,13 @@ export function validCapWords(words: readonly unknown[]): string[] | null {
 }
 
 /** Why the last catalogue poll did not land (§7). `http-<status>` carries the
- *  status the listing answered with. */
-export type CatalogueErrorReason = 'no-egress' | 'rate-limited' | `http-${number}` | 'malformed' | 'no-release-source';
+ *  status the listing answered with. `redirect` (fix round 1, F9): the
+ *  listing fetch sends `redirect: 'error'`, so a 3xx answers a thrown
+ *  `TypeError` rather than a status — named on its own, never folded into
+ *  the generic `no-egress` a network failure gets, because a redirect is a
+ *  server telling this box to ask somewhere else, not silence. */
+export type CatalogueErrorReason =
+  'no-egress' | 'rate-limited' | `http-${number}` | 'malformed' | 'no-release-source' | 'redirect';
 
 /** One node's refusal of one release, rolled up for DISPLAY (`node_release_refusals`).
  *  `by` is the refusing node's id. Never a predicate: eligibility reads the
@@ -8424,7 +8429,8 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    duplicate-tag — one listing named a tag twice; the whole listing is refused.
  *    bad-row       — a listed row the table cannot store: a channel outside
  *                    `UpdateChannel`, a non-integer `publishedAt`, an empty
- *                    `tarballUrl`. Refused before the transaction opens.
+ *                    (never `null`, D-3216) `tarballUrl`. Refused before the
+ *                    transaction opens.
  *    empty-listing — `[]` while releases are known: a transient answer must
  *                    not yank the catalogue.
  *    unknown-node  — no `nodes` row carries this id.
