@@ -18,7 +18,7 @@ removed on 2026-09-10 was not.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **in scoped review** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178 at `76594fec` (merged main `a3a93b41` in); reviews 144, 145 (`ccrc-pwa-warm-ridge`) |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **tight fix round** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178; reviews 144, 145 (145: R28/R29 as ruled; a null-tip fail-open found) |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
@@ -43,6 +43,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-23 — scoped review 145 (`76594fec`): R28/R29 as ruled; one shipped fail-open; one tight round.**
+  - **The panel.** 28 agents; 7 findings survived 3–0 and 1 was refuted. 11/11 mutations red, suites green, the
+    remerge-diff empty.
+  - **The fail-open that earned the round.** A marked child whose registered branch no longer resolves (renamed
+    in place) gives ccd a `tip:null` line with no rows. The server read that as `unspent`, and the bind was
+    permitted. It predates the fix round but is wave 2's own code, so as committed it is a shipped-behaviour
+    defect.
+  - **Fixed in the round, as one departure:** that fail-open, plus malformed-head lines answering `unmeasured`.
+  - **Bookkeeping under one number:** review 144's ruled minors, which changed plan-prescribed text.
+  - **Four small test and prose leftovers** are fixed now rather than carried into the destructive wave.
+  - **Numbers.** Two new, 3350 and 3351.
 - **2026-09-23 — wave 2's fix round done (`76594fec`); scoped review 145; wave 3 pre-flight started.**
   - **The round.** Every ruling applied, and each fix group got its own review. The R28 measurement passed on
     the real read path: ccd lists `gh pr list --head <branch> --state all` with no base filter.
