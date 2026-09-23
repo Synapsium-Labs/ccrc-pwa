@@ -25,6 +25,8 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
+| `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one the server minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
+| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. Nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
 | `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
@@ -63,6 +65,11 @@ a `400 bad-request` whose `detail` names `homeProject`.
    `sessionId` at all and takes wave 1's own fresh-spawn path in the target
    project. Naming a session whose workspace belongs to another project is
    refused `project-mismatch`, `by:` that project, before any run row exists.
+
+   **And it is PR-FREE.** A workspace the server minted for a run is a CHILD,
+   and a child carries at most one PR: once its branch has had one, naming it
+   here is refused `workspace-spent` (table above), whatever the project. See
+   §5, "One PR per child".
 
    **Every open carries the home**, on every wave of the programme:
    `"homeProject":"<the home project>"` in the same body. The response answers
@@ -704,6 +711,19 @@ whole time, which is the only prevention this ordering rule buys.
    program now has two open runs (this wave's, still `working`/
    `awaiting-review`/`merging`, and the new `planned` one), so it can never
    read as zero between waves.
+
+   **One PR per child — the PR decides `sessionId`, not the project.** A
+   workspace the server minted for a run is a CHILD, and a child carries at
+   most one PR. If this producer's workspace opened a PR — the ordinary case
+   for a wave that shipped code — it is SPENT: open wave N+1 WITHOUT its
+   `sessionId`, even in the same project, and close the producer as the
+   cross-project arm below closes it (`final:true`, then require
+   `released:true`). The same-project arm is for a producer whose workspace
+   opened no PR — a research or measurement wave — and only for that. Naming a
+   spent workspace is refused `workspace-spent`, with `pr` naming the PR, and
+   nothing is opened; `spent-unmeasured` means the server could not read the
+   evidence either way — retry the same open, and do not drop `sessionId` on
+   its account.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open

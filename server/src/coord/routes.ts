@@ -29,6 +29,7 @@ import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { queueSystemMail } from './rundefs.js';
+import { childBindGate } from './childBind.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
@@ -1328,6 +1329,26 @@ export function registerCoordRoutes(
     const workerOf = coord.openClaimantsOf(claimedBy).find((c) => c !== claimedBy);
     if (workerOf !== undefined) {
       return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });
+    }
+
+    // Rule 3 (child-reclamation spec §5.4): a CHILD whose branch has had a PR
+    // may not take another run. HERE, for F1's reason: a refusal must leave no
+    // `planned` orphan and place no hold, so it runs before `openRun` and the
+    // hold below. After every DB-only refusal above, because this is the
+    // handler's first awaited read of the registry and, for a child with no PR
+    // on record, a live `pr-state` round trip — a cheaper refusal is never
+    // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
+    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    // record — a workspace with no marker costs one registry read. The two
+    // codes are spelled here, not forwarded from the verdict: `mail-routes.
+    // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
+    if (typeof sessionId === 'string') {
+      const gate = await childBindGate(deps, sessionId);
+      if (!gate.ok) {
+        return gate.code === 'workspace-spent'
+          ? reply.code(409).send({ ok: false, refused: 'workspace-spent', pr: gate.pr })
+          : reply.code(409).send({ ok: false, refused: 'spent-unmeasured', detail: gate.detail });
+      }
     }
 
     // The coordinator's project, from the REGISTRY — never `sessionProject`,

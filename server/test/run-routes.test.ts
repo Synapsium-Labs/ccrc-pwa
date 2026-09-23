@@ -1336,16 +1336,17 @@ describe('POST /api/runs/:id/dispatch', () => {
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    // Succeeds on the pause-marker's own read (call 1), fails on the very
-    // next one — this route's own registry read for the resumed session
-    // (call 2) — never a third: nothing else in this branch touches
-    // `io.readdir` before either of those two. `POST /api/runs`' own
-    // coordinator-project stamp read (Task 1) does NOT count against this:
+    // Succeeds on the open's child bind gate (call 1 — child-reclamation
+    // wave 2: `readSessionRecord` lists the registry once) and on the
+    // pause-marker's own read (call 2), fails on the very next one — this
+    // route's own registry read for the resumed session (call 3) — never a
+    // fourth: nothing else touches `io.readdir` before those. `POST /api/runs`'
+    // own coordinator-project stamp read (Task 1) does NOT count against this:
     // it reads `<claimedBy>.project` through `fieldMeasured`, a FILE read
     // (`io.readFileMeasured`), never `io.readdir` — this fixture only
     // overrides the latter.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
@@ -1481,9 +1482,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     // wave-N>=2 `registry-unmeasurable` case above this one already uses.
     // `POST /api/runs`' own coordinator-project stamp read (Task 1) does NOT
     // count against this: it reads `<claimedBy>.project` through
-    // `fieldMeasured`, a FILE read, never `io.readdir`.
+    // `fieldMeasured`, a FILE read, never `io.readdir`. The open's child bind
+    // gate DOES (child-reclamation wave 2: `readSessionRecord` lists the
+    // registry once), so the resumed session's own listing is the THIRD.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);

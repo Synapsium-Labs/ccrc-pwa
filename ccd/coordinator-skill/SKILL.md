@@ -161,7 +161,8 @@ code rides on is NOT the same on every route, and `ok:false` is the only
 field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
 `refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
-`claimed-by-another`, `not-dispatched`, `prhistory-unreadable`); those same
+`claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
+`workspace-spent`, `spent-unmeasured`); those same
 three routes put `unknown-run`, `bad-transition` and the re-measurement
 family (`stale-tip`, `pr-regressed`, `no-handoff-commit`) on `error` instead;
 `POST /api/mail` puts every one of its own refusals on `error`; and `POST /api/runs/:id/advance` puts **every**
@@ -173,7 +174,8 @@ client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
-`project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `hold-oversize`, `hold-invalid`,
+`project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
+`spent-unmeasured`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
 `unknown-item`, `item-terminal`. Their meanings are in
@@ -356,6 +358,12 @@ not after.
      zero open runs, and the server retires a program with none — silently
      breaking every `toId:'coordinator'` mail from that point on. Opening first
      never lets the count reach zero.
+     **One PR per child decides `sessionId` before the project does:** a
+     producer whose workspace opened a PR is SPENT, so wave N+1 opens without
+     its `sessionId` and the producer closes as the cross-project arm closes it,
+     even inside one project — naming a spent workspace is refused
+     `workspace-spent` (`references/wave-lifecycle.md` §5). The same-project arm
+     is for a producer whose workspace opened no PR.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,

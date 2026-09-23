@@ -5315,8 +5315,8 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Nineteen codes exist below today; the next new one would be the
- * twentieth, not the ninth.
+ * Twenty-one codes exist below today; the next new one would be the
+ * twenty-second, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
@@ -5378,13 +5378,28 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * `review-in-flight` — a second non-terminal review run named the same
  * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
  * invariant 3).
+ *
+ * `workspace-spent` and `spent-unmeasured` are rule 3 of the child-reclamation
+ * programme (spec 2026-09-22 §5.3-§5.4): a CHILD — a workspace the server
+ * minted for a run and marked `$REG/<id>.child` at creation — carries at most
+ * one PR, so once its branch has had one (open, draft, merged or closed) no
+ * further run may bind it. ONE gate emits both (`coord/childBind.ts`), at TWO
+ * doors: `POST /api/runs` naming a `sessionId`, before any row exists, and
+ * `POST /api/runs/:id/dispatch`'s resume arm, before `ensure`. Two codes and
+ * not one with a detail, because the caller acts on them in OPPOSITE
+ * directions: `workspace-spent` (with `pr`) says "drop the `sessionId`; a
+ * fresh child will be minted" — and at dispatch the server has already done
+ * so, reporting `unbound` — while `spent-unmeasured` (with `detail`) says "the
+ * evidence could not be read; retry, and do NOT drop the `sessionId` on this
+ * account", because an unreadable marker or ledger is not a spent one. A
+ * workspace with no marker is never refused by either.
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
-  | 'claimant-is-a-worker';
+  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5393,6 +5408,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
+  'workspace-spent': true, 'spent-unmeasured': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
