@@ -66,10 +66,11 @@ a `400 bad-request` whose `detail` names `homeProject`.
    project. Naming a session whose workspace belongs to another project is
    refused `project-mismatch`, `by:` that project, before any run row exists.
 
-   **And it is PR-FREE.** A workspace the server minted for a run is a CHILD,
-   and a child carries at most one PR: once its branch has had one, naming it
-   here is refused `workspace-spent` (table above), whatever the project. See
-   §5, "One PR per child".
+   **And it is PR-FREE.** A workspace carrying the `$REG/<id>.child` marker —
+   ordinarily one the server minted for a run — is a CHILD, and a MARKED child
+   carries at most one PR: once its branch has had one, naming it here is
+   refused `workspace-spent` (table above), whatever the project. An UNMARKED
+   producer is never refused this way. See §5, "One PR per child".
 
    **Every open carries the home**, on every wave of the programme:
    `"homeProject":"<the home project>"` in the same body. The response answers
