@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **last fix round** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175; review run 135 (six minors, no behaviour defect) |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **in scoped review** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 at `4c23fa25`; review 135 (six minors), scoped review 136 on `ccrc-pwa-plain-ridge` |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -39,10 +39,20 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (review **135**).
+Run ids: wave 1 = **131** (reviews **135**, **136**).
 
 ## Decisions & deviations
 
+- **2026-09-23 — the last fix round done; scoped review 136 dispatched.** Tip `4c23fa25`: two commits, `ccd/ccd`
+  untouched; row 4 re-spelled and measured red on exactly its one case (17/18); the `child-omitted` sentence
+  added; the census title narrowed; the count corrected. Touched suites and guards green; `suite: unrun`, as
+  ruled. Review 136 reads `31c11916..4c23fa25` on the held-out panel alone. Its first dispatch answered a bare
+  502: `ws-add` picked the slug `quiet-delta`, and `git worktree add` refused because a branch `ws/quiet-delta`
+  from 2026-09-17 still exists. Nothing was created (run still `planned`, no worktree, no registry row), so it
+  was retried once and landed on `plain-ridge`. **An observed ccd defect, outside this programme's scope:**
+  `_ws_slug_free` asks only the registry, never whether `ws/<slug>` exists as a branch, so a random pick can
+  collide with any leftover branch. Measured the same hour: 27 of this repo's 33 `ws/*` branches have no
+  registry row.
 - **2026-09-23 — review run 135 on `31c11916`: six minors, no shipped-behaviour defect; one last fix round.**
   Six Opus lenses (the held-out panel plus the plan's three), 51 agents, none died, nothing unexamined;
   whole-branch points (a)–(e) hold; suites green but for the carried `tmp-sweep` case and a `boot.test.ts`
