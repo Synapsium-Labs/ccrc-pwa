@@ -12124,6 +12124,22 @@ _upd_deadline_ms() {
   printf '%s' "$v"
 }
 
+# ── _upd_watchdog_probe_gap_s — D-3278's sampling interval ─────────────────
+# (fix round 1, reviewing Task 9). `CCRC_WATCHDOG_PROBE_GAP_S`, digits-only,
+# else a WARN on stderr and the default. Seconds, not milliseconds — this one
+# is `sleep`'s own argument, never compared against `update.json`, so it
+# carries no unit conversion. Zero is accepted (tests set it, so a suite does
+# not pay three real probe intervals per failing-probe case); the default is
+# five, well under the update's own gate window (90s) so three samples still
+# land inside one watchdog tick.
+_upd_watchdog_probe_gap_s() {
+  local v="${CCRC_WATCHDOG_PROBE_GAP_S:-}"
+  if [ -z "$v" ]; then printf '%s' 5; return 0; fi
+  if [[ "$v" =~ ^[0-9]+$ ]]; then printf '%s' "$v"; return 0; fi
+  echo "watchdog: CCRC_WATCHDOG_PROBE_GAP_S='$v' is not digits-only — using 5" >&2
+  printf '%s' 5
+}
+
 # ── ccrc watchdog — the server box's own measure of a self-update that died ─
 # (design 2026-09-20 §11; D-3227). W2's deadline sweep measures
 # a node's update from INSIDE the server process, and on a server-role box
@@ -12140,13 +12156,17 @@ _upd_deadline_ms() {
 #     shows a wedged box instead of silence;
 #   - stale with NO holder → RE-MEASURED — the stamp, the completed-install
 #     record, and the gate's own probe (`_upd_gate_probe`, the one the update
-#     itself ends with). Healthy → the report is rewritten `failed:
-#     abandoned…` and nothing moves: a hand-run `ccrc update` over a dropped
-#     ssh session leaves exactly this file on a box that finished. The one
-#     exception is healthy but NOT at the target, in a phase that may have
-#     moved the tree (`installing` onward). There nothing is written, and the
-#     next tick measures again. Only a FAILING probe runs
-#     `$HOME/.local/bin/ccrc rollback --from watchdog`.
+#     itself ends with, sampled three times against a single failure — D-3278
+#     below). Healthy → the report is rewritten `failed: abandoned…` and
+#     nothing moves: a hand-run `ccrc update` over a dropped ssh session
+#     leaves exactly this file on a box that finished. The one exception is
+#     healthy but NOT at the target, in a phase that may have moved the tree
+#     (`installing` onward). There nothing is written, and the next tick
+#     measures again. Only a box that FAILS all three probe samples, in a
+#     phase this update's own tree-move could have reached, and whose
+#     running stamp carries a version, runs
+#     `$HOME/.local/bin/ccrc rollback --from watchdog` (D-3276 below narrows
+#     this from "any failing probe").
 # THE LOCK IS HELD across the re-measure and the rewrite
 # (D-3267): probe-then-act would leave a window in
 # which an operator's fresh `ccrc update` takes the lock, writes `resolving`,
@@ -12157,11 +12177,22 @@ _upd_deadline_ms() {
 # rc 3, Task 2) — is neither a live holder nor a free lock, and is not acted
 # on (ruling R16, D-3250). The rollback runs in this oneshot's cgroup,
 # which a `ccrc.service` restart does not touch; the unit file bounds it.
-# Nothing here writes a report through `_ccrc_die`: `UPD_REPORTING` is never
-# set by this verb, so its refusals leave `update.json` exactly as they found
-# it. Every detail it writes is printable ASCII — `_upd_json_str` turns each
-# non-ASCII byte into `?`.
+# D-3277 (fix round 1): the report is read once more, right after `flock -n`
+# measures 0 or 1 and before either the wedged write or the re-measure/probe
+# decision — if `phase` or `updatedAt` moved since the FIRST (pre-lock) read,
+# this run stands down rather than act on a report that is no longer the one
+# it read. Nothing here writes a report through `_ccrc_die`: `UPD_REPORTING`
+# is never set by this verb, so its refusals leave `update.json` exactly as
+# they found it. Every detail it writes is printable ASCII — `_upd_json_str`
+# turns each non-ASCII byte into `?`.
 UPD_IN_FLIGHT_PHASES=(queued resolving fetching verifying backing-up installing restarting checking restoring)
+# D-3276 (fix round 1, reviewing Task 9): the phases `~/.ccrc/previous`
+# predates — `_upd_write_previous` runs at the END of `backing-up`, so a
+# report stale in any of these five still names the build BEFORE the one
+# running. Declared ONCE: both the D-3246 split (a box that passes the probe
+# but is not at its target) and the D-3276 split (a box that fails it) read
+# this ONE array, never a hand-copied case pattern.
+UPD_PRE_INSTALL_PHASES=(queued resolving fetching verifying backing-up)
 cmd_watchdog() {
   case "${1:-}" in -h|--help) usage; exit 0 ;; esac
   [ $# -eq 0 ] || _ccrc_usage_die "$1"
@@ -12215,6 +12246,11 @@ cmd_watchdog() {
     echo "watchdog: last update $phase — nothing to do"
     return 0
   fi
+  # D-3276: computed ONCE, off the one array above, and read by both splits
+  # further down — the passing-probe D-3246 split and the failing-probe
+  # D-3276 split.
+  local pre_install=0
+  for p in "${UPD_PRE_INSTALL_PHASES[@]}"; do [ "$p" = "$phase" ] && pre_install=1; done
   # THE UPDATER'S ATTRIBUTION SURVIVES every rewrite below: `_upd_phase`
   # stamps target, startedAt, from and pid from these globals, preset from
   # the report. Each is held to its shape first, because the file is data —
@@ -12267,6 +12303,27 @@ cmd_watchdog() {
     echo "watchdog: the update lock could not be measured — not acting"
     return 0
   fi
+  # D-3277 (fix round 1, reviewing Task 9): the report above was read BEFORE
+  # `flock -n`, never re-read under (or around) it. An updater that writes a
+  # terminal report and exits in that exact window would otherwise have its
+  # `done` clobbered or its finished box rolled back (`lrc` 0, below); the
+  # SAME window lets a wedge verdict, computed from the stale reading,
+  # overwrite a FRESH updater's live report (`lrc` 1, the wedged arm). One
+  # more `jq` read, always, before either: if `phase` or `updatedAt` moved
+  # since the first read, stand down rather than act on what has changed.
+  local out2="" phase2="" upd2=""
+  out2="$(jq -r '
+    try (
+      if type == "object" then "\(.phase)\n\(.updatedAt)" else empty end
+    ) catch empty' -- "$BOX_UPDATE_JSON" 2>/dev/null)" || out2=""
+  local -a f2=()
+  [ -n "$out2" ] && mapfile -t f2 <<< "$out2"
+  phase2="${f2[0]:-}"; upd2="${f2[1]:-}"
+  if [ "$phase2" != "$phase" ] || [ "$upd2" != "$upd" ]; then
+    _upd_unlock
+    echo "watchdog: the report moved while measuring — next tick"
+    return 0
+  fi
   local who="${pid:-unknown}"
   if [ "$lrc" -eq 1 ]; then
     _upd_unlock
@@ -12287,11 +12344,32 @@ cmd_watchdog() {
   # ONE line, so ONE entry in single-definition's census of this record's
   # readers. `-f` first: a FIFO or a directory at that path is not read.
   [ -f "$BOX_INSTALLED_FILE" ] && { IFS= read -r rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || true
-  # An unversioned stamp is asked for version "" — which `/health` can never
-  # answer (it carries `version` only for a versioned build), so that box
-  # reads as unhealthy here, and the rollback below then refuses `untagged`
-  # by name (Task 7) and is recorded: nothing moves on a box with no tag.
-  _upd_gate_probe "$role" "$cur_v" || prc=$?
+  # D-3276 (fix round 1): an unversioned stamp is probed for version "" —
+  # which `/health` never answers (it carries `version` only for a versioned
+  # build), so such a box reads unhealthy here. It is NEVER rolled back for
+  # it — `ccrc rollback`'s own `untagged` refusal (Task 7, D-3231) looks at
+  # `~/.ccrc/previous`, not at THIS box's stamp, so it would not catch a
+  # deploy.sh-placed (unversioned) box whose `previous` happens to name a
+  # tag; the check belongs here, below, before rollback is ever reached.
+  #
+  # D-3278: one probe sample must not decide an irreversible rollback — the
+  # update's own gate retries for 90s (`_upd_gate_probe`'s other caller,
+  # `cmd_update`), so a curl timeout or one `activating` sample mid-restart
+  # must not either. THREE failing samples, `CCRC_WATCHDOG_PROBE_GAP_S`
+  # apart (default 5s), decide a fail; any PASSING sample takes the passing
+  # arms below with THAT sample's own result — a probe that recovers on
+  # sample 2 is a pass, not a partial fail. Still under the held lock: the
+  # window D-3267 closes stays closed for the whole sampling run.
+  local gap attempt=1
+  gap="$(_upd_watchdog_probe_gap_s)"
+  while :; do
+    prc=0
+    _upd_gate_probe "$role" "$cur_v" || prc=$?
+    [ "$prc" -eq 0 ] && break
+    [ "$attempt" -ge 3 ] && break
+    sleep "$gap"
+    attempt=$(( attempt + 1 ))
+  done
   if [ "$prc" -eq 0 ]; then
     if [ -n "$tgt" ] && [ "$cur_v" = "$tgt" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
       _upd_phase failed "abandoned by its updater; box measures converged at $cur_v"
@@ -12316,24 +12394,40 @@ cmd_watchdog() {
       # before `_inst_stamp` and `_inst_enable`: killed there, the stamp and
       # the running ccrc.service are still the old build over a partly-new
       # tree. A terminal report would close this verb on that box for good.
-      case "$phase" in
-        queued|resolving|fetching|verifying|backing-up)
-          # The tree cannot have moved, so the box it left is the box it found.
-          _upd_phase failed "abandoned by its updater; box measures healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target}"
-          echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — recorded as abandoned; nothing was reverted (only a failing probe reverts)"
-          ;;
-        *)
-          # installing, restarting, checking, restoring, and any in-flight
-          # word added later (the fail-safe direction): NOTHING is written, so
-          # the next tick re-measures, and a failing probe then rolls back.
-          echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — its tree may be partly replaced; not acting, re-measuring every tick"
-          ;;
-      esac
+      # `pre_install` is the ONE array above, computed once.
+      if [ "$pre_install" -eq 1 ]; then
+        # The tree cannot have moved, so the box it left is the box it found.
+        _upd_phase failed "abandoned by its updater; box measures healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target}"
+        echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — recorded as abandoned; nothing was reverted (only a failing probe reverts)"
+      else
+        # installing, restarting, checking, restoring, and any in-flight
+        # word added later (the fail-safe direction): NOTHING is written, so
+        # the next tick re-measures, and a failing probe then rolls back.
+        echo "watchdog: stale report ($phase, ${age}s) on a box that answers healthy at ${cur_v:-an unversioned build}, not at ${tgt:-its target} — its tree may be partly replaced; not acting, re-measuring every tick"
+      fi
     fi
     _upd_unlock
     return 0
   fi
   local why="${UPD_GATE_WHY:-the probe gave no reason}" rrc=0
+  # D-3276: the failing-probe arm is phase-split too, on the SAME array —
+  # `~/.ccrc/previous` (the rollback's own baseline) is written at the END of
+  # `backing-up`, so a report stale in one of the five pre-install phases
+  # still names the build BEFORE this run, and a rollback there would undo
+  # an update this run never applied. And a box whose running stamp carries
+  # no version is never rolled back either — see the comment above the probe.
+  if [ "$pre_install" -eq 1 ]; then
+    _upd_phase failed "abandoned by its updater; box unhealthy ($why) and its tree never moved; nothing reverted"
+    echo "watchdog: stale report ($phase, ${age}s) fails its health probe ($why), but its tree never moved — recorded as abandoned; nothing was reverted"
+    _upd_unlock
+    return 0
+  fi
+  if [ -z "$cur_v" ]; then
+    _upd_phase failed "abandoned by its updater; box unhealthy ($why) on an unversioned tree; not reverting"
+    echo "watchdog: stale report ($phase, ${age}s) fails its health probe ($why) on an unversioned tree — recorded as abandoned; not reverting"
+    _upd_unlock
+    return 0
+  fi
   echo "watchdog: stale report ($phase, ${age}s) and the box fails its health probe ($why) — rolling back"
   # Released FIRST: the rollback takes the lock itself, and a child that
   # inherited this descriptor would pin it past this process (the D-2605

@@ -59,6 +59,11 @@ const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
 const REAL_NODE = realPath('node');
 const REAL_MV = realPath('mv');
+// D-3277 (fix round 1, Task 9): the real `flock`, so a shim placed ahead of
+// it on PATH can rewrite a file and then `exec` into the genuine binary —
+// the locking semantics the shim intercepts stay real, only the write in
+// between is fixture-controlled.
+const FLOCK = realPath('flock');
 
 interface Result { code: number; stdout: string; stderr: string }
 
@@ -125,6 +130,18 @@ function healthyBox(home: string): void {
     // same URL with `-w '\n%{http_code}'` and parses `build.sha`.
     'case "$url" in local://*|*/api/fleet/health) ;; */health)',
     '  [ -f "$HOME/fixture-health-down" ] && { echo "curl: (7) Failed to connect to ${url#http://}" >&2; exit 7; }',
+    // D-3278 (fix round 1, Task 9): a decrementing counter of FAILING probes
+    // — the watchdog's own three-sample gate needs a health answer that can
+    // fail N times then pass, told apart from `fixture-health-down` (which
+    // fails every call forever) and from `fixture-health-pin-probes` (which
+    // bounds a PINNED version, not a failure).
+    '  if [ -f "$HOME/fixture-health-fail-count" ]; then',
+    '    fc=0; IFS= read -r fc < "$HOME/fixture-health-fail-count"',
+    '    if [ "$fc" -gt 0 ]; then',
+    '      echo $((fc - 1)) > "$HOME/fixture-health-fail-count"',
+    '      echo "curl: (7) Failed to connect to ${url#http://}" >&2; exit 7',
+    '    fi',
+    '  fi',
     '  v=""; pinned=0',
     '  if [ -f "$HOME/fixture-health-pin" ]; then',
     '    left=1; [ -f "$HOME/fixture-health-pin-probes" ] && IFS= read -r left < "$HOME/fixture-health-pin-probes"',
@@ -909,6 +926,17 @@ function pathWithoutJq(home: string): string {
   // own flock sentence (or at "cannot create ~/.ccrc"), never at jq's, and
   // the D-3140 case below measures the wrong refusal.
   for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir']) symlinkSync(realPath(b), join(d, b));
+  return `${join(home, '.local', 'bin')}:${d}`;
+}
+
+/** F5 (fix round 1, Task 9): the watchdog's own `flock` preflight, the twin
+ *  of `pathWithoutJq` above — everything the watchdog calls before its
+ *  `command -v flock` check (jq, and `date` for its `now="$(date +%s)"`)
+ *  stays real, only `flock` itself is missing. */
+function pathWithoutFlock(home: string): string {
+  const d = join(home, 'no-flock-bin');
+  mkdirSync(d, { recursive: true });
+  for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date']) symlinkSync(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -4663,6 +4691,15 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     'if flock -n "$HOME/.ccrc/update.lock" true; then echo free; else echo held; fi >> "$HOME/launcher-lock"',
     'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" >> "$HOME/launcher-marker"',
     '[ -f "$HOME/fixture-rollback-report" ] && cp "$HOME/fixture-rollback-report" "$HOME/.ccrc/update.json"',
+    // F4 (fix round 1, Task 9): a launcher that leaves ~/.ccrc/update.lock
+    // HELD when it exits — the refused-rollback re-lock guard's own
+    // `&& flock -n "$UPD_LOCK_FD"` half, unpinned until now. Backgrounded so
+    // it survives the launcher's own exit, and polled-for so the watchdog's
+    // re-lock attempt is guaranteed to see it CONTENDED, never a race.
+    'if [ -f "$HOME/fixture-rollback-leaves-holder" ]; then',
+    '  flock "$HOME/.ccrc/update.lock" sleep 3 &',
+    '  until ! flock -n "$HOME/.ccrc/update.lock" true 2>/dev/null; do sleep 0.02; done',
+    'fi',
     'code=0',
     '[ -f "$HOME/fixture-rollback-exit" ] && IFS= read -r code < "$HOME/fixture-rollback-exit"',
     'exit "$code"',
@@ -4726,7 +4763,11 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     extraEnv: Record<string, string | undefined> = {}): Result => {
     mkdirSync(join(home, 'tmp'), { recursive: true });
     const env: NodeJS.ProcessEnv = {
+      // D-3278 (fix round 1): three failing samples, `CCRC_WATCHDOG_PROBE_GAP_S`
+      // apart, decide a rollback — defaulted to 0 here so a suite does not pay
+      // real sleep time per failing-probe case; the gap test overrides it.
       ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_UPDATE_DEADLINE_MS: DEADLINE_MS,
+      CCRC_WATCHDOG_PROBE_GAP_S: '0',
     };
     for (const [k, v] of Object.entries(extraEnv)) {
       if (v === undefined) delete env[k]; else env[k] = v;
@@ -5063,6 +5104,157 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     const r = runWatchdog(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toBe('watchdog: macOS is not centrally managed (decision 17) — nothing to watch\n');
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('D-3276: a stale report in a pre-install phase with a failing probe is never rolled back — its tree cannot have moved', () => {
+    for (const phase of ['fetching', 'backing-up']) {
+      const home = watchBox(`ccrc-watchdog-preinstall-fail-${phase}-`);
+      report(home, { phase, ageS: 90 });
+      writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+      const r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      const now = readReport(home);
+      expect(now.phase, phase).toBe('failed');
+      expect(String(now.detail), phase)
+        .toMatch(/^abandoned by its updater; box unhealthy \(.+\) and its tree never moved; nothing reverted$/);
+      expect(r.stdout, phase)
+        .toMatch(/^watchdog: stale report \([a-z-]+, 9\ds\) fails its health probe \(.+\), but its tree never moved — recorded as abandoned; nothing was reverted$/m);
+      expect(existsSync(join(home, 'launcher-argv')), phase).toBe(false);
+      expect(lockFree(home), phase).toBe(true);
+    }
+  });
+
+  itLinux('D-3276: a stale report on an UNVERSIONED running tree with a failing probe is never rolled back', () => {
+    // A deploy.sh-placed (or never-stamped) box: no ~/.ccrc/build.json at
+    // all, so `_box_build_fields` answers non-zero and `cur_v` stays "".
+    const home = freshUpdateBox('ccrc-watchdog-unversioned-');
+    plantOldBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'), LAUNCHER, { mode: 0o755 });
+    report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    const now = readReport(home);
+    expect(now.phase).toBe('failed');
+    expect(String(now.detail))
+      .toMatch(/^abandoned by its updater; box unhealthy \(.+\) on an unversioned tree; not reverting$/);
+    expect(r.stdout)
+      .toMatch(/^watchdog: stale report \(installing, 9\ds\) fails its health probe \(.+\) on an unversioned tree — recorded as abandoned; not reverting$/m);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    expect(lockFree(home)).toBe(true);
+  });
+
+  itLinux('D-3277: the report moving between the first read and the lock stands the watchdog down — nothing rewritten, nothing rolled back', () => {
+    const home = watchBox('ccrc-watchdog-moved-');
+    report(home, { phase: 'installing', ageS: 90 });
+    // A box that WOULD be rolled back if the stand-down did not fire.
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    // A fresh, TERMINAL report — modelling an updater that finished and
+    // exited in the exact window between the watchdog's first (pre-lock)
+    // read and its own `flock -n`.
+    const movedDoc = {
+      target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 999999999,
+      detail: null, from: 'cli', pid: 4321,
+    };
+    const movedStr = `${JSON.stringify(movedDoc)}\n`;
+    writeFileSync(join(home, 'fixture-flock-moved-report'), movedStr);
+    // A `flock` shim ahead of the real one on PATH (this fixture's own
+    // `.local/bin`, first): it rewrites update.json, then defers to the
+    // REAL binary so the watchdog's own lock-take still succeeds (lrc=0) —
+    // the locking semantics stay real, only the write in between is fixture.
+    writeFileSync(join(home, '.local', 'bin', 'flock'),
+      `#!/bin/sh\ncp "$HOME/fixture-flock-moved-report" "$HOME/.ccrc/update.json"\nexec ${FLOCK} "$@"\n`,
+      { mode: 0o755 });
+    const r = runWatchdog(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('watchdog: the report moved while measuring — next tick\n');
+    // The report is exactly what the SHIM wrote — the watchdog touched nothing.
+    expect(readFileSync(jsonPath(home), 'utf8')).toBe(movedStr);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+    expect(healthProbed(home)).toBe(false);
+    expect(probed(home)).toBe(false);
+    expect(lockFree(home)).toBe(true);
+  });
+
+  itLinux('D-3278: the failing verdict needs three failing probe samples — one passing sample is a pass; all three failing rolls back with exactly 3 probes', () => {
+    const healthCount = (home: string): number =>
+      lines(home, 'curl-argv').filter((u) => u === 'http://127.0.0.1:7788/health').length;
+    // Fails once, then passes: overall a PASS — no rollback, and the loop
+    // stopped at 2 samples (it never spent a 3rd).
+    const flip = watchBox('ccrc-watchdog-probe-flip-');
+    report(flip, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(flip, 'fixture-health-fail-count'), '1\n');
+    let r = runWatchdog(flip);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(flip, 'launcher-argv'))).toBe(false);
+    expect(healthCount(flip)).toBe(2);
+    // All three fail: rollback, and exactly 3 probes ran — never a 4th.
+    const allFail = watchBox('ccrc-watchdog-probe-allfail-');
+    report(allFail, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(allFail, 'fixture-health-fail-count'), '3\n');
+    r = runWatchdog(allFail);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lines(allFail, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+    expect(healthCount(allFail)).toBe(3);
+  });
+
+  itLinux('D-3278: the sampling gap is CCRC_WATCHDOG_PROBE_GAP_S — malformed reads as the five-second default (no die, no crash)', () => {
+    const home = watchBox('ccrc-watchdog-probe-gap-malformed-');
+    report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-health-fail-count'), '1\n');
+    const r = runWatchdog(home, [], { CCRC_WATCHDOG_PROBE_GAP_S: 'soon' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/^watchdog: CCRC_WATCHDOG_PROBE_GAP_S='soon' is not digits-only — using 5$/m);
+    // The malformed value did not stop the sample from running — a flip
+    // still reads as a pass.
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('Minor F4: a refused rollback whose launcher leaves ~/.ccrc/update.lock HELD records nothing — the re-lock guard\'s "&&" half', () => {
+    const home = watchBox('ccrc-watchdog-refused-heldlock-');
+    const was = report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home, 'fixture-rollback-exit'), '1\n');
+    writeFileSync(join(home, 'fixture-rollback-leaves-holder'), '');
+    const r = runWatchdog(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^watchdog: ccrc rollback --from watchdog exited 1$/m);
+    // The re-lock is CONTENDED (the launcher's own holder), so nothing is
+    // recorded: the stale report the rollback was called on stands untouched.
+    expect(readReport(home)).toEqual(was);
+  }, 10_000);
+
+  itLinux('Minor F5: jq missing is refused by name, exit 1, nothing measured', () => {
+    const home = watchBox('ccrc-watchdog-nojq-');
+    report(home, { phase: 'installing', ageS: 90 });
+    const r = runWatchdog(home, [], { PATH: pathWithoutJq(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: watchdog: jq is not on PATH, so ~\/\.ccrc\/update\.json cannot be read — nothing was re-measured or reverted$/m);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('Minor F5: flock missing is refused by name, exit 1, nothing measured', () => {
+    const home = watchBox('ccrc-watchdog-noflock-');
+    report(home, { phase: 'installing', ageS: 90 });
+    const r = runWatchdog(home, [], { PATH: pathWithoutFlock(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: watchdog: flock \(util-linux\) is not on PATH, so a live updater cannot be told from a dead one — nothing was re-measured or reverted$/m);
+    expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
+  });
+
+  itLinux('Minor F5: date not answering unix seconds is refused by name, exit 1, nothing measured', () => {
+    const home = watchBox('ccrc-watchdog-baddate-');
+    report(home, { phase: 'installing', ageS: 90 });
+    writeFileSync(join(home, '.local', 'bin', 'date'), '#!/bin/sh\necho not-a-number\n', { mode: 0o755 });
+    const r = runWatchdog(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(
+      /^ccrc: watchdog: date \+%s did not answer with unix seconds — nothing was re-measured or reverted$/m);
     expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
   });
 
