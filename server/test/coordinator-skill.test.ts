@@ -512,6 +512,16 @@ describe('the coordinator skill: linkage', () => {
     expect(lifecycle).toContain('route-omitted:no-route-v1-cap');
   });
 
+  it('names the child-omitted run event a fresh dispatch journals on a box without child-argv-v1', () => {
+    // Child-workspace reclamation wave 1. `dispatchRun` journals this row on
+    // EVERY fresh dispatch to a box whose ccd predates `child-argv-v1` — far
+    // more often than either `route-omitted` event — so the coordinator's
+    // reference must say what it means before a run trail shows it one.
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(lifecycle).toContain('`child-omitted:no-child-argv-cap`');
+    expect(lifecycle).toContain('that workspace is simply not a child');
+  });
+
   it('names POST /api/runs/:id/items after the re-measurement, never before', () => {
     const lifecycle = refs('wave-lifecycle.md');
     const settle = lifecycle.indexOf('POST /api/runs/:id/items');

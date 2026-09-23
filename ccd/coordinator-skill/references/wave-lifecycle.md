@@ -203,6 +203,24 @@ always has. The brief still names the routing in prose (clause 13) — this
 object is what carries that placement to the fleet, never a replacement
 for saying so.
 
+**`child-omitted:no-child-argv-cap` — a fresh workspace that is not a
+child.** Every workspace a fresh dispatch mints is a CHILD of its run: the
+server sends `--child <run id>` on the `ws-add` argv and `ccd` records it as
+the workspace's child marker before the first launch. A box whose `ccd`
+predates the `child-argv-v1` capability cannot parse that flag, so the
+server omits it and journals `child-omitted:no-child-argv-cap` on the run —
+on EVERY fresh dispatch to that box, not only when you asked for something,
+unlike the two `route-omitted` events. The same event also records a
+dispatch the server could not measure: it held no capability list for the
+box — the local-mode boot window, a failed local caps probe unmeasured
+until the server restarts, or a remote ready frame with no usable list.
+`ccd caps` on the box tells the two apart: a list naming `child-argv-v1`
+puts the remedy on the server (reconnect the agent, or restart it), not on
+a ccd deploy. It is not an error and asks nothing
+of you: that workspace is simply not a child, exactly like every workspace
+minted before the token existed, and nothing will ever reclaim it as one. A
+resumed workspace mints nothing and never carries the row.
+
 **The ledger is fixed at dispatch.** No route adds an item to a dispatched
 run, so `total` never grows and the tally can never move backwards. Work
 discovered mid-wave is a note in the wave-done mail and an item in the NEXT
