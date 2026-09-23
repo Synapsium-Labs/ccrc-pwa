@@ -148,9 +148,15 @@ const routeCallsIn = (src: string): { key: string; at: number }[] => {
  *  escape (a literal backtick is unremarkable inside `[...]`, but this file's
  *  own source is read back by OTHER regex-vs-template scans, so spelling it
  *  as a raw backtick here would itself be a stray template delimiter to
- *  anyone re-reading this literal). */
+ *  anyone re-reading this literal). Fix round 2 (R14): `\s*` between the verb
+ *  call's `(` and the path's quote, for EVERY verb — `app.route(\s*\{` already
+ *  had this tolerance (fix round 1, m1), but the bare-verb branch required the
+ *  quote to sit immediately after `(`, so a formatter-wrapped
+ *  `app.put(\n  '/api/updates/x', …)` matched nothing: invisible to both
+ *  `lanesIn` and `REGISTERED`, exactly F14's original failure mode, for a
+ *  shape a Prettier-style reflow produces routinely. */
 const registrationsIn = (src: string): { key: string; at: number }[] => {
-  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\((['"\\x60])([^'"\\x60]+)\\2`, 'g');
+  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\(\\s*(['"\\x60])([^'"\\x60]+)\\2`, 'g');
   const verbHits = [...src.matchAll(verbRe)]
     .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[3]!}`, at: mm.index! }));
   return [...verbHits, ...routeCallsIn(src)].sort((a, b) => a.at - b.at);
@@ -752,6 +758,30 @@ describe('the update surface: one dual-credential read, every other route sessio
     for (const key of ['PUT /api/updates/z', 'PUT /api/updates/t', 'PUT /api/updates/w']) {
       expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain(key);
     }
+  });
+
+  it('a formatter-wrapped verb call — the quote on its own line, indented — is SEEN by registrationsIn for EVERY verb (fix round 2, R14)', () => {
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    // CONTROL (R14's own shape): before this fix, `verbRe` required the
+    // quote immediately after `(`, so this Prettier-style reflow — legal
+    // JavaScript, and exactly what a formatter produces on a long argument
+    // list — matched nothing at all.
+    const plantedWrapped = UPDATE_SRC.replace(anchor,
+      `app.put(\n    '/api/updates/x',\n    async (req, reply) => { reply.code(200).send({ ok: true }); },\n  );\n\n  ${anchor}`);
+    expect(registrationsIn(plantedWrapped).map((r) => r.key), 'a formatter-wrapped app.put went unseen')
+      .toContain('PUT /api/updates/x');
+
+    // Every verb, not only put — `\s*` sits in the shared verb alternation, not a per-verb branch.
+    for (const verb of ['get', 'post', 'delete', 'patch']) {
+      const plantedVerb = UPDATE_SRC.replace(anchor,
+        `app.${verb}(\n    '/api/updates/reflow-${verb}',\n    async (req, reply) => { reply.code(200).send({ ok: true }); },\n  );\n\n  ${anchor}`);
+      expect(registrationsIn(plantedVerb).map((r) => r.key), `a formatter-wrapped app.${verb} went unseen`)
+        .toContain(`${verb.toUpperCase()} /api/updates/reflow-${verb}`);
+    }
+
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('PUT /api/updates/x');
   });
 
   it("CLAUDE.md's box-token bullet names every update route by its backticked verb and path", () => {
