@@ -148,12 +148,18 @@ function healthyBox(home: string): void {
     '    case "$url" in *.sigstore.json)',
     '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi ;;',
     '    esac',
+    // Task 6: the release host answering an HTTP error that is NOT a 404 (a
+    // 403 rate limit, a 5xx) — a FILE knob naming the status, for every
+    // `local://` URL from the moment it exists. curl -f exits 22 for it, as
+    // for a 404; only the status `-w` writes tells the two apart.
+    '    if [ -f "$HOME/fixture-release-http" ]; then IFS= read -r hc < "$HOME/fixture-release-http"; [ -n "$wfmt" ] && printf \'%s\' "$hc"; echo "curl: (22) The requested URL returned error: $hc for $url" >&2; exit 22; fi',
     '    src="${url#local://}"',
     '    if [ ! -f "$src" ]; then',
+    '      [ -n "$wfmt" ] && printf 404',
     '      echo "curl: (22) The requested URL returned error: 404 for $url" >&2',
     '      exit 22',
     '    fi',
-    '    cp "$src" "$dest" ;;',
+    '    cp "$src" "$dest"; if [ -n "$wfmt" ]; then printf 200; fi ;;',
     '  *)',
     '    body=\'{"mode":"local","connected":true,"downSince":null,"build":"agreed","roster":"agreed"}\'',
     '    [ -f "$HOME/fixture-health-body" ] && IFS= read -r body < "$HOME/fixture-health-body"',
@@ -610,6 +616,11 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
     + `printf '%s\\n' '${opts.version}' > "$HOME/fixture-health-version"\n`
     + 'printf \'app.ccrc.ccrc.plist\\napp.ccrc.ccrc-agent.plist\\n\' >> "$HOME/launchctl-loaded"\n'
     + '[ -f "$HOME/fixture-stub-installed" ] && mkdir -p "$HOME/.ccrc" && printf \'newsha0000000000000000000000000000000000\\n\' > "$HOME/.ccrc/installed"\n'
+    // Task 6: a test's own "what the spine did to the box" — moving the tree,
+    // placing the new `ccd/ccrc` arm 2 will run, rewriting a marker — as a
+    // FILE the shim reads (knobs are files: `replantDoctorStubs` clobbers a
+    // re-planted stub between two runner calls, never a fixture file).
+    + '[ "$1" = install ] && [ -f "$HOME/fixture-on-install" ] && { sh "$HOME/fixture-on-install" || exit 91; }\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -761,6 +772,76 @@ function sourcedCcrc(home: string, script: string): Result {
     { env: updateEnv(home), encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
+
+// ── Task 6: the automatic restore's fixtures ──────────────────────────────
+// The arm-2 child is `bash "$BOX_TREE_DIR/ccd/ccrc" update --to <previous>
+// --no-gate --from restore` — the NEW tree's ccrc, because `~/ccrc` is what
+// the staged spine just placed (spec §10's argv). A STUB-flavour install
+// places no tree, so the new tree's `install` places the child itself,
+// through `fixture-on-install`: either this recorder, or a broken one.
+const OLD_SHA = 'oldsha0000000000000000000000000000000000';
+/** Records its argv, the lock marker it was handed, its own $PPID and
+ *  whether ~/.ccrc/update.lock was HELD while it ran — a fresh `flock -n`
+ *  that FAILS is the measurement (spec §10's own), and it can only fail
+ *  because the parent holds its descriptor. Exits `fixture-restore-exit`. */
+const RESTORE_RECORDER = [
+  '#!/bin/sh',
+  'printf \'%s\\n\' "$0" "$@" > "$HOME/restore-child-argv"',
+  'locked=no',
+  'if command -v flock >/dev/null 2>&1 && ! flock -n "$HOME/.ccrc/update.lock" true; then locked=yes; fi',
+  'printf \'held=%s ppid=%s locked=%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" "$PPID" "$locked" > "$HOME/restore-child-env"',
+  'code=0; [ -f "$HOME/fixture-restore-exit" ] && IFS= read -r code < "$HOME/fixture-restore-exit"',
+  'exit "$code"',
+].join('\n') + '\n';
+/** The hazard spec §11's arm 2 carries: a new tree whose own ccrc is broken. */
+const RESTORE_BROKEN = '#!/bin/sh\necho "fixture: the new tree\'s ccd/ccrc is broken" >&2\nexit 1\n';
+
+interface RestoreBoxOpts {
+  /** The running stamp's version; `null` = an unversioned box. Default `v1.0.0`. */
+  oldVersion?: string | null;
+  /** `~/.ccrc/installed` BEFORE the update; `null` = absent. Default the verified one-line marker. */
+  marker?: string | null;
+  /** The previous release ships a provenance bundle. Default true. */
+  prevBundle?: boolean;
+  /** What the new tree places at `~/ccrc/ccd/ccrc`. Default `recorder`. */
+  child?: 'recorder' | 'broken' | 'none';
+  /** More sh lines the new tree's `install` runs, before it places the child. */
+  onInstall?: string[];
+  /** The new tree's staged install exit code. Default 0. */
+  installExit?: number;
+}
+
+/** A box whose update to the STUB release v2.0.0 FAILS its health gate:
+ *  `/health` answers the OLD build (Task 5's `fixture-health-pin`), which is
+ *  spec §11's "wrong `/health` version" — exit 4, and `_upd_restore` runs.
+ *  The previous release is published under `download/<old>/` so arm 2 has
+ *  something to ask about. */
+function plantRestoreBox(home: string, opts: RestoreBoxOpts = {}): void {
+  const oldVersion = opts.oldVersion === undefined ? 'v1.0.0' : opts.oldVersion;
+  if (oldVersion === null) plantOldBox(home); else plantOldBox(home, { version: oldVersion });
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  const marker = opts.marker === undefined ? `${OLD_SHA}\n` : opts.marker;
+  if (marker !== null) writeFileSync(join(home, '.ccrc', 'installed'), marker);
+  if (oldVersion !== null) {
+    packRelease(home, stubTree(home, { version: oldVersion }),
+      { tag: oldVersion, latest: false, bundle: opts.prevBundle !== false });
+  }
+  packRelease(home, stubTree(home, { version: 'v2.0.0', installExit: opts.installExit }), { tag: 'v2.0.0' });
+  const lines = [...(opts.onInstall ?? [])];
+  const child = opts.child ?? 'recorder';
+  if (child !== 'none') {
+    writeFileSync(join(home, 'fixture-restore-child'), child === 'recorder' ? RESTORE_RECORDER : RESTORE_BROKEN);
+    lines.push('mkdir -p "$HOME/ccrc/ccd" && cp "$HOME/fixture-restore-child" "$HOME/ccrc/ccd/ccrc"');
+  }
+  writeFileSync(join(home, 'fixture-on-install'), `${lines.join('\n')}\n`);
+  writeFileSync(join(home, 'fixture-health-pin'), `${oldVersion ?? 'v0.0.1'}\n`);
+}
+
+// The reports this run placed are read through Task 1's file-scope
+// `reportWrites` (every `update.json` the `mv` recorder saw, in order) and
+// `lastReport` (the file on disk) — never a second copy of either.
+const restoreChildArgv = (home: string): string[] | null => (existsSync(join(home, 'restore-child-argv'))
+  ? readFileSync(join(home, 'restore-child-argv'), 'utf8').split('\n').filter((l) => l !== '') : null);
 
 describe('ccrc update: the argument surface', () => {
   it('update -h prints usage on STDOUT at exit 0 — a verb with flags explains them', () => {
@@ -917,6 +998,11 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
+    // Task 6: its v1.0.0 is unpublished, so arm 2 refuses and arm 3 runs —
+    // and arm 3 removes ~/.ccrc/installed rather than restoring it, so the
+    // no-record line holds.
+    expect(r.stdout).toMatch(/^update: arm2-refused: v1\.0\.0 ships no bundle — /m);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
     expect(r.stderr).toMatch(/update: v2\.0\.0 was installed, but the box did not come back healthy on it \(.*\) — exit 4\. The backup taken BEFORE the install is complete at/);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
@@ -1106,7 +1192,8 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(readFileSync(join(bare, 'staged-saw-previous'), 'utf8')).toBe('untagged\nunstamped\n');
   });
 
-  it.each([['restore'], ['rollback'], ['watchdog']])('a --from %s run does NOT rewrite previous — it returns to a known tag, not a new baseline (§18 "…and not by a restore")', (from) => {
+  // `restore` is not typed here: bare, it is refused at exit 2 (Task 6); its `previous: kept` is read off the real child in Task 6's FULL case.
+  it.each([['rollback'], ['watchdog']])('a --from %s run does NOT rewrite previous — it returns to a known tag, not a new baseline (§18 "…and not by a restore")', (from) => {
     const home = stubBox(`ccrc-update-prev-keep-${from}-`);
     writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nbaselinesha\n');
     const r = runUpdate(home, ['--from', from]);
@@ -2256,13 +2343,6 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   // swaps this literal for W2's `UPDATE_PHASES` once W2 has merged.
   const WRITTEN_PHASES = ['queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
     'restarting', 'checking', 'restoring', 'done', 'reverted', 'failed'];
-  // Phases a LATER task wires. Each task deletes its own member in the commit
-  // that writes it; Task 6 deletes the literal, and the union assertion below
-  // becomes total.
-  const PENDING = new Set<string>([
-    'restoring',  // Task 6 — `_upd_restore`
-    'reverted',   // Task 6 — `_upd_restore`'s last word
-  ]);
   // `queued` is written only by `--detach`, which macOS refuses (decision 17),
   // so on Darwin it can never be written. Kept apart from PENDING because Task 6
   // deletes PENDING, and this set must outlive it.
@@ -2317,12 +2397,18 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       expect(phases(detached)).toEqual(['queued']);
     }
 
-    const written = new Set([...phases(moved), ...phases(same), ...phases(refused), ...phases(detached)]);
-    expect(written.has('unknown'), 'a writer wrote the reader\'s word').toBe(false);
-    for (const p of PENDING) expect(written.has(p), `${p} is written but still listed PENDING`).toBe(false);
-    expect([...new Set([...written, ...PENDING, ...DARWIN_UNREACHABLE])].sort()).toEqual([...WRITTEN_PHASES].sort());
+    // Task 6: the automatic restore writes the last two phases, `restoring`
+    // and `reverted` (a gate that fails on the OLD /health version, arm 2).
+    const restoreHome = freshUpdateBox('ccrc-update-json-restore-');
+    plantRestoreBox(restoreHome);
+    r = runUpdate(restoreHome);
+    expect(r.code, `the restore fixture must reach _upd_restore — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
 
-    for (const home of [moved, same, refused, ...(process.platform === 'darwin' ? [] : [detached])]) {
+    const written = new Set([...phases(moved), ...phases(same), ...phases(refused), ...phases(detached), ...phases(restoreHome)]);
+    expect(written.has('unknown'), 'a writer wrote the reader\'s word').toBe(false);
+    expect([...new Set([...written, ...DARWIN_UNREACHABLE])].sort()).toEqual([...WRITTEN_PHASES].sort());
+
+    for (const home of [moved, same, refused, restoreHome, ...(process.platform === 'darwin' ? [] : [detached])]) {
       const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
       for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS);
       // The file on disk IS the last rename, and no staged copy is left beside it.
@@ -2471,8 +2557,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
   });
 
-  it('--from restore|rollback|watchdog go below the floor with a WARN naming the caller, and the floor stays; --from pwa is refused by W1\'s sentence (spec §9)', () => {
-    for (const from of ['restore', 'rollback', 'watchdog']) {
+  it('--from rollback|watchdog go below the floor with a WARN naming the caller, and the floor stays; --from pwa is refused by W1\'s sentence (spec §9; --from restore\'s WARN is measured by Task 6\'s FULL restore case)', () => {
+    // `restore` is not typed here: bare, it is refused at exit 2 (Task 6,
+    // D-3257); its WARN is read off a real
+    // restore child in Task 6's FULL case.
+    for (const from of ['rollback', 'watchdog']) {
       const home = freshUpdateBox(`ccrc-update-json-floor-${from}-`);
       plantOldBox(home, { version: 'v3.0.0' });
       plantFloor(home, 'v3.0.0');
@@ -3035,11 +3124,13 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — \/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0$/m);
     expect(r.stderr).toMatch(/update: v2\.0\.0 was installed, but the box did not come back healthy on it \(\/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0\) — exit 4\. The backup taken BEFORE the install is complete at \S*ccrc-backups/);
     const rep = reportOf(home);
-    expect(rep['phase']).toBe('failed');   // Task 6: `reverted`
-    expect(rep['detail']).toBe('gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
+    // Task 6: a failed gate restores. This box's v1.0.0 is unpublished, so
+    // arm 2 refuses (no bundle to re-install from) and arm 3 copies back.
+    expect(rep['phase']).toBe('reverted');
+    expect(rep['detail']).toBe('arm3: tree MIXED, deploy.sh is the remedy; gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
     // withSweep planted everything a sweep needs, so this absence is the gate's.
     expect(lines(home, 'systemctl-calls').join('\n')).not.toMatch(/try-restart/);
-    expect(lines(home, 'launchctl-calls').join('\n')).not.toMatch(/kickstart/);
+    expect(lines(home, 'launchctl-calls').join('\n')).not.toMatch(/kickstart -k \S+\/app\.ccrc\.session\./);   // arm 3 re-bootstraps and kickstarts the main job; the sweep never ran
     expect(r.stdout).not.toMatch(/^update: build: /m);
   });
 
@@ -3050,7 +3141,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     expect(r.code, r.stdout).toBe(4);
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — ccrc\.service is failed \(systemctl --user is-active\), not active$/m);
     expect(healthProbes(home)).toEqual([]);
-    expect(reportOf(home)['detail']).toBe('gate: ccrc.service is failed (systemctl --user is-active), not active');
+    expect(reportOf(home)['detail']).toBe('arm3: tree MIXED, deploy.sh is the remedy; gate: ccrc.service is failed (systemctl --user is-active), not active');
   });
 
   it('/health that does not answer fails the gate, naming curl\'s exit', () => {
@@ -3092,7 +3183,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     writeFileSync(join(both, 'fixture-health-pin'), 'v1.0.0\n');
     const r2 = runUpdate(both);
     expect(r2.code, r2.stdout).toBe(4);
-    expect(reportOf(both)['phase']).toBe('failed');
+    expect(reportOf(both)['phase']).toBe('reverted');
   });
 
   itLinux('fleet: ccrc-agent.service active AND staying up (verify-service.sh\'s two samples) passes with no /health asked; a MainPID that churns behind `active` fails', () => {
@@ -3140,7 +3231,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     r = runUpdate(failing);
     expect(r.code, r.stdout).toBe(4);
     expect(reportOf(failing)['detail'])
-      .toBe('spine died at _inst_skills; gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
+      .toBe('arm3: tree MIXED, deploy.sh is the remedy; spine died at _inst_skills; gate: /health at 127.0.0.1:7788 answers v1.0.0, not v2.0.0');
     // …and BEFORE the tree: nothing was replaced, so nothing is measured.
     const early = gateBox('ccrc-update-gate-spine-early-', 'server', 1);
     writeFileSync(join(early, 'fixture-install-step'), '_inst_env\n');
@@ -3149,6 +3240,22 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     expect(r.stdout).not.toMatch(/^update: gate/m);
     expect(lines(early, 'systemctl-calls')).not.toContain('--user is-active ccrc.service');
     expect(healthProbes(early)).toEqual([]);
+  });
+
+  // Task 5 review carry: no earlier case measured D-3240's --no-gate sentence
+  // ("was not measured (--no-gate)") — arm 2's own child types exactly this
+  // flag, so this arm must stay reachable and unrestored under it.
+  it('a spine that died AFTER the tree moved, run with --no-gate: exit 1, "was not measured (--no-gate)", no restore (D-3240)', () => {
+    const home = gateBox('ccrc-update-gate-spine-nogate-', 'server', 1);
+    withSweep(home);
+    writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');
+    const r = runUpdate(home, ['--no-gate']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toMatch(/^update: gate: skipped \(--no-gate\) — nothing measured whether v2\.0\.0 came back up on this box$/m);
+    expect(r.stderr).toMatch(/update: the box moved and was not measured \(--no-gate\), but its install never completed \(spine died at _inst_skills\) — rerun: ccrc update --to v2\.0\.0 --force/);
+    expect(reportOf(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_skills' });
+    expect(lines(home, 'systemctl-calls').join('\n')).not.toMatch(/try-restart/);
+    expect(restoreChildArgv(home), 'a --no-gate death is not restored').toBeNull();
   });
 
   it('--no-gate skips the gate: one line says so, nothing is probed, and the run completes (only the restore child passes it automatically)', () => {
@@ -3247,5 +3354,329 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     ]);
     expect(existsSync(join(lf, 'stayed-up-calls'))).toBe(false);
     expect(healthProbes(lf)).toEqual([]);
+  });
+});
+
+describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
+  it('a failed gate restores by arm 2: ONE synchronous child re-installs the previous tag with --no-gate --from restore, under the parent\'s lock, and the run exits 4 (§18 "the gate restores", "arm 2 re-installs the previous tag", "the automatic restore does not sweep")', () => {
+    const home = freshUpdateBox('ccrc-update-restore-arm2-');
+    plantRestoreBox(home);
+    // A sweep that RAN would leave a try-restart in the recording: the drop-in
+    // passes its preflight and two supervisors are live. Without both, a
+    // "no try-restart" assertion is vacuous (plantKillModeDropIn's own note).
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
+    const last = lastReport(home);
+    // The marker names the PARENT (its own $$ is the report's pid), the child
+    // saw it as its $PPID, and the lock was held while the child ran.
+    const env = /^held=(\d+) ppid=(\d+) locked=(yes|no)$/.exec(
+      readFileSync(join(home, 'restore-child-env'), 'utf8').trim());
+    expect(env, 'the child recorded no environment line').not.toBeNull();
+    expect(env![1]).toBe(env![2]);
+    expect(env![1]).toBe(String(last['pid']));
+    expect(env![3], 'the parent released the lock before its restore child ran').toBe('yes');
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
+    expect(last['target']).toBe('v2.0.0');
+    expect(last['from']).toBe('cli');
+    const phases = reportWrites(home).map((w) => w['phase']);
+    expect(phases.slice(-3)).toEqual(['checking', 'restoring', 'reverted']);
+    expect(phases).not.toContain('restarting');
+    expect(phases).not.toContain('done');
+    expect(phases).not.toContain('failed');
+    expect(String(reportWrites(home).at(-2)!['detail'])).toMatch(/^gate: /);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 2\): this box runs v1\.0\.0 again, re-installed from its release — gate: /m);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 3\)/);
+    // Arm 2 asked whether the previous release ships a bundle (the node was
+    // verified), and fetched nothing else of it — the child does the install.
+    expect(localUrls(home)).toContain(`local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`);
+    expect(localUrls(home)).not.toContain(`local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`);
+    if (process.platform !== 'darwin') {
+      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+      expect(calls, 'the automatic restore swept the supervisors').not.toMatch(/try-restart/);
+    }
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(`v1.0.0\n${OLD_SHA}\n`);
+  });
+
+  it('arm 2 passes --allow-unsigned only when the marker read `unsigned` BEFORE the install rewrote it (§18 "arm 2 never silently unsigns")', () => {
+    const home = freshUpdateBox('ccrc-update-restore-unsigned-');
+    plantRestoreBox(home, {
+      marker: `${OLD_SHA}\nunsigned\n`,
+      prevBundle: false,
+      // The new spine writes a VERIFIED marker: reading it at restore time
+      // instead of before the install would drop the flag.
+      onInstall: ['printf \'newsha0000000000000000000000000000000000\\n\' > "$HOME/.ccrc/installed"'],
+    });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore', '--allow-unsigned',
+    ]);
+    // Already unverified: nothing to ask the release host.
+    expect(localUrls(home)).not.toContain(`local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`);
+    expect(r.stdout).not.toMatch(/arm2-refused/);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; /);
+  });
+
+  it('a previously VERIFIED node whose previous release ships no bundle: arm 2 refuses with the by-hand sentence and falls to arm 3 — the child never runs', () => {
+    const home = freshUpdateBox('ccrc-update-restore-refused-');
+    plantRestoreBox(home, {
+      prevBundle: false,
+      // The new spine writes an UNSIGNED marker: reading it at restore time
+      // would pass --allow-unsigned to a node that was verified.
+      onInstall: ['printf \'newsha0000000000000000000000000000000000\\nunsigned\\n\' > "$HOME/.ccrc/installed"'],
+    });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm2-refused: v1\.0\.0 ships no bundle — run ccrc update --to v1\.0\.0 --allow-unsigned by hand$/m);
+    expect(restoreChildArgv(home), 'arm 2 ran a child for a release it had just refused').toBeNull();
+    const details = reportWrites(home).map((w) => String(w['detail']));
+    expect(details).toContain('arm2-refused: v1.0.0 ships no bundle; run ccrc update --to v1.0.0 --allow-unsigned by hand');
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm3: tree MIXED, deploy\.sh is the remedy; gate: /);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+  });
+
+  it('the hazard: arm 2 runs the NEW tree\'s ccd/ccrc — a broken one fails arm 2, and arm 3 copies the tree back by rename, never coord.db or memory, restarts the unit, and says MIXED', () => {
+    const home = freshUpdateBox('ccrc-update-restore-arm3-');
+    const darwin = process.platform === 'darwin';
+    const unitRel = darwin ? 'Library/LaunchAgents/app.ccrc.ccrc.plist' : '.config/systemd/user/ccrc.service';
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'session-hook.sh'), 'OLD hook\n', { mode: 0o755 });
+    mkdirSync(join(home, '.ccrc', 'memory', 'fixture-proj'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', 'fixture-proj', 'MEMORY.md'), 'before the update\n');
+    plantRestoreBox(home, {
+      child: 'broken',
+      onInstall: [
+        // What a spine that moved the tree leaves: a new dist, a new ccd
+        // placed by rename (with a second name kept on its inode, so an
+        // in-place restore would show through it), a new unit, a new hook —
+        // and a session writing memory while the update ran.
+        'rm -rf "$HOME/ccrc/server/dist" && mkdir -p "$HOME/ccrc/server/dist" && printf \'// NEW dist\\n\' > "$HOME/ccrc/server/dist/new.js"',
+        'printf \'#!/bin/sh\\n# the NEW ccd\\n\' > "$HOME/.local/bin/ccd.new" && chmod 755 "$HOME/.local/bin/ccd.new" && mv -f "$HOME/.local/bin/ccd.new" "$HOME/.local/bin/ccd"',
+        'ln -f "$HOME/.local/bin/ccd" "$HOME/new-ccd-link"',
+        `printf 'NEW job file\\n' > "$HOME/${unitRel}"`,
+        'printf \'NEW hook\\n\' > "$HOME/.cc-sessions/session-hook.sh"',
+        'printf \'written while the update ran\\n\' > "$HOME/.ccrc/memory/fixture-proj/MEMORY.md"',
+      ],
+    });
+    plantCoordDb(home);
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    const unitBefore = readFileSync(join(home, unitRel), 'utf8');
+    const db = join(home, '.ccrc', 'coord.db');
+    const dbBytes = readFileSync(db);
+    const dbIno = statSync(db).ino;
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stderr).toMatch(/fixture: the new tree's ccd\/ccrc is broken/);
+    expect(r.stdout).toMatch(/^update: arm 2 failed \(the restore child exited 1\) — falling to arm 3$/m);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): copied the pre-update backup back — the tree is MIXED \(new shared\/, ccd\/ and node_modules under the old dists\); the remedy is deploy\.sh\. Best effort\.$/m);
+    // The tree rows came back …
+    expect(existsSync(join(home, 'ccrc', 'server', 'dist', 'old.js'))).toBe(true);
+    expect(existsSync(join(home, 'ccrc', 'server', 'dist', 'new.js'))).toBe(false);
+    expect(readFileSync(join(home, '.local', 'bin', 'ccd'), 'utf8')).toBe('#!/bin/sh\n# the OLD ccd\n');
+    expect(statSync(join(home, '.local', 'bin', 'ccd')).mode & 0o111).not.toBe(0);
+    // … by RENAME: the new ccd's inode still holds the new bytes, so no live
+    // supervisor executing it had its script rewritten underneath it.
+    expect(readFileSync(join(home, 'new-ccd-link'), 'utf8')).toBe('#!/bin/sh\n# the NEW ccd\n');
+    expect(readFileSync(join(home, '.cc-sessions', 'session-hook.sh'), 'utf8')).toBe('OLD hook\n');
+    expect(readFileSync(join(home, unitRel), 'utf8')).toBe(unitBefore);
+    // … and the live data did not: memory keeps the write made during the
+    // update, coord.db is the same file with the same bytes.
+    expect(readFileSync(join(home, '.ccrc', 'memory', 'fixture-proj', 'MEMORY.md'), 'utf8'))
+      .toBe('written while the update ran\n');
+    expect(statSync(db).ino).toBe(dbIno);
+    expect(readFileSync(db).equals(dbBytes), 'arm 3 restored coord.db').toBe(true);
+    if (darwin) {
+      // launchd's daemon-reload + restart: bootout the job it holds (the NEW
+      // definition — this fixture wrote `NEW job file` over the plist), then
+      // bootstrap the restored plist. A bare `kickstart -k` would restart the
+      // cached new definition.
+      const lc = readFileSync(join(home, 'launchctl-calls'), 'utf8').split('\n');
+      const out = lc.findIndex((l) => /^bootout \S+\/app\.ccrc\.ccrc$/.test(l));
+      const back = lc.findIndex((l, i) => i > out && /^bootstrap \S+ \S+\/app\.ccrc\.ccrc\.plist$/.test(l));
+      expect(out, `arm 3 never booted out the job launchd held:\n${lc.join('\n')}`).toBeGreaterThan(-1);
+      expect(back, 'arm 3 never bootstrapped the restored plist after the bootout').toBeGreaterThan(out);
+      expect(lc.some((l) => /^kickstart -k \S+\/app\.ccrc\.ccrc$/.test(l)), 'arm 3 kickstarted the cached definition').toBe(false);
+      expect(existsSync(join(home, 'systemctl-calls')), 'a Darwin restore reached systemctl').toBe(false);
+    } else {
+      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n');
+      const reload = calls.indexOf('--user daemon-reload');
+      const restart = calls.indexOf('--user restart ccrc.service');
+      expect(reload, 'arm 3 restored unit files without daemon-reload').toBeGreaterThan(-1);
+      expect(restart).toBeGreaterThan(reload);
+      expect(calls.join('\n')).not.toMatch(/try-restart/);
+    }
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm3: tree MIXED, deploy\.sh is the remedy; gate: /);
+  });
+
+  it('an unversioned box has no tag to re-install: arm 2 says so and arm 3 runs', () => {
+    const home = freshUpdateBox('ccrc-update-restore-untagged-');
+    plantRestoreBox(home, { oldVersion: null });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('untagged');
+    expect(r.stdout).toMatch(/^update: arm 2: previous build carried no tag — arm 3$/m);
+    expect(restoreChildArgv(home)).toBeNull();
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm3: /);
+  });
+
+  it('a `previous` that went missing or unreadable after it was written falls to arm 3 by name — never a guessed tag', () => {
+    const cases: Array<[string, string, RegExp]> = [
+      ['absent', 'rm -f "$HOME/.ccrc/previous"', /^update: arm 2: no ~\/\.ccrc\/previous — the build this box ran before is not recorded — arm 3$/m],
+      ['malformed', 'printf \'three\\n\' > "$HOME/.ccrc/previous"', /^update: arm 2: ~\/\.ccrc\/previous is unreadable or malformed — arm 3$/m],
+    ];
+    for (const [name, line, says] of cases) {
+      const home = freshUpdateBox(`ccrc-update-restore-prev-${name}-`);
+      plantRestoreBox(home, { onInstall: [line] });
+      const r = runUpdate(home);
+      expect(r.code, `${name}: stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+      expect(r.stdout, name).toMatch(says);
+      expect(restoreChildArgv(home), name).toBeNull();
+      expect(String(lastReport(home)['detail']), name).toMatch(/^arm3: /);
+    }
+  });
+
+  it('a spine that died after the tree moved, then failed the gate, restores and exits 4 — the reason names the step (completes §18 "a spine death after the tree moved reverts")', () => {
+    const home = freshUpdateBox('ccrc-update-restore-spine-');
+    plantRestoreBox(home, { installExit: 1 });
+    writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');   // Task 4's knob
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    const details = reportWrites(home).map((w) => `${String(w['phase'])} ${String(w['detail'])}`);
+    expect(details).toContain('failed spine died at _inst_skills');
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; spine died at _inst_skills; gate: /);
+  });
+
+  it('a fleet box\'s arm 3 restarts ccrc-agent.service — the unit that box has — and never ccrc.service', () => {
+    const home = freshUpdateBox('ccrc-update-restore-fleet-');
+    plantRestoreBox(home, { child: 'broken' });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');   // Task 5's knob: the fleet gate fails (Linux)…
+    writeFileSync(join(home, 'fixture-main-pid-churn'), 'yes\n'); // …and its Darwin twin (launchd has no is-active)
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    if (process.platform === 'darwin') {
+      const calls = readFileSync(join(home, 'launchctl-calls'), 'utf8');
+      expect(calls).toMatch(/^bootout \S+\/app\.ccrc\.ccrc-agent$/m);
+      expect(calls).toMatch(/^bootstrap \S+ \S+\/app\.ccrc\.ccrc-agent\.plist$/m);
+      expect(calls).not.toMatch(/^bootout \S+\/app\.ccrc\.ccrc$/m);
+      expect(calls).not.toMatch(/^bootstrap \S+ \S+\/app\.ccrc\.ccrc\.plist$/m);
+    } else {
+      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+      expect(calls).toMatch(/^--user restart ccrc-agent\.service$/m);
+      expect(calls).not.toMatch(/^--user restart ccrc\.service$/m);
+    }
+  });
+
+  it('a release host that answers 503 to the bundle question is not "ships no bundle": arm 2 runs the child without --allow-unsigned and lets its own fetch decide', () => {
+    const home = freshUpdateBox('ccrc-update-restore-host-5xx-');
+    // Planted by the new tree's install, i.e. AFTER the parent fetched its own
+    // release: only arm 2's question meets the 503.
+    plantRestoreBox(home, { onInstall: ['printf \'503\\n\' > "$HOME/fixture-release-http"'] });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm 2: could not ask the release host whether v1\.0\.0 ships a bundle \(curl failed, or the host answered neither 200 nor 404\) — the restore child's own fetch decides$/m);
+    expect(r.stdout).not.toMatch(/arm2-refused/);
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
+  });
+
+  it('a spine that COMPLETED and then failed its gate, restored by arm 3: the completed-install record goes, so the box reads incomplete — never converged on the release it backed out of', () => {
+    const home = freshUpdateBox('ccrc-update-restore-unrecord-');
+    // What a completed v2.0.0 spine leaves before the gate runs: its stamp and
+    // its completed-install record, agreeing. That pair is what
+    // `_upd_converged` and `update --check` read as "current at v2.0.0".
+    const newSha = 'newsha0000000000000000000000000000000000';
+    plantRestoreBox(home, {
+      child: 'broken',
+      onInstall: [
+        `printf '%s\\n' '${shippedStamp('v2.0.0', newSha).trim()}' > "$HOME/.ccrc/build.json"`,
+        `printf '%s\\n' '${newSha}' > "$HOME/.ccrc/installed"`,
+      ],
+    });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    expect(r.stdout).toMatch(/^update: arm 3: the completed-install record is gone — this box reads install: incomplete until deploy\.sh or a completed update records it again$/m);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'arm 3 left the reverted build\'s record').toBe(false);
+    // The stamp still names v2.0.0 (arm 3 copies no stamp back; the tree is
+    // MIXED), so the honest word is `incomplete` — never `current`.
+    const c = runUpdate(home, ['--check']);
+    // RULING C1: `cmd_update --check`'s `incomplete` arm returns 1 (D-3266
+    // keeps incomplete/exit 1) — not the 0 an earlier draft of this case typed.
+    expect(c.code, `stderr: ${c.stderr}\nstdout: ${c.stdout}`).toBe(1);
+    expect(c.stdout).toMatch(new RegExp(`^check: box=v2\\.0\\.0 sha=${newSha} target=v2\\.0\\.0 (.* )?state=incomplete$`, 'm'));   // Task 12 adds fields before `state=`
+  });
+
+  it('--from restore is refused unless this run is the child of an update holding the lock — it is not a typed way past the floor or the sweep', () => {
+    const home = freshUpdateBox('ccrc-update-from-restore-bare-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    // No marker at all, and a marker naming a pid that is not this run's parent.
+    for (const extra of [{}, { CCRC_UPDATE_LOCK_HELD: '1' }]) {
+      const r = runUpdate(home, ['--to', 'v2.0.0', '--from', 'restore'], extra);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+      expect(r.stderr).toMatch(/^ccrc: update: --from restore is the automatic restore's own word — it runs only as the child of an update holding ~\/\.ccrc\/update\.lock \(it skips the floor, previous and the sweep\); to move this box to a tag by hand: ccrc update --to <tag> --downgrade$/m);
+      expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+      expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+      expect(localUrls(home)).toEqual([]);
+    }
+  });
+
+  it('FULL flavour: the arm-2 child is a REAL `ccrc update` that completes under the parent\'s lock — no lock sentence, no sweep, the previous tag re-installed (§18 "arm 2 runs under the parent\'s lock"; Review Focus 4)', () => {
+    // The parent installs the FULL v2.0.0 tree (the real spine places the
+    // real `ccd/ccrc` at ~/ccrc/ccd/ccrc), fails its gate, and arm 2 runs that
+    // placed ccrc as a child against the STUB v1.0.0 release. The child's own
+    // lock (Task 2) must INHERIT — marker = its $PPID, and a fresh flock -n
+    // fails because the parent holds the lock — or it refuses with "another
+    // update holds …" and every restore silently becomes arm 3.
+    const home = freshUpdateBox('ccrc-update-restore-full-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(`${r.stdout}\n${r.stderr}`).not.toMatch(/another update holds/);
+    expect(`${r.stdout}\n${r.stderr}`).not.toMatch(/ambiguous redirect/);
+    expect(r.stderr).not.toMatch(/--from restore is the automatic restore's own word/);
+    // The child's own transcript: it kept `previous`, skipped the sweep, and
+    // its staged install (the STUB v1.0.0 shim) actually ran.
+    expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\)/m);
+    // The two exemptions a bare --from restore can no longer be typed to
+    // reach (Step 1 (c)), measured here on the real child: the parent's
+    // completed spine raised the floor to v2.0.0, and the restore goes below
+    // it saying so, without lowering it (spec §9, Task 1's `--from` arm).
+    expect(r.stdout).toMatch(/^update: WARN: v1\.0\.0 is below this box's floor v2\.0\.0 \(resolved by --to v1\.0\.0\) — proceeding because this run is --from restore; the floor stays v2\.0\.0$/m);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
+    expect(r.stdout).toMatch(/^update: sweep: skipped — a --from restore run returns the supervisors' own build; they never moved$/m);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the restore child\'s staged install never ran').toBe(true);
+    expect(localUrls(home)).toContain(`local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`);
+    const writes = reportWrites(home);
+    expect(writes.some((w) => w['from'] === 'restore' && w['phase'] === 'installing'),
+      'the child reported no install of its own').toBe(true);
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(last['from']).toBe('cli');
+    expect(String(last['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 3\)/);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('v1.0.0');
   });
 });

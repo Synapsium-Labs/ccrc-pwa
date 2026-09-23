@@ -1508,12 +1508,21 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // _upd_marker_unsigned (wave 4, Task 6): the ONE read of the record's
+      // line 2 for an update — cmd_update's arm-2 precondition and
+      // cmd_rollback's --allow-unsigned both call it, so neither caller
+      // names the record here.
+      '[ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ] || return 1',
+      '{ IFS= read -r m1; IFS= read -r m2; } < "$BOX_INSTALLED_FILE" || :',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
       // W4 Task 4 (D-3254): `_upd_write_previous`
       // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
       // with no record is not a completed baseline.
       'elif [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // _upd_restore_arm3 (wave 4, Task 6, D-3260):
+      // removes the record a completed spine wrote before its gate failed.
+      'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);

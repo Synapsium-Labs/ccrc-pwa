@@ -1436,6 +1436,8 @@ UPD_BACKUP_DIR=""
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
+UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
+UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by _upd_backup_pairs
 # The report's state (design §10), at file scope for the same `set -u`
 # reason. NONE is exported: a child `ccrc` — the staged spine, a restore
 # child — is a different run and keeps its own.
@@ -11494,6 +11496,19 @@ cmd_update() {
     echo "$PROG: update: --check and --from are exclusive — --check measures and writes nothing, --from attributes a run that moves this box; pick one" >&2
     exit 2
   fi
+  # D-3257 — `--from restore` is the one word
+  # that exempts a run from the floor (Task 1), from `previous` (Task 4) and
+  # from the supervisor sweep (below). It is spoken by exactly one caller:
+  # `_upd_restore_arm2`, whose child carries CCRC_UPDATE_LOCK_HELD=<parent>.
+  # Typed by hand it would be the floor's second door, beside --downgrade —
+  # which spec §9 says is the only one. Any marker other than this process's
+  # own parent can never inherit (Task 2's rule), so refuse before anything is
+  # detached, locked or written; a marker that IS the parent is measured by
+  # `_upd_lock` itself and dies there if nobody holds the lock.
+  if [ "$UPD_FROM" = restore ] && [ "${CCRC_UPDATE_LOCK_HELD:-}" != "$PPID" ]; then
+    echo "$PROG: update: --from restore is the automatic restore's own word — it runs only as the child of an update holding ~/.ccrc/update.lock (it skips the floor, previous and the sweep); to move this box to a tag by hand: ccrc update --to <tag> --downgrade" >&2
+    exit 2
+  fi
   if [ "$check" -eq 1 ] && [ "$detach" -eq 1 ]; then
     echo "$PROG: update: --check and --detach are exclusive — --check measures and writes nothing, --detach hands a run that moves this box to a transient unit; pick one" >&2
     exit 2
@@ -11649,6 +11664,14 @@ cmd_update() {
 
   _upd_phase installing
   echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  # ARM 2'S PROVENANCE PRECONDITION, read NOW (design §11): whether the build
+  # this run is about to replace was ALREADY unverified is a fact about the
+  # marker as it stands before the staged spine rewrites it — the new spine's
+  # own marker says how the NEW install was made, which is the wrong half.
+  # Absent or unreadable reads 0: a restore never unsigns a node on evidence
+  # it could not read.
+  UPD_PREV_UNSIGNED=0
+  _upd_marker_unsigned && UPD_PREV_UNSIGNED=1
   # The completed-install record is written LAST by the spine (`_inst_installed`).
   # Cleared here, right before the staged install, its presence afterwards
   # means ONE thing — this run's spine ran to its end — which is what tells a
@@ -11762,7 +11785,13 @@ cmd_update() {
     # died after the tree): Task 6 replaces exactly this line with its restore.
     local gate_fail="gate: $UPD_GATE_WHY"
     [ -n "$UPD_SPINE_DIED" ] && gate_fail="spine died at $UPD_SPINE_DIED; $gate_fail"
-    _upd_phase failed "$gate_fail"
+    # A FAILED GATE RESTORES (design §11): a dead unit or a wrong /health
+    # version is exit 4 — "reverted" — and _upd_restore runs first, under
+    # this run's lock (the unlock below follows it). `gate_fail` carries the
+    # spine's death when there was one, so the row says both why the tree
+    # moved half-way and why the box was not trusted. `_upd_restore` writes
+    # `restoring` and then `reverted`; nothing here writes `failed`.
+    _upd_restore "$role" "$gate_fail"
     _upd_unlock
     echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $UPD_BACKUP_DIR" >&2
     exit 4
@@ -11780,12 +11809,19 @@ cmd_update() {
     exit 1
   fi
 
-  _upd_phase restarting
-  # Closed BEFORE the sweep (design §10): a try-restart must not hand the
-  # lock to anything it leaves running. The report and `done` below run
-  # unlocked — the spec's order; see the plan's Task 2 hazard.
-  _upd_unlock
-  _upd_sweep
+  if [ "$UPD_FROM" = restore ]; then
+    # THE AUTOMATIC RESTORE NEVER SWEEPS (design §11): the parent's gate failed
+    # BEFORE its own _upd_sweep ever fired, so the live claude-session@
+    # supervisors are still on the in-memory ccd they had — the build this
+    # child is putting back. A sweep here would restart the fleet to arrive
+    # where it already is.
+    echo "update: sweep: skipped — a --from restore run returns the supervisors' own build; they never moved"
+  else
+    _upd_phase restarting
+    # Task 2's, kept in its place: closed BEFORE the sweep (design §10).
+    _upd_unlock
+    _upd_sweep
+  fi
   _upd_report "$old_desc" "$old_version"
   if [ "$doctor_failed" -eq 1 ]; then
     _upd_phase done "doctor exited $inst_rc — the box moved; its health is ccrc doctor's"
@@ -12047,9 +12083,30 @@ _upd_unlock() {
 # `download/<tag>/<asset>`) under the one owner/repo pair at the top;
 # `install.sh --release` walks the same space with the same order — SUMS
 # first, because under `latest/` only the sums file knows the tarball's name.
+# `_upd_marker_unsigned` — rc 0 iff the completed-install record's line 2 reads
+# `unsigned`. It is the one read of that line for an update: `cmd_update`'s
+# arm-2 precondition capture and `cmd_rollback`'s --allow-unsigned both ask
+# it, and neither names the record. An absent, unreadable or one-line record
+# answers 1 (verified). That is the safe direction, because it refuses a
+# bundle-less target instead of admitting it.
+_upd_marker_unsigned() {
+  local m1="" m2=""
+  [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ] || return 1
+  { IFS= read -r m1; IFS= read -r m2; } < "$BOX_INSTALLED_FILE" || :
+  [ "$m2" = unsigned ]
+}
+# The release URL space's root — GitHub's layout under the one owner/repo pair
+# — spelled ONCE in this file: `_upd_resolve` fetches under it and
+# `_upd_asset_listed` asks it whether a release carries an asset.
+# (install.sh:51 carries its own copy of this expression — the release
+# source's deliberate cross-file second, argued in the RELEASE SOURCE
+# header above `CCRC_RELEASE_OWNER`: install.sh runs before any ccrc exists.)
+_upd_release_base() {
+  printf '%s' "${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+}
 _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   local to="$1" base _sum
-  base="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  base="$(_upd_release_base)"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
@@ -12529,6 +12586,15 @@ _upd_backup() {
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
+  _upd_backup_set
+  echo "$say: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+}
+
+# ── _upd_backup_set — the ONE list of what a backup copies ────────────────
+# `_upd_backup` copies it; `_upd_backup_pairs` LISTS it for arm 3 of
+# `_upd_restore`, which copies the `tree` rows back. One list, two readers:
+# a row added here is backed up AND restored, never one without the other.
+_upd_backup_set() {
   _upd_backup_copy "$BOX_TREE_DIR/server/dist"     server-dist
   _upd_backup_copy "$BOX_TREE_DIR/server/dist-pwa" dist-pwa
   _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
@@ -12545,7 +12611,10 @@ _upd_backup() {
   # convenience snapshot, not a substitute for `_uninst_purge`'s own R34
   # fix: this directory sits under `$BOX_BACKUP_ROOT`, which `--purge`
   # removes regardless of `--purge-memory`, same as every other entry here.
-  _upd_backup_copy "$HOME/.ccrc/memory"            memory
+  # `data`, not `tree` (D-3258): no install spine writes
+  # it, every live session does, so arm 3 NEVER copies it back — a restore
+  # minutes after this snapshot would erase what sessions wrote meanwhile.
+  _upd_backup_copy "$HOME/.ccrc/memory"            memory data
   # THE JOB FILES, UNDER THE NAMES THIS BOX ACTUALLY HAS THEM. On Linux that
   # is the unit list plus the session TEMPLATE; on macOS there is no template
   # (launchd has none — `ccd` mints a plist per session) and the names are
@@ -12567,13 +12636,217 @@ _upd_backup() {
       _upd_backup_copy "$BOX_UNIT_DIR/$u" "$u"
     done
   fi
-  echo "$say: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
 }
 
-_upd_backup_copy() {   # <src> <name under $UPD_BACKUP_DIR> — absent src is ordinary
+# `<src> <name under $UPD_BACKUP_DIR> [tree|data]` — absent src is ordinary.
+# With UPD_BACKUP_LISTING=1 (only `_upd_backup_pairs` sets it) it prints the
+# row instead of copying it. The class word means nothing to the copy.
+_upd_backup_copy() {
+  if [ "${UPD_BACKUP_LISTING:-0}" = 1 ]; then
+    printf '%s\t%s\t%s\n' "${3:-tree}" "$1" "$2"
+    return 0
+  fi
   [ -e "$1" ] || return 0
   cp -a "$1" "$UPD_BACKUP_DIR/$2" \
     || _ccrc_die "backing up $1 failed — refusing to install with an incomplete backup"
+}
+
+# `_upd_backup_pairs` — `<class>\t<source>\t<name>` per row of `_upd_backup_set`,
+# every row whether or not it exists (arm 3 checks the BACKUP's side).
+# coord.db is no row: it goes through backup-coord.mjs and is never restored
+# (design §11 — an older server reads a newer db, `db.ts:176-181`).
+_upd_backup_pairs() {
+  local UPD_BACKUP_LISTING=1
+  _upd_backup_set
+}
+
+# `_upd_restore_copy <backup copy> <live path>` — rc 0 placed, 1 not (and the
+# live path is as it was). Staged BESIDE the live path and placed by RENAME
+# (D-3259): `~/.local/bin/ccd` is the file every live
+# `ccd supervise` is executing, and a `cp` onto that inode would rewrite a
+# running bash script under it — `_inst_atomic`'s reason, applied backwards.
+# A live directory is moved aside, the copy renamed in, and the old one
+# removed only then; a failed rename puts it back. Every placement is
+# `_plat_mv_notdir` (GNU `mv -fT`, its Darwin twin): a plain `mv -f` onto a
+# symlink that names a directory would move the copy INTO that directory
+# and answer 0 — the shape `_inst_step`'s marker write (Task 4) refuses.
+_upd_restore_copy() {
+  local back="$1" live="$2" stage aside
+  stage="$live.ccrc-restore.$$"
+  aside="$live.ccrc-replaced.$$"
+  mkdir -p -- "${live%/*}" || return 1
+  rm -rf -- "$stage" || return 1
+  cp -a -- "$back" "$stage" || { rm -rf -- "$stage"; return 1; }
+  if [ -d "$live" ] && [ ! -L "$live" ]; then
+    _plat_mv_notdir "$live" "$aside" || { rm -rf -- "$stage"; return 1; }
+    if ! _plat_mv_notdir "$stage" "$live"; then
+      _plat_mv_notdir "$aside" "$live"
+      rm -rf -- "$stage"
+      return 1
+    fi
+    rm -rf -- "$aside"
+    return 0
+  fi
+  _plat_mv_notdir "$stage" "$live" || { rm -rf -- "$stage"; return 1; }
+}
+
+# `_upd_asset_listed <tag> <asset>` — 0 the release carries it; 1 it does not,
+# MEASURED: the host answered 404; 2 unmeasured — anything else. Two callers:
+# arm 2 asks for the previous release's bundle, `rollback` (Task 7) for
+# SHA256SUMS. D-3261: curl -f's exit 22 is ANY status
+# >= 400 (D-3143, `_upd_fetch`), so a 403 rate limit or a 5xx from the release
+# host is not "this release does not exist" — read as that, arm 2 would refuse
+# a restore it could have run and `rollback` would call a real tag
+# unpublished. `-w` still writes the status when `-f` fails the transfer
+# (`000` when nothing answered at all).
+_upd_asset_listed() {
+  local rc=0 code=""
+  code="$(curl -fsSL -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -eq 22 ] && [ "$code" = 404 ] && return 1
+  return 2
+}
+
+# ── _upd_restore <role> <reason> — a failed gate returns the box ───────────
+# (design 2026-09-20 §11). Arm 1 (a kept version directory) is wave 6's; this
+# wave has arm 2 — re-install the release that was running, as a synchronous
+# child under THIS run's lock — falling to arm 3 — copy this run's backup back.
+# Returns 0; the caller exits 4. NO SWEEP: the gate failed before this run's
+# `_upd_sweep` ever fired, so the supervisors never left the build a restore
+# returns to. Called from the main shell only: arm 2's child proves its lock
+# exemption with $PPID, which inside `$(…)` or a pipeline is a subshell's.
+_upd_restore() {
+  local role="$1" reason="$2"
+  _upd_phase restoring "$reason"
+  echo "update: RESTORING — $reason; returning this box to the build it ran before this update (no supervisor sweep: they never moved in this run)"
+  _upd_restore_arm2 "$reason" && return 0
+  _upd_restore_arm3 "$role" "$reason"
+  return 0
+}
+
+# Arm 2 — rc 0 restored, rc 1 fall to arm 3. THE HAZARD IT CARRIES: the
+# child is `$BOX_TREE_DIR/ccd/ccrc`, the NEW tree the spine just placed
+# (design §10's argv). It needs only curl, tar and node to work — but if the
+# new ccrc itself is broken the child fails and arm 3 runs; that is the
+# design, and a fixture pins it.
+_upd_restore_arm2() {
+  local reason="$1" prc=0 lrc=0 crc=0
+  local -a extra=()
+  _upd_read_previous || prc=$?
+  case "$prc" in
+    0) ;;
+    1) echo "update: arm 2: no ~/.ccrc/previous — the build this box ran before is not recorded — arm 3"; return 1 ;;
+    2) echo "update: arm 2: previous build carried no tag — arm 3"; return 1 ;;
+    *) echo "update: arm 2: ~/.ccrc/previous is unreadable or malformed — arm 3"; return 1 ;;
+  esac
+  if [ ! -f "$BOX_TREE_DIR/ccd/ccrc" ]; then
+    echo "update: arm 2: ~/ccrc/ccd/ccrc is absent (the spine died placing the tree) — arm 3"
+    return 1
+  fi
+  # NEVER SILENTLY UNSIGNED (design §11): --allow-unsigned only for a node
+  # that was ALREADY running unverified code — the marker read before this
+  # run's install rewrote it. A verified node whose previous release ships
+  # no bundle (older than W1) is not restored to unverified code behind the
+  # operator's back: the refusal names the by-hand command instead.
+  if [ "$UPD_PREV_UNSIGNED" = 1 ]; then
+    extra=(--allow-unsigned)
+  else
+    _upd_asset_listed "$UPD_PREV_TAG" "ccrc-$UPD_PREV_TAG.tar.gz.sigstore.json" || lrc=$?
+    case "$lrc" in
+      0) ;;
+      1)
+        echo "update: arm2-refused: $UPD_PREV_TAG ships no bundle — run ccrc update --to $UPD_PREV_TAG --allow-unsigned by hand"
+        _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --allow-unsigned by hand"
+        return 1 ;;
+      *)
+        echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle (curl failed, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
+    esac
+  fi
+  echo "update: arm 2: re-installing $UPD_PREV_TAG (the build this box ran before) — a synchronous child under this run's lock"
+  # The ONE child that keeps UPD_LOCK_FD: synchronous, reaped, a DIRECT
+  # child (so its $PPID is this $$), handed the marker in its own
+  # environment only. Its `_upd_lock` inherits iff the marker is its $PPID
+  # AND a fresh `flock -n` fails — the lock this descriptor holds (Task 2).
+  # (The exemption proves only that SOMEBODY holds the lock, not that this
+  # process's parent does — attribution, not authentication (Task 2 review);
+  # nothing else can supply $PPID's own value.)
+  CCRC_UPDATE_LOCK_HELD=$$ bash "$BOX_TREE_DIR/ccd/ccrc" update --to "$UPD_PREV_TAG" --no-gate --from restore \
+    ${extra[@]+"${extra[@]}"} || crc=$?
+  if [ "$crc" -ne 0 ]; then
+    echo "update: arm 2 failed (the restore child exited $crc) — falling to arm 3"
+    return 1
+  fi
+  _upd_phase reverted "arm2: restored $UPD_PREV_TAG; $reason"
+  echo "update: REVERTED (arm 2): this box runs $UPD_PREV_TAG again, re-installed from its release — $reason"
+  return 0
+}
+
+# Arm 3 — best effort, and said so. Removes the completed-install record,
+# copies every `tree` row of this run's backup back (never `data`, never
+# coord.db), then restarts the role's main unit so it runs the copied-back
+# dists. The tree stays MIXED: shared/, ccd/
+# and node_modules are the new install's, the dists the old one's — and the
+# remedy for that is deploy.sh, which the sentence names.
+_upd_restore_arm3() {
+  local role="$1" reason="$2" class src name back main=ccrc.service n=0 bad=0 rrc=0 note="" unrec=""
+  [ "$role" = fleet ] && main=ccrc-agent.service
+  # D-3260 — FIRST, before a single row moves. A
+  # spine that COMPLETED and then failed the gate has already written the new
+  # build's stamp and its completed-install record, agreeing; arm 3 copies
+  # neither back. Left in place, the record makes the box measure CONVERGED on
+  # the release it is backing out of: `_upd_converged` answers 0 (the next
+  # `update --to <that tag>` is a no-op), `update --check` says `current`.
+  # Removed, the box reads `incomplete`, which is the truth of a MIXED tree,
+  # until deploy.sh or a completed update records it again. A spine that died
+  # before `_inst_installed` left no record (`cmd_update` removed it), and this
+  # is a no-op there.
+  if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then
+    echo "update: arm 3: the completed-install record is gone — this box reads install: incomplete until deploy.sh or a completed update records it again"
+  else
+    echo "update: arm 3: could not remove the completed-install record — this box may still read as converged on the build being backed out"
+    unrec=" (the completed-install record could not be removed)"
+  fi
+  echo "update: arm 3: copying this run's pre-update backup ($UPD_BACKUP_DIR) back over the install"
+  while IFS=$'\t' read -r class src name; do
+    [ "$class" = tree ] || continue
+    back="$UPD_BACKUP_DIR/$name"
+    [ -e "$back" ] || [ -L "$back" ] || continue
+    n=$((n + 1))
+    if ! _upd_restore_copy "$back" "$src"; then
+      bad=$((bad + 1))
+      echo "update: arm 3: could not copy $back back to $src — left as the new install placed it"
+    fi
+  done < <(_upd_backup_pairs)
+  if [ "$CCD_OS" = darwin ]; then
+    # launchd's spelling of daemon-reload + restart — `_inst_enable_darwin`'s
+    # own idiom, "how launchd spells 'load the file I just rewrote'". A bare
+    # `kickstart -k` (`_svc_restart`) restarts the job launchd already HOLDS,
+    # i.e. the definition this arm just replaced on disk, and fails outright
+    # on a label that is not loaded — the likeliest dead unit here, an
+    # `_inst_enable_darwin` whose bootstrap failed after its bootout. So:
+    # bootout, then bootstrap the restored plist and kickstart it
+    # (`_svc_stop`, `_svc_start`); `_svc_start` answers the kickstart's rc,
+    # which fails when the bootstrap did.
+    _svc_stop "$main"
+    _svc_start "$main" || rrc=$?
+  else
+    # The bus contingency `_inst_enable` and `_upd_sweep` carry, for their
+    # reason; daemon-reload because the unit FILES just changed on disk and
+    # a restart against the cached definition would start the new ExecStart.
+    : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+    : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+    systemctl --user daemon-reload >/dev/null 2>&1 \
+      || echo "update: arm 3: systemctl --user daemon-reload failed — systemd may still hold the new unit definitions"
+    _svc_restart "$main" || rrc=$?
+  fi
+  if [ "$rrc" -ne 0 ]; then
+    echo "update: arm 3: restarting $main failed (rc $rrc) — the copied-back files are in place, but $main may still run the new build: $(_svc_restart_hint "$main")"
+    note=" (restart of $main failed)"
+  fi
+  [ "$bad" -eq 0 ] || note=" ($bad of $n rows could not be copied back)$note"
+  note="$note$unrec"
+  echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."
+  _upd_phase reverted "arm3: tree MIXED, deploy.sh is the remedy$note; $reason"
 }
 
 # ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────
