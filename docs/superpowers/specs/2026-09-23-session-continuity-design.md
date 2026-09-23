@@ -327,7 +327,7 @@ stop on the limit again, stop and leave it listed.
 
 **Background shells** killed by the stop, or handed over natively, are listed so the session re-arms its watchers.
 
-### 5.4 Stage 4 — rescue timing, the herd, and swaps that cut work (ccd; needs stage 3)
+### 5.4 Stage 4 — rescue timing, the herd, and swaps that cut work (ccd; its refusal of swaps that cut work needs stage 3)
 
 **The rescue policy (C2, C6).** A rate-limited turn is lost either way — Claude Code's wait re-runs it after the
 reset, and a resume after a swap re-runs it too — so waiting saves only the swap and the risk that the model does
@@ -561,7 +561,9 @@ redesigned.
 
 ## 10. Sequencing
 
-1 → 2 → 3 → {4, 5}. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
+1 → 2 → 3 → {4, 5}, with one exception: stage 4's rescue policy (rules 1–3 and their tests) reads only the
+transcript, the limits files and the swap log, needs nothing from stages 1–3, and ships any time; stage 4's refusal
+of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6 ships in two parts. The first — the spawn variable (after its one-week baseline, §5.6),
 the dead-scope report, the inert stop, and the harness fix — needs nothing from stages 1–5 and
 can ship any time. Before stage 3 no handoff record exists, so a handed-over waiter with no CPU and no socket can be
 stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
