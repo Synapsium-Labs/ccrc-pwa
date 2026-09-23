@@ -472,3 +472,15 @@ leave a wave undispatchable pending a ruling below.
   that tried to recognise every spelling of a grammar would be a semantic pin, and no such scan is complete.
   Every run-id parse that wave 3 adds calls `_child_runid_valid`, and wave 3's reviewers check this by
   reading.
+- **R28 — spent means a PR was OPENED from the branch, whether or not it binds** (wave 2, review 144). This
+  amends §2's `none|no-commits → unspent`. Rule 3's ruling is "a PR opened from its branch spends a child", and
+  `phaseFor`'s binding test answers a different question: same base, and the head an ancestor of the local
+  tip. So `childSpent`'s live rung answers `spent`, with that row's number, when ANY same-repository PR row names
+  the child's branch as its head, in any state and whatever its base or ancestry. `unspent` needs no such row.
+  If the live read cannot carry unbound rows on the real ccd, this rung moves to wave 3's ccd edit rather than
+  being approximated.
+- **R29 — a listed marker that reads absent is `unreadable`** (wave 2, review 144). This amends the marker's
+  listing rung. When the registry listing names `$REG/<id>.child` but the read answers absent (a dangling link,
+  or a file removed between list and read), `ChildMark` is `unreadable`, so a bind is refused and a reclaim is
+  deferred. ccd's `_reg_get` reads any symlinked field as empty (not a child). The server refusing where ccd
+  answers "not a child" is the safe direction, and it is stated as the one place the two readings differ.

@@ -18,7 +18,7 @@ removed on 2026-09-10 was not.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **in review** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178 at `08e40675`; review run 144 on `ccrc-pwa-still-river` |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **fix round** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178; review 144: 4 important + 12 minor |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
@@ -43,6 +43,24 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (review *
 
 ## Decisions & deviations
 
+- **2026-09-23 — review 144 on wave 2 (`08e40675`): four important, twelve minor; the last full fix round.**
+  - **The panel.** Six lenses (the held-out panel plus the plan's three; the fail-shut lens at xhigh), 99
+    agents, 25 survivors merged into 16 findings, 6 refuted. Whole-branch: nothing destroyed, wire additive
+    with one reader, citation tax paid per commit (green at each of the three commits). Fail-shut held
+    everywhere except two reads that take "none" at its word.
+  - **Rulings, with contract §9 R28 and R29 written the same hour:**
+    1. **Spent means OPENED from the branch.** A same-repo PR whose head is the child's branch spends it,
+       even when it does not bind: a stacked base, or a head the local tip does not contain. Measured first on
+       the real read path. If ccd's line cannot carry unbound rows, this goes to wave 3.
+    2. **A listed-but-absent marker is `unreadable`.**
+    3. **Every `unbound:false` names its cause.** §2 says stop on a permanent cause, and otherwise retry once.
+    4. **The actor pin binds the call site's value.**
+    5. **The minors are all fixed.**
+  - **Held items.** A same-project producer's exact SHA is its verified `handoffCommit`, proven merged by the
+    PR's `headRefOid`.
+  - **Numbers.** Ten assigned, 3340 through 3349.
+  - **Named in advance as the last full fix round:** a scoped review follows, and only a shipped-behaviour
+    defect sends it back again.
 - **2026-09-23 — wave 2's wave-done (PR #178, `08e40675`); review 144 dispatched.**
   - **The claim.** Tasks 1–7 through Step 5, plus the declared wave-1 prose item. Main had not moved, so no
     merge was needed. The server accepted the claim; 8/8 items settled.
