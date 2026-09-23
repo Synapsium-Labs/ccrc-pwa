@@ -399,9 +399,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  next time the probe answers (200 applied, 304, or 404 — all three are
    *  answers, not failures). */
   let lastWarnedLatestError: string | null = null;
-  /** I3 (fix round 1, review round 2): the tag of the latest probe's own last
-   *  SUCCESSFUL upsert — process memory, like the ETags (D-3182), never
-   *  cleared by a 304, a 404 or any failure. The LISTING's yank statement
+  /** I3 (fix round 1, review round 2): the stable tag the listing must not
+   *  yank — process memory, like the ETags (D-3182). Set by a 200 the probe
+   *  applied; unchanged by a 304 or any probe failure; on a move AWAY from
+   *  K (a 404 or an older tag, ruling A) it moves only once K's own tag
+   *  fetch resolves (to the new tag, or to null after a bare 404 or a
+   *  confirmed withdrawal) and stays at K while that fetch fails. When it is
+   *  null, `currentK()` re-derives K from the store (restart). The LISTING's yank statement
    *  excludes it (`pollListing`'s `keepTags`), so a `complete`/`newest-page`
    *  listing that omits it (the off-page-stable shape D-3215 exists for)
    *  never marks it absent out from under the probe that just confirmed it. */
@@ -660,7 +664,8 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // N1 (fix round 2): the latest probe runs FIRST. `pollListing` reads
     // `lastLatestTag` as its `keepTags` argument, so running the probe first
     // makes that read THIS poll's answer (200 → the confirmed tag; 304 →
-    // unchanged; 404 → cleared; any other failure → unchanged) rather than
+    // unchanged; a move away → settled by K's tag fetch, ruling A; any other
+    // failure → unchanged) rather than
     // the previous poll's, which is what let a genuinely withdrawn stable
     // release stay un-yanked forever (the regression the re-review found).
     const prevLatestTag = lastLatestTag;
