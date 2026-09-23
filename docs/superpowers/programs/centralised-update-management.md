@@ -25,7 +25,7 @@ numbers; the spec wave each one implements is named beside it.
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **fix round 1** (run 128, PR #176); review run 134 at `a35f5e7c`: 21 findings survived; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602`; dispatches when wave 2 merges |
-| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **dispatched** (run 129, 2026-09-23 09:5x UTC, `ccrc-pwa-keen-meadow`); plan `4b361c00`; tasks 15–16 wait for wave 2's merge |
+| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
@@ -174,6 +174,22 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     - The wave-2 worker adds a `timeout` to every `spawnSync` its tests added (the correct shape regardless).
   - **The fleet's gh API quota.** All 5000 calls an hour were used by 15:20 UTC. The coordinator's own CI reads now
     stay few.
+
+- **Wave 4 reached its pause (2026-09-23).** Tasks 1–14 are committed at `2fe02e2d`, and every task passed its
+  per-task review. Eight reserve numbers are spent (D-3274…D-3281), each defined in the plan:
+  - D-3274: the lock tells contention from a flock that could not run.
+  - D-3275: a restore child exiting 3 counts as restored.
+  - D-3276: the watchdog never rolls back a pre-install-phase or unversioned report.
+  - D-3277: the watchdog re-reads the report under its lock.
+  - D-3278: three failing probe samples.
+  - D-3279: an epoch over 18 digits is refused.
+  - D-3280: the body is validated as bytes from a bounded temp file.
+  - D-3281: `rollout` refuses a box whose floor is newer than the target unless `--downgrade`.
+
+  The worker made plan-text corrections without numbers (test and anchor defects, not spec departures). It follows the
+  Global Constraints' reserve-number rule over Task 15's slug wording. It shares `session-hook.test.ts` narrow hunks
+  with runs 131 and 138 under its claim 733; whichever merges second re-measures the census. Its wake mail carries W2's
+  merge sha and the K4 re-pointing: `REPORT_TIME_MAX_S`/`MAX_UNIX_S` became `shared/api.ts`'s `UNIX_SECONDS_MAX`.
 
 ## Carried constraints
 
