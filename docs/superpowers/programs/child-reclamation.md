@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | planned |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **dispatched** 2026-09-23 to `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -42,6 +42,10 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131**.
 
 ## Decisions & deviations
+
+- **2026-09-23 — documents merged, wave 1 dispatched.** Spec, contract, ledger and plans reached main as
+  `aed80210` (#173; the non-required macOS leg was cancelled at its time limit with no test failed). Run 131
+  dispatched into a fresh child; `skillState: present`.
 
 - **2026-09-22 — the design, its four rulings, and the accepted spec.** The operator gave four rules, then
   ruled on four questions: pin everything then reap; a PR *opened* spends a child; transcripts are kept;
