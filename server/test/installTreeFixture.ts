@@ -43,6 +43,16 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // Plan 2b-1 Task 1: the two GPT-lane executables that ship today (Plan
+  // 2a), copied from the repository. `_inst_bins` places both, so a tree
+  // missing either makes a placement assertion fail for a fixture reason
+  // rather than a real one. `ccgpt` and `ccgpt-runtime` are NOT here, and
+  // not stubbed either: they are not in the repository until Plan 2b-2, so
+  // nothing may place them (D-3165), and a stub would hide a placement that
+  // dies on a real tree — the class `install-census.test.ts`'s tracked-source
+  // case now reds on.
+  'ccd/ccgpt-proxy.py',
+  'ccd/ccgpt-usage.py',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.

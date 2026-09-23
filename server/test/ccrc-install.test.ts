@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1138,6 +1138,23 @@ describe('ccrc install: the fixture tree', () => {
     writeFileSync(treeFile(home, 'deploy/accounts.default.json'), 'clobbered');
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
   });
+
+  it('the fixture tree carries the two GPT-lane executables that ship today', () => {
+    // The two `.py` files only. `ccgpt` and `ccgpt-runtime` are not in the
+    // repository until Plan 2b-2, and the fixture no longer stubs them: a stub
+    // is what let a placement of them pass here while a real tree would die.
+    const home = mkTmp('ccrc-tree-ccgpt-');
+    const root = installFixtureTree(home);
+    for (const rel of ['ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
+      const p = join(root, rel);
+      expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
+      // 0o111 — both are placed 755 by `_inst_bins`, and copied at the repo's mode.
+      expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
+    }
+    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime']) {
+      expect(existsSync(join(root, rel)), `${rel} is in the fixture tree, and the repository has no such file`).toBe(false);
+    }
+  });
 });
 
 describe('ccrc install: a fresh box', () => {
@@ -1708,6 +1725,73 @@ describe('ccrc install: the executables and files it installs', () => {
     const bin = join(home, '.local', 'bin', 'ccd-telemetry-keepalive');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-telemetry-keepalive')));
     expect(mode(bin)).toBe(0o755);
+  });
+
+  it('places the two GPT-lane executables that exist today on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
+    // Unlike the three darwin-gated cases above, these are NOT platform-gated:
+    // the two `.py` files are NOT timer-only tools reserved to the systemd
+    // arm. `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py`
+    // is placed here so an operator can run it by hand (no installer places
+    // its timer yet). They ARE role-gated, `!= server` (spec §11, final
+    // review F-2): this install is role `both`, the fleet describe pins
+    // `fleet`, and the `--role server` case pins their absence.
+    //
+    // Fix round 1, Finding 1: `ccgpt` and `ccgpt-runtime` are NOT placed by
+    // `_inst_bins` yet — they don't exist in the tree (`git ls-files ccd/`
+    // has no such names) until Plan 2b-2 writes them, and `_inst_atomic`
+    // dies on a missing source by design. This test covers only the two
+    // names that exist; Plan 2b-2 extends it to four in the same commit
+    // that adds the real files.
+    const { home } = installed;
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      const bin = join(home, '.local', 'bin', name);
+      expect(readFileSync(bin), `${name} was not placed`).toEqual(readFileSync(placed(home, 'ccd', name)));
+      expect(mode(bin), `${name} mode`).toBe(0o755);
+    }
+  });
+
+  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the two .py on both and fleet, neither on server', () => {
+    // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
+    // line were pinned only by `itDarwin`/`process.platform` branches, and no
+    // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
+    // (ccd/ccrc's platform block), and bash keeps an OSTYPE it inherits, so
+    // the child runs the Darwin arm here — `install: units:` naming
+    // `$HOME/Library/LaunchAgents` is the control that it did.
+    //
+    // FORCED THROUGH `_inst_bins`, NOT THROUGH THE VERB. A later step of a
+    // `both`/`fleet` install (the wrapper converger's `stat`) speaks BSD
+    // userland on that arm, which a Linux box does not have, so the run exits
+    // nonzero AFTER this function's work is done (measured: `stat answered for
+    // 85 of the 17 id-shaped files`). The exit code is therefore not asserted:
+    // what is asserted is everything `_inst_bins` did, which a step failing
+    // later cannot undo.
+    for (const role of ['both', 'fleet', 'server'] as const) {
+      const home = freshBox(`ccrc-install-darwin-arm-${role}-`);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      const r = runInstall(home, ['install', '--role', role], { OSTYPE: 'darwin23' });
+      expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
+        .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
+      const lane = role === 'server' ? [] : ['ccgpt-proxy.py', 'ccgpt-usage.py'];
+      const bins = readdirSync(join(home, '.local', 'bin'))
+        .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
+      expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
+        .toEqual(['ccd', 'ccd-account-auth', ...lane, 'ccrc'].sort());
+      for (const name of lane) {
+        const bin = join(home, '.local', 'bin', name);
+        expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+        expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+      }
+      const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+      expect(line, `--role ${role}: no \`install: bins:\` line`).toBeDefined();
+      expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
+      if (role === 'server') {
+        expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
+      } else {
+        expect(line!).toMatch(/(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/);
+      }
+    }
   });
 
   itLinux('ccd-tmp-sweep lands beside it too (the temp-dir reaper) — every role, but not Darwin', () => {
@@ -2364,6 +2448,8 @@ const UNIT_FILES: Array<[string, string]> = [
   // that is supposed to run them hourly.
   ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
   ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
+  // NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}`: no role
+  // places that pair (the dedicated case below says why, and pins it).
   // The temp-dir reaper: ROLE-GATED on the same terms — a server box runs no
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
@@ -2405,7 +2491,19 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs ten unit files and two drop-ins, byte for byte, at 644', () => {
+  // The count is DERIVED from `UNIT_FILES` itself, not hand-written: fix
+  // round 1 (Finding 4) measured the title stuck at "ten" while the census
+  // had grown to fourteen, the exact staleness this avoids repeating.
+  //
+  // Split by SUFFIX, not by position. `UNIT_FILES.length - 2` was the first
+  // spelling and it is a hand-maintained constant wearing a derivation's
+  // clothes: it is correct only while the two drop-ins are the last two rows,
+  // so appending a unit file below them silently makes the title wrong by one
+  // — the same defect, one wave later and harder to see. Every drop-in is a
+  // `.conf`; no unit file is.
+  const dropIns = UNIT_FILES.filter(([dest]) => dest.endsWith('.conf'));
+  const unitFiles = UNIT_FILES.filter(([dest]) => !dest.endsWith('.conf'));
+  it(`installs ${unitFiles.length} unit files and ${dropIns.length} drop-ins, byte for byte, at 644`, () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
@@ -2420,6 +2518,69 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
         .toEqual(readFileSync(placed(home, ...src.split('/'))));
       expect(statSync(p).mode & 0o777, `${dest} has the wrong mode`).toBe(0o644);
     }
+  });
+
+  itLinux('places NO ccgpt-usage@ unit file on any role — the pair ships in the tree and waits for Plan 3\'s cutover', () => {
+    // Final review F-1 (SEC-1 = FID-1). On a live fleet box
+    // `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` ALREADY
+    // EXIST, owned by another repository, with an instance enabled. Placing
+    // ours at those two names replaces a running timer's definition, so it
+    // is the cutover, and Plan 3 owns that (spec §15 step 3). This case pins
+    // `both` (the shared install above) and `fleet` (the role a Codex lane
+    // runs under); the `--role server` describe pins the third role. The
+    // files still SHIP: `_inst_tree` lands them in the placed tree.
+    const home = freshBox('ccrc-install-ccgpt-usage-fleet-');
+    // `--role fleet` reads the agent's URL and token from a tty when
+    // `~/.ccrc/agent.env` is absent; a box that already carries one (every
+    // re-install) skips that prompt.
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const [role, h] of [['both', units.home], ['fleet', home]] as const) {
+      for (const u of ['ccgpt-usage@.service', 'ccgpt-usage@.timer']) {
+        expect(existsSync(unitDir(h, u)), `--role ${role} placed ${u}`).toBe(false);
+        expect(existsSync(placed(h, 'deploy', 'systemd', u)), `--role ${role}: ${u} did not ship in the placed tree`)
+          .toBe(true);
+      }
+      expect(systemctlCalls(h).map((c) => c.argv).join('\n'), `--role ${role}`).not.toContain('ccgpt-usage');
+    }
+  });
+
+  itLinux('a FOREIGN ccgpt-usage@ unit pair and its enabled instance survive install --role fleet and uninstall, byte for byte', () => {
+    // The live fleet box's shape (F-1), in a fixture HOME: another
+    // repository's template pair at the two names, and an ENABLED instance of
+    // it (the `timers.target.wants/` link `systemctl enable` makes). Every
+    // fixture HOME before this case was empty there, so nothing could see an
+    // install overwrite that pair or an uninstall delete it.
+    const home = freshBox('ccrc-install-foreign-ccgpt-usage-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const svc = unitDir(home, 'ccgpt-usage@.service');
+    const timer = unitDir(home, 'ccgpt-usage@.timer');
+    const wants = unitDir(home, 'timers.target.wants', 'ccgpt-usage@x.timer');
+    mkdirSync(unitDir(home, 'timers.target.wants'), { recursive: true });
+    const foreignSvc = '# FOREIGN-FIXTURE-7f3a: another repository owns this template\n[Service]\nType=oneshot\nExecStart=/bin/true %i\n';
+    const foreignTimer = '# FOREIGN-FIXTURE-7f3a: another repository owns this template\n[Timer]\nOnCalendar=*:0/7\n';
+    writeFileSync(svc, foreignSvc, { mode: 0o644 });
+    writeFileSync(timer, foreignTimer, { mode: 0o644 });
+    symlinkSync(timer, wants);
+    const untouched = (stage: string): void => {
+      expect(read(svc), `${stage}: the foreign ccgpt-usage@.service changed`).toBe(foreignSvc);
+      expect(read(timer), `${stage}: the foreign ccgpt-usage@.timer changed`).toBe(foreignTimer);
+      expect(lstatSync(wants).isSymbolicLink(), `${stage}: the enabled instance's wants link is gone`).toBe(true);
+      expect(readlinkSync(wants), `${stage}: the wants link was repointed`).toBe(timer);
+    };
+    const inst = runInstall(home, ['install', '--role', 'fleet']);
+    expect(inst.code, inst.stderr).toBe(0);
+    untouched('after install --role fleet');
+    const un = runInstall(home, ['uninstall']);
+    expect(un.code, `stderr: ${un.stderr}\nstdout: ${un.stdout}`).toBe(0);
+    untouched('after uninstall');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n'), 'a systemctl verb named the foreign unit')
+      .not.toContain('ccgpt-usage');
   });
 
   it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
@@ -2926,8 +3087,13 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
-        // and the three timer-bound ones, macOS is a supported box for it.
-        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
+        // and the three timer-bound ones, macOS is a supported box for it. The
+        // two GPT-lane files that exist today (Plan 2b-1 Task 2) join it here
+        // for the same reason: `ccgpt-proxy.py` is the engine `ccgpt` execs
+        // and `ccgpt-usage.py` is placed for hand-running, neither timer-bound
+        // to this arm. `ccgpt`/`ccgpt-runtime` are NOT here — they don't
+        // exist in the tree until Plan 2b-2 (fix round 1, Finding 1).
+        ? ['ccd', 'ccd-account-auth', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']
         // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
@@ -2935,7 +3101,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
            'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
-           'ccrc', 'graphify']);
+           'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']);
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -2948,20 +3114,40 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     //
     // DERIVED FROM THE BIN DIRECTORY, so the next executable added is caught
     // by the same mechanism rather than by someone remembering this line —
-    // `macos-platform.test.ts:184-189`'s rule under D-1250. Two names are
-    // excluded and each says why: `graphify` is `_inst_graphify_engine`'s
-    // symlink into the pinned venv, not one of `_inst_bins`' copies, and
-    // `ccd-usage-sweep.py` is the sweep's ENGINE, carried by the entry that
-    // names the sweep itself (`ccrc-uninstall`'s own census calls them a
-    // PAIR).
+    // `macos-platform.test.ts:184-189`'s rule under D-1250. `graphify` is
+    // excluded because `_inst_graphify_engine`'s symlink into the pinned venv
+    // is not one of `_inst_bins`' copies.
+    //
+    // Plan 2b-1 Task 2: the blanket `!b.endsWith('.py')` this line used to
+    // carry is gone. A `.py` file is exempt only when a non-`.py` SIBLING
+    // execs it and that sibling's own name in the echo covers it — named
+    // explicitly, not by suffix, so a `.py` with no such sibling is caught
+    // rather than silently waved through. Fix round 1, Finding 4: the
+    // reviewer mutated this list both ways — dropping `ccd-usage-sweep.py`
+    // reds, dropping `ccgpt-proxy.py` stayed GREEN, because the echo names
+    // `ccgpt-proxy.py` explicitly regardless (it is not a timer-only
+    // artifact), so it bound nothing and is gone. One entry survives:
+    const PY_SIDECARS_COVERED_BY_SIBLING = [
+      'ccd-usage-sweep.py', // engine carried by ccd-usage-sweep's own name
+    ];
+    // `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
+    // each must be named explicitly in the echo below on its own.
     const { home, r } = converged;
     const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(line, 'no `install: bins:` line in the transcript at all').toBeDefined();
     const placed = readdirSync(join(home, '.local', 'bin'))
-      .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify' && !b.endsWith('.py'))
+      .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify'
+        && !PY_SIDECARS_COVERED_BY_SIBLING.includes(b))
       .sort();
+    // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum (`ccd`,
+    // `ccd-account-auth`, `ccgpt-proxy.py`, `ccgpt-usage.py`, `ccrc`) — the
+    // smaller of the two platforms, so it holds on both. Like
+    // `gen-wrappers.test.ts`'s `TOOLCHAIN_EXECUTABLES` floor, this is a
+    // RATCHET: it only ever needs to rise as names are added, never fall,
+    // and a fall here means the derivation lost members rather than that
+    // fewer names shipped.
     expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
-      .toBeGreaterThanOrEqual(3);
+      .toBeGreaterThanOrEqual(5);
     // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
     // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
     // PREFIX of another name this same census carries (`ccd-account-auth`,
@@ -3625,6 +3811,20 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
+  it('places the two GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
+    // Final review F-2 (spec §11): `_inst_bins` gates them `!= server`, on
+    // both platform arms, so a fleet box gets both. The server-role case in
+    // the next describe pins the other side of that gate.
+    const { home, r } = await fleet();
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      const bin = join(home, '.local', 'bin', name);
+      expect(existsSync(bin), `--role fleet did not place ${name}`).toBe(true);
+      expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+      expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+    }
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/m);
+  });
+
   itLinux('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
     const { home } = await fleet();
     const agent = unitDir(home, 'ccrc-agent.service');
@@ -3762,7 +3962,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged. C5: the models pair joins the
-    // same gate — a server box has no lanes to refresh.
+    // same gate — a server box has no lanes to refresh. The ccgpt-usage@
+    // pair is placed on NO role (F-1), and its absence is asserted here too,
+    // for the third role.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
@@ -3777,6 +3979,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.timer'))).toBe(false);
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
@@ -3792,7 +3996,18 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    // Final review F-2 (spec §11): the two GPT-lane executables are gated
+    // `!= server` — the lane needs a converged per-account launcher, and a
+    // server-role box converges nothing per account (D-3111) — and the
+    // closing line must not claim what the gate skipped.
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(home, '.local', 'bin', name)), `--role server placed ${name}`).toBe(false);
+    }
+    const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+    expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
+    expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

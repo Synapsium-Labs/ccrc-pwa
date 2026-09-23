@@ -27,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -615,6 +615,50 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
+  // `_inst_bins` to these — the lane's launcher and runtime binaries are not
+  // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
+  // places them and this census names none of them either). The usage-window
+  // publisher's `ccgpt-usage@.{service,timer}` pair is the other half of this
+  // case since the final review's F-1: no installer places it, because on a
+  // live fleet box those two names hold ANOTHER repository's pair with an
+  // instance enabled, so an uninstall that removed them would delete a live
+  // unit ccrc never wrote. They must survive byte for byte, their enabled
+  // instance's wants link too, and no systemctl verb may name them. `itLinux`,
+  // as every other systemd-argv assertion in this file.
+  itLinux('uninstall removes the two GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
+    const home = mkTmp('ccrc-uninst-ccgpt-');
+    plantInstalledBox(home);
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
+    const units = join(home, '.config', 'systemd', 'user');
+    const foreignSvc = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.service, not ccrc\'s\n';
+    const foreignTimer = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.timer, not ccrc\'s\n';
+    writeFileSync(join(units, 'ccgpt-usage@.service'), foreignSvc);
+    writeFileSync(join(units, 'ccgpt-usage@.timer'), foreignTimer);
+    mkdirSync(join(units, 'timers.target.wants'), { recursive: true });
+    const wants = join(units, 'timers.target.wants', 'ccgpt-usage@codex-a.timer');
+    symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
+    }
+    expect(readFileSync(join(units, 'ccgpt-usage@.service'), 'utf8'), 'the foreign .service was removed or changed')
+      .toBe(foreignSvc);
+    expect(readFileSync(join(units, 'ccgpt-usage@.timer'), 'utf8'), 'the foreign .timer was removed or changed')
+      .toBe(foreignTimer);
+    expect(lstatSync(wants).isSymbolicLink(), 'the enabled instance\'s wants link was removed').toBe(true);
+    expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
+    expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
+      .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
+    expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
+      .toMatch(/uninstall: tree: .*ccgpt-usage\.py.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the
