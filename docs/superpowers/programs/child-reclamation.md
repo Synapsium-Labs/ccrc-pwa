@@ -2,6 +2,7 @@
 
 Spec: `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`
 Plans: `docs/superpowers/plans/2026-09-22-child-reclamation-wave{1,2,3,4,5}-*.md`
+Contract: `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings)
 Home project: `ccrc-pwa`   Coordinator: not yet placed   Workspace: **a fresh one per wave**
 Ticket: CCR-15
 

@@ -40,8 +40,9 @@ Four further rulings, given the same day against four questions this design coul
 automatic collector acts on, and that is what makes one safe here where the last one was not — see §3.
 
 One qualification is owed up front, because the first ruling's "nothing waits for a human" is not kept
-absolutely: two conditions, both of them cases where proceeding would destroy work **nobody could see**,
-refuse instead of proceeding. They are argued at §5.5 and bounded at §7, and they are the only two.
+absolutely: three conditions — two where proceeding would destroy work **nobody could see**, and one where
+ccd cannot tell the directory is the child's at all — refuse instead of proceeding. They are argued at §5.5
+and bounded at §7, and they are the only three.
 
 ---
 
@@ -292,6 +293,14 @@ nothing is destroyed.
 | 8 | the tree reads, after a permission normalisation pass | `tree-unreadable` | **terminal** |
 | 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream | `containment-unproven` | **terminal** |
 | 10 | the recomputed fingerprint equals `--expect` | `state-changed` | retryable |
+| — | the workdir exists but git records no worktree there | `no-worktree-record` | **terminal** |
+
+**A vanished worktree is not a refusal.** When the child's workdir no longer exists and no breadcrumb says a
+reclaim was already under way, there is nothing left on disk that could be lost: the branch tip and its
+stashes are pinned into the attic, the tombstone records `worktree: absent`, and the tail runs from the branch
+delete on. Retrying such a child would never succeed, and it would write a feed row every time it failed. A
+directory that *exists* but that git does not record as this project's worktree is the opposite case: ccd
+cannot tell what it would be deleting, so it refuses with `no-worktree-record`, terminally.
 
 Rungs 8 and 9 are the two places this design **refuses rather than proceeds**, and they are a deliberate
 reading of the operator's ruling rather than a softening of it. The ruling authorises overriding
@@ -497,7 +506,8 @@ offering to open its session, which no longer exists.
 **No child ever appears in the reap or archive sheets.** Both are gated on a workspace being archived, which
 a child never is.
 
-**One fleet-level attention item** collects children under a terminal refusal, with each one's sentence.
+**One fleet-level attention item** collects children under a terminal refusal, and children whose reclaim
+has kept failing past the defer ceiling (retries back off in between), with each one's sentence.
 It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness. It
 lives in the reclaim row of the Runs screen's banner, beside the pause toggle, carried on the coordination
 frame and derived from the lifecycle mirror so a restart does not lose it. It is **not** a divergence
@@ -586,8 +596,9 @@ approved on a narrow one.
    root, and covers tool scratch only insofar as the writer respects `TMPDIR`. Writers that hardcode `/tmp`,
    or write to `~/.cache`, `~/.npm`, a docker volume or the project's main checkout, are not contained. The
    residue probe measures the remainder so it is a number rather than a belief.
-2. **"Always" in rule 1 is bounded by two refusals.** A child whose tree cannot be read, or which holds a
-   foreign repository's unpushed commits, is reported and left alone. That is the operator's pin-everything
+2. **"Always" in rule 1 is bounded by three refusals.** A child whose tree cannot be read, which holds a
+   foreign repository's unpushed commits, or whose directory git does not record as a worktree, is reported
+   and left alone. That is the operator's pin-everything
    ruling applied honestly: it overrides conditions where the work is visible and can be pinned, not
    conditions where proceeding means silent loss.
 3. **Rule 4 has one exception, and it is a report.** The attention item asks nothing of the human and
