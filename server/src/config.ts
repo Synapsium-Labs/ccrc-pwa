@@ -5,8 +5,131 @@ import { defaultCoordDbPath } from './coord/db.js';
 import { defaultSessionsPath } from './auth/sessions.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
+import { isNodeRole, type NodeRole } from '../../shared/api.js';
 
 export type FleetMode = 'local' | 'remote';
+
+/**
+ * Where `CcrcConfig.role` came from (D-3174). The server had no
+ * role before the update control plane (design 2026-09-20 §6, §9); the box's
+ * recorded one is `CCRC_ROLE` in `~/.ccrc/ccrc.env`, written by `ccrc install`'s
+ * first write of that file and handed to this process by `ccrc.service`'s
+ * EnvironmentFile. THREE words, never two: `derived-absent` (nothing recorded
+ * — every box `deploy.sh` seeded, D-3106) and `derived-invalid` (a token
+ * outside `NodeRole`) have different remedies, so one never stands for the other.
+ */
+export type RoleSource = 'recorded' | 'derived-absent' | 'derived-invalid';
+
+/** The GitHub owner/repo the catalogue poller lists (design 2026-09-20 §7). */
+export interface ReleaseSource { owner: string; repo: string }
+
+/**
+ * The release source as READ (D-3175), failure included. No TS
+ * root may spell the org (`single-definition.test.ts`), so the pair reaches
+ * this process at runtime only: from the INSTALLED tree's `ccd/ccrc` — its two
+ * release-source lines, the same pair `ccrc update` downloads from — or from
+ * `CCRC_RELEASE_OWNER` + `CCRC_RELEASE_REPO` when BOTH are set. Every failure is a
+ * `why`, never a throw: `loadConfig` must boot a box whose tree is elsewhere,
+ * and the poller reports the failure as `no-release-source` and sends nothing.
+ * `tree-absent` (ENOENT) and `tree-unreadable` (any other errno — EACCES,
+ * EISDIR) are kept apart for `loadRoster`'s reason: a file that plainly exists
+ * is not fixed by reinstalling. `env-malformed` (D-3196)
+ * is an override the operator set and this process cannot use; it refuses
+ * rather than quietly polling the tree's pair instead.
+ */
+export type ReleaseSourceRead =
+  | { ok: true; owner: string; repo: string; from: 'env' | 'tree' }
+  | { ok: false; why: 'tree-absent' | 'tree-unreadable' | 'tree-malformed'; path: string }
+  | { ok: false; why: 'env-malformed'; path: null };
+
+/** The releases API root (design 2026-09-20 §7) — the sibling of `ccd/ccrc`'s
+ *  `CCRC_RELEASE_BASE_URL`, so a fixture server stands in for GitHub in tests. */
+export const DEFAULT_RELEASE_API_URL = 'https://api.github.com';
+/** How long an update may run before the server calls it failed (§10). Stored
+ *  from W2; nothing reads it until W4's dispatcher. */
+export const DEFAULT_UPDATE_DEADLINE_MS = 15 * 60_000;
+
+/** One owner or repo name: GitHub's own character set, at most 100, and never
+ *  a name made only of dots — `..` matches the character class and would walk
+ *  `/repos/{owner}/{repo}/releases` up a segment (D-3196). */
+const RELEASE_SOURCE_VALUE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * This box's role: the recorded `CCRC_ROLE` when it is a `NodeRole`, else
+ * DERIVED from the fleet mode — `remote` is the server box of a two-box
+ * fleet, `local` is the single box that is both. A bare `CCRC_ROLE=` line is
+ * absent (the house `||` rule); any other non-member is invalid, and says so.
+ */
+export function deriveRole(env: NodeJS.ProcessEnv, fleetMode: FleetMode): { role: NodeRole; roleSource: RoleSource } {
+  const raw = env.CCRC_ROLE;
+  if (isNodeRole(raw)) return { role: raw, roleSource: 'recorded' };
+  const role: NodeRole = fleetMode === 'remote' ? 'server' : 'both';
+  return { role, roleSource: raw === undefined || raw === '' ? 'derived-absent' : 'derived-invalid' };
+}
+
+/**
+ * `roleSource`'s reader (D-3174): the one boot line that says a role
+ * was DERIVED, and why. `NodeWire` carries the role and never where it came
+ * from, so without this line a `deploy.sh` box that never recorded one (D-3106)
+ * reads exactly like a box that did. `null` for a recorded role, which is not
+ * news. `index.ts` warns it once; the words are pinned here, not by a boot.
+ */
+export function derivedRoleNote(c: Pick<CcrcConfig, 'role' | 'roleSource' | 'fleetMode'>): string | null {
+  if (c.roleSource === 'recorded') return null;
+  const why = c.roleSource === 'derived-absent' ? 'absent' : 'invalid';
+  return `ccrc-server: CCRC_ROLE is ${why} in the environment — this box's role reads ${c.role} ` +
+    `(derived from CCRC_FLEET=${c.fleetMode})`;
+}
+
+/**
+ * The pair from a `ccd/ccrc` text: `CCRC_RELEASE_OWNER="…"` and
+ * `CCRC_RELEASE_REPO="…"` at the START of a line, each EXACTLY once (a second
+ * assignment is two answers, and this parser does not pick one), each value a
+ * plain name. `null` on anything else. The URL lines that READ the variables
+ * (`…/$CCRC_RELEASE_OWNER/…`) never match: they do not start with the name.
+ * Split on `\n` and anchored per line WITHOUT the `m` flag, so `$` is the end
+ * of the line: under `m`, `$` also matches before a bare `\r`, and a CRLF line
+ * would parse (measured with node, 2026-09-23).
+ */
+export function parseReleaseSource(ccrcText: string): ReleaseSource | null {
+  const lines = ccrcText.split('\n');
+  const pick = (re: RegExp): RegExpExecArray[] =>
+    lines.map((l) => re.exec(l)).filter((m): m is RegExpExecArray => m !== null);
+  const owners = pick(/^CCRC_RELEASE_OWNER="([^"]+)"$/);
+  const repos = pick(/^CCRC_RELEASE_REPO="([^"]+)"$/);
+  if (owners.length !== 1 || repos.length !== 1) return null;
+  const owner = owners[0]![1]!;
+  const repo = repos[0]![1]!;
+  return RELEASE_SOURCE_VALUE.test(owner) && RELEASE_SOURCE_VALUE.test(repo) ? { owner, repo } : null;
+}
+
+/**
+ * Synchronous, for `loadRoster`'s reason: `index.ts` calls `loadConfig()` at
+ * module top level with no `await`. BOTH env keys set → they decide, valid or
+ * refused; one set without the other is ignored (a half-written override is
+ * not an override) and the tree decides.
+ */
+export function readReleaseSource(env: NodeJS.ProcessEnv, installedCcrcPath: string): ReleaseSourceRead {
+  const envOwner = env.CCRC_RELEASE_OWNER;
+  const envRepo = env.CCRC_RELEASE_REPO;
+  if (envOwner && envRepo) {
+    return RELEASE_SOURCE_VALUE.test(envOwner) && RELEASE_SOURCE_VALUE.test(envRepo)
+      ? { ok: true, owner: envOwner, repo: envRepo, from: 'env' }
+      : { ok: false, why: 'env-malformed', path: null };
+  }
+  let text: string;
+  try {
+    text = readFileSync(installedCcrcPath, 'utf8');
+  } catch (err) {
+    return {
+      ok: false,
+      why: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'tree-absent' : 'tree-unreadable',
+      path: installedCcrcPath,
+    };
+  }
+  const src = parseReleaseSource(text);
+  return src ? { ok: true, ...src, from: 'tree' } : { ok: false, why: 'tree-malformed', path: installedCcrcPath };
+}
 
 export interface CcrcConfig {
   host: string;
@@ -32,6 +155,13 @@ export interface CcrcConfig {
   accountsPath: string;
   /** 'remote' drives the fleet through ccrc-agent instead of local node:fs/exec — see server/src/remote/. */
   fleetMode: FleetMode;
+  /** This box's role in the update control plane (design 2026-09-20 §6, §9):
+   *  the role of its own `nodes` row, and whether this process writes its own
+   *  `~/.ccrc/update-intent` (`server`/`both` do). `deriveRole` decides it. */
+  role: NodeRole;
+  /** Where `role` came from — recorded, or derived because the record was
+   *  absent or invalid (D-3174). */
+  roleSource: RoleSource;
   agentUrl: string | null;
   agentToken: string | null;
   hetznerToken: string | null;
@@ -49,6 +179,23 @@ export interface CcrcConfig {
   mailTokenPath: string;
   /** The deploy's build stamp (deploy.sh stamp_build). Absent = dev boot. */
   buildInfoPath: string;
+  /** `<home>/.ccrc` — the directory the update control plane's node files live
+   *  in (`NODE_FILES`, `shared/agent-protocol.ts`). ONLY the W2 paths route
+   *  through it; the older `.ccrc` paths above keep their own spellings. In
+   *  remote mode the fleet node's files are read at this same absolute path
+   *  over the agent, the same-path assumption `registryDir` already makes. */
+  ccrcDir: string;
+  /** `<home>/ccrc/ccd/ccrc` — the INSTALLED tree's `ccrc`, the tree
+   *  `ccrc.service`'s ExecStart runs from; `releaseSource` is read from it. */
+  installedCcrcPath: string;
+  /** The catalogue's owner/repo, or why there is none (`readReleaseSource`). */
+  releaseSource: ReleaseSourceRead;
+  /** `CCRC_RELEASE_API_URL`, trailing slashes trimmed; `DEFAULT_RELEASE_API_URL`
+   *  when unset, a bare line, or nothing but slashes. */
+  releaseApiUrl: string;
+  /** `CCRC_UPDATE_DEADLINE_MS` as a positive safe integer, else
+   *  `DEFAULT_UPDATE_DEADLINE_MS`. Read by W4; carried from W2. */
+  updateDeadlineMs: number;
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -310,6 +457,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       'default CCRC_ORIGIN come from this value.');
   }
   const port = portOk ? portNum : 7788;
+  // Hoisted for the `port`/`origin` reason above: `role` is derived FROM the
+  // fleet mode, and one expression read twice is how the two come to disagree.
+  const fleetMode: FleetMode = env.CCRC_FLEET === 'remote' ? 'remote' : 'local';
+  const { role, roleSource } = deriveRole(env, fleetMode);
+  const installedCcrcPath = path.join(home, 'ccrc', 'ccd', 'ccrc');
+  const releaseApiUrl = (env.CCRC_RELEASE_API_URL || '').replace(/\/+$/, '');
+  const deadlineNum = Number(env.CCRC_UPDATE_DEADLINE_MS);
   return {
     // `||`, not `??`: a bare `CCRC_HOST=` EnvironmentFile line yields '', and
     // `listen({host: ''})` binds ALL interfaces — the opposite of the loopback
@@ -330,7 +484,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     projectsRoot: env.CCRC_PROJECTS_ROOT ?? path.join(home, 'projects'),
     roster,
     accountsPath,
-    fleetMode: env.CCRC_FLEET === 'remote' ? 'remote' : 'local',
+    fleetMode,
+    role,
+    roleSource,
     agentUrl: env.CCRC_AGENT_URL ?? null,
     agentToken: env.CCRC_AGENT_TOKEN ?? null,
     hetznerToken: env.CCRC_HETZNER_TOKEN ?? null,
@@ -347,6 +503,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
     buildInfoPath: path.join(home, '.ccrc', 'build.json'),
+    ccrcDir: path.join(home, '.ccrc'),
+    installedCcrcPath,
+    releaseSource: readReleaseSource(env, installedCcrcPath),
+    // `||` in effect for both knobs: '' trims to '' and falls to the default,
+    // and `Number('')` is 0, which the positive test refuses.
+    releaseApiUrl: releaseApiUrl || DEFAULT_RELEASE_API_URL,
+    updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10

@@ -1,5 +1,5 @@
 import { buildServer, type Deps } from './server.js';
-import { loadConfig } from './config.js';
+import { derivedRoleNote, loadConfig } from './config.js';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
@@ -167,3 +167,9 @@ const app = await buildServer(deps, bus, watcher);
 watcher.start();
 await app.listen({ host: cfg.host, port: cfg.port });
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
+
+// Said once at boot, beside the line above: a role DERIVED because CCRC_ROLE
+// is absent or invalid (D-3174) is visible nowhere else — the
+// inventory's server row carries the role, never where it came from.
+const roleNote = derivedRoleNote(cfg);
+if (roleNote !== null) console.warn(roleNote);
