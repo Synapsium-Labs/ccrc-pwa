@@ -34,6 +34,24 @@ export type SessionBucket =
  *  lines warning about. */
 export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
 
+/** Whether a registry row is a CHILD (spec §4, §5.1). Three answers, never two: an unreadable or malformed
+ *  marker is neither "a child" nor "not a child", and callers act on it in OPPOSITE directions — a bind
+ *  REFUSES, a reclaim DEFERS. */
+export type ChildMark =
+  | { readonly kind: 'none' }                                  // no marker file: not a child
+  | { readonly kind: 'child'; readonly runId: number }         // marker names the minting run
+  | { readonly kind: 'unreadable' };                           // listed but unreadable, or not a decimal run id
+
+/** The run id a child marker may carry — the server's ONE spelling of the set
+ *  ccd's `_child_runid_valid` accepts under its shadowed `LC_ALL=C`
+ *  (child-reclamation spec §5.1): at most ten ASCII digits, no sign, no
+ *  leading zero. JavaScript's `[0-9]` is ASCII in every mode, and `$` without
+ *  the `m` flag anchors at the end of the input only, so the two sets are
+ *  equal; ten digits sit far below `Number.MAX_SAFE_INTEGER`, so `Number` of a
+ *  match is exact. No `g` flag: `.test` must carry no `lastIndex` between
+ *  calls. Anything else in a marker is `unreadable`, never a child. */
+export const CHILD_RUN_ID = /^[1-9][0-9]{0,9}$/;
+
 export interface FleetSession {
   id: string; wrapper: string; home: string; project: string; workdir: string;
   /** The worktree slug when this session is a workspace; null for a project's
@@ -440,6 +458,28 @@ export interface FleetSession {
     readonly fields: RouteFields; readonly degraded: string | null;
     readonly inert: readonly RouteField[]; readonly unreadable: readonly RouteReadField[];
   } | null;
+
+  /**
+   * Whether this workspace is a CHILD — minted by `dispatch` for a run and
+   * marked so at creation (`$REG/<id>.child`, child-reclamation spec §5.1) —
+   * `server/src/registry.ts`'s `SessionRecord.child`, carried straight onto
+   * the wire. Three answers, never a boolean (`ChildMark`): `none`, `child`
+   * with the minting run's id, or `unreadable` — a marker the registry listing
+   * named whose bytes did not come back or did not parse as one run id.
+   *
+   * DISPLAY ONLY on this wire. No server decision reads it: the bind gate
+   * (`coord/childBind.ts`) re-reads the registry at the instant it decides,
+   * because a snapshot is exactly the staleness spec §5.3 refuses.
+   *
+   * ADDITIVE, absence-permits: an older persisted `FleetSession[]` revives
+   * with `{ kind: 'none' }` through `reviveFleetSession` below — a frame
+   * written before markers existed describes no children. The LIVE `fleet`
+   * frame is CAST, not revived (`pwa/src/stores/fleet.ts`'s `asFleetMsg`), so a
+   * frame from a server older than this field arrives with the key genuinely
+   * absent: a PWA reader must read `s.child?.kind` and treat `undefined` as
+   * `none`. No `FLEET_PROTO` bump.
+   */
+  readonly child: ChildMark;
 }
 
 /**
@@ -2752,6 +2792,30 @@ const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
   return v as IdentityField[];
 };
 
+/** `FleetSession.child`'s persistence contract (child-reclamation wave 2) —
+ *  THE ONE READER of the key off raw JSON. Absent or null → `{ kind: 'none' }`:
+ *  a snapshot written before markers existed describes no children, and
+ *  nothing else on an older record could say otherwise. Present → exactly one
+ *  of the three `ChildMark` shapes, or the WHOLE session is rejected: the
+ *  `held`/`bucket` stance, not `reviveAsk`'s, because an affirmative-looking
+ *  value this build cannot parse must never be laundered into "not a child" —
+ *  and a `child` whose `runId` is outside `CHILD_RUN_ID` (spec §5.1: at most
+ *  ten digits, the only run ids the registry reader ever produces) is exactly
+ *  that value. */
+const reviveChildMark = (o: RawObj, k: string): ChildMark => {
+  const v = o[k];
+  if (v === undefined || v === null) return { kind: 'none' };
+  const s = asObj(v, k);
+  const kind = s['kind'];
+  if (kind === 'none') return { kind: 'none' };
+  if (kind === 'unreadable') return { kind: 'unreadable' };
+  if (kind === 'child') {
+    const runId = s['runId'];
+    if (isPositiveDecimalSafeInteger(runId) && CHILD_RUN_ID.test(String(runId))) return { kind: 'child', runId };
+  }
+  throw new MalformedSnapshot(k);
+};
+
 /** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
  *  membership is not re-checked here because this file imports no class list. */
 function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
@@ -2918,6 +2982,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // does the identical thing with both.
       boardProject: optStr(o, 'boardProject'),
       route: reviveRoute(o, 'route'),
+      child: reviveChildMark(o, 'child'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -5250,8 +5315,8 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Nineteen codes exist below today; the next new one would be the
- * twentieth, not the ninth.
+ * Twenty-one codes exist below today; the next new one would be the
+ * twenty-second, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
@@ -5313,13 +5378,28 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * `review-in-flight` — a second non-terminal review run named the same
  * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
  * invariant 3).
+ *
+ * `workspace-spent` and `spent-unmeasured` are rule 3 of the child-reclamation
+ * programme (spec 2026-09-22 §5.3-§5.4): a CHILD — a workspace the server
+ * minted for a run and marked `$REG/<id>.child` at creation — carries at most
+ * one PR, so once its branch has had one (open, draft, merged or closed) no
+ * further run may bind it. ONE gate emits both (`coord/childBind.ts`), at TWO
+ * doors: `POST /api/runs` naming a `sessionId`, before any row exists, and
+ * `POST /api/runs/:id/dispatch`'s resume arm, before `ensure`. Two codes and
+ * not one with a detail, because the caller acts on them in OPPOSITE
+ * directions: `workspace-spent` (with `pr`) says "drop the `sessionId`; a
+ * fresh child will be minted" — and at dispatch the server has already done
+ * so, reporting `unbound` — while `spent-unmeasured` (with `detail`) says "the
+ * evidence could not be read; retry, and do NOT drop the `sessionId` on this
+ * account", because an unreadable marker or ledger is not a spent one. A
+ * workspace with no marker is refused only when the registry cannot be listed.
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
   | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
-  | 'claimant-is-a-worker';
+  | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5328,6 +5408,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
   'review-in-flight': true, 'claimant-is-a-worker': true,
+  'workspace-spent': true, 'spent-unmeasured': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
