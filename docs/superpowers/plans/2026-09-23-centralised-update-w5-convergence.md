@@ -9020,15 +9020,16 @@ git commit -m "feat(update): the five move controls go live — one UpdateMoveSh
 
 ### Task 8A: W2's carried residue — catalogue pins and prose
 
-Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by the rule its coordinator announced before its third review: a shipped-behaviour defect went back as a narrow fix, while a guard that could not red or a sentence that was false was recorded and carried. This wave carries them because it is the next server-side wave. Nothing here changes what the catalogue DOES; every item is a pin that must red, or a sentence that must become true.
+Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by the rule its coordinator announced before its third review: a shipped-behaviour defect went back as a narrow fix, while a guard that could not red or a sentence that was false was recorded and carried. This wave carries them because it is the next server-side wave. Most items are a pin that must red, or a sentence that must become true. The items marked **BEHAVIOUR** (review 150's F2–F4, review 151's F6 and F7) change what the catalogue does, each red-first. They are fixed HERE, before this wave's dispatcher and auto path consume `newestUnyankedStable()` on `main`: every one of them can leave a deleted release resolvable.
 
 **First step, before any item:** re-measure each item on `main`. W2's narrow round 3 (B1–B3) touched `catalogue.ts`, `routes.ts` and D-3215/D-3218 after these items were written, and may have closed some (P3, P4, C-a and C-b are the likely ones). An item already closed on arrival is reported as such in the wave-done mail and gets no commit. Anchor every item by symbol or quoted text, never by the line numbers review 146 used (`1258a57a`).
 
 **Files:**
 - Modify: `server/test/update-catalogue.test.ts`, `server/test/update-resolve.test.ts`, `server/test/update-routes.test.ts` — pins.
-- Modify: `server/src/update/catalogue.ts` — comments only, except C-d, a warning re-arm.
+- Modify: `server/src/update/catalogue.ts` — comments, C-d's warning re-arm, and the BEHAVIOUR items.
 - Modify: `docs/superpowers/plans/2026-09-22-centralised-update-w2-control-plane.md` — W2's plan prose. It is on `main`, so this wave's PR corrects it in place.
 - One departure number for P2's placement move, taken from this run's reserve (the next unspent number), defined in THIS plan's `## Deviations found`.
+- One more departure number, the reserve's next unspent after P2's, for the BEHAVIOUR items together: they change what W2's D-3215 describes. Define it here, and amend D-3215's text in W2's plan in place to point at it.
 
 **Items** (the first ten from review run 146 of W2; the last four from W2's own fix-round-2 review):
 
@@ -9090,12 +9091,26 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 
     Correct each against the code on `main`.
 
+- **From W2's review run 151 (its fix round 5, reviewed at `985e8c30`).** Round 5 made a pending `'demote'` whose `tags/K` check row is non-draft be dropped when this poll's listing names K as a DRAFT (`listingContradictsPending`'s `if (fact.draft) return !pending.row.draft;`). Two coverage items, three prose items, then two BEHAVIOUR items with the coordinator's rulings:
+  - **F1 (coverage).** The `!pending.row.draft` carve-out is unpinned: `if (fact.draft) return true;` leaves `update-catalogue` green. Add the draft `tags/K` × draft-listing case (both say draft, so the demote applies): `tags/K` is asked once, and from the poll after, `/latest` carries T's ETag.
+  - **F2 (coverage).** The ETag-keep call site's change is unpinned, because round 5's test scripts `/latest` with 304s an honest source would not send after the drop. Re-script `/latest` with honest ETags, and assert the listing request's `If-None-Match` on the poll after the draft listing. Mutation: revert ONLY the ETag-keep call site to the round-4 predicate (`fact === undefined || fact.draft` → no contradiction). It must red.
+  - **F3 (prose).** The ETag-keep comment in `pollOnce` still lists "names K only as a draft" among the cases that do NOT contradict. Narrow it: a draft row does not contradict a pending yank, or a demote whose check row is also a draft.
+  - **F4 (prose).** `update-catalogue.test.ts`'s mutation table names `if (fact === undefined) return false;` as the draft-row mutant, which is now the shipped line. Name today's mutant (the yank arm's `return !fact.draft` → `return true`). Narrow pin (c)'s comment ("a draft row never vouches either way") to a pending yank. Correct the same mutant sentence in D-3215's text in W2's plan.
+  - **F5 (prose).** D-3215's ETag-reset sentence ("a non-draft row for a yank, a non-draft STABLE row for a demote") also lacks the draft-listing × non-draft-demote case. Fix it together with review 150's F5 above, as one sentence that names every cell.
+  - **F6 (BEHAVIOUR).** A mirror that keeps disagreeing with itself: `/latest` names T, `tags/K` answers a stale non-draft 200 on every poll, and the listing names K as a draft. The pending demote is dropped every poll, so `lastLatestTag` stays on K. `/latest` never earns a 304, `tags/K` is asked every poll, and T is never protected or judged. Variant: a full page of 29 newer dev releases plus K, with an off-page T that is later deleted for real. T stays `yanked: false`, and `newestUnyankedStable()` answers the deleted tag.
+    - **Ruling.** In the draft-listing drop cell, this poll's listing itself yanks K, so keeping K as the kept tag protects nothing. The drop skips ONLY K's upsert. The kept tag still moves to `pending.t`/`pending.tEtag`, exactly as on the agreeing path. The dropped path writes two things; name both in the D-3215 amendment, and say which one is dropped.
+    - The non-draft drop cells (a pending yank against a non-draft row; a demote against a non-draft stable row) stay as W2 shipped them: there the listing vouches that K is alive. This task does not change them.
+    - Pin the reviewer's input and the variant. From the poll after the draft listing, `/latest` carries T's ETag, and `tags/K` is asked at most once more. In the variant, the deleted T ends yanked, and `newestUnyankedStable()` does not answer it.
+  - **F7 (BEHAVIOUR, identical at W2's `24e3379c`).** Review 150's F4 mechanism, reached through a draft that is later deleted. Poll 2: the listing names K as a draft, `tags/K` answers stale stable, and the pending is dropped. Poll 4: a fresh listing without K, while `tags/K` still answers stale stable. K is still the kept tag, so it rides in `keepTags` and the listing's absence judgment skips it. `applyWithdrawn`'s `'single'` upsert then un-yanks K, and `newestUnyankedStable()` answers the deleted release.
+    - **Ruling.** F6's fix closes this path: the kept tag leaves K at poll 2, so no later poll re-reads `tags/K` for it. Review 150's F4 fix (a `'complete'` listing's silence about K contradicts a stable check) closes it a second time. Pin F7's input as its own case. The path is closed twice, so measure three states: red with BOTH fixes reverted, and green with either one reverted alone. Record all three.
+  - **The tie-break for every BEHAVIOUR item here.** When a mirror's answers disagree and no listing names K as a non-draft release, the outcome that leaves K yanked wins. A deleted release left resolvable is the defect class. An old release left unresolvable fails safe: its move is refused, and nothing is installed. Add no new column for any of this: a `coord.db` schema change is out of this task's scope.
+
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
-- [ ] **Step 2: Pins first, red first.** For every open pin item (P1, P4, P9, P10, C-a, C-d), write the case, run it against the unmutated tree and see it green, then apply the item's mutation to a scratch copy of the file (`cp`, never `git checkout --`) and see it red. Restore with `cp` and `cmp` it byte-identical. Record each measurement in the mutation table below.
-- [ ] **Step 3: Prose.** Correct every open prose item (P2, P3, P5, P6, P7, P8, P11, the nits) in place. Where W2's plan is corrected, change only the named sentence. Its historical Interfaces snapshots stay as they are.
-- [ ] **Step 4: The number.** Define P2's placement departure in this plan's `## Deviations found` with the reserve number, in the same commit that first cites it.
+- [ ] **Step 2: Pins first, red first.** For every open pin or BEHAVIOUR item (every row of the mutation table below), write the case, run it against the unmutated tree and see it green, then apply the item's mutation to a scratch copy of the file (`cp`, never `git checkout --`) and see it red. Restore with `cp` and `cmp` it byte-identical. Record each measurement in the mutation table below.
+- [ ] **Step 3: Prose.** Correct every open prose item (P2, P3, P5, P6, P7, P8, P11, the nits, review 149's F5, review 150's F5–F10, review 151's F3–F5) in place. Where W2's plan is corrected, change only the named sentence. Its historical Interfaces snapshots stay as they are.
+- [ ] **Step 4: The numbers.** Define P2's placement departure, and the BEHAVIOUR items' departure, in this plan's `## Deviations found` with their reserve numbers, each in the same commit that first cites it.
 - [ ] **Step 5: Suites.** `cd server && ./node_modules/.bin/vitest run test/update-catalogue.test.ts test/update-resolve.test.ts test/update-routes.test.ts`. Expected: PASS. Task 9's full gate follows.
 - [ ] **Step 6: Commit.** `git add` the files above, then `git commit -m "test(update): W2's carried residue — catalogue pins and prose"`.
 
@@ -9111,9 +9126,13 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 | m1 | drop the `!r.draft` filter from the vouched set | the draft-listing case |
 | m2 | advance `latestEtag` on a throw | the B1 case's no-`If-None-Match` assertion |
 | m4 | delete the `Math.max(0, …)` floor | the backwards-clock case |
-| F3 | revert K's protection under a non-draft check | the off-page live-K case |
-| F4 | revert the complete-coverage contradiction | the deleted-K stale-check case |
-| F2 | drop the 404 arm's release of the borrowed T | the always-throwing-store case |
+| 150 F3 | revert K's protection under a non-draft check | the off-page live-K case |
+| 150 F4 | revert the complete-coverage contradiction | the deleted-K stale-check case |
+| 150 F2 | drop the 404 arm's release of the borrowed T | the always-throwing-store case |
+| 151 F1 | `if (fact.draft) return !pending.row.draft;` → `return true;` | the draft-check × draft-listing case |
+| 151 F2 | the ETag-keep call site alone back to the round-4 predicate | the honest-ETag draft-listing case's `If-None-Match` |
+| 151 F6 | the draft drop cell keeps `lastLatestTag` on K | the self-disagreeing mirror case and its deleted-off-page-T variant |
+| 151 F7 | revert BOTH 151 F6's and 150 F4's fixes (each alone: green, recorded) | the drafted-then-deleted K case |
 
 
 ### Task 9: Docs, the gate, the PR
