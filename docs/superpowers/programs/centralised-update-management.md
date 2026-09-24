@@ -24,7 +24,7 @@ numbers; the spec wave each one implements is named beside it.
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **MERGED** `b501698a` (PR #176, run 128 done), released as v0.0.23 (dev); after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
-| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **scoped review** (run 130 at `e5ddd3ba`, which merges `main` at #183 cleanly): fix round 1 done 18:15 UTC (5 fix commits, `ffce2c6d..4d47f144`; 3316 and 3317 spent); scoped review run 161 dispatched 18:25 UTC to `ccrc-pwa-soft-cove`, under the bar in `rulings-run130-fix1.md`; wave-done was at `432e2731`, PR #184, 13/13 items, one reserve number spent (3315); review run 156 opened; its 11:24 dispatch lost the cap slot to another project's coordinator, and a re-measuring retry loop waits for the next age-out (14:09 UTC); plan `d638c602` + re-points `08cecd10`, `733d295a` |
+| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **MERGED** `4b2ff904` (PR #184, run 130 done) 2026-09-24 ~19:00 UTC, after scoped review 161 at `e5ddd3ba` met none of the committed bar's four classes; 13 findings carried to wave 5's Task 8A (`d8db956a`); plan `d638c602` + re-points `08cecd10`, `733d295a` |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **fix round 1 of 1 full** (run 129, `ccrc-pwa-keen-meadow`), sent 2026-09-24 14:25 UTC on review 155 (`rulings-run129-fix1.md`); wave-done was at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
@@ -439,6 +439,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     twice for one tag, or for a tag `notify` excludes; a move control is enabled, or `apply`/`rollback` is sent;
     untrusted text becomes markup or off-origin navigation, or a secret leaks. That is at most one narrow round;
     after its scoped review, #184 merges.
+- **2026-09-24 19:00 UTC — review 161 (W3's scoped review at `e5ddd3ba`): #184 merges under the committed bar.**
+  - Every ruled item was done; the reviewer measured F2 at 46 × 44 px in Chromium and saw F12's guard red.
+  - 13 findings. None meets the bar.
+    - F-A is behaviour, introduced by the delta: a 409's node note lives one round trip. It withdraws a claim;
+      it states nothing unmeasured, so it is outside the four classes.
+    - F-B is reachable only from a non-conforming server, which the bar's qualifier excludes.
+    - F-C to F-M are coverage and prose.
+  - **Ruling on F-A:** the write's own reload IS F5's "later poll". Carried to wave 5 with the stored-view fix.
+  - All 13 carried to wave 5's Task 8A (`d8db956a`).
+  - **main is red on macOS** at `814fc53d`, in child-reclamation's tests from #175: `ccd-ws-add-child` and
+    `ccd-child-tmpdir` fail, and one shard hung to its cap. #183's stable gate needs every macOS shard green, so this
+    blocks every stable promotion. Raised with calm-mesa; #184's own macOS red is that same class, not its own.
+  - Wave 4 merges second and resolves the `README.md` conflict (measured with `git merge-tree`) by W3's stated
+    placement.
 
 ## Carried constraints
 
