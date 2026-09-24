@@ -363,6 +363,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     non-draft, the outcome that leaves K yanked wins. No new column is added.
   - **Why merging with these open is safe:** W2 is read-only. Nothing moves a node from the catalogue until wave 5's
     dispatcher, and Task 8A lands in that same PR. A deleted release also has no tarball left to install.
+- **2026-09-24 06:40 UTC — wave 4 edits `ccd/ccrc` and `ccd/ccrc-doctor-checks` under another programme's claim.**
+  - Wave 4's final review wants fixes inside its own update functions. Claim 749 (child-reclamation wave 3, run 148)
+    holds both files, and its holder had not read two mails all morning.
+  - Measured first: that branch touches `ccd/ccd` only, with no hunk in either file. Claim 749 is a broad 30-path
+    claim.
+  - Ruled yes, on the advisory terms (whoever merges second resolves), with conditions: only wave 4's named
+    functions; re-measure the other branch before the push, and stop and report on any adjacent hunk; claim 749 is
+    left untouched. The holder's coordinator was told, with the function list.
 
 ## Carried constraints
 
