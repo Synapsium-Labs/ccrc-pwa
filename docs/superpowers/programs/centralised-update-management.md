@@ -462,6 +462,14 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
      before child-reclamation existed. The shard's log goes silent until the 55-min cap. calm-mesa is reporting it to
      the operator; the gpt lane's owner session owns it.
   - Until both are fixed, no full-suite verdict can be green, so nothing can be promoted to stable.
+- **2026-09-24 20:20 UTC — W3 deploys on calm-mesa's v0.0.27 rollout (ruled "go").** #185 (the BSD chmod fix,
+  `3fd6c816`) removed blocker 1 of the stable gate; ccgpt-proxy's macOS wedge remains. Both boxes were on v0.0.24,
+  which already carries W2. v0.0.27 carries W3 (#184).
+  - Ruled: default order (fleet box first); W3 needs no `--server-first`, because it is server and PWA over W2's
+    projection, with no fleet-side reader change.
+  - The release push is live from this build. I corrected my own first claim about it after measuring
+    `releaseToNotify`: an unreachable or non-tag node can prompt one push (D-3316).
+  - W3's live exit criteria get measured after this rollout.
 
 ## Carried constraints
 
