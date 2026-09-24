@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=abaea6a505dc85c1679a450700564503f34a35db923464256567c741498e6d6f
+# ccrc:generated 1 sha256=113b85e9646e8ed55752d048322b3acc1db32f17bd430049b1a92fe526c6040a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,11 +2885,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 156
-# invocations across 132 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 162
+# invocations across 136 non-comment lines.
 #
-# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
-# `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
+# THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 2);
+# before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -23319,6 +23319,575 @@ cmd_clip() {   # <png-path> [id] — file an image into a session and inject its
   tmux send-keys -t "$(_tmux "$id")" -l "$dest "
   echo "clip -> $dest (injected into $id)"
 }
+
+# ── child reclamation: ws-reclaim (spec 2026-09-22 §5.5-§5.6) ──────────── RECLAIM-BEGIN ──
+# A CHILD is a workspace dispatch minted for a run and marked `$REG/<id>.child`
+# at creation (`ws-add --child <runId>`). It is reclaimed — pinned, then torn
+# down — by `ws-reclaim`, and by nothing else. This region is that verb's whole
+# machinery, and it is deliberately NOT `ws-reap` with a flag: the two accept
+# OPPOSITE evidence (reap refuses dirty-tree and sensitive-ignored; reclaim
+# pins through both), and a ladder that asks "which caller am I serving" at
+# every rung is how a refusal becomes an override (spec §5.5).
+#
+# THE VOCABULARY IS CLOSED AT FOURTEEN TOKENS, and every one of them is written
+# in a shape `server/test/wsaudit.test.ts` harvests — `_reap_refuse <token>` or
+# a literal `"refused":"<token>"` — so SENTENCES stays set-equal to what ccd can
+# say. `server/test/child-reclaim.test.ts` holds the same fourteen equal to
+# `CHILD_RECLAIM_TOKEN_KIND` by slicing THIS region, between its two markers.
+# A failure AFTER the act started is not a refusal: it prints `"failed"`, never
+# `"refused"`, and is journaled by `_lc_fail`.
+
+_ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the reclaim ladder's own
+  _ws_reap_reset
+  RECLAIM_CHILDOF=""        # the marker's run id, as READ — never inferred from anything else
+  RECLAIM_DEFER=0           # 1 = --defer-expired: rungs 5 and 6 skipped, and a fingerprint input
+  RECLAIM_WORKTREE=""       # `present`, or `absent` for a vanished worktree (`_ws_reclaim_eval_absent`)
+  RECLAIM_HEAD=""           # the child's HEAD commit (differs from REAP_TIP on a detached HEAD); on the
+  #                           vanished arm, the HEAD git's record still names ('' when it holds none)
+  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""   # `_ws_reclaim_record`'s answer for the last path asked
+  RECLAIM_STATUSDIGEST=""   # sha256 of the child's `status --porcelain=v1 -z --untracked-files=all`
+  RECLAIM_SECRETS=()        # secret-shaped untracked AND ignored paths — never staged, recorded by path
+  RECLAIM_STAGE=()          # the one tree last classified: its non-secret untracked paths
+  RECLAIM_NESTED=""         # same-repository nested checkouts: one resolved path per line
+  RECLAIM_FOREIGN=""        # different-repository nested checkouts PROVEN clean and pushed
+  RECLAIM_STASHES=""        # stash commits attributed to the branch, one sha per line
+  RECLAIM_OPHEADS=""        # `<NAME>=<sha>` per in-progress operation head present
+  RECLAIM_WIP=""            # the child's own WIP commit, or '' when there was nothing to commit
+  RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
+  RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
+}
+
+_ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
+  # reclaim token can never equal a reap token or a resume token over the same
+  # facts: the first input is always `mode=…`.
+  printf '%s\n' "$@" | _plat_sha256 | cut -d' ' -f1
+}
+
+_ws_reclaim_unmeasured() {   # detail -> rc 1 with REAP_VERDICT=unmeasured and REAP_DETAIL set
+  # A PROBE THAT COULD NOT RUN MEASURED NOTHING. The permission pass running
+  # out of time (or unable to start), the operation probe failing, the stash
+  # list or the clips listing unreadable: none of these says the TREE cannot be
+  # read, so none may answer a TERMINAL token — a terminal refusal is never
+  # retried, and a momentary box hiccup would strand a child for good. So this
+  # is NOT one of the fourteen tokens and NOT a refusal: it is deliberately set
+  # here, never through the refusal helper, so the harvest in
+  # `server/test/wsaudit.test.ts` never counts it. `ws-audit --reclaim` prints
+  # its document with the verdict `unmeasured` and exits 1 on it, and
+  # `ws-reclaim` prints a `"failed"` document (`probe-unmeasured`) at exit 1 —
+  # both of which the server reads as `failed`, which the sweep retries.
+  # `tree-unreadable` stays reserved for a tree that still cannot be read AFTER
+  # the permission pass (spec §5.5, rung 8) — so a registry row that does not
+  # say where its tree is, and an unreadable tombstone on resume, answer HERE
+  # too, never through that word. A tree that is GONE and a directory git does
+  # not record are NOT unmeasured: the first is reclaimed from what is left
+  # (`_ws_reclaim_eval_absent`), the second refuses `no-worktree-record`,
+  # terminally (spec §5.5, "A vanished worktree is not a refusal").
+  REAP_VERDICT=unmeasured; REAP_DETAIL="$1"; return 1
+}
+
+_WS_NORMALISE_WHY=''
+_ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx and every file u+r afterwards;
+  #                              1 when an entry is STILL unreadable after the pass (rung 8 refuses);
+  #                              2 when the pass could not RUN at all — no uid, no scratch file, or
+  #                              `_plat_timeout`'s 124 (rung 8 answers `_ws_reclaim_unmeasured`)
+  # RUNG 8's "permission normalisation pass" (spec §5.5). ccd has measured a
+  # mode-000 directory answering `git status` with rc 0, EMPTY stdout and a
+  # warning on stderr — clean-looking and not clean (`_ws_reap_eval`'s Phase B
+  # comment) — so before a reclaim reads a tree it adds the OWNER bits it needs
+  # and nothing else: `u+rwx` on a directory, `u+r` on a file, only where this
+  # uid owns the entry. Group and other bits are never touched.
+  #
+  # PRE-ORDER, ONE `-exec` PER ENTRY (`\;`, never `+`). find evaluates a
+  # directory BEFORE it opens it, so a mode-000 directory is fixed and then
+  # entered; `+` batches the chmods until after the walk, by which time find has
+  # already failed to read the directory. Measured on GNU find 4.9 with
+  # `a/` 000 holding `b/c/` 000 holding a 000 file: one pass, rc 0, empty
+  # stderr, `git status` then lists the file.
+  #
+  # -P never follows a symlink; -xdev never leaves the tree's filesystem. What
+  # is still unreadable afterwards — an entry another uid owns, a chmod that did
+  # not take — is named, and rung 8 refuses on it.
+  #
+  # `-user` GOVERNS BOTH ARMS, so the disjunction is parenthesised as a whole:
+  # find's `-o` binds looser than the implicit `-a`, and an unwrapped
+  # `-user me \( dir-arm \) -o \( file-arm \)` parses as
+  # `(-user me AND dir-arm) OR file-arm` — the file arm would chmod files of
+  # ANY owner.
+  local d="$1" me errf left rc
+  _WS_NORMALISE_WHY=''
+  [[ -d "$d" ]] || return 0
+  me=$(id -u) || { _WS_NORMALISE_WHY='could not read this uid'; return 2; }
+  errf=$(_plat_mktemp) || { _WS_NORMALISE_WHY='could not make a scratch file'; return 2; }
+  _plat_timeout "$REAP_SCAN_SECONDS" find -P "$d" -xdev -user "$me" \
+    \( \( -type d ! -perm -u=rwx -exec chmod u+rwx {} \; \) \
+    -o \( -type f ! -perm -u=r -exec chmod u+r {} \; \) \) 2>"$errf"; rc=$?
+  if (( rc == 124 )); then
+    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"; return 2
+  fi
+  left=$(find -P "$d" -xdev \( -type d ! -perm -u=rwx -o -type f ! -perm -u=r \) -print -quit 2>>"$errf")
+  if [[ -n "$left" || -s "$errf" ]]; then
+    _WS_NORMALISE_WHY="${left:+$left is still unreadable after the permission pass}${left:+ }$(head -1 "$errf" 2>/dev/null)"
+    rm -f "$errf"; return 1
+  fi
+  rm -f "$errf"
+  return 0
+}
+
+_ws_reclaim_secret_path() {   # relpath -> 0 when ANY component is secret-shaped (and not noise), 1 otherwise
+  # The existing classifier (`_ws_sensitive_match`) judges a BASENAME, which is
+  # right for `_ws_collect_ignored` — it walks INTO an ignored directory with
+  # `_ws_sensitive_inside` — and wrong for an untracked file listed with
+  # `--untracked-files=all`: `secrets/token.txt` has a harmless basename, and
+  # the WIP commit would stage it and the attic would pin it PERMANENTLY in a
+  # public repository. So every path component is asked, and a vendored path
+  # (`node_modules/…`) is exempt exactly as `_ws_sensitive_vendored` exempts it.
+  local p="${1%/}" rest seg
+  _ws_sensitive_vendored "$p" && return 1
+  rest="$p"
+  while [[ -n "$rest" ]]; do
+    seg="${rest%%/*}"
+    if _ws_sensitive_match "$seg" && ! _ws_sensitive_noise "$seg"; then return 0; fi
+    [[ "$rest" == */* ]] || break
+    rest="${rest#*/}"
+  done
+  return 1
+}
+
+_ws_reclaim_classify() {   # dir prefix -> 0 with RECLAIM_STAGE (this dir's non-secret untracked paths)
+  #                             set and "$prefix<path>" appended to RECLAIM_SECRETS; 1 when the tree
+  #                             could not be read (_WS_RECLAIM_CLASSIFY_WHY names why); 2 when the read
+  #                             could not RUN — no scratch file (never `tree-unreadable`: spec §5.5, rung 8)
+  # THE PIN PHASE'S STEP 1 (spec §5.5): untracked AND ignored files through the
+  # secret-shape classifier. A secret-shaped file is never staged — ignored or
+  # merely untracked — so an accident of `.gitignore` never decides whether a
+  # credential is committed. Nested checkout roots (`?? dir/` with a `.git`
+  # inside) are skipped: each is pinned as its own tree, or proven clean and
+  # pushed, never staged as a gitlink here.
+  local dir="$1" prefix="$2" outf errf err rc entry skip p
+  RECLAIM_STAGE=(); _WS_RECLAIM_CLASSIFY_WHY=""
+  outf=$(_plat_mktemp) || { _WS_RECLAIM_CLASSIFY_WHY='could not make a scratch file'; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_RECLAIM_CLASSIFY_WHY='could not make a scratch file'; return 2; }
+  git -C "$dir" -c core.quotePath=false status --porcelain=v1 -z --untracked-files=all >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"; _WS_RECLAIM_CLASSIFY_WHY="git status at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; return 1
+  fi
+  [[ -n "$prefix" ]] || RECLAIM_STATUSDIGEST=$(_plat_sha256 <"$outf" | cut -d' ' -f1)
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      '?? '*) p="${entry#?? }" ;;
+      [RC]*)  IFS= read -r -d '' skip || :; continue ;;   # a rename's second field is its source path
+      *)      continue ;;
+    esac
+    [[ -n "$p" ]] || continue
+    if [[ "$p" == */ && -e "$dir/${p%/}/.git" ]]; then continue; fi
+    if _ws_reclaim_secret_path "$p"; then RECLAIM_SECRETS+=("$prefix$p"); else RECLAIM_STAGE+=("$p"); fi
+  done <"$outf"
+  rm -f "$outf"
+  _ws_collect_ignored "$dir" \
+    || { _WS_RECLAIM_CLASSIFY_WHY="could not read the ignored set at $dir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
+  local s
+  for s in ${REAP_SENSITIVE[@]+"${REAP_SENSITIVE[@]}"}; do
+    [[ -n "$s" ]] && RECLAIM_SECRETS+=("$prefix$s")
+  done
+  return 0
+}
+
+_ws_reclaim_stash_shas() {   # main branch -> the stash commits attributed to branch, one sha per line;
+  #                             rc 1 when the stash list could not be read
+  # THE SAME ATTRIBUTION `_ws_stash_count` COUNTS, answering shas instead of a
+  # number: a subject naming the branch, or a `(no branch)` entry whose first
+  # parent is an ancestor of the branch — and an unresolvable base counts,
+  # fail-closed, exactly as it does there. Two copies of one rule, so
+  # `server/test/ccd-child-reclaim-ladder.test.ts` holds this line count equal
+  # to `_ws_stash_count` over a fixture carrying both shapes.
+  local main="$1" branch="$2" list sha gs base
+  list=$(git -C "$main" stash list --format='%H%x09%gs' 2>/dev/null) || return 1
+  while IFS=$'\t' read -r sha gs; do
+    [[ -n "$sha" ]] || continue
+    case "$gs" in
+      "On $branch:"*|"WIP on $branch:"*) printf '%s\n' "$sha" ;;
+      'On (no branch):'*|'WIP on (no branch):'*)
+        base=$(git -C "$main" rev-parse --verify --quiet "$sha^1" 2>/dev/null) || { printf '%s\n' "$sha"; continue; }
+        git -C "$main" merge-base --is-ancestor "$base" "refs/heads/$branch" 2>/dev/null && printf '%s\n' "$sha" ;;
+    esac
+  done <<< "$list"
+  return 0
+}
+
+_ws_reclaim_record() {   # main path -> git's worktree record for path, read from $main ONCE: rc 0 with
+  #                           RECLAIM_REC_BRANCH ('' = detached) and RECLAIM_REC_HEAD set; rc 1 when $main
+  #                           records no worktree at path; rc 2 when the list could not be READ
+  # `_ws_wt_branch`'s matching (the path as given, or resolved through
+  # `_ws_realpath`, so a symlinked ancestor cannot hide a record), with the one
+  # distinction it folds: its exit 1 is both "no record" and "the list failed",
+  # which is right for ws-reap's refusal and wrong here, where "no record" is
+  # the TERMINAL `no-worktree-record` and a terminal refusal is never retried.
+  # A list that could not be read measured nothing (spec §5.5, rung 8's rule).
+  # It also answers the HEAD the record names — a VANISHED worktree's record
+  # (`prunable`) is the one place a detached child's last commit is reachable
+  # from, and the tail clears that record.
+  local main="$1" path="$2" real line listing m=0 hit=0
+  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""
+  listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 2
+  real=$(_ws_realpath "$path")
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) m=0
+                    [[ "${line#worktree }" == "$real" || "${line#worktree }" == "$path" ]] && { m=1; hit=1; } ;;
+      "HEAD "*)     (( m )) && RECLAIM_REC_HEAD="${line#HEAD }" ;;
+      "branch "*)   (( m )) && RECLAIM_REC_BRANCH="${line#branch refs/heads/}" ;;
+    esac
+  done <<< "$listing"
+  (( hit )) || return 1
+  return 0
+}
+
+_WS_SHARED_ROWS=''; _WS_SHARED_WHY=''
+_ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
+  #                                 `.workdir` names workdir, comma-joined ('' = none); rc 2 when that could
+  #                                 not be asked (_WS_SHARED_WHY): the registry would not list, or a row's
+  #                                 `.workdir` would not read
+  # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
+  # path itself). Registry corruption or an old slug collision can leave a
+  # child's row naming ANOTHER live session's worktree with no link anywhere
+  # in sight; the pin would then commit that session's work and the tail would
+  # remove its tree. Compared twice: the literal path, and the resolved one
+  # (`_ws_realpath`, the `pwd -P` of the path), so two spellings of one
+  # directory are one directory. The literal arm is implied by the resolved
+  # one — one string resolves one way — and stays as the spec's stated form;
+  # deleting it alone leaves the suite green, by construction.
+  #
+  # GLOBALS, NOT STDOUT: the caller reads the why too, and a command
+  # substitution would lose it in its subshell. The listing is `find`'s, whose
+  # status says whether `$REG` was READ — a glob over an unlistable directory
+  # matches nothing and reads as "no other row", the fail-open answer. A row
+  # whose `.workdir` does not read (`_reg_read` rc 2: unreadable, or a link)
+  # cannot be proven NOT to name this tree, so it is not-asked too. Neither is
+  # a refusal: the caller answers `_ws_reclaim_unmeasured`, and the vocabulary
+  # stays fourteen words.
+  local id="$1" wd="$2" mine names n o w rc
+  _WS_SHARED_ROWS=''; _WS_SHARED_WHY=''
+  names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
+    || { _WS_SHARED_WHY="could not list $REG"; return 2; }
+  mine=$(_ws_realpath "$wd")
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    o="${n##*/}"; o="${o%.workdir}"
+    [[ "$o" != "$id" ]] || continue
+    w=$(_reg_read "$o" workdir); rc=$?
+    (( rc == 1 )) && continue   # gone between the listing and the read
+    (( rc == 0 )) || { _WS_SHARED_WHY="could not read $n"; return 2; }
+    [[ -n "$w" ]] || continue
+    if [[ "$w" == "$wd" || "$(_ws_realpath "$w")" == "$mine" ]]; then
+      _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
+    fi
+  done <<< "$names"
+  return 0
+}
+
+_ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when the reclaim ladder
+  #                       passes (REAP_TOKEN set, REAP_VERDICT=reclaimable), else REAP_VERDICT names it
+  # THE LADDER, in spec §5.5's order. A refusal writes NOTHING — with one named
+  # exception, rung 8's permission pass, which adds owner bits and destroys
+  # nothing. `ws-audit --reclaim` runs this with childof '' (the audit is not
+  # told the run); `ws-reclaim` runs it with its `--child-of`, so rung 2 is the
+  # two-authority check there and a marker check here. It runs only where no
+  # breadcrumb exists — a resumed reclaim is `_ws_reclaim_resume_eval`'s.
+  _ws_reclaim_reset
+  local id="$1" defer="$2" childof="$3"
+  local ws mark project workdir regbranch branch wthead main mainreal common
+  local op clients elsewhere elsrc nested p pcommon ptop errf err rc pdirt pahead h hs clipsjson
+  RECLAIM_DEFER="$defer"
+  # 1 — registry identity
+  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  ws=$(_reg_get "$id" workspace)
+  [[ -n "$ws" ]] || { _reap_refuse not-a-workspace "$id is a main checkout"; return 1; }
+  # 2 — the marker, and (from the verb) its equality with --child-of. NO
+  # OVERRIDE ANYWHERE: no flag, no breadcrumb, no resume skips this rung.
+  # The grammar is wave 1's `_child_runid_valid` (its `LC_ALL=C` shadow: the
+  # bare `=~` range admits `1²` under a UTF-8 locale) — one definition, never
+  # re-spelled here. The read's rc is NOT branched on: an absent, unreadable or
+  # linked marker prints nothing and the grammar refuses '' — `_reg_get`'s rc
+  # readers are an enumerated list (`ccd-crosspool.test.ts`), and this is none.
+  mark=$(_reg_get "$id" child)
+  _child_runid_valid "$mark" \
+    || { _reap_refuse not-a-child "$id carries no readable child marker — only a workspace dispatch minted for a run is ever reclaimed"; return 1; }
+  [[ -z "$childof" || "$mark" == "$childof" ]] \
+    || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
+  RECLAIM_CHILDOF="$mark"
+  # 3 — the kill-switch, read HERE, at the instant of deletion (spec §5.8). -e,
+  # not -f: a pause file that is a directory, or unreadable, still pauses.
+  [[ ! -e "$REG/reclaim-paused" ]] \
+    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+  # 4 — held. -e for the same reason: an unreadable hold is still a hold.
+  if [[ -e "$REG/$id.hold" ]]; then
+    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+  fi
+  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir); regbranch=$(_reg_get "$id" branch)
+  # A ROW THAT DOES NOT SAY WHAT THE CHILD IS IS UNMEASURED, NOT UNREADABLE:
+  # `tree-unreadable` means ONLY a tree still unreadable after rung 8's
+  # permission pass (spec §5.5). A row with no project, workdir or branch
+  # proved nothing — a `failed` document, retried.
+  [[ -n "$project" && -n "$workdir" && -n "$regbranch" ]] \
+    || { _ws_reclaim_unmeasured "the registry does not say what $id is: project='$project' workdir='$workdir' branch='$regbranch'"; return 1; }
+  main="$PROJECTS_ROOT/$project"
+  # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
+  # (`=`): a bare `-t cc-<id>` is an fnmatch pattern and resolves a prefix to a
+  # DIFFERENT session (`cmd_win_size`'s measured case). A session that does not
+  # exist has no client; a
+  # session that exists and will not list its clients is presence UNMEASURED,
+  # which is not absence.
+  if (( ! defer )); then
+    if tmux has-session -t "=$(_tmux "$id")" 2>/dev/null; then
+      clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
+        || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
+      [[ -z "$clients" ]] \
+        || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; }
+    fi
+  fi
+  # NO OTHER REGISTRY ROW NAMES THIS WORKDIR (spec §5.5, rung 9 asked of the
+  # path) — `_ws_reclaim_workdir_shared` says why. Asked BEFORE the vanished
+  # fork, so it guards both arms: the absent arm still clears git's record at
+  # that path. A registry that would not list proved nothing: unmeasured.
+  _ws_reclaim_workdir_shared "$id" "$workdir" \
+    || { _ws_reclaim_unmeasured "could not ask whether another registry row names $workdir: $_WS_SHARED_WHY"; return 1; }
+  [[ -z "$_WS_SHARED_ROWS" ]] \
+    || { _reap_refuse containment-unproven "$workdir is also named by registry row(s) $_WS_SHARED_ROWS — ccd cannot prove the tree at that path is $id's own"; return 1; }
+  # A VANISHED WORKTREE IS NOT A REFUSAL (spec §5.5). NOTHING stands at the
+  # workdir — `! -e` and `! -L`, so a dangling link is never read as absence —
+  # and no breadcrumb exists (this function only runs where there is none), so
+  # no reclaim took it: there is no tree left that could hold unseen work, and
+  # a retry could never succeed. The ladder answers over what IS left, and the
+  # verb reclaims the child from its branch on.
+  if [[ ! -e "$workdir" && ! -L "$workdir" ]]; then
+    _ws_reclaim_eval_absent "$id" "$workdir" "$main" "$regbranch"
+    return $?
+  fi
+  # THE LEAF IS NEVER FOLLOWED (spec §5.5). A workdir that is itself a link
+  # reaches a tree ccd cannot prove is this child's: the pin would commit that
+  # tree's work and the tail would remove it. `-L` on the LEAF, no trailing
+  # slash, so a symlinked ANCESTOR (projects on a mounted volume) stays legal;
+  # a dangling link skipped the fork above and refuses here too.
+  [[ ! -L "$workdir" ]] \
+    || { _reap_refuse containment-unproven "$workdir is a symbolic link — ccd never follows a link to a tree it would pin or delete, so it cannot prove the tree at that path is $id's own"; return 1; }
+  [[ -d "$workdir" ]] \
+    || { _ws_reclaim_unmeasured "something that is not a directory stands at $workdir — neither a tree to pin nor a worktree that is gone"; return 1; }
+  # THE TREE MUST BE ONE OF $main's WORKTREES — settled BEFORE any probe reads
+  # git inside it (rung 6 does, and fails on exactly the no-record shape: an
+  # admin directory removed by hand leaves every read of the tree failing
+  # `not a git repository`). Asked in this order, each answer its own word:
+  # $main's repository (unresolvable: unmeasured); git's record of the workdir,
+  # read from $main (a list that could not be READ: unmeasured, never "no
+  # record"); the repository the directory resolves to — ANOTHER repository's
+  # is rung 9's question asked of the child itself, `containment-unproven`; and
+  # only then the record: a directory $main does not record is
+  # `no-worktree-record`, TERMINAL (spec §5.5) — ccd cannot tell what it would
+  # be deleting there.
+  mainreal=$(_ws_common_dir "$main") \
+    || { _ws_reclaim_unmeasured "could not resolve the repository of $main"; return 1; }
+  _ws_reclaim_record "$main" "$workdir"; rc=$?
+  (( rc == 2 )) \
+    && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git records $workdir was never asked"; return 1; }
+  if common=$(_ws_common_dir "$workdir"); then
+    [[ "$common" == "$mainreal" ]] \
+      || { _reap_refuse containment-unproven "$workdir belongs to $common, not $mainreal — another repository's work cannot be pinned into this one"; return 1; }
+  elif (( rc == 0 )); then
+    _ws_reclaim_unmeasured "$main records a worktree at $workdir, but git cannot resolve the directory's repository"; return 1
+  fi
+  (( rc == 0 )) \
+    || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+  wthead="$RECLAIM_REC_BRANCH"
+  # 6 — no in-progress git operation in the child's OWN tree.
+  if (( ! defer )); then
+    op=$(_ws_child_op "$workdir") \
+      || { _ws_reclaim_unmeasured "could not probe $workdir for an in-progress git operation"; return 1; }
+    [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at $workdir"; return 1; }
+  fi
+  # git's record names the branch removed; a DETACHED child removes the one the
+  # registry names — its HEAD commit is pinned on its own (the pin phase).
+  branch="${wthead:-$regbranch}"
+  REAP_REGBRANCH="$regbranch"; REAP_BRANCH="$branch"; REAP_WTHEAD="$wthead"
+  [[ -z "$wthead" || "$wthead" == "$regbranch" ]] \
+    || REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $wthead is the branch reclaimed, and $regbranch is left alone"
+  # 7 — the branch is checked out in no other worktree: the tail deletes it
+  # with `update-ref -d`, which does NOT make the check `git branch -d` makes.
+  elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir"); elsrc=$?
+  (( elsrc == 0 )) \
+    || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
+  [[ -z "$elsewhere" ]] \
+    || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+  # 8 — the tree reads, after the permission pass. Its clips directory is
+  # normalised too: the tail deletes it, and its manifest is a fingerprint input.
+  # NO FOLD: a pass that could not RUN (`_ws_reclaim_normalise` rc 2 — it ran
+  # out of time, or could not start) is `_ws_reclaim_unmeasured`, retried as a
+  # failure; only rc 1, an entry STILL unreadable after the pass, is the
+  # terminal `tree-unreadable`. Rung 6's probe, the stash list and the clips
+  # listing below take the same unmeasured arm.
+  _ws_reclaim_normalise "$workdir"; rc=$?
+  (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $workdir could not run: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse tree-unreadable "$workdir cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
+  (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  _ws_reclaim_classify "$workdir" ""; rc=$?
+  (( rc == 2 )) && { _ws_reclaim_unmeasured "$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse tree-unreadable "$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
+  # The audit's `sensitive` field lists what the pin phase will DROP: every
+  # secret-shaped path, untracked or ignored.
+  REAP_SENSITIVE=(${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"})
+  # 9 — containment. A nested checkout of THIS repository (a registered child
+  # worktree or a stray) is pinned and removed, never refused. A checkout of a
+  # DIFFERENT repository cannot be pinned into this attic at all, so it must
+  # prove it holds nothing that exists nowhere else: clean, and every commit on
+  # one of its own remotes.
+  nested=$(_ws_nested_checkouts "$workdir") \
+    || { _ws_reclaim_unmeasured "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    pcommon=$(_ws_common_dir "$p") \
+      || { _reap_refuse containment-unproven "could not resolve the repository of the checkout at $p"; return 1; }
+    if [[ "$pcommon" == "$mainreal" ]]; then
+      ptop=$(git -C "$p" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ptop=""
+      [[ "$ptop" == "$p" ]] \
+        || { _reap_refuse containment-unproven "the checkout at $p names $mainreal but is not a worktree root"; return 1; }
+      RECLAIM_NESTED+="$p"$'\n'
+      continue
+    fi
+    errf=$(_plat_mktemp) || { _ws_reclaim_unmeasured "could not make a scratch file to read the checkout at $p"; return 1; }
+    pdirt=$(git -C "$p" status --porcelain 2>"$errf"); rc=$?
+    err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+    { (( rc == 0 )) && [[ -z "$err" ]]; } \
+      || { _reap_refuse containment-unproven "could not read the checkout of another repository at $p"; return 1; }
+    [[ -z "$pdirt" ]] \
+      || { _reap_refuse containment-unproven "the checkout of another repository at $p has $(printf '%s\n' "$pdirt" | grep -c .) uncommitted file(s)"; return 1; }
+    pahead=$(git -C "$p" rev-list --count --all --not --remotes 2>/dev/null) \
+      || { _reap_refuse containment-unproven "could not prove every commit in $p is on one of its own remotes"; return 1; }
+    (( pahead == 0 )) \
+      || { _reap_refuse containment-unproven "$pahead commit(s) in the checkout of another repository at $p are on none of its remotes"; return 1; }
+    RECLAIM_FOREIGN+="$p"$'\n'
+  done <<< "$nested"$'\n'
+  # The facts the pin phase will act on, each a fingerprint input.
+  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  RECLAIM_HEAD=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || RECLAIM_HEAD=""
+  RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
+    || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
+  REAP_STASHES=$(printf '%s' "$RECLAIM_STASHES" | grep -c . || true)
+  for h in REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD ORIG_HEAD; do
+    hs=$(git -C "$workdir" rev-parse --verify --quiet "$h^{commit}" 2>/dev/null) || continue
+    RECLAIM_OPHEADS+="$h=$hs"$'\n'
+  done
+  clipsjson=$(_ws_clip_manifest "$id") \
+    || { _ws_reclaim_unmeasured "could not list $HOME/.cc-clips/$id"; return 1; }
+  REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | _plat_sha256 | cut -d' ' -f1)
+  REAP_SENSDIGEST=$(printf '%s\n' ${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"} | LC_ALL=C sort | _plat_sha256 | cut -d' ' -f1)
+  REAP_CHILDDIGEST=$(printf '%s%s' "$RECLAIM_NESTED" "$RECLAIM_FOREIGN" | _plat_sha256 | cut -d' ' -f1)
+  # 10 is the VERB's: it recomputes this inside the reap lock and compares.
+  RECLAIM_WORKTREE=present
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" \
+    "deferExpired=$RECLAIM_DEFER" "worktree=present" "branch=$branch" "registryBranch=$regbranch" \
+    "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" "statusDigest=$RECLAIM_STATUSDIGEST" \
+    "ignoredDigest=$REAP_IGNDIGEST" "secretsDigest=$REAP_SENSDIGEST" \
+    "stashes=${RECLAIM_STASHES//$'\n'/,}" "opHeads=${RECLAIM_OPHEADS//$'\n'/,}" \
+    "nestedDigest=$REAP_CHILDDIGEST" "clipsDigest=$REAP_CLIPDIGEST")
+  REAP_VERDICT=reclaimable
+  return 0
+}
+
+_ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer for a child whose worktree
+  #                               directory is GONE and no breadcrumb says a reclaim took it; called ONLY
+  #                               from `_ws_reclaim_eval`, after rungs 1-5. rc 0 with REAP_VERDICT=reclaimable,
+  #                               REAP_TOKEN and RECLAIM_WORKTREE=absent; else REAP_VERDICT names it
+  # A VANISHED WORKTREE IS NOT A REFUSAL (spec §5.5): there is nothing left on
+  # disk that could be lost, so the reclaim pins what IS left and runs its tail
+  # from the branch on. WHAT IS ASKED, AND WHAT IS NOT. Rungs 1-5 were asked by
+  # the caller, the pause and the hold among them. Rung 6 (an operation in the
+  # child's OWN tree), rung 8's pass over the tree and rung 9 (nested
+  # checkouts) have no tree to ask about. Rung 7 IS asked — the tail deletes
+  # the branch by CAS, which does not check other worktrees — excluding the
+  # child's own path, whose record git may still hold (`prunable`) and the tail
+  # clears first. Rung 8's pass still runs over the CLIPS directory: the tail
+  # deletes it, and its manifest is a fingerprint input. The facts pinned are
+  # the branch tip, the stashes attributed to the branch, and the HEAD git's
+  # record still names — a detached child's last commit is reachable from that
+  # record alone, and the tail clears it.
+  local id="$1" workdir="$2" main="$3" regbranch="$4" mainreal rec branch wthead elsewhere elsrc rc clipsjson
+  mainreal=$(_ws_common_dir "$main") \
+    || { _ws_reclaim_unmeasured "could not resolve the repository of $main"; return 1; }
+  _ws_reclaim_record "$main" "$workdir"; rec=$?
+  (( rec == 2 )) \
+    && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
+  # git's record, when it still holds one, names the branch removed (a DETACHED
+  # record removes the registry's); with no record left, the registry's name.
+  wthead="$RECLAIM_REC_BRANCH"; RECLAIM_HEAD="$RECLAIM_REC_HEAD"
+  branch="${wthead:-$regbranch}"
+  REAP_REGBRANCH="$regbranch"; REAP_BRANCH="$branch"; REAP_WTHEAD="$wthead"
+  [[ -z "$wthead" || "$wthead" == "$regbranch" ]] \
+    || REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $wthead is the branch reclaimed, and $regbranch is left alone"
+  # 7 — no OTHER worktree holds the branch.
+  elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir"); elsrc=$?
+  (( elsrc == 0 )) \
+    || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
+  [[ -z "$elsewhere" ]] \
+    || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+  # 8 — the clips directory only: there is no tree.
+  _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
+  (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse tree-unreadable "$HOME/.cc-clips/$id cannot be read: $_WS_NORMALISE_WHY"; return 1; }
+  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
+    || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
+  REAP_STASHES=$(printf '%s' "$RECLAIM_STASHES" | grep -c . || true)
+  clipsjson=$(_ws_clip_manifest "$id") \
+    || { _ws_reclaim_unmeasured "could not list $HOME/.cc-clips/$id"; return 1; }
+  REAP_CLIPDIGEST=$(printf '%s\n' "$clipsjson" | _plat_sha256 | cut -d' ' -f1)
+  # `worktree=absent` and `record` are INPUTS: a token minted over the tree can
+  # never be spent on its absence, nor one minted before git's record went
+  # after it, or the other way round.
+  RECLAIM_WORKTREE=absent
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" \
+    "deferExpired=$RECLAIM_DEFER" "worktree=absent" "record=$rec" "branch=$branch" \
+    "registryBranch=$regbranch" "worktreeHead=$wthead" "tip=$REAP_TIP" "head=$RECLAIM_HEAD" \
+    "stashes=${RECLAIM_STASHES//$'\n'/,}" "clipsDigest=$REAP_CLIPDIGEST")
+  REAP_VERDICT=reclaimable
+  return 0
+}
+
+_ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
+  # A crash may not launder a refusal (spec §5.6): the resume re-asserts what
+  # authorised the act — the marker and its --child-of, the pause, the hold —
+  # BEFORE anything else runs, and its token binds the phase and the recorded
+  # tip, so a stale resume token refuses `state-changed` like any other.
+  _ws_reclaim_reset
+  local id="$1" defer="$2" childof="$3" phase="$4" mark tomb tombtip tombbranch
+  RECLAIM_DEFER="$defer"
+  [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
+  mark=$(_reg_get "$id" child)
+  _child_runid_valid "$mark" \
+    || { _reap_refuse not-a-child "$id carries no readable child marker — an interrupted reclaim does not finish without one"; return 1; }
+  [[ -z "$childof" || "$mark" == "$childof" ]] \
+    || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
+  RECLAIM_CHILDOF="$mark"
+  [[ ! -e "$REG/reclaim-paused" ]] \
+    || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
+  if [[ -e "$REG/$id.hold" ]]; then
+    _reap_refuse held "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')"; return 1
+  fi
+  tomb="$REG/.reaped/$id.json"
+  tombbranch=$(_ws_tomb_str "$tomb" branch) || tombbranch=""
+  tombtip=$(_ws_tomb_str "$tomb" tip) || tombtip=""
+  # Unmeasured, not `tree-unreadable` (spec §5.5, rung 8: that word is a tree
+  # unreadable after the permission pass): the tree was never asked; the
+  # record of which steps ran was. A `failed` document, retried.
+  [[ -n "$tombbranch" ]] \
+    || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted reclaim already ran is unknown"; return 1; }
+  REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
+  REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim-resume" "id=$id" "childOf=$mark" \
+    "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
+  REAP_VERDICT=reclaimable
+  return 0
+}
+# ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
 # Guard so the script can be `source`d by tests without running a command.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

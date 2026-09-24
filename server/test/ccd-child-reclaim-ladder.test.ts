@@ -1,0 +1,582 @@
+// `_ws_reclaim_eval` — the reclaim ladder, rung by rung (spec 2026-09-22 §5.5).
+// Called directly: the verb that consumes it lands in Task 4 and the audit that
+// prints it in Task 5, and neither can be more right than this function is.
+//
+// The ORDER is part of the spec (§5.5's table): rung 2 (`not-a-child`)
+// outranks every retryable rung, so a workspace nobody marked never reads as
+// "try again".
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { itLinux } from './platformFixtures.js';
+import { CCD } from './ccdWsHelpers.js';
+import { CHILD_BRANCH, CHILD_ID, CHILD_STUBS, evalOf, makeChild, wideDigitLocale } from './childReclaimFixture.js';
+
+let h: PrHarness;
+beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-ladder-'); });
+afterEach(() => { h.cleanup(); });
+
+const reg = (field: string): string => path.join(h.home, '.cc-sessions', `${CHILD_ID}.${field}`);
+const calls = (): string[] => h.calls();
+const resetCalls = (): void => { fs.rmSync(path.join(h.home, 'ccd-calls'), { force: true }); };
+/** A live session with one attached client. */
+const ATTACHED = 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 0 ;; list-clients) echo /dev/pts/3 ;; *) return 1 ;; esac; };';
+/** A live session that will not list its clients. */
+const UNLISTABLE = 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 0 ;; *) return 1 ;; esac; };';
+
+describe('a finished child passes, and its token is a fingerprint', () => {
+  it('answers reclaimable with a 64-hex token, stable across two reads of an unchanged child', () => {
+    makeChild(h);
+    const a = evalOf(h);
+    const b = evalOf(h);
+    expect(a.verdict, a.detail).toBe('reclaimable');
+    expect(a.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(b.token).toBe(a.token);
+  }, 60_000);
+
+  it('moves the token when a fingerprinted fact moves — defer, a file, a stash, a clip, the marker', () => {
+    const { wt } = makeChild(h);
+    const base = evalOf(h).token;
+    expect(evalOf(h, { defer: 1 }).token, '--defer-expired is an INPUT, so a token minted without it cannot be spent with it')
+      .not.toBe(base);
+    fs.appendFileSync(path.join(wt, 'f1.txt'), 'stashed\n');
+    h.git(wt, 'stash', 'push', '-m', 'kept');
+    const withStash = evalOf(h).token;
+    expect(withStash, 'the stash list is an input (the tree is clean again)').not.toBe(base);
+    fs.writeFileSync(path.join(wt, 'late.txt'), 'late\n');
+    const withFile = evalOf(h).token;
+    expect(withFile, 'the status digest is an input').not.toBe(withStash);
+    fs.mkdirSync(path.join(h.home, '.cc-clips', CHILD_ID), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-clips', CHILD_ID, 'shot.png'), 'png');
+    const withClip = evalOf(h).token;
+    expect(withClip, 'the clips manifest is an input').not.toBe(withFile);
+    fs.writeFileSync(reg('child'), '8');
+    expect(evalOf(h).token, 'the marker itself is an input').not.toBe(withClip);
+  }, 90_000);
+});
+
+describe('rungs 1 and 2 — identity, and the two authorities', () => {
+  it('refuses no-such-session when there is no registry row', () => {
+    expect(evalOf(h).verdict).toBe('no-such-session');
+  });
+
+  it('refuses not-a-workspace for a main checkout', () => {
+    h.sh(`_reg_set ${CHILD_ID} uuid u-1; _reg_set ${CHILD_ID} child 7`);
+    expect(evalOf(h).verdict).toBe('not-a-workspace');
+  });
+
+  it('refuses not-a-child with no marker, an unreadable one, a malformed one, and one naming another run', () => {
+    makeChild(h);
+    expect(h.reg(CHILD_ID, 'child'), 'wave 1 wrote the marker through the real ws-add').toBe('7');
+    expect(evalOf(h, { childOf: '8' }).verdict, 'the two authorities disagree').toBe('not-a-child');
+    expect(evalOf(h, { childOf: '7' }).verdict, 'the two authorities agree').toBe('reclaimable');
+    for (const bad of ['seven', '0', '07', '7 ', '12345678901', '']) {
+      fs.writeFileSync(reg('child'), bad);
+      expect(evalOf(h).verdict, `marker ${JSON.stringify(bad)}`).toBe('not-a-child');
+    }
+    fs.rmSync(reg('child'));
+    expect(evalOf(h).verdict, 'no marker').toBe('not-a-child');
+  }, 60_000);
+
+  itLinux('refuses not-a-child when the marker is present but unreadable', () => {
+    makeChild(h);
+    fs.chmodSync(reg('child'), 0o000);
+    try { expect(evalOf(h).verdict).toBe('not-a-child'); } finally { fs.chmodSync(reg('child'), 0o644); }
+  }, 60_000);
+
+  it('ranks not-a-child ABOVE every retryable rung — paused, held and attached do not make it "try again"', () => {
+    makeChild(h);
+    fs.rmSync(reg('child'));
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'reclaim-paused'), '');
+    fs.writeFileSync(reg('hold'), 'program:x wave:2/3');
+    expect(evalOf(h, { pre: ATTACHED }).verdict).toBe('not-a-child');
+  }, 60_000);
+
+  it('refuses not-a-child for a marker only a locale-widened range admits — rung 2 is wave 1’s `_child_runid_valid`, on BOTH arms', (ctx) => {
+    // Wave 1 measured the bare `=~ ^[1-9][0-9]{0,9}$` ACCEPTING `1²` under
+    // `en_US.UTF-8`; `_child_runid_valid` shadows `LC_ALL=C`. A rung that
+    // re-spelled the bare pattern would pass this marker — and with the verb's
+    // `--child-of '1²'`, the "two authorities" would agree on a non-id.
+    makeChild(h);
+    const loc = wideDigitLocale(h);
+    if (loc === '') { ctx.skip(); return; }
+    fs.writeFileSync(reg('child'), '1²');
+    const pre = `LC_ALL=${loc};`;
+    expect(evalOf(h, { pre }).verdict, 'fresh arm, the audit form').toBe('not-a-child');
+    expect(evalOf(h, { pre, childOf: '1²' }).verdict, 'fresh arm, both sides spelling the same non-id').toBe('not-a-child');
+    expect(h.sh(`${CHILD_STUBS} ${pre} _ws_reclaim_resume_eval ${CHILD_ID} 0 '' children >/dev/null;`
+      + ` printf '%s' "$REAP_VERDICT"`), 'the resume arm').toBe('not-a-child');
+  }, 60_000);
+});
+
+describe('rungs 3 to 6 — the retryable ones', () => {
+  it('refuses paused while the kill-switch exists — a file, or even a directory', () => {
+    makeChild(h);
+    const pause = path.join(h.home, '.cc-sessions', 'reclaim-paused');
+    fs.writeFileSync(pause, '');
+    expect(evalOf(h).verdict).toBe('paused');
+    fs.rmSync(pause);
+    fs.mkdirSync(pause);
+    expect(evalOf(h).verdict, '-e, not -f').toBe('paused');
+  }, 60_000);
+
+  it('refuses held on a hold, and on an unreadable hold', () => {
+    makeChild(h);
+    fs.writeFileSync(reg('hold'), 'program:x wave:2/3');
+    const held = evalOf(h);
+    expect(held.verdict).toBe('held');
+    expect(held.detail).toContain('program:x wave:2/3');
+  }, 60_000);
+
+  itLinux('treats an unreadable hold as held', () => {
+    makeChild(h);
+    fs.writeFileSync(reg('hold'), 'x');
+    fs.chmodSync(reg('hold'), 0o000);
+    try {
+      const held = evalOf(h);
+      expect(held.verdict).toBe('held');
+      expect(held.detail).toContain('<unreadable — treat as held>');
+    } finally { fs.chmodSync(reg('hold'), 0o644); }
+  }, 60_000);
+
+  it('refuses attached on a client, on an unlistable session, and asks through an ANCHORED target', () => {
+    makeChild(h);
+    resetCalls();
+    expect(evalOf(h, { pre: ATTACHED }).verdict).toBe('attached');
+    // `=` anchors the target: a bare `cc-<id>` is an fnmatch pattern that
+    // resolves a prefix to a DIFFERENT session (`ccd-win-size.test.ts` measures it).
+    expect(calls()).toContain(`tmux has-session -t =cc-${CHILD_ID}`);
+    expect(calls()).toContain(`tmux list-clients -t =cc-${CHILD_ID} -F #{client_tty}`);
+    expect(calls().some((c) => / -t cc-/.test(c)), 'no unanchored target').toBe(false);
+    expect(evalOf(h, { pre: UNLISTABLE }).verdict, 'presence unmeasured is not absence').toBe('attached');
+  }, 60_000);
+
+  it('refuses tree-busy while an operation is in progress in the child’s own tree', () => {
+    const { wt, main } = makeChild(h);
+    const mergeHead = h.git(wt, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD');
+    fs.writeFileSync(mergeHead, `${h.git(main, 'rev-parse', 'HEAD')}\n`);
+    const busy = evalOf(h);
+    expect(busy.verdict).toBe('tree-busy');
+    expect(busy.detail).toContain('merge in progress');
+  }, 60_000);
+
+  it('--defer-expired skips rungs 5 and 6 and NOTHING else', () => {
+    const { wt, main } = makeChild(h);
+    const mergeHead = h.git(wt, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD');
+    fs.writeFileSync(mergeHead, `${h.git(main, 'rev-parse', 'HEAD')}\n`);
+    resetCalls();
+    expect(evalOf(h, { defer: 1, pre: ATTACHED }).verdict).toBe('reclaimable');
+    expect(calls().filter((c) => c.includes('list-clients')), 'rung 5 was not even asked').toEqual([]);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'reclaim-paused'), '');
+    expect(evalOf(h, { defer: 1 }).verdict, 'the pause is NOT a presence rung').toBe('paused');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'reclaim-paused'));
+    fs.writeFileSync(reg('hold'), 'x');
+    expect(evalOf(h, { defer: 1 }).verdict, 'nor is the hold').toBe('held');
+  }, 90_000);
+});
+
+describe('rung 7 — branch-elsewhere', () => {
+  it('refuses when another worktree stands on the branch the tail would delete', () => {
+    const { wt, main } = makeChild(h);
+    h.git(wt, 'checkout', '--detach');
+    h.git(main, 'worktree', 'add', path.join(h.home, 'elsewhere'), CHILD_BRANCH);
+    const r = evalOf(h);
+    expect(r.verdict).toBe('branch-elsewhere');
+    expect(r.detail).toContain(path.join(h.home, 'elsewhere'));
+  }, 60_000);
+});
+
+describe('rung 8 — the tree reads, after the permission pass', () => {
+  itLinux('normalises a mode-000 directory it owns, then reads it — the owner bits and nothing else', () => {
+    const { wt } = makeChild(h);
+    const a = path.join(wt, 'a');
+    fs.mkdirSync(path.join(a, 'b'), { recursive: true });
+    fs.writeFileSync(path.join(a, 'b', 'hidden.txt'), 'work nobody could see');
+    fs.chmodSync(path.join(a, 'b'), 0o000);
+    fs.chmodSync(a, 0o000);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('reclaimable');
+      expect(fs.statSync(a).mode & 0o700).toBe(0o700);
+      expect(fs.statSync(a).mode & 0o077, 'group and other bits untouched').toBe(0);
+    } finally {
+      fs.chmodSync(a, 0o755); fs.chmodSync(path.join(a, 'b'), 0o755);
+    }
+  }, 60_000);
+
+  itLinux('refuses tree-unreadable when the pass cannot fix the tree', () => {
+    const { wt } = makeChild(h);
+    const a = path.join(wt, 'a');
+    fs.mkdirSync(a);
+    fs.writeFileSync(path.join(a, 'hidden.txt'), 'x');
+    fs.chmodSync(a, 0o000);
+    // A chmod that exits 0 and changes nothing — the shape of an entry another
+    // uid owns, which this uid cannot fix. `find -exec` resolves chmod on PATH.
+    const shim = path.join(h.home, 'shim');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'chmod'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    try {
+      const r = evalOf(h, { pre: `PATH="${shim}:$PATH";` });
+      expect(r.verdict).toBe('tree-unreadable');
+      expect(r.detail).toContain(wt);
+    } finally { fs.chmodSync(a, 0o755); }
+  }, 60_000);
+
+  it('answers unmeasured — NEVER tree-unreadable — for a row that does not say where the tree is', () => {
+    // Spec §5.5, rung 8: `tree-unreadable` is a tree still unreadable after
+    // the permission pass. A row with no workdir never reached the pass.
+    makeChild(h);
+    fs.rmSync(reg('workdir'));
+    const noRow = evalOf(h);
+    expect(noRow.verdict, noRow.detail).toBe('unmeasured');
+    expect(noRow.token).toBe('');
+  }, 60_000);
+});
+
+describe('a vanished worktree is reclaimed; a directory git does not record is refused (spec §5.5)', () => {
+  it('a child whose worktree directory is GONE is reclaimable over what is left — never unmeasured, and its own token', () => {
+    // "A vanished worktree is not a refusal": nothing on disk can hold unseen
+    // work any more, and a retry could never succeed.
+    const { wt } = makeChild(h);
+    const present = evalOf(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    const gone = evalOf(h);
+    expect(gone.verdict, gone.detail).toBe('reclaimable');
+    expect(gone.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(gone.token, 'a token minted over the tree can never be spent on its absence').not.toBe(present.token);
+    expect(h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s' "$RECLAIM_WORKTREE"`))
+      .toBe('absent');
+  }, 60_000);
+
+  it('the vanished arm still asks rungs 2, 4, 5 and 7 — nothing that guards the branch is skipped', () => {
+    const { wt, main } = makeChild(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    expect(evalOf(h, { childOf: '8' }).verdict, 'rung 2').toBe('not-a-child');
+    expect(evalOf(h, { pre: ATTACHED }).verdict, 'rung 5').toBe('attached');
+    fs.writeFileSync(reg('hold'), 'x');
+    expect(evalOf(h).verdict, 'rung 4').toBe('held');
+    fs.rmSync(reg('hold'));
+    // Rung 7: git's own stale record of the vanished tree is pruned (fixture
+    // repository only) so ANOTHER worktree can take the branch the tail would
+    // delete — the shape the CAS alone would not notice.
+    h.git(main, 'worktree', 'prune');
+    h.git(main, 'worktree', 'add', path.join(h.home, 'elsewhere'), CHILD_BRANCH);
+    const r = evalOf(h);
+    expect(r.verdict, 'rung 7').toBe('branch-elsewhere');
+    expect(r.detail).toContain(path.join(h.home, 'elsewhere'));
+  }, 90_000);
+
+  it('refuses no-worktree-record — TERMINAL — for a directory that EXISTS but git does not record, before any probe reads it', () => {
+    const { wt, main } = makeChild(h);
+    // `ccd-ws-audit.test.ts`'s own no-record shape: removing `$main/.git/
+    // worktrees/<slug>` leaves the directory and the branch intact while every
+    // read of the directory fails `not a git repository` — which is also why
+    // the record is asked before rung 6, whose probe reads git in the tree.
+    const admin = path.join(main, '.git', 'worktrees', 'quiet-basin');
+    expect(fs.existsSync(admin), 'the CONTROL: git names the admin directory after the worktree basename').toBe(true);
+    fs.rmSync(admin, { recursive: true, force: true });
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('no-worktree-record');
+    expect(r.token).toBe('');
+    // …and a plain directory standing where the worktree was: the same answer.
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.mkdirSync(wt, { recursive: true });
+    expect(evalOf(h).verdict).toBe('no-worktree-record');
+  }, 60_000);
+});
+
+describe('a probe that could not RUN is `unmeasured` — never a token, never terminal', () => {
+  // Spec §5.5, rung 8: `tree-unreadable` is terminal for a tree unreadable
+  // AFTER the permission pass. A probe that never ran measured nothing; a
+  // terminal word for it would never be retried (wave 4's sweep skips the
+  // attention list).
+  it.each([
+    ['rung 6: the operation probe failed', '_ws_child_op() { return 1; };'],
+    ['rung 8: the permission pass ran out of time', '_plat_timeout() { return 124; };'],
+    ['the stash list could not be read', '_ws_reclaim_stash_shas() { return 1; };'],
+    ['the clips manifest could not be listed', '_ws_clip_manifest() { return 1; };'],
+    // The identity probes too — each was a `tree-unreadable` fold once.
+    ['the repository could not be resolved', '_ws_common_dir() { return 1; };'],
+    ['the worktree list could not be enumerated', '_ws_branch_elsewhere() { return 1; };'],
+    // git's record of the child's OWN workdir, when the list itself fails:
+    // unmeasured, never the terminal `no-worktree-record` (a list that could
+    // not be read is not "no record").
+    ['git’s worktree list could not be read — never "no record"',
+      'git() { case "$*" in *"worktree list"*) return 128 ;; esac; command git "$@"; };'],
+    // …and a directory git DOES record that resolves to no repository (its
+    // `.git` gone): the record says it is ours, the tree cannot say so.
+    ['a recorded worktree whose directory resolves to no repository',
+      '_ws_common_dir() { case "$1" in */worktrees/demo/quiet-basin) return 1 ;; esac; git -C "$1" rev-parse --path-format=absolute --git-common-dir; };'],
+    ['the nested-checkout scan could not run', '_ws_nested_checkouts() { return 1; };'],
+  ])('%s → unmeasured, no token', (_what, pre) => {
+    makeChild(h);
+    const r = evalOf(h, { pre });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  itLinux('a tree STILL unreadable after the pass keeps the terminal word — the pass RAN', () => {
+    // The `refuses tree-unreadable when the pass cannot fix the tree` case
+    // above, restated as the control for this describe: rc 1 is not rc 2.
+    const { wt } = makeChild(h);
+    const a = path.join(wt, 'a');
+    fs.mkdirSync(a);
+    fs.chmodSync(a, 0o000);
+    const shim = path.join(h.home, 'shim');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'chmod'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    try { expect(evalOf(h, { pre: `PATH="${shim}:$PATH";` }).verdict).toBe('tree-unreadable'); }
+    finally { fs.chmodSync(a, 0o755); }
+  }, 60_000);
+});
+
+describe('rung 9 — containment', () => {
+  it('refuses a nested checkout of ANOTHER repository that holds a commit on none of its remotes', () => {
+    const { wt } = makeChild(h);
+    const nested = path.join(wt, 'vendor', 'lib');
+    fs.mkdirSync(nested, { recursive: true });
+    execFileSync('git', ['init', '-q', '-b', 'main', nested]);
+    fs.writeFileSync(path.join(nested, 'x'), 'x');
+    h.git(nested, 'add', 'x');
+    h.git(nested, 'commit', '-m', 'local only');
+    const r = evalOf(h);
+    expect(r.verdict).toBe('containment-unproven');
+    expect(r.detail).toContain('on none of its remotes');
+  }, 60_000);
+
+  it('refuses a DIRTY nested checkout of another repository, and passes a clean, pushed one', () => {
+    const { wt } = makeChild(h);
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
+    h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    expect(evalOf(h).verdict, 'clean and pushed: nothing of it is lost').toBe('reclaimable');
+    fs.writeFileSync(path.join(clone, 'dirty'), 'd');
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+  }, 60_000);
+
+  it('NEVER refuses a nested checkout of the child’s OWN repository, dirty or not — it is pinned', () => {
+    const { wt, main } = makeChild(h);
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', path.join(wt, 'inner'));
+    fs.writeFileSync(path.join(wt, 'inner', 'dirty.txt'), 'dirty');
+    expect(evalOf(h).verdict).toBe('reclaimable');
+    expect(h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s' "$RECLAIM_NESTED"`))
+      .toContain(path.join(wt, 'inner'));
+  }, 60_000);
+
+  it('refuses containment-unproven when the child’s own workdir is a worktree of ANOTHER repository', () => {
+    makeChild(h);
+    const other = h.makeRepo('other');
+    const alien = path.join(h.home, 'alien');
+    h.git(other, 'worktree', 'add', '-b', 'ws/alien', alien);
+    fs.writeFileSync(reg('workdir'), alien);
+    expect(evalOf(h).verdict).toBe('containment-unproven');
+  }, 60_000);
+});
+
+describe('the tree at the workdir must be the child’s own — a link, or a path another row names, refuses (spec §5.5, rung 9)', () => {
+  /** A sibling worktree `other` of the child's OWN repository, left DIRTY, and
+   *  the child's directory replaced by a link to it — the shape in which a
+   *  ladder that followed the leaf would pin `other`'s work into the child's
+   *  WIP commit and the tail would remove `other`. */
+  const plantLink = (main: string, wt: string): string => {
+    const other = path.join(h.home, 'other');
+    h.git(main, 'worktree', 'add', '-b', 'ws/other', other);
+    fs.writeFileSync(path.join(other, 'dirty.txt'), 'uncommitted work of another session\n');
+    fs.appendFileSync(path.join(other, 'README.md'), 'edited\n');
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.symlinkSync(other, wt);
+    return other;
+  };
+  /** Everything of `other` that a reclaim could change: every entry under it
+   *  (path, type, mode, bytes), git's record of it, its branch tip, its status
+   *  and its branch's subjects. */
+  const snapshot = (main: string, other: string): Record<string, unknown> => {
+    const tree: string[] = [];
+    const walk = (d: string): void => {
+      for (const n of fs.readdirSync(d).sort()) {
+        const p = path.join(d, n);
+        const st = fs.lstatSync(p);
+        const rel = path.relative(other, p);
+        if (st.isDirectory()) { tree.push(`d ${st.mode.toString(8)} ${rel}`); walk(p); }
+        else tree.push(`f ${st.mode.toString(8)} ${rel} ${fs.readFileSync(p).toString('base64')}`);
+      }
+    };
+    walk(other);
+    const stanza = h.git(main, 'worktree', 'list', '--porcelain').split('\n\n')
+      .find((s) => s.startsWith(`worktree ${other}\n`)) ?? '<no record>';
+    return {
+      tree,
+      record: stanza,
+      tip: h.git(main, 'rev-parse', 'refs/heads/ws/other'),
+      status: h.git(other, 'status', '--porcelain=v1', '--untracked-files=all'),
+      subjects: h.git(main, 'log', '--format=%s', 'refs/heads/ws/other'),
+    };
+  };
+
+  it('(a) refuses a workdir that is a symbolic link to another worktree, the child’s record present — and `other` is untouched', () => {
+    const { main, wt } = makeChild(h);
+    const other = plantLink(main, wt);
+    expect(fs.existsSync(path.join(main, '.git', 'worktrees', 'quiet-basin')), 'the child’s record is present').toBe(true);
+    const before = snapshot(main, other);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('symbolic link');
+    expect(r.token).toBe('');
+    expect(snapshot(main, other)).toEqual(before);
+    expect(String(before['subjects'])).not.toContain('ccrc: WIP pinned');
+  }, 60_000);
+
+  it('(b) refuses the same link with the child’s record REMOVED — and `other` is untouched', () => {
+    const { main, wt } = makeChild(h);
+    const other = plantLink(main, wt);
+    fs.rmSync(path.join(main, '.git', 'worktrees', 'quiet-basin'), { recursive: true, force: true });
+    const before = snapshot(main, other);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('symbolic link');
+    expect(r.token).toBe('');
+    expect(snapshot(main, other)).toEqual(before);
+    expect(String(before['subjects'])).not.toContain('ccrc: WIP pinned');
+  }, 60_000);
+
+  it('the CONTROL: a symlinked ANCESTOR is legal — only the leaf is tested', () => {
+    // Projects live under a mounted volume reached through a link on the
+    // fleet box; a guard that resolved the whole path would refuse every child.
+    const { wt } = makeChild(h);
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    fs.writeFileSync(reg('workdir'), path.join(h.home, 'wtlink', 'demo', 'quiet-basin'));
+    expect(fs.realpathSync(path.join(h.home, 'wtlink', 'demo', 'quiet-basin'))).toBe(wt);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
+
+  it('refuses when ANOTHER registry row names the same workdir — literally, and by its resolved path', () => {
+    const { wt, tip } = makeChild(h);
+    const other = (id: string, workdir: string): void => {
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
+    };
+    other('demo-twin', wt);
+    const literal = evalOf(h);
+    expect(literal.verdict, literal.detail).toBe('containment-unproven');
+    expect(literal.detail).toContain('demo-twin');
+    expect(literal.token).toBe('');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'));
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'));
+    // The same directory spelled through a link: two literals, one tree.
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    other('demo-alias', path.join(h.home, 'wtlink', 'demo', 'quiet-basin'));
+    const resolved = evalOf(h);
+    expect(resolved.verdict, resolved.detail).toBe('containment-unproven');
+    expect(resolved.detail).toContain('demo-alias');
+    // Nothing was pinned or deleted: the ladder only evaluates.
+    expect(fs.existsSync(wt)).toBe(true);
+    expect(h.git(wt, 'rev-parse', 'HEAD')).toBe(tip);
+  }, 60_000);
+
+  it('the CONTROL: one row, or a second row naming a DIFFERENT workdir, proceeds', () => {
+    makeChild(h);
+    expect(evalOf(h).verdict, 'one row').toBe('reclaimable');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-elsewhere.uuid'), 'u-2');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-elsewhere.workdir'),
+      path.join(h.home, 'worktrees', 'demo', 'quiet-basin-2'));
+    const r = evalOf(h);
+    expect(r.verdict, `a row naming another path: ${r.detail}`).toBe('reclaimable');
+  }, 60_000);
+
+  it('the vanished arm asks it too: a GONE workdir another row names is not reclaimed over', () => {
+    const { wt } = makeChild(h);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'), 'u-2');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'), wt);
+    fs.rmSync(wt, { recursive: true, force: true });
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+  }, 60_000);
+
+  itLinux('an UNLISTABLE registry answers unmeasured — never a token, never a new word', () => {
+    // Search permission without read: every `$REG/<id>.<field>` the rungs above
+    // read by name still opens, and only the LISTING fails.
+    makeChild(h);
+    const regDir = path.join(h.home, '.cc-sessions');
+    fs.chmodSync(regDir, 0o300);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+    } finally { fs.chmodSync(regDir, 0o755); }
+  }, 60_000);
+
+  itLinux('an unreadable `.workdir` of another row answers unmeasured — it cannot be proven not to name this tree', () => {
+    makeChild(h);
+    const f = path.join(h.home, '.cc-sessions', 'demo-twin.workdir');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'), 'u-2');
+    fs.writeFileSync(f, '/somewhere');
+    fs.chmodSync(f, 0o000);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+    } finally { fs.chmodSync(f, 0o644); }
+  }, 60_000);
+});
+
+describe('the classifier the pin phase stages through', () => {
+  it('drops every secret-shaped path, untracked or ignored — by ANY path component, not the basename alone', () => {
+    const { wt } = makeChild(h);
+    fs.writeFileSync(path.join(wt, '.gitignore'), '.env.local\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-m', 'ignore');
+    fs.writeFileSync(path.join(wt, '.env'), 'SECRET=1');
+    fs.mkdirSync(path.join(wt, 'secrets'));
+    fs.writeFileSync(path.join(wt, 'secrets', 'token.txt'), 't');
+    fs.writeFileSync(path.join(wt, '.env.local'), 'SECRET=2');
+    fs.writeFileSync(path.join(wt, '.env.example'), 'SECRET=');
+    fs.writeFileSync(path.join(wt, 'notes.txt'), 'n');
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null;`
+      + ` printf 'S:%s\\n' "\${RECLAIM_SECRETS[@]}"; printf 'T:%s\\n' "\${RECLAIM_STAGE[@]}"`);
+    const secrets = out.split('\n').filter((l) => l.startsWith('S:')).map((l) => l.slice(2)).sort();
+    const stage = out.split('\n').filter((l) => l.startsWith('T:')).map((l) => l.slice(2)).sort();
+    expect(secrets).toEqual(['.env', '.env.local', 'secrets/token.txt']);
+    expect(stage).toEqual(['.env.example', 'notes.txt']);
+  }, 60_000);
+});
+
+describe('stash attribution — one rule in two copies, held equal', () => {
+  it('_ws_reclaim_stash_shas lists exactly as many stashes as _ws_stash_count counts, named and anonymous', () => {
+    const { wt, main } = makeChild(h);
+    fs.appendFileSync(path.join(wt, 'f1.txt'), 'named\n');
+    h.git(wt, 'stash', 'push', '-m', 'named');
+    h.git(wt, 'checkout', '--detach');
+    fs.appendFileSync(path.join(wt, 'f2.txt'), 'anon\n');
+    h.git(wt, 'stash', 'push', '-m', 'anon');
+    h.git(wt, 'checkout', CHILD_BRANCH);
+    const [shas, count] = h.sh(`printf '%s|%s' "$(_ws_reclaim_stash_shas "${main}" ${CHILD_BRANCH} | grep -c .)"`
+      + ` "$(_ws_stash_count "${main}" ${CHILD_BRANCH})"`).split('|');
+    expect(count).toBe('2');
+    expect(shas).toBe(count);
+  }, 60_000);
+});
+
+describe('the region', () => {
+  const src = fs.readFileSync(CCD, 'utf8');
+  it('is bracketed by its two markers, once each, and its CODE never calls reap’s ladder or tail', () => {
+    expect(src.split('RECLAIM-BEGIN').length - 1).toBe(1);
+    expect(src.split('RECLAIM-END').length - 1).toBe(1);
+    const region = src.slice(src.indexOf('RECLAIM-BEGIN'), src.indexOf('RECLAIM-END'));
+    // Comment lines are dropped first: the region's comments NAME reap's
+    // functions to say why they are not used, and that is not a call.
+    const code = region.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code.length, 'the region has code in it').toBeGreaterThan(5000);
+    // They accept OPPOSITE evidence (spec §5.5): a reclaim that consulted
+    // `_ws_reap_eval` would refuse every dirty child the ruling says to pin.
+    expect(code).not.toMatch(/_ws_reap_eval\b/);
+    expect(code).not.toMatch(/_ws_reap_tail\b/);
+  });
+});

@@ -195,6 +195,27 @@ export const SENTENCES: Record<string, string> = {
   'has-upstream': 'This branch has already been pushed. Renaming it now would leave the old name on the remote and open a second branch there on the next push.',
   'name-taken-local': 'A branch with that name already exists in this project.',
   'name-taken-origin': 'A branch with that name already exists on the remote.',
+  // ── ws-reclaim (child-workspace reclamation, spec 2026-09-22 §5.5). The
+  // ladder's new words. A CHILD has no human to act on a sentence (rule 4), so
+  // none of these tells anyone to do anything: the retryable ones say the lane
+  // tries again, the terminal ones say what was not proven. The reused tokens
+  // (`no-such-session`, `not-a-workspace`, `held`, `branch-elsewhere`,
+  // `tree-unreadable`, `no-worktree-record`, `state-changed`, `in-progress`)
+  // keep their sentences: the server only ever shows a TERMINAL token's
+  // sentence for a child — `no-worktree-record`'s ("nothing here is ccrc's to
+  // remove") is true of one and asks nothing of anyone — and
+  // `held`/`state-changed`/`in-progress` — the three whose copy names a human
+  // remedy — are retryable, carried as a deferral's `detail`, never rendered.
+  // `containment-unproven` has several causes in ccd (a checkout of another
+  // repository holding work that exists nowhere else, a workdir that belongs to
+  // another repository, a workdir that is a symbolic link, a workdir another
+  // registry row names), so its sentence names them all and claims only what
+  // each one shares: the tree at that path is not proven to be the child's own.
+  'not-a-child': 'ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees — so it is never reclaimed automatically. Nothing was removed.',
+  'paused': 'Reclamation is paused fleet-wide. Nothing was removed; it resumes when the pause is lifted.',
+  'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
+  'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, so nothing was removed. Reclamation tries again later.',
+  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed: a checkout of another repository inside it holds changes or commits that exist nowhere else, the directory belongs to another repository, the path is a symbolic link, or another session’s record names the same path.',
 };
 
 export function refusalSentence(token: string): string {
