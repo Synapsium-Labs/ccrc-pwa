@@ -43,6 +43,27 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-24 — main's macOS leg is red on wave 1's `_child_tmpdir`; fixed by a separate one-wave programme.**
+  - **The defect.** `chmod 0700 -- "$dir"` puts `--` after the mode operand. BSD `chmod` reads it as a file and
+    exits 1, so on macOS every child answers rc 2 and spawns uncontained. Reported by bright-river; upheld by a
+    three-agent check (the runner's `chmod` is BSD, and every failure goes through that rc 2).
+  - **Owner.** Programme `child-tmpdir-bsd` (ledger `docs/superpowers/programs/child-tmpdir-bsd.md`).
+  - **Why it does not wait for wave 3's claim on `ccd/ccd`.** ws-slug-collision waited out wave 1's claim; this
+    narrows that precedent. Two of this coordinator's workers may share a claimed file when the second's edit is
+    line-neutral, in a function the first carries unchanged, and the first merges main before its PR as it must
+    anyway. The only text both branches change is ccd's generated stamp line. Clause 10 itself governs splitting
+    one wave across workers, which this is not.
+  - **Not ours.** Main's macOS 3/4 cancellation is `ccgpt-proxy.test.ts` (#165) wedging the single macOS worker
+    on every main run since 2026-09-22, before this programme existed. It also blocks stable promotion; it is
+    reported to the operator.
+  - **Wave 3 portability, from the same check.** `_ws_reclaim_residue` hardcodes `/tmp/claude-<uid>` where
+    `ccd-tmp-sweep` uses `${TMPDIR:-/tmp}/claude-<uid>`, so on macOS it reads a measured-looking 0. Its `find
+    -perm`/`-quit` are the first Darwin-reachable uses in ccd and need the macOS leg to confirm them. Both are
+    mailed to wave 3's worker. Nothing else in its 1151 new lines is platform-sensitive.
+- **2026-09-24 — wave 3 stalled for ~3 h after an account move.** At ~16:02 the worker moved from one wrapper
+  to another at the weekly limit. The move stopped its background merge subagent (the merge commit `b05d0be5`
+  had landed; its S6-R11 follow-up is unknown), and the resumed session never took a turn. Woken by mail at 18:59
+  to verify S6-R11 on the merge and continue at Task 5.
 - **2026-09-24 — scoped review 147 (`95703aa7`): accepted; wave 2 merges.**
   - **The panel.** 36 agents; 8 findings survived 3–0 and merge into 5 minors; 3 were refuted. All 12 mutations
     behaved as claimed; the named suites passed 1141/1141 and the ledger/topology suites 87/87.
