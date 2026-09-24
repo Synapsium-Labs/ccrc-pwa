@@ -143,7 +143,7 @@ Per test file, **repository paths only** (anything outside the checkout, and `no
 | `listed` | a directory is enumerated (`getdents64`) | a file directly inside it is added, deleted or renamed |
 | `subtree` | the test creates a symlink whose target is an in-repo DIRECTORY (a fixture home that links `deploy/` or `shared/` whole) — what it later stats or probes through the link has no resolved path to record (§15.13) | any path at or under it is added, modified, deleted or renamed |
 | `git` | any path under the repository's `.git/` is opened | **always** — the test reads the whole tracked tree or its history (`git ls-files`, `git grep`, a range scan) |
-| `unknown` | the traced run failed, timed out, or was killed, a relative path could not be resolved, or a floor test lost its breadth | **always**, until a clean trace replaces it |
+| `unknown` | the traced run failed, timed out, or was killed, a relative path could not be resolved, a floor test lost its breadth, or the test is on `SKIPS_UNDER_TRACE` — it skips some of its own cases when traced, so its record misses what they read (§15.16) | **always**, until a clean trace replaces it (never, for a test on `SKIPS_UNDER_TRACE`) |
 
 - **Recursive walks** enumerate every subdirectory they descend into, so each is recorded in `listed` on its own.
 - **`git` is derived, not hand-kept.** It is expected to contain at least `source-bytes`, `topology-clean`,
@@ -153,7 +153,8 @@ Per test file, **repository paths only** (anything outside the checkout, and `no
   through directory walks and `tsc` project reads rather than `.git`; their breadth arrives through `listed` and
   `read`, and the same pin names them.
 - **`unknown` exists because a test that dies early reads less.** Its record would be too small, which is the one
-  direction that is unsafe.
+  direction that is unsafe. So does a test that skips cases under trace (`CCRC_TRACING=1`): `trace-run.mjs`'s
+  `SKIPS_UNDER_TRACE` names each such file, and a scan keeps it equal to the test files that read the variable.
 - **vitest's own startup is subtracted, per process side** (§15.1). A trivial baseline test file is traced with the
   same invocation, and each trace is split into the vitest main process and everything else (the worker running the
   test, and its children). The baseline's main-process record — the config, `package.json`, `tsconfig.json`, the

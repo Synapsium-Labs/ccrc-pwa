@@ -9,7 +9,11 @@
 //
 // When this file is itself being traced (a map rebuild traces every server test; `CCRC_TRACING=1` comes from
 // trace-run's own environment), its nested-strace cases skip: strace cannot attach under an outer strace, so
-// they would fail and leave this file `unknown` in every map.
+// they would fail. Skipped, they read nothing — so the traced run exits 0 with a record that misses the repo
+// paths those cases read (`ccd/worker-skill/SKILL.md`, `ccd/ccrc-models-probe`, `shared/` through a link), and
+// a change to one of them would not select this file. So trace-run writes it `unknown` whatever its trace says
+// (`SKIPS_UNDER_TRACE`, final review FR-5), and a scan below keeps that list equal to the files that read the
+// variable.
 //
 // Platform gating (per the plan): `strace` does not exist on Darwin, so this whole suite is a structural no-op
 // there -- `describe.skip`. On Linux, `strace` is a required tool for real CI (the daily map rebuild and every
@@ -17,10 +21,14 @@
 // skip -- §6.3's "loud, never silent" applies to the tracer's own preconditions as much as to the selector's.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, rmSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, rmSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { traceArgv, traceAll, tracedCommand, tracedEnv, recordOf, runTraced, runPool } from '../../.github/ci/trace-run.mjs';
+import {
+  traceArgv, traceAll, tracedCommand, tracedEnv, recordOf, runTraced, runPool,
+  SKIPS_UNDER_TRACE, SKIPS_UNDER_TRACE_WHY, markSkipsUnderTrace,
+} from '../../.github/ci/trace-run.mjs';
+import { FAILED_UNDER_TRACE, buildMap, traceVerdict, RECORDS_FORMAT } from '../../.github/ci/testmap.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -104,6 +112,48 @@ describe('trace-run.mjs: the traced command and how a finished run is read', () 
     const noFile = recordOf(workDir('999', { 't.700': cfg }), REPO, ok, 60);
     expect(noFile.unknown).toBe(true);
     expect(noFile.why).toMatch(/root process/);
+  });
+
+  // ── a test that skips cases under trace (final review FR-5) ────────────────
+  it('SKIPS_UNDER_TRACE is exactly the test files that read CCRC_TRACING, and each one exists', () => {
+    const testDir = path.join(repoRoot, 'server', 'test');
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return walk(full);
+      return e.name.endsWith('.test.ts') ? [full] : [];
+    });
+    const readers = walk(testDir)
+      .filter((f) => readFileSync(f, 'utf8').includes('CCRC_TRACING'))
+      .map((f) => path.relative(repoRoot, f).split(path.sep).join('/'))
+      .sort();
+    expect(readers, 'the scan found nothing — it would pass vacuously').toContain('server/test/ci-trace-run.test.ts');
+    expect([...SKIPS_UNDER_TRACE].sort()).toEqual(readers);
+    for (const f of SKIPS_UNDER_TRACE) expect(existsSync(path.join(repoRoot, f)), f).toBe(true);
+  });
+
+  it('a clean record of a listed file is written unknown, "skips cases under trace"; its deps are kept; others untouched', () => {
+    const clean = recordOf(workDir('700', { 't.700': cfg, 't.701': own }), REPO, ok, 60);
+    const marked = markSkipsUnderTrace('server/test/ci-trace-run.test.ts', clean);
+    expect(marked).toEqual({ ...clean, unknown: true, why: SKIPS_UNDER_TRACE_WHY });
+    expect(SKIPS_UNDER_TRACE_WHY).toBe('skips cases under trace');
+    expect(markSkipsUnderTrace('server/test/other.test.ts', clean)).toEqual(clean);
+    // A run that already FAILED keeps its own reason (the first reason wins, as in recordOf): unknown either way,
+    // and a real failure under trace still reaches map-build as one.
+    const failed = recordOf(workDir('700', { 't.700': cfg }), REPO, { code: 1, signal: null, error: null }, 60);
+    expect(markSkipsUnderTrace('server/test/ci-trace-run.test.ts', failed)).toEqual(failed);
+  });
+
+  it('the why is not a failure: testmap.mjs neither counts it as news nor warns on it, and the map always selects it', () => {
+    expect(FAILED_UNDER_TRACE.test(SKIPS_UNDER_TRACE_WHY)).toBe(false);
+    const empty = { read: [], probed: [], listed: [], subtree: [], git: false };
+    const records = {
+      format: RECORDS_FORMAT,
+      baseline: { root: empty, rest: empty },
+      tests: { 'server/test/ci-trace-run.test.ts': { root: empty, rest: { ...empty, read: ['ccd/x'] }, unknown: true, why: SKIPS_UNDER_TRACE_WHY } },
+    };
+    const map = buildMap('a'.repeat(40), records);
+    expect(map.tests['server/test/ci-trace-run.test.ts']).toMatchObject({ unknown: true, why: SKIPS_UNDER_TRACE_WHY });
+    expect(traceVerdict(map, records, null)).toEqual({ floor: [], newlyFailed: [], stillFailing: [] });
   });
 
   it('a non-zero exit, a timeout, or an unresolved path -> unknown with the reason', () => {
@@ -218,7 +268,8 @@ describe.skipIf(isDarwin)('trace-run.mjs', () => {
     });
 
     it('traces the baseline plus two files at jobs:2: the tiny one reads itself, the linked one reads through symlinks', async () => {
-      const records = await traceAll(repoRoot, [tiny, linked], { jobs: 2, timeoutSec: 120 });
+      // The tiny one stands in for a file on SKIPS_UNDER_TRACE: traceAll must write it unknown, deps kept.
+      const records = await traceAll(repoRoot, [tiny, linked], { jobs: 2, timeoutSec: 120, skipsUnderTrace: [`server/${tiny}`] });
       expect(records.format).toBe(2);
       expect(records.baseline.root.git).toBe(false);
       expect(records.baseline.rest.git).toBe(false);
@@ -230,7 +281,7 @@ describe.skipIf(isDarwin)('trace-run.mjs', () => {
 
       expect(Object.keys(records.tests).sort()).toEqual([`server/${linked}`, `server/${tiny}`]);
       const t = records.tests[`server/${tiny}`];
-      expect(t.unknown).toBe(false);
+      expect(t).toMatchObject({ unknown: true, why: SKIPS_UNDER_TRACE_WHY });
       expect(t.root.read).toContain(`server/${tiny}`);
       const l = records.tests[`server/${linked}`];
       expect(l.unknown).toBe(false);

@@ -17,6 +17,11 @@
 // is NEWS — failing now and not unknown in the map this run started from — is `testmap.mjs`'s to say, after it
 // has written the map (spec §5.4). A test that always fails under tracing (session-hook's timing budgets) would
 // otherwise turn every refresh that re-traces it red.
+//
+// A test that SKIPS some of its own cases when traced (`CCRC_TRACING=1`, below) exits 0 with a record too small
+// to trust — the skipped cases read nothing — which is the one unsafe direction (spec §5.2). Such a file is on
+// `SKIPS_UNDER_TRACE`, and every record of it is written `unknown` (final review FR-5), so rule 2 always selects
+// it. Its why is not a failure: testmap.mjs neither counts it as news nor warns on it.
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,6 +38,22 @@ const DEFAULT_TIMEOUT_SEC = 900;
 const KILL_AFTER_SEC = 30;
 const BASELINE_SERVER_REL = 'test/ci-baseline.test.ts';
 const ROOT_PID_SH = 'echo $$ > "$0"; exec "$@"';
+
+/** Repo-relative test files that skip cases when traced — each reads `CCRC_TRACING` (a scan in
+ *  `ci-trace-run.test.ts` keeps this list equal to the files that do). `ci-trace-run.test.ts` skips its real
+ *  traced runs (strace cannot attach under an outer strace), which read `ccd/worker-skill/SKILL.md`,
+ *  `ccd/ccrc-models-probe` and `shared/` through links: its traced record never names them. */
+export const SKIPS_UNDER_TRACE = ['server/test/ci-trace-run.test.ts'];
+export const SKIPS_UNDER_TRACE_WHY = 'skips cases under trace';
+
+/** `record`, written unknown when `file` is on `list` (default `SKIPS_UNDER_TRACE`) — with the why
+ *  `SKIPS_UNDER_TRACE_WHY`, unless the run was already unknown for its own reason (a failure, a timeout), which
+ *  wins as the first reason does in `recordOf`. The deps are kept either way.
+ *  @param {string} file @param {SplitRecord} record @param {string[]} [list] @returns {SplitRecord} */
+export function markSkipsUnderTrace(file, record, list = SKIPS_UNDER_TRACE) {
+  if (!list.includes(file) || record.unknown) return record;
+  return { ...record, unknown: true, why: SKIPS_UNDER_TRACE_WHY };
+}
 
 /**
  * The exact `strace` invocation this module wraps every traced `vitest run` in (spec §5.1): per-thread output
@@ -70,7 +91,7 @@ export function tracedCommand(traceDir, pidFile) {
  * The traced child's environment. `UV_USE_IO_URING=0` keeps libuv on its threadpool: with io_uring, Node's
  * asynchronous fs can be submitted through the ring, and none of it would appear as a syscall strace can see.
  * `CCRC_TRACING=1` tells a test it is being traced — this module's own suite skips its nested-strace cases then,
- * since strace cannot attach under an outer strace.
+ * since strace cannot attach under an outer strace; a file that reads it belongs on `SKIPS_UNDER_TRACE`.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} listFile
  * @returns {NodeJS.ProcessEnv}
@@ -191,13 +212,14 @@ export async function runPool(items, concurrency, worker) {
  * @param {string} repoRoot
  * @param {string[]} serverRelPaths server-relative paths, e.g. `test/bus.test.ts`
  * `baselineTimeoutSec` (default `timeoutSec`) bounds the baseline alone; `killAfterSec` (default 30) is the
- * `timeout --kill-after` grace.
- * @param {{ jobs?: number, timeoutSec?: number, baselineTimeoutSec?: number, killAfterSec?: number }} [options]
+ * `timeout --kill-after` grace; `skipsUnderTrace` (default `SKIPS_UNDER_TRACE`) names the files written unknown.
+ * @param {{ jobs?: number, timeoutSec?: number, baselineTimeoutSec?: number, killAfterSec?: number, skipsUnderTrace?: string[] }} [options]
  * @returns {Promise<Records>}
  */
 export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const root = realpathSync(repoRoot);
   const jobs = options.jobs ?? DEFAULT_JOBS;
+  const skipsUnderTrace = options.skipsUnderTrace ?? SKIPS_UNDER_TRACE;
   const timeoutSec = options.timeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const baselineTimeoutSec = options.baselineTimeoutSec ?? timeoutSec;
   const killAfterSec = options.killAfterSec ?? KILL_AFTER_SEC;
@@ -212,7 +234,7 @@ export async function traceAll(repoRoot, serverRelPaths, options = {}) {
   const tests = {};
   await runPool(serverRelPaths, jobs, async (serverRelPath) => {
     const repoRelKey = path.posix.join('server', serverRelPath);
-    tests[repoRelKey] = await traceOne(root, serverRelPath, timeoutSec, killAfterSec);
+    tests[repoRelKey] = markSkipsUnderTrace(repoRelKey, await traceOne(root, serverRelPath, timeoutSec, killAfterSec), skipsUnderTrace);
   });
 
   return { format: 2, baseline, tests };
