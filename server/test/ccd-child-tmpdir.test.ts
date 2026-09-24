@@ -47,9 +47,13 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
  *  the non-required macOS leg could see it. This shim runs the host's own chmod
  *  with `POSIXLY_CORRECT` set, which makes GNU getopt stop at the first operand
  *  too. It sets that in the SHIM, never on bash itself (bash would enter posix
- *  mode), and resolves the real chmod once, by measuring. On macOS the real
+ *  mode), and resolves the real chmod once, by measuring: the first executable
+ *  `chmod` on this process's PATH, walked here rather than asked of a bash that
+ *  `ccd-workspaces`' containment scan would have to exempt. On macOS the real
  *  chmod is already BSD-order and the shim changes nothing. */
-const REAL_CHMOD = execFileSync('bash', ['-c', 'command -v chmod'], { encoding: 'utf8' }).trim();
+const REAL_CHMOD = (process.env['PATH'] ?? '').split(':').filter(Boolean)
+  .map((d) => path.join(d, 'chmod'))
+  .find((p) => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; } }) ?? '';
 const bsdOrderBin = (): string => path.join(h.home, 'bsd-order-bin');
 const bsdOrderEnv = (): NodeJS.ProcessEnv => {
   fs.mkdirSync(bsdOrderBin(), { recursive: true });
