@@ -489,6 +489,28 @@ does it in order — roles preflighted, version pinned once from SHA256SUMS, fle
 box, stop on the first failure, both boxes re-measured. `ccrc doctor`'s `build` check compares the
 running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`.
 
+**Control plane (update-management W2).** The server now measures and records the fleet's update state; nothing
+in it moves a node yet. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
+listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
+`ccd/ccrc`, or from `CCRC_RELEASE_OWNER` and `CCRC_RELEASE_REPO` when both are set — a pair that is not two
+plain names stops the poll rather than falling back); a release that vanishes from the listing is marked
+yanked, never deleted — a **node inventory** re-measured every 60 seconds (each node's `~/.ccrc` stamp,
+install record, `ccrc-caps`, floor, previous version, `node-id` and update report; every file lstat-gated,
+capped at 64 KiB and validated; the fleet node's read through an exact-basename read set on the agent, never a
+prefix of `~/.ccrc`), and one **desired-state intent** per scope (`*`, or a node id: channel, pin, auto,
+notify), each write journalled to `~/.ccrc/update-intent.log` under a rising epoch. The catalogue and the
+inventory keep their cadence when the fleet registry cannot be listed. After every inventory sweep the server
+resolves each node's desired tag — the newest eligible release on its channel, never below the node's floor
+(the higher of its recorded floor and the version it runs), pinned or not — and on a `server` or `both` box
+writes its own projection, `~/.ccrc/update-intent` (whole, by rename; mode 0600; times in unix seconds). The
+role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from `CCRC_FLEET` and the boot log
+says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
+(once a minute) and `/api/updates/ack` are session-only — the box token never writes intent — and
+`GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
+`/api/fleet/health`'s `builds` is now a view of the inventory rows. Not yet: no apply or rollback route, no
+fleet-side projection reader, no release notification, no settings screen — and an `auto` other than `off` is
+refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
@@ -566,14 +588,14 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the twenty-six machine lanes the
+liveness gate reads the shipped sha out of it), the twenty-seven machine lanes the
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation,
-and `/api/pools/epoch` — the callers are `curl` inside a Claude Code session and
-`ccd-pool-sync.timer`, both with no cookie jar, though the
+`/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
+Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`) take a live session
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
@@ -1174,9 +1196,9 @@ only ever sees the tmux name, so `_spawn` is what emits this, once it has
 both back): `<id> is waiting for login on <wrapper> — attach and run
 /login`.
 
-The startup verdict is four-valued now, not the one non-zero code above: `0`
+The startup verdict is six-valued now, not the one non-zero code above: `0`
 a live marker appeared, `2` a login screen (unchanged, above), `3` the tmux
-session vanished mid-poll, `4` the window expired with no marker. `3` ends
+session vanished mid-poll, `4` the window expired with no marker, `5` a hard block (a limit/spend banner or lost auth), `6` a live pane too narrow to read (or of unreadable width), so the startup gates stood down. `3` ends
 the wait **immediately** — a debounced second probe, not the ~15-minute wait
 a vanished pane used to cost. Every verdict, success included, is recorded in
 `$REG/<id>.spawn` as `<epoch> <rc>`, which is the one channel from a spawn
@@ -1509,14 +1531,14 @@ general remote-shell:
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
-  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), and the
-  fleet's projects root. Writes: `$HOME/.cc-clips/` only. **This list did not
-  widen for the transcript resolver or the supervisor heartbeat**, and both
-  are worth saying out loud: the resolver's uuid search (rungs 5 and 6 of
-  its ladder) rides the existing `$HOME/.claude*` grant — no new read
-  permission — and the supervisor heartbeat exists specifically so the
-  server never has to ask systemd anything; nothing under
-  `~/.config/systemd` was added to reach it.
+  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
+  fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
+  name (`NODE_FILES`, `shared/agent-protocol.ts`) — a live symlink inside
+  `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
+  list did not widen for the transcript resolver or the supervisor
+  heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
+  rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
+  server never asks systemd anything — nothing under `~/.config/systemd`.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
 
@@ -2557,8 +2579,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7465-7467`), each with an operator sentence of its own at `:7505`,
-`:7513` and `:7526`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7555-7557`), each with an operator sentence of its own at `:7595`,
+`:7603` and `:7616`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2596,8 +2618,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:20970`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19776-19778`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21202`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19989-19991`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
@@ -2979,7 +3001,7 @@ never left half-true:
 | `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
 | `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
 | `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
-| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4/5/6), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
 **30 seconds**, so a live loop never drifts stale under its own steady

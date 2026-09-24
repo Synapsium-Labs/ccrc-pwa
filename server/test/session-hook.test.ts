@@ -8177,6 +8177,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   clean after a shift; the anchors have to be walked by hand.
       // RE-MEASURED against the tree, never adjusted to keep a number green;
       // Task 11 still owns re-anchoring the citations themselves.
+      // CHILD-RECLAMATION WAVE 1 (Task 3) left this at 147 with its COMPOSITION
+      // moved two for two: `spec:2125`/`spec:2230` `:13567` enter, `spec:1210
+      // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
+      // them, measured by the plan's `cite-remeasure.py` against the pre-task
+      // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
       'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -8268,6 +8273,34 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // content (+3) rather than counted, on the same ground the round before
       // this one used: README is the one corpus document this branch may repair,
       // so a rotted anchor there is a repair and never a debt.
+      //
+      // RE-MEASURED at child-reclamation wave 2 (S6-R11, no rule changed, no
+      // D-number), in EACH task that inserted lines into `shared/api.ts`: the
+      // programme ledger's carried constraint pays the citation tax in the
+      // task that incurs it, so this file is green at every commit. The inserts
+      // land above anchors the frozen spec/plan corpus cites by line, and
+      // neither document may be re-pointed (byte-identical to `origin/main`).
+      // README's four anchors into the same file were RE-ANCHORED BY CONTENT in
+      // the same commits (the three `LcRefusalToken` union arms and their three
+      // map keys, `diff`-proved byte-identical against the previous commit), so
+      // README contributes nothing here.
+      //   Task 1 (`ChildMark`, `CHILD_RUN_ID`): a clean +18 insertion at
+      //   `:37` (`git diff -U0` — one hunk, `@@ -36,0 +37,18 @@`), so every
+      //   line below shifts by +18: the `RoutingArm` referent this entry
+      //   already tracks — MEASURED by its own bytes ("into `arm === null`.
+      //   Rows after the first well-formed `arm:` are never"), not derived by
+      //   adding the delta — sits at `:5779` in base `4b6bdaa7` and `:5797` at
+      //   this commit (`git show 4b6bdaa7:shared/api.ts | grep -n` and the
+      //   same grep on the working tree). Still not `:5644`, so the entry
+      //   stays 1 -> 1.
+      //   Task 2 (`FleetSession.child`'s docstring, `reviveChildMark`): three
+      //   pure-insertion hunks (`git diff -U0`: `@@ -460,0 +461,22 @@`,
+      //   `@@ -2772,0 +2795,24 @@`, `@@ -2938,0 +2985 @@` — +22, +24, +1),
+      //   all above the same `RoutingArm` referent, which shifts by their sum,
+      //   +47: `:5797` -> `:5844` (measured by the same bytes, not by adding
+      //   the delta). Still not `:5644`, so the entry stays 1 -> 1.
+      //   Task 5 (the `RunRefuseCode` paragraph for `workspace-spent`/`spent-unmeasured`): `:5844` -> `:5860`,
+      //   still not `:5644`, so the entry stays 1 -> 1.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
@@ -9003,11 +9036,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `**Files:**` note already books in the other direction. A coincidental
         // pass is not a green anchor. S6-R11 covers the re-measurement, so no
         // D-number.
+        // RE-MEASURED at child-reclamation wave 1 (Task 3), 53 -> 53, FROM THE
+        // SAME RUN as the site-level set below. Task 3 adds EIGHT lines to
+        // `ccd/ccd` above every entry that moved — four in `cmd_ws_add`'s strip
+        // loop, one refusal, one marker write, two in `cmd_caps` — and nothing
+        // else above them (its long argument sits below the corpus's lowest
+        // anchor on purpose). Two ENTER (`:13567`, `:13650-13652`) and two LEAVE
+        // (`:13573-13575` x2). Both corpus documents are byte-identical to
+        // `origin/main` at this tree, so nothing was re-pointed and every move is
+        // that shift. A coincidental pass is not a green anchor. S6-R11 covers
+        // the re-measurement, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
@@ -9016,6 +9058,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
+        'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -9024,6 +9067,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
+        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -9043,7 +9087,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9136,14 +9179,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // them — this wave's `ccd/ccd` growth — and nothing is re-pointed: both
       // corpus documents are byte-identical to `origin/main` at this tree. S6-R11
       // covers the re-measurement, so no D-number.
+      // RE-MEASURED at child-reclamation wave 1 (Task 3), 36 -> 35, FROM THE
+      // SAME RUN as the row-pass set above, and every move mirrors one there:
+      // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
+      // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
+      // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
-        'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
@@ -9166,7 +9214,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/session-hook.sh:993',
         'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3050',

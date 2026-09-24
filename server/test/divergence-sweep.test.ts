@@ -794,3 +794,100 @@ describe('sweepDivergences: archived-but-live, driven through the registry (D-11
       expect.objectContaining({ kind: 'archived-but-live' }));
   });
 });
+
+// The fleet's branch fallback (fleet.ts: `sl?.branch ?? head ?? r.branch`)
+// reads the HEAD this sweep already measures for `branch-drift`. What only
+// the watcher can prove: that the sweep KEEPS what it measured, that a failed
+// read keeps the last answer for the LABEL without feeding the CENSUS, and
+// that `tick()` hands the map to the assembly.
+describe('sweepDivergences keeps each worktree\'s measured HEAD for the fleet', () => {
+  it('remembers the branch git\'s own HEAD names, keyed by the ccd id its checkout path measures', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('docs/checked-out-by-hand');
+  });
+
+  it('keeps a project\'s last HEADs through a failed read — and never lets them reach the census', async () => {
+    const cfg: FixtureCfg = {};
+    const h = await watcherFixture(cfg);
+    // HEAD and registry agree at first, so the first census is clean.
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'ws/demo-quiet-basin');
+    const frames: Divergence[][] = [];
+    h.bus.on('divergence', (d) => frames.push(d as Divergence[]));
+    await sweep(h);
+    expect(frames.flat()).not.toContainEqual(expect.objectContaining({ kind: 'branch-drift' }));
+    // The registry then moves, and the project's git read fails. A retained
+    // HEAD that reached the census would now DISAGREE with the registry and
+    // publish a fresh `branch-drift` — a finding manufactured from an old read.
+    h.plantRecord('demo-quiet-basin', { branch: 'ws/renamed' });
+    cfg.unreadableProject = 'demo';
+    jump(2);
+    await sweep(h);
+    // The label keeps the last measured answer…
+    expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('ws/demo-quiet-basin');
+    // …and the census, which a failed read may only ever SUPPRESS, does not.
+    const afterFailed = frames.length;
+    expect(frames.flat()).not.toContainEqual(expect.objectContaining({ kind: 'branch-drift' }));
+    // The control: the same disagreement, read FRESH, is published — so the
+    // silence above is the census declining an old read, not a census that
+    // could not have spoken.
+    cfg.unreadableProject = undefined;
+    jump(4);
+    await sweep(h);
+    expect(frames.slice(afterFailed).flat()).toContainEqual(expect.objectContaining({ kind: 'branch-drift' }));
+  });
+
+  it('writes the fleet\'s HEADs even when the census then refuses on an unlistable registry', async () => {
+    // The HEAD reads are valid whatever the registry listing does; the census
+    // returns early on a failed listing, and the label must not stop updating
+    // with it.
+    const cfg: FixtureCfg = { unreadableRegistry: true };
+    const h = await watcherFixture(cfg);
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    // The records are handed in; only the sweep's own late listing fails.
+    const records = await readRegistry(localIO, h.cfgObj);
+    await h.watcher.sweepDivergences(records);
+    expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('docs/checked-out-by-hand');
+  });
+
+  it('keeps NOTHING through a standing refusal — a project that is no longer a checkout', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('docs/checked-out-by-hand');
+    rmSync(path.join(h.projectsRoot, 'demo', '.git'), { recursive: true, force: true });
+    jump(2);
+    await sweep(h);
+    expect(h.watcher.currentHeadBranches().has('demo-quiet-basin')).toBe(false);
+  });
+
+  it('drops a worktree\'s HEAD once its project answers without it', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    rmSync(path.join(h.projectsRoot, 'demo', '.git', 'worktrees', 'quiet-basin'), { recursive: true, force: true });
+    jump(2);
+    await sweep(h);
+    expect(h.watcher.currentHeadBranches().has('demo-quiet-basin')).toBe(false);
+  });
+
+  it('tick() publishes the measured HEAD as the branch of a row whose pane gave none', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    const fleets: { id: string; branch: string | null }[][] = [];
+    h.bus.on('fleet', (s) => fleets.push(s as { id: string; branch: string | null }[]));
+    // The fixture's panes capture empty — no statusline, so no branch from it.
+    await h.watcher.tick();
+    const row = fleets.at(-1)?.find((s) => s.id === 'demo-quiet-basin');
+    expect(row, 'tick() published no fleet row for the planted session').toBeDefined();
+    expect(row!.branch).toBe('docs/checked-out-by-hand');
+  });
+});

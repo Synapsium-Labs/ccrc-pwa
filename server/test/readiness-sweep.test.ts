@@ -197,9 +197,9 @@ describe('the readiness sweep — the coord probe', () => {
 describe('the sweep measures the box token on the SERVER box', () => {
   /** THE PRODUCTION TOPOLOGY, as a fixture. `CCRC_FLEET=remote` is standing
    *  config on the live server, so the watcher's `deps.io` is the agent-backed
-   *  FleetIO — and the agent's read whitelist has no `.ccrc` arm
+   *  FleetIO — and the agent's read whitelist admits no `.ccrc` name but its eight node files
    *  (`agent/src/whitelist.ts`: .cc-sessions, .cc-limits, .cc-clips, the
-   *  projects root, underClaudeGlob). This io refuses `.ccrc` exactly as that
+   *  projects root, underClaudeGlob). This io refuses `.ccrc` whole — exact for `mail.token`, as that
    *  whitelist does, while the token file really exists on this box.
    *
    *  Before the local/fleet split this fixture answered `unmeasurable`, so the

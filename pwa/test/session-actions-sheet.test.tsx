@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
@@ -17,7 +18,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and
@@ -638,6 +639,38 @@ describe('the spawn-state note (§1.6b)', () => {
     // broken teaches the operator to ignore the sheet.
     renderSheet(s({ spawnState: 'expired' }));
     expect(notes().join(' ')).toContain('not a fault');
+  });
+
+  it('tells a narrow spawn to widen the window and look for an unanswered prompt', () => {
+    // rc 6: ccd stood its startup gates down on a pane under READER_MIN_COLS,
+    // so a trust/bypass/resume prompt may still be waiting, and the window
+    // stays narrow until something re-pins it. The drawer re-pins 220x50 on
+    // open and on close (server.ts's `resizeWindow(id, 220, 50)`).
+    renderSheet(s({ spawnState: 'narrow' }));
+    const t = notes().join(' ');
+    // Rendered from the constant ccd stands down at (a hand-typed 120 would
+    // match this too — what this pins is the value, not its spelling).
+    expect(t).toContain(`under ${READER_MIN_COLS} columns`);
+    // rc 6 also answers when ccd could not read the width at all.
+    expect(t).toContain('could not read');
+    expect(t).toContain('terminal drawer');
+    expect(t).toContain('startup prompt');
+    // The step that stops the NEXT spawn landing narrow too.
+    expect(t).toMatch(/narrow terminal attached to any session[^.]*close it first/);
+    // rc 6 answers only for a live pane, so Restart session (ensure) spawns
+    // nothing there — the note must not offer it as the remedy.
+    expect(t).not.toContain('Restart session');
+  });
+
+  it('sends a DEAD narrow row to Restart session — the pane to widen is gone', () => {
+    // `.spawn` survives the pane, so a stopped or dead row can still carry rc
+    // 6. There is no drawer to open; Restart session is the respawn, and it
+    // lands narrow again if a narrow terminal is still attached anywhere.
+    renderSheet(s({ spawnState: 'narrow', status: 'dead', bucket: 'dead' }));
+    const t = notes().join(' ');
+    expect(t).toContain('Restart session builds a new one');
+    expect(t).toContain('close any narrow terminal');
+    expect(t).not.toContain('terminal drawer');
   });
 
   it('says NOTHING for a CLEAN spawn', () => {
