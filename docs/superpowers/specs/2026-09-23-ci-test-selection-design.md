@@ -60,7 +60,7 @@ what the mode runs, and every other job reads its output.
 |---|---|---|
 | `pull_request` | `selected` | Server tests chosen by §6, sharded on Linux (§7); `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` in full, as today; `test-macos` on the same selection, advisory. |
 | `push` to `main` (a merge) | `refresh` | Linux only: re-trace the tests the merge affected and update the map (§5.4). No agent, pwa, build or macOS legs. |
-| `schedule`, daily | `full` | Every leg in full, Linux and macOS, sharded; plus a separate traced full run that rebuilds the map from scratch (§5.3). When `main`'s head already carries a green `full-suite` check (§8), the selector-driven legs are skipped (§15.4). |
+| `schedule`, daily | `full` | Every leg in full, Linux and macOS, sharded; plus a separate traced full run that rebuilds the map from scratch (§5.3). When `main`'s head already carries a green `full-suite` (§8), the selector-driven legs are skipped (§15.4). |
 | `workflow_dispatch` | input `mode`, default `full` | The manual escape hatch. |
 | `workflow_call` | input `mode` | How `release-stable.yml` runs the full suite (§8). |
 
@@ -236,7 +236,9 @@ modified and deleted, which §5.2's table needs.
 - the selector itself hits any internal error. It then **emits mode `full` with the reason** — it never answers
   "nothing". Only if the `select` job dies outright does `test (server)` go red (§4.2) — loud, never silent. Two
   conditions deliberately make it die rather than fall back, because "full" would run the wrong thing too: a live test
-  path containing whitespace (shard lists are space-joined), and a live test list that is empty or unreadable (§15.5).
+  path containing whitespace, a control character, a double quote or a backslash (shard lists are space-joined, list
+  files hold one path per line; the listing itself is NUL-delimited, so a non-ASCII name runs, §15.16), and a live test
+  list that is empty or unreadable (§15.5).
 
 ### 6.4 The reason table
 
@@ -272,9 +274,10 @@ variable. Literal include patterns match exactly (*measured*). The same config s
 - A `full`-mode run ends with a job named **`full-suite`**, green iff every leg — Linux shards, typechecks, agent, pwa,
   build, **and the macOS shards** — is green. It exists only in `full` mode. Like `test (server)`, it starts with a step
   that reads only job results and can only add red, and its verdict script fails closed (§15.8).
-- `release-stable.yml`, on a push to `stable`, gains a first job, `gate`, that asks the checks API whether the pushed
-  commit carries a successful `full-suite` check run (named `full-suite`, or `<caller> / full-suite` when it came from a
-  called workflow).
+- `release-stable.yml`, on a push to `stable`, gains a first job, `gate`, that asks the Actions API whether the pushed
+  commit carries a successful `full-suite` job (named `full-suite`, or `<caller> / full-suite` when it came from a
+  called workflow) in a run that tested that commit's own tree: `ci.yml`'s scheduled or dispatched run on `main`, or
+  `release-stable.yml`'s own run on a push to `stable` — never a pull request's run (§15.16).
   - **Found** — from the daily run, a manual full run, or an earlier gate: the existing `promote` job runs at once. The
     usual path, if the operator promotes the commit the daily run tested.
   - **Not found** — a second job calls `ci.yml` with `mode: full` (`uses: ./.github/workflows/ci.yml`, granting the
@@ -312,6 +315,7 @@ It holds only as far as its assumptions do. The known limits, each with what cat
 | A test whose reads vary between runs (time, randomness, load) can be under-recorded | each daily rebuild re-traces everything; a miss surfaces at the daily run |
 | A syscall family the trace list omits (e.g. `io_uring` file ops) would hide reads | the plan's spike checks the list against a full trace; the history replay (§11.3) is the recall measurement |
 | A test that touches a repository path only by mutating it (`unlink`, `mkdir`, `rmdir`, `rename`, `link`, `chmod`, `utimensat`) or by `statfs` — never opening, stating or listing it — is not recorded: those families are outside the trace list | tests write only under fixture HOMEs: traced with exactly those families, `ccd-ws-audit` (the spike's census file) made 43,089 such calls and none named a repository path; the daily full run and the stable gate |
+| A test that learns about a repository path ONLY from a failed check other than `ENOENT` — `EACCES` from `[ -x f ]` / `X_OK`, `ENOTDIR` from probing beneath a file — is not recorded: the parser keeps a success or an `ENOENT` (and `readlink`'s `EINVAL`, §15.6) and nothing else. No test in the tree does this today (measured by the final review, §15.16) | the daily full run and the stable gate |
 | `strict: false` lets `main` move under a PR, so a PR's green covers its merge ref at the time it ran | the per-merge refresh runs the affected tests on the real merged tree; the daily run covers the rest |
 
 ## 10. Constraints the change must honour
@@ -477,3 +481,10 @@ The bounded second review round (closure of the 43, plus a fresh pass over the n
     estimate. `session-hook` fails under trace in its own nested-strace case and stays `unknown`. The syscall
     families outside the trace list are mutations, fd-only calls and libuv's epoll-ctl ring, and none named a
     repository path (§9's new row).
+16. **Final whole-branch review (2026-09-24).** Full-suite evidence is a trusted run, not a check's name: the gate and
+    the daily skip accept a green `full-suite` job only from `ci.yml`'s scheduled or dispatched run on `main`, or
+    `release-stable.yml`'s run on a push to `stable`, of this repository and of exactly that commit — never a pull
+    request's run, whose checks sit on its head sha while it tested the merge ref (§8, `main-artifact.mjs
+    green-full-suite`). The live tests are listed with `git ls-tree -z`, so a name git would quote still runs and one
+    no list can carry is refused (§6.3); every cache path lives under the runner's temp directory, where a pull request
+    cannot plant a map; and a test that skips cases under trace is written `unknown` (`SKIPS_UNDER_TRACE`, §5.2).
