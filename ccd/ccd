@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b1ae47c4fb1696b29b8f5554a3fac21505f966ac9d2d28febf13ebe6aa7250ae
+# ccrc:generated 1 sha256=d99e52e47b24b1f3c96a1b5ef1ba026b39016991bfc3dfce2025558b2d5b3c39
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,8 +2885,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 171
-# invocations across 142 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 170
+# invocations across 141 non-comment lines.
 #
 # THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 5);
 # before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
@@ -12588,25 +12588,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ "$(_reg_get "$id" started)" == "1" ]] && startedflag=true
   unitstate=$(_ws_unit_state "$id")
 
-  local rbc=""
   if [[ $mode == reclaim ]]; then
-    rbc=$(_reg_get "$id" reaping) || rbc=""
-    # A BREADCRUMB THAT STANDS BUT READS AS NOTHING is unmeasured, the same
-    # rung `_ws_reclaim_locked` runs first (a directory, a link, a file this
-    # uid cannot read — `_reg_get` answers empty for each): which verb left it
-    # and at which step is unknown, so the audit must not read that as "no
-    # breadcrumb" and hand out a fresh-ladder token over a half-torn-down child.
-    if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
-      _ws_reclaim_reset
-      _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
-    elif [[ -n "$rbc" && "$rbc" != reclaim:* ]]; then
-      _ws_reclaim_reset
-      _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || true
-    elif [[ -n "$rbc" ]]; then
-      _ws_reclaim_resume_eval "$id" "$defer" "" "${rbc#reclaim:}" || true
-    else
-      _ws_reclaim_eval "$id" "$defer" "" || true
-    fi
+    _ws_reclaim_fork "$id" "$defer" ""   # see "THE FLAVOUR FORK" in the RECLAIM region
   else
     _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
   fi
@@ -12923,7 +12906,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)"
-    [[ "$rbc" == reclaim:* ]] && printf '"resume":%s,' "$(_json_str "${rbc#reclaim:}")"
+    [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       printf '"verdict":"reclaimable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
     elif [[ "$REAP_VERDICT" == unmeasured ]]; then
@@ -24610,7 +24593,15 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # `ccd-tmp-sweep` already collects it by session id. The number turns rule 2's
   # bounded claim into a measurement. `CCD_RECLAIM_RESIDUE_ROOT` overrides the
   # root for the test harness only.
-  local root="${CCD_RECLAIM_RESIDUE_ROOT:-/tmp/claude-$(id -u)}" d b
+  #
+  # THE DEFAULT ROOT IS THE BOX'S OWN, not the child's: `${TMPDIR:-/tmp}/claude-<uid>`,
+  # the exact derivation `ccd-tmp-sweep`'s own `ROOT=` line uses (`ccd/ccd-tmp-sweep`),
+  # because that is where Claude Code actually lands this scratch — under whatever
+  # TMPDIR the ccd PROCESS runs under, never the child's own `$HOME/.cc-tmp/<id>`
+  # (`_child_tmpdir`'s TMPDIR, a different variable in a different process). A bare
+  # `/tmp/claude-$(id -u)` measured nothing on a box whose TMPDIR points elsewhere —
+  # macOS scan, mail 2375.
+  local root="${CCD_RECLAIM_RESIDUE_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}" d b
   d="$root/${1//\//-}"
   _ws_reclaim_absent "$d"; case $? in 0) echo 0; return 0 ;; 2) echo null; return 0 ;; esac
   b=$(_ws_gc_bytes "$d")
@@ -25228,10 +25219,14 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   return "$rc"
 }
 
-_ws_reclaim_locked() {   # token childof id defer surface actor reason — everything the shared lock serialises
-  local token="$1" childof="$2" id="$3" defer="$4" surface="$5" actor="$6" reason="$7"
-  local rbc phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
-  [[ "$surface" == none ]] || declared="$surface"
+_ws_reclaim_fork() {   # id defer childof -> runs the flavour fork exactly once (spec §5.6), the ONE copy
+  #                          `cmd_ws_audit` and `_ws_reclaim_locked` both call (single-definition; a fix
+  #                          round found the brief's own prescribed copy verbatim in both places). Sets
+  #                          REAP_* through whichever eval it runs, and RECLAIM_RESUME_PHASE to the phase a
+  #                          `reclaim:` breadcrumb names, or "" on every other path (fresh, mismatched
+  #                          flavour, or unmeasured) — the one fact a caller cannot re-derive itself.
+  local id="$1" defer="$2" childof="$3" rbc
+  RECLAIM_RESUME_PHASE=""
   rbc=$(_reg_get "$id" reaping)
   # THE FLAVOUR FORK, before any eval (spec §5.6): a `reclaim:` breadcrumb
   # resumes THIS verb's ladder; any other breadcrumb is ws-reap's interrupted
@@ -25248,13 +25243,22 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     _ws_reclaim_reset
     _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || :
   elif [[ -n "$rbc" ]]; then
-    # `resumed` carries the PHASE, as `LifecycleMeas.resumed` and ws-reap's own
-    # `meas.resumed` do — never a 0/1 beside it — and is empty on a fresh act.
-    phase="${rbc#reclaim:}"; resumed="$phase"
-    _ws_reclaim_resume_eval "$id" "$defer" "$childof" "$phase" || :
+    # `RECLAIM_RESUME_PHASE` carries the PHASE, as `LifecycleMeas.resumed` and
+    # ws-reap's own `meas.resumed` do — never a 0/1 beside it — and is "" on a
+    # fresh act (the caller's `resumed` local, where it keeps one, is this).
+    RECLAIM_RESUME_PHASE="${rbc#reclaim:}"
+    _ws_reclaim_resume_eval "$id" "$defer" "$childof" "$RECLAIM_RESUME_PHASE" || :
   else
     _ws_reclaim_eval "$id" "$defer" "$childof" || :
   fi
+}
+
+_ws_reclaim_locked() {   # token childof id defer surface actor reason — everything the shared lock serialises
+  local token="$1" childof="$2" id="$3" defer="$4" surface="$5" actor="$6" reason="$7"
+  local phase="" resumed="" declared="" lctx project workdir main clips pinned=0 start=children
+  [[ "$surface" == none ]] || declared="$surface"
+  _ws_reclaim_fork "$id" "$defer" "$childof"
+  phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
   # 10 — the consent IS the fingerprint, recomputed HERE, inside the lock. A
   # server-side check fails open into deletion; this one cannot.
   if [[ "$REAP_VERDICT" == reclaimable && "$token" != "$REAP_TOKEN" ]]; then
@@ -25333,13 +25337,15 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # byte: `mode` is read at exactly two places, the eval call and the verdict
 # line, and both keep their old text on `reap`.
 #
-# THE FLAVOUR FORK, made here too, so the token printed is one `ws-reclaim`
-# can accept: a `reclaim:` breadcrumb answers the RESUME token, any other
-# breadcrumb is ws-reap's and answers `reap-in-progress`, no token. A
-# breadcrumb that STANDS but reads as nothing — the same case
-# `_ws_reclaim_locked` guards first — answers `unmeasured`, never a fresh
-# ladder over a half-torn-down child: which verb left it, and at which step,
-# is unknown.
+# THE FLAVOUR FORK IS ONE COPY, `_ws_reclaim_fork` (single-definition; a fix
+# round found the brief's own prescribed copy verbatim in both `cmd_ws_audit`
+# and `_ws_reclaim_locked`, and this is the extraction), so the token printed
+# is one `ws-reclaim` can accept: a `reclaim:` breadcrumb answers the RESUME
+# token, any other breadcrumb is ws-reap's and answers `reap-in-progress`, no
+# token. A breadcrumb that STANDS but reads as nothing answers `unmeasured`,
+# never a fresh ladder over a half-torn-down child: which verb left it, and at
+# which step, is unknown. `RECLAIM_RESUME_PHASE` is the fork's one output a
+# caller cannot re-derive: "" on every path but the resume one.
 #
 # THE VERDICT LINE. `reclaimable` MEANS a token, exactly as `reapable` does —
 # a child whose worktree has vanished included (spec §5.5): its document says

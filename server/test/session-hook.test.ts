@@ -8182,18 +8182,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
-      // CHILD-RECLAMATION WAVE 3 (Task 5) moves it 147 -> 148, +1, measured by
-      // running this same audit against the pre-Task-5 tree (`ccd/ccd` and
-      // `README.md` at this task's own base, this file unchanged) and diffing
-      // the two failure lists: TWO ENTER, `spec:1210 ccd/ccd:13602` and
-      // `spec:2123 ccd/ccd:13573-13575`, ONE LEAVES, `spec:91 ccd/ccd:13602` —
-      // net +1. None is a repair: Task 5's insertions into `cmd_ws_audit`'s
-      // header, argv parse, eval call and verdict line (plus `cmd_caps`' verb
-      // heredoc and token echo, and the dispatcher arm) slid other bytes under
-      // these same fixed line numbers; neither corpus document changed
-      // (`spec`/`plan` byte-identical to this task's base, measured). Still
-      // stale in fact; Task 11 still owns the re-anchor. S6-R11, no D-number.
-      'ccd/ccd': 148,
+      // CHILD-RECLAMATION WAVE 3 (Task 5, fix round 1) moves it 147 -> 149,
+      // +2, measured against the pre-Task-5 tree (this task's own base) and
+      // diffing the two failure lists: TWO ENTER, `spec:1210 ccd/ccd:13602`
+      // and `spec:2123 ccd/ccd:13573-13575`; NONE LEAVES — `spec:91
+      // ccd/ccd:13602` still fails at both trees, on a different token of the
+      // same line. None is a repair: fix round 1 (review I1, I2) deleted five
+      // prose lines above the frozen boundary and extracted the flavour fork
+      // into one shared helper (`_ws_reclaim_fork`, called by both
+      // `cmd_ws_audit` and `_ws_reclaim_locked`), net shrinking the insertion
+      // above `:13602`/`:13573-13575` from the first commit's, and sliding
+      // other bytes under these same fixed line numbers; neither corpus
+      // document changed (`spec`/`plan` byte-identical to this task's base,
+      // measured). Still stale in fact; Task 11 still owns the re-anchor.
+      // S6-R11, no D-number.
+      'ccd/ccd': 149,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8451,9 +8454,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    // 195 -> 196 at child-reclamation wave 3 (Task 5): the same +1 the
-    // `'ccd/ccd'` entry above carries, and nothing else moved.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
+    // 195 -> 197 at child-reclamation wave 3 (Task 5, fix round 1): the same
+    // +2 the `'ccd/ccd'` entry above carries, and nothing else moved.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -9069,18 +9072,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
-        // RE-MEASURED at child-reclamation wave 3 (Task 5), 53 -> 53, net zero
-        // but not unchanged: ONE ENTERS (`:13573-13575`) and ONE LEAVES
-        // (`:13567`), measured by running this same audit against the
-        // pre-Task-5 tree and diffing the two failure lists. Task 5's
-        // insertions into `cmd_ws_audit` (header, argv parse, eval call,
-        // verdict line), `cmd_caps` (the verb line and the token echo) and the
-        // dispatcher arm sit entirely above both lines, so the same joined
-        // row's primary-quotation match (`_reg_purge "$id"`, `cmd_ws_reap`'s
-        // prologue) now lands three lines earlier at `:13573-13575` instead of
-        // at `:13567`. Neither corpus document changed (byte-identical to this
-        // task's base, measured); still stale in fact, and Task 11 still owns
-        // the re-anchor. S6-R11, no D-number.
+        // RE-MEASURED at child-reclamation wave 3 (Task 5, fix round 1), 53 ->
+        // 53, net zero but not unchanged: ONE ENTERS (`:13573-13575`) and ONE
+        // LEAVES (`:13650-13652`), measured against the pre-Task-5 tree (this
+        // task's own base) and diffing the two failure lists. THE MECHANISM,
+        // corrected here (a prior round of this paragraph stated it backwards):
+        // at base, the row's quoted token `_reg_purge "$id"` stands AT
+        // `:13573-13575` itself (`cmd_ws_reap`'s prologue), so that citation
+        // PASSES there. Task 5's net insertion above it — `cmd_ws_audit`'s
+        // header, argv parse, one shared-fork call and its verdict line, plus
+        // `cmd_caps`'s verb line and token echo, and the dispatcher arm — moves
+        // `_reg_purge "$id"` DOWN to `:13625`, so `:13573-13575` no longer holds
+        // it and now FAILS (enters). `:13650-13652` now PASSES on some other
+        // token of its row landing there instead. Neither corpus document
+        // changed (byte-identical to this task's base, measured); still stale
+        // in fact, and Task 11 still owns the re-anchor. S6-R11, no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9094,6 +9100,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
+        'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -9102,7 +9109,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -9219,14 +9225,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
-      // RE-MEASURED at child-reclamation wave 3 (Task 5), 35 -> 35, FROM THE
-      // SAME RUN as the row-pass set above, and the move mirrors the one
-      // there: `spec:2123 ccd/ccd:13573-13575` enters, `spec:2125
-      // ccd/ccd:13567` leaves — the two together are one measurement, never
-      // taken from different trees. One cause — Task 5's insertions into
-      // `cmd_ws_audit`, `cmd_caps` and the dispatcher arm — and nothing
-      // re-pointed: both corpus documents are byte-identical to this task's
-      // base, measured. S6-R11, no D-number.
+      // RE-MEASURED at child-reclamation wave 3 (Task 5, fix round 1), 35 ->
+      // 36: `spec:2123 ccd/ccd:13573-13575` enters and NOTHING leaves —
+      // `spec:2125 ccd/ccd:13567` stands at BOTH trees (a prior round of this
+      // paragraph read it as leaving, wrongly; it is re-added above). This set
+      // is NOT derived from the row-pass set above this round — that one's own
+      // mover is `:13650-13652`, which no other pass reaches, so it is absent
+      // here, exactly as this list's own rule states. One cause — fix round
+      // 1's shrink of the insertion above these lines (review I1, I2) — and
+      // nothing re-pointed: both corpus documents are byte-identical to this
+      // task's base, measured. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
@@ -9235,6 +9243,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',

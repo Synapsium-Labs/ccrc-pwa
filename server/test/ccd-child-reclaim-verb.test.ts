@@ -1416,3 +1416,24 @@ describe('"gone" is PROVEN — a path that could not be looked at is never read 
     expect(JSON.parse(r.stdout).residueBytes).toBeNull();
   }, 90_000);
 });
+
+describe('the residue probe’s DEFAULT root is the BOX’s own TMPDIR, never a bare /tmp (macOS scan, mail 2375)', () => {
+  it('derives ${TMPDIR:-/tmp}/claude-<uid> — the same derivation ccd-tmp-sweep uses — with no override set', () => {
+    // Every other case in this file drives `_ws_reclaim_residue` through
+    // `CCD_RECLAIM_RESIDUE_ROOT` (`CHILD_ENV`, the fixture's own override for
+    // exactly this reason: the real default must never be read in a test). This
+    // is the one case that reads the DEFAULT, so it plants under a fixture
+    // TMPDIR rather than the real `/tmp` — never against the live box.
+    const c = makeChild(h);
+    const uid = h.sh('id -u');
+    const boxTmp = path.join(h.home, 'box-tmp');
+    fs.mkdirSync(boxTmp, { recursive: true });
+    const residue = path.join(boxTmp, `claude-${uid}`, c.wt.replaceAll('/', '-'));
+    fs.mkdirSync(residue, { recursive: true });
+    fs.writeFileSync(path.join(residue, 'scratch.txt'), 'scratch under the box TMPDIR, not /tmp');
+    const expected = Number(h.sh(`_plat_bytes "${residue}"`));
+    expect(expected).toBeGreaterThan(0);
+    const out = Number(h.sh(`_ws_reclaim_residue "${c.wt}"`, { TMPDIR: boxTmp }));
+    expect(out, 'measured under $TMPDIR/claude-<uid>, never a bare /tmp/claude-<uid>').toBe(expected);
+  });
+});

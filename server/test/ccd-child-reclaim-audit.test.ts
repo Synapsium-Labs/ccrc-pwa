@@ -82,8 +82,10 @@ describe('ws-audit --reclaim', () => {
     // directory, a link, or a mode-000 file at `$REG/<id>.reaping` answers
     // `_reg_get` empty, exactly as an ABSENT breadcrumb does. The audit must
     // not read that emptiness as "no breadcrumb, run the fresh ladder": the
-    // ladder would re-run over a child another verb already started tearing
-    // down, and the pin would rewrite whichever tombstone is already there.
+    // audit never pins — its own hazard is rung 8's permission pass (owner
+    // bits added to the tree and the clips directory) running over a child
+    // another verb already started tearing down, and a token minted for an
+    // arm the verb, re-measuring the same breadcrumb, will not take.
     makeChild(h);
     fs.mkdirSync(path.join(h.home, '.cc-sessions', `${CHILD_ID}.reaping`));
     const r = h.run(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
