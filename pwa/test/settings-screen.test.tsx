@@ -1153,6 +1153,20 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
     await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked());
   });
 
+  it('a poll row whose setAt EQUALS the answer\'s setAt is already caught up (>=, never >)', async () => {
+    // Same shape as the case above, but the poll's second row lands at EXACTLY
+    // the answer's setAt rather than strictly after it — the boundary >= is
+    // meant to cover, not just the strictly-newer case a bare `>` would also pass.
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(t10View({ notify: 'channel' }))
+      .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 1 }));   // exactly the answer's setAt
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    render(<SettingsScreen />);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked());
+  });
+
   it('a write in flight disables the three radios, so a second tap cannot race the first', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     const write = vi.spyOn(api, 'setUpdateIntent').mockReturnValue(new Promise(() => {}));
@@ -1168,6 +1182,45 @@ describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 
   it('an unreadable answer says the write may have landed and shows the stored row, not a guess', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
     vi.spyOn(api, 'setUpdateIntent').mockResolvedValue('unreadable');
+    render(<><ToastHost /><SettingsScreen /></>);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+  });
+
+  // fix round 1 (mutation-table finding): a 2xx answer that IS readable as JSON
+  // but whose `intent` carries a shape this build cannot trust is the SAME
+  // "may have landed" outcome as `'unreadable'` — never stored as-is. Three
+  // ways an answer can fail that trust, each guarded by its own clause in
+  // `choose`: a `notify` outside `NotifyMode` (`isNotifyMode`), a `setAt` that
+  // is not a number (`typeof … === 'number'`), and an answer with no `intent`
+  // at all (`answer?.intent ?? null`).
+  it('a malformed notify value in the answer is not stored — unconfirmed, not a guess (isNotifyMode guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
+      { ok: true, intent: { ...t10Intent(), notify: 'loud' as NotifyMode }, epoch: 2 });
+    render(<><ToastHost /><SettingsScreen /></>);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+  });
+
+  it('a non-number setAt in the answer is not stored — unconfirmed, not a guess (typeof setAt guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(
+      { ok: true, intent: { ...t10Intent(), notify: 'off', setAt: 'soon' as unknown as number }, epoch: 2 });
+    render(<><ToastHost /><SettingsScreen /></>);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+  });
+
+  it('an answer with no intent field at all is not stored — unconfirmed, not a guess (the ?? null guard)', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true } as unknown as IntentWriteAnswer);
     render(<><ToastHost /><SettingsScreen /></>);
     const group = await t10Group();
     fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
