@@ -718,6 +718,20 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  wave 3's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
 
+/** The `ccd caps` token that says this box has child-workspace reclamation
+ *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
+ *  own ladder, pin phase and tail arm, and ws-reap's mirror refusal — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo reclaim-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`. `verbSupported` PERMITS
+ *  on an absent verb list; the verb this token gates deletes a workspace, and a
+ *  destructive verb dispatched to a box with no evidence it exists is the
+ *  failure the capability reader was built to prevent. A box without the token
+ *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
+export const RECLAIM_CAP = 'reclaim-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an

@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, RECLAIM_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -99,6 +99,19 @@ describe('capSupported', () => {
     expect(capSupported(state(['win-size']), WIN_SIZE_CAP)).toBe(false);
     expect(capSupported(state([WIN_SIZE_CAP]), WIN_SIZE_CAP)).toBe(true);
     expect(verbSupported(state(null), ['win-size'])).toBe(true);
+  });
+
+  it('spells the reclaim token exactly once in server/src, and it REFUSES on no evidence', () => {
+    // Child reclamation, wave 3. The verb this token gates DESTROYS a workspace:
+    // `verbSupported` permits on an absent verb list, which is right for verbs
+    // that have always existed and exactly wrong here (spec 2026-09-22 §6).
+    expect(RECLAIM_CAP).toBe('reclaim-v1');
+    expect(literalSpellings(RECLAIM_CAP)).toBe(1);
+    expect(capSupported(state(null), RECLAIM_CAP)).toBe(false);
+    expect(capSupported(undefined, RECLAIM_CAP)).toBe(false);
+    expect(capSupported(state(['ws-reclaim']), RECLAIM_CAP), 'the verb is not the token').toBe(false);
+    expect(capSupported(state([RECLAIM_CAP]), RECLAIM_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['ws-reclaim'])).toBe(true);
   });
 
   it('spells the child-argv token exactly once in server/src', () => {

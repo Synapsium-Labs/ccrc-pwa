@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=79db105a30d11ece17c010c23bd2eb4d37671ff93a09b994b63e522680aabd23
+# ccrc:generated 1 sha256=b1ae47c4fb1696b29b8f5554a3fac21505f966ac9d2d28febf13ebe6aa7250ae
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,10 +2885,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 170
-# invocations across 141 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 171
+# invocations across 142 non-comment lines.
 #
-# THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 4);
+# THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 5);
 # before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -8223,6 +8223,7 @@ ws-audit
 ws-gc
 ws-hold
 ws-reap
+ws-reclaim
 ws-release
 ws-rename
 ws-restore
@@ -8372,6 +8373,8 @@ EOF
   echo win-size-v1
   # child-argv-v1 — `ws-add --child` and a child's own TMPDIR, one inode; argued at `_child_tmpdir`.
   echo child-argv-v1
+  # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
+  echo reclaim-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -12550,7 +12553,16 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # than of WHAT. Neither is optional: mergedness is never proven against an
   # unfetched ref, and a symref read from clone-time memory proved containment
   # against a default the remote had deleted (measured, git 2.43).
-  [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-audit --session <id>"
+  # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
+  local mode=reap defer=0
+  [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
+    || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]"
+  if (( $# >= 3 )); then
+    [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
+      || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]"
+    mode=reclaim
+    (( $# == 4 )) && defer=1
+  fi
   local id=$2
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
@@ -12576,7 +12588,28 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ "$(_reg_get "$id" started)" == "1" ]] && startedflag=true
   unitstate=$(_ws_unit_state "$id")
 
-  _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
+  local rbc=""
+  if [[ $mode == reclaim ]]; then
+    rbc=$(_reg_get "$id" reaping) || rbc=""
+    # A BREADCRUMB THAT STANDS BUT READS AS NOTHING is unmeasured, the same
+    # rung `_ws_reclaim_locked` runs first (a directory, a link, a file this
+    # uid cannot read — `_reg_get` answers empty for each): which verb left it
+    # and at which step is unknown, so the audit must not read that as "no
+    # breadcrumb" and hand out a fresh-ladder token over a half-torn-down child.
+    if [[ -z "$rbc" ]] && [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then
+      _ws_reclaim_reset
+      _ws_reclaim_unmeasured "a breadcrumb stands at $REG/$id.reaping but cannot be read — which verb left it, and at which step, is unknown" || :
+    elif [[ -n "$rbc" && "$rbc" != reclaim:* ]]; then
+      _ws_reclaim_reset
+      _reap_refuse reap-in-progress "an interrupted ws-reap of $id stopped at its '$rbc' step — a reclaim never finishes another verb's work" || true
+    elif [[ -n "$rbc" ]]; then
+      _ws_reclaim_resume_eval "$id" "$defer" "" "${rbc#reclaim:}" || true
+    else
+      _ws_reclaim_eval "$id" "$defer" "" || true
+    fi
+  else
+    _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
+  fi
   local project workdir branch base repo transcript reaping
   project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
   branch=$(_reg_get "$id" branch);   base=$(_reg_get "$id" base)
@@ -12887,7 +12920,24 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # document beside it says the manifest could not be taken. One state, one
   # verdict: no token, and the same token name the eval uses, so the sheet
   # reads the same sentence whichever read caught it.
-  if [[ "$REAP_VERDICT" == reapable && "$clips_json" == null ]]; then
+  if [[ $mode == reclaim ]]; then
+    printf '"mode":"reclaim","childOf":%s,' \
+      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)"
+    [[ "$rbc" == reclaim:* ]] && printf '"resume":%s,' "$(_json_str "${rbc#reclaim:}")"
+    if [[ "$REAP_VERDICT" == reclaimable ]]; then
+      printf '"verdict":"reclaimable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
+    elif [[ "$REAP_VERDICT" == unmeasured ]]; then
+      printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+      echo "ccd: ws-audit --reclaim measured nothing: $REAP_DETAIL — retry" >&2
+      return 1
+    else
+      printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+      case "$REAP_VERDICT" in
+        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+          _lc_emit reclaim refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
+      esac
+    fi
+  elif [[ "$REAP_VERDICT" == reapable && "$clips_json" == null ]]; then
     printf '"verdict":"clips-unreadable","detail":%s}\n' \
       "$(_json_str "could not list $HOME/.cc-clips/$id — the pasted images this cleanup would delete cannot be enumerated")"
   elif [[ "$REAP_VERDICT" == reapable && "$exists" == true ]]; then
@@ -25269,6 +25319,60 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   _ws_reclaim_tail "$id" "$phase" "$lctx" "$RECLAIM_CHILDOF" "$surface" "$declared" "$resumed"
 }
 
+# WS-AUDIT --RECLAIM (child reclamation, spec 2026-09-22 §5.5). The reclaim
+# mode `cmd_ws_audit` gained in wave 3 — its code sits above the frozen
+# citation corpus's anchors (`server/test/session-hook.test.ts`), where every
+# added line moves a citation, so its explanation lives here.
+#
+# THE ONE EXCEPTION TO "READ-ONLY", AND IT IS NARROW. The ladder's rung 8 runs
+# `_ws_reclaim_normalise`, which adds OWNER bits — `u+rwx` on a directory,
+# `u+r` on a file, only where this uid owns the entry, never a group or other
+# bit — to the child's tree and its clips directory before reading them,
+# because a mode-000 directory answers `git status` clean. Nothing is
+# destroyed or created; a mode changes. The plain form does neither, byte for
+# byte: `mode` is read at exactly two places, the eval call and the verdict
+# line, and both keep their old text on `reap`.
+#
+# THE FLAVOUR FORK, made here too, so the token printed is one `ws-reclaim`
+# can accept: a `reclaim:` breadcrumb answers the RESUME token, any other
+# breadcrumb is ws-reap's and answers `reap-in-progress`, no token. A
+# breadcrumb that STANDS but reads as nothing — the same case
+# `_ws_reclaim_locked` guards first — answers `unmeasured`, never a fresh
+# ladder over a half-torn-down child: which verb left it, and at which step,
+# is unknown.
+#
+# THE VERDICT LINE. `reclaimable` MEANS a token, exactly as `reapable` does —
+# a child whose worktree has vanished included (spec §5.5): its document says
+# `"exists":false`, and its token is the vanished arm's. Every other verdict
+# is one of the fourteen tokens `ws-reclaim` itself can answer, and carries
+# none. `unmeasured` (`_ws_reclaim_unmeasured`: a probe that could not RUN, or
+# a registry row that does not say what the child is — spec §5.5, rung 8's
+# rule) is not a verdict: the RECLAIM document is still printed, its verdict
+# field holding that word, spelled through `_json_str` — never as the literal
+# `"verdict":"…"` shape the refusal harvest would count — the reason goes to
+# stderr, and the audit EXITS 1. The server maps ANY audit exit 1 to `failed`
+# and retries. It is journaled nowhere: no refusal, no token.
+#
+# A TERMINAL REFUSAL FOUND BY THE AUDIT IS JOURNALED, AND ONLY A TERMINAL ONE
+# (spec §5.9). The server audits first and stops on a refusal, so a terminal
+# word found here never reaches `ws-reclaim` — and this is the only place it
+# can reach the lifecycle mirror, which wave 4's attention list reads ONLY and
+# wave 5's chip reads (spec §5.9: "so a restart does not lose it"). Terminal
+# only: the sweep audits every pass, and a retryable `held` or `attached` line
+# a minute would bury the journal; the attention list wants terminal rows, and
+# a retryable refusal reaches the chip through the sweep's own defer state.
+# The case list EQUALS `CHILD_RECLAIM_TOKEN_KIND`'s `terminal` arm —
+# `child-reclaim.test.ts` derives the arm from that map and holds this list
+# equal to it. `_lc_emit` is always 0 and writes to the journal, never to
+# stdout.
+#
+# RECLAIM-V1. `cmd_caps` echoes it: this box has `ws-audit --reclaim`,
+# `ws-reclaim` and its own tail arm, the `reclaim` journal act, and ws-reap's
+# mirror refusal — one ccd inode, one token. The server composes the
+# destructive verb ONLY behind `capSupported(state, 'reclaim-v1')`, which
+# REFUSES on no evidence; `verbSupported` would permit a verb this box never
+# had, and this is the verb that deletes a workspace.
+
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
 # ── ws-reap's mirror of a reclaim breadcrumb (spec 2026-09-22 §5.6) ─────── MIRROR-BEGIN ──
@@ -25327,6 +25431,7 @@ case "${1:-}" in
   ws-attic)   shift; cmd_ws_attic "$@" ;;
   ws-audit)   shift; cmd_ws_audit "$@" ;;
   ws-reap)   shift; cmd_ws_reap "$@" ;;
+  ws-reclaim) shift; cmd_ws_reclaim "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
@@ -25337,6 +25442,6 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
