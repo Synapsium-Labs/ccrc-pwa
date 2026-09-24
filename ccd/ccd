@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c8de8611b5f7fc3450434da600cc3e45a3861c9a0056e24ce022c7b59e693b5
+# ccrc:generated 1 sha256=9d78115c98a573b07509e9fcce6ab4af8b36a1161b4de90b861ca4a4af4a95b6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16743,13 +16743,41 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   return 0
 }
 
+_pane_outside_box() {   # pane text -> the same text without the prompt box's own rows
+  # THE BOX HOLDS WHAT A HUMAN IS TYPING, and nothing Claude Code prints there
+  # is a banner: on 128 real 2.1.280 captures every limit, auth and credit
+  # banner rendered ABOVE the box (the auto-continue footer, below it) and none
+  # inside. So the rows from the box's `❯` marker — the `❯` row directly under
+  # a `─` border, bare or titled — through its bare bottom border are dropped;
+  # a pane whose top border fell outside the window keeps them all, which is
+  # what every reader got before this existed.
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
+    function bare(s) { gsub(/[ \t]/, "", s); return s ~ /^(─)+$/ }
+    { if (!inbox && index($0, "❯") == 1 && NR > 1 && border(prev)) inbox = 1
+      if (inbox) { if (!(index($0, "❯") == 1) && bare($0)) inbox = 0 } else print
+      prev = $0 }'
+}
+
 _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardless of turn state.
   # A real limit/spend banner (or lost auth) is up: waiting for a clean turn boundary is wrong,
   # the session is stuck NOW. Auth-failure strings join the same rescue lane as a 429 — a session
   # that WAS working and lost auth is exactly as stuck. "Select login method" stays OUT: that
   # screen appears during an intentional login, not a failure — evacuating out from under an
   # operator mid-login would be wrong (see _pane_login_screen, which owns that screen instead).
-  grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?|Invalid API key|Please run /login" <<<"$1"
+  #
+  # NARROWED TWICE, and narrowing is not the widening D-2364 forbids — it can only
+  # keep a swap from firing, never make one. (1) The prompt box is not read
+  # (`_pane_outside_box`): an unsent draft saying "rate limit" or "Please run
+  # /login" matched in all four measured layouts, and this arm swaps a session
+  # draft or not. (2) `rate limit` no longer matches BARE — the trailing `?` did
+  # that, so any sentence about rate limits did; `rate limited`, `rate limit
+  # exceeded` and `rate limit reached` still do. No 2.1.280 banner in any
+  # reader's window needs the bare form (measured), while a `--resume` landing
+  # re-renders an old API-key 429's body ("…your per-minute rate limit") in the
+  # full-pane capture `_spawn_settle` reads for rc 5 — D-2364's own unmeasured
+  # worry, now measured.
+  grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)|Invalid API key|Please run /login" <<<"$(_pane_outside_box "$1")"
 }
 
 _pane_limit_banner() {   # pane text -> success iff the pane carries Claude Code's CURRENT limit banner (D-3100).
@@ -16799,7 +16827,9 @@ _pane_limit_banner() {   # pane text -> success iff the pane carries Claude Code
   # not have two behaviours depending on which of two equally-visible banners the
   # build happens to render — and it is the transcript arm, not this one, that
   # owes a human's unsent sentence its stand-down.
-  grep -qiE "hit your ([a-z0-9]+ )*limit ·" <<<"$1"
+  # Outside the prompt box, as `_pane_hard_blocked` reads: a human typing the
+  # banner's words into the box is not the banner.
+  grep -qiE "hit your ([a-z0-9]+ )*limit ·" <<<"$(_pane_outside_box "$1")"
 }
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
@@ -17510,10 +17540,44 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   return 0
 }
 
-_pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" statusline segment, or empty.
-  # Anchored to "ctx": the model's "(1M context)" has no "ctx" substring, and the limits/cost %s are
-  # not preceded by "ctx"; the bar glyphs between "ctx" and the number are non-digits.
-  printf '%s\n' "$1" | grep -aoiE 'ctx[^0-9]*[0-9]+%' | grep -oE '[0-9]+' | head -1
+_pane_statusline_seg() {   # pane-text glyph -> text of the statusline ROW's `<glyph> …` segment, or empty
+  # THE STATUSLINE ROW, NOT A LINE THAT LOOKS LIKE PART OF IT — the bash twin of
+  # server/src/pane/statusline.ts's `statuslineRowAt`/`segmentAfter`, and one
+  # rule for both readers (statusline-parity in ccd-ctx-row.test.ts). The row is
+  # the LOWEST line whose trimmed text STARTS `👤 `: statusline-command.sh writes
+  # that segment first, unconditionally once jq is present, and chat or tool
+  # output can print a statusline-shaped line anywhere above it. A glyph reads
+  # only where it OPENS a `│` segment of that row, and a LAST segment holding
+  # Claude Code's `…` cut mark reads as nothing — a narrow pane clips the row at
+  # its width, so that segment is a prefix. LC_ALL=C: byte comparisons against
+  # literal UTF-8, `_pane_box_has_content`'s idiom; mawk and gawk both measured.
+  printf '%s\n' "$1" | LC_ALL=C awk -v g="$2" '
+    { l = $0; sub(/^[ \t]+/, "", l); if (index(l, "👤 ") == 1) row = l }
+    END {
+      if (row == "") exit
+      n = split(row, parts, "│")
+      for (i = 1; i <= n; i++) {
+        p = parts[i]; sub(/^[ \t]+/, "", p); sub(/[ \t]+$/, "", p)
+        if (index(p, g) != 1) continue
+        seg = substr(p, length(g) + 1); sub(/^[ \t]+/, "", seg)
+        if (seg != "" && !(i == n && index(seg, "…"))) print seg
+        exit
+      }
+    }'
+}
+
+_pane_ctx_pct() {   # pane text -> context % from the statusline row's "▓ ctx <bar> NN%" segment, or empty.
+  # ROW-SCOPED, and that is the whole change from the first-match grep this was:
+  # `grep -aoiE 'ctx[^0-9]*[0-9]+%' | head -1` took the TOPMOST `ctx…NN%` in the
+  # window, so an assistant's closing line quoting swap.log ("auto-compact X: ctx
+  # 95% >= 50%") one row above the prompt box outranked the real segment below
+  # it — measured on a real 2.1.280 capture: its true 45 read as 97 once `ctx
+  # 97%` was written into the window's top row — and a false high types `/compact`. The
+  # segment must still read `ctx … NN%` to its end (the server's CTX_SEGMENT_RE),
+  # so a cut or bare segment is "no reading", never a number. Digits only out:
+  # this is still the one sanitiser the arithmetic below it relies on.
+  _pane_statusline_seg "$1" "▓" | LC_ALL=C grep -aiE 'ctx[^[:alnum:]_].*[0-9]+%$' \
+    | LC_ALL=C grep -aoE '[0-9]+%$' | LC_ALL=C grep -oE '^[0-9]+'
 }
 
 # D-2013 — WHY THE COMPACTOR DECLINED, said once rather than never or 240 times a minute.
@@ -18610,6 +18674,90 @@ _route_ack_wait() {   # tmuxname regex [rows] -> 0 iff the pane shows the acknow
   return 1
 }
 
+_pane_prompt_box_showing() {   # pane text -> 0 iff the prompt box is up, the statusline row directly under its bottom border
+  # THE IDLE TUI, AND NEVER A DIALOG — the bash twin of the server's
+  # `promptBoxShowing` (statusline.ts). Measured on 128 real 2.1.280 captures,
+  # both renderers, 100x24 to 220x50: every menu, confirmation and slider HID
+  # both the box and the `👤` row; every idle pane showed both. So a reading of
+  # the pane taken while this answers 1 is a reading of whatever overlay is up,
+  # not of the session's settled state.
+  # ONE IDLE SHAPE ANSWERS 1: a limited pane with auto-continue armed puts its
+  # `⚠ Usage limit reached · continuing automatically …` footer between the
+  # border and the row (the server twin steps over it). No caller here can meet
+  # it — every keystroke path refuses on `_pane_auto_continue_armed` first.
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    { t = $0; sub(/^[ \t]+/, "", t); if (index(t, "👤 ") == 1) { row = NR; above = prev }; prev = $0 }
+    END { sub(/[ \t]+$/, "", above); exit (row > 1 && above ~ /^(─)+$/) ? 0 : 1 }'
+}
+
+_pane_effort_switch_dialog() {   # pane text -> 0 iff Claude Code's "Change effort level?" confirmation is what is up
+  # THE DIALOG'S SHAPE, NOT ITS WORDS ANYWHERE. It used to be `grep -q "Yes,
+  # switch"` over the whole pane, so a reply quoting the dialog pressed Enter —
+  # and on the open slider an Enter is "Enter to confirm", the form that SAVES
+  # the level to the lane's settings.json. Measured 2026-09-23 (2.1.280, both
+  # renderers): the dialog replaces the prompt box and the statusline row, and
+  # its cursor row is the pane's LOWEST `❯ N.` row: `❯ 1. Yes, switch to <lvl>`.
+  # BOUND TO THE BOTTOM OVERLAY, not to the pane: the overlay's top edge resets
+  # what was seen above it — a bare `─` rule in the classic renderer; in
+  # fullscreen a `▔` edge that often CARRIES a tmux notice (`▔▔… tmux
+  # focus-events off … ▔`, or `tmux detected · scroll with PgUp/PgDn … ▔`), so
+  # a line that opens with a `─`/`▔` run or ends in `▔` counts (review round 2,
+  # measured on the real fullscreen slider and dialog captures) — and the
+  # title resets the cursor row, so one counts only BELOW it. Without that, the dialog quoted in
+  # chat above the open SLIDER — which hides the box too, and has no `❯ N.`
+  # rows of its own — read as the dialog, and the Enter it earned landed on the
+  # slider as "Enter to confirm" (measured on the real slider captures, review
+  # round 1).
+  _pane_prompt_box_showing "$1" && return 1
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    { t = $0; gsub(/^[ \t]+|[ \t]+$/, "", t) }
+    t ~ /^(─|▔)(─|▔)/ || t ~ /▔$/ { title = 0; last = ""; next }
+    index($0, "Change effort level?") { title = 1; last = ""; next }
+    /^[ \t]*❯[ \t]*[0-9]+\./ { last = $0 }
+    END { exit (title && index(last, "Yes, switch to ")) ? 0 : 1 }'
+}
+
+_pane_effort_ack() {   # pane text -> the LOWEST `⎿  Set effort level to …`/`Kept effort level as …` line, or empty
+  # Claude Code prints each /effort outcome as a `⎿` line under its echoed
+  # command, above the prompt box, and the older ones stay on screen — so the
+  # LOWEST is the pane's latest word on its effort, and anything above it has
+  # been superseded (measured, 2.1.280: `⎿  Set effort level to ultracode (this
+  # session only): …`, `⎿  Kept effort level as low` after "No, go back").
+  printf '%s\n' "$1" | LC_ALL=C awk '
+    { t = $0; sub(/^[ \t]+/, "", t) }
+    index(t, "⎿") == 1 { a = t; sub(/^⎿[ \t]+/, "", a)
+      if (index(a, "Set effort level to ") == 1 || index(a, "Kept effort level as ") == 1) last = a }
+    END { if (last != "") print last }'
+}
+
+_route_effort_ack_wait() {   # tmuxname level -> 0 iff the pane acknowledges THIS session-only level, with its dialogs closed
+  # BOUND TO THE ACT, the half `_route_ack_wait`'s `rows` could not give the
+  # two effort acks, which grepped the whole pane: an OLDER `ultracode … this
+  # session only` line still on screen confirmed a fresh apply while the
+  # slider or the confirmation it raised was still open (measured on real
+  # captures), the field was recorded applied, and the next keystroke landed
+  # in the dialog. Now three things must hold on ONE capture: the prompt box is
+  # back; the LOWEST effort line names this level and `(this session only)`;
+  # and the statusline row's `🤖 … · <effort>` shows it — Claude Code updates
+  # that within a second of the ack (measured), and it is what stops a tool's
+  # output line shaped like an ack, or an older same-level ack, confirming an
+  # apply whose keys never landed (review round 1). Ultracode shows as
+  # `xhigh` there. A home without the ccrc statusline row never confirms, and
+  # the bounded retry (`_route_try_bump`) gives up — fail-safe, not a lie.
+  local t="$1" level="$2" shown="$2" i pane
+  [[ "$level" == ultracode ]] && shown=xhigh
+  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
+    pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    if _pane_prompt_box_showing "$pane" \
+      && [[ "$(_pane_effort_ack "$pane")" == "Set effort level to $level (this session only)"* ]] \
+      && [[ "$(_pane_statusline_seg "$pane" "🤖")" == *" · $shown" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 _route_escape() {   # id — leave the pane as we found it after an unacknowledged sequence
   # THE TARGET IS DERIVED HERE, FROM THE REGISTRY ID, and that is the whole
   # reason this function takes an id rather than the tmux name its callers
@@ -18662,7 +18810,13 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   local -a stops=()
   if [[ "$level" == ultracode ]]; then
     tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
-    _route_ack_wait "$t" "ultracode.*this session only" && return 0
+    # Opus 5 raises the same `Change effort level?` confirmation here as on the
+    # slider below (`1. Yes, switch to xhigh`, measured 2026-09-23); unanswered,
+    # no ack ever came and every retry ended in Escape.
+    if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
+      tmux send-keys -t "$t" Enter; sleep 1
+    fi
+    _route_effort_ack_wait "$t" ultracode && return 0
     _route_escape "$id"; return 1
   fi
   read -r -a stops <<< "$ROUTE_EFFORT_STOPS"
@@ -18683,10 +18837,10 @@ _route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no sli
   # gets a second dialog — `Change effort level? … 1. Yes, switch to <level>` —
   # because the cached prefix has to be re-read; on Fable 5.1 the same two-turn
   # history showed none (measured, D-2808). Confirm it if it is there.
-  if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
+  if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
     tmux send-keys -t "$t" Enter; sleep 1
   fi
-  _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)" && return 0
+  _route_effort_ack_wait "$t" "$level" && return 0
   _route_escape "$id"; return 1
 }
 
@@ -20070,8 +20224,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
   tmux set-option -t "$tname" set-titles on 2>/dev/null
   tmux set-option -t "$tname" set-titles-string '#S' 2>/dev/null
-  # Follow the most-recent client's size (defensive; with attach -d there's only ever one client,
-  # so the window always fits the device you're on — no smaller-client "dotted filler" clash).
+  # PIN, THEN FOLLOW: -x/-y lose to any narrow client on the server (tmux 3.4, measured: born 60x19 = spawn rc 6); pin FIRST, as `latest` then keeps it, so an attach still fits (ccd-spawn-split).
+  tmux resize-window -t "=$tname:" -x 220 -y 50 2>/dev/null
   tmux set-option -t "$tname" window-size latest 2>/dev/null
   # VALIDATED TO THE TWO LEGAL WORDS, and the FAILURE DIRECTION is why the check
   # survived the move off stdout: fromswap=1 picks the cheap auto-compact
@@ -20141,7 +20295,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
-    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns (or its width could not be read), so the startup gates stood down — any narrow terminal attached to this tmux server narrows new panes: close it, then widen this one (open and close its terminal drawer) and answer any startup prompt." >&2 ;;
+    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns (or its width could not be read), so the startup gates stood down — every spawn is pinned 220x50, so the likely cause is a terminal attached to this session, or a failed pin: widen it (open and close its terminal drawer) and answer any startup prompt." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the external backends — gpt/Codex today — which don't take it, so the
@@ -20246,7 +20400,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
-  if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
+  if _pane_effort_switch_dialog "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
     tmux send-keys -t "$t" Enter
   fi
   return 0
