@@ -106,7 +106,11 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
   // because it moved; a cleanup record that could not be READ, not only one
   // that could not be written.
   it('the three reused reap words name the reclaim tail’s causes too', () => {
-    expect(SENTENCES['worktree-remove-failed']).toMatch(/could not prove that the tree at that path — or a checkout inside it — is this workspace’s own/);
+    expect(SENTENCES['worktree-remove-failed']).toMatch(/could not prove that the tree at this workspace’s path — or a checkout inside it — is its own/);
+    // …and it claims no worktree was about to be removed: the reclaim tail
+    // emits it at the `branch` and `artifacts` phases and on the vanished arm,
+    // where an earlier attempt removed the worktree or there never was one.
+    expect(SENTENCES['worktree-remove-failed']).not.toMatch(/before removing a worktree/);
     expect(SENTENCES['branch-moved']).toMatch(/names no commit to delete it at/);
     expect(SENTENCES['tombstone-unwritable']).toMatch(/write, update or read/);
   });

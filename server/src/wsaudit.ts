@@ -113,7 +113,7 @@ export const SENTENCES: Record<string, string> = {
   'reap-interrupted': 'A previous cleanup of this workspace stopped part-way and its worktree is already gone. Finish it from ccd — there is nothing left here to confirm.',
   'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
   'in-progress': 'Another cleanup of this workspace is already running.',
-  'worktree-remove-failed': 'ccrc stopped before removing a worktree: git refused to remove it, or ccrc could not prove that the tree at that path — or a checkout inside it — is this workspace’s own. The session is stopped and nothing further was deleted.',
+  'worktree-remove-failed': 'ccrc stopped: git refused to remove a worktree, or ccrc could not prove that the tree at this workspace’s path — or a checkout inside it — is its own. The session is stopped and nothing further was deleted.',
   // Whole-branch review, finding I6: the teardown loop's merge-base
   // pre-probe (`git -C $main merge-base --is-ancestor`) never calls
   // `worktree remove` at all — it is checking, ahead of time, whether

@@ -1023,3 +1023,80 @@ describe('a nested checkout is PROVEN inside the child’s tree before it is rem
     expect(String(done['detail']), 'the done row says what it kept').toContain('ws/nested');
   }, 90_000);
 });
+
+describe('the windows the proofs are asked in — each rung stands for the one after the check before it (spec §5.5)', () => {
+  for (const prune of [false, true]) {
+    it(`N1: the workdir swapped for a link from INSIDE the settle is stopped at the removal step (git's record ${prune ? 'pruned' : 'standing'})`, () => {
+      // `_ws_reclaim_owned` asked the leaf before the settle; the settle and the
+      // nested steps run after it. The suite's function-override device reaches
+      // that window: `_ws_reclaim_children_merge` runs inside the settle.
+      const c = makeChild(h);
+      interrupted(c, 'worktree');
+      const tok = resumeToken('worktree');
+      const other = path.join(h.home, 'other');
+      h.git(c.main, 'worktree', 'add', '-b', 'ws/other', other);
+      fs.writeFileSync(path.join(other, 'dirty.txt'), 'another session’s uncommitted work\n');
+      const before = treeOf(other);
+      const pre = `_ws_reclaim_children_merge() { rm -rf "${c.wt}"; ${prune ? `command git -C "${c.main}" worktree prune;` : ''}`
+        + ` ln -s "${other}" "${c.wt}"; printf '%s' "$1"; };`;
+      const r = childReclaimVerb(h, tok, { pre });
+      expect(treeOf(other), 'the other worktree was not removed through the link').toEqual(before);
+      expect(h.git(c.main, 'branch', '--list', 'ws/other')).toContain('ws/other');
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain('symbolic link');
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays at the worktree step').toBe('reclaim:worktree');
+    }, 90_000);
+  }
+
+  it('the child’s tree swapped for a link AFTER its resolved path was taken is stopped by the nested checkout’s own resolution', () => {
+    // The component walk starts BELOW the resolved root and never re-asks the
+    // root itself; a nested checkout that stands must then resolve (`pwd -P`)
+    // to exactly its recorded path, which a swapped root cannot. git's record
+    // and git's own validation stand behind this rung too.
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    const x = path.join(h.home, 'x');
+    fs.mkdirSync(x);
+    const other2 = path.join(x, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/other2', other2);
+    fs.writeFileSync(path.join(other2, 'keep.txt'), 'another session\n');
+    const before = treeOf(other2);
+    const aside = path.join(h.home, 'aside');
+    const pre = `eval "$(declare -f _ws_reclaim_nested_proven | sed '1s/_ws_reclaim_nested_proven/_orig_np/')";`
+      + ` _ws_reclaim_nested_proven() { [[ -L "${c.wt}" ]] || { mv "${c.wt}" "${aside}"; ln -s "${x}" "${c.wt}"; }; _orig_np "$@"; };`;
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(treeOf(other2), 'the other worktree survives').toEqual(before);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain('not to itself');
+  }, 90_000);
+
+  it('N2: a resume at `children` whose child tree has VANISHED finishes — the nested records cleared by path, nothing outside the child touched', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const sibling = path.join(h.home, 'worktrees', 'demo', 'sibling');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/sibling', sibling);
+    fs.writeFileSync(path.join(sibling, 'dirty.txt'), 'another session\n');
+    const before = treeOf(sibling);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(sibling), 'the sibling worktree is untouched').toEqual(before);
+    expect(h.git(c.main, 'branch', '--list', 'ws/sibling')).toContain('ws/sibling');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    const list = h.git(c.main, 'worktree', 'list', '--porcelain');
+    expect(list, 'the nested checkout’s stale record was cleared').not.toContain(inner);
+    expect(list, 'and the child’s own').not.toContain(`worktree ${c.wt}\n`);
+    expect(list, 'the sibling’s record stands').toContain(sibling);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the nested branch went, at its pinned head').toBe('');
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
+    expect(unsupervised(), 'unsupervise still ran first').toHaveLength(1);
+  }, 90_000);
+});
