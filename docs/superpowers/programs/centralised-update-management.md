@@ -453,6 +453,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     blocks every stable promotion. Raised with calm-mesa; #184's own macOS red is that same class, not its own.
   - Wave 4 merges second and resolves the `README.md` conflict (measured with `git merge-tree`) by W3's stated
     placement.
+- **2026-09-24 19:15 UTC — the stable gate has two blockers, neither of them this programme's.** Measured by
+  calm-mesa after my report:
+  1. child-reclamation's `_child_tmpdir` writes `chmod 0700 -- "$dir"`. BSD chmod stops parsing options at the mode,
+     so on macOS it returns rc 2, and all six macOS cases fail. calm-mesa's fix run 162 is dispatched and will add a
+     Linux-visible pin.
+  2. `server/test/ccgpt-proxy.test.ts` (the gpt lane, #165) wedges every macOS run since #165 merged, five of them
+     before child-reclamation existed. The shard's log goes silent until the 55-min cap. calm-mesa is reporting it to
+     the operator; the gpt lane's owner session owns it.
+  - Until both are fixed, no full-suite verdict can be green, so nothing can be promoted to stable.
 
 ## Carried constraints
 
