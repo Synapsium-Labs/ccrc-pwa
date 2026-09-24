@@ -1509,12 +1509,18 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
-      // cmd_rollback (D-3285, final review B3(i)): a read-only convergence
-      // check — the running stamp's version and sha against the completed-
-      // install record — before any network call or lock, so a rollback
-      // already converged on its target prints a runnable remedy instead of
-      // falling into `cmd_update`'s own `--force`-to-reinstall no-op.
-      '&& IFS= read -r rb_rec < "$BOX_INSTALLED_FILE" 2>/dev/null && [ -n "$rb_rec" ] && [ "$rb_rec" = "$rb_sha" ]; then',
+      // cmd_rollback (D-3285, final review B3(i), then a re-review clause):
+      // a read-only convergence check — the running stamp's version and sha
+      // against the completed-install record — before any network call or
+      // lock, so a HAND-TYPED rollback (`--from cli`) already converged on
+      // its target prints a runnable remedy instead of falling into
+      // `cmd_update`'s own `--force`-to-reinstall no-op. Gated to `--from
+      // cli` only: every other caller (pwa, watchdog, …) must reach
+      // `cmd_update`'s converged path instead, which writes the terminal
+      // `done` report this early return does not. The guarded read (the
+      // same shape `_upd_write_previous`, D-3283, uses) so an absent record
+      // prints no stray bash error.
+      '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
       // above). Measured (not the brief's claimed anchor, which put this

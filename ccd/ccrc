@@ -12188,16 +12188,35 @@ cmd_rollback() {
   # (D-3283) now makes. Caught HERE, before any network call or lock, so a
   # repeated bare `ccrc rollback` — or `ccrc rollback --to <current>` — is
   # told a command that can actually run.
-  local rb_version="" rb_sha="" rb_rc=0 rb_rec=""
-  _box_build_fields || rb_rc=$?
-  if [ "$rb_rc" -eq 0 ]; then
-    rb_version="${BOX_BUILD[4]}"
-    rb_sha="${BOX_BUILD[0]}"
-  fi
-  if [ "$rb_rc" -eq 0 ] && [ -n "$rb_version" ] && [ "$rb_version" = "$to" ] \
-     && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE" 2>/dev/null && [ -n "$rb_rec" ] && [ "$rb_rec" = "$rb_sha" ]; then
-    echo "rollback: this box already runs $to ($rb_sha) and that install completed — nothing to do (to reinstall it: ccrc update --to $to --downgrade --force)"
-    return 0
+  #
+  # RE-REVIEW (same D-3285, one clause added): this early `return 0` writes
+  # NO report — fine for a hand-typed run, where the terminal prints the
+  # sentence and the operator reads it. But `cmd_watchdog` only records when
+  # the rollback it runs answers non-zero, so a `--from watchdog` run that
+  # lands here returns 0 with `update.json` still `checking`/`restarting` —
+  # never closed, and the NEXT tick sees the same stale report and runs
+  # rollback again, forever. `--from pwa --detach` loses its `queued` → `done`
+  # transition the same way. So: only for a rollback TYPED BY HAND
+  # (`--from cli`, the default) does this pre-check apply; every other
+  # `--from` skips it and falls through to `cmd_update`'s own converged
+  # no-op below, which DOES write the terminal `done` report.
+  if [ "$from" = cli ]; then
+    local rb_version="" rb_sha="" rb_rc=0 rb_rec=""
+    _box_build_fields || rb_rc=$?
+    if [ "$rb_rc" -eq 0 ]; then
+      rb_version="${BOX_BUILD[4]}"
+      rb_sha="${BOX_BUILD[0]}"
+    fi
+    # The guarded read `_upd_write_previous` uses (D-3283): an ABSENT record
+    # (no prior completed install) must never print a stray "No such file or
+    # directory" to this run's stderr, and a FIFO planted at the path must
+    # never block a read that has nothing to gain from following it.
+    if [ "$rb_rc" -eq 0 ] && [ -n "$rb_version" ] && [ "$rb_version" = "$to" ] \
+       && { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \
+       && [ -n "$rb_rec" ] && [ "$rb_rec" = "$rb_sha" ]; then
+      echo "rollback: this box already runs $to ($rb_sha) and that install completed — nothing to do (to reinstall it: ccrc update --to $to --downgrade --force)"
+      return 0
+    fi
   fi
 
   command -v curl >/dev/null 2>&1 \

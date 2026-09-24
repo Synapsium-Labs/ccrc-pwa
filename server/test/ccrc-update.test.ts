@@ -655,6 +655,22 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
   return tree;
 }
 
+/** The STUB flavour, but with `build.json`'s sha overwritten to match the
+ *  BOX's own running stamp — the shape `_upd_converged` needs (staged sha
+ *  == running sha == the completed-install record) to take its EARLY-RETURN
+ *  path once a real `cmd_update` reaches it, rather than `stubTree`'s
+ *  default `newsha…`, which reads as a genuine upgrade and would drive the
+ *  box into a full (never-exercised-here) staged install. `MANIFEST` is
+ *  removed before recomputing so the new one does not hash a stale copy of
+ *  itself into itself. */
+function selfConvergedTree(home: string, version: string, sha: string): string {
+  const tree = stubTree(home, { version });
+  rmSync(join(tree, 'MANIFEST'));
+  writeFileSync(join(tree, 'build.json'), shippedStamp(version, sha));
+  writeManifest(tree);
+  return tree;
+}
+
 /** Tars a payload tree into the `local://` URL space (`latest/download` or
  *  `download/<tag>`), writes SHA256SUMS beside it. `corruptInner` rewrites a
  *  file INSIDE the tree after the MANIFEST was generated (outer checksum
@@ -4328,6 +4344,64 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(home, 'curl-argv')), 'the ordinary rollback path must still run').toBe(true);
   });
 
+  // RE-REVIEW (same D-3285, one clause added): the converged pre-check's
+  // early `return 0` writes no report at all. `cmd_watchdog` only records
+  // when the rollback IT runs answers non-zero, so a `--from watchdog` (or
+  // any non-`cli`) run landing on this early return would leave
+  // `update.json` stuck `checking`/`restarting` forever — the next tick
+  // sees the same stale report and rolls back again, looping. Fixed: the
+  // pre-check now applies ONLY to `--from cli` (the default, a hand-typed
+  // run); every other `--from` falls through to `cmd_update`'s own
+  // converged no-op, which DOES write a terminal `done`.
+  it('`ccrc rollback --from pwa` on a converged box reaches cmd_update\'s own converged path and ends update.json `done`, not untouched (re-review fix)', () => {
+    const home = rollbackBox('ccrc-rollback-converged-pwa-');
+    // Publish v2.0.0 (the box's own running tag), its build.json sha made to
+    // match the box's own stamp — `_upd_converged`'s real comparison, which
+    // the non-shortcut path this run now takes must actually satisfy.
+    packRelease(home, selfConvergedTree(home, 'v2.0.0', 'oldsha0000000000000000000000000000000000'),
+      { tag: 'v2.0.0', latest: false });
+    const r = runRollback(home, ['--to', 'v2.0.0', '--from', 'pwa']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // NOT cmd_rollback's own shortcut sentence (the pre-check is skipped for
+    // this `--from`) — it reaches cmd_update's OWN converged message instead,
+    // a DIFFERENT sentence that also happens to say "nothing to do".
+    expect(r.stdout).not.toMatch(/this box already runs v2\.0\.0 .* and that install completed — nothing to do \(to reinstall it:/);
+    expect(r.stdout).toMatch(/^update: this box already runs v2\.0\.0 \(oldsha0+\) and that install completed — nothing to do \(pass --force to reinstall\)$/m);
+    expect(existsSync(join(home, 'curl-argv')), 'the ordinary (non-shortcut) path ran').toBe(true);
+    expect(existsSync(join(home, '.ccrc', 'update.json')), 'update.json was left untouched').toBe(true);
+    const rep = report(home);
+    expect(rep['phase']).toBe('done');
+    expect(rep['detail']).toBe('already converged at v2.0.0');
+    // cmd_rollback always calls cmd_update with --from rollback|watchdog,
+    // never its own --from verbatim (`run_from`, ccd/ccrc:12238-12239).
+    expect(rep['from']).toBe('rollback');
+  });
+
+  // Mutation control for the fix above: WITHOUT the `--from cli` gate, this
+  // case would take the shortcut, print "nothing to do" and leave
+  // update.json untouched — the assertions above would both fail.
+  it('a hand-typed (--from cli, the default) converged rollback still takes the shortcut: no report written (control for the pwa case above)', () => {
+    const home = rollbackBox('ccrc-rollback-converged-cli-control-');
+    const r = runRollback(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/nothing to do/);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  // The guarded read (D-3283's own shape, `_upd_write_previous`): an ABSENT
+  // completed-install record must never leak a bash "No such file or
+  // directory" onto this run's stderr — the pre-check's `[ -f … ] &&`
+  // guard, not the trailing `2>/dev/null` alone, is what prevents it (a
+  // redirection that fails to OPEN prints before a later `2>` in the same
+  // simple command can catch it — measured: `2>/dev/null` positioned AFTER
+  // a failing `<` does NOT suppress bash's own diagnostic).
+  it('an ABSENT completed-install record leaks no "No such file or directory" from the hand-typed converged pre-check (re-review fix)', () => {
+    const home = rollbackBox('ccrc-rollback-no-record-');
+    rmSync(join(home, '.ccrc', 'installed'));
+    const r = runRollback(home, ['--to', 'v2.0.0']);
+    expect(r.stderr).not.toMatch(/No such file or directory/);
+  });
+
   it('an unpublished tag is refused at exit 2 before the lock and before any backup — its SHA256SUMS is the ONE request (§18 "`rollback` refuses an unknown tag")', () => {
     const home = rollbackBox('ccrc-rollback-unknown-', { previous: PREV });
     const r = runRollback(home, ['--to', 'v7.7.7']);
@@ -5449,6 +5523,53 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     writeFileSync(join(home2, 'fixture-health-pin'), 'v1.0.0\n');
     expect(runWatchdog(home2).code).toBe(0);
     expect(lines(home2, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+  });
+
+  // RE-REVIEW regression (D-3285, one clause added): every OTHER test in
+  // this describe uses the STUB `LAUNCHER` at `.local/bin/ccrc`, which never
+  // runs real ccrc code — so it cannot see the bug the re-review found:
+  // `cmd_rollback --from watchdog` on a box whose PREVIOUS tag is its own
+  // RUNNING tag (already converged) used to hit the converged pre-check's
+  // early `return 0`, which writes NO report at all. `cmd_watchdog` records
+  // only when the rollback it ran answers non-zero, so update.json stayed
+  // stuck `checking` forever, and the NEXT tick would see the same stale
+  // report and roll back again — looping every tick. This test installs a
+  // REAL `ccrc` as the launcher so the real `cmd_rollback`/`cmd_update`
+  // convergence path actually runs, then measures TWO ticks.
+  itLinux('a real, converged `ccrc rollback --from watchdog` closes its report — done, not stuck — and a second tick does not run it again (re-review fix)', () => {
+    const home = watchBox('ccrc-watchdog-revert-converged-');
+    // The REAL binary, not the stub LAUNCHER: this is the one case in this
+    // describe that must exercise `cmd_rollback`'s own convergence logic.
+    cpSync(join(REPO, 'ccd', 'ccrc'), join(home, '.local', 'bin', 'ccrc'));
+    chmodSync(join(home, '.local', 'bin', 'ccrc'), 0o755);
+    // previous == the box's own running tag (v2.0.0, watchBox's default) —
+    // the scenario the regression needs: a bare `rollback --from watchdog`
+    // (no --to) resolves `to` from here.
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v2.0.0\noldsha0000000000000000000000000000000000\n');
+    // Published, its build.json sha matching the box's own stamp — the
+    // shape `_upd_converged` (reached for real now) needs to answer yes.
+    // `packRelease` derives `<home>/releases/…` itself — the same
+    // `CCRC_RELEASE_BASE_URL` shape `runUpdate`'s own default uses.
+    packRelease(home, selfConvergedTree(home, 'v2.0.0', 'oldsha0000000000000000000000000000000000'),
+      { tag: 'v2.0.0', latest: false });
+    report(home, { phase: 'checking', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const releaseUrl = `local://${home}/releases`;
+    const r = runWatchdog(home, [], { CCRC_RELEASE_BASE_URL: releaseUrl });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^watchdog: stale report \(checking, 9\ds\) and the box fails its health probe \(.+\) — rolling back$/m);
+    const rep1 = readReport(home);
+    expect(rep1['phase'], `stdout: ${r.stdout}`).toBe('done');
+    expect(rep1['detail']).toBe('already converged at v2.0.0');
+    expect(lockFree(home)).toBe(true);
+    // Second tick: the report is now TERMINAL (`done`), so the watchdog
+    // takes the NOT_IN_FLIGHT "nothing to do" branch — it must not probe,
+    // must not touch the lock, must not run rollback again.
+    const before = readFileSync(jsonPath(home), 'utf8');
+    const r2 = runWatchdog(home, [], { CCRC_RELEASE_BASE_URL: releaseUrl });
+    expect(r2.code, `stderr: ${r2.stderr}`).toBe(0);
+    expect(r2.stdout).toBe('watchdog: last update done — nothing to do\n');
+    expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
   });
 
   itLinux('a refused rollback is relayed; when it wrote nothing it is recorded, verdict first — when it wrote its own report, that report stands', () => {
