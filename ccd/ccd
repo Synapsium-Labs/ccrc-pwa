@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=04ac3d9dc6816f9f9f3b66de24e43af84c0111a1fbda0397db4d3c7d272836e4
+# ccrc:generated 1 sha256=258434f69675e8141889dc92c040d3ec68f076a245865ccaf4551479d1fe7511
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13185,7 +13185,7 @@ _reap_paths_json() {   # -> REAP_SENSITIVE as a JSON array of strings
   printf '%s]\n' "$out"
 }
 
-_ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
+_ws_tombstone() {   # id clipsjson [reclaim-fragment: ws-reclaim's keys, ending in a comma; ws-reap never passes it] -> writes .reaped/<id>.json, echoes its path
   local id="$1" clips="$2" dir="$REG/.reaped" f="$REG/.reaped/$1.json"
   mkdir -p "$dir"
   # `sensitive\tbytes\tpath`, NUL-terminated, read exactly as cmd_ws_audit reads
@@ -13314,9 +13314,9 @@ _ws_tombstone() {   # id clipsjson -> writes .reaped/<id>.json, echoes its path
       "$(_json_str "$(_reg_get "$id" uuid)")" "$(_json_str "$(_reg_get "$id" wrapper)")" \
       "$(_json_str "$REAP_MERGE")" "$(_json_str "$REAP_PROOF")" \
       "$( [[ "$REAP_PRNUM" =~ ^[0-9]+$ ]] && echo "$REAP_PRNUM" || echo null)" "$(_json_str "$REAP_PRURL")"
-    printf '"ignored":%s,"clips":%s,"transcript":%s,"attic":%s,"reflog":%s,"children":%s,"reapedAt":%s}\n' \
+    printf '"ignored":%s,"clips":%s,"transcript":%s,"attic":%s,"reflog":%s,"children":%s,%s"reapedAt":%s}\n' \
       "$ign_json" "$clips" "$(_json_str "$transcript")" "$attic_json" "$(_json_str "$reflog")" \
-      "$children_json" "$(date +%s)"
+      "$children_json" "${3-}" "$(date +%s)"
   } > "$f"
   echo "$f"
 }
@@ -23597,6 +23597,15 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   return 0
 }
 
+_ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling: absolute, with no trailing
+  #                              `/`, no `//`, and no `.` or `..` component — the only form ccd writes a
+  #                              workdir in. The ladder refuses any other, and the pin phase fails on one
+  #                              (spec §5.5): `lstat("<link>/")` follows the link, so every leaf test reads
+  #                              the path as written and a spelling can walk past it.
+  [[ "$1" == /* && "$1" != */ && "$1" != */. && "$1" != */.. \
+     && "$1" != *//* && "$1" != */./* && "$1" != */../* ]]
+}
+
 _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when the reclaim ladder
   #                       passes (REAP_TOKEN set, REAP_VERDICT=reclaimable), else REAP_VERDICT names it
   # THE LADDER, in spec §5.5's order. A refusal writes NOTHING — with one named
@@ -23651,8 +23660,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # written by something else — refused, not normalised (the verb re-reads the
   # row, and a local rewrite would not carry). Terminal: the same row answers
   # the same way on every retry.
-  [[ "$workdir" == /* && "$workdir" != */ && "$workdir" != */. && "$workdir" != */.. \
-     && "$workdir" != *//* && "$workdir" != */./* && "$workdir" != */../* ]] \
+  _ws_reclaim_plain_path "$workdir" \
     || { _reap_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
   main="$PROJECTS_ROOT/$project"
   # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
@@ -23926,6 +23934,201 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   REAP_VERDICT=reclaimable
   return 0
 }
+
+_ws_wip_commit() {   # dir id childof -> 0 with RECLAIM_WIP_SHA = the new commit ('' when nothing was
+  #                     uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY `git commit` IN ccd, and its
+  #                     one call site is `_ws_reclaim_pin` — which is reason enough for it to be one
+  #                     function (spec §5.5, pin phase step 2).
+  # What it commits: tracked modifications and deletions (`add --update`) and
+  # the non-secret untracked paths `_ws_reclaim_classify` just put in
+  # RECLAIM_STAGE, handed over NUL-separated with literal pathspecs so no path
+  # is ever read as a glob. What it never commits: a secret-shaped path
+  # (RECLAIM_SECRETS), an ignored file, a nested checkout.
+  #
+  # THE IDENTITY IS FIXED, in both channels. `-c user.*` names it to git's
+  # config; the GIT_* environment is what outranks config, so a caller
+  # that happened to export GIT_AUTHOR_NAME cannot put its own name on a commit
+  # it did not write. `core.hooksPath=/dev/null` with `--no-verify`: `--no-verify`
+  # alone still runs prepare-commit-msg and post-commit — a repository's own
+  # hooks must not run inside the fleet's destructive verb (measured, git 2.43:
+  # with all three hooks installed, none ran).
+  #
+  # On a DETACHED HEAD (a rebase stopped, or a checkout of a sha) the commit
+  # lands on HEAD and not on the branch; the caller pins it by sha.
+  local dir="$1" id="$2" childof="$3" errf listf
+  RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
+  errf=$(_plat_mktemp) || { RECLAIM_WIP_WHY='could not make a scratch file'; return 1; }
+  git -C "$dir" add --update -- . 2>"$errf" \
+    || { RECLAIM_WIP_WHY="git add --update at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf"; return 1; }
+  if (( ${#RECLAIM_STAGE[@]} )); then
+    listf=$(_plat_mktemp) || { rm -f "$errf"; RECLAIM_WIP_WHY='could not make a scratch file'; return 1; }
+    printf '%s\0' "${RECLAIM_STAGE[@]}" >"$listf"
+    GIT_LITERAL_PATHSPECS=1 git -C "$dir" add --pathspec-from-file="$listf" --pathspec-file-nul 2>"$errf" \
+      || { RECLAIM_WIP_WHY="git add of the untracked files at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf" "$listf"; return 1; }
+    rm -f "$listf"
+  fi
+  # Nothing staged is the ordinary case for a finished child: no commit.
+  if git -C "$dir" diff --cached --quiet 2>/dev/null; then rm -f "$errf"; return 0; fi
+  GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
+  GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
+    git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' \
+      -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+      commit --no-verify --quiet -m "ccrc: WIP pinned at reclaim of $id (run $childof)" 2>"$errf" \
+    || { RECLAIM_WIP_WHY="git commit at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf"; return 1; }
+  rm -f "$errf"
+  RECLAIM_WIP_SHA=$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null) \
+    || { RECLAIM_WIP_WHY="the WIP commit at $dir landed but HEAD does not resolve"; return 1; }
+  return 0
+}
+
+_ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned under refs/ccrc/attic/<id>/<sha>;
+  #                               1 on the first one that cannot be — a pin that cannot be taken
+  #                               is a FAILURE here, never a skip (`_ws_attic_pin` may skip a pruned
+  #                               reflog entry; nothing handed to THIS function is optional)
+  local main="$1" id="$2" sha; shift 2
+  for sha in "$@"; do
+    [[ -n "$sha" ]] || continue
+    [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || return 1
+    git -C "$main" cat-file -e "${sha}^{commit}" 2>/dev/null || return 1
+    git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null || return 1
+  done
+  return 0
+}
+
+_ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything recoverable is pinned;
+  #                        1 with RECLAIM_PIN_WHY. Sets RECLAIM_WIP, REAP_TIP (the branch tip AFTER
+  #                        the WIP commit), RECLAIM_SECRETS, REAP_IGNORED (the child's own) and
+  #                        REAP_CHILDLINES (path\tbranch\thead per same-repository nested checkout).
+  # THE PIN PHASE (spec §5.5), runnable more than once: the fresh arm runs it
+  # before anything is destroyed, and the tail runs it again as the SETTLE, once
+  # the pane is dead, to catch anything the session wrote between the two. Every
+  # pin is idempotent (`update-ref` of a ref to the sha it already names).
+  local id="$1" workdir="$2" main="$3" branch="$4" childof="$5"
+  local h hs nested cpath cpcommon cbr chead mainreal wdreal extras=() sha stashes
+  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""
+  # THE LEAF IS NEVER FOLLOWED, here as at the ladder (spec §5.5): the settle
+  # re-pin runs with no ladder in front of it, so this guard stands alone. A
+  # link at the workdir reaches a tree ccd cannot prove is this child's, and
+  # the WIP commit would land in it. One plain absolute spelling first — a
+  # trailing `/` makes `-L` follow the link it is asking about — then `-L` on
+  # the LEAF, with no trailing slash, so a symlinked ancestor stays legal.
+  # Either failure is taken before any commit or pin: nothing is changed.
+  _ws_reclaim_plain_path "$workdir" \
+    || { RECLAIM_PIN_WHY="'$workdir' is not one plain absolute path — ccd pins only a tree it can prove is $id's own"; return 1; }
+  [[ ! -L "$workdir" ]] \
+    || { RECLAIM_PIN_WHY="$workdir is a symbolic link — ccd never follows a link to a tree it would pin"; return 1; }
+  [[ -d "$workdir" ]] || { RECLAIM_PIN_WHY="$workdir is gone — there is nothing to pin"; return 1; }
+  # (0) The in-progress operation heads, FIRST: a commit concludes a merge or a
+  # cherry-pick and deletes MERGE_HEAD / CHERRY_PICK_HEAD (measured, git 2.43).
+  for h in REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD ORIG_HEAD; do
+    hs=$(git -C "$workdir" rev-parse --verify --quiet "$h^{commit}" 2>/dev/null) && extras+=("$hs")
+  done
+  mainreal=$(_ws_common_dir "$main") || { RECLAIM_PIN_WHY="could not resolve the repository of $main"; return 1; }
+  # (1) Same-repository nested checkouts, innermost first: classify, commit,
+  # remember the head. A different repository's checkout was proven clean and
+  # pushed by rung 9 and goes with the tree; nothing of it can be pinned here.
+  # A checkout whose repository will not RESOLVE is neither: skipping it would
+  # leave its uncommitted work out of the pin AND out of REAP_CHILDLINES, and
+  # the tree removal would take it — so it fails the pin (spec §5.5, rung 8's
+  # rule: a read that failed measured nothing).
+  wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || { RECLAIM_PIN_WHY="could not resolve $workdir"; return 1; }
+  nested=$(_ws_nested_checkouts "$workdir") \
+    || { RECLAIM_PIN_WHY="could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+  # fd 9, not stdin: nothing git runs inside this loop may read the list.
+  while IFS= read -r -u 9 cpath; do
+    [[ -n "$cpath" ]] || continue
+    cpcommon=$(_ws_common_dir "$cpath") \
+      || { RECLAIM_PIN_WHY="could not resolve the repository of the checkout at $cpath"; return 1; }
+    [[ "$cpcommon" == "$mainreal" ]] || continue
+    _ws_reclaim_classify "$cpath" "${cpath#"$wdreal"/}/" \
+      || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
+    _ws_wip_commit "$cpath" "$id" "$childof" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+    [[ -n "$RECLAIM_WIP_SHA" ]] && extras+=("$RECLAIM_WIP_SHA")
+    chead=$(git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || chead=""
+    [[ -n "$chead" ]] && extras+=("$chead")
+    cbr=$(git -C "$cpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || cbr=""
+    REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\n'
+  done 9< <(printf '%s\n' "$nested" | awk '{ print length($0) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
+  # (2) The child's own tree, LAST, so REAP_IGNORED describes it for the tombstone.
+  _ws_reclaim_classify "$workdir" "" || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
+  _ws_wip_commit "$workdir" "$id" "$childof" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+  RECLAIM_WIP="$RECLAIM_WIP_SHA"
+  [[ -n "$RECLAIM_WIP" ]] && extras+=("$RECLAIM_WIP")
+  hs=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) && extras+=("$hs")
+  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  # (3) Every stash attributed to the branch.
+  stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
+    || { RECLAIM_PIN_WHY="could not read the stash list of $main"; return 1; }
+  while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$stashes"
+  # (4) The pins: the reflog and the tip through the EXISTING pin (its 200 + tip
+  # cap, unchanged), then everything above, which is never optional.
+  _ws_attic_pin "$main" "$id" "$workdir" "${REAP_TIP:-$hs}" >/dev/null
+  _ws_reclaim_attic_extra "$main" "$id" ${extras[@]+"${extras[@]}"} \
+    || { RECLAIM_PIN_WHY="a commit this reclaim must keep could not be pinned under refs/ccrc/attic/$id/"; return 1; }
+  return 0
+}
+
+_ws_reclaim_secrets_json() {   # -> RECLAIM_SECRETS as a JSON array of strings, on stdout
+  local out="[" first=1 s
+  for s in ${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"}; do
+    [[ -n "$s" ]] || continue
+    (( first )) || out+=","; first=0; out+="$(_json_str "$s")"
+  done
+  printf '%s]' "$out"
+}
+
+_ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclaim-only tombstone keys as a
+  #                                JSON fragment ENDING IN A COMMA — `_ws_tombstone`'s optional third
+  #                                argument. Reads the eval's RECLAIM_NESTED/RECLAIM_FOREIGN and the pin's
+  #                                RECLAIM_WIP and RECLAIM_SECRETS, so it runs after both, in the same shell.
+  # `worktree` says whether there was a tree to pin at all: `absent` is a child
+  # whose worktree had VANISHED (spec §5.5) — the record then holds its branch
+  # tip and stashes and nothing of a tree, and says so rather than implying one.
+  local childof="$1" worktree="${2:-present}" p first same="[" foreign="["
+  first=1
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    (( first )) || same+=","; first=0; same+="$(_json_str "$p")"
+  done <<< "$RECLAIM_NESTED"
+  same+="]"; first=1
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    (( first )) || foreign+=","; first=0; foreign+="$(_json_str "$p")"
+  done <<< "$RECLAIM_FOREIGN"
+  foreign+="]"
+  printf '"mode":"reclaim","childOf":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
+    "$childof" "$(_json_str "$worktree")" "$( [[ -n "$RECLAIM_WIP" ]] && _json_str "$RECLAIM_WIP" || echo null)" \
+    "$(_ws_reclaim_secrets_json)" "$same" "$foreign"
+}
+
+_ws_tombstone_patch() {   # id json-object -> merges its keys into the EXISTING tombstone and rewrites it
+  #                          atomically; `secretsDropped` is UNIONED, every other key replaced. rc 1 when
+  #                          the tombstone is missing or could not be rewritten.
+  # `_ws_tombstone_reclip`'s shape, widened: the settle re-pin moves `tip` and
+  # `wip`, and the residue probe fills `residueBytes`, both after the tombstone
+  # was first written. A key this function never received is never touched.
+  # The patch is read as UTF-8 BYTES, so a secret-shaped path that is not
+  # ASCII reads the same under any locale the caller happens to run in.
+  local id="$1" patch="$2" f="$REG/.reaped/$1.json"
+  [[ -s "$f" ]] || return 1
+  printf '%s' "$patch" | python3 -c '
+import json, os, sys
+path = sys.argv[1]
+patch = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+with open(path, "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+for k, v in patch.items():
+    if k == "secretsDropped" and isinstance(doc.get(k), list) and isinstance(v, list):
+        doc[k] = sorted(set(doc[k]) | set(v))
+    else:
+        doc[k] = v
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh, separators=(",", ":"))
+os.replace(tmp, path)
+' "$f" 2>/dev/null
+}
+
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
 # Guard so the script can be `source`d by tests without running a command.
