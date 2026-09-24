@@ -232,6 +232,12 @@ export interface CataloguePoller {
 
 export interface ParsedListing { rows: ReleaseListingRow[]; skipped: number; coverage: ListingCoverage }
 
+/** Fix round 4 (F1, coordinator's reshaped B2 ruling, review 149): what a
+ *  fresh listing's own row says about ONE tag — never just "is it named at
+ *  all". `draft` and `channel` are the two facts a pending withdrawal's
+ *  contradiction check needs; see `listingContradictsPending`. */
+export interface ListingFact { draft: boolean; channel: ReleaseListingRow['channel'] }
+
 type Json = Record<string, unknown>;
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 const httpReason = (status: number): CatalogueErrorReason => `http-${status}` as const;
@@ -499,6 +505,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  failing while `/latest` itself keeps answering fine is not re-armed
    *  every poll by that unrelated success (which would spam the log). */
   let lastWarnedWithdrawnError: string | null = null;
+  /** Fix round 4 (F1, coordinator's reshaped ruling, review 149): the
+   *  listing-contradicts-the-check warning's own dedupe key — keyed on K
+   *  itself (a DIFFERENT K always warns), and re-armed by `withdrawnAnswered()`
+   *  so the next episode where a check actually applies warns again, rather
+   *  than being silenced forever by one earlier, unrelated cause's reset. */
+  let lastWarnedListingWinsFor: string | null = null;
   /** Fix round 2 (S1): `currentK()`'s own dedupe key — a throw from
    *  `deps.store.newestUnyankedStable` is a DIFFERENT failure than any of
    *  the three requests', so it gets its own message-keyed warn rather than
@@ -506,14 +518,18 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  let an unrelated request success re-arm it or a store failure silence
    *  an unrelated request failure. */
   let lastWarnedCurrentKError: string | null = null;
-  /** B2 (fix round 3, coordinator's ruling, review 146): the tags a fresh,
-   *  ACCEPTED listing last named — process memory, like the ETags (D-3182).
-   *  `null` until the first accepted listing; set only where `etag` itself
-   *  is (see `pollListing`). Read only to decide whether a pending
-   *  withdrawal's own K already has a remembered answer on record, so a
-   *  later poll need not force the listing's ETag away purely on the
-   *  pending's account (see `pollOnce`). */
-  let lastAcceptedListingTags: ReadonlySet<string> | null = null;
+  /** B2 (fix round 3, coordinator's ruling, review 146): the per-tag facts a
+   *  fresh, ACCEPTED listing last named — process memory, like the ETags
+   *  (D-3182). `null` until the first accepted listing; set only where
+   *  `etag` itself is (see `pollListing`). Fix round 4 (F1, coordinator's
+   *  reshaped ruling, review 149): widened from a bare tag SET to a
+   *  draft/channel FACT per tag — a bare "named at all" cannot tell a
+   *  contradicting listing from an AGREEING one (F1's own defect). Read only
+   *  through `listingContradictsPending`, the SAME helper the apply-decision
+   *  site uses on THIS poll's own fresh facts, so the ETag-keep decision and
+   *  the apply-decision can never disagree about what "already settles
+   *  this" means (see `pollOnce`). */
+  let lastAcceptedListingFacts: ReadonlyMap<string, ListingFact> | null = null;
   /** Fix round 3 (B3, D-3218 amended, review 146): `elapsedMs()`'s reading at
    *  THIS poll's own start — captured once, at the top of `pollOnce`, so
    *  every `stampRequest` call this poll measures its own request's send
@@ -568,7 +584,16 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     console.warn(`ccrc-server: update catalogue moved-away tag check failed (${cause})`);
     lastWarnedWithdrawnError = cause;
   };
-  const withdrawnAnswered = (): void => { lastWarnedWithdrawnError = null; };
+  /** Fix round 4 (F1, coordinator's reshaped ruling, review 149): a
+   *  SEPARATE dedupe from `warnWithdrawn` — this is not a check FAILURE
+   *  (the check succeeded and answered), so it must never say "check
+   *  failed". Deduped on K itself; re-armed by `withdrawnAnswered()`. */
+  const warnListingWins = (k: string): void => {
+    if (k === lastWarnedListingWinsFor) return;
+    console.warn(`ccrc-server: update catalogue listing contradicts the moved-away tag check for ${k} (listing wins)`);
+    lastWarnedListingWinsFor = k;
+  };
+  const withdrawnAnswered = (): void => { lastWarnedWithdrawnError = null; lastWarnedListingWinsFor = null; };
   /** Fix round 1, item 5 (ruling A): K is never a stored column — derived on
    *  demand, whenever the poller's own remembered tag has gone null, as the
    *  store's newest un-yanked stable release BY TAG. `null` when the store
@@ -619,15 +644,15 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  specific release is gone. */
   async function pollListing(
     now: number, source: { owner: string; repo: string },
-  ): Promise<{ state: CatalogueState; freshOk: boolean; tags: ReadonlySet<string> | null }> {
+  ): Promise<{ state: CatalogueState; freshOk: boolean; facts: ReadonlyMap<string, ListingFact> | null }> {
     // B2: built from `validatedBase` — the SAME trimmed/normalised base the
     // gate accepted — never `deps.apiUrl` raw.
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
     stampRequest(now);
-    const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean; tags: ReadonlySet<string> | null } =>
-      ({ state, freshOk: false, tags: null });
+    const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean; facts: ReadonlyMap<string, ListingFact> | null } =>
+      ({ state, freshOk: false, facts: null });
     const answer = await fetchOne(url, sentEtag, timeoutMs);
     if (answer === null) return notFresh(failed(now, 'no-egress'));
     if (answer === 'over-cap') return notFresh(failed(now, 'malformed'));   // D-3209
@@ -678,9 +703,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // where `etag` itself is — a fresh, ACCEPTED listing's own content, kept
     // so a LATER poll's pending withdrawal on a tag THIS listing already
     // named needs no forced fresh re-answer purely on the pending's account
-    // (see `pollOnce`).
-    lastAcceptedListingTags = new Set(parsed.rows.map((r) => r.tag));
-    return { state: answered(now), freshOk: true, tags: lastAcceptedListingTags };
+    // (see `pollOnce`). Fix round 4 (F1): per-tag FACTS now, not a bare tag
+    // set — draft and channel are exactly what `listingContradictsPending`
+    // needs, and nothing less lets it tell an agreeing listing from a
+    // contradicting one.
+    lastAcceptedListingFacts = new Map(parsed.rows.map((r) => [r.tag, { draft: r.draft, channel: r.channel }]));
+    return { state: answered(now), freshOk: true, facts: lastAcceptedListingFacts };
   }
 
   /**
@@ -810,6 +838,33 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     | { kind: 'yank'; k: string; t: string | null; tEtag: string | null }
     | { kind: 'demote'; row: ReleaseListingRow; t: string | null; tEtag: string | null };
 
+  /** Fix round 4 (F1, coordinator's reshaped B2 ruling, review 149): whether
+   *  a listing's own per-tag facts CONTRADICT a pending withdrawal — the
+   *  ONLY condition under which the listing overrules the moved-away tag
+   *  check. A pending `'yank'` is contradicted by ANY non-draft row named K
+   *  (the listing just showed K is still there, in either channel); a
+   *  pending `'demote'` is contradicted ONLY by a non-draft STABLE row (a
+   *  non-draft DEV row is exactly what the demote's own check found — the
+   *  listing AGREES, so the demote applies, moving the kept tag to T; the
+   *  listing's own upsert having already written that same channel is
+   *  harmless, never a reason to also drop the pending). A row absent from
+   *  the facts, or present only as a DRAFT, never vouches either way —
+   *  drafts are never evidence, so that case reads as "no verdict", exactly
+   *  like an absent row: the pending proceeds to `applyWithdrawn` as it
+   *  would with no listing at all. Used at BOTH the apply-decision site
+   *  (`pollOnce`, this poll's own fresh facts) and the ETag-keep decision
+   *  (`pollOnce`, the remembered facts) — the SAME helper at both sites, so
+   *  a remembered listing that would NOT contradict (would let the pending
+   *  apply) never suppresses the ETag reset that gets it a fresh answer. */
+  function listingContradictsPending(
+    kind: PendingWithdrawal['kind'], k: string, facts: ReadonlyMap<string, ListingFact> | null,
+  ): boolean {
+    if (facts === null) return false;
+    const fact = facts.get(k);
+    if (fact === undefined || fact.draft) return false;
+    return kind === 'yank' ? true : fact.channel === 'stable';
+  }
+
   /**
    * Fix round 1, item 5 (ruling A): the confirming half of the moved-away
    * transition — `GET {api}/repos/{owner}/{repo}/releases/tags/{k}`, the
@@ -916,27 +971,42 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     const pendingK = pendingWithdrawal === null
       ? null
       : (pendingWithdrawal.kind === 'yank' ? pendingWithdrawal.k : pendingWithdrawal.row.tag);
-    // B2 (fix round 3, coordinator's ruling, review 146): "do not drop the
-    // listing's ETag for it" — once a fresh, ACCEPTED listing has already
-    // vouched for K (named it, whatever its channel), a LATER poll's pending
-    // withdrawal on that SAME K needs no forced fresh re-answer purely on
-    // its own account: the remembered content already settles it below, and
-    // this poll's listing may answer a cheap 304 that carries no fresh
-    // evidence either way — the poll simply settles, exactly as a deferred
-    // check always has. `lastAcceptedListingTags` is that remembered
-    // content, updated only where `etag` itself is (see `pollListing`).
-    const pendingAlreadyVouchedFor = pendingK !== null
-      && lastAcceptedListingTags !== null && lastAcceptedListingTags.has(pendingK);
+    // B2 (fix round 3, coordinator's ruling, review 146), reshaped fix round
+    // 4 (F1, review 149): "do not drop the listing's ETag for it" — but only
+    // when the REMEMBERED listing already CONTRADICTS this pending, i.e.
+    // would drop it if it were fresh evidence. In that case a later poll's
+    // pending withdrawal on the SAME K needs no forced fresh re-answer
+    // purely on its own account: the remembered content already tells us
+    // the outcome (a drop), so a cheap 304 that carries no fresh evidence
+    // either way costs nothing to accept — the check is simply DEFERRED,
+    // exactly as any check with no listing evidence at all would be, never
+    // dropped by a remembered listing (F6: only THIS poll's OWN fresh
+    // listing can drop a pending — see below). When the remembered listing
+    // does NOT contradict (it is silent, names K only as a draft, or
+    // AGREES), the reset must NOT be suppressed: an agreeing pending needs a
+    // FRESH listing this poll to actually get applied, or it would sit
+    // deferred forever behind a 304 that never carries the fresh evidence
+    // `applyWithdrawn` requires — exactly F1's own defect.
+    // `lastAcceptedListingFacts` is that remembered content, updated only
+    // where `etag` itself is (see `pollListing`).
+    const pendingAlreadyVouchedFor = pendingWithdrawal !== null
+      && listingContradictsPending(pendingWithdrawal.kind, pendingK!, lastAcceptedListingFacts);
     if (lastLatestTag !== prevLatestTag || (pendingWithdrawal !== null && !pendingAlreadyVouchedFor)) {
       // The stable identity CHANGED this poll (a fresh confirmation, or a
       // 404-with-no-kept-tag clearing it) — unchanged trigger — OR a
       // moved-away transition was just CONFIRMED and is waiting on this
-      // poll's own listing (R2), and no remembered listing has vouched for
-      // its K yet: either way a stale 304 here must not stand in for a real
-      // answer that was never actually given. Dropping the ETag forces a
-      // full re-answer.
+      // poll's own listing (R2), and the remembered listing does not already
+      // contradict its K: either way a stale 304 here must not stand in for
+      // a real answer that was never actually given. Dropping the ETag
+      // forces a full re-answer.
       etag = null;
     }
+    // Fix round 4 (F7, review 149): this reset does not shrink the per-poll
+    // request COUNT either way — `/latest` and the listing are still asked
+    // every poll (spec §7's partial-mirror shape), so a poll that accepts a
+    // 304 here still spends the maximum `CATALOGUE_MAX_REQUESTS_PER_POLL`
+    // (3) requests; only the FLIP (a stale yank/demote re-applying against
+    // a K the listing just re-confirmed) is gone, never the cost.
     const listing = await pollListing(now, source);
     // R2 (ruling on review 143's R2): a moved-away judgment acts ONLY when
     // THIS poll's listing itself answered with a fresh 200 body — never on
@@ -946,24 +1016,30 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // same K (`measureWithdrawn` re-fetches; nothing here remembers the
     // discarded `pendingWithdrawal`).
     //
-    // B2 (fix round 3, coordinator's ruling, review 146): THE LISTING WINS.
-    // When this SAME poll's fresh listing itself names K at all — stable or
-    // prerelease, whatever the confirming tag check answered — that is
-    // stronger, more current evidence than the check's own verdict, so the
-    // pending withdrawal is DROPPED, never applied: a pending 'yank' is
-    // dropped because the listing just showed K is still there; a pending
-    // 'demote' is dropped uniformly too (when the listing names K stable,
-    // the check's own "still stable"/"demoted" verdict is stale next to it;
-    // when the listing names it dev, the listing's OWN upsert just wrote
-    // that same fact, so applying the pending demote as well would be
-    // harmless but redundant — dropping it either way is simpler and costs
-    // nothing). Before this fix a repository whose listing endpoint alone
-    // stayed live (a partial mirror, spec §7's own example) could apply a
-    // stale yank or demote against a K the SAME poll's listing had just
-    // re-confirmed, flipping the resolved stable tag every poll.
+    // B2 (fix round 3, coordinator's ruling, review 146), reshaped fix round
+    // 4 (F1, coordinator's ruling, review 149): THE LISTING WINS ONLY WHEN
+    // IT DISAGREES with the check. A pending 'yank' meeting a listing that
+    // names K as any non-draft release DISAGREES (the listing just showed K
+    // is still there) — dropped. A pending 'demote' meeting a listing that
+    // names K as a non-draft STABLE release DISAGREES (the check's own
+    // "still stable" verdict is stale next to it) — dropped. Otherwise they
+    // AGREE — a pending 'demote' meeting a listing that already names K as
+    // dev (the check found exactly what the listing shows), or a pending
+    // 'yank' meeting a listing that does not name K at all — or the listing
+    // gives NO VERDICT (K named only as a DRAFT — a draft row never
+    // vouches, in either direction) — and `applyWithdrawn` runs exactly as
+    // it would with no listing at all, moving the kept tag to T. Before this
+    // fix a repository whose listing endpoint alone stayed live (a partial
+    // mirror, spec §7's own example) could either apply a stale yank/demote
+    // against a K the SAME poll's listing had just re-confirmed (the
+    // original defect), or — B2's own first shape, F1 — drop an AGREEING
+    // demote right along with a contradicting one, so a demotion the
+    // listing itself already confirmed could never settle: `/latest` stayed
+    // pinned to the demoted K forever, and an off-page stable the listing
+    // never lists stayed resolvable after real deletion.
     if (pendingWithdrawal !== null && listing.freshOk) {
-      if (listing.tags!.has(pendingK!)) {
-        warnWithdrawn('listing-names-k');
+      if (listingContradictsPending(pendingWithdrawal.kind, pendingK!, listing.facts)) {
+        warnListingWins(pendingK!);
       } else {
         applyWithdrawn(now, pendingWithdrawal);
       }

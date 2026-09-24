@@ -1539,8 +1539,8 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     // partial mirror, spec §7's own example) could flip the resolved stable
     // tag every poll. Fixed: a pending withdrawal is dropped whenever this
     // poll's own fresh listing names K at all.
-    describe('B2 — the listing wins: a pending withdrawal is dropped when this poll\'s own fresh listing names K', () => {
-      it('two-stable alternation: a listing-only source (every other endpoint 404s) never yanks either stable, and settles on a 304 once vouched for', async () => {
+    describe('B2 — the listing wins ONLY when it DISAGREES with the check (reshaped fix round 4, F1, review 149)', () => {
+      it('two-stable alternation: a listing-only source (every other endpoint 404s) never yanks either stable, and settles on a 304 once vouched for (a 304 still spends a full request — only the FLIP is gone, never the cost: F7)', async () => {
         const { store, port } = fixture();
         const p = poller(port);
         const s3 = rel('v0.0.3', '2026-08-03T00:00:00Z');
@@ -1626,10 +1626,17 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.2');
       });
 
-      // The prerelease variant, cheaply: when the listing itself already
-      // names K as dev, the pending demote is dropped too — the listing's
-      // own upsert already wrote that same fact.
-      it('a pending demote to prerelease is also dropped when the listing itself already names K as dev', async () => {
+      // F2 (re-titled, review 149) / F1 pin (a) (the reviewer's own
+      // demotion case): when the listing itself already names K as dev, the
+      // check AGREES with it — the demote APPLIES, moving the kept tag to
+      // T. The round-3 shape of this test asserted only `channel: 'dev'`
+      // after 2 polls, which the F2 finding measured as passing whether the
+      // demote was dropped OR applied (the listing's OWN upsert already
+      // writes K's channel either way) — so it pinned nothing about drop vs
+      // apply. This version separates them exactly as the stable variant
+      // above does: WHICH tag the check hits, and which ETag `/latest`
+      // carries, across enough polls to show the demotion actually SETTLES.
+      it('a pending demote to prerelease APPLIES when the listing itself already names K as dev — tags/K is asked at most once, and from poll 3 on /latest carries T\'s ETag', async () => {
         const { store, port } = fixture();
         const p = poller(port);
         const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
@@ -1637,29 +1644,132 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         script = [
           { status: 200, etag: '"eL1"', body: [k] },
           { status: 200, etag: '"eL2"', body: [{ ...k, prerelease: true }] },   // the listing already demoted K
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
         ];
         scriptLatest = [
           { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },   // /latest moves to the older T
+          { status: 200, etag: '"eS2"', body: t },
+          { status: 200, etag: '"eS2"', body: t },
           { status: 200, etag: '"eS2"', body: t },
         ];
         scriptWithdrawn = [{ status: 200, etag: '"eK"', body: { ...k, prerelease: true } }];
         await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
         await p.poll(2000);
+        // Agreement, not disagreement: the listing already shows K as dev,
+        // exactly what the check found — APPLIED, not dropped.
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.2');
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'dev' });
+        for (let i = 3; i <= 5; i += 1) {
+          await p.poll(i * 1000);
+          // The kept tag is T now, and T is never older than itself, so the
+          // check is never retried against K again — at most once total.
+          expect(seenWithdrawn, `poll ${i}`).toHaveLength(1);
+          // From poll 3's own OUTGOING request on, /latest carries T's ETag
+          // — set by poll 2's `applyWithdrawn`, read by every later poll's
+          // request (a request's own If-None-Match reflects the PRIOR
+          // poll's final state, never this poll's own outcome).
+          expect(seenLatest[i - 1]!.headers['if-none-match'], `poll ${i}`).toBe('"eS2"');
+        }
       });
 
-      // Mutation, measured red: dropping the `listing.tags!.has(pendingK!)`
-      // check inside `pollOnce` (applying every pending withdrawal
-      // unconditionally on a fresh listing, the fix round 2 shape) reds the
-      // two-stable alternation case (poll 2's SECOND fresh 200 lets the
-      // pending yank apply for real, ending v0.0.3 yanked) and the
-      // stable-stays-stable demote case (`seenWithdrawn` never reaches a
-      // second call because the FIRST pending demote already applied and
-      // moved `lastLatestTag` to T, so poll 3 checks T instead of retrying
-      // K). It does NOT red the prerelease-demote case just above: the
-      // listing's OWN upsert already writes K as `channel: 'dev'` in that
-      // case, so applying the pending demote too is observably identical —
-      // this is the harmless-either-way shape the ruling itself names.
+      // F1 pin (b) (the reviewer's deleted-T case): an off-page stable T
+      // becomes the kept tag once K demotes, and later a REAL deletion of T
+      // — never listed, since it sits below the window this whole time —
+      // must still be resolvable. A full page (30 = 29 newer dev releases
+      // plus K) means the listing's own 'newest-page' coverage never judges
+      // T absent on its own (T's `publishedAt` sits below the window floor)
+      // — only the /latest + tag-check mechanism can ever yank it.
+      it('a full page (29 newer dev + K); K demotes so T (older, off-page) becomes the kept tag; T is later deleted for real -> T ends yanked, and newestUnyankedStable() answers null', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.9.0', '2026-08-20T00:00:00Z');
+        const t = rel('v0.0.1', '2026-01-01T00:00:00Z');   // older by tag AND by date — off the window
+        const noise = Array.from({ length: 29 }, (_, i) =>
+          rel(`v0.9.${i + 1}`, new Date(Date.UTC(2026, 7, 21 + i)).toISOString(), { prerelease: true }));
+        const fullPage = [...noise, k];   // exactly RELEASES_PER_PAGE (30)
+        expect(fullPage).toHaveLength(RELEASES_PER_PAGE);
+        script = [
+          { status: 200, etag: '"eL1"', body: fullPage },
+          { status: 200, etag: '"eL2"', body: [...noise, { ...k, prerelease: true }] },   // K demoted, still listed
+          { status: 200, etag: '"eL3"', body: [...noise, { ...k, prerelease: true }] },   // T never listed — off the window
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },   // /latest moves to the older, off-page T
+          { status: 404 },                            // T deleted for real
+        ];
+        scriptWithdrawn = [
+          { status: 200, etag: '"eK"', body: { ...k, prerelease: true } },   // poll 2: confirms K's demotion
+          { status: 404 },                                                   // poll 3: confirms T is truly gone
+        ];
+        await p.poll(1000);
+        await p.poll(2000);
+        // K demoted (agreement — the listing already shows it as dev), so
+        // the kept tag moved to T; T itself is real and upserted regardless.
+        expect(store.releases().find((r) => r.tag === 'v0.9.0')).toMatchObject({ yanked: false, channel: 'dev' });
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false, channel: 'stable' });
+        await p.poll(3000);
+        // T was never on any listing page (agreement by absence — no verdict
+        // to contradict), so the yank APPLIES.
+        expect(seenWithdrawn).toHaveLength(2);
+        expect(seenWithdrawn[1]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+        expect(store.newestUnyankedStable()).toBeNull();
+      });
+
+      // F1 pin (c): a pending 'yank' meeting a listing that names K ONLY as
+      // a DRAFT is applied, not dropped — a draft row never vouches either
+      // way. The store's ordinary birth rule ALSO yanks a draft row on
+      // sight, so `yanked` alone cannot distinguish "applied" from
+      // "dropped" here (the listing's own upsert already yanks it either
+      // way) — the discriminator is whether the WITHDRAWAL itself applied,
+      // observed via `lastLatestTag`/`latestEtag` moving to `null` (a bare
+      // 404 with no replacement T), visible on the NEXT poll's own
+      // `/latest` request carrying no If-None-Match at all.
+      it('a pending yank meeting a listing that names K only as a DRAFT still applies — observed via the next poll\'s /latest ETag, never via the row\'s own yanked flag', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k] },
+          { status: 200, etag: '"eL2"', body: [{ ...k, draft: true }] },   // K named, but ONLY as a draft
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 404 },   // /latest moves away with no replacement
+        ];
+        scriptWithdrawn = [{ status: 404 }];   // confirms K itself is truly gone
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false });
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        // Poll 3's own /latest request reflects whether poll 2 actually
+        // APPLIED the yank (latestEtag/lastLatestTag cleared to null) or
+        // DROPPED it (they would still read K's own "eS1"): applied means
+        // no If-None-Match at all.
+        await p.poll(3000);
+        expect(seenLatest[2]!.headers['if-none-match']).toBeUndefined();
+      });
+
+      // Mutation, measured red under the round-3 UNIFORM-drop shape
+      // (`listingContradictsPending` reverted to "the listing names K at
+      // all" — draft or not, any channel, for either kind): reproduces the
+      // reviewer's alternation (the two-stable case above ends a stable
+      // yanked), the stable-stays-stable demote case (`seenWithdrawn` never
+      // reaches a second call), the demote-APPLIES case just above (K never
+      // advances past `channel: 'dev'` to a moved kept tag — `seenWithdrawn`
+      // grows past 1 and `/latest`'s ETag never becomes T's), the
+      // deleted-T case (T is never even challenged, so it never ends
+      // yanked and `newestUnyankedStable()` keeps answering the deleted
+      // tag), and the draft-row case (a mutant that also lets a DRAFT row
+      // vouch: `if (fact === undefined) return false;` alone, dropping the
+      // `|| fact.draft` half) — the yank is dropped, so poll 3's /latest
+      // request keeps carrying K's own `"eS1"` instead of `undefined`.
     });
 
     // Fix round 1, item 5 (ruling A): N1 above still left a residual —
@@ -2069,6 +2179,7 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       await pr;   // let the probe time out and the (unscripted) listing run, so afterEach closes cleanly
     });
   });
+
 
   // B3 (fix round 3, D-3218 amended, review 146): "each request stamps the
   // clock at its OWN send time, never the poll's shared start `now`." Every
