@@ -25,7 +25,7 @@ numbers; the spec wave each one implements is named beside it.
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **MERGED** `b501698a` (PR #176, run 128 done), released as v0.0.23 (dev); after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **executing** (run 130, `ccrc-pwa-clear-river`, `ws/clear-river` at `b501698a`), dispatched 2026-09-24 05:25 UTC; plan `d638c602` + re-points `08cecd10`, `733d295a`; the first try at W2's merge was refused `cap-daily` (24/24 in a rolling 24 h window) |
-| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **resuming Tasks 15–16** (run 129, `ccrc-pwa-keen-meadow`), woken at W2's merge with the re-point artifact; Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00` |
+| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **awaiting review** (run 129, `ccrc-pwa-keen-meadow`): wave-done at `05b9ac4f`, PR #181, 16/16 items, reserve D-3274…D-3287 spent (14); review run 155 opened, its dispatch waits on the daily cap; plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
@@ -371,6 +371,17 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - Ruled yes, on the advisory terms (whoever merges second resolves), with conditions: only wave 4's named
     functions; re-measure the other branch before the push, and stop and report on any adjacent hunk; claim 749 is
     left untouched. The holder's coordinator was told, with the function list.
+- **2026-09-24 08:30 UTC — wave 4 wave-done (`05b9ac4f`, PR #181).**
+  - Re-measured: tip = handoff = PR head; merge-base = `main` (`b501698a`); 35 commits, all by the noreply identity;
+    clean tree. Items 16/16 settled after the `awaiting-review` advance.
+  - `suite: red` with `failure: ceiling`. One red, the post-plan `install-census` deploy.sh-parity guard, conflicted
+    with spec §19 and was ruled by the worker as D-3287. The other is `tmp-sweep`'s FAILS CLOSED case, red on `main` on
+    this box too. The worker did not re-run the full gate after its final-review fixes, so CI arbitrates the tip.
+  - Eight deferred design questions were raised in the wave-done. They are held until the review returns and ruled
+    with it, so that the held-out brief carries none of the worker's framing.
+  - Review run 155 carries three wave-specific lenses beyond the panel: security and untrusted input; safety hardware
+    plus self-update (can this tree install its successor?); interface fidelity against W2 on `main` and the W5/W6
+    plans.
 
 ## Carried constraints
 
