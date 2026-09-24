@@ -743,4 +743,12 @@ describe('end-to-end: new test file in a brand-new subdirectory (Review Focus b)
  * selectTests: drop the final `.sort()` on liveTests                   -> 'sorts the selection by file, independent of rule or input order' (1)
  * affectedSet: drop the ancestor-walk loop (Pa = [p], E = parentOf(p)  -> 'fires via the gone-ancestor rule...', 'fires when a brand-new subdirectory
  *   always)                                                               appears under a listed dir...', 'handles a root-level entry directory...' (3)
+ *
+ * Final review (2026-09-24), measured the same way:
+ * selectTests: gate rule 5 to `a.change.status === 'A'` (FR-7)         -> 'fires when a file is DELETED directly inside a listed directory...' (1)
+ * readChanges: drop `--no-renames` (FR-7)                              -> 'a rename (git mv) arrives as D old + A new...' (1)
+ * liveTestFiles: drop `-z`, split on '\n' (FR-2)                        -> 'lists a non-ASCII name...', 'the live-tests subcommand prints...',
+ *                                                                        'the live-tests subcommand refuses...' (3 here; 5 more in ci-select-cli,
+ *                                                                        1 in ci-pipeline — 9 in all)
+ * UNSAFE_TEST_PATH narrowed back to /\s/ (FR-2)                          -> ci-select-cli's double-quote, backslash and control-character cases (3)
  */
