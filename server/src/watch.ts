@@ -62,7 +62,7 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
-import { versionsSummary } from '../../shared/update-summary.js';
+import { remoteSides, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -957,6 +957,18 @@ export class FleetWatcher {
     return this.sweepThenProject(inv, Date.now());
   }
 
+  /** Fix round 1 (F3/F4, D-3314 amended): true only when THIS sweep's outcomes are a real write — the row
+   *  was upserted, not merely marked unreachable, refused, or lost to a throw. `sweepInventory`'s outcome
+   *  order is fixed: `outcomes[0]` is always the server's own row (`sweepOwn`); `outcomes[1]`, present only
+   *  when `inv.fleet !== null` (remote mode), is the one fleet connection (`sweepFleet`). Local mode has no
+   *  fleet row to demand — the server row alone opens the gate. */
+  private sweptEnoughToDecide(inv: InventoryDeps, outcomes: readonly SweepOutcome[]): boolean {
+    const wasMeasured = (o: SweepOutcome | undefined): boolean =>
+      o !== undefined && (o.result === 'measured' || o.result === 'node-id-collision');
+    if (!wasMeasured(outcomes[0])) return false;
+    return inv.fleet === null || wasMeasured(outcomes[1]);
+  }
+
   /** One inventory run (design 2026-09-20 §9): the sweep, then the resolver over every live row and the
    *  server-role projection — so the file's `lease` is refreshed on the sweep's 60 s beat. Called ONLY from
    *  `runInventory()`, i.e. inside `inventoryNow()`'s single-flight promise, so a ready-triggered run and the
@@ -984,15 +996,20 @@ export class FleetWatcher {
     }
     const key = warn?.key ?? null;
     if (warn !== null && key !== this.lastProjectionWhy) {
-      console.warn(`update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
+      console.warn(`ccrc-server: update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
     this.lastProjectionWhy = key;
     // Plan W3 Task 3: the inventory run MEASURES what the nodes run, so it is where a release every node
     // already runs is marked instead of pushed (D-3294), where the first release after a
     // fresh install is decided at all (D-3300), and what opens the catalogue
-    // side's decisions in this process (D-3314).
-    this.inventorySwept = true;
-    this.pushRelease(now);
+    // side's decisions in this process — fix round 1 (F3/F4, D-3314 amended):
+    // `inventorySwept` opens only once THIS sweep actually rewrote what the push decides on — the server's
+    // own row written without a throw or refusal, AND (in remote mode) the fleet row measured by this
+    // process, never merely marked unreachable. A link-down sweep or a `sweepOwn` throw leaves it closed, so
+    // the direct call below — the same hazard `pushReleaseAfterPoll` guards for the catalogue lane — is
+    // skipped too, rather than deciding on rows this process never wrote.
+    if (this.sweptEnoughToDecide(inv, outcomes)) this.inventorySwept = true;
+    if (this.inventorySwept) this.pushRelease(now);
     return outcomes;
   }
 
@@ -1041,7 +1058,19 @@ export class FleetWatcher {
         return { did: 'skipped', why: 'nothing-to-notify' };
       }
       marked = coord.markReleaseNotified(n.tag, now);
-      summary = versionsSummary(nodes.filter((r) => r.measuredAt !== null && r.stampRead === 'ok').map((r) => ({ role: r.role, version: r.currentVersion })));
+      // Fix round 1 (F1/F14, D-3313/D-3316): sides are picked from EVERY live row — filtering first is what
+      // let a `both` server row's own version stand in for a fleet nobody measured (the reviewer's exact
+      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — measured this
+      // sweep, its stamp read, and (D-3316) reachable — so an occupying row that fails it renders as a dash,
+      // never its stale value, but still blocks another row from falling back into its side. On a remote
+      // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
+      // is both (D-3301).
+      const summaryRows = nodes.map((r) => ({
+        role: r.role, version: r.currentVersion,
+        stated: r.measuredAt !== null && r.stampRead === 'ok' && r.reachable,
+      }));
+      const sides = this.deps.cfg.fleetMode === 'remote' ? remoteSides(summaryRows) : versionSides(summaryRows);
+      summary = summaryFromSides(sides);
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);

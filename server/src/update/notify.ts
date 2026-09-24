@@ -18,8 +18,11 @@ import { eligibleTags, type EligibilityRow } from './resolve.js';
  *  notification group's one column. `ReleaseRow` (store.ts) satisfies it. */
 export interface NotifyReleaseRow extends EligibilityRow { notifiedAt: number | null }
 /** A live inventory row as the notifier reads it. `NodeRow` (store.ts) satisfies
- *  it. `measuredAt: null` = never measured (a `markUnreachable` placeholder). */
-export interface NotifyNodeRow { measuredAt: number | null; currentVersion: string | null }
+ *  it. `measuredAt: null` = never measured (a `markUnreachable` placeholder).
+ *  `reachable` — fix round 1 (F14, D-3316) — is false while a connection is down; `markUnreachable` keeps
+ *  the row's last `measuredAt`/`currentVersion` unchanged, so an unreachable row is still `measured`, but its
+ *  cached version is unconfirmed. */
+export interface NotifyNodeRow { measuredAt: number | null; currentVersion: string | null; reachable: boolean }
 export interface NotifyInput {
   /** update_intent[FLEET_SCOPE] — the ONE row that governs the release push; null = the seed row is gone → nothing */
   fleetIntent: { notify: NotifyMode; channel: UpdateChannel | null } | null;
@@ -48,11 +51,27 @@ function notifyChannel(notify: NotifyMode, fleetChannel: UpdateChannel | null): 
   }
 }
 
+/** Fix round 1 (F12, D-3317): the newest tag any row has ever been marked notified for — scanned over
+ *  EVERY row, whether or not it is still eligible on any channel (a yanked or bundle-dropped row keeps its
+ *  `notifiedAt`; `releases()` never clears it). null when nothing has ever been marked. */
+function lastAnnouncedTag(releases: readonly NotifyReleaseRow[]): string | null {
+  let best: string | null = null;
+  for (const r of releases) {
+    if (r.notifiedAt === null || !isReleaseTag(r.tag)) continue;
+    if (best === null || isNewerTag(r.tag, best)) best = r.tag;
+  }
+  return best;
+}
+
 /** null = nothing to decide, nothing to mark: notify 'off'; no '*' row; notify 'channel' with a NULL channel
- *  (an unknown token, D-3181); no eligible release on the target channel; the candidate's notifiedAt is set;
- *  or no node has measuredAt !== null (D-3300).
- *  Candidate = eligibleTags(releases, target, ∅)[0] — ONLY the newest; an older unnotified tag is never announced.
- *  push = some node with measuredAt !== null has currentVersion null, not a tag, or older than the candidate. */
+ *  (an unknown token, D-3181); no eligible release on the target channel; no node has measuredAt !== null
+ *  (D-3300); or the candidate is not NEWER than the newest tag ever announced (D-3317 — this subsumes the
+ *  plain self-check: a candidate equal to the last announced tag is never newer than itself).
+ *  Candidate = eligibleTags(releases, target, ∅)[0] — ONLY the newest; an older tag is never announced once a
+ *  newer one has been, even if that newer one is later yanked (D-3317: the silencing survives a yank).
+ *  push = some MEASURED node is not reachable, or has currentVersion null, not a tag, or older than the
+ *  candidate (D-3294; D-3316: an unreachable node's cached version is unconfirmed, so it never counts as
+ *  "already on vX" and can never be the fact that suppresses a push). */
 export function releaseToNotify(input: NotifyInput): ReleaseNotification | null {
   if (input.fleetIntent === null) return null;
   const channel = notifyChannel(input.fleetIntent.notify, input.fleetIntent.channel);
@@ -64,13 +83,13 @@ export function releaseToNotify(input: NotifyInput): ReleaseNotification | null 
   if (measured.length === 0) return null;
   const tag = eligibleTags(input.releases, channel, NO_REFUSALS)[0];
   if (tag === undefined) return null;
-  // Only the newest is ever a candidate, so a tag already announced silences
-  // every older one — an operator who heard of v0.0.10 needs no v0.0.9 push.
-  if (input.releases.find((r) => r.tag === tag)?.notifiedAt !== null) return null;
-  // D-3294: a release every measured node already runs (or
-  // runs past) is marked, not pushed. Unversioned and unreadable versions are
-  // behind by definition — nothing proves them current.
-  const push = measured.some((n) => !isReleaseTag(n.currentVersion) || isNewerTag(tag, n.currentVersion));
+  const announced = lastAnnouncedTag(input.releases);
+  if (announced !== null && !isNewerTag(tag, announced)) return null;
+  // D-3294/D-3316: a release every measured, REACHABLE node already runs (or runs past) is marked, not
+  // pushed. Unversioned and unreadable versions are behind by definition — nothing proves them current — and
+  // neither is an unreachable one: it is treated as not-current regardless of its cached value, exactly like
+  // a stamp that never read, so it cannot be the sole reason a fleet reads as already up to date.
+  const push = measured.some((n) => !n.reachable || !isReleaseTag(n.currentVersion) || isNewerTag(tag, n.currentVersion));
   return { tag, channel, push };
 }
 

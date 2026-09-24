@@ -35,7 +35,7 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
 import { useFleetHealth } from './useFleetHealth';
-import { remoteSides } from './BuildLine';
+import { remoteSides } from '../../../shared/update-summary';
 import './fleet.css';
 
 const POLL_MS = 15_000;

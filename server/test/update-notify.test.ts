@@ -27,9 +27,9 @@ const intentRowFits: [UpdateIntentRow] extends [NonNullable<NotifyInput['fleetIn
 
 const rel = (tag: string, channel: UpdateChannel | null = 'stable', o: Partial<NotifyReleaseRow> = {}): NotifyReleaseRow =>
   ({ tag, channel, bundleListed: true, yanked: false, notifiedAt: null, ...o });
-const measured = (currentVersion: string | null): NotifyNodeRow => ({ measuredAt: T0, currentVersion });
+const measured = (currentVersion: string | null, reachable = true): NotifyNodeRow => ({ measuredAt: T0, currentVersion, reachable });
 /** `markUnreachable`'s label placeholder: a row, never measured. */
-const PLACEHOLDER: NotifyNodeRow = { measuredAt: null, currentVersion: null };
+const PLACEHOLDER: NotifyNodeRow = { measuredAt: null, currentVersion: null, reachable: false };
 const fleet = (notify: NotifyMode, channel: UpdateChannel | null = 'stable'): NotifyInput['fleetIntent'] => ({ notify, channel });
 /** The seed intent ('*': stable, notify channel), one stable release, a fleet and a server both behind it. */
 const input = (o: Partial<NotifyInput> = {}): NotifyInput => ({
@@ -144,6 +144,31 @@ describe('push, or mark only (D-3294, D-3300)', () => {
   it('a placeholder row is not an unversioned node — beside a current measured node the tag is marked, not pushed', () => {
     expect(releaseToNotify(input({ nodes: [measured('v0.0.9'), PLACEHOLDER] })))
       .toEqual({ tag: 'v0.0.9', channel: 'stable', push: false });
+  });
+
+  // Fix round 1 (F14, D-3316): an unreachable node's cached version is unconfirmed, so it never counts as
+  // "already on vX" — it must not be the fact that suppresses a push.
+  it('an unreachable node never counts as already on the candidate, even one whose cached version reads current', () => {
+    expect(releaseToNotify(input({ nodes: [measured('v0.0.9'), measured('v0.0.9', false)] })))
+      .toEqual({ tag: 'v0.0.9', channel: 'stable', push: true });
+  });
+
+  it('a sole unreachable node still pushes — the fleet is not read as up to date on its say alone', () => {
+    expect(releaseToNotify(input({ nodes: [measured('v0.0.9', false)] })))
+      .toEqual({ tag: 'v0.0.9', channel: 'stable', push: true });
+  });
+});
+
+describe('the silencing survives a yank (F12, D-3317)', () => {
+  it('v0.0.9 announced then yanked: an unmarked, older v0.0.8 pushes nothing', () => {
+    const releases = [rel('v0.0.9', 'stable', { notifiedAt: T0, yanked: true }), rel('v0.0.8')];
+    expect(releaseToNotify(input({ releases }))).toBeNull();
+  });
+
+  it('v0.0.9 announced then yanked: a newer v0.0.10, never marked, still pushes normally', () => {
+    const releases = [rel('v0.0.9', 'stable', { notifiedAt: T0, yanked: true }), rel('v0.0.10')];
+    expect(releaseToNotify(input({ releases })))
+      .toEqual({ tag: 'v0.0.10', channel: 'stable', push: true });
   });
 });
 

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import type { BuildInfo } from '../../../shared/buildinfo';
-import { versionSides } from '../../../shared/update-summary';
+import { remoteSides } from '../../../shared/update-summary';
 import { pendingTag } from './useUpdatesView';
 import './fleet.css';
 
@@ -28,25 +28,6 @@ function side(label: string, b: BuildInfo | null, next: string | null): ReactNod
       {label} {name}{dirty ? ' dirty' : ''}{affix}
     </span>
   );
-}
-
-/**
- * The two sides of a REMOTE fleet, read off the node inventory
- * (centralised-update design 2026-09-20 §14) — the ONE place BuildLine and
- * FleetHostBanner's skew arm learn which row is which box, so the two cannot
- * disagree on one screen.
- *
- * `versionSides` (shared/update-summary.ts) is the side picker; this adds one
- * rule (D-3313): a fleet side that IS the
- * server row — versionSides' fallback for a lone `both` row, which is right in
- * local mode, where one box is both — is NULL here. Both readers render only
- * on a remote fleet, where a `both` row is this box and never the fleet box;
- * the server's own agreement word (`health.build`, from W2's `derivedBuilds`)
- * reads that row the same way, so the names never contradict the trigger.
- */
-export function remoteSides(nodes: readonly NodeWire[]): { fleet: NodeWire | null; server: NodeWire | null } {
-  const { fleet, server } = versionSides(nodes);
-  return { fleet: fleet === server ? null : fleet, server };
 }
 
 /** Always visible at the foot of FleetScreen (spec §6). Reads the node

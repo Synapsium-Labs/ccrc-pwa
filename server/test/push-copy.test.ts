@@ -23,6 +23,13 @@ import type { CataloguePoller } from '../src/update/catalogue.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
+import type { FleetState } from '../src/fleetstate.js';
+
+/** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
+ *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
+ *  file from importing across test files). */
+const fleetState = (over: Partial<FleetState> = {}): FleetState =>
+  ({ connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, ...over });
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -138,6 +145,9 @@ function watcher(opts: {
   /** Plan W3 Task 3: an EXISTING fixture home. A second watcher over the same
    *  home opens a second connection to the same `coord.db` — a restart. */
   home?: string;
+  /** Item 3, fix round 1 (F3/F4): a remote-mode `fleetState` double, so a test can drive the agent link
+   *  down (or later flip it up) and exercise `inventorySwept`'s gate for real, through `inventoryNow()`. */
+  fleetState?: FleetState;
 }): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore; w: FleetWatcher } {
   const home = opts.home ?? mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
@@ -152,6 +162,7 @@ function watcher(opts: {
     coord,
     ...(opts.io ? { io: opts.io } : {}),
     ...(opts.catalogue ? { catalogue: opts.catalogue } : {}),
+    ...(opts.fleetState ? { fleetState: opts.fleetState } : {}),
   };
   // The state cache stays inside the fixture home: without the fourth
   // argument the constructor falls back to `defaultCachePath()`, the LIVE
@@ -1237,7 +1248,7 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
     expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     await vi.waitFor(() => expect(warn.mock.calls.some(([l]) =>
-      String(l).includes('release push for v0.0.9 did not send'))).toBe(true));
+      String(l).startsWith('ccrc-server: ') && String(l).includes('release push for v0.0.9 did not send'))).toBe(true));
     expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
     expect(calls).toBe(1);
   });
@@ -1262,7 +1273,9 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     expect(a).toMatchObject({ did: 'failed' });
     expect(b).toEqual(a);
     expect(sent).toEqual([]);
-    expect(warn.mock.calls.filter(([l]) => String(l).includes('the release push was not decided'))).toHaveLength(1);
+    const decisionWarns = warn.mock.calls.filter(([l]) => String(l).includes('the release push was not decided'));
+    expect(decisionWarns).toHaveLength(1);
+    expect(String(decisionWarns[0]![0])).toMatch(/^ccrc-server: /);   // item 10, F10: the prefix is pinned, not just present
   });
 
   it("a fleet-role process neither sends nor marks — push subscriptions are the server box's", () => {
@@ -1382,5 +1395,84 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     await w.w.inventoryNow();
     expect(sent).toEqual([]);
     expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F3, D-3314 amended): `inventorySwept` opens only on a sweep that actually rewrote what the
+  // push decides on. A link-down sweep only marks the fleet row unreachable — it does not remeasure it — so
+  // this must not count, either for the flag or for the DIRECT `pushRelease` call `sweepThenProject` makes at
+  // its own end (the same hazard `pushReleaseAfterPoll` guards for the catalogue lane).
+  it("a remote-mode boot with the agent link down never pushes on the previous process's rows — a later sweep that measures the link does (F3, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const state = fleetState({ connected: false, downSince: T });
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote', role: 'server' }, fleetState: state });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's fleet row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    writeStamp(w.home, 'v0.0.9');
+    await w.w.inventoryNow();   // the link is down: sweepFleet only marks it unreachable, never remeasures
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The link recovers: the next sweep measures the fleet row for real, and this process finally decides.
+    state.connected = true;
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F4, D-3314 amended): a `sweepOwn` throw (a locked/corrupt coord.db, most likely) must not
+  // open the flag either — its premise, "this sweep rewrote the rows", is not measured.
+  it("a boot whose sweepOwn throws also leaves inventorySwept closed — pushRelease is not tried on the previous process's row (F4, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement').mockImplementationOnce(() => { throw new Error('boom'); });
+    await w.w.inventoryNow();   // sweepOwn's own write throws, caught as an 'error' outcome
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+    warn.mockRestore();
+  });
+
+  // Fix round 1 (F1, D-3313 via remoteSides, moved to L0): on a REMOTE fleet, deciding sides from a
+  // pre-filtered row set is what let a `both` server row's own version stand in for a fleet nobody measured.
+  // The reviewer's exact rows: a server row recorded `both`, and a separate fleet row whose stamp did not read.
+  it('on a remote fleet, a server row recorded as both never states a fleet version nobody measured (F1)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // The narrower D-3313 case: no separate fleet row exists AT ALL, so `versionSides`' own `both`-row fallback
+  // is what would fire (a real fleet-role row's mere presence, above, already blocks the fallback regardless
+  // of which side-picker runs — this is the case that needs `remoteSides` specifically).
+  it('on a remote fleet with no fleet row at all, a lone both row never lends its version to the fleet side (D-3313)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // Fix round 1 (F14, D-3316): "unreachable is not current" binds the push body too. An unreachable fleet
+  // row carrying an old version does not state its version in the push body, and does not count as current
+  // in the decision — it is not the fact that suppresses the push.
+  it('an unreachable fleet row carrying an old version does not state its version, and is not treated as current (F14, D-3316)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.markUnreachable(FLEET_LABEL, 'fleet', T + 1).ok).toBe(true);   // the connection then drops
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });   // never suppressed
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
   });
 });

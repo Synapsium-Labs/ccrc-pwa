@@ -2,7 +2,8 @@
 // the update banner both say what the nodes run through `versionsSummary`, so both forms are pinned here once.
 import { describe, it, expect } from 'vitest';
 import {
-  MISSING_SIDE, UNVERSIONED_WORD, sideVersion, versionSides, versionsSummary, type SummaryRow,
+  MISSING_SIDE, UNVERSIONED_WORD, remoteSides, sideVersion, summaryFromSides, versionSides, versionsSummary,
+  type SummaryRow,
 } from '../../shared/update-summary.js';
 
 const row = (role: string | null, version: string | null): SummaryRow => ({ role, version });
@@ -61,5 +62,53 @@ describe('versionSides and sideVersion', () => {
     expect(sideVersion(row('fleet', null))).toBe(UNVERSIONED_WORD);
     expect(sideVersion(row('fleet', 'v0.0.10'))).toBe('v0.0.10');
     expect([MISSING_SIDE, UNVERSIONED_WORD]).toEqual(['—', 'unversioned']);
+  });
+});
+
+// Fix round 1 (item 1, D-3313): `remoteSides` moved here from `pwa/src/fleet/BuildLine.tsx` so the server
+// can call it too. `single-definition.test.ts` sees only this one holder now.
+describe('remoteSides — versionSides for a remote fleet, moved to L0 (D-3313)', () => {
+  it('a both-role row is this box, never the fleet box — the fleet side comes back null', () => {
+    const b = row('both', 'v0.0.7');
+    expect(remoteSides([b])).toEqual({ fleet: null, server: b });
+  });
+
+  it('a real fleet row still occupies the fleet side, beside a both server row', () => {
+    const b = row('both', 'v0.0.7'); const f = row('fleet', 'v0.0.9');
+    expect(remoteSides([b, f])).toEqual({ fleet: f, server: b });
+  });
+
+  it('server = fleet = null on empty input, same as versionSides', () => {
+    expect(remoteSides([])).toEqual({ fleet: null, server: null });
+  });
+});
+
+// Fix round 1 (item 1/item 4, F1/F14, D-3316): `stated` — an occupying row that does not vouch for its
+// version (unmeasured this run, unread stamp, or unreachable) renders as the dash, never as its stale value,
+// but still blocks another row from falling back into its side.
+describe('stated — an occupied side that does not vouch for its version (D-3316)', () => {
+  const statedRow = (role: string | null, version: string | null, stated: boolean): SummaryRow => ({ role, version, stated });
+
+  it('an unstated row reads as the dash, not its version — sideVersion', () => {
+    expect(sideVersion(statedRow('fleet', 'v0.0.7', false))).toBe(MISSING_SIDE);
+    expect(sideVersion(statedRow('fleet', 'v0.0.7', true))).toBe('v0.0.7');
+  });
+
+  it('an omitted `stated` defaults to stated — every existing caller and row is unaffected', () => {
+    expect(sideVersion(row('fleet', 'v0.0.7'))).toBe('v0.0.7');
+  });
+
+  it("an unstated occupant still blocks the OTHER side's fallback — never a version nobody vouches for", () => {
+    const both = row('both', 'v0.0.7');
+    const unstatedFleet = statedRow('fleet', null, false);
+    // The fleet slot is occupied by the unstated row, not the `both` fallback — remoteSides never nulls it,
+    // because it is not the SAME row as server, but summaryFromSides renders it as the dash.
+    expect(summaryFromSides(remoteSides([both, unstatedFleet]))).toBe('fleet — · server v0.0.7');
+  });
+
+  it('two stated, agreeing sides still read as one clause; one unstated side never "agrees"', () => {
+    const server = statedRow('server', 'v0.0.7', true);
+    expect(summaryFromSides({ fleet: statedRow('fleet', 'v0.0.7', true), server })).toBe('fleet and server are on v0.0.7');
+    expect(summaryFromSides({ fleet: statedRow('fleet', 'v0.0.7', false), server })).toBe('fleet — · server v0.0.7');
   });
 });
