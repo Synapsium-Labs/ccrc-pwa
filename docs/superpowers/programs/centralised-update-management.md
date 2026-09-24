@@ -25,7 +25,7 @@ numbers; the spec wave each one implements is named beside it.
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **MERGED** `b501698a` (PR #176, run 128 done), released as v0.0.23 (dev); after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **awaiting review** (run 130, `ccrc-pwa-clear-river`): wave-done at `432e2731`, PR #184, 13/13 items, one reserve number spent (3315); review run 156 opened; its 11:24 dispatch lost the cap slot to another project's coordinator, and a re-measuring retry loop waits for the next age-out (14:09 UTC); plan `d638c602` + re-points `08cecd10`, `733d295a` |
-| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **awaiting review** (run 129, `ccrc-pwa-keen-meadow`): wave-done at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
+| 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **fix round 1 of 1 full** (run 129, `ccrc-pwa-keen-meadow`), sent 2026-09-24 14:25 UTC on review 155 (`rulings-run129-fix1.md`); wave-done was at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
@@ -392,6 +392,33 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     They conflict with EACH OTHER in `README.md` only. Whichever merges second merges `main` and resolves it; the
     worker's stated resolution keeps W4's Not-yet sentence, and places W3's paragraph after W4's trust-roots paragraph.
   - The worker's parked follow-ups and plan-text rulings are held until review 156 returns, out of the held-out brief.
+- **2026-09-24 14:25 UTC — review run 155 (wave 4 at `05b9ac4f`): one full fix round, bounded now.**
+  - 7 lenses, 136 agents: 43 findings raised, 36 survived. R1 is a refutation the reviewer set aside on a false
+    premise; I re-measured it. The refuters were not pointed at the ledger, and my carried constraint is there.
+  - Important:
+    - R1: the README says `CCRC_SIGSTORE_TRUSTED_ROOT` overrides the root "by hand only", while the verifier reads
+      the environment unconditionally. This was the plan's prescribed text, so the miss is mine.
+    - C1: a false "REVERTED (arm 2)" after a same-tag `--force`.
+    - C31: a detached rollback wedges `update.json` at `queued`.
+    - C34: rollout blames doctor for a floor-write death (M1 one layer up).
+  - Rulings:
+    - C1: `previous` names the last DIFFERENT release, so a same-tag reinstall leaves it alone, and arm 2 is
+      skipped for a same-tag run.
+    - C16: `--from rollback|watchdog` are caller words, like `restore` (spec §9's "is the caller"), so a hand-typed
+      one is refused.
+    - C28: a converged no-op precedes the floor check.
+    - C29: a killed watchdog rollback is never retried.
+  - The worker's eight deferred questions: Q1 and Q3 accepted as designed; the other six ruled into fixes.
+  - Carried:
+    - C24 (plaintext box token, one of four copies) is reported to the operator as one class.
+    - C26 and C27, and the floor-refusal wording, go to wave 6's new Task 8A (`edc98508`).
+    - C33 (node clock vs server clock) goes to wave 5 as a Global Constraint and a Task 8A behaviour item
+      (`fddf8370`), ruled "fresh by change, not by clock".
+  - **The bar, committed before any result:** the next review is scoped to this round's delta. It sends back only a
+    behaviour defect that the delta introduces, reachable on a box whose config ccrc wrote, and that does one of
+    four things: leaves a box unable to install or roll back its next release; reports a restore, revert or success
+    that did not happen; leaks a secret; or moves a box below its floor without `--downgrade`. That is at most one
+    narrow round; after its scoped review, #181 merges.
 
 ## Carried constraints
 
