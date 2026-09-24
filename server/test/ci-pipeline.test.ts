@@ -617,12 +617,25 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     expect(b.match(/verdict=green/g), 'verdict=green is written in one place').toHaveLength(1);
   });
 
-  it('a shard runs exactly its list, through vitest.select.config.ts', () => {
+  it('a shard runs exactly its list, through vitest.select.config.ts — the whole script, nothing appended or commented out', () => {
+    // Exact, as the trace shard's Trace step is (final review FR-3): a `toContain` over the job block stayed green
+    // with `|| true` appended, with the run replaced by a no-op and the old line kept as a comment, and with
+    // `continue-on-error: true` on the step (all three measured).
+    const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
     const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}';
+    expect(runScript(step(job('server-shard'), 'Test'))).toBe(
+      `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
+    expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
-      expect(job(id), `${id}: the list file`).toContain(`echo "$FILES" | tr ' ' '\\n' > "$RUNNER_TEMP/tests.txt"`);
-      expect(job(id), `${id}: the exact-list run`).toContain(run);
+      const st = step(job(id), 'Test');
+      expect(st, `${id}: the Test step runs in server/`).toMatch(/^ {8}working-directory: server$/m);
+      // A failed shard must fail its job: no continue-on-error (on the step or the job), and the runner's own
+      // `bash -e` — no shell override on the step, and no `defaults:` on the job or the workflow.
+      expect(job(id), `${id}: continue-on-error`).not.toMatch(/continue-on-error/);
+      expect(st, `${id}: a shell override on the Test step`).not.toMatch(/^ {8}shell:/m);
+      expect(job(id), `${id}: job-level defaults`).not.toMatch(/^ {4}defaults:/m);
     }
+    expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
   });
 
   it('every server-running job installs through server-deps, and the Linux arm installs strace', () => {
