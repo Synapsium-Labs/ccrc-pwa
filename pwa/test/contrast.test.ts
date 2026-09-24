@@ -1841,3 +1841,52 @@ describe('the resume door is measured, not left in the blind spot', () => {
     }
   });
 });
+
+// ── centralised update management W3, Task 6: the /settings shell and its door ──
+// D-2689 froze the uncovered census, so every colour rule this task adds is
+// REGISTERED (design/audit.mjs) rather than left to join it. The shell's three
+// sit on .shell-detail, which paints nothing: one ground, --bg-page. The door
+// has two — the page on a phone, .shell-nav's --bg-surface in the desktop
+// sidebar — and a registration is one layer stack, so it is registered on the
+// page (the .pool-epoch-lag entry's ground, same header) and the SECOND ground
+// is measured here off the rule's own declared ink, so a retint re-measures
+// both. `.accounts-door` beside it stays in the census as pre-existing debt,
+// pinned above; this is not a licence to move it and not a copy of its choice.
+describe('the /settings shell and its door are measured, not left in the blind spot', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .settings-back'],
+    ['fleet.css .settings-back:active'],
+    ['fleet.css .settings-title'],
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s is registered on the page and measured in both themes', (key) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
+    expect(report.uncovered).not.toContain(key);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each([
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s also clears AA on the desktop sidebar it sits on', (key) => {
+    // Measured at d759c914 with this task's rules: --ink-secondary 8.67 dark /
+    // 7.41 light, --ink-primary 15.68 / 16.58 on --bg-surface.
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-surface)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

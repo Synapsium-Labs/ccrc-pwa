@@ -2941,3 +2941,69 @@ button.proj-card-pool::before {
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 .hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+
+/* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
+   The AccountsScreen skeleton, class for class. `.settings-screen` paints NO
+   background of its own, and neither does `.shell-detail`, so every rule
+   here that sets a colour sits on body's --bg-page and is registered on that
+   ground in design/audit.mjs's INHERITED_GROUNDS (the `.mail-chip` /
+   `.pool-epoch-lag` reasoning) — the uncovered census is frozen (D-2689).
+   Tasks 7-10 append the screen's sections after this block. */
+.settings-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
+.settings-head { display: flex; align-items: center; gap: var(--sp-2); }
+/* Same visual contract as `.accounts-back` (and chat.css's `.chat-back`) — a
+   rule of its own rather than a shared class, for the reason `.accounts-back`
+   gives: two screens with one shape are not one thing. */
+.settings-back {
+  flex: none;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.settings-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.settings-title {
+  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-primary);
+}
+/* — The door to /settings, in the fleet header beside `.accounts-door` —
+   The `.accounts-door` box exactly: the 44px floor, no background, the same
+   ink as its neighbours, a TEXT label (FleetScreen.tsx says why). Its ground
+   is two — the page on a phone, `.shell-nav`'s --bg-surface in the desktop
+   sidebar — and unlike `.accounts-door` it is REGISTERED, on the page
+   (design/audit.mjs; the `.pool-epoch-lag` entry, same header, is the
+   precedent), because the frozen census admits no new identity; the sidebar
+   ground is measured off this rule's own ink in contrast.test.ts, so neither
+   ground is claimed without a number (D-3304). */
+.settings-door {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: var(--tap-min); padding: 0 var(--sp-1);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.settings-door:active { transform: scale(0.88); color: var(--ink-primary); }
+/* The glyph is decoration beside the word — aria-hidden in the markup, sized
+   in the UI font, as `.accounts-door-glyph` is. */
+.settings-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+/* THE HEAD'S RIGHT GROUP WRAPS (D-3303). The width
+   note above `.fleet-runs-line` is a Chromium measurement: the group's four
+   steady-state items need 244px of min-content and have 294px at 390px, so
+   ~38px is left once a fifth item's 12px gap is paid. The labelled door —
+   glyph, "Settings" in 11px mono, padding: ~80px by the tokens, an ESTIMATE
+   and not a measurement — cannot fit that, and nor could a glyph-only door at
+   the 44px floor. Without this rule the head would push the fleet screen past
+   the viewport, the defect #116 shipped. With it, a group that does not fit
+   breaks onto a second right-aligned line, and where it fits nothing moves.
+   The descendant form out-specifies `.fleet-head-right` (0,2,0 against
+   0,1,0), so it wins from any position — the cascade trap documented at the
+   class chooser. No row gap: every control on the group is already a 44px
+   box. */
+.fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }

@@ -2604,3 +2604,25 @@ describe('the programme tree on the fleet screen', () => {
     expect(document.querySelector('.proj-crossing')).toBeNull();
   });
 });
+
+// ── centralised update management W3, Task 6: the door to /settings ─────────
+//
+// The `.accounts-door` pin's twin (auth-door.test.tsx:174-187): the door is
+// only ever useful where it is mounted, so it is found INSIDE the screen that
+// hosts it, in the header's control cluster, with a visible word beside the
+// glyph — an icon-only gear would be as undiscoverable as the strip D-161
+// replaced. The file-level afterEach does not reset the route, so this
+// describe does, like `archived footer row` above.
+describe('the door to /settings (centralised update management §13)', () => {
+  afterEach(() => navigate('/'));
+
+  it('sits in the fleet header, says what it is, and routes to /settings', () => {
+    render(<FleetScreen store={makeStore()} />);
+    const door = screen.getByRole('button', { name: 'Settings — updates and notifications' });
+    expect(door.closest('.fleet-head-right')).not.toBeNull();
+    expect(door).toHaveClass('settings-door');
+    expect(door.textContent).toMatch(/settings/i);
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/settings');
+  });
+});

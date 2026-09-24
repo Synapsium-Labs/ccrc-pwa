@@ -565,6 +565,28 @@ export function FleetScreen({
             <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
             Account
           </button>
+          {/* THE DOOR TO /settings (centralised update management §13) — the
+              `.accounts-door` pattern directly above, for the argument its
+              comment makes: a glyph AND a short text label, because an
+              icon-only gear would be exactly as undiscoverable as the
+              AccountsStrip tap target that D-161 found was the only door to
+              /accounts. The accessible name says what is behind it — updates
+              and notifications — because "Settings" alone names no content;
+              it begins with the visible word, so a voice user saying what
+              they see still reaches it. Rendered unconditionally: a first-run
+              fleet with no sessions needs the screen as much as any. A fifth
+              item does not fit this group's measured width budget on a
+              phone, so the group now wraps rather than overflowing
+              (fleet.css, D-3303). */}
+          <button
+            type="button"
+            className="settings-door"
+            aria-label="Settings — updates and notifications"
+            onClick={() => navigate('/settings')}
+          >
+            <span className="settings-door-glyph" aria-hidden="true">⚙</span>
+            Settings
+          </button>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>

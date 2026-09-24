@@ -743,6 +743,27 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same .fleet ground as the base rule above. Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
   },
+  // ── centralised update management W3, Task 6: the /settings shell and its door ──
+  'fleet.css .settings-back': {
+    under: ['var(--bg-page)'],
+    why: "SettingsScreen's back chevron, in .settings-head inside .settings-screen inside .shell-detail — none of the three paints a background, so body's --bg-page (styles/base.css:111) is behind it, the .mail-chip reasoning. Its selector names no painted ancestor, so no route could ground it; .accounts-back, its twin, is grandfathered debt, and the frozen census admits no new identity (D-2689)",
+  },
+  'fleet.css .settings-back:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same chevron, same ground. Registered separately for the reason the .mail-chip[data-on] entry states: it overrides `color` directly, and grounding only the base rule would leave the state a tap confirms unmeasured',
+  },
+  'fleet.css .settings-title': {
+    under: ['var(--bg-page)'],
+    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground and the same reason as .settings-back",
+  },
+  'fleet.css .settings-door': {
+    under: ['var(--bg-page)'],
+    why: "the fleet header's door to /settings, in .fleet-head-right beside .accounts-door and .pool-epoch-lag. .fleet, .fleet-head and .fleet-head-right paint nothing, so on a phone the ground is body's --bg-page — the .pool-epoch-lag entry's ground and reasoning. On the desktop sidebar it is .shell-nav's --bg-surface instead, which one layer stack cannot also say; contrast.test.ts measures this rule's own ink on that second ground in both themes, so this registration is not the whole claim",
+  },
+  'fleet.css .settings-door:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same door, with the same two grounds and the same second measurement in contrast.test.ts; registered separately because it overrides `color` directly (the .mail-chip[data-on] reason)',
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────
