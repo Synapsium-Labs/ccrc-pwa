@@ -242,12 +242,17 @@ describe('ccd-update-sync: no node id, no request', () => {
 });
 
 describe('ccd-update-sync: no usable box token, no request (F3, fix round 1)', () => {
-  it('refuses when the token file exists but is not readable — curl never runs', () => {
+  it.skipIf(process.getuid?.() === 0)('refuses when the token file exists but is not readable — curl never runs', () => {
     const home = box('upd-sync-token-unreadable-');
-    chmodSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 0o000);
+    const tokenPath = join(home, '.cc-secrets', 'ccrc-mail.token');
+    chmodSync(tokenPath, 0o000);
     answer(home, intentDoc());
-    const r = sync(home);
-    chmodSync(join(home, '.cc-secrets', 'ccrc-mail.token'), 0o600);
+    let r: Run;
+    try {
+      r = sync(home);
+    } finally {
+      chmodSync(tokenPath, 0o600);
+    }
     expect(r.code).toBe(1);
     expect(r.stderr).toContain('ccd-update-sync: no readable box token at $HOME/.cc-secrets/ccrc-mail.token');
     expect(existsSync(join(home, 'curl.argv')), 'a request went out with an unreadable token').toBe(false);

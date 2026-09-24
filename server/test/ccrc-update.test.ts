@@ -3217,6 +3217,15 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(detachArgv(home), 'rc 3 was folded into "free"').toEqual([]);
   });
 
+  itLinux('a box with no flock on PATH refuses the detach with the flock sentence, not the busy or unmeasured one — no spawn, no report (rc-2 arm, mutation `2) ;;` must go RED)', () => {
+    const home = detachedBox('ccrc-update-detach-noflock-');
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0'], { PATH: pathWithoutFlock(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: flock \(util-linux\) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed$/m);
+    expect(existsSync(join(home, '.ccrc', 'update.json')), 'queued was written past a lock this box cannot probe').toBe(false);
+    expect(detachArgv(home), 'the rc-2 arm spawned anyway').toEqual([]);
+  });
+
   itLinux('the parent holds NO lock descriptor at the spawn: a child that lingers after the parent exits pins nothing (§18 "--detach precedes the lock")', () => {
     const home = detachedBox('ccrc-update-detach-nofd-');
     writeFileSync(join(home, 'fixture-systemd-run-linger'), '');
@@ -4725,6 +4734,24 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: update: --channel needs the control plane \(no projection resolves on this box\); use --to <tag>$/m);
     expect(r.stdout).not.toMatch(/unreachable/);
+  });
+
+  // The clock-failure guard (`ccd/ccrc:12934-12938`): without it, an empty
+  // `now="$(date +%s)"` reads as 0 in `(( now > 10#${vals[2]} ))`, so a lease
+  // that cannot be measured reads as PERMANENTLY in force rather than
+  // refusing — mutation `date() { :; }` must go RED here.
+  itLinux('an unmeasurable clock (date +%s answers nothing) reads unreadable, never "0 — every lease in force"', () => {
+    const home = managedFleetBox('ccrc-update-intent-clock-fail-');
+    plantIntent(home, intentDoc());
+    let r = sourcedCcrc(home,
+      'date() { :; }; _upd_intent_state; printf "%s|%s\\n" "$UPD_INTENT_STATE" "$UPD_INTENT_WHY"');
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe('unreadable|the clock did not answer: date +%s\n');
+    r = sourcedCcrc(home, 'date() { :; }; _upd_target "" ""; echo unreachable');
+    expect(r.code).toBe(1);
+    expect(r.stdout).not.toMatch(/unreachable/);
+    expect(r.stderr).toMatch(new RegExp(
+      `^ccrc: update: ~/\\.ccrc/update-intent is unreadable \\(the clock did not answer: date \\+%s\\) — ${esc(PULLER_REMEDY)}$`, 'm'));
   });
 });
 

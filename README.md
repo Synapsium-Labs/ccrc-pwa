@@ -471,7 +471,7 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
 **Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with `--channel`, `--no-gate`, `--detach`
-and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against the published release (a fixed-shape
+and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
 `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
 running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
 last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
@@ -598,7 +598,7 @@ Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted
 (`CCRC_SIGSTORE_TRUSTED_ROOT` overrides it, by hand only), and a box's first `install.sh --release`, which trusts
 the transport checksum alone — trust on first use — and places the verifier every later update runs. Doctor's
 `provenance` check PASSes, naming the next step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a
-checkout install, that first install, or `--allow-unsigned`); the next `ccrc update` verifies and clears it.
+checkout install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made

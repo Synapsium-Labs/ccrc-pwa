@@ -2802,6 +2802,25 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(rcNone).toBeLessThanOrEqual(254);
   });
 
+  it('the watchdog unit PREPENDS ~/.local/bin to the PATH it inherits, never REPLACES it (D-3282)', () => {
+    // `ccrc.service` (ExecStart=/usr/bin/env node …) finds `node` through the
+    // user manager's PATH — systemd defaults plus every environment.d
+    // fragment (e.g. /snap/bin). A bare `Environment=PATH=…` on this unit
+    // would REPLACE that PATH rather than extend it, so on a box whose node
+    // is reachable only through one of those fragments, the rollback this
+    // unit's one real act runs (`ccrc rollback --from watchdog`, a whole
+    // `ccrc update`) would die at its own node preflight — silently
+    // disabling the watchdog on exactly the boxes whose layout differs from
+    // the four hard-coded directories.
+    const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-update-watchdog.service'), 'utf8');
+    const lines = unit.split('\n');
+    expect(lines.some((l) => l.startsWith('Environment=PATH='))).toBe(false);
+    const execStart = lines.filter((l) => l.startsWith('ExecStart='));
+    expect(execStart).toEqual([
+      `ExecStart=/bin/sh -c 'PATH="%h/.local/bin:$$PATH" exec %h/.local/bin/ccrc watchdog'`,
+    ]);
+  });
+
   it('fails the install when the started service does not stay up', () => {
     // `systemctl enable --now` returns the moment systemd FORKS, which is the
     // whole reason `deploy/verify-service.sh` exists: a server that throws
