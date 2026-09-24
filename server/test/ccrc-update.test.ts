@@ -6509,6 +6509,36 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     } finally { release(holder); }
   });
 
+  // Review fix round 1, M7: 150s (above) reds a 3x mutation but tolerates
+  // ANY multiplier up to 2.98x. This pair binds the threshold EXACTLY at
+  // 2x a 60s deadline: 119s (just under 120s) must NOT be wedged, 121s
+  // (just past) MUST be.
+  itLinux('a holder\'s report at 119s (just UNDER 2x a 60s deadline) is NOT wedged; 121s (just past) IS — the threshold binds at exactly 2x (review fix round 1 M7)', async () => {
+    const notWedgedHome = watchBox('ccrc-watchdog-wedged-119-');
+    report(notWedgedHome, { phase: 'installing', ageS: 119, pid: 4321, from: 'cli' });
+    writeFileSync(join(notWedgedHome, 'fixture-unit-state'), 'failed\n');
+    const holder1 = await holdLock(notWedgedHome);
+    try {
+      const r = runWatchdog(notWedgedHome);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toMatch(
+        /^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 119s old; not acting while it lives$/m);
+    } finally { release(holder1); }
+
+    const wedgedHome = watchBox('ccrc-watchdog-wedged-121-');
+    const was = report(wedgedHome, { phase: 'installing', ageS: 121, pid: 4321, from: 'cli' });
+    writeFileSync(join(wedgedHome, 'fixture-unit-state'), 'failed\n');
+    const holder2 = await holdLock(wedgedHome);
+    try {
+      const r = runWatchdog(wedgedHome);
+      expect(r.code, r.stderr).toBe(0);
+      const now = readReport(wedgedHome);
+      expect(now.phase).toBe('failed');
+      expect(now.detail).toBe(`watchdog: updater pid 4321 wedged holding ~/.ccrc/update.lock since ${String(was.updatedAt)}`);
+      expect(r.stdout).toMatch(/recorded as wedged; nothing was reverted$/m);
+    } finally { release(holder2); }
+  });
+
   itLinux('a lock that cannot be MEASURED is neither a live holder nor a free lock — exit 0 and the one sentence, nothing probed, nothing rewritten (ruling R16, D-3250)', () => {
     // Both of `_upd_lock_probe`'s rc-3 conditions (Task 2), on a report that
     // is past TWICE the deadline and a box whose probe would fail — so folding
