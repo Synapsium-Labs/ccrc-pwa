@@ -90,7 +90,7 @@ Five more, found by the plan's adversarial review (each measured on a prototype 
 Measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc` (`origin/main` `a3a93b41` plus the two approved specs and the programme ledgers).
 
 1. **The spec's "existing redrive fallback runs in place" types nothing for a waiting session.** `_redrive_after_spawn` types `RESUME_PROMPT` only while `_transcript_stalled_pair` says the transcript's newest real turn is the unsubmitted resume pair (`Continue from where you left off.` + synthetic `No response requested.`). A session waiting on a limit banner has the banner (or a later turn) newest, so the fallback stands down on its first check, silently (`fromswap 0`). Measured: Task 3's "GRACE after the reset with no newer row" case records zero `tmux send-keys`. Called anyway — through its own gate, unchanged — because §6 forbids any keystroke outside that fallback's conditions.
-2. **Hence the near wait requires an ARMED auto-continue.** A STALLED session (auto-resume off, re-arm cap hit, a human's Esc) has nothing that re-sends its turn at the reset and, by finding 1, nothing ccd may type; a wait would park it idle on an account that has reset. Mechanism 5 names the cost D-2236 pays as "the wait for one whose reset is minutes away" — the session Claude Code continues itself — and rule 2 says the wait "leaves Claude Code's armed auto-continue alone". So `_rescue_policy` enters a near wait only when `_pane_auto_continue_armed` holds on the tick's pane; a stalled session is rescued as today. Armed panes are current on this fleet: `swap.log` carries `compact-skip … auto-continue` lines every day 2026-09-09..09-23 (3 on 09-23). **The same reasoning governs how a wait ENDS at its reset** (the review's resolution of the spec gap the orchestrator left open): at `R + RESCUE_WAIT_GRACE` a wait ends in place and holds on that reset only while the pane is ARMED. A STALLED pane is rescued as today — a near or chain wait ends `turned` and the tick proceeds to a swap to a target with room (skipping the just-left accounts), and a no-room wait stays open and ends in a swap the moment a target gains room, which is today's strand. Today (measured on unmodified `ccd/ccd`) a stalled session on a reset account idles only until ANOTHER target has room: the forced `_swap_target` never offers the current account (its walk skips `cur`, its home-stay branch needs `-z "$force"`), and `cmd_swap` refuses target == cur. That swap's `--resume` spawn is the only re-send path that types nothing but the existing constant (`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, else `RESUME_PROMPT` through `_redrive_after_spawn`'s own gate). `RESUME_PROMPT` cannot be typed in place: it tells the model ccd restarted the session and its background work "is gone", which would be false. Recorded in `D-3498`'s definition; the residual — a stalled session whose own account is the only one with room — is in "Open questions for the operator".
+2. **Hence the near wait requires an ARMED auto-continue.** A STALLED session (auto-resume off, re-arm cap hit, a human's Esc) has nothing that re-sends its turn at the reset and, by finding 1, nothing ccd may type; a wait would park it idle on an account that has reset. Mechanism 5 names the cost D-2236 pays as "the wait for one whose reset is minutes away" — the session Claude Code continues itself — and rule 2 says the wait "leaves Claude Code's armed auto-continue alone". So `_rescue_policy` enters a near wait only when `_pane_auto_continue_armed` holds on the tick's pane; a stalled session is rescued as today. Armed panes are current on this fleet: `swap.log` carries `compact-skip … auto-continue` lines every day 2026-09-09..09-23 (3 on 09-23). **The same reasoning governs how a wait ENDS at its reset** (the review's resolution of the spec gap the orchestrator left open): at `R + RESCUE_WAIT_GRACE` a wait ends in place and holds on that reset only while the pane is ARMED. A STALLED pane is rescued as today — a near or chain wait ends `turned` and the tick proceeds to a swap to a target with room (skipping the just-left accounts), and a no-room wait stays open and ends in a swap the moment a target gains room, which is today's strand. Today (measured on unmodified `ccd/ccd`) a stalled session on a reset account idles only until ANOTHER target has room: the forced `_swap_target` never offers the current account (its walk skips `cur`, its home-stay branch needs `-z "$force"`), and `cmd_swap` refuses target == cur. That swap's `--resume` spawn is the only re-send path that types nothing but the existing constant (`CLAUDE_CODE_RESUME_INTERRUPTED_TURN`, else `RESUME_PROMPT` through `_redrive_after_spawn`'s own gate). `RESUME_PROMPT` cannot be typed in place: it tells the model ccd restarted the session and its background work "is gone", which would be false. Recorded in `D-3498`'s definition; the residual — a stalled session whose own account is the only one with room — was the plan's open question 1, RULED 2026-09-24 (spec §11 item 6): leave it as today and count it, through Task 5's four `noroom_…` rows.
 3. **`ccd-swap-pin.test.ts` pins the `auto-rescue` line INLINE in `_auto_swap_check`, above the pin check.** A first draft that moved the line into a helper redded "the pin check sits ABOVE the hold and BELOW the rescue dispatch" (`the rescue log line moved or was renamed: expected -1 to be greater than 0`). The line stays inline and gains `$(_rescue_line_extra)` and a `; _rescuewait_close "$id" swap` tail — one line for one line.
 4. **The python inside `_transcript_limit_banner` is a single-quoted bash string.** A first draft printed `'-'` inside it, which closed the quote: 15 `ccd-limit-banner` cases redded with `expected { rc: '1', out: '' }`. The placeholder is `chr(45)`, and `_rescue_history`'s python avoids `'` and backslash-in-f-string (3.12-only) forms.
 5. **The dating read shares `_transcript_limit_banner`, so the cache describe's stub counted it.** Three D-2444 cases redded on read counts (`expected [ 'transcript-read', …(2) ] to have a length of 1 but got 3`). The stub now answers `newest` separately (rc 1, "no rate-limit row", which keeps every verdict) — the cache is still measured on the banner read it caches; the dating read is uncached by design. Two further cases asserted the old fold (`caches an unreadable transcript as a negative verdict`, `expected '… 2' to match /^\d+ 0$/`) and are rewritten to the spec's `2`.
@@ -98,7 +98,7 @@ Measured on a prototype of this plan's exact edits in an isolated worktree at `9
 7. **`swap.log` size, for rule 3's read bound.** Read-only `stat`/`wc` at planning: 2,229,986 bytes, 19,554 lines since 2026-07-03; busiest hour 233,896 bytes, p99 hour 20,263, median 1,122. `RESCUE_LOG_TAIL_BYTES=1048576` covers more than four of the busiest hours; a short read can only undercount history, which is today's behaviour.
 8. **The instrument's baseline on the live log** (read-only, `--since 2026-09-08 --until 2026-09-24`): 248 rescues; 4 sessions with 4 or more auto-rescues inside an hour; max 4. Every other stage-4 row reads 0 because no line carries this wave's words yet.
 9. **Doctor does not read `.rescuewait` in this wave.** §5.4's tests list says the record "is read by ccd's own entry/exit dedupe and by doctor"; §7's surfaces table gives doctor stage-6 work only, and this wave's brief does not scope a doctor check. The record's grammar is fixed here (`state= kind= since= reset= wrapper=`, plus `until= end=`) so a doctor reader can be added without touching ccd; it is reported as a spec gap, not built.
-10. **Red-first, measured.** With Tasks 1–5's tests in place (as revised after review) and `ccd/ccd` at `af64d9d2` (byte-identical to `905360dc`'s), `ccd-rescue-policy` + `measure-continuity-stage4` run `35 failed | 25 passed (60)`: every rule's guard red, every regression control green on today's code and still green after — no `.landed`, equal seconds, unreadable transcript, no rate-limit row, auth (rule 1), refused swap, purge, `seven_day`, bound 0 (both), outside the bound, stalled, non-Anthropic, no reset, a turned record on another account, a STALLED session with a turned record on this reset, a row written after its own reset (both), least-used control, a passed logged reset, spread-as-preference, unreadable log, the Codex-lane fourth rescue, the auth pane with three rescues, and the landing-line source pin. On the full revised prototype: `ccd-rescue-policy` 55/55, `measure-continuity-stage4` 5/5, `ccd-limit-banner` 60/60, `ownership` 14/14, `ccd-reg-get-census` 3/3.
+10. **Red-first, measured.** With Tasks 1–5's tests in place (as revised after review) and `ccd/ccd` at `af64d9d2` (byte-identical to `905360dc`'s), `ccd-rescue-policy` + `measure-continuity-stage4` run `36 failed | 25 passed (61)` (35 of 60 before the stage-4 file's sixth case, added 2026-09-24 with §11 item 6's count; that file alone measured `5 failed | 1 passed (6)` with no instrument present): every rule's guard red, every regression control green on today's code and still green after — no `.landed`, equal seconds, unreadable transcript, no rate-limit row, auth (rule 1), refused swap, purge, `seven_day`, bound 0 (both), outside the bound, stalled, non-Anthropic, no reset, a turned record on another account, a STALLED session with a turned record on this reset, a row written after its own reset (both), least-used control, a passed logged reset, spread-as-preference, unreadable log, the Codex-lane fourth rescue, the auth pane with three rescues, and the landing-line source pin. On the full revised prototype: `ccd-rescue-policy` 55/55, `measure-continuity-stage4` 6/6 (the sixth case and the four `noroom_…` rows measured 2026-09-24 against the first-draft prototype's `ccd/ccd`, whose `RESCUE_WAIT_GRACE=120` line and wait lines this plan keeps), `ccd-limit-banner` 60/60, `ownership` 14/14, `ccd-reg-get-census` 3/3.
 
 ---
 
@@ -1985,7 +1985,7 @@ MSG
 
 **Interfaces:**
 - Consumes: the `swap.log` lines of Tasks 2–4 and `cmd_swap`'s existing `swap <id>: <from> -> <to> (uuid …)` line.
-- Produces: `python3 deploy/measure-continuity.py [--stage N]… [--home DIR] [--swap-log PATH] [--since T] [--until T] [--deployed T] [--all-copies] [--json]` — the programme's ONE CLI and ONE registry, the cross-wave contract both continuity waves write: `STAGES = {N: stageN}`, `stageN(ctx)` returning a dict of NAMED SECTIONS, the report `{"stage<N>": {<section>: {…}}}`. `ctx` carries `home`, `swap_log` (default `<home>/.cc-sessions/swap.log`), `since` and `until` as EPOCHS (swap.log's LOCAL-time stamps convert with `time.mktime`, a transcript's ISO `Z` stamps with `calendar.timegm`), `all_copies`, `deployed`. `--stage` is repeatable, default every registered stage; read-only; exit 0 on success. Wave 1 owns stage 1 (sections `carry`, `resume`); this wave owns stage 4, section `rescue`: `{rescues, sessions_with_4plus_rescues_in_an_hour, max_rescues_in_an_hour, chain_waits_ending_in_neither_swap_nor_reset, rescues_on_a_carried_in_banner, rescues_with_a_dated_row, near_reset_waits_ending_in_a_swap, rule1_suppressions, rule1_suppressions_rescued_within_5min, waits_opened_by_kind, waits_ended_by_kind_and_end}`, or `{swap_log: "absent"}` — spec §9's stage-4 rows except "non-rescue swaps that cut delegated work" (wave 7's).
+- Produces: `python3 deploy/measure-continuity.py [--stage N]… [--home DIR] [--swap-log PATH] [--since T] [--until T] [--deployed T] [--all-copies] [--json]` — the programme's ONE CLI and ONE registry, the cross-wave contract both continuity waves write: `STAGES = {N: stageN}`, `stageN(ctx)` returning a dict of NAMED SECTIONS, the report `{"stage<N>": {<section>: {…}}}`. `ctx` carries `home`, `swap_log` (default `<home>/.cc-sessions/swap.log`), `since` and `until` as EPOCHS (swap.log's LOCAL-time stamps convert with `time.mktime`, a transcript's ISO `Z` stamps with `calendar.timegm`), `all_copies`, `deployed`. `--stage` is repeatable, default every registered stage; read-only; exit 0 on success. Wave 1 owns stage 1 (sections `carry`, `resume`); this wave owns stage 4, section `rescue`: `{rescues, sessions_with_4plus_rescues_in_an_hour, max_rescues_in_an_hour, chain_waits_ending_in_neither_swap_nor_reset, rescues_on_a_carried_in_banner, rescues_with_a_dated_row, near_reset_waits_ending_in_a_swap, rule1_suppressions, rule1_suppressions_rescued_within_5min, waits_opened_by_kind, waits_ended_by_kind_and_end, noroom_waits_past_their_reset, noroom_waits_past_their_reset_by_end, noroom_seconds_past_their_reset_total, noroom_seconds_past_their_reset_max}`, or `{swap_log: "absent"}` — spec §9's stage-4 rows except "non-rescue swaps that cut delegated work" (wave 7's). The four `noroom_…` rows are §11 item 6's count (ruled 2026-09-24, "leave it and count it"): a stalled session whose own account is the only one with room, left idle in the no-room wait after that account resets.
 
 **Whichever continuity wave lands first writes the file.** If `deploy/measure-continuity.py` does NOT exist when this task starts, create it exactly as Step 3 gives it — its header, helpers and argparse are the contract's, and wave 1, landing later, adds only its own `# ── stage 1` block and its `STAGES` entry. If it DOES exist because wave 1 merged first, keep its header, helpers and argparse; add only this plan's `# ── stage 4 (wave 2)` block (from that comment down to, not including, `STAGES = {`), the entry `4: stage4,` in its `STAGES`, and any contract flag its argparse still lacks. The stage-4 block is self-contained — it reads `ctx` through its own `s4_ctx` (dict or attribute namespace alike) and uses no helper outside the block — so it drops in unchanged either way, and this task's test must pass unchanged. Should that file's CLI or `ctx` depart from the contract above, stop and report rather than adapt either side.
 
@@ -1995,7 +1995,8 @@ Create `server/test/measure-continuity-stage4.test.ts`:
 
 ```ts
 // `deploy/measure-continuity.py`'s stage-4 rows (session-continuity spec §9;
-// wave 2). The instrument is READ-ONLY and stage 4 reads swap.log alone, so
+// wave 2). The instrument is READ-ONLY and stage 4 reads swap.log (and, for a
+// no-room wait still open now, that session's `.rescuewait` record), so
 // two things are pinned: each row counts what its name says on a hand-built
 // log whose answer is known, and each regex it parses is bound to a line the
 // REAL ccd function wrote — a reworded ccd line reds here, not silently on the
@@ -2043,6 +2044,22 @@ describe('stage 4 rows count what their names say (TZ=UTC, hand-built log)', () 
     `2026-09-20 12:10:00 rescuewait-end s6: kind=chain on claude reset=${utc('2026-09-20 13:00:00')} after 60s end=clear`,
     '2026-09-20 12:10:00 rescuewait-end s7: kind=chain on claude reset=1 after 60s end=turned',
     '2026-09-20 12:10:00 rescuewait-end s8: kind=chain on claude reset=- after 1800s end=noroom',
+    // §11 item 6 (stalled, own account the only one with room): no-room waits against a 13:30 reset.
+    // s9 idled 30 minutes past it and then swapped (counted); s10's armed pane ended it in place
+    // (`turned`, not counted); s11 swapped inside the grace (not counted); s12 had no reset (not
+    // counted); s13 is still open, against a 13:10 reset (counted, measured to the window's end);
+    // s14's session was purged mid-wait, so no end line exists and the registry holds no record
+    // (not counted when measuring now — the registry, not the log, says a wait is open now); s15's
+    // record was re-used by a later session of the same id and is closed (not counted either).
+    `2026-09-20 13:00:00 rescuewait s9: kind=noroom on claude reset=${utc('2026-09-20 13:30:00')}`,
+    `2026-09-20 13:00:00 rescuewait s10: kind=noroom on claude reset=${utc('2026-09-20 13:30:00')}`,
+    `2026-09-20 13:00:00 rescuewait s13: kind=noroom on claude-b reset=${utc('2026-09-20 13:10:00')}`,
+    `2026-09-20 13:31:00 rescuewait-end s11: kind=noroom on claude reset=${utc('2026-09-20 13:30:00')} after 600s end=swap`,
+    `2026-09-20 13:32:05 rescuewait-end s10: kind=noroom on claude reset=${utc('2026-09-20 13:30:00')} after 1925s end=turned`,
+    `2026-09-20 14:00:00 rescuewait-end s9: kind=noroom on claude reset=${utc('2026-09-20 13:30:00')} after 3600s end=swap`,
+    '2026-09-20 15:00:00 rescuewait-end s12: kind=noroom on claude reset=- after 9000s end=swap',
+    `2026-09-20 15:10:00 rescuewait s14: kind=noroom on claude reset=${utc('2026-09-20 15:05:00')}`,
+    `2026-09-20 15:10:00 rescuewait s15: kind=noroom on claude reset=${utc('2026-09-20 15:05:00')}`,
   ];
   const handLog = (): string => {
     const log = path.join(h.home, 'hand-built-swap.log');
@@ -2051,6 +2068,10 @@ describe('stage 4 rows count what their names say (TZ=UTC, hand-built log)', () 
   };
 
   it('every row on a log whose answer is known', () => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 's13.rescuewait'),
+      `state=open kind=noroom since=${utc('2026-09-20 13:00:00')} reset=${utc('2026-09-20 13:10:00')} wrapper=claude-b\n`);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 's15.rescuewait'),
+      `state=closed kind=near since=1 reset=- wrapper=claude until=2 end=swap\n`);
     const r = run(h.home, ['--swap-log', handLog()], { TZ: 'UTC' });
     expect(r.rescues).toBe(8);
     expect(r.sessions_with_4plus_rescues_in_an_hour).toBe(1);
@@ -2061,8 +2082,26 @@ describe('stage 4 rows count what their names say (TZ=UTC, hand-built log)', () 
     expect(r.rule1_suppressions_rescued_within_5min).toBe(1);
     expect(r.near_reset_waits_ending_in_a_swap).toBe(1);
     expect(r.chain_waits_ending_in_neither_swap_nor_reset).toBe(2);
-    expect(r.waits_opened_by_kind).toEqual({ near: 1 });
-    expect(r.waits_ended_by_kind_and_end).toEqual({ 'chain:clear': 1, 'chain:noroom': 1, 'chain:turned': 1, 'near:swap': 1 });
+    expect(r.waits_opened_by_kind).toEqual({ near: 1, noroom: 5 });
+    expect(r.waits_ended_by_kind_and_end).toEqual({
+      'chain:clear': 1, 'chain:noroom': 1, 'chain:turned': 1, 'near:swap': 1, 'noroom:swap': 3, 'noroom:turned': 1,
+    });
+    expect(r.noroom_waits_past_their_reset, 's9 swapped late; s13 open in the registry; not s14 (purged) or s15 (closed)').toBe(2);
+    expect(r.noroom_waits_past_their_reset_by_end).toEqual({ open: 1, swap: 1 });
+  });
+
+  // §11 item 6, ruled 2026-09-24: a stalled session whose own account is the only
+  // one with room idles as today, and the instrument counts it. A still-open wait
+  // is measured to the window's end, so this case pins the seconds with `--until`.
+  it('no-room waits past their reset: counted to their end or the window\'s, from the reset, beyond the grace', () => {
+    const r = run(h.home, ['--swap-log', handLog(), '--since', '2026-09-20 13:45', '--until', '2026-09-20 15:00'], { TZ: 'UTC' });
+    expect(r.noroom_waits_past_their_reset, 's9 ended in the window; s13 opened before it and is open at its end').toBe(2);
+    expect(r.noroom_waits_past_their_reset_by_end).toEqual({ open: 1, swap: 1 });
+    expect(r.noroom_seconds_past_their_reset_max, 's13: 15:00 - 13:10').toBe(6600);
+    expect(r.noroom_seconds_past_their_reset_total, 's9: 14:00 - 13:30, plus s13').toBe(1800 + 6600);
+    const grace = (src: string, re: RegExp): string => (re.exec(src) ?? ['', 'absent'])[1];
+    expect(grace(fs.readFileSync(TOOL, 'utf8'), /^S4_GRACE = (\d+)/m), 'the instrument\'s grace is ccd\'s')
+      .toBe(grace(fs.readFileSync(CCD, 'utf8'), /^RESCUE_WAIT_GRACE=(\d+)/m));
   });
 
   it('--since is inclusive and --until exclusive, as local-time epochs, in either spelling', () => {
@@ -2120,7 +2159,7 @@ describe('each regex is bound to the line the real ccd writes', () => {
 
 Run: `(cd server && ./node_modules/.bin/vitest run test/measure-continuity-stage4.test.ts)`
 
-Expected: FAIL. If the file does not exist yet: every case but the landing-line source pin red on `python3: can't open file …/deploy/measure-continuity.py` (`4 failed | 1 passed (5)`, measured); the pin passes because that line predates this wave. If wave 1 created the file first, the same four red instead on its argparse refusing `--stage 4` (`argument --stage: invalid choice: 4`, exit 2) or on a missing `stage4` key — not ENOENT.
+Expected: FAIL. If the file does not exist yet: every case but the landing-line source pin red on `python3: can't open file …/deploy/measure-continuity.py` (`5 failed | 1 passed (6)`, measured); the pin passes because that line predates this wave. If wave 1 created the file first, the same five red instead on its argparse refusing `--stage 4` (`argument --stage: invalid choice: 4`, exit 2) or on a missing `stage4` key — not ENOENT.
 
 - [ ] **Step 3: Write the instrument**
 
@@ -2187,7 +2226,9 @@ def iso_epoch(stamp):
 
 
 # ── stage 4 (wave 2): the rescue policy ─────────────────────────────────────
-# Every row reads swap.log only. The line shapes are ccd's own, and
+# Every row reads swap.log; the no-room rows also read a session's
+# `.rescuewait` record, read-only, to tell a wait open NOW from one a purge
+# cut short. The line shapes are ccd's own, and
 # `server/test/measure-continuity-stage4.test.ts` binds each regex below to a
 # line the real ccd function wrote. Self-contained: nothing outside this block.
 S4_TS = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)"
@@ -2197,6 +2238,8 @@ S4_CARRIED = re.compile(S4_TS + r" carried-in (\S+): via=(\S+) ")
 S4_WAIT_OPEN = re.compile(S4_TS + r" rescuewait (\S+): kind=(\S+) on (\S+) reset=(\S+)$")
 S4_WAIT_END = re.compile(S4_TS + r" rescuewait-end (\S+): kind=(\S+) on (\S+) reset=(\S+) after (\d+)s end=(\S+)$")
 S4_TOKEN = re.compile(r" (reset|type|row)=(\d+|[a-z_]+)")
+# ccd's RESCUE_WAIT_GRACE; the stage-4 test binds the two numbers together.
+S4_GRACE = 120
 
 
 def s4_ctx(ctx, key):
@@ -2224,6 +2267,21 @@ def stage4(ctx):
     rescues, landings, carried = [], collections.defaultdict(list), []
     opened, ended = collections.Counter(), collections.Counter()
     chain_neither, near_swap = 0, 0
+    # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
+    # whose own account is the only one with room idles in the no-room wait
+    # after that account resets, because only an ARMED pane ends a wait in place
+    # there (`turned`). Counted: a no-room wait with a numeric reset, not ended
+    # `turned`, whose end (its end line in the window) or, still open, the
+    # window's end (`--until`, else now) is more than S4_GRACE past its reset;
+    # seconds run from the reset. `pending` pairs each session's entry line with
+    # its exit line — the record holds one wait at a time, so they alternate.
+    # A purge removes the record and writes no exit line, so a wait measured
+    # NOW is open only while `<home>/.cc-sessions/<id>.rescuewait` still says
+    # `state=open` (a later session of the same id may have re-used a closed
+    # one); a past window (`--until`) has only the log, and a session purged
+    # mid-wait there counts to the window's end.
+    ref = until if until is not None else int(time.time())
+    pending, past = {}, []
     inwin = lambda t: t is not None and (since is None or t >= since) and (until is None or t < until)
     for line in lines:
         m = S4_LANDING.match(line)
@@ -2245,21 +2303,43 @@ def stage4(ctx):
                 carried.append((t, m.group(2), m.group(3)))
             continue
         m = S4_WAIT_OPEN.match(line)
-        if m and inwin(s4_epoch(m.group(1))):
-            opened[m.group(3)] += 1
+        if m:
+            t = s4_epoch(m.group(1))
+            if inwin(t):
+                opened[m.group(3)] += 1
+            if t is not None and t < ref:
+                pending[m.group(2)] = (m.group(3), m.group(5))
             continue
         m = S4_WAIT_END.match(line)
         if m:
             t = s4_epoch(m.group(1))
+            if t is not None and t < ref:
+                pending.pop(m.group(2), None)
             if not inwin(t):
                 continue
             kind, reset, end = m.group(3), m.group(5), m.group(7)
             ended[f"{kind}:{end}"] += 1
+            if kind == "noroom" and end != "turned" and reset.isdigit() and t > int(reset) + S4_GRACE:
+                past.append((end, t - int(reset)))
             at_reset = end == "turned" or (end == "clear" and reset.isdigit() and t >= int(reset))
             if kind == "chain" and end != "swap" and not at_reset:
                 chain_neither += 1
             if kind == "near" and end == "swap":
                 near_swap += 1
+
+    for sid, (kind, reset) in pending.items():
+        if kind != "noroom" or not reset.isdigit() or ref <= int(reset) + S4_GRACE:
+            continue
+        if until is None:
+            try:
+                with open(os.path.join(s4_ctx(ctx, "home"), ".cc-sessions", sid + ".rescuewait")) as fh:
+                    rec = fh.read().split()
+            except OSError:
+                continue
+            if "state=open" not in rec:
+                continue
+        past.append(("open", ref - int(reset)))
+    past_by_end = collections.Counter(end for end, _ in past)
 
     # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
     by_sess = collections.defaultdict(list)
@@ -2299,6 +2379,10 @@ def stage4(ctx):
         "rule1_suppressions_rescued_within_5min": became,
         "waits_opened_by_kind": dict(sorted(opened.items())),
         "waits_ended_by_kind_and_end": dict(sorted(ended.items())),
+        "noroom_waits_past_their_reset": len(past),
+        "noroom_waits_past_their_reset_by_end": dict(sorted(past_by_end.items())),
+        "noroom_seconds_past_their_reset_total": sum(s for _, s in past),
+        "noroom_seconds_past_their_reset_max": max((s for _, s in past), default=0),
     }}
 
 
@@ -2352,7 +2436,7 @@ chmod 0755 deploy/measure-continuity.py
 python3 deploy/measure-continuity.py --stage 4 --since 2026-09-08 --until 2026-09-24
 ```
 
-The test runs in a subshell, so the baseline command runs from the repo root whether the test passed or not. Expected: `5 passed`. On the fleet box the baseline prints (measured at planning) `rescues: 248`, `sessions_with_4plus_rescues_in_an_hour: 4`, `max_rescues_in_an_hour: 4`, and 0 for every row this wave's words feed. The tool opens `swap.log` read-only and writes nothing; if you are not on the fleet box, skip the second command and say so in the wave-done.
+The test runs in a subshell, so the baseline command runs from the repo root whether the test passed or not. Expected: `6 passed`. On the fleet box the baseline prints (measured at planning, and again with the `noroom_…` rows on 2026-09-24) `rescues: 248`, `sessions_with_4plus_rescues_in_an_hour: 4`, `max_rescues_in_an_hour: 4`, and 0 (or `{}`) for every row this wave's words feed, the four `noroom_…` rows included — no wait is recorded before this wave deploys. The tool opens `swap.log` read-only and writes nothing; if you are not on the fleet box, skip the second command and say so in the wave-done.
 
 - [ ] **Step 5: README**
 
@@ -2403,6 +2487,8 @@ previous account, and no rescue decision read the reset the transcript already c
   when a target gains room. At its reset an armed session ends it in place, under the same two
   conditions; a stalled one is rescued as before — nothing re-sends its turn in place, so it stays in
   the no-room wait and swaps the moment a target has room, whose `--resume` spawn re-drives the turn.
+  When its own account is the only one with room it idles there as before; `--stage 4` counts
+  those waits and the seconds each spent past its reset (spec §11 item 6).
 - **Spread, do not bounce, chain-wait.** A rescue skips every account this session left blocked in
   the last hour (until that rescue's logged reset passes), and prefers a target no rescue landed on in
   the last `RESCUE_SPREAD_WINDOW=600` seconds when another has room — never at the price of a class
@@ -2432,7 +2518,14 @@ No `file:line` token appears in the new text (session-hook's README audit reads 
 | 5.4 | `        four_plus += best >= 4` → `>= 5` | same | same case only — `expected +0 to be 1` |
 | 5.5 | `ccd/ccd`: `rescuewait-end`'s `after $((now - since))s end=$end"` → `ending=$end"` (re-stamp not needed for this row) | same | "auto-rescue (with its dated tokens), rescuewait, rescuewait-end and carried-in all parse" only — `expected {} to deeply equal { 'near:swap': 1 }` |
 | 5.6 | `(until is None or t < until)` → `(until is None or t <= until)` | same | "--since is inclusive and --until exclusive…" only — `s3 at 11:03 is in; s4 at 11:10 is at the exclusive bound: expected 2 to be 1` |
-| 5.7 | `        'swap_log': a.swap_log or os.path.join(a.home, '.cc-sessions', 'swap.log'),` → `        'swap_log': os.path.join(a.home, '.cc-sessions', 'swap.log'),` | same | 3 failed: the two hand-built-log cases (`expected undefined to be 8`) and "opens the default log read-only…; an absent log says so" (`expected { …(11) } to deeply equal { swap_log: 'absent' }`) |
+| 5.7 | `        'swap_log': a.swap_log or os.path.join(a.home, '.cc-sessions', 'swap.log'),` → `        'swap_log': os.path.join(a.home, '.cc-sessions', 'swap.log'),` | same | 4 failed: the three hand-built-log cases (`expected undefined to be 8`, `… to be 2`, `… to be 1`) and "opens the default log read-only…; an absent log says so" (`expected { …(15) } to deeply equal { swap_log: 'absent' }`) — re-measured 2026-09-24 with the sixth case; 5.1–5.6 re-measured then too, unchanged |
+| 5.8 | `            if kind == "noroom" and end != "turned" and reset.isdigit() and t > int(reset) + S4_GRACE:` → `            if kind == "noroom" and reset.isdigit() and t > int(reset) + S4_GRACE:` | same | "every row on a log whose answer is known" only — `s9 swapped late; s13 open in the registry; not s14 (purged) or s15 (closed): expected 3 to be 2` (s10's armed, in-place end counted) |
+| 5.9 | `S4_GRACE = 120` → `S4_GRACE = 0` | same | 2 failed: "every row…" (`expected 3 to be 2`, s11's swap inside the grace counted) and "no-room waits past their reset…" (`the instrument's grace is ccd's: expected '0' to be '120'`) |
+| 5.10 | `    ref = until if until is not None else int(time.time())` → `    ref = int(time.time())` | same | "no-room waits past their reset…" only — `s9 ended in the window; s13 opened before it and is open at its end: expected 4 to be 2` (s14 and s15, opened after the window, counted) |
+| 5.11 | `        past.append(("open", ref - int(reset)))` → `        pass` | same | 2 failed: both `noroom` cases — `expected 1 to be 2` (the still-open s13 uncounted) |
+| 5.12 | `                pending.pop(m.group(2), None)` → `                pass` | same | "no-room waits past their reset…" only — `expected 4 to be 2` (s9 and s11, already ended, counted again as open in a past window, where only the log speaks; measuring now, the registry gate hides the same fault) |
+| 5.13 | `        if until is None:` (the registry gate) → `        if False:` | same | "every row…" only — `expected 4 to be 2` (s14, purged mid-wait, and s15, whose record is closed, counted as open now) |
+| 5.14 | `            if "state=open" not in rec:` + `                continue` → `            pass` | same | "every row…" only — `expected 3 to be 2` (s15's closed record read as open) |
 
 ```bash
 git add deploy/measure-continuity.py server/test/measure-continuity-stage4.test.ts README.md
@@ -2443,7 +2536,9 @@ deploy/measure-continuity.py --stage 4 reads swap.log read-only: sessions with
 4+ rescues in an hour, rescues on a carried-in banner (row= against the landing
 the log itself records), rule-1 suppressions rescued within 5 minutes, chain
 waits ending in neither a swap nor a reset, near waits ending in a swap, and
-every wait by kind and end. Each regex is bound to the line the real ccd writes.
+every wait by kind and end, and (spec §11 item 6) the no-room waits a stalled
+session outlived its own reset in, with the seconds idled past it. Each regex
+is bound to the line the real ccd writes, and the grace to ccd's constant.
 Baseline on the live log 2026-09-08..09-23: 248 rescues, 4 sessions with 4 in
 an hour. README: the rescue arm's new exception, and a section for rules 1-3.
 MSG
@@ -2586,6 +2681,6 @@ Four lenses, all `opus` — a diff of one shipped script (`ccd/ccd`, ≈380 line
 
 ## Open questions for the operator
 
-1. **A stalled session whose own account is the only one with room (the residual of Review Focus item 6).** This plan rescues a STALLED session whose wait crosses its own reset exactly as today: by a swap, once some OTHER target has room. So a stalled session whose own, just-reset account is the only one with room still idles until another target gains room — exactly as today (measured on unmodified `ccd/ccd`: the forced `_swap_target` never offers the current account, and `cmd_swap` refuses target == cur). The only zero-keystroke remedy is an in-place `--resume` restart on the current account, which `cmd_swap` refuses and spec §6 ("No revival") does not sanction. Typing `RESUME_PROMPT` into the live process is not a remedy either: the prompt says ccd restarted the session and its background work "is gone", which would be false. Does the operator want an in-place restart sanctioned for this case (a spec change, and a later wave), or is today's idle accepted?
+1. **A stalled session whose own account is the only one with room — RULED 2026-09-24 (spec §11 item 6): leave it as today and count it.** This plan rescues a STALLED session whose wait crosses its own reset exactly as today, by a swap once some OTHER target has room, so one whose own, just-reset account is the only one with room still idles until another target gains room. No in-place restart is sanctioned. Task 5's `noroom_waits_past_their_reset` rows count every no-room wait that outlives its own reset by more than `RESCUE_WAIT_GRACE` without ending `turned`, and the seconds it idled past that reset; the operator rules again with that count in hand.
 2. **The near wait requires an ARMED auto-continue** (Pre-flight finding 2, D-3498): a stalled session near its reset is rescued as today. Recorded as the plan's reading of "leaves Claude Code's armed auto-continue alone"; the operator may rule otherwise.
 3. **Doctor's reader of `.rescuewait`** ships with wave 4 (Pre-flight finding 9); the record's grammar is fixed here so that reader needs no ccd change.

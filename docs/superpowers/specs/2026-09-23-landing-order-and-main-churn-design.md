@@ -112,7 +112,7 @@ repositories are on plans that exclude it.
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
 | R8 | Mergify and other queue apps rejected; file-level lanes rejected. | §13. |
-| R9 | Break-glass: the repository-admin role is the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). The main ruleset also names the Maintain role as a bypass actor today; that entry comes off with the queue rule. | Stage 2; §4's operator row; §11. |
+| R9 | Break-glass: the repository-admin role is the ruleset's only bypass actor (operator, 2026-09-23, on the written spec). The main ruleset also names the Maintain role as a bypass actor today; that entry comes off with the queue rule (confirmed by the operator, 2026-09-24). | Stage 2; §4's operator row; §11. |
 | R10 | Strict protection comes off intake-platform and data-internal after a week of coordinator landings with composition tests there (operator, 2026-09-23, on the written spec). | Stage 5; §11. |
 
 ## 4. Roles and authority

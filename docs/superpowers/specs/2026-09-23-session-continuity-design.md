@@ -2,7 +2,7 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (all surviving findings applied) and a rev-3 verification pass; rev 4 records the operator's
-rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-23, item 6 found at plan time and open) and the measurements behind
+rulings on the written spec (C9–C11, C13, C14; §11 items 1–5 ruled 2026-09-23, item 6 found at plan time and ruled 2026-09-24) and the measurements behind
 them; rev 5 reconciles it with its first wave plans, 2026-09-24 ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
@@ -585,7 +585,8 @@ a swap; an operator `/model opus` survives an auto-home.
 - **A near-reset wait lasts longer than the reset promised:** it ends `RESCUE_WAIT_GRACE` after the reset, in
   place only on an armed pane, otherwise in a swap; a row stale on arrival opens no wait.
 - **A stalled session idles on a reset account:** a stalled session's waits end in a swap, never in place; the one
-  case left is a stalled session whose own account is the only one with room (§11 item 6).
+  case left is a stalled session whose own account is the only one with room, left as today and counted by §9
+  (§11 item 6).
 - **A chain wait on an account with a far reset:** bounded at 30 minutes, then a swap that skips the account just
   left blocked, or the no-room wait when no target has room.
 - **The slice ceiling kills a live session** once the pressure reap is off: named in §5.6, measured in §9 by the
@@ -606,7 +607,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals | 774 of 1,310, all by existence; 8 | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0 |
 | 2 | spike outcome | — | decides stage 3 |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
-| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; — | 0; 0; 0; 0; reported; reported |
+| 4 | sessions with 4 or more auto-rescues in an hour; chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner; near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4); —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; 0; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
 | 6 | pressure kills of background shells; dead ccd scopes that pass the inert test yet survive a day; OOM stops of pane scopes whose session was idle 30 minutes or more with a live background shell, and all pane-scope OOM stops | 186 since 2026-09-04 (9 since 09-18); 5 of 12 on 2026-09-23; B, measured the week before the variable ships, and 16 in 2026-09-16..23 | 0; 0; at most B + 2 a week, reported |
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
@@ -681,13 +682,15 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    Stage 6 does not wait for step 7: the reap fires below about 3 GiB of host memory, after the slice has already
    reached its ceiling, so the variable barely moves this risk; its own kill rule (§5.6) guards the rest.
 
-6. **Open — a stalled session whose own account is the only one with room.** Measured from the code on
+6. **A stalled session whose own account is the only one with room — ruled 2026-09-24: leave it as today and
+   count it.** Measured from the code on
    2026-09-24: nothing re-sends a stalled session's turn on its own account after the reset, and the forced
    target choice never offers the current account, so the session idles until another target gains room — today
    and under stage 4 alike. A stop and resume on the same account would end that, because the landing's redrive
-   re-sends the turn, but it is a restart ccd does not make today, against §6's first invariant. Recommended:
-   leave it as today and count it — stage 4's instrument reports stalled no-room waits that outlive their own
-   reset — and rule on it with the count in hand.
+   re-sends the turn, but it is a restart ccd does not make today, against §6's first invariant. The operator
+   ruled (2026-09-24): no in-place restart; stage 4's instrument counts the no-room waits that outlive their own
+   reset by more than `RESCUE_WAIT_GRACE` without ending in place, and the seconds each spent past it (§9), and the
+   question comes back with that count in hand. It is tracked outside the repository as its own ticket.
 
 ## 12. Out of scope, named
 

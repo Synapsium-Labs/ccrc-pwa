@@ -12,7 +12,7 @@ nothing specific, a resumed session is rescued again on the limit banner it brou
 `/model` reverts, and Claude Code's pressure reap kills the watchers of idle sessions while real orphans go
 uncollected. This programme makes a restart a place where work is handed over. It adds no revival: the swap stays
 the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14); §11 items 1–5 were ruled on
-2026-09-23, and item 6, found at plan review, is open.
+2026-09-23, and item 6, found at plan review, on 2026-09-24.
 
 ## Waves
 
@@ -45,6 +45,14 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 - **Amendment slugs.** Each is minted by the plan that implements it and defined in that plan's
   `## Deviations found` in the same act: `sidecar-carry-merges` (wave 1), `carried-in-banner-is-not-a-block` and
   `rescue-waits-near-reset` (wave 2), `operator-model-survives-restart` (wave 3), `inert-scope-sweep` (wave 4).
+- **2026-09-24 — §11 item 6 ruled: leave it and count it.** A stalled session whose own account is the only one with
+  room idles as today; no in-place restart is sanctioned. Wave 2's plan gains the count — four `noroom_…` rows in
+  `measure-continuity.py --stage 4`, measured red-first and by seven mutations on the plan's prototype — and the
+  question returns to the operator with that count in hand.
+- **2026-09-24 — execution: coordinator dispatch.** The operator creates one coordinator per programme from its
+  ticket. Each wave goes to a fresh worker workspace running subagent-driven development, a review run reads the
+  worker's branch, and the coordinator rules and merges; the plans reach a worker only from `main`, so the docs
+  PR carrying the specs, the ledgers and the first four plans merges before the first dispatch.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -71,7 +79,8 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned and reviewed; dispatch either on a fresh workspace with its plan path and this file.
+Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch either on a fresh workspace with its
+plan path and this file.
 Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
 records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
 its safety lens is `xhigh`.

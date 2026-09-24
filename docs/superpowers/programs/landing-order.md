@@ -36,6 +36,12 @@ gated on that.
 - **2026-09-23 — stage 2 split into two waves.** The spec's own rollout order puts the `--admin` deny after the
   operator's ruleset change and the proof run (§5.2 steps 2–4), so it ships as wave 2b rather than behind a flag in
   wave 2. Not a deviation — the spec's order, drawn as waves.
+- **2026-09-24 — the Maintain-role bypass comes off.** The operator confirmed the removal wave 2's runbook makes
+  (Task 7 Step 4) when it adds the queue rule: the repository-admin role stays the ruleset's only bypass actor.
+- **2026-09-24 — execution: coordinator dispatch.** The operator creates one coordinator per programme from its
+  ticket. Each wave goes to a fresh worker workspace running subagent-driven development, a review run reads the
+  worker's branch, and the coordinator rules and merges; the plans reach a worker only from `main`, so the docs
+  PR carrying the specs, the ledgers and the first four plans merges before the first dispatch.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -57,6 +63,7 @@ gated on that.
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned and reviewed; wave 2 needs wave 1's clause 15 to append its native-queue sentence to. After wave 2
+Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch wave 1 on a fresh workspace with its
+plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to. After wave 2
 merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
 planned and dispatched only on that proof's result.
