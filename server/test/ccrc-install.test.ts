@@ -3567,6 +3567,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const vsha = gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
     expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\nunsigned\n`);
+
     expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
     // Ordering: the line is printed AFTER the wrappers step's own line.
     const lines = ok.stdout.split('\n');
@@ -3583,6 +3584,49 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.code).toBe(1);
     expect(existsSync(join(broken, '.ccrc', 'build.json')), 'the stamp is written mid-spine, as designed').toBe(true);
     expect(existsSync(join(broken, '.ccrc', 'installed')), 'a spine that died must leave NO completed-install record').toBe(false);
+  });
+
+  // Review fix round 1 I1: EVERY released `cmd_update` before this wave ran
+  // its staged spine as `env CCRC_UPDATE_VERIFIED=1 bash "$UPD_TREE/ccd/ccrc"
+  // install`, with no `CCRC_UPDATE_SPINE` at all — so the first update onto
+  // this wave's build would record a genuinely verified install as
+  // unsigned, fleet-wide. `_inst_legacy_verified_parent` is the transition
+  // arm: it honours CCRC_UPDATE_VERIFIED=1 when this process's OWN PARENT
+  // (measured, `ps -o args=`) is itself a `ccrc … update` invocation.
+  // Emulated here as a FORK (not an exec), so the install process's own
+  // $PPID resolves, via `ps`, to the fixture's argv — exactly the shape a
+  // real legacy `cmd_update` leaves behind. The fixture is named `ccrc`
+  // itself (in its own directory), so the process `ps -o args=` reports for
+  // it names a word ending in `ccrc` — the shape
+  // `_inst_legacy_verified_parent` matches.
+  it('CCRC_UPDATE_VERIFIED is honoured when the PARENT process is a legacy `ccrc … update` (review fix round 1 I1)', () => {
+    const legacy = freshBox('ccrc-install-installed-legacy-parent-');
+    const legacySha = gitInit(treeRoot(legacy));
+    const legacyDir = join(legacy, 'legacy-ccrc-fixture');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyCcrc = join(legacyDir, 'ccrc');
+    writeFileSync(legacyCcrc,
+      '#!/bin/sh\n'
+      + `env CCRC_UPDATE_VERIFIED=1 bash '${ccrcIn(treeRoot(legacy))}' install\n`
+      + 'exit $?\n', { mode: 0o755 });
+    expect(runInstall(legacy, ['update'], {}, { from: legacyCcrc }).code).toBe(0);
+    expect(readFileSync(join(legacy, '.ccrc', 'installed'), 'utf8')).toBe(`${legacySha}\n`);
+  });
+
+  // Pin (2): the SAME fixture, but the parent's own verb is NOT `update` —
+  // the transition arm must not fire, and the record stays unsigned.
+  it('CCRC_UPDATE_VERIFIED stays stripped when the parent\'s verb is NOT `update` (review fix round 1 I1)', () => {
+    const legacyOther = freshBox('ccrc-install-installed-legacy-other-verb-');
+    const legacyOtherSha = gitInit(treeRoot(legacyOther));
+    const legacyOtherDir = join(legacyOther, 'legacy-ccrc-fixture');
+    mkdirSync(legacyOtherDir, { recursive: true });
+    const legacyOtherCcrc = join(legacyOtherDir, 'ccrc');
+    writeFileSync(legacyOtherCcrc,
+      '#!/bin/sh\n'
+      + `env CCRC_UPDATE_VERIFIED=1 bash '${ccrcIn(treeRoot(legacyOther))}' install\n`
+      + 'exit $?\n', { mode: 0o755 });
+    expect(runInstall(legacyOther, ['rollback'], {}, { from: legacyOtherCcrc }).code).toBe(0);
+    expect(readFileSync(join(legacyOther, '.ccrc', 'installed'), 'utf8')).toBe(`${legacyOtherSha}\nunsigned\n`);
   });
 
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {

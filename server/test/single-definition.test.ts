@@ -1504,6 +1504,13 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
+      // cmd_update (review fix round 1 I4): whether the OLD (running) build
+      // was itself a COMPLETED install of its own tag, captured before this
+      // run's spine clears the record — arm 2's same-tag skip narrows to
+      // this, so a same-tag rerun over a HALF-installed tree still lets arm
+      // 2 restore `previous` instead of falling straight to arm 3.
+      'if [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
+      'IFS= read -r old_rec < "$BOX_INSTALLED_FILE" 2>/dev/null || old_rec=""',
       // cmd_update (D-3114): cleared right before the staged install, so its
       // presence afterwards means this run's spine completed — the one fact
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
@@ -1518,8 +1525,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // cli` only: every other caller (pwa, watchdog, …) must reach
       // `cmd_update`'s converged path instead, which writes the terminal
       // `done` report this early return does not. The guarded read (the
-      // same shape `_upd_write_previous`, D-3283, uses) so an absent record
-      // prints no stray bash error.
+      // same shape `cmd_update`'s own `old_completed` capture above uses,
+      // review fix round 1 I4) so an absent record prints no stray bash
+      // error.
       '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
@@ -1540,8 +1548,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
       // W4 Task 4 (D-3254): `_upd_write_previous`
       // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
-      // with no record is not a completed baseline.
-      'elif [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // with no record is not a completed baseline. Plain `if` (review fix
+      // round 1 I2): the same-tag arm above now `return`s unconditionally,
+      // so this is no longer its `elif`.
+      'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',

@@ -1385,14 +1385,38 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
   });
 
-  it('a --force reinstall of the tag the box already runs, with NO previous to keep, writes its stamp as today regardless of the record (D-3254)', () => {
+  // Review fix round 1 I2: the same-tag keep is UNCONDITIONAL — it does
+  // NOT need a well-formed `previous` to have something worth keeping
+  // (unlike the absent-record keep D-3254 protects for a DIFFERENT tag,
+  // below), because a same-tag run writes nothing in the first place. This
+  // test used to pin the opposite (writing the running tag as `previous`
+  // when none existed to keep) — that write is exactly what let a `rollout
+  // --force` on a converged, never-rolled-back box invent a `previous`
+  // pointing at itself.
+  it('a --force reinstall of the tag the box already runs, with NO previous file at all, keeps (none) and writes nothing (review fix round 1 I2)', () => {
     const first = freshUpdateBox('ccrc-update-prev-reinstall-none-');
     plantOldBox(first, { version: 'v2.0.0' });
     writeFileSync(join(first, '.ccrc', 'installed'), `${OLD_SHA}\n`);
     packRelease(first, stubTree(first, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r2 = runUpdate(first, ['--force']);
     expect(r2.code, `stderr: ${r2.stderr}\nstdout: ${r2.stdout}`).toBe(0);
-    expect(previous(first)).toBe(`v2.0.0\n${OLD_SHA}\n`);
+    expect(r2.stdout).toMatch(/^update: previous: kept \(none\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
+    expect(existsSync(join(first, '.ccrc', 'previous')), 'a same-tag run must never INVENT a previous').toBe(false);
+  });
+
+  // Review fix round 1 I2's second pin: a MALFORMED `previous` (not the
+  // two-line grammar) is likewise left exactly as it was — never
+  // overwritten with the running tag, and never "repaired".
+  it('a --force reinstall of the tag the box already runs, with a MALFORMED previous file, keeps (unreadable) and writes nothing (review fix round 1 I2)', () => {
+    const home = freshUpdateBox('ccrc-update-prev-reinstall-malformed-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'not the right shape at all\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: previous: kept \(unreadable\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
+    expect(previous(home)).toBe('not the right shape at all\n');
   });
 
   it('a box whose last install never completed (stamp v2.0.0, no record) keeps previous on an update to ANOTHER tag (D-3254)', () => {
@@ -1910,15 +1934,17 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
-  // Fix round 1 item 5 / review 155 C2 (your Q5): the lock is released
-  // BEFORE the sweep (§10 requires it), so a SECOND `ccrc update` can take
-  // it mid-sweep and write its own in-flight report. This run's final
-  // writes — `_upd_report`'s announcement and the closing `_upd_phase done`
-  // — must not clobber that newer run's report: they run only while
-  // update.json still names THIS run's own pid, and skip with one line
-  // otherwise. The reviewer's own probe shape: the systemctl stub's
-  // try-restart arm writes a foreign report (a different pid) mid-sweep.
-  itLinux('a foreign report written mid-sweep survives this run\'s own final writes, which skip with one line (fix round 1 item 5 / review 155 C2, your Q5)', () => {
+  // Fix round 1 item 5 / review 155 C2 (your Q5), narrowed by review fix
+  // round 1 m2: the lock is released BEFORE the sweep (§10 requires it), so
+  // a SECOND `ccrc update` can take it mid-sweep and write its own
+  // in-flight report. Only the WRITE this run makes after that point — the
+  // closing `_upd_phase done` — must not clobber that newer run's report:
+  // it runs only while update.json still names THIS run's own pid, and
+  // skips with one line otherwise. `_upd_report`'s own announcement writes
+  // NOTHING to disk (operator output only) and always runs regardless. The
+  // reviewer's own probe shape: the systemctl stub's try-restart arm writes
+  // a foreign report (a different pid) mid-sweep.
+  itLinux('a foreign report written mid-sweep survives this run\'s closing phase write, which skips with one line — but the build line still prints (review fix round 1 m2, narrowing item 5 / review 155 C2, your Q5)', () => {
     const home = freshUpdateBox('ccrc-update-sweep-foreign-report-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantKillModeDropIn(home);
@@ -1931,15 +1957,17 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     // success to ITS OWN caller; only the JSON write is skipped.
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toMatch(
-      /^update: report: skipped — ~\/\.ccrc\/update\.json no longer names this run's pid \(\d+\); a newer update took the lock this run released before the sweep, and this run's final report would have overwritten its in-flight one$/m);
-    // The foreign report SURVIVES — this run never overwrote it with its own
-    // `build: … -> …` announcement or a closing `done`.
+      /^update: report: skipped — ~\/\.ccrc\/update\.json no longer names this run's pid \(\d+\); a newer update took the lock this run released before the sweep, and this run's final phase write would have overwritten its in-flight one$/m);
+    // The foreign report SURVIVES — this run never overwrote it with a
+    // closing `done`.
     const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
     expect(rep).toEqual({
       target: 'v9.9.9', phase: 'resolving', startedAt: 1, updatedAt: 1, detail: null, from: 'cli', pid: 999999,
     });
-    expect(r.stdout).not.toMatch(/^update: build: /m);
-    // The sweep itself still ran — the skip is only the trailing writes.
+    // `_upd_report` writes NOTHING to disk, so it always runs — the build
+    // line prints even though the JSON write it precedes was skipped.
+    expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha0+\) -> v1\.0\.0 \(oldsha0+\)$/m);
+    // The sweep itself still ran — the skip is only the closing phase write.
     expect(r.stdout).toMatch(/^update: sweep: /m);
   });
 
@@ -2484,19 +2512,18 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by latest\/download\) is below this box's floor v3\.0\.0/);
     expect(r.stderr).toMatch(/ccrc update --to v2\.0\.0 --downgrade/);
-    // Fix round 1 item 17 / review 155 C28: the converged no-op now precedes
-    // the floor check, and the ONLY converged proof (`_upd_converged`) needs
-    // the STAGED tree's own sha — so the full fetch (tarball, then the
-    // bundle) runs before the floor can die, not only the resolve-time
-    // SHA256SUMS read. Never installed: the floor still refuses before any
-    // backup or the staged spine.
-    expect(localUrls(home)).toEqual([
-      `local://${home}/releases/latest/download/SHA256SUMS`,
-      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
-      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz.sigstore.json`,
-    ]);
+    // Review fix round 1 I5 (narrowing item 17 / review 155 C28): the
+    // target's VERSION (v2.0.0) differs from the running stamp's (v3.0.0),
+    // so `_upd_converged`'s first comparison already answers "not
+    // converged" without ever needing the staged sha — the floor is
+    // checked BEFORE the fetch here, exactly as before item 17, and the
+    // refusal costs only the resolve-time SHA256SUMS read.
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    // The measured phases: resolving, then straight to failed — never
+    // fetching/verifying, which a full fetch would have added.
+    expect(reportWrites(home).map((w) => w['phase'])).toEqual(['resolving', 'failed']);
   });
 
   it('--to below the floor is refused the same way, naming --to', () => {
@@ -4023,7 +4050,7 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
   // run IS that same release). The reviewer's own probe: `update --to
   // v2.0.0 --force` on a v2.0.0 box whose gate fails ends with arm 3, NEVER
   // `REVERTED (arm 2)`, and `previous` still names v1.0.0.
-  it('a same-tag --force reinstall whose gate fails skips arm 2 and falls straight to arm 3; previous still names the release before this run (fix round 1 item 2 / review 155 C1)', () => {
+  it('a same-tag --force reinstall whose gate fails skips arm 2 and falls straight to arm 3; previous still names the release before this run — a DIFFERENT staged sha keeps MIXED (fix round 1 item 2 / review 155 C1; review fix round 1 I3)', () => {
     const home = freshUpdateBox('ccrc-update-restore-sametag-');
     // NOT `plantRestoreBox({ oldVersion: 'v2.0.0' })`: that fixture's own
     // "old" and (unconditional) "target" packRelease calls both build a
@@ -4034,6 +4061,8 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     plantOldBox(home, { version: 'v2.0.0' });
     writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
     writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    // `stubTree`'s own sha (`newsha…`) DIFFERS from the box's OLD_SHA — a
+    // same tag, but a REBUILD, not a repeat: arm 3 must still say MIXED.
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     // The gate fails regardless of version match — /health simply never
     // answers — so the same-tag skip is exercised on its own, not masked by
@@ -4044,9 +4073,79 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(r.stdout).toMatch(/^update: arm 2: this run's target is v2\.0\.0, the release that was already running — re-installing it is what just failed its gate; arm 3$/m);
     expect(restoreChildArgv(home)).toBeNull();
     expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
-    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
-    expect(String(lastReport(home)['detail'])).toMatch(/^arm3: /);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): copied the pre-update backup back — the tree is MIXED \(new shared\/, ccd\/ and node_modules under the old dists\); the remedy is deploy\.sh\. Best effort\.$/m);
+    expect(String(lastReport(home)['detail'])).toBe('arm3: tree MIXED, deploy.sh is the remedy; gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)');
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+  });
+
+  // Review fix round 1 I3's other half: the SAME sha under the same tag —
+  // a genuine repeat, not a rebuild — so arm 3 must say the tree is NOT
+  // mixed and name the honest remedy (the gate's own failure is this box's
+  // health, not its code).
+  it('a same-tag --force reinstall whose STAGED sha equals the running build\'s: arm 3 says not mixed, names ccrc doctor / a plain reinstall (review fix round 1 I3, D-3288)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-samebuild-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    // selfConvergedTree: the staged tree's OWN sha is made to match the
+    // box's running stamp (OLD_SHA) — a genuine REPEAT of the release
+    // already running, not a rebuild under the same tag.
+    packRelease(home, selfConvergedTree(home, 'v2.0.0', OLD_SHA), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm 2: this run's target is v2\.0\.0, the release that was already running — re-installing it is what just failed its gate; arm 3$/m);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    expect(r.stdout).not.toMatch(/MIXED/);
+    expect(r.stdout).not.toMatch(/deploy\.sh is the remedy/);
+    expect(r.stdout).toMatch(
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the SAME release that was running before this update; nothing is mixed\. Read 'ccrc doctor' for why the gate failed, or once fixed: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m);
+    expect(String(lastReport(home)['detail'])).toBe(
+      'arm3: restored v2.0.0 (same build, not mixed); gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)');
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+  });
+
+  // Review fix round 1 I4: item 2's same-tag skip narrows to a COMPLETED
+  // install of the running tag. D-3240's own scenario — a spine that died
+  // after `_inst_stamp` (the stamp reads the new tag, no completed-install
+  // record) — reruns `ccrc update --to <v> --force`, which is a SAME-TAG
+  // run by the stamp, but the box was never WHOLE on that tag: arm 2 must
+  // still restore `previous` (v1.0.0, the last DIFFERENT, COMPLETED
+  // release), never fall straight to arm 3 over the half-installed tree
+  // this very rerun started from.
+  it('a same-tag rerun over a HALF-installed tree (record absent) still lets arm 2 restore previous, a DIFFERENT release (review fix round 1 I4)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-halfinstalled-sametag-');
+    plantOldBox(home, { version: 'v2.0.0' });   // stamp already reads v2.0.0 (the dead spine moved it)
+    // NO .ccrc/installed at all: that spine died before its own record.
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    // v1.0.0: arm 2's own fetch target — a separate tree, no MANIFEST clash.
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    // v2.0.0 (this rerun's target, same tag as the stamp): swaps in the
+    // RESTORE_RECORDER after its own "install" step, exactly as
+    // `plantRestoreBox` does, so arm 2's child (which also runs
+    // `$BOX_TREE_DIR/ccd/ccrc`, the SAME tree) hits the recorder rather
+    // than a bare stub.
+    writeFileSync(join(home, 'fixture-restore-child'), RESTORE_RECORDER);
+    writeFileSync(join(home, 'fixture-on-install'),
+      'mkdir -p "$HOME/ccrc/ccd" && cp "$HOME/fixture-restore-child" "$HOME/ccrc/ccd/ccrc"\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');   // the gate never sees v2.0.0: FAILS
+    // No --to: v2.0.0 is published as latest/download (packRelease's own
+    // default), matching D-3240's prescribed rerun resolving the same way
+    // the original (now half-installed) run did.
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    // Arm 2 restores v1.0.0 — a REAL restore child ran, never the same-tag
+    // skip line.
+    expect(r.stdout).not.toMatch(/this run's target is v2\.0\.0, the release that was already running/);
+    expect(restoreChildArgv(home)).toEqual([
+      join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
+    ]);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 2\): this box runs v1\.0\.0 again, re-installed from its release — gate: /m);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 3\)/);
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
   });
 
   it('a `previous` that went missing or unreadable after it was written falls to arm 3 by name — never a guessed tag', () => {
@@ -5079,6 +5178,31 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     }
   });
 
+  // m5 (review fix round 1): the sibling item 22 missed — an UNVERSIONED
+  // server/both box has nothing to self-compare against either, but that
+  // is not a reason to die: Q8's own rule ("--check always prints its
+  // line") carves out no exception for it. `state=unversioned` is this
+  // box's own DEFAULT state (never flipped to `behind`, since `box` never
+  // gets a real version) — nothing new to compute, just not dying on the
+  // way there.
+  itLinux('server or both + projection absent + an UNVERSIONED box, on --check: `check:` still prints, state=unversioned, never a death (review fix round 1 m5)', () => {
+    for (const role of ['server', 'both'] as const) {
+      const home = freshUpdateBox(`ccrc-update-intent-absent-unversioned-check-${role}-`);
+      plantOldBox(home);   // no version: no build.json at all
+      plantRole(home, role);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const r = runUpdate(home, ['--check']);
+      expect(r.code, `${role}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, role).toBe('');
+      expect(checkLine(r.stdout), role).toBe(
+        `check: box=unversioned sha=none target=none caps=${CAPS_NOW} floor=none projection=unreadable state=unversioned`);
+      expect(r.stdout, role).toMatch(new RegExp(
+        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+      expect(r.stdout, role).toMatch(/^this box: unversioned \(none\) · latest: none — a release install would be the first on this box$/m);
+      expect(localUrls(home), role).toEqual([]);
+    }
+  });
+
   itLinux('an in-force projection names the target: download/<desired>, said on stdout, never latest/download', () => {
     const home = managedFleetBox('ccrc-update-intent-ok-');
     plantIntent(home, intentDoc());
@@ -5290,15 +5414,11 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     const r = runUpdate(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by the control plane \(channel stable\)\) is below this box's floor v3\.0\.0/);
-    // Fix round 1 item 17 / review 155 C28: the converged no-op (which needs
-    // the staged tree's own sha) now precedes the floor check, so the full
-    // fetch runs before the floor can die — see the sibling `latest/download`
-    // case's own comment.
-    expect(localUrls(home)).toEqual([
-      `local://${home}/releases/download/v2.0.0/SHA256SUMS`,
-      `local://${home}/releases/download/v2.0.0/ccrc-v2.0.0.tar.gz`,
-      `local://${home}/releases/download/v2.0.0/ccrc-v2.0.0.tar.gz.sigstore.json`,
-    ]);
+    // Review fix round 1 I5 (narrowing item 17 / review 155 C28): the
+    // target's VERSION (v2.0.0) differs from the running stamp's (v3.0.0),
+    // so the floor is checked BEFORE the fetch here — see the sibling
+    // `latest/download` case's own comment.
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
   });
