@@ -42,7 +42,11 @@ get wrong when editing `src/whitelist.ts`.
 - **Write whitelist:** the agent may write files only under `$HOME/.cc-clips/`. Every other fleet mutation crosses
   the WS as a whitelisted `ccd`/`tmux` verb, never a raw file write. Read whitelist is canonical-prefix,
   realpath-resolved (closes symlink escapes): `~/.cc-sessions/`, `~/.cc-limits/`, `~/.cc-clips/`, `~/.claude*`,
-  and the fleet projects root.
+  and the fleet projects root — plus ONE non-prefix grant: exactly the eight `~/.ccrc` node files
+  (`NODE_FILES`, `shared/agent-protocol.ts`: `build.json`, `installed`, `ccrc-caps`, `floor`, `previous`,
+  `node-id`, `update.json`, `update-intent`), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
+  carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
+  `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's

@@ -22,6 +22,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { NodeMeasurement } from '../src/coord/store.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -50,7 +52,7 @@ const session = (id: string): FleetSession => ({
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -148,6 +150,55 @@ describe('GET /api/fleet/health', () => {
       await app.close();
     }
   });});
+
+describe('GET /api/fleet/health — the inventory-derived `builds` degrades, never 500s (design 2026-09-20 §14)', () => {
+  const STAMP: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
+  const serverRow = (role: 'server' | 'both'): NodeMeasurement => ({
+    nodeId: 'server', role, label: 'server',
+    currentVersion: STAMP.version ?? null, currentSha: STAMP.sha, currentRef: STAMP.ref,
+    currentBuiltAt: STAMP.builtAt, currentDirty: STAMP.dirty,
+    stampRead: 'ok', installState: 'unknown', provenance: 'unknown', caps: [], agentOps: null,
+    highestVersion: null, previousVersion: null, floorRead: 'absent', previousRead: 'absent',
+    os: 'linux', measuredAt: 1_758_000_000_000, report: null,
+  });
+
+  it('an inventory that cannot be read answers builds null per side and build unknown — the route stays up', async () => {
+    // `nodes()` is a synchronous sqlite read; a corrupt or locked coord.db throws. Before W2 nothing in this arm
+    // touched coord.db, so a throw here would be a NEW way for the banner route to 500. It degrades the way
+    // `readPoolEpoch` degrades — and it does NOT fall back to the handshake stamp planted below (spec §8).
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: STAMP });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    const broken = Object.assign(Object.create(coord) as CoordStore, {
+      nodes: (): never => { throw new Error('planted: the inventory cannot be read'); },
+    });
+    const app = await buildServer({ ...deps, build: STAMP, coord: broken });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown', builds: { own: null, fleet: null } });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('local mode never emits `builds`, even over an inventory holding this box\'s row', async () => {
+    // The derivation is the remote arm's alone: there is still no second box to show.
+    const home = mkTmp('ccrc-fh-builds-');
+    const deps = testDeps(home);
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('both'))).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect('builds' in body).toBe(false);
+      expect(body['build']).toBe('unknown');
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+});
 
 describe('GET /api/fleet — degraded mode', () => {
   it('serves the cached snapshot with stale:true + downSince when disconnected', async () => {

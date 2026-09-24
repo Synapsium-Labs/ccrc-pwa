@@ -24,7 +24,7 @@ export const POOLS_DIR_NAME = 'pools';
 /** Do not launch a marker burst that has too little time to produce evidence. */
 const MARKER_LAUNCH_FLOOR_MS = 50;
 
-interface PoolReadDeadline {
+export interface PoolReadDeadline {
   budgetMs: number;
   signal: AbortSignal;
   expired(): boolean;
@@ -33,8 +33,11 @@ interface PoolReadDeadline {
   close(): void;
 }
 
-/** One monotonic, aborting aggregate deadline for the complete pool read. */
-function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
+/** One monotonic, aborting aggregate deadline for the complete pool read.
+ *  Exported unchanged for `update/catalogue.ts`'s listing fetch and
+ *  `update/inventory.ts`'s sweep: `signal` aborts the fetch, `race` turns a
+ *  throw or the deadline into `null`, `close` clears the timer. */
+export function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
   const budget = Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 0;
   if (budget === 0) return null;
 

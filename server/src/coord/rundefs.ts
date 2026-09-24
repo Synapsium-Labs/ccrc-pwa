@@ -145,6 +145,20 @@ export const holdReasonVerdict = (
 export const releaseIsSafe = (openSiblings: readonly OpenSibling[]): boolean =>
   openSiblings.length === 0;
 
+/** The claim that survives a close (or a spent-child refusal): the MOST
+ *  RECENTLY opened run, because the coordinator protocol opens wave N+1
+ *  before closing wave N. With the ordinary one-sibling case this is a
+ *  distinction without a difference; it is written down so two siblings
+ *  produce a DETERMINISTIC reason rather than a coin toss
+ *  (`openRunsForSession` is `ORDER BY id`).
+ *
+ *  Hoisted here (fix round B, F13) so `close.ts` and `dispatch.ts` share ONE
+ *  survivor rule instead of two independent spellings of the same
+ *  `s[s.length - 1] ?? null` — no test pinned the two doors equal before this
+ *  move, and a future edit to one would have silently drifted from the
+ *  other. */
+export const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s.length - 1] ?? null;
+
 /**
  * The two SYSTEM MAIL senders. Neither is a registry row: both are fixed ROLE
  * identities, the same way `resolveCoordinator`'s own docstring already treats

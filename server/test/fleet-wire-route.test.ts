@@ -2,9 +2,10 @@
 // the live read-back. Two halves: `reviveFleetSession`'s persistence
 // contract (additive, absence-permits — S6-R4/constraints.md), and
 // `assembleFleet`'s production read off the registry's seven routing files
-// (`server/src/registry.ts`'s `buildRecord`, the census this task raised
-// from 23 to 30 [registry-read-census:fields] — see registry.test.ts's own
-// census suite for that half).
+// (`server/src/registry.ts`'s `buildRecord`, whose census this task raised
+// from twenty-three reads to thirty; later waves raised it again, and today it
+// is 31 [registry-read-census:fields] — see registry.test.ts's own census
+// suite for that half).
 //
 // Fix round 2, finding 1 (controller ruling S6-R5): the seven reads are now
 // MEASURED (`fieldMeasured`, not the collapsing `field()`), so `route` is
@@ -32,7 +33,7 @@ const session = (id: string): FleetSession => ({
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 const seedSession = (home: string, id: string, wrapper: string, extra: Record<string, string> = {}) => {

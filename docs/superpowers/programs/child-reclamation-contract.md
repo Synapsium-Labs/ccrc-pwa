@@ -38,7 +38,7 @@ planning inputs and are not committed. Every plan re-measures what it relies on.
   spawn, so the first launch already sees it.
 - `_spawn_start` (the one spawn function every path uses) composes `TMPDIR=$HOME/.cc-tmp/<id>` into the
   claude launch environment beside the existing `genenv`/`resenv` precedent, **iff** `_reg_get "$id" child`
-  is non-empty, after `mkdir -p -m 0700` of that directory. Driven by the MARKER, never by ws-add's argv, so
+  is non-empty (superseded by §9 R24: judged with `_child_runid_valid`), after `mkdir -p -m 0700` of that directory. Driven by the MARKER, never by ws-add's argv, so
   every respawn (ensure, start, swap, supervisor restart, ws-restore) keeps it and a non-child never gets it.
 - `cmd_caps` echoes `child-argv-v1` in its capability-token block.
 - `_reg_purge` already globs `$REG/$id.*`; wave 1 adds a test proving `.child` is collected.
@@ -316,7 +316,7 @@ to build the ruled form. A plan keeps its one-line revert notes only where they 
 leave a wave undispatchable pending a ruling below.
 
 - **R1 — an unusable temp root spawns without TMPDIR (wave 1's rc 2): ACCEPTED.** §1 now reads: `_spawn_start`
-  composes `TMPDIR=$HOME/.cc-tmp/<id>` iff the marker is non-empty AND the leaf is, or was just made, a real
+  composes `TMPDIR=$HOME/.cc-tmp/<id>` iff the marker is non-empty (§9 R24: a valid run id) AND the leaf is, or was just made, a real
   directory (not a symlink) owned by this user with mode 0700; otherwise the session spawns WITHOUT `TMPDIR`
   and ccd warns on stderr. Wave 3's tail unlinks a symlink or regular-file leaf at exactly that path with
   `rm -f --`, never following it and never `-rf`.
@@ -443,3 +443,71 @@ leave a wave undispatchable pending a ruling below.
 - **R23 — the contract is committed** at `docs/superpowers/programs/child-reclamation-contract.md`. Every plan's
   header carries a `**Contract:**` line with that path, and every "contract §N" in a plan means that file.
   Committed CODE comments cite the spec, never the contract.
+
+## 9. Rulings, 2026-09-23 (from wave 1's reports and reviews) — binding; they AMEND sections 1–8
+
+- **R24 — the marker is judged, not merely present (D-3336).** `_child_tmpdir` answers "a child" only when
+  `_child_runid_valid "$(_reg_get "$id" child)"` holds. A marker that is present but is not a run id gets no
+  child temp root. Its scratch stays under the box's own TMPDIR, where `ccd-tmp-sweep` collects it. Its reclaim
+  is DEFERRED by the SERVER: wave 2's `childMarkOf` reads a malformed marker as `unreadable`, and the executor
+  defers `marker-unreadable` before any ccd call. ccd's own rung 2 stays a terminal `not-a-child` (re-worded
+  2026-09-23 on wave 3's pre-flight; it once said wave 3's rung 2 defers). Every ccd reader of the marker speaks
+  the one grammar of R2. Shipped in wave 1 (#175).
+- **R25 — an orphaned child temp root has an owner, and it is wave 4 (D-3337).** A child disposed of by a
+  human verb (`ws-rm`, `ws-reap`, `ws-gc --prune`, `forget`) loses its marker and its registry row, but keeps
+  `$HOME/.cc-tmp/<id>`, which no marker-driven path can find again. Wave 4 collects such a leaf only when all
+  of these hold:
+  - its name is a session id no registry file names;
+  - the registry listed cleanly;
+  - it was observed on two consecutive passes;
+  - `reclaim-paused` is absent.
+
+  A link or file leaf is unlinked with `rm -f --`, never followed. A directory is removed without following
+  a link out of it. Until wave 4 deploys, the leak is accepted. Also accepted, from wave 1's deploy until
+  wave 3's: no child's temp root is collected by anything.
+- **R26 — R1 is check-once.** `_child_tmpdir` tests the leaf for a symlink once, before `mkdir`/`chmod`, and
+  does not test it again. A second test after the `chmod` would move the race window, not close it: TMPDIR is a
+  path, and a path can be swapped at any later moment under the fleet's single-user trust model. The defence
+  that holds is at removal: wave 3's tail re-judges the leaf when it removes it and never follows a link.
+- **R27 — the run-id census is a literal-absence pin (D-3339).** `ccd-ws-add-child.test.ts` reds on a verbatim
+  second copy of the pattern and on nothing else. It is accepted as exactly that and is not widened: a scan
+  that tried to recognise every spelling of a grammar would be a semantic pin, and no such scan is complete.
+  Every run-id parse that wave 3 adds calls `_child_runid_valid`, and wave 3's reviewers check this by
+  reading.
+- **R28 — spent means a PR was OPENED from the branch, whether or not it binds** (wave 2, review 144). This
+  amends §2's `none|no-commits → unspent`. Rule 3's ruling is "a PR opened from its branch spends a child", and
+  `phaseFor`'s binding test answers a different question: same base, and the head an ancestor of the local
+  tip. So `childSpent`'s live rung answers `spent`, with that row's number, when ANY same-repository PR row names
+  the child's branch as its head, in any state and whatever its base or ancestry. `unspent` needs no such row.
+  Measured on the real ccd: it can, because ccd lists `gh pr list --head <branch> --state all`. Consequence,
+  accepted for BINDS: a recycled slug inherits its head name's PR history and reads `spent`. It is split by
+  consumer in R30, because wave 3's close reads `spent` as permission to reclaim.
+- **R29 — a listed marker that reads absent is `unreadable`** (wave 2, review 144). This amends the marker's
+  listing rung. When the registry listing names `$REG/<id>.child` but the read answers absent (a dangling link,
+  or a file removed between list and read), `ChildMark` is `unreadable`, so a bind is refused and a reclaim is
+  deferred. ccd's `_reg_get` reads any symlinked field as empty (not a child). The server refusing where ccd
+  answers "not a child" is the safe direction, and it is stated as the one place the two readings differ.
+- **R30 — incarnation placement, split by consumer** (wave 3 pre-flight, 2026-09-23).
+  - **Birth.** A child's birth is its minting run's `dispatchStartedAt` (the server's clock, stamped just before
+    the minting `ws-add`, never cleared). It is unplaceable when that row is absent or unreadable, when the stamp
+    is null, or when the run's `sessionId` is not this session.
+  - **Placement.** Skew is ±120 s. ccd adds `createdAt` to `PR_JSON_FIELDS`. Every same-repository row whose head
+    is the child's branch is placed as one of:
+    - `this` (created at or after birth + skew);
+    - `inherited` (before birth − skew);
+    - `unplaced` (no or unparseable `createdAt`, an unplaceable birth, or within the skew).
+  - **The BIND** refuses on `this` or `unplaced` (R28 unchanged for binds).
+  - **The CLOSE** treats `spent` as finished ONLY when a dated live row proves `this`. `unplaced` and `inherited`
+    HOLD. A fast-path `.prnumber`/`.prhistory` spent is re-dated through the live rung before the close decides.
+  - **Why the two differ.** A bind that refuses wrongly costs one round. A close that reclaims wrongly destroys a
+    held child's clips, temp root, ignored files and pane context. On this repository, merge-commit merges bound
+    old PRs to recycled slugs (`quiet-meadow`, `brisk-meadow`).
+- **R31 — the reclaim never follows a symlinked workdir, and never acts on a workdir another row names** (wave 3
+  pre-flight, 2026-09-23). ccd's ladder, pin and tail each refuse `containment-unproven` when the child's workdir
+  LEAF is a symbolic link. An ancestor link, such as a mounted projects volume, stays legal. The tail re-tests at
+  removal time. The ladder also refuses `containment-unproven` when any other registry row names the same workdir,
+  literally or by resolved path. An unlistable registry refuses too.
+
+  Measured on git 2.43.0: with the child's directory replaced by a link to a dirty sibling worktree, the planned
+  WIP commit lands on the sibling's branch. With the child's worktree record gone, `git worktree remove --force`
+  deletes the sibling outright.
