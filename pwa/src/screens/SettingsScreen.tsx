@@ -109,17 +109,29 @@ export function dayClock(ms: number, now: number): string {
 
 export interface CatalogueLine { text: string; tone: 'calm' | 'amber' | 'muted' }
 
+/** A `lastOkAt`/`lastError.at` magnitude this build's Date cannot place — `asUpdatesView` only guards
+ *  `Number.isFinite`, and 1e20 is finite but `new Date(1e20)` is Invalid Date (review R-b). Not the
+ *  guard `catalogueLine` uses to CLASSIFY `lastOkAt` (below): this one only tells clockTime/dayClock
+ *  when to print '—'. */
+const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
+
 export function catalogueLine(c: CatalogueState, now: number): CatalogueLine {
+  // review R-b: a lastOkAt this build's Date cannot place is UNMEASURED, not a
+  // "checked" instant — treated exactly as a null lastOkAt from here down, so
+  // the failure arm's "since" form and the success arm both fall back
+  // correctly (never "since —", never "checked moments ago" off a value that
+  // was never really placeable).
+  const lastOkAt = c.lastOkAt !== null && isPlaceableInstant(c.lastOkAt) ? c.lastOkAt : null;
   // The failure arm FIRST: a catalogue that answered an hour ago and has failed
   // since is amber, never the calm "checked 1h ago" it would read as if
   // lastOkAt were consulted first (W2 clears lastError on the next success).
   if (c.lastError !== null) {
     const reason = catalogueReasonText(c.lastError.reason);
-    return c.lastOkAt !== null
-      ? { text: `couldn't reach GitHub since ${dayClock(c.lastOkAt, now)} — ${reason}`, tone: 'amber' }
+    return lastOkAt !== null
+      ? { text: `couldn't reach GitHub since ${dayClock(lastOkAt, now)} — ${reason}`, tone: 'amber' }
       : { text: `couldn't reach GitHub (tried ${dayClock(c.lastError.at, now)}) — ${reason}`, tone: 'amber' };
   }
-  if (c.lastOkAt !== null) return { text: `checked ${elapsedWords(now - c.lastOkAt)} ago`, tone: 'calm' };
+  if (lastOkAt !== null) return { text: `checked ${elapsedWords(now - lastOkAt)} ago`, tone: 'calm' };
   return { text: 'never checked', tone: 'muted' };
 }
 
@@ -221,7 +233,7 @@ function UpdatesBody({ view, stale, now, reload }: {
     void api.refreshUpdates()
       .catch((err: unknown) => {
         // A 429 is the route's interval guard (W2 Task 13's
-        // `REFRESH_MIN_INTERVAL_MS`, derived — 200 s today), not a failure: GitHub
+        // `REFRESH_MIN_INTERVAL_MS`, derived, D-3218), not a failure: GitHub
         // was ASKED too recently — by a request that may itself have
         // failed (D-3203 counts every request), so the note claims the request
         // and never a "checked" (the catalogue line owns that word, and only
@@ -252,7 +264,7 @@ function UpdatesBody({ view, stale, now, reload }: {
       </fieldset>
       <fieldset
         className="settings-fieldset"
-        disabled={busy || missing.length > 0}
+        disabled={busy}
         aria-describedby={gateNote !== null ? gateNoteId : undefined}
       >
         <legend className="settings-legend">Auto-install</legend>
@@ -263,6 +275,11 @@ function UpdatesBody({ view, stale, now, reload }: {
               name="settings-auto"
               value={m}
               checked={fleet !== null && fleet.auto === m}
+              // D-3315: only the non-'off' choices are gated on the node caps — the
+              // route accepts `auto: 'off'` unconditionally (server/src/update/routes.ts),
+              // so disabling the whole fieldset would remove the one safe action
+              // exactly when the gate is incomplete.
+              disabled={m !== 'off' && missing.length > 0}
               onChange={() => writeIntent({ auto: m })}
             />
             <span className="settings-option-sentence">{AUTO_LABELS[m]}</span>

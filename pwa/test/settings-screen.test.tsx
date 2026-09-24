@@ -155,6 +155,10 @@ describe('SettingsScreen — Updates: helpers (W3 Task 7)', () => {
       .toBe('23:50 · 23 Sep');
     expect(dayClock(T7_1402, new Date(2027, 8, 23, 15, 0).getTime()), 'the same date a year on is not today').toBe('14:02 · 23 Sep');
     expect(dayClock(Number.NaN, T7_1402)).toBe('—');
+    // The wire only guards Number.isFinite (asUpdatesView); a magnitude this
+    // build's Date cannot place (review R-b) is the missing mark too, not a
+    // thrown exception or a silently wrong day.
+    expect(dayClock(1e20, T7_1402)).toBe('—');
   });
 
   it('catalogueReasonText names each CatalogueErrorReason, reads http-NNN, and shows any other word as it came', () => {
@@ -187,6 +191,17 @@ describe('SettingsScreen — Updates: helpers (W3 Task 7)', () => {
     expect(catalogueLine({ lastOkAt: null, lastError: { at: T7_1402, reason: 'no-egress' } }, T7_1402 + 60_000))
       .toEqual({ text: "couldn't reach GitHub (tried 14:02) — no network route to GitHub", tone: 'amber' });
     expect(catalogueLine({ lastOkAt: null, lastError: null }, T7_1402)).toEqual({ text: 'never checked', tone: 'muted' });
+  });
+
+  it('catalogueLine treats a lastOkAt this build\'s Date cannot place as UNMEASURED, never a "checked"/"since —" (review R-b)', () => {
+    // asUpdatesView only guards Number.isFinite — 1e20 is finite and would
+    // reach here over the wire, and new Date(1e20) is Invalid Date. Read as
+    // null, exactly as an absent lastOkAt is: never-checked with no failure,
+    // and the lastOkAt-null "tried" amber form with one, never "since —".
+    expect(catalogueLine({ lastOkAt: 1e20, lastError: null }, T7_1402))
+      .toEqual({ text: 'never checked', tone: 'muted' });
+    expect(catalogueLine({ lastOkAt: 1e20, lastError: { at: T7_1402, reason: 'no-egress' } }, T7_1402 + 60_000))
+      .toEqual({ text: "couldn't reach GitHub (tried 14:02) — no network route to GitHub", tone: 'amber' });
   });
 
   it('catalogueLine never says "checked" or "up to date" while lastOkAt is null (spec §18 "unreachable is not current")', () => {
@@ -316,21 +331,40 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     expect(set).toHaveBeenCalledTimes(2);
   });
 
-  it('disables auto-install and names every node without the gate word (D-3297)', async () => {
+  it('disables the non-off auto-install radios (off stays enabled) and names every node without the gate word (D-3297, D-3315)', async () => {
     const region = await t7Mount(t7View());   // neither node carries it — every W2 node
     const auto = within(region).getByRole('group', { name: 'Auto-install' });
-    expect(auto).toBeDisabled();
-    for (const m of AUTO_MODES) expect(within(auto).getByRole('radio', { name: AUTO_LABELS[m] })).toBeDisabled();
+    // The route accepts `auto: 'off'` unconditionally (D-3315): the fieldset
+    // itself is not disabled — only the two non-off radios are — so the one
+    // safe action stays reachable while the gate is incomplete.
+    expect(auto).not.toBeDisabled();
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.off })).not.toBeDisabled();
+    for (const m of AUTO_MODES.filter((mode) => mode !== 'off')) {
+      expect(within(auto).getByRole('radio', { name: AUTO_LABELS[m] })).toBeDisabled();
+    }
     expect(within(region).getByText(`${T7_GATE_NOTE}fleet, server`)).toHaveClass('settings-note');
     expect(auto).toHaveAccessibleDescription(`${T7_GATE_NOTE}fleet, server`);
-    // Only the auto choice is gated: the channel and Check now stay live.
+    // Only the non-off auto choices are gated: the channel and Check now stay live.
     expect(within(region).getByRole('group', { name: 'Channel' })).not.toBeDisabled();
     expect(within(region).getByRole('button', { name: 'Check now' })).not.toBeDisabled();
   });
 
+  it('with the gate missing, tapping "off" still writes it — the route accepts auto: "off" unconditionally (D-3315)', async () => {
+    const set = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue({ ok: true, intent: t7Intent({ auto: 'off' }), epoch: 4 });
+    const region = await t7Mount(t7View({ intent: [t7Intent({ channel: 'stable', auto: 'stable' })] }));
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    const off = within(auto).getByRole('radio', { name: AUTO_LABELS.off });
+    expect(off).not.toBeDisabled();
+    fireEvent.click(off);
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({ scope: FLEET_SCOPE, auto: 'off' });
+  });
+
   it('names only the nodes that lack the word', async () => {
     const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server()] }));
-    expect(within(region).getByRole('group', { name: 'Auto-install' })).toBeDisabled();
+    const auto = within(region).getByRole('group', { name: 'Auto-install' });
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.stable })).toBeDisabled();
+    expect(within(auto).getByRole('radio', { name: AUTO_LABELS.off })).not.toBeDisabled();
     expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument();
   });
 
@@ -354,6 +388,26 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     expect(document.querySelector('.toast--error')).toBeNull();
   });
 
+  it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
+    await waitFor(() => expect(document.querySelector('.toast--error'))
+      .toHaveTextContent('Auto-install needs the rollback gate on every node, and at least one does not carry it yet.'));
+    expect(within(region).queryByText(/not yet on:/)).toBeNull();
+  });
+
+  it('a 409 auto-needs-rollback-gate naming only NON-STRING ids falls back to the route\'s own toast', async () => {
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [42] }));
+    const region = await t7Mount(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] }));
+    fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
+    await waitFor(() => expect(document.querySelector('.toast--error'))
+      .toHaveTextContent('Auto-install needs the rollback gate on every node, and at least one does not carry it yet.'));
+    expect(within(region).queryByText(/not yet on:/)).toBeNull();
+  });
+
   it('Check now refreshes once and re-polls; a 429 says GitHub was asked too recently', async () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(t7View());
     const refresh = vi.spyOn(api, 'refreshUpdates')
@@ -373,7 +427,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
   });
 
   it('a 429 over a catalogue never reached claims only a request — no "checked" text anywhere in the section (§18)', async () => {
-    // W2 answers 429 inside REFRESH_MIN_INTERVAL_MS (200 s today) of lastRequestAt(), which a FAILED
+    // W2 answers 429 inside REFRESH_MIN_INTERVAL_MS (derived, D-3218) of lastRequestAt(), which a FAILED
     // scheduled poll sets too (D-3203): this is a tap just after one.
     vi.spyOn(api, 'refreshUpdates')
       .mockRejectedValue(new ApiError(429, { ok: false, error: 'rate-limited', retryAfterS: 42 }));
