@@ -538,12 +538,19 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  could reject `poll()` itself, breaking its own "Never rejects"
    *  docstring and silently freezing the catalogue lane (the listing never
    *  ran either, since it comes after in `pollOnce`). A throw here is read
-   *  as "K unknown this poll": no moved-away tag check is attempted, so
-   *  nothing is yanked on its account (a `/latest` 200 still advances the
-   *  kept tag to the tag it just confirmed, as without a K), and the listing
-   *  still runs. The store is read only when no tag is kept, so `threw` and
-   *  `k: null` lead to the same next step today; they stay two values so a
-   *  later caller cannot mistake a failed read for "no stable release".
+   *  as "K unknown THIS poll": no moved-away tag check is attempted, so
+   *  nothing is yanked on its account, and the listing still runs.
+   *  Fix round 3 (B1, D-3215 amended, review 146): the 200 arm used to fold
+   *  `threw` into `k: null` and then advance `lastLatestTag`/`latestEtag` to
+   *  the tag it had just confirmed, exactly as a legitimate "no K yet"
+   *  would — but that fold is PERMANENT: once `lastLatestTag` is non-null,
+   *  `currentK()` never reads the store again, so one transient throw could
+   *  leave a genuinely withdrawn stable release un-yanked until a restart.
+   *  The 200 arm now treats `threw` exactly like the 404 arm always did — a
+   *  FAILED PROBE, advancing neither var — so the very next poll re-reads
+   *  the store. `threw` and `k: null` therefore no longer lead to the same
+   *  next step on the 200 arm; they still stay two distinct values so
+   *  neither arm's caller can mistake a failed read for "no stable release".
    *  The warning is deduped on the message and not re-armed on recovery. */
   const measuredCurrentK = (): { threw: true } | { threw: false; k: string | null } => {
     try {
@@ -718,10 +725,17 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     }
     if (!applied.ok) { warnLatest(`store-refused-${applied.why}`); return null; }
     latestAnswered();   // the /latest fetch itself succeeded
-    // S1: a throwing read reads as "K unknown" here too — the same branch a
-    // legitimate null takes (advance to T unconditionally, no tag check).
+    // Fix round 3 (B1, D-3215 amended, review 146): a throwing read is a
+    // FAILED PROBE here too — never folded into "no K", which advanced
+    // lastLatestTag/latestEtag to T exactly as a legitimate null did and
+    // made the fold PERMANENT (currentK() never re-reads the store once
+    // lastLatestTag is non-null). T's own upsert above already ran and is
+    // harmless (D-3215's own "T is real regardless of what happens to K");
+    // nothing else here advances on the throw's account, so the very next
+    // poll re-reads the store instead of trusting a stale memory.
     const measured = measuredCurrentK();
-    const k = measured.threw ? null : measured.k;
+    if (measured.threw) return null;
+    const k = measured.k;
     if (k !== null && compareReleaseTags(row.tag, k) < 0) {
       // Ruling A: moved AWAY from K to an OLDER tag T. `latestEtag`/
       // `lastLatestTag` stay pointed at K until the check resolves AND this

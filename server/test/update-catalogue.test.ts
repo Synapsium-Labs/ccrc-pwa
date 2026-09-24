@@ -1833,6 +1833,67 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       }
     });
 
+    // B1 (fix round 3, D-3215 amended, review 146): the S1 case above only
+    // ever drives the 404 arm — the reviewer measured that the 200 arm's OWN
+    // throw handling (`const k = measured.threw ? null : measured.k;`)
+    // folded a failed store read into "no K" and then advanced
+    // `lastLatestTag`/`latestEtag` to the tag it had just confirmed, exactly
+    // as a legitimate null would — PERMANENTLY, since `currentK()` never
+    // reads the store again once `lastLatestTag` is non-null. A restart (so
+    // `lastLatestTag` starts null), a store that throws on its FIRST call
+    // only, and a `/latest` answering 200 with a tag OLDER than K together
+    // reproduce it: poll 1 must send no tag-check request at all (the throw
+    // is read as "K unknown this poll", never as "no K"); poll 2, with the
+    // store healthy again, must tag-check K for real.
+    it('B1: a throwing store read on the 200 arm is a failed probe, not "no K" — the next poll re-reads the store and K is still yanked when withdrawn (mutation: restore the fold; c6: bare currentK() on this arm)', async () => {
+      const { store, port } = fixture();
+      let calls = 0;
+      const throwOnceThenHealthy: CatalogueStore = {
+        applyReleaseListing: (listing, now, coverage, keepTags, withdrawTag) =>
+          port.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag),
+        newestUnyankedStable: () => {
+          calls += 1;
+          if (calls === 1) throw new Error('coord.db is locked');
+          return store.newestUnyankedStable();
+        },
+      };
+      const p = poller(throwOnceThenHealthy);
+      // K sits OFF the listing's own window (D-3215's shape) — planted
+      // directly, as a restart would present it, with no poller ever having
+      // run yet.
+      const kRow: ReleaseListingRow = {
+        tag: 'v0.0.1', channel: 'stable', publishedAt: Date.parse('2026-08-01T00:00:00Z'),
+        commitSha: null, tarballUrl: null, bundleListed: true, notes: null, draft: false,
+      };
+      store.applyReleaseListing([kRow], 500, 'complete');
+      const t = rel('v0.0.0', '2026-07-01T00:00:00Z');   // older than K, on both polls
+      const devPage = (day: number) => Array.from({ length: RELEASES_PER_PAGE }, (_, i) =>
+        rel(`v0.${day}.${i + 1}`, new Date(Date.UTC(2026, 8, day, 0, i)).toISOString(), { prerelease: true }));
+      script = [
+        { status: 200, etag: '"eL1"', body: devPage(2) },
+        { status: 200, etag: '"eL2"', body: devPage(3) },   // still never names K
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eT1"', body: t },
+        { status: 200, etag: '"eT2"', body: t },
+      ];
+      scriptWithdrawn = [{ status: 404 }];   // confirms K is truly gone, once actually asked
+
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await p.poll(1000);
+        expect(seenWithdrawn, 'poll 1: currentK() threw — no tag check attempted').toHaveLength(0);
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
+
+        await p.poll(2000);
+        expect(seenWithdrawn, 'poll 2: the store answered — K is tag-checked for real').toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
+        expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     // Mutation (measured by hand): dropping the probe's own `stampRequest(now)`
     // call (relying solely on `pollListing`'s) is invisible to every OTHER
     // case in this file, because `pollListing` always runs immediately after
