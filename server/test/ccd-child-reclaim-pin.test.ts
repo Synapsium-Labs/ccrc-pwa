@@ -689,3 +689,61 @@ describe('the WIP commit starts from a COPY of the user’s own index', () => {
     expect(atticShas(c)).toContain(side);
   }, 60_000);
 });
+
+describe('intent-to-add entries (`git add -N`), and every status code accounted for', () => {
+  it('commits an intent-to-add file when it is the ONLY change', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, 'plan.md'), 'the plan\n');
+    h.git(c.wt, 'add', '-N', 'plan.md');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip, 'no WIP commit — the intent-to-add file would die with the tree').toMatch(/^[0-9a-f]{40}$/);
+    expect(h.git(c.main, 'show', `${p.wip}:plan.md`)).toBe('the plan');
+  }, 60_000);
+
+  it('commits an intent-to-add file beside other changes', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, 'plan.md'), 'the plan\n');
+    h.git(c.wt, 'add', '-N', 'plan.md');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n')).toEqual(expect.arrayContaining(['plan.md', 'f1.txt']));
+  }, 60_000);
+
+  it('withholds and LISTS an intent-to-add secret-shaped file', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=live');
+    h.git(c.wt, 'add', '-N', '.env');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n')).not.toContain('.env');
+    expect(p.secrets, 'the intent-to-add secret is in no record').toEqual(['.env']);
+  }, 60_000);
+
+  it('commits BOTH halves of what git would read as a rename — the deletion and the intent-to-add file', () => {
+    // With rename detection, `status` pairs a deleted tracked file with an
+    // intent-to-add one of the same content as ` R new\0old`; read as one
+    // path, the deletion's half is lost.
+    const c = makeChild(h);
+    fs.renameSync(path.join(c.wt, 'f2.txt'), path.join(c.wt, 'g2.txt'));
+    h.git(c.wt, 'add', '-N', 'g2.txt');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
+    expect(tree).toContain('g2.txt');
+    expect(tree, 'the deletion half was dropped').not.toContain('f2.txt');
+  }, 60_000);
+
+  it('FAILS — never skips — on a status code the pin does not know', () => {
+    // `--no-renames` means git never answers R or C; a git that did anyway is
+    // the shape of "a code nobody enumerated", which must not drop its path.
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c, { between: 'git() { case "$*" in *"--untracked-files=all --no-renames"*) printf "R  new.txt\\0old.txt\\0"; return 0 ;; esac; command git "$@"; }' });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('does not know');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
+  }, 60_000);
+});

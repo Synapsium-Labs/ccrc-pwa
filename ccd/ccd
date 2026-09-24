@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0b6ddc24621970bb9c68d4ffb3ad3915885302704f44639d5f50042231d70aef
+# ccrc:generated 1 sha256=8c37c85bb145fbb5d7763da6688802ed9ecb7a19bce8fb390b20cb7466fcef30
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24045,7 +24045,7 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new
   #
   # On a DETACHED HEAD (a rebase stopped, or a checkout of a sha) the commit
   # lands on HEAD and not on the branch; the caller pins it by sha.
-  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy skip rc err
+  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err
   local cand=() back=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
   _ws_reclaim_index_src "$dir" || { RECLAIM_WIP_WHY="$_WS_INDEX_WHY"; return 1; }
@@ -24065,22 +24065,36 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new
     GIT_INDEX_FILE="$idx" GIT_LITERAL_PATHSPECS=1 git -C "$dir" reset -q HEAD --pathspec-from-file="$sd/back" --pathspec-file-nul 2>"$sd/err" \
       || { RECLAIM_WIP_WHY="could not return the staged secret-shaped paths at $dir to HEAD: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
   fi
-  # (2) The working tree's changes against the copy.
+  # (2) The working tree's changes against the copy. `--no-renames`: no entry
+  # is ever a rename or a copy (R/C in EITHER column), so each is one path —
+  # a rename is its two halves, a deletion and an addition, each added below.
   GIT_INDEX_FILE="$idx" git -C "$dir" -c core.quotePath=false \
-    status --porcelain=v1 -z --untracked-files=all >"$sd/status" 2>"$sd/err"; rc=$?
+    status --porcelain=v1 -z --untracked-files=all --no-renames >"$sd/status" 2>"$sd/err"; rc=$?
   err=$(cat "$sd/err" 2>/dev/null)
   if (( rc != 0 )) || [[ -n "$err" ]]; then
     RECLAIM_WIP_WHY="git status at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; rm -rf "$sd"; return 1
   fi
+  # EVERY porcelain v1 code, and where it goes (git-status(1), "Short Format"):
+  #   ??                      untracked — added, unless a nested checkout's root
+  #   DD AU UD UA DU AA UU    unmerged — added: its working-tree version
+  #   X in [ MTAD], Y in [MTDA]
+  #                           the working tree differs from the copy — added;
+  #                           ` A` is an INTENT-TO-ADD entry (`add -N`), which
+  #                           neither `diff --cached` nor a commit would carry
+  #   [MTAD] followed by ' '  staged only — the copy already holds it: skipped
+  #   R? ?R C? ?C             not produced under `--no-renames`
+  #   !!                      not produced without `--ignored`
+  # So nothing reaches `*)` — and if git ever answers a code this list does not
+  # name, the pin FAILS rather than dropping that path with no record.
   while IFS= read -r -d '' entry; do
     xy="${entry:0:2}"; p="${entry:3}"
     case "$xy" in
       '??') if [[ "$p" == */ && -e "$dir/${p%/}/.git" ]]; then continue; fi ;;
-      DD|AU|UD|UA|DU|AA|UU) : ;;                                # unmerged: its working-tree version
-      R?|C?) IFS= read -r -d '' skip || :                       # a rename's second field is its source
-             [[ "${xy:1:1}" == [MDT] ]] || continue ;;
-      ?[MDT]) : ;;
-      *) continue ;;
+      DD|AU|UD|UA|DU|AA|UU) : ;;
+      [' 'MTAD][MTDA]) : ;;
+      [MTAD]' ') continue ;;
+      *) RECLAIM_WIP_WHY="git status at $dir answered an entry this pin does not know ('$xy $p') — refusing to guess what it holds"
+         rm -rf "$sd"; return 1 ;;
     esac
     [[ -n "$p" ]] || continue
     if _ws_reclaim_secret_path "$p"; then _ws_reclaim_secret_note "$prefix$p"; else cand+=("$p"); fi
