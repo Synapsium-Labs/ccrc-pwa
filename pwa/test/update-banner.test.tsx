@@ -101,6 +101,18 @@ describe('UpdateBanner — when it speaks', () => {
     expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
+  it('reads a MEASURED but UNREAD stamp as a MISSING side, never as unversioned (D-3307)', () => {
+    // The fleet row WAS measured this sweep, but its stamp did not read (a
+    // local-mode box that cannot read its own build.json). Only the server
+    // side is behind, so the banner speaks off the server's arrow alone; the
+    // fleet side must still read as missing, not "unversioned" — that word
+    // would claim a version measurement nobody made.
+    render(<UpdateBanner updates={view({
+      nodes: [fleetNode({ current: null, stampRead: 'unreadable' }), serverNode()],
+    })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
   it('renders in local mode: the one node that is both reads as both sides', () => {
     render(<UpdateBanner updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
     expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();

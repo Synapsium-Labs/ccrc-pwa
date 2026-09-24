@@ -66,7 +66,7 @@ export function updateBannerText(view: UpdatesView): string | null {
   const release = bannerRelease(view);
   if (release === null) return null;
   const measured = view.nodes
-    .filter((n) => typeof n.measuredAt === 'number')
+    .filter((n) => typeof n.measuredAt === 'number' && n.stampRead === 'ok')
     .map((n) => ({ role: n.role, version: nodeVersion(n) }));
   return `${release.tag} is out on ${release.channel} — ${versionsSummary(measured)}.`;
 }

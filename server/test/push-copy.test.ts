@@ -1130,6 +1130,20 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     expect(notifiedAt(w.coord!, 'v0.0.7')).toBeNull();   // only the newest is ever announced
   });
 
+  it("a measured node whose stamp did not read is a MISSING side in the push body, never 'unversioned' (D-3307)", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.7')).ok).toBe(true);
+    // The fleet row WAS measured this sweep, but its stamp did not read — the
+    // same shape a local-mode box's EACCES leaves. `measured()` fixes
+    // stampRead 'ok', so this overrides it to the unread arm directly.
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+    expect(sent[0]!.body).not.toContain('unversioned');
+  });
+
   it('names each side when the nodes disagree — On dev — fleet v0.0.7 · server v0.0.9', () => {
     const { sent, push } = recorder();
     const w = watcher({ push, coord: true, sessions: [] });

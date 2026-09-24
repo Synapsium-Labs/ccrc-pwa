@@ -1029,7 +1029,7 @@ export class FleetWatcher {
         return { did: 'skipped', why: 'nothing-to-notify' };
       }
       marked = coord.markReleaseNotified(n.tag, now);
-      summary = versionsSummary(nodes.filter((r) => r.measuredAt !== null).map((r) => ({ role: r.role, version: r.currentVersion })));
+      summary = versionsSummary(nodes.filter((r) => r.measuredAt !== null && r.stampRead === 'ok').map((r) => ({ role: r.role, version: r.currentVersion })));
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       if (detail !== this.lastReleasePushFailure) console.warn(`update: the release push was not decided (${detail}) — nothing was marked or sent`);
