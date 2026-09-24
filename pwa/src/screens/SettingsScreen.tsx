@@ -40,10 +40,13 @@ import '../fleet/fleet.css';
 //   * UNREACHABLE IS NOT CURRENT (§18). The line says "checked" only off a
 //     non-null lastOkAt; a failed check is amber and says only what it can
 //     measure (D-3306); nothing here says "up to date".
-//   * THE AUTO GATE IS ADVISORY HERE. The auto-install fieldset is disabled
-//     from the nodes' measured caps before a tap (D-3297);
-//     the intent route's 409 stays the authority, and when it answers, its
-//     node list is rendered by label in the same note.
+//   * THE AUTO GATE IS ADVISORY HERE. Only the non-`'off'` auto-install radios
+//     are disabled, from the nodes' measured caps alone (`autoGateMissing`,
+//     D-3297, D-3315) — `off` stays enabled, since the route accepts it
+//     unconditionally and it moves nothing. The fieldset itself carries no
+//     `disabled` from the gate. The route's 409 disables nothing; it only
+//     relabels the note, rendering its own node list by label in place of
+//     the measured one (D-3315).
 // The selectors are native radios in a fieldset (D-3299):
 // the platform supplies the group's role, its name (the legend), arrow-key
 // movement and the checked state.
