@@ -3094,9 +3094,29 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // LAST in its SET list walked straight past it, measured green.
     const here = path.dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
-    const updates = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
-      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    const writes = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/gi)]
+      .filter((m) => /\bsessionId\b/i.test(m[1]!));
+    // child-reclamation wave 2: an UNBIND is not a re-bind. It binds no value
+    // to the column, so it can hand a run to nobody and has no mail to move —
+    // but it is still a writer, so it is named here rather than let through by
+    // a wider regex: exactly ONE statement may set the column to NULL, it must
+    // mention the column nowhere else in its SET list, and it lives in
+    // `clearSession`. Fix (F14): SQLite column names are case-insensitive and
+    // it applies the rightmost duplicate SET, so `sessionId` here is matched
+    // with the `i` flag — a statement that, case-insensitively, sets or later
+    // re-touches the column with anything other than a LONE `NULL` (a `?`, an
+    // empty string, or the reviewer's own probe, a later `SESSIONID = ?` in
+    // the SAME statement) is a re-binder and lands in `updates` below, not a
+    // silent UNBIND.
+    const UNBIND = /^\s*sessionId\s*=\s*NULL\b(?![\s\S]*\bsessionId\b)/i;
+    const unbinds = writes.filter((m) => UNBIND.test(m[1]!));
+    const updates = writes.filter((m) => !UNBIND.test(m[1]!));
     expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    expect(unbinds, 'a second statement sets runs.sessionId to NULL').toHaveLength(1);
+    const clearAt = src.indexOf('  clearSession(runId: number, pr: number)');
+    expect(clearAt, 'clearSession is gone — the unbind has no home').toBeGreaterThan(-1);
+    expect(unbinds[0]!.index!).toBeGreaterThan(clearAt);
+    expect(unbinds[0]!.index!).toBeLessThan(src.indexOf('\n  }\n', clearAt));
     // The one that remains sits inside bindSession — the funnel, not a caller.
     const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
     const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
