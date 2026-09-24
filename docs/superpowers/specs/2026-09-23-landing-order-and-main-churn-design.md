@@ -2,7 +2,8 @@
 
 **Status:** design approved in the brainstorm by the operator 2026-09-23 (rulings in §3); rev 2 after a six-lens
 adversarial review (61 findings survived, all applied) and a rev-3 verification pass; the operator's ruling on the
-written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24 ·
+written spec's two open decisions recorded 2026-09-23 (R9, R10); reconciled with its first wave plans 2026-09-24,
+and with `main` `b501698a` the same day (step 6 is CCR-15's; stage 2's wave is re-planned, §9) ·
 **Date:** 2026-09-23 · **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-session-continuity-design.md`. Two dependencies run between the specs (§9): the
 continuity spec's stage 1 must land before this spec's stage 5, and the continuity spec's stage 5 appends its
@@ -92,9 +93,8 @@ repositories are on plans that exclude it.
 - Review runs §4: the worker persists until review clears and a send-back is a `fix-round` mail. Ejection from
   the landing line (stage 5) is the same mail on the `merging → working` edge, which exists.
 - CCR-15 rule 3: one PR per child; a spent child refuses a further run bind; the next run opens without a session
-  id and dispatch mints a fresh child (`server/src/coord/dispatch.ts:418`). Stage 1 makes that every wave's
-  path. Reclamation of spent children is CCR-15's later wave; until it ships each wave leaves one more live
-  child (§9).
+  id and dispatch mints a fresh child (`server/src/coord/dispatch.ts:418`). CCR-15's wave 2 (#178) made that
+  every PR-bearing wave's path on `main` ("One PR per child"); reclamation of spent children is its wave 3.
 - Cross-repo ruling 4: a consumer wave is dispatched only after the producer's PR is proven merged at an exact
   sha. Ordering ACROSS repositories stays that discipline; the landing line orders within one repository.
 - Release rollout: every push to `main` becomes a prerelease and `release-main.sh:60` tags HEAD only, so a push
@@ -107,7 +107,7 @@ repositories are on plans that exclude it.
 | R1 | The pain is LANDING (order, cancelled work after main moved, absorb rounds), not visibility. | The edit-ledger direction from the earlier analysis is out. |
 | R2 | Two specs: landing (this) and session continuity. | §9. |
 | R3 | Coordinators may enqueue on this repository's native queue on their own. | Stage 2. |
-| R4 | A fresh workspace per wave. | Stage 1, step 6. |
+| R4 | A fresh workspace per wave. | Delivered by CCR-15 rule 3 on `main` (#178), so stage 1 carries no step of its own (§5.1). |
 | R5 | **No unattended lander.** "It's the coordinator's job to do merges, not the sub-workspace's, as it is the coordinator that bears ultimate merge responsibility (ultimate after the human)." | No timer holds MERGE authority; workers never merge; the coordinator composes, tests and merges from its own shell. |
 | R6 | No headroom estimation. | Nothing here reads account headroom. |
 | R7 | The knowledge graph is not used for landing (measured). | §1's closing paragraph; §13. |
@@ -162,13 +162,13 @@ a land-sync only to the PR it named next in a strict repository, never merges ma
 own, and commits programme-ledger documents on its own ledger PR, never inside a feature PR (the ledger file was
 the hottest overlap file in three repositories).
 
-**Step 6 of the wave lifecycle.** Once the predecessor's PR measures merged, wave N+1's run opens WITHOUT
-`sessionId`, so dispatch mints a fresh child from current main, and the same-project predecessor closes as the
-cross-project arm closes a producer: `final:true`, requiring `released:true`. A wave that must overlap its
-predecessor is a deliberate stacked child, named in the brief, and pays one absorb knowingly. Open-before-close is
-unchanged.
-This step goes live only with CCR-15's reclaim-on-close wave (§9); before that, every wave leaves a live child
-the operator archives by hand.
+**A fresh workspace per wave (R4) is CCR-15's.** This section first drew it as step 6 of the wave lifecycle,
+gated on CCR-15's reclaim-on-close wave. CCR-15's wave 2 (#178) made it live on `main` without a gate, as "One PR
+per child" in the coordinator skill's step 6 and `wave-lifecycle.md` §5 step 3: a marked producer whose workspace
+opened a PR is spent, wave N+1 opens without its `sessionId`, and a wave that builds on its predecessor's code
+dispatches only once that PR is proven merged at its exact head. Stage 1 therefore adds no step 6; a producer
+whose workspace opened no PR keeps it, as CCR-15 rules. (Removed 2026-09-24, when the first plans were
+re-measured against `main` `b501698a`.)
 
 **The hook reaches sessions the skills do not.** `ccd/session-hook.sh`'s PreToolUse arm (matcher `*`) sees every
 Bash call. On a command that merges, pulls or rebases `main` into the current branch, or asks GitHub to with
@@ -393,7 +393,7 @@ of the "main went red after two PRs landed 28 minutes apart" class.
 
 | Area | Change |
 |---|---|
-| `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, step 6, land-sync and ejection vocabulary; pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
+| `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md`, `references/wave-lifecycle.md` | clauses 16 / 15, land-sync and ejection vocabulary; pins in `worker-skill.test.ts`, `coordinator-skill.test.ts`; clause-count words in `README.md` and `CLAUDE.md` |
 | `ccd/session-hook.sh` | PreToolUse advisory on main syncs and `update-branch`; deny on `gh pr merge` for programme-wave sessions (`CCRC_HOLD_WAVE_RE`), and on `--admin` and `gh api` merge calls for all sessions |
 | `ccd/ccd` | `pr-state` GraphQL queue query and the `--project --pr` form; `land-candidate` with `--drop`; lineage hooks; re-stamp and the citation-corpus procedure |
 | `server/src/remote/runner.ts`, `server/test/pr-timeout-budget.test.ts` | `pr-state`'s outer bound 20 s → 25 s; the budget sums three timeouts |
@@ -438,7 +438,10 @@ headlines in the last 40 merged PRs). Stage 1's `ccrc restamp` is its first deli
 ## 9. Sequencing
 
 - Stage 1 first; stage 2 builds on stage 1's coordinator clause 15, so it lands with or after stage 1.
-  Stage 1's step 6 goes live only with CCR-15's reclaim-on-close wave.
+  Stage 2's wave is re-planned against CCR-15 before it is dispatched: CCR-15's "One PR per child" (#178) closes a
+  PR-bearing producer's run before its PR merges, and its wave 3 then reclaims that workspace. Stage 2's dequeue
+  lane, its landing spelling (which must keep #178's `--match-head-commit`) and its merge deny each assumed the
+  producer's run stays open until its PR lands (the wave-2 plan's status block, 2026-09-24).
 - Stage 3 next; stage 4 needs stage 3's lineage.
 - Stage 5 needs stages 3 and 4 and **the continuity spec's stage 1** (the sidecar carry merge): a coordinator
   parked on a limit cannot land until rescued, and after a rescue it must find its journals on the new account.

@@ -1,5 +1,13 @@
 # Landing order, wave 2 — GitHub's native merge queue, repository code (SERVER-FIRST) Implementation Plan
 
+> **Status: Tasks 3–5 need a re-plan before this wave is dispatched.** Ruled by the orchestrator 2026-09-24: Tasks 3, 4 and 5 are RE-PLANNED after child-reclamation wave 3 merges, and no worker executes them from the text below. Tasks 1 and 2 are not re-planned (Task 2 re-measured 2026-09-24 on `65c5bb34`). Task 6's PR-body items 3–5 and whole-branch counts, and Task 7 Step 5's enqueue command, checks (e) and (f) and stop rule 4, restate Tasks 3–5 and are re-planned with them. The reason is the interaction with child-reclamation: #178's **One PR per child** plus wave 3's **reclaim-on-close**. A PR-bearing producer's run is closed `final:true`, `released:true` BEFORE its PR merges (`ccd/coordinator-skill/references/wave-lifecycle.md:718-738`, the close at `:725-729`, the merge proof it defers to at `:730-738`; the release is `ws-release`, `server/src/coord/close.ts:347-353`), and wave 3 then reclaims its workspace, removing the registry row with the worktree and pane (`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md:132-133` and `:366-368`; the trigger is `:376-382`; the ladder ignores `not-merged`, `:275-277`). So, as written:
+>
+> 1. **(i) Task 3's dequeue lane mails nobody.** It is keyed on an OPEN run naming the workspace and on the session's registry row, and the producer has neither once it closes and is reclaimed.
+> 2. **(ii) Task 5's clause-15 spelling `gh pr merge <n>` drops #178's exact-SHA binding** `--match-head-commit <handoffCommit>` (`wave-lifecycle.md:737-738`). Task 3's `renderDequeueBrief` uses the same spelling.
+> 3. **(iii) Task 4's merge deny is keyed on a wave hold,** so it has a window after the final close releases the hold and before the PR lands.
+>
+> The measured facts, the recommended directions for each, and the other inputs to the re-plan are Pre-flight finding 12.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make this repository ready for GitHub's native merge queue and make the queue's one silent failure loud — without changing a single repository setting. `ci.yml` answers `merge_group` (so a queue entry gets its required checks), skips the two non-required macOS legs on a queue run, and cancels a superseded `pull_request` run; `ccd pr-state --project` makes ONE GraphQL query per repository per sweep, under its own timeout, and stamps every full line with an additive `queue` word (`queued | dequeued | landed | none | unmeasured`); the server turns a `dequeued` reading into a `queue` feed record and a `status` mail to the run's coordinator, once per removal — across a server restart too, and never latched as told when the read or the mail failed; the session hook DENIES `gh pr merge` to any session whose hold names a programme wave, and lets the coordinator's plain `gh pr merge <n>` (which enqueues) through; coordinator clause 15 says so. The last task is the operator's post-merge runbook: the queue ruleset, approvals to 0, R9's break-glass, and the proof run that gates wave 2b.
@@ -75,7 +83,9 @@ Six inputs or failure modes the spec implies and nothing on `main` tests. Each i
 | `.github/workflows/ci.yml` | Modify — `merge_group:` in `on:`; a top-level `concurrency:` block; `if:` on `test-macos` and `probe-macos` (Task 1) | The queue gets its required checks; macOS stays off queue runs; a superseded PR run stops |
 | `server/test/ci-merge-queue.test.ts` | Create (Task 1) | The three `ci.yml` properties, read from the file, the macOS set derived from `runs-on` |
 | `ccd/ccd` | Modify — `PR_GH_QUEUE_TIMEOUT`, `PR_QUEUE_QUERY`, `_gh_pr_queue`, `_pr_queue_stamp`, `_pr_queue_py` inserted between `cmd_clip` and the source guard; ONE line of `cmd_pr_state` in place; two length-neutral prose rewrites (the outer-bound paragraph, `cmd_pr_state`'s budget header) (Task 2) | The third `--project` call and the `queue`/`queueAt` stamp |
-| `server/src/remote/runner.ts` | Modify — `'pr-state': 20_000` → `25_000`, its comment and `ws-rename`'s (Task 2) | The outer bound the three calls fit inside |
+| `server/src/remote/runner.ts` | Modify — `'pr-state': 20_000` → `25_000`, its comment (the three calls, and the two `--session` consumers that wait on the same key) and `ws-rename`'s (Task 2) | The outer bound the three calls fit inside |
+| `server/src/coord/childSpent.ts` | Modify — ONE docstring line in place: `pr-state`'s `20 s` remote budget → `25 s` (Task 2) | States the bound `childSpent`'s live gh round trip waits on |
+| `server/src/coord/routes.ts` | Modify — ONE comment line in place, in `POST /api/runs`'s rule-3 gate: `pr-state`'s `20 s` budget → `25 s` (Task 2) | States what `childBindGate` can cost inside `coordMutex` |
 | `server/test/remote-runner.test.ts` | Modify — the `pr-state` row and its comment (Task 2) | The new bound, pinned |
 | `server/test/pr-timeout-budget.test.ts` | Modify — header, the budget sums THREE timeouts (Task 2) | The cross-language budget |
 | `server/test/ccd-pr-queue.test.ts` | Create (Task 2) | One call per sweep, `-f` variables, its own timeout, the five words, and "may not cost the rows" |
@@ -101,7 +111,7 @@ Six inputs or failure modes the spec implies and nothing on `main` tests. Each i
 
 Each was measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc`. They are why the tasks look the way they do.
 
-1. **The existing budget has no room for a third call.** `pr-timeout-budget.test.ts` requires the gh timeouts to sum to at most 70 % of `CCD_VERB_TIMEOUT_MS['pr-state']`: `8 + 5 = 13 ≤ 14` at 20 s, so a third call could have at most 1 s. The queue query measured 0.72–1.39 s, so 1 s is not a bound. The plan raises the outer bound to 25 s and gives the call 4 s: `8 + 5 + 4 = 17 ≤ 17.5`. Row B1 (bound back at 20) reds with `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`.
+1. **The existing budget has no room for a third call.** `pr-timeout-budget.test.ts` requires the gh timeouts to sum to at most 70 % of `CCD_VERB_TIMEOUT_MS['pr-state']`: `8 + 5 = 13 ≤ 14` at 20 s, so a third call could have at most 1 s. The queue query measured 0.72–1.39 s, so 1 s is not a bound. The plan raises the outer bound to 25 s and gives the call 4 s: `8 + 5 + 4 = 17 ≤ 17.5`. Row B1 (bound back at 20) reds with `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`. **RULED 2026-09-24 (the orchestrator, option a): 25 s for BOTH `pr-state` modes.** The map is keyed by the verb alone (`server/src/remote/runner.ts:115`, `CCD_VERB_TIMEOUT_MS[args[0] ?? '']`), so `--session`, which makes one gh call, rises with `--project`. Measured at `65c5bb34`: `verifyDone`'s `--session` read has waited inside `coordMutex` since 2026-08 (at close, `server/src/coord/close.ts:283` under `routes.ts:1535`'s `coordMutex.run`; at advance, `routes.ts:1774` inside `:1723`'s), so all of them rise to 25 s; #178 added two MORE waits — `childSpent` calls it (`server/src/coord/childSpent.ts:116`, `CCD_ARGV.prStateSession`) through `childBindGate`, which `POST /api/runs` awaits (`server/src/coord/routes.ts:1356`, inside the `coordMutex.run` at `:1187`) and dispatch's resume arm awaits (`server/src/coord/dispatch.ts:729`, inside `routes.ts:1511`'s `coordMutex.run(() => dispatchRun(…))`) — and it stated the old bound as a fact twice (`childSpent.ts:103`, `routes.ts:1351`). Task 2 Step 7 names both consumers in the runner comment and rewrites both statements in place.
 2. **The query, measured read-only against this project's own public repository** (`gh api graphql`, no mutation; the owner is not written here): the single-window form (`first: 100, states: [OPEN, MERGED], orderBy UPDATED_AT`) answered in 2.13–2.69 s over four runs; the two-window form this plan ships (100 OPEN, the 20 most recently updated MERGED) answered in 0.72–1.39 s over five runs, rc 0, `{open: 11 nodes, merged: 20 nodes}`, every node carrying `number`, `state`, `mergeQueueEntry` (null — no queue exists yet) and `timelineItems` (empty). So the schema accepts every field the query names. Re-measured at review with the open window ordered `CREATED_AT DESC` (the form this plan now ships): 0.74–1.12 s over five runs, rc 0, `{open: 12, merged: 20}`, the open numbers newest-first. `gh pr list` itself orders `CREATED_AT DESC` (read from gh 2.45's embedded `pullRequests(… orderBy: {field: CREATED_AT, direction: DESC})` query), so every open PR `_gh_pr_list`'s `--state all --limit 100` window can bind is inside the queue read's hundred.
 3. **The spec's "last `REMOVED_FROM_MERGE_QUEUE_EVENT`" alone is ambiguous** for a MERGED PR: "dequeued, re-enqueued, landed" and "dequeued, then merged by hand" both have a removal and no entry. The query asks for the last queue act of EITHER kind (`timelineItems(last: 1, itemTypes: [ADDED_…, REMOVED_…])`). Pinned by the case "none — a MERGED PR whose last queue act is a removal was merged BY HAND"; row Q4 (`MERGED` alone reads as landed) reds it.
 4. **`GH_STUB` answers every `gh` call with the rows**, so every existing `ccd-pr-state.test.ts` case now meets a list where the GraphQL object should be. `_pr_queue_py` reads that as "not the query's shape" → `unmeasured`, and the existing suite stays green: `ownership` + `ccd-pr-state` 113/113 on the prototype. No existing test asserted an exact line object or a call count that the third call moves.
@@ -112,6 +122,11 @@ Each was measured on a prototype of this plan's exact edits in an isolated workt
 9. **The repository's current settings, measured read-only** (`gh api …/rulesets`, `…/rulesets/<id>`, `…/branches/main/protection`, `…/<repo>`): the `main` ruleset has ONE rule, `pull_request`, with `required_approving_review_count: 1` and `allowed_merge_methods: [merge, squash, rebase]`, and TWO bypass actors — `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `bypass_mode: pull_request`; classic protection requires the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `strict: false`, `enforce_admins: true`, approvals 0; `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. Task 7 is written against these values. R9 reads "the repository-admin role STAYS the ruleset's only bypass actor", and the maintain role is a second one today — RULED (the orchestrator's decision record, 2026-09-24, confirmed by the operator the same day): the runbook removes it, R9 as ruled; Task 7 Step 3 records it. The rulesets LIST endpoint returns summaries only (no `conditions`, `rules` or `bypass_actors` — measured), so Task 7 finds the main ruleset by reading each ruleset in full.
 10. **Red-first, measured at `905360dc` with each new test written first:** `ci-merge-queue` 3 failed of 3; `ccd-pr-queue` 10 failed | 3 passed (the three that pass are the "absence" and "passes through" guards, true before and after; re-measured at `af64d9d2` with the ordered-window assertion, unchanged); `pr-queue-lane` 10 failed | 1 passed, re-measured at `af64d9d2` with the review revision's four new cases (vitest leaves a missing named export `undefined`, so the reds are `TypeError: queueFor is not a function` and empty feeds, not an import crash); `session-hook-merge-deny` 4 failed | 3 passed (the three that pass are the pass-through cases; re-measured at `af64d9d2` with the widened lists, unchanged).
 11. **Two shapes of the first deny were measured wrong at review, and are why Task 4 strips quotes and widens the head.** Probed through the real hook with a wave hold: it DENIED ``git commit -m "the coordinator lands with `gh pr merge <n>` …"``, `git commit -m "docs (gh pr merge 42)"`, a heredoc commit message quoting `` `gh pr merge --admin` `` and ``gh pr create --body '… `gh pr merge <n>` …'`` — the commit messages and PR bodies this very programme writes — and it PASSED `if gh pr checks 42; then gh pr merge 42; fi`, `for …; do gh pr merge $n; done`, `{ gh pr merge 42; }`, `! …`, `time …`, `timeout 60 …`, `env GH_TOKEN=x …` and `gh pr --repo o/r merge 42`. The revised block removes '…' spans and $(-free "…" spans in the jq it already runs (no new fork), drops the backtick from the head separators, and accepts reserved-word, grouping and wrapper heads and flags between `pr` and `merge`; the new cases and rows H9–H14 pin both directions.
+12. **Tasks 3–5 need a re-plan before this wave is dispatched (ruled by the orchestrator 2026-09-24).** Re-plan them after child-reclamation wave 3 merges. Tasks 1 and 2 are not re-planned by this ruling, though direction (i) below may reopen Task 2's output shape; Task 6's PR-body items 3–5 and whole-branch counts, and Task 7 Step 5's enqueue command, checks (e) and (f) and stop rule 4, restate Tasks 3–5 and are re-planned with them. Measured 2026-09-24 at `65c5bb34`. The cause is #178's One PR per child plus wave 3's reclaim-on-close. A PR-bearing producer is SPENT, and the coordinator closes its run `final:true`, requires `released:true` and opens wave N+1 without its `sessionId` (`ccd/coordinator-skill/references/wave-lifecycle.md:718-729`). A merge proof is required only when wave N+1 depends on the producer's code (`:730-738`), so the close ordinarily lands BEFORE the PR merges. That close's `ws-release` removes the hold (`server/src/coord/close.ts:347-353`). Wave 3 then reclaims the child on the same close, because the close is `final` or the child is `spent` (`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md:376-382`). The ladder that reclaims it ignores `not-merged` (`:275-277`). It removes the pane, the worktree, the branch and, last, the registry row (`:132-133`, `:366-368`). Three interactions with this plan's text follow:
+    - **(i) The dequeue lane mails nobody.** `cmd_pr_state` prints one line per REGISTRY id (`ccd/ccd:10684`, `for id in "${ids[@]}"`). Task 2's stamp annotates only those lines. Task 3's `sweepDequeued` walks the registry `records`, and it mails only when `openRunsForSession` (`server/src/coord/store.ts:2661`) finds an OPEN run naming the workspace. After the final close there is no open run, so the lane writes the feed record and mails nobody. After the reclaim there is no registry row, so there is no line and no queue word, and not even the feed record gets written. Yet a dequeue of the PR the coordinator enqueued is the one the programme must hear. **Direction:** key the lane on the PR the coordinator enqueued, not on a session row. Mail `resolveCoordinator` of the newest run that named that workspace. `resolveCoordinator(runId)` reads the run's `claimedBy` with no state predicate (`store.ts:3554-3559`). Two reads outlive the registry row. `runsTouching` (`store.ts:1399`) returns runs in any state, ordered by id; filter it to `sessionId`. `runs.prLineage` is folded from `.prhistory` at close (`close.ts:325`, `store.ts:2486`) and names the run's PRs. The re-plan must also decide where a PR that no line binds gets its queue word. Task 2's stamp answers only on per-session lines. If the lane needs a per-repository record of queue facts, that reopens Task 2's output shape and its pins (`ccd-pr-queue.test.ts`, rows Q1–Q9). That decision is the re-plan's to make, not this ruling's.
+    - **(ii) Clause 15's spelling drops the exact-SHA binding.** Task 5's sentence says landing is `gh pr merge <n>` with no `--admin`, and Task 3's `renderDequeueBrief` says the same (`gh pr merge ${pr}`). Both drop `--match-head-commit <handoffCommit>`. #178 put that flag in the coordinator's merge "for exactly this reason": the exact-SHA merge proof (`wave-lifecycle.md:734-739`). **Direction:** keep `--match-head-commit <handoffCommit>`. Pass no `--squash` and no `--admin` on a native-queue project, because the queue's merge method applies. Task 7's proof run gains a measurement that gh enqueues with `--match-head-commit`. Task 5 then ALSO edits `wave-lifecycle.md` §5 (`## 5`, `:683`). On this tree `:737-738` read ``gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus `--admin` where the repository's ruleset requires it)``. That edit goes in Task 5's Files, the File Structure table and its `git add`, with exact old and new text. No test pins that spelling today (`grep -rn "match-head-commit" server/test` finds nothing).
+    - **(iii) The merge deny has a window.** Task 4 judges `$REG/<id>.hold` (read as `_hook_hold_card` reads it, `ccd/session-hook.sh:808`) against the wave grammar. The final close's `ws-release` removes that hold while the PR is still open. From then until the PR lands, the producer's session carries no hold, so `gh pr merge` passes. The window lasts until wave 3's reclaim kills the pane, and the ladder can defer that on `paused` or `attached` (spec `:288`, `:290`; `held`, `:289`, only if a new hold is placed after the release; the attached defer is bounded at 15 minutes, `:460`). **Direction:** the deny also keys on the child marker `$REG/<id>.child`. `cmd_ws_add` writes the marker (`ccd/ccd:7117`, `_reg_set "$id" child …`), and it outlives the hold. The re-plan measures that no coordinator session carries one.
+   **Other inputs to the re-plan (the verifier's):** (a) Task 3 Step 7 rewrites `rundefs.ts`'s `queueSystemMail` comment to "all six of its callers". On this tree the comment says "all five" (`server/src/coord/rundefs.ts:274-278`), and the callers are SIX: `closeRun` (`close.ts:293`), `closeReviewRun` (`close.ts:474`, which the comment omits), `dispatchRun` (`dispatch.ts:1098`), `queueProgramKickoff` (`kickoff.ts:157`), the `POST /api/runs/:id/advance` handler (`routes.ts:1781`) and `FleetWatcher.hold` (`watch.ts:4427`). With `sweepDequeued` that is seven. Name all seven, or name only the addition and drop the count. (b) Task 5 never edited `wave-lifecycle.md`. Direction (ii) above adds it. (c) `sweepDequeued` picks `sib.siblings[sib.siblings.length - 1]` by hand. It should use `rundefs.ts`'s `survivorOf` (`server/src/coord/rundefs.ts:160`, the same rule; `close.ts:309` and `dispatch.ts:282` call it), so the lane cannot drift from the close's choice of survivor.
 
 ---
 
@@ -535,11 +550,12 @@ MSG
 **Files:**
 - Modify: `ccd/ccd` — insert the queue block between `cmd_clip`'s closing `}` and `# Guard so the script can be \`source\`d …`; replace ONE line in `cmd_pr_state` (the per-session loop); rewrite IN PLACE `cmd_pr_state`'s nine-line budget header and the sixteen-line outer-bound paragraph above `PR_GH_CHECKS_TIMEOUT=5`
 - Modify: `server/src/remote/runner.ts`, `server/test/remote-runner.test.ts`, `server/test/pr-timeout-budget.test.ts`
+- Modify: `server/src/coord/childSpent.ts` and `server/src/coord/routes.ts` — ONE comment line each, `20 s` → `25 s` in place (length-neutral; #178's two shipped statements of the old bound, located by content)
 - Test: `server/test/ccd-pr-queue.test.ts` (new)
 
 **Interfaces:**
 - Consumes: `_gh_repo_slug`'s `OWNER/NAME` (anchored to `[A-Za-z0-9._-]`), `_plat_timeout`, each full `_pr_state_one` line's `number`, `id` and `rows`.
-- Produces: on every FULL line of `ccd pr-state --project` (a line with `id` and `rows`), `queue` ∈ `queued | dequeued | landed | none | unmeasured`, plus `queueAt` (ISO-8601 `Z` timestamp of the last queue act) only when present and well-shaped. `--session` lines, failure objects and older builds carry neither key. `CCD_VERB_TIMEOUT_MS['pr-state'] = 25_000`. Task 3 reads both keys through `queueFor`.
+- Produces: on every FULL line of `ccd pr-state --project` (a line with `id` and `rows`), `queue` ∈ `queued | dequeued | landed | none | unmeasured`, plus `queueAt` (ISO-8601 `Z` timestamp of the last queue act) only when present and well-shaped. `--session` lines, failure objects and older builds carry neither key. `CCD_VERB_TIMEOUT_MS['pr-state'] = 25_000` — for BOTH modes (ruled 2026-09-24), so `childBindGate`'s `--session` read on `POST /api/runs` and on dispatch's resume arm can hold `coordMutex` 25 s where it held 20. Task 3 reads both keys through `queueFor`.
 
 - [ ] **Step 1: Write the failing test** — `server/test/ccd-pr-queue.test.ts`:
 
@@ -1020,7 +1036,12 @@ with:
 ```typescript
   // 25, not 20, since landing-order wave 2: `pr-state --project` makes THREE
   // gh calls now (rows, rollups, the merge-queue read), and their timeouts are
-  // summed against this number by `pr-timeout-budget.test.ts`.
+  // summed against this number by `pr-timeout-budget.test.ts`. The key is the
+  // VERB, so `--session` (one gh call) is bounded at 25 s too, and it is read
+  // INSIDE `coordMutex` — by `verifyDone` at close and at advance, and through
+  // `childSpent` by every child-bind check (`childBindGate` on `POST /api/runs`,
+  // dispatch's resume arm) — so every other coordination write can queue
+  // behind one slow read for up to this long.
   'pr-state': 25_000,
   // Same reach as pr-state: it shells out to `git ls-remote` against origin
   // before it will rename. Without an entry it silently inherits the flat
@@ -1124,6 +1145,28 @@ and replace the two `it`s (from `  it('the two gh calls together leave real room
   });
 ```
 
+**And the two shipped comments that state the old bound as a fact** — both added by #178 (child-reclamation wave 2), both on `--session`'s path, both true only at 20 s. Census them by content first:
+
+```bash
+grep -rn "pr-state\`'s 20 s" server/src
+```
+
+Expected at `65c5bb34` (measured 2026-09-24): exactly two hits —
+
+    server/src/coord/childSpent.ts:103: * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
+    server/src/coord/routes.ts:1351:    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+
+(the second is `POST /api/runs`'s rule-3 comment, the one that records the wait happens INSIDE `coordMutex`). In each hit replace `20 s` with `25 s` and change nothing else on the line — length-neutral, so no line moves:
+
+```bash
+sed -i "s/bounded by \`pr-state\`'s 20 s remote budget, and it/bounded by \`pr-state\`'s 25 s remote budget, and it/" server/src/coord/childSpent.ts
+sed -i "s/at most \`pr-state\`'s 20 s budget, and only for a CHILD/at most \`pr-state\`'s 25 s budget, and only for a CHILD/" server/src/coord/routes.ts
+grep -rn "pr-state\`'s 20 s" server/src; echo "rc=$?"
+git diff --numstat -- server/src/coord/childSpent.ts server/src/coord/routes.ts
+```
+
+Expected: no hit and `rc=1`; `1	1	server/src/coord/childSpent.ts` and `1	1	server/src/coord/routes.ts`. The exact-spelling census cannot see a statement worded another way, so widen it once before the edit: `grep -rnE "(^|[^0-9.])20 ?s([^a-z0-9]|$)" server/src | grep -v _000` — at `65c5bb34` with the `runner.ts` edit above in (measured 2026-09-24) five hits: the two above, `server/src/server.ts:1322` and `:2240` (the PWA's 20 s poll cadence, not this bound), and `server/src/remote/runner.ts:40` (the new `ws-rename` comment, which narrates the past and stays). Census the CALLERS too, because a caller that states no bound is invisible to both greps: `grep -rn "childSpent(\|childBindGate(" server/src | grep -v '^\S*:\s*\*' | grep -v 'function '` — at `65c5bb34` three: `childBind.ts:62` (`childSpent`), `routes.ts:1356` and `dispatch.ts:729` (`childBindGate`). Any other caller — child-reclamation wave 3's `childGateAtClose` passes the birth to `childSpent` (its plan, `:7278`) — is a consumer: name it in the runner comment's parenthesis and in the commit message, whether or not its docstring states the bound. **If the bound census finds a THIRD statement of this bound** — child-reclamation wave 3's plan tells its worker to state "pr-state's 20 s budget" in the close's `childGateAtClose` docstring (`docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md:7280` and `:7434`), and this wave is dispatched only after wave 3 merges — rewrite it the same way, in place, add its file to this task's `git add`, and name the close as a third consumer in the runner comment above and in the commit message; say so in the wave-done mail. Any other hit that states the LIVE bound gets the same edit; a sentence that narrates the past (`ccd-pr-open.test.ts:363`'s and `ccd-pr-state.test.ts:214`'s "measured the pair against the 20 s … ceiling that actually ships", `ccd-pr-state.test.ts:300`'s "the outer bound the pr-lifecycle spec set for this verb (20 s)") stays as written — they are in `server/test`, which this census does not read, deliberately.
+
 - [ ] **Step 8: Re-stamp, then pay (and prove) the citation tax**
 
 ```bash
@@ -1137,7 +1180,7 @@ python3 "$SCRATCH/repoint-readme.py" && git diff --quiet -- README.md && echo re
 python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD
 ```
 
-Expected (measured on the prototype at `af64d9d2`, with the ordered open window): `syntax-ok`; `190	25	ccd/ccd` (the 165-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes; `185	25` before the review revision's five comment lines); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21202` and `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc` (the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, and EMPTY `ENTERED`/`LEFT` everywhere.
+Expected (measured on the prototype at `af64d9d2`, with the ordered open window): `syntax-ok`; `190	25	ccd/ccd` (the 165-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes; `185	25` before the review revision's five comment lines); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21202` and `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc` (the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, and EMPTY `ENTERED`/`LEFT` everywhere. Re-measured 2026-09-24 at `65c5bb34` (`main` `b501698a` merged), with Steps 1 and 3–7 applied by script from this plan's own blocks, the two `sed` edits run as written: `syntax-ok`; `190	25	ccd/ccd`; the re-pointer printed `ccd/ccd:21202` and `ccd/ccd:19989-19991` and `readme-untouched`; the re-measurer `147 / 195 / 53 / 35` stated == base == tree, `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty.
 
 - [ ] **Step 9: Run the tests to verify they pass**
 
@@ -1150,13 +1193,15 @@ cd server && ./node_modules/.bin/vitest run test/ccd-pr-queue.test.ts
 ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'EVERY bash call site'
 ./node_modules/.bin/vitest run test/session-hook.test.ts \
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
+./node_modules/.bin/vitest run test/child-reclaim-bind.test.ts test/child-reclaim-spent.test.ts \
+  test/child-reclaim-refusals.test.ts test/coord-routes-single-file.test.ts
 ```
 
-Expected (measured on the prototype): `13 passed (13)`; `113 passed (113)` (ownership proves the re-stamp; every existing pr-state case survives the third call — its stub answers the GraphQL call with rows, which reads as `unmeasured`); `23 passed (23)`; `49 passed (49)` (the `_reg_get` census did not move — this task adds no `_reg_get`); PASS (`98 passed | 10 skipped` for the first two, then the route and whitelist files); `1 passed | 78 skipped`; `7 passed | 326 skipped`.
+Expected (measured on the prototype): `13 passed (13)`; `113 passed (113)` (ownership proves the re-stamp; every existing pr-state case survives the third call — its stub answers the GraphQL call with rows, which reads as `unmeasured`); `23 passed (23)`; `49 passed (49)` (the `_reg_get` census did not move — this task adds no `_reg_get`); PASS (`98 passed | 10 skipped` for the first two, then the route and whitelist files); `1 passed | 78 skipped`; `7 passed | 326 skipped`; PASS (the two comment edits are length-neutral and touch no string a test reads). Re-measured 2026-09-24 at `65c5bb34` with this task applied (each command above with `--maxWorkers=1`, one process at a time): `13 passed (13)`; `113 passed (113)`; `23 passed (23)`; `49 passed (49)`; `218 passed | 10 skipped (228)` for the four files together, of which `98 passed | 10 skipped (108)` for the first two; `1 passed | 78 skipped (79)`; `7 passed | 326 skipped (333)`; and `68 passed (68)` for the last line.
 
 - [ ] **Step 10: Mutation check, then commit**
 
-Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"` and `cp server/src/remote/runner.ts "$SCRATCH/runner.task2"` after Step 8; restore with `cp` back — the copy is already stamped, so no re-stamp is needed between rows; never `git checkout --`). Every red below was measured on the prototype:
+Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"` and `cp server/src/remote/runner.ts "$SCRATCH/runner.task2"` after Step 8; restore with `cp` back — the copy is already stamped, so no re-stamp is needed between rows; never `git checkout --`). Every red below was measured on the prototype, and all eleven again on 2026-09-24 at `65c5bb34` with this task applied from this plan's blocks, each restored from the saved copy: the same failing cases and the same quoted reds (B1's second red is the `--session` row, `sends ["pr-state","--session","x"] with a 25000 ms budget` — the key is the verb, so both modes move together, as ruled):
 
 | # | Exact edit | Command (from `server/`) | Expected red |
 |---|---|---|---|
@@ -1174,7 +1219,8 @@ Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.tas
 
 ```bash
 git add ccd/ccd server/src/remote/runner.ts server/test/remote-runner.test.ts \
-  server/test/pr-timeout-budget.test.ts server/test/ccd-pr-queue.test.ts
+  server/test/pr-timeout-budget.test.ts server/test/ccd-pr-queue.test.ts \
+  server/src/coord/childSpent.ts server/src/coord/routes.ts
 git commit -m "$(cat <<'MSG'
 feat(ccd): pr-state --project reads the merge queue, once per repository per sweep
 
@@ -1193,6 +1239,14 @@ The server's outer bound on pr-state rises 20 s -> 25 s: 8 + 5 + 4 = 17 of
 25 keeps pr-timeout-budget.test.ts's 30 % for the local loop (at 20 s the
 third call could have had 1 s; measured 0.72-1.39 s). Spec §5.2.
 
+The key is the verb, so --session (one gh call) is bounded at 25 s too
+(ruled 2026-09-24: 25 s for both modes). It is read inside coordMutex by
+verifyDone at close and advance (since 2026-08) and, through childSpent,
+by childBindGate on POST /api/runs and dispatch's resume arm (#178), so
+other coordination writes can now queue up to 25 s, not 20, behind one read. The
+two shipped comments that stated the old bound (childSpent.ts's docstring,
+routes.ts's rule-3 gate) say 25 s, in place.
+
 S6-R11: the block sits below cmd_clip, beneath every frozen anchor; the one
 line in cmd_pr_state and both prose rewrites are in place. Census 147 / 195
 / 53 / 35, stated == base == tree; README untouched.
@@ -1203,6 +1257,8 @@ MSG
 ---
 
 ### Task 3: The server reads the queue word once, and turns a dequeue into a feed record and a coordinator mail
+
+> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
 
 **Model routing:** `sonnet`, effort `high` — a new wire reader, a new watcher lane, a new feed kind across three packages.
 
@@ -1888,6 +1944,8 @@ MSG
 
 ### Task 4: The hook denies `gh pr merge` to a programme wave's session
 
+> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
+
 **Model routing:** `sonnet`, effort `high` — the hook is on every tool call of ~20 sessions, and it is the gate R5 leans on.
 
 **Files:**
@@ -2259,6 +2317,8 @@ MSG
 
 ### Task 5: Coordinator clause 15 names the native queue
 
+> **RE-PLAN PENDING — do not execute this task from this text.** See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
+
 **Model routing:** `sonnet`, effort `medium`. One sentence, pinned verbatim.
 
 **Files:**
@@ -2363,6 +2423,8 @@ cd server && ./node_modules/.bin/vitest run test/ci-merge-queue.test.ts test/oss
 ```
 
 Expected: PASS. If `ownership` reds, `ccd/ccd` was edited after the last re-stamp.
+
+> **RE-PLAN PENDING for this step's PR-body items 3–5 and Step 2's whole-branch counts** — they restate Tasks 3–5. See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
 
 - [ ] **Step 4: Confirm the author, push, and open the PR**
 
@@ -2523,6 +2585,8 @@ Expected: `main ruleset: <id>`, and the diff shows exactly three changes — the
 
 Expected: the ruleset, with `rules: ["pull_request","merge_queue"]` and one bypass actor (`RepositoryRole` 5). No output at all means the saved `ruleset-before.json` is not the ruleset `RS` names (or `RS` is empty), so nothing was written — re-run (4a). The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's per-ruleset read. Keep `ruleset-rollback.json`: `gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json` is the rollback, and restores the ruleset exactly as it was, maintain bypass included.
 
+> **RE-PLAN PENDING for this step's enqueue command, checks (e) and (f), and stop rule 4** — they restate Tasks 3–5 (the landing spelling, the dequeue lane, the merge deny). See the Status block under the plan header and Pre-flight finding 12 (ruled 2026-09-24).
+
 - [ ] **Step 5: THE PROOF RUN — spec §5.2 rollout step 3, stage 2's own gate**
 
 Make two or three TRIVIAL PRs from fleet workspaces (so `is_ours` has a workspace to bind — e.g. three `ws-add` workspaces, each committing a one-line change to a different line of a doc file nothing pins), wait for each PR's own CI to go green, then enqueue all of them within a minute, from a session with no wave hold or from the operator's shell:
@@ -2628,7 +2692,7 @@ The pre-flight findings above are not deviations: they were measured before this
 
 ## Review lenses
 
-Three lenses for this wave, all `opus`, effort `high` — a twenty-file diff (the File Structure table: eleven shipped files and nine test files), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, so lens 2 reads it as security-sensitive.
+Three lenses for this wave, all `opus`, effort `high` — a twenty-two-file diff as this plan stands on 2026-09-24 (the File Structure table: thirteen shipped files and nine test files; the Tasks 3–5 re-plan re-counts it), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, so lens 2 reads it as security-sensitive.
 
 1. **The queue read and its wire (opus, high).** `_gh_pr_queue` sends one constant document with `-f` variables only, under `PR_GH_QUEUE_TIMEOUT`, and only in `--project`, its open window the newest hundred in `gh pr list`'s own order; the stamp buffers and falls back to the unstamped lines on its own failure, never costs a row, phase or `checks`, and says `unmeasured` — never `none` — for a read that did not happen; the five words are derived the way the spec's §5.2 intends, with the last act of either kind; `queueAt` is shape-gated before it reaches a latch key; `queueFor` is the ONE reader and keeps `absent` apart from `unmeasured`; the budget test sums THREE timeouts and the 25 s bound is argued; the server-first deploy order matches `CLAUDE.md`'s reader-widening rule; no `FLEET_PROTO` bump, no `PrState` change.
 2. **The worker merge deny and the dequeue lane's authority (opus, high, security-sensitive).** The deny fires at every command head the regex claims and on no quoted mention (the pass list), and its header states what it cannot parse and its one known false deny; a hold is a wave only if whole (≤ `CCRC_HOLD_MAX`) and matching `CCRC_HOLD_WAVE_RE` — the card's own reader, bound and grammar, spelled once; a deny replaces advice and never the graph gate's counted deny; exit 0 and a silent stderr on every path; what it does NOT stop is stated in its header (quoted strings; `--admin` and `gh api` for non-workers are wave 2b's). The dequeue lane enqueues, merges and re-runs nothing; it mails only a coordinator an open run names, never `resolveCoordinator(null)`'s guess; its mail body carries no GitHub-sourced string; it latches only what it told (an unreadable run read defers, a thrown mail retries) and a restart repeats nothing (the two durable reads).

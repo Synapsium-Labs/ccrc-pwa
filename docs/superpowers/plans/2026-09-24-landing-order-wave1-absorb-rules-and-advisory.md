@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop the fleet manufacturing main churn with every part of spec stage 1 that changes no server: worker clause 16 (absorb `origin/main` only on one of three triggers, `git merge` only, never `update-branch`, no repository-settings writes), coordinator clause 15 (no `update-branch`, no repository-settings writes, a sync request only on a measured conflict, programme ledgers on the coordinator's own PR), a PreToolUse advisory in `ccd/session-hook.sh` that reaches the sessions no skill reaches, `ccrc restamp <file>`, `update-branch` pinned ABSENT from executable source (its two licensed, non-calling spellings pinned line for line) and COUNTED in the two skill corpora, and step 6 of the wave lifecycle (a fresh workspace per wave) written GATED on child-reclamation's reclaim-on-close wave. Plus the instrument spec §10 commits with the plan, `deploy/measure-landing.py`, and the three prerequisites it measures before the first stage ships.
+**Goal:** Stop the fleet manufacturing main churn with every part of spec stage 1 that changes no server: worker clause 16 (absorb `origin/main` only on one of three triggers, `git merge` only, never `update-branch`, no repository-settings writes), coordinator clause 15 (no `update-branch`, no repository-settings writes, a sync request only on a measured conflict, programme ledgers on the coordinator's own PR), a PreToolUse advisory in `ccd/session-hook.sh` that reaches the sessions no skill reaches, `ccrc restamp <file>`, `update-branch` pinned ABSENT from executable source (its two licensed, non-calling spellings pinned line for line) and COUNTED in the two skill corpora. Plus the instrument spec §10 commits with the plan, `deploy/measure-landing.py`, and the three prerequisites it measures before the first stage ships.
 
-**Architecture:** Seven mechanisms, each with a test that reds when it is deleted or mutated. (1) `deploy/measure-landing.py` — a stdlib-only Python instrument whose ONE door to GitHub is `_gh`, a fixed `gh api -X GET <path>` argv behind a path grammar that refuses anything but a plain REST read, and whose ONE door to the ccrc server is `_api`, which refuses every `ccrc-api` verb but `runs list` and `mail list`; an input it could not read (an empty required-context set, a missing `--fleet-login`, a full newest-first mail page) is refused or reported as such, never turned into a number; its pure decisions (`required_state`, `red_intervals`, `merge_of_main`, `repeat_share`, `fleet_logins`, `sync_kind`, `episode_class`) are tested directly. (2) `cmd_restamp` in `ccd/ccrc` — `markGenerated` from the tree's own `shared/mark.mjs`, which RE-STAMPS a `ccrc:generated` file and REFUSES one with no marker (a restamp that adopted a hand-written file would make it overwritable by the next generator) and one under `~/.local/bin` or `~/.ccrc` (a generator's own output, whose `ccrc-edited` state its generator protects). (3) Worker clause 16 in `ccd/worker-skill/SKILL.md`, pinned verbatim with the count moving 15 → 16 in the skill, `README.md` and `CLAUDE.md`. (4) Coordinator clause 15 in `ccd/coordinator-skill/SKILL.md`, 14 → 15 the same way, and §5 step 6 in `references/wave-lifecycle.md`, gated on `ccd caps` listing `reclaim-v1`, with a pointer from SKILL.md's same-project arm. (5) A PreToolUse block in `ccd/session-hook.sh`, below every frozen citation anchor, that emits `additionalContext` — never a decision — on a Bash command whose `git` sits in command position and merges, pulls or rebases `main` into the current branch, or that asks GitHub to (`gh pr update-branch`, the REST route, the GraphQL mutation). (6) `update-branch` — absent from the spec's DERIVED executable-source set (every tracked file under `server/src`, `agent/src`, `shared/`, `deploy/`, plus `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh`), with exactly two licensed spellings pinned line for line as the only ones — the advisory's detector and the instrument's classifier, neither of which calls it — and counted by EQUALITY in each skill corpus (licensed once, in the clause that forbids it). (7) The measurement itself: required-only red-main with its PR-failure overlap, coordinator mail latency to the first nudge-started turn, and the repeat-absorption share over the ruled fleet identities, per PR and per merge.
+**Architecture:** Seven mechanisms, each with a test that reds when it is deleted or mutated. (1) `deploy/measure-landing.py` — a stdlib-only Python instrument whose ONE door to GitHub is `_gh`, a fixed `gh api -X GET <path>` argv behind a path grammar that refuses anything but a plain REST read, and whose ONE door to the ccrc server is `_api`, which refuses every `ccrc-api` verb but `runs list` and `mail list`; an input it could not read (an empty required-context set, a missing `--fleet-login`, a full newest-first mail page) is refused or reported as such, never turned into a number; its pure decisions (`required_state`, `red_intervals`, `merge_of_main`, `repeat_share`, `fleet_logins`, `sync_kind`, `episode_class`) are tested directly. (2) `cmd_restamp` in `ccd/ccrc` — `markGenerated` from the tree's own `shared/mark.mjs`, which RE-STAMPS a `ccrc:generated` file and REFUSES one with no marker (a restamp that adopted a hand-written file would make it overwritable by the next generator) and one under `~/.local/bin` or `~/.ccrc` (a generator's own output, whose `ccrc-edited` state its generator protects). (3) Worker clause 16 in `ccd/worker-skill/SKILL.md`, pinned verbatim with the count moving 15 → 16 in the skill, `README.md` and `CLAUDE.md`. (4) Coordinator clause 15 in `ccd/coordinator-skill/SKILL.md`, 14 → 15 the same way, with `update-branch` counted across SKILL.md and every reference. (5) A PreToolUse block in `ccd/session-hook.sh`, below every frozen citation anchor, that emits `additionalContext` — never a decision — on a Bash command whose `git` sits in command position and merges, pulls or rebases `main` into the current branch, or that asks GitHub to (`gh pr update-branch`, the REST route, the GraphQL mutation). (6) `update-branch` — absent from the spec's DERIVED executable-source set (every tracked file under `server/src`, `agent/src`, `shared/`, `deploy/`, plus `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh`), with exactly two licensed spellings pinned line for line as the only ones — the advisory's detector and the instrument's classifier, neither of which calls it — and counted by EQUALITY in each skill corpus (licensed once, in the clause that forbids it). (7) The measurement itself: required-only red-main with its PR-failure overlap, coordinator mail latency to the first nudge-started turn, and the repeat-absorption share over the ruled fleet identities, per PR and per merge.
 
 **Tech Stack:** bash 5.2 (`ccd/session-hook.sh`, `ccd/ccrc`, both `set -uo pipefail`, no `-e`), Markdown skills pinned by vitest 4.1, TypeScript tests, node 22 (`shared/mark.mjs`), python 3.12 (the instrument, stdlib only), gh 2.45 (GET only), git 2.43.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.1 in full (clause 16, clause 15, step 6, the hook, the regenerator CLI, the pins); §3 (R1–R10; R5 above all: the coordinator merges, workers never do, nothing merges unattended); §4's Worker and Coordinator rows; §9 (step 6 goes live only with CCR-15's reclaim-on-close wave; session-continuity's stage 5 appends its clauses AFTER these); §10 (the stage-1 metric row, the three prerequisites, the committed instrument). Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 1's row).
+**Spec:** `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md` — §5.1 (clause 16, clause 15, the hook, the regenerator CLI, the pins — its wave-lifecycle step is not this wave's, by the 2026-09-24 ruling in Global Constraints); §3 (R1–R10; R5 above all: the coordinator merges, workers never do, nothing merges unattended); §4's Worker and Coordinator rows; §9 (session-continuity's stage 5 appends its clauses AFTER these); §10 (the stage-1 metric row, the three prerequisites, the committed instrument). Programme ledger: `docs/superpowers/programs/landing-order.md` (wave 1's row).
 
 ---
 
@@ -16,11 +16,11 @@
 
 Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's requirements implicitly include this section.
 
-- **Deploy class for THIS wave: AGENT-FIRST, and there is no server arm at all.** Everything that ships lands on the fleet box: the two skills and the wave-lifecycle reference reach every rostered home through `ccrc update`'s install spine (`_inst_skills`), the hook through its installer (`~/.cc-sessions/session-hook.sh`), and `ccrc restamp` with the installed tree. `ccrc rollout --to <this merge's tag>` in its DEFAULT order (fleet box first); never `--server-first`, never `deploy.sh`. The instrument is run from a checkout by hand and installs nowhere. Task 7's post-merge steps restate the order.
+- **Deploy class for THIS wave: AGENT-FIRST, and there is no server arm at all.** Everything that ships lands on the fleet box: the two skills reach every rostered home through `ccrc update`'s install spine (`_inst_skills`), the hook through its installer (`~/.cc-sessions/session-hook.sh`), and `ccrc restamp` with the installed tree. `ccrc rollout --to <this merge's tag>` in its DEFAULT order (fleet box first); never `--server-first`, never `deploy.sh`. The instrument is run from a checkout by hand and installs nowhere. Task 7's post-merge steps restate the order.
 - **The skill pins move in the same commit as the clauses** (programme ledger, carried constraint 2): `worker-skill.test.ts` and `coordinator-skill.test.ts`, and the clause-count words in `README.md` and `CLAUDE.md` that both pins read, land in ONE commit per skill (Tasks 3 and 4). Session-continuity's stage-5 wave appends its clauses AFTER these (spec §9); nothing here reserves a number for it.
 - **Clause text is VERBATIM, and its bytes are load-bearing.** Worker clauses are double-quoted in the test and written with STRAIGHT apostrophes and no `"` (the D-104 note in SKILL.md); worker clause 16 is ONE line — `worker-skill.test.ts` harvests `^\d+\. ` over the whole file as the clause list, so its three triggers are written inline, never as a nested numbered list. Coordinator clause 15 carries no apostrophe at all, so neither the curly nor the straight spelling can drift.
 - **`update-branch` is ABSENT from executable source and COUNTED in the skills** (spec §5.1 "Pins", as reconciled 2026-09-24). The executable set is the spec's own, derived from the index: every tracked file under `server/src`, `agent/src`, `shared/` and `deploy/`, plus `ccd/ccd`, every `ccd/ccd-*` sibling, `ccd/ccrc` and `ccd/session-hook.sh`. It carries exactly TWO allowed spellings, pinned line for line as the only ones, and neither calls anything: the advisory's detector in `ccd/session-hook.sh` (its `LANDING_UB_RE` line and its prefilter's branch-update line) and the classifier in `deploy/measure-landing.py` (its `GH_UPDATE` label and its `UPD` regex). Every other line of those two files — comments, the advisory's own text, docstrings — avoids the spelling (Pre-flight finding 8).
-- **Step 6 is written GATED, never live.** Child-reclamation's reclaim-on-close wave (CCR-15 wave 3) has NOT merged at `905360dc` (its ledger reads `planned`); step 6 says it applies only once `ccd caps` lists `reclaim-v1`, the token that wave's contract names, and until then §5 step 3's same-project arm governs as written.
+- **The spec's wave-lifecycle step (R4) is NOT this wave's — ruled by the orchestrator 2026-09-24.** R4 is already live on main through child-reclamation rule 3, "One PR per child" (#178): coordinator SKILL.md step 6's **Clean** arm and `wave-lifecycle.md` §5 step 3. A PR-bearing marked producer is spent, wave N+1 opens without its `sessionId`, and wave N+1 dispatches only once wave N's PR is proven merged when it builds on it. The residual cases (a producer with no PR keeps its workspace; unmarked producers are dying out) are not worth a gated rule. So this wave does not modify `wave-lifecycle.md`, adds nothing to SKILL.md's **Same project:** arm, and pins neither; a worker reading spec §5.1 writes no lifecycle step.
 - **The hook is a contract, not an access boundary** (programme ledger, carried constraint 3). The advisory NEVER denies: it is `_hook_nudge_json`, the graph arm's advice envelope, never `_hook_deny_json`. One line per event still: a deny or nudge the graph arm already built wins.
 - **The hook's hot path** (its header: exit 0 on every path, no network, no waiting). The new block forks nothing unless the raw payload carries `main` or `origin` AND a sync verb, or GitHub's branch-update spelling, and then exactly one `jq`. Its regex costs at most tens of milliseconds on a 30–38 KB adversarial command (measured: 41 ms worst, `git merge ` × 3000), no pathological backtracking.
 - **SAFETY — sacred.** NEVER run destructive `ccd` verbs against the live host (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`). NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly — Task 1's measurement READS the registry's `<id>.workdir` files and Claude Code transcripts and writes nothing outside its own `--out` directory. **No `gh` write of any kind**: the instrument's only gh argv is `gh api -X GET <path>`, and no step in this plan runs `gh` for anything but a read — except Task 7's `gh pr create`, the worker's own PR, which the worker skill already licenses. NEVER print secret file CONTENTS.
@@ -39,7 +39,8 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 - **Rings:** nothing here touches `shared/*.ts`, `server/src` or `agent/src`. **No overloaded null at a seam:** the instrument's `required_state` answers THREE words (`green`/`red`/`unmeasured`) and `red_intervals` never lets `unmeasured` open or close an interval; `ccrc restamp` answers three outcomes (re-stamped / already current / refused), each its own exit and line.
 - **Wire discipline:** no frame, no field, no `FLEET_PROTO` change.
 - **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted or mutated, measured before/after. Every row below was run on a prototype of exactly these edits and its red is quoted — first at `905360dc`, then, after the review round, every row of every table re-run at `af64d9d2` (the spec reconciliation; no code differs from `905360dc`), one vitest process at a time. A mutation's backup copy lives in the SCRATCHPAD, never beside the file: a `SKILL.md.mutbak` inside `ccd/worker-skill/` reds `worker-skill.test.ts`'s "carries no references of its own" on EVERY row (measured — Pre-flight finding 10), which makes every red ambiguous.
-- **Locate code by CONTENT.** Line numbers in this plan are "at `905360dc`" and are hints, never addresses. Two other programmes (child-reclamation waves 3–5, session-continuity) are live against the same skills and hook — child-reclamation wave 2 merged as #178 and is on main at `b501698a`, so its step-3 text in `SKILL.md` and `wave-lifecycle.md` §5 ("One PR per child") is part of the base this plan edits (re-measured 2026-09-24 at `08701c22`).
+- **Locate code by CONTENT.** Line numbers in this plan are "at `905360dc`" and are hints, never addresses. Two other programmes (child-reclamation waves 3–5, session-continuity) are live against the same skills and hook — child-reclamation wave 2 merged as #178 (`37d9da66`) and is on main at `b501698a`, so its "One PR per child" text is part of the base: in coordinator `SKILL.md` it sits in step 6 (**Rule on the report**), in the **Clean** arm (≈361–376 at `65c5bb34`, directly above the **Same project:** arm), and in `wave-lifecycle.md` under §5 step 3 (≈718–754). This plan edits neither passage (re-measured 2026-09-24 at `65c5bb34`).
+- **CCR-15 wave 3 edits the same three skill pins, and one anchor is SHARED: whichever wave lands second KEEPS BOTH** (Pre-flight finding 17). `docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md` Task 10 is the next CCR-15 wave to land. Its (b) inserts ONE `it` — `'says, in its reporting section, that this workspace ends when its run closes'` — directly above `worker-skill.test.ts`'s `it('carries no references of its own — the census corpus is the whole skill (D-103)'`, the anchor Task 3 (c) inserts this wave's TWO `it`s above; its (a) rewrites coordinator `CONTRACT[2]` (clause 3) and adds two cases above `'names the three destructive verbs ONLY inside the clause that forbids them'`; its (c) adds one `reviewer-skill.test.ts` case; its prose edits coordinator clause 3 and step 7, `wave-lifecycle.md` §6, one non-clause sentence in each of the worker and reviewer skills, CLAUDE.md's SAFETY bullet and README's reap paragraph. Whichever lands second resolves that one anchor by keeping this wave's two `it`s (in their order) AND wave 3's one, in either order, each closed by its own `  });` and followed by a blank line, all directly above `carries no references of its own`; neither block replaces the other, and neither side of the file is taken. A git conflict there is add/add. Resolve it: delete every marker line (`<<<<<<<`, `|||||||` if present, `=======`, `>>>>>>>`), then check that each of the three `it`s ends with its own `  });` followed by a blank line, adding `  });` and a blank line to the first side ONLY if it is missing — under git's default and `zdiff3` conflict styles it is missing, because the shared tail sits below `>>>>>>>`; under `diff3` each side is complete and it is already there. Either way `worker-skill` must then read 46/46. Then re-measure, each file alone: with both waves in, in EITHER order, `worker-skill` 46/46, `coordinator-skill` 150/150, `reviewer-skill` 13/13 (this wave alone: 45, 148, 12; wave 3 alone: 44, 149, 13; the base `65c5bb34`: 43, 147, 12). Every other overlap of the two waves' files merges clean (measured).
 - **Every forecast number is "at `905360dc`" for code, and "measured 2026-09-23 over the frozen window 2026-09-08..2026-09-22" for Task 1.** A different figure on your run is not a red — the instrument is the authority, and the difference goes in the wave-done report.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` or `$OUT` sets it itself; `SCRATCH=<…>` means "paste your own session's scratchpad, as an ABSOLUTE path".
 - **Branch discipline:** commit on this workspace's own branch only; never a separate feature branch. One commit per task.
@@ -76,16 +77,15 @@ Nine inputs or failure modes the spec implies and no pre-existing test covers. E
 | `server/test/ccrc-cli.test.ts` | Modify (Task 2) — the usage-line regex; one description assertion | `restamp` is discoverable |
 | `ccd/worker-skill/SKILL.md` | Modify (Task 3) — clause 16 after clause 15; "fifteen" → "sixteen" twice | The worker's absorb rule |
 | `server/test/worker-skill.test.ts` | Modify (Task 3) — CONTRACT entry 16 and `ABSORB`; two `it`s; two count words in a comment and a title | Clause 16 verbatim; `update-branch` counted; the probe's two halves, the settings it never writes, the stamp-line rule |
-| `ccd/coordinator-skill/SKILL.md` | Modify (Task 4) — clause 15 after clause 14; "fourteen" → "fifteen"; two lines in step 6's same-project arm | The coordinator's no-churn rule; the pointer to the gated step |
-| `ccd/coordinator-skill/references/wave-lifecycle.md` | Modify (Task 4) — §5 step 6 after step 5 | A fresh workspace per wave, GATED on `reclaim-v1` |
-| `server/test/coordinator-skill.test.ts` | Modify (Task 4) — CONTRACT entry 15; one census `it`; one appended `describe`; three count words in comments and a title | Clause 15 verbatim; `update-branch` counted across the whole corpus; step 6's gate and order |
+| `ccd/coordinator-skill/SKILL.md` | Modify (Task 4) — clause 15 after clause 14; "fourteen" → "fifteen" | The coordinator's no-churn rule |
+| `server/test/coordinator-skill.test.ts` | Modify (Task 4) — CONTRACT entry 15; one census `it`; three count words in comments and a title | Clause 15 verbatim; `update-branch` counted across the whole corpus |
 | `README.md` | Modify (Tasks 3–4) — four count words, in place, no line added | The clause-count words both pins read |
 | `CLAUDE.md` | Modify (Tasks 3–4) — two count words, in place | Same |
 | `ccd/session-hook.sh` | Modify (Task 5) — one block after the graph arm's closing `fi` (≈3116, below README's `:2900`, the file's highest cited anchor) | The sync-of-main advisory; the detector's one spelling of `update-branch` |
 | `server/test/session-hook-sync-advisory.test.ts` | Create (Task 5) | Advises on nineteen sync spellings, silent on thirteen near-misses and mentions, never denies, independent of the graph gate |
 | `server/test/update-branch-absent.test.ts` | Create (Task 6) | `update-branch` absent from the derived executable-source set, but for its two licensed lines |
 
-**Not modified, deliberately:** `server/test/session-hook.test.ts` (a cited file and a load flake — the advisory's cases live in their own file), `ccd/ccd`, every `server/src`/`agent/src`/`shared`/`pwa` file, `ccd/reviewer-skill/SKILL.md` (the spec gives the reviewer no clause), `docs/superpowers/programs/landing-order.md` (the coordinator's ledger, committed on its own PR by clause 15's own rule).
+**Not modified, deliberately:** `server/test/session-hook.test.ts` (a cited file and a load flake — the advisory's cases live in their own file), `ccd/ccd`, every `server/src`/`agent/src`/`shared`/`pwa` file, `ccd/reviewer-skill/SKILL.md` (the spec gives the reviewer no clause), `ccd/coordinator-skill/references/wave-lifecycle.md` (the 2026-09-24 ruling in Global Constraints; Task 4's census still READS it), `docs/superpowers/programs/landing-order.md` (the coordinator's ledger, committed on its own PR by clause 15's own rule).
 
 **Task order is load-bearing once:** the absence pin (Task 6) licenses a line the hook block (Task 5) introduces, so it lands after it; written before Task 5, its licence would red on the missing detector line — which is the licence working, not a flake.
 
@@ -93,7 +93,7 @@ Nine inputs or failure modes the spec implies and no pre-existing test covers. E
 
 ## Pre-flight findings (measured while planning; not deviations)
 
-Each was measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc`; findings 13–16 and the revised 7, 8 and 11 were measured in the review round at `af64d9d2` (code-identical). They are why the tasks look the way they do.
+Each was measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc`; findings 13–16 and the revised 7, 8 and 11 were measured in the review round at `af64d9d2` (code-identical); finding 17 was measured 2026-09-24 at `65c5bb34`. They are why the tasks look the way they do.
 
 1. **The probe's exit code is ambiguous on git 2.43** (Review Focus 1). `git merge-tree --write-tree --name-only --no-messages 79a46a56^1 79a46a56^2` → rc 1, stdout `20a4009204db2d05612a9b3d17b4ee31cc99d0b2` then `server/test/worker-skill.test.ts`, stderr empty; `git merge-tree --write-tree HEAD nonexistent-ref` → rc 1, stdout empty, stderr `merge-tree: nonexistent-ref - not something we can merge`. `HEAD` × `origin/HEAD` on this tree → rc 0. So the conflict answer is rc 1 AND a 40-hex tree id on stdout's first line; `--name-only --no-messages` keeps that first line alone and the rest paths. `origin/HEAD` resolves (`git symbolic-ref refs/remotes/origin/HEAD` → `refs/remotes/origin/main`), and a clone without that symref is exactly the case the "any other answer" arm covers.
 2. **The citation tax measured ZERO on all three cited files.** With every task's edit in, `cite-remeasure.py … HEAD --files ccd/session-hook.sh,ccd/ccrc,README.md` printed stated = base = tree for every `byFile` key (`ccd/ccd` 147, `ccd/session-hook.sh` 21, `ccd/ccrc` 5, total 195) and empty `ENTERED`/`LEFT` on all three compositions (53-entry `|`-row array, 35-entry site array) — re-measured with the review round's longer hook block and `cmd_restamp`, same answer. The hook block sits below README's `ccd/session-hook.sh:2900`, the file's highest anchor (line 2900 still reads `if _hook_emit_context "$CARD" "$CARD_COMPACT" …` after the edit); `cmd_restamp` sits below the spec's highest `ccd/ccrc` anchor (`:11635`); the three usage lines at ≈1596 ARE above `ccd/ccrc`'s anchors and moved no census entry — measured, not argued.
@@ -111,6 +111,18 @@ Each was measured on a prototype of this plan's exact edits in an isolated workt
 14. **`~/.local/bin` is not on the fleet session unit's PATH** (worker SKILL.md's own `ccrc-api` section; `server/src/coord/envelope.ts`: "Invoke by that exact path"). A clause that named the launcher by `ccrc restamp` would answer `command not found` inside a `claude-session@` unit at exactly the moment the worker must not hand-resolve, so clause 16 and the advisory spell `~/.local/bin/ccrc restamp <file>`; from ccrc's own checkout `ccd/ccrc restamp ccd/ccd` works too.
 15. **The mail read is a newest-first page.** `mail list --to <id> --all 1` is `mailForRecipient(toId, limit = 100)` — `ORDER BY d.id DESC LIMIT ?`, clamped at 500 (`clampMailLimit`, `server/src/coord/store.ts`). Measured after the window, a coordinator with more than 100 deliveries since it opened loses exactly the window's oldest mail, which the first draft counted neither matched nor unmatched. The instrument now asks for `--limit 500` and reports a coordinator whose page came back full as `truncated`, in neither figure. A page with room to spare is that recipient's whole history, so an oldest row later than the window's start is NOT truncation (a coordinator first mailed mid-window) — the review's proposal to treat it as such was not taken.
 16. **The advisory's first regex let a MENTION through.** Its leading class accepted any whitespace before `git`, so `git commit -m "Workers now git merge origin/main only on a conflict"`, `gh pr comment 5 --body "please git merge origin/main and re-run"` and `echo 'run git rebase origin/main first'` all advised (measured by the review's 66-command probe), and it missed `git merge "origin/main"`, `git -c k=v merge origin/main`, `git --no-pager merge origin/main`, `git pull origin HEAD` and the GraphQL `updatePullRequestBranch`. The revised regex requires `git` in command position (start, or after `;` `&` `|` `(` `{` or a newline, past any `VAR=value` prefixes), takes any global options, the quoted slash forms and `origin HEAD`, and `LANDING_UB_RE` takes the GraphQL mutation. Measured over 41 commands: every intended spelling advises, and every mention, read and near-miss stays silent, including `git pull origin feature/x` and `git merge -m "sync with main" feature/x`. Bare `git merge origin` (origin's HEAD) is deliberately NOT advised: a bare `origin` ref would also match `git pull origin`, a pull of the current branch's own upstream.
+17. **CCR-15 wave 3's Task 10 and this wave's Tasks 3–4 collide on exactly one anchor, and a marker-only resolution breaks the file.** Measured 2026-09-24 at `65c5bb34` by applying both waves' edits by script (this wave's Tasks 3–4; that plan's Task 10 Steps 1 (a)–(c) and 3–6, its new `child-reclaim-prose.test.ts` aside) and restoring the sources after. A three-way `git merge-file` of the nine files either wave touches (six of them touched by both), base `65c5bb34`: `server/test/worker-skill.test.ts` conflicts (1 hunk); the other five shared files (`coordinator-skill.test.ts`, the coordinator and worker SKILL.md files, README.md, CLAUDE.md) merge clean; `wave-lifecycle.md`, the reviewer SKILL.md and `reviewer-skill.test.ts` are wave 3's alone. The conflict is add/add directly above `carries no references of its own`, and the hunk's shared tail — the last `  });` and the blank line — sits BELOW the `>>>>>>>` marker, so the first side's `it` has no `  });` of its own inside the hunk: under git's default style, deleting the three marker lines alone gives `Transform failed` and `no tests` for `worker-skill.test.ts`, and deleting them and closing the first side with `  });` plus a blank line gives 46/46; under `diff3` (a fourth marker, `|||||||`, and each side complete) deleting the markers alone gives 46/46 and adding the close gives `Transform failed` — so the rule checks for a missing close rather than always adding one. Counts, each file alone (`./node_modules/.bin/vitest run test/<file> --maxWorkers=1`):
+
+    | Tree | `worker-skill` | `coordinator-skill` | `reviewer-skill` |
+    |---|---|---|---|
+    | base `65c5bb34` | 43 | 147 | 12 |
+    | this wave only (Tasks 3–4) | 45 | 148 | 12 |
+    | CCR-15 wave 3 only (Task 10) | 44 | 149 | 13 |
+    | both, this wave first (wave 3's `it` lands between this wave's two and the anchor) | 46 | 150 | 13 |
+    | both, wave 3 first (this wave's two land between wave 3's `it` and the anchor) | 46 | 150 | 13 |
+    | both, via the merge-file resolution above | 46 | 150 | 13 |
+
+    Red-first on a base that already carries wave 3: Task 3 Step 2 `5 failed | 41 passed (46)` and Task 4 Step 2 `4 failed | 146 passed (150)`, the same named cases as on main. On the both-waves tree every Task 3 row reds as on main (W1, W2, W4–W7 `1 failed | 45 passed (46)`, W3 `2 failed | 44 passed (46)`) and every Task 4 row `1 failed | 149 passed (150)`. The other direction, wave 3's red-first on this wave's tree: `worker-skill` `1 failed | 45 passed (46)`, `coordinator-skill` `2 failed | 148 passed (150)` (its verbatim case, whose title reads "carries all fifteen clauses verbatim" once this wave is in, and its §6 case), `reviewer-skill` `1 failed | 12 passed (13)`. One stale WORD follows if this wave lands first: wave 3's worker-skill comment says "the count stays fifteen", which becomes sixteen; no pin reads a comment, so it is not a red, and it is that plan's to correct, not this one's.
 
 ---
 
@@ -1805,7 +1817,7 @@ const ABSORB = CONTRACT[15]!;
 
 (the block above begins directly after the fifteenth entry's line and replaces the old `];`);
 
-(c) directly above `  it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {` add:
+(c) directly above `  it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {` add the two `it`s below. CCR-15 wave 3's Task 10 (b) inserts its own `it` at this SAME anchor: if it is already on your base, the two below go directly above the anchor, below its `it`, and nothing of it is removed (Global Constraints; Pre-flight finding 17):
 
 ```ts
   it('names `update-branch` ONLY inside clause 16, which forbids it — counted, not absent (spec §5.1)', () => {
@@ -1841,7 +1853,7 @@ const ABSORB = CONTRACT[15]!;
 
 Run: `cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts`
 
-Expected: FAIL — `Tests 5 failed | 40 passed (45)`: "carries all sixteen clauses verbatim" (`missing contract clause: Absorb \`origin/main\` into this branch only on on…`), "numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps", "spells that same count … everywhere prose states it" (`SKILL.md says fifteen where the CONTRACT pins 16`), "names `update-branch` ONLY inside clause 16…" (`update-branch appears 0×`), and "adds no new clause and no second numbered list" (re-measured at `af64d9d2` with the revised clause: the same five). The probe case passes: it pins the CONTRACT literal itself, so it reds when someone softens the literal (and SKILL.md with it), not before the clause exists.
+Expected: FAIL — `Tests 5 failed | 40 passed (45)`: "carries all sixteen clauses verbatim" (`missing contract clause: Absorb \`origin/main\` into this branch only on on…`), "numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps", "spells that same count … everywhere prose states it" (`SKILL.md says fifteen where the CONTRACT pins 16`), "names `update-branch` ONLY inside clause 16…" (`update-branch appears 0×`), and "adds no new clause and no second numbered list" (re-measured at `af64d9d2` with the revised clause: the same five; re-measured 2026-09-24 at `65c5bb34`: the same five, `5 failed | 40 passed (45)`). On a base that already carries CCR-15 wave 3: the same five, `5 failed | 41 passed (46)` (measured 2026-09-24). The probe case passes: it pins the CONTRACT literal itself, so it reds when someone softens the literal (and SKILL.md with it), not before the clause exists.
 
 - [ ] **Step 3: Add clause 16 and move the count words**
 
@@ -1877,7 +1889,7 @@ cd server && ./node_modules/.bin/vitest run test/worker-skill.test.ts test/revie
   test/install-worker-skill.test.ts test/readme-holds.test.ts
 ```
 
-Expected: PASS — `worker-skill` 45/45, `reviewer-skill` 12/12, `install-worker-skill` 11/11, `readme-holds` 16/16 (measured at `af64d9d2`, each file alone).
+Expected: PASS — `worker-skill` 45/45, `reviewer-skill` 12/12, `install-worker-skill` 11/11, `readme-holds` 16/16 (measured at `af64d9d2`, each file alone; `worker-skill` and `reviewer-skill` re-measured 2026-09-24 at `65c5bb34`, unchanged). On a base that already carries CCR-15 wave 3: `worker-skill` 46/46, `reviewer-skill` 13/13 (measured 2026-09-24).
 
 - [ ] **Step 6: Mutation check, then commit**
 
@@ -1891,7 +1903,7 @@ Expected: PASS — `worker-skill` 45/45, `reviewer-skill` 12/12, `install-worker
 | W6 | SKILL.md clause 16: drop ` Never write any repository's rulesets, branch protection, auto-merge setting or `allow_update_branch`.` | "carries all sixteen clauses verbatim" only (1 failed) — `missing contract clause: Absorb \`origin/main\` into this branch only on on…` |
 | W7 | SKILL.md clause 16: `take either side of that line only, resolve every other hunk of the file as the source it is, then run `~/.local/bin/ccrc restamp <file>`.` → `take either side, then run `ccrc restamp <file>`.` (the file-level reading and the bare name back) | same case only (1 failed) |
 
-Each Task 3 row was re-measured at `af64d9d2` with the revised clause: W1, W2, W4–W7 `1 failed | 44 passed (45)`, W3 `2 failed | 43 passed (45)`.
+Each Task 3 row was re-measured at `af64d9d2` with the revised clause: W1, W2, W4–W7 `1 failed | 44 passed (45)`, W3 `2 failed | 43 passed (45)`. With CCR-15 wave 3's Task 10 also in (measured 2026-09-24 at `65c5bb34`): W1, W2, W4–W7 `1 failed | 45 passed (46)`, W3 `2 failed | 44 passed (46)`, the same cases.
 
 Rows (`$SCRATCH/mut-task3.json`):
 
@@ -1934,19 +1946,18 @@ MSG
 
 ---
 
-### Task 4: Coordinator clause 15, and wave-lifecycle step 6 written gated
+### Task 4: Coordinator clause 15
 
 **Model routing:** `sonnet`, effort `high`.
 
 **Files:**
-- Modify: `ccd/coordinator-skill/SKILL.md` — clause 15 directly after clause 14 (≈83); `These fourteen sentences` (≈67) → `fifteen`; two lines at the end of step 6's **Same project:** arm (after ≈380 at `08701c22`; #178's "One PR per child" paragraph now sits above the arm)
-- Modify: `ccd/coordinator-skill/references/wave-lifecycle.md` — §5 step 6 directly after step 5 (≈785–786 at `08701c22`, before `## 6 — Final merge`)
-- Modify: `README.md` ≈1945, `CLAUDE.md` ≈263 (count words, in place; hints at `08701c22`)
+- Modify: `ccd/coordinator-skill/SKILL.md` — clause 15 directly after clause 14 (≈83); `These fourteen sentences` (≈67) → `fifteen`
+- Modify: `README.md` ≈1945, `CLAUDE.md` ≈263 (count words, in place; hints at `65c5bb34`)
 - Test: `server/test/coordinator-skill.test.ts`
 
 **Interfaces:**
-- Consumes: the token `reclaim-v1` as `docs/superpowers/programs/child-reclamation-contract.md` names it (CCR-15 wave 3); §5 steps 3 and 5 as they stand.
-- Produces: clause 15 (`CONTRACT[14]`); §5 step 6's gate sentence (`` `ccd caps` lists `reclaim-v1` ``) and rule. Wave 2 of this programme appends the native-queue sentence to clause 15 (programme ledger, next-wave brief); session-continuity's stage 5 appends its clauses after it.
+- Consumes: the coordinator corpus as it stands — `allSkillText`, SKILL.md plus every file under `references/`, derived — which the census counts; no reference file is edited.
+- Produces: clause 15 (`CONTRACT[14]`). Wave 2 of this programme appends the native-queue sentence to clause 15 (programme ledger, next-wave brief); session-continuity's stage 5 appends its clauses after it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1978,65 +1989,13 @@ In `server/test/coordinator-skill.test.ts`:
   });
 ```
 
-(d) at the end of the file, add:
-
-```ts
-// Landing-order wave 1 (spec 2026-09-23 §5.1, "Step 6 of the wave lifecycle").
-// The step ships WRITTEN but GATED: a fresh child per wave is only safe to make
-// the default once child-reclamation's reclaim-on-close wave (CCR-15 wave 3)
-// collects spent children, and that wave advertises `reclaim-v1`. So the pins
-// hold the gate BEFORE the rule, the rule's own succession order, and the
-// pointer from SKILL.md's same-project arm — each red when its half goes.
-describe('wave-lifecycle §5 step 6 — a fresh workspace per wave, gated on reclaim-v1', () => {
-  const lifecycle = refs('wave-lifecycle.md');
-  const boundary = lifecycle.slice(lifecycle.indexOf('## 5 — The boundary'),
-    lifecycle.indexOf('## 6 — Final merge'));
-  const at = boundary.indexOf('6. **A fresh workspace per wave');
-  const step6 = flat(boundary.slice(at));
-
-  it('is step 6 of §5, after step 5 and before the final-merge section', () => {
-    expect(at, '§5 carries no step 6').toBeGreaterThan(boundary.indexOf('5. Dispatch wave N+1'));
-  });
-
-  it('states the gate before the rule, by the token CCR-15 wave 3 advertises', () => {
-    const gate = step6.indexOf('`ccd caps` lists `reclaim-v1`');
-    const rule = step6.indexOf('WITHOUT `sessionId`');
-    expect(gate, 'step 6 no longer names its gate').toBeGreaterThanOrEqual(0);
-    expect(rule, 'step 6 no longer opens the successor WITHOUT sessionId').toBeGreaterThan(gate);
-    expect(step6).toContain("step 3's same-project arm governs exactly as written");
-    // The gate's token is the programme contract's own name for it, so a rename
-    // there reds here instead of leaving a gate nothing will ever open.
-    const contract = readFileSync(path.join(root, 'docs/superpowers/programs/child-reclamation-contract.md'), 'utf8');
-    expect(contract).toContain('`reclaim-v1`');
-  });
-
-  it('opens fresh only after the predecessor measures merged, then succeeds open-first with a releasing close', () => {
-    const merged = step6.indexOf('measures merged');
-    const open = step6.indexOf('open wave N+1 first');
-    const close = step6.indexOf('close the producer with `final:true` and require `released:true`');
-    const proof = step6.indexOf('runs list --closed 1');
-    expect(merged, 'step 6 no longer waits for the predecessor to measure merged').toBeGreaterThanOrEqual(0);
-    expect(open, 'step 6 no longer opens the successor first').toBeGreaterThan(merged);
-    expect(close, 'step 6 no longer closes with a releasing close after the open').toBeGreaterThan(open);
-    expect(proof, 'step 6 no longer reads the closed row after its close').toBeGreaterThan(close);
-    expect(step6).toContain('stacked child');
-  });
-
-  it("SKILL.md's same-project arm points at the gated step", () => {
-    const s6 = skill.slice(skill.indexOf('6. **Rule on the report**'), skill.indexOf('\n7. **Final merge:**'));
-    const same = flat(s6.slice(s6.indexOf('**Same project:**'), s6.indexOf('**Different project:**')));
-    expect(same).toContain('`references/wave-lifecycle.md` §5 step 6');
-  });
-});
-```
-
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts`
 
-Expected: FAIL — `Tests 8 failed | 144 passed (152)`: "carries all fifteen clauses verbatim", "numbers exactly as many clauses…", "spells that same count…", "names `update-branch` ONLY inside clause 15…" (`update-branch appears 0× in the coordinator corpus`), and all four cases of the new `describe` (step 6 absent; the pointer absent).
+Expected: FAIL — `Tests 4 failed | 144 passed (148)`: "carries all fifteen clauses verbatim", "numbers exactly as many clauses…", "spells that same count…", and "names `update-branch` ONLY inside clause 15…" (`update-branch appears 0× in the coordinator corpus`) — re-measured 2026-09-24 at `65c5bb34` with Task 3 in. On a base that already carries CCR-15 wave 3: the same four, `4 failed | 146 passed (150)` (measured 2026-09-24).
 
-- [ ] **Step 3: Add clause 15, the pointer, and the count words**
+- [ ] **Step 3: Add clause 15 and the count words**
 
 In `ccd/coordinator-skill/SKILL.md`, directly after the line beginning `14. The review brief names the held-out panel` add this ONE line:
 
@@ -2044,46 +2003,11 @@ In `ccd/coordinator-skill/SKILL.md`, directly after the line beginning `14. The 
 15. This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR.
 ```
 
-change `These fourteen sentences are the boundary` → `These fifteen sentences are the boundary`, and in step 6's **Clean** arm, directly after the **Same project:** sentence's last line `     find the producer by run id, and require its own `state` to be `done`.` (and before `     **Different project:** …`) add:
-
-```
-     A fresh workspace per wave replaces this arm only once the gate in
-     `references/wave-lifecycle.md` §5 step 6 opens; until then it stands.
-```
-
-(The two SKILL.md succession pins — "orders each SKILL.md succession arm independently" and "describes step 6 as step 6 actually reads" — find their phrases by first occurrence inside the arm; the new sentence names none of them, measured green.)
+and change `These fourteen sentences are the boundary` → `These fifteen sentences are the boundary`. Nothing else in SKILL.md changes: step 6's **Clean** arm, its "One PR per child" paragraph and its **Same project:** / **Different project:** arms stay exactly as #178 left them (Global Constraints, the 2026-09-24 ruling).
 
 In `README.md`: `` the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its fourteen `` → `` …, and its fifteen `` (the line ends there; the count word's `clauses` is on the next line, which the pin's `\s+` spans). In `CLAUDE.md`: `` (`ccd/coordinator-skill/SKILL.md`); its fourteen clauses are pinned VERBATIM by `` → `` …; its fifteen clauses are pinned VERBATIM by ``.
 
-- [ ] **Step 4: Write step 6 of §5, gated**
-
-In `ccd/coordinator-skill/references/wave-lifecycle.md`, directly after step 5's two lines (`5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row` / `   proof, release proof, and exact-SHA merge proof above succeed.`) and before the blank line that precedes `## 6 — Final merge`, add:
-
-```
-6. **A fresh workspace per wave — written GATED, and not live yet** (landing
-   order, spec 2026-09-23 §5.1). Nothing in this step applies until this box's
-   `ccd caps` lists `reclaim-v1`, the token child-reclamation's reclaim-on-close
-   wave advertises. Until then step 3's same-project arm governs exactly as
-   written, because a wave opened fresh today leaves one more live child that
-   the operator archives by hand. Once the token is listed, a same-project
-   successor is opened only after the predecessor's PR measures merged
-   (`ccd pr-state --session <predecessor id>` answers `phase` = `merged`;
-   read the field with `jq -r .phase`, never by matching the line's text), and
-   it opens WITHOUT `sessionId`, so dispatch mints a fresh child from current
-   `main` instead of resuming a workspace built on the old one. The succession
-   is then the cross-project arm's, inside one project: open wave N+1 first,
-   close the producer with `final:true` and require `released:true`, then read
-   `"$API" runs list --closed 1` and require the producer's own `state` to be
-   `done` — open-before-close is unchanged. A wave that must overlap its
-   predecessor is a deliberate stacked child: its brief names the
-   predecessor's branch it builds on, and it pays one absorption of `main`
-   knowingly once that PR lands, under worker clause 16's triggers like any
-   other.
-```
-
-Three properties the existing §5 pins need, each measured green on the prototype: `dispatchAt` (the first `Dispatch wave N+1`) is still step 5's; the step names no `**Same project:**`/`**Different project:**` marker, so the per-arm slices end where they did; and it names no destructive verb and no route (`allSkillText`'s census and the route harvest read this file).
-
-- [ ] **Step 5: Pay the citation tax (README only)**
+- [ ] **Step 4: Pay the citation tax (README only)**
 
 ```bash
 SCRATCH=<your scratchpad, absolute>
@@ -2092,52 +2016,41 @@ python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD --files README.md
 
 Expected: stated = base = tree everywhere, empty compositions.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/coordinator-skill.test.ts test/reviewer-skill.test.ts \
   test/install-coordinator-skill.test.ts test/box-token-census.test.ts test/routing-references.test.ts
 ```
 
-Expected: PASS — `coordinator-skill` 152/152, `reviewer-skill` 12/12, `install-coordinator-skill` 16/16, `box-token-census` 22/22, `routing-references` 11/11 (measured at `af64d9d2`, each file alone; re-measured 2026-09-24 at `08701c22` with every task's edit in — `box-token-census` moved 14 → 22 with main's #176, which added eight update-route census cases to that file; the rest unchanged).
+Expected: PASS — `coordinator-skill` 148/148, `reviewer-skill` 12/12, `install-coordinator-skill` 16/16, `box-token-census` 22/22, `routing-references` 11/11 (re-measured 2026-09-24 at `65c5bb34` with Tasks 3–4 in, each file alone, `--maxWorkers=1`; `coordinator-skill` was 152 while this task also wrote a lifecycle step and its four pins, which the 2026-09-24 ruling removed; `box-token-census` moved 14 → 22 with main's #176, which added eight update-route census cases to that file). On a base that already carries CCR-15 wave 3: `coordinator-skill` 150/150, `reviewer-skill` 13/13 (measured 2026-09-24).
 
-- [ ] **Step 7: Mutation check, then commit**
+- [ ] **Step 6: Mutation check, then commit**
 
 | # | Exact edit | Expected red (measured) |
 |---|---|---|
 | C1 | SKILL.md clause 15: `only on a conflict it has measured; beyond that,` → `only on a conflict; beyond that,` | "carries all fifteen clauses verbatim" only — `missing contract clause: This session never calls \`update-branch\` by any …` |
-| C2 | wave-lifecycle.md step 6: `…like any\n   other.` → `…like any\n   other, and never by update-branch.` | "names `update-branch` ONLY inside clause 15, across SKILL.md and every reference…" — `update-branch appears 2× in the coordinator corpus` |
+| C2 | wave-lifecycle.md §5 step 5: `   proof, release proof, and exact-SHA merge proof above succeed.` → `   proof, release proof, and exact-SHA merge proof above succeed, never by update-branch.` (a mention planted in a REFERENCE file, which only the derived `allSkillText` reads) | "names `update-branch` ONLY inside clause 15, across SKILL.md and every reference…" — `update-branch appears 2× in the coordinator corpus; only clause 15 may name it` |
 | C3 | README.md `and its fifteen` → `and its fourteen` | "spells that same count…" — `README.md says fourteen clauses where the CONTRACT pins 15` |
-| C4 | CLAUDE.md `its fifteen clauses are pinned VERBATIM by` → `fourteen` | same case — `CLAUDE.md says fourteen clauses…` |
-| C5 | step 6: `` `ccd caps` lists `reclaim-v1`, the token `` → `` `ccd caps` lists anything, the token `` | "states the gate before the rule…" — `step 6 no longer names its gate` |
-| C6 | step 6: `it opens WITHOUT `sessionId`` → `it opens with `sessionId`` | same case — `step 6 no longer opens the successor WITHOUT sessionId` |
-| C7 | step 6: `close the producer with `final:true` and require `released:true`, then read` → `close the producer with `final:false`, then read` | "opens fresh only after the predecessor measures merged…" — `step 6 no longer closes with a releasing close after the open` |
-| C8 | SKILL.md pointer: `` `references/wave-lifecycle.md` §5 step 6 opens `` → `the lifecycle reference opens` | "SKILL.md's same-project arm points at the gated step" |
-| C9 | step 6: `PR measures merged` → `PR is reviewed` | "opens fresh only after the predecessor measures merged…" — `step 6 no longer waits for the predecessor to measure merged` |
+| C4 | CLAUDE.md `its fifteen clauses are pinned VERBATIM by` → `fourteen` | same case — `CLAUDE.md says fourteen clauses where the CONTRACT pins 15` |
 
-Every Task 4 row was re-measured at `af64d9d2` with the revised clause 15 and step 6: each `1 failed | 151 passed (152)`.
+Rows C5–C9 mutated the lifecycle step and its SKILL.md pointer, and left with them (the 2026-09-24 ruling); C1–C4 keep their ids, so the table has no gap. C2 used to plant its mention in the removed step's last line; it now plants it in step 5's last line, which is on main. Every row re-measured 2026-09-24 at `65c5bb34` with Tasks 3–4 in: each `1 failed | 147 passed (148)`, the case named above and no other. With CCR-15 wave 3's Task 10 also in: each `1 failed | 149 passed (150)`, the same case.
 
 Rows (`$SCRATCH/mut-task4.json`):
 
 ```json
 [
  {"id": "C1", "file": "ccd/coordinator-skill/SKILL.md", "old": "only on a conflict it has measured; beyond that,", "new": "only on a conflict; beyond that,", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C2", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "knowingly once that PR lands, under worker clause 16's triggers like any\n   other.", "new": "knowingly once that PR lands, under worker clause 16's triggers like any\n   other, and never by update-branch.", "tests": ["test/coordinator-skill.test.ts"]},
+ {"id": "C2", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "   proof, release proof, and exact-SHA merge proof above succeed.\n", "new": "   proof, release proof, and exact-SHA merge proof above succeed, never by update-branch.\n", "tests": ["test/coordinator-skill.test.ts"]},
  {"id": "C3", "file": "README.md", "old": "(`ccd/coordinator-skill/SKILL.md`), and its fifteen", "new": "(`ccd/coordinator-skill/SKILL.md`), and its fourteen", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C4", "file": "CLAUDE.md", "old": "its fifteen clauses are pinned VERBATIM by", "new": "its fourteen clauses are pinned VERBATIM by", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C5", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "`ccd caps` lists `reclaim-v1`, the token", "new": "`ccd caps` lists anything, the token", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C6", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "it opens WITHOUT `sessionId`, so dispatch mints", "new": "it opens with `sessionId`, so dispatch mints", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C7", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "   close the producer with `final:true` and require `released:true`, then read\n   `\"$API\" runs list --closed 1`", "new": "   close the producer with `final:false`, then read\n   `\"$API\" runs list --closed 1`", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C8", "file": "ccd/coordinator-skill/SKILL.md", "old": "`references/wave-lifecycle.md` §5 step 6 opens; until then it stands.", "new": "the lifecycle reference opens; until then it stands.", "tests": ["test/coordinator-skill.test.ts"]},
- {"id": "C9", "file": "ccd/coordinator-skill/references/wave-lifecycle.md", "old": "successor is opened only after the predecessor's PR measures merged", "new": "successor is opened only after the predecessor's PR is reviewed", "tests": ["test/coordinator-skill.test.ts"]}
+ {"id": "C4", "file": "CLAUDE.md", "old": "its fifteen clauses are pinned VERBATIM by", "new": "its fourteen clauses are pinned VERBATIM by", "tests": ["test/coordinator-skill.test.ts"]}
 ]
 ```
 
 ```bash
-git add ccd/coordinator-skill/SKILL.md ccd/coordinator-skill/references/wave-lifecycle.md \
-  server/test/coordinator-skill.test.ts README.md CLAUDE.md
+git add ccd/coordinator-skill/SKILL.md server/test/coordinator-skill.test.ts README.md CLAUDE.md
 git commit -m "$(cat <<'MSG'
-feat(skills): coordinator clause 15, and a fresh workspace per wave, gated
+feat(skills): coordinator clause 15 — no update-branch, no churn requests
 
 Landing-order spec §5.1. The coordinator never calls update-branch and never
 writes rulesets, branch protection, auto-merge or allow_update_branch; it
@@ -2150,12 +2063,6 @@ its own ledger PR — the ledger was the hottest overlap file in three
 repositories. update-branch is counted across the whole coordinator corpus,
 licensed once. The pin moves 14 -> 15 with README.md and CLAUDE.md in the
 same commit.
-
-wave-lifecycle §5 step 6 — a same-project successor opens WITHOUT sessionId
-once its predecessor's PR measures merged, so dispatch mints a fresh child —
-is written GATED on `ccd caps` listing reclaim-v1 (child-reclamation's
-reclaim-on-close wave, not yet merged); until then step 3's same-project arm
-stands, and SKILL.md's arm points at the gate.
 MSG
 )"
 ```
@@ -2692,7 +2599,7 @@ git diff --quiet origin/main -- docs/superpowers/specs/2026-09-09-graphify-compa
 git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD; echo "probe rc=$?"
 ```
 
-Expected: PASS, `corpus-frozen`, and a probe answer. Clause 16's rule applies to this branch too, so absorb main ONLY on one of its triggers: the probe exits 1 with a 40-hex tree id on its first line (a conflict), or a required check on this wave's PR is red while main's latest push run of the same job is green — which is how a count-word, census or licence pin that main moved shows up, since PR CI tests the merge ref. Exit 0 is clean: leave main alone. Any other answer is unmeasured and licenses nothing. When a trigger fires: `git merge origin/HEAD` (never a rebase); on a conflict in `ccd/ccd`'s stamp line take either side of that line only and run `ccd/ccrc restamp ccd/ccd`; then re-run the citation procedure against the merge's first parent, Tasks 3–4's pins and Task 6's licence — an assertion over the merge is only true on the merged tree.
+Expected: PASS, `corpus-frozen`, and a probe answer. Clause 16's rule applies to this branch too, so absorb main ONLY on one of its triggers: the probe exits 1 with a 40-hex tree id on its first line (a conflict), or a required check on this wave's PR is red while main's latest push run of the same job is green — which is how a count-word, census or licence pin that main moved shows up, since PR CI tests the merge ref. Exit 0 is clean: leave main alone. Any other answer is unmeasured and licenses nothing. When a trigger fires: `git merge origin/HEAD` (never a rebase); on a conflict in `ccd/ccd`'s stamp line take either side of that line only and run `ccd/ccrc restamp ccd/ccd`; on a conflict above `worker-skill.test.ts`'s `carries no references of its own` (CCR-15 wave 3 merged first) keep BOTH blocks, delete every marker line and add the first side's `  });` only if it is missing (Global Constraints; Pre-flight finding 17); then re-run the citation procedure against the merge's first parent, Tasks 3–4's pins and Task 6's licence — an assertion over the merge is only true on the merged tree.
 
 - [ ] **Step 3: The wave's own surface in one run**
 
@@ -2703,7 +2610,7 @@ cd server && ./node_modules/.bin/vitest run test/measure-landing.test.ts test/cc
 cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
 ```
 
-Expected: PASS (`measure-landing` 15, `ccrc-restamp` 8, `ccrc-cli` 35, `worker-skill` 45, `coordinator-skill` 152, `update-branch-absent` 2, `session-hook-sync-advisory` 37, `ownership` 14, `single-definition` 214 — each measured alone at `af64d9d2`, and re-measured 2026-09-24 at `08701c22` with `single-definition` alone moved, 160 → 214, by main's #176); the second run `7 passed | 326 skipped (333)`.
+Expected: PASS (`measure-landing` 15, `ccrc-restamp` 8, `ccrc-cli` 35, `worker-skill` 45, `coordinator-skill` 148, `update-branch-absent` 2, `session-hook-sync-advisory` 37, `ownership` 14, `single-definition` 214 — each measured alone at `af64d9d2`, and re-measured 2026-09-24 at `08701c22` with `single-definition` alone moved, 160 → 214, by main's #176; `worker-skill` and `coordinator-skill` re-measured 2026-09-24 at `65c5bb34` with Tasks 3–4 applied, `coordinator-skill` 152 → 148 by the ruling that removed the lifecycle step's four pins. If CCR-15 wave 3 merged first: `worker-skill` 46, `coordinator-skill` 150 — Pre-flight finding 17); the second run `7 passed | 326 skipped (333)`.
 
 - [ ] **Step 4: Confirm the author, push, and open the PR**
 
@@ -2720,11 +2627,10 @@ Wave 1 of the landing-order programme (spec `docs/superpowers/specs/2026-09-23-l
 
 1. **Worker clause 16** — absorb `origin/main` only when the branch conflicts (probe: `git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD` exits 1 WITH a tree id on its first line — git 2.43 also exits 1 on an unresolvable ref, measured), when a required check is red while main's same job is green, or on a coordinator's fix-round naming the PR ejected or next to land. `git merge` only; never a rebase, force-push or `update-branch`; no writes to rulesets, protection, auto-merge or `allow_update_branch` (spec §4's Worker row); a generated stamp resolved by taking either side of the stamp LINE only, the rest of the file as source, then `~/.local/bin/ccrc restamp <file>`. Pin 15 → 16 with README/CLAUDE.md's count words.
 2. **Coordinator clause 15** — no `update-branch`, no ruleset/protection/auto-merge/`allow_update_branch` writes, a rebase-check or other conflict-sync request only on a measured conflict, and beyond that an absorb asked only as a land-sync to the PR it named next (strict repositories) or an ejection naming the recorded base sha; programme ledgers on its own PR. Pin 14 → 15.
-3. **wave-lifecycle §5 step 6** — a fresh workspace per wave, written GATED on `ccd caps` listing `reclaim-v1` (child-reclamation's reclaim-on-close wave, not yet merged).
-4. **The PreToolUse advisory** in `ccd/session-hook.sh` — `additionalContext`, never a decision, on a Bash call whose `git` in command position merges/pulls/rebases main, or that asks GitHub for a branch update (`gh pr`, REST or GraphQL). A sync only mentioned — a commit message, an echo, a PR comment — stays silent.
-5. **`ccrc restamp <file>`** — re-stamps a `ccrc:generated` file; refuses one with no marker, and one under `~/.local/bin` or `~/.ccrc` (a generator's own output).
-6. **`update-branch`** absent from executable source — the spec's reconciled set, derived from the index: `server/src`, `agent/src`, `shared/`, `deploy/`, `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh` — but for its two licensed, non-calling spellings (the advisory's detector, the instrument's classifier), pinned line for line; counted in both skills.
-7. **`deploy/measure-landing.py`** — the programme's read-only instrument (gh GET only, ccrc-api list verbs only, each pinned statically and through a recording stub; an unreadable input is refused or reported, never counted; the fleet is the ruled identity pair, required as `--fleet-login`); the three prerequisites spec §10 names are in the wave-done report.
+3. **The PreToolUse advisory** in `ccd/session-hook.sh` — `additionalContext`, never a decision, on a Bash call whose `git` in command position merges/pulls/rebases main, or that asks GitHub for a branch update (`gh pr`, REST or GraphQL). A sync only mentioned — a commit message, an echo, a PR comment — stays silent.
+4. **`ccrc restamp <file>`** — re-stamps a `ccrc:generated` file; refuses one with no marker, and one under `~/.local/bin` or `~/.ccrc` (a generator's own output).
+5. **`update-branch`** absent from executable source — the spec's reconciled set, derived from the index: `server/src`, `agent/src`, `shared/`, `deploy/`, `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh` — but for its two licensed, non-calling spellings (the advisory's detector, the instrument's classifier), pinned line for line; counted in both skills.
+6. **`deploy/measure-landing.py`** — the programme's read-only instrument (gh GET only, ccrc-api list verbs only, each pinned statically and through a recording stub; an unreadable input is refused or reported, never counted; the fleet is the ruled identity pair, required as `--fleet-login`); the three prerequisites spec §10 names are in the wave-done report.
 
 Citation corpus (S6-R11): three cited files edited, census unmoved (measured).
 
@@ -2765,7 +2671,7 @@ grep -c 'THE LANDING-ORDER ADVISORY' "$HOME/.cc-sessions/session-hook.sh"
 ~/.local/bin/ccrc restamp --help
 ```
 
-Expected: `PASS skills: …` (every rostered home carries the shipped skills — clause 16, clause 15 and step 6); `1`; `usage: ccrc restamp <file>` — by the launcher's installed path, the spelling clause 16 gives a worker, because `~/.local/bin` is not on a session unit's PATH. From here every fleet session's next Bash call that syncs main receives the advisory, and every dispatched worker's next brief invokes a skill carrying clause 16.
+Expected: `PASS skills: …` (every rostered home carries the shipped skills — clause 16 and clause 15); `1`; `usage: ccrc restamp <file>` — by the launcher's installed path, the spelling clause 16 gives a worker, because `~/.local/bin` is not on a session unit's PATH. From here every fleet session's next Bash call that syncs main receives the advisory, and every dispatched worker's next brief invokes a skill carrying clause 16.
 
 ---
 
@@ -2790,8 +2696,8 @@ The pre-flight findings above are not deviations: they were measured before this
 
 ## Review lenses
 
-Three lenses, all `opus`, effort `high` — a fifteen-file diff (the File Structure table: seven shipped files — `ccd/ccrc`, `ccd/session-hook.sh`, the two SKILL.md files, `wave-lifecycle.md`, `README.md`, `CLAUDE.md` — the instrument, and seven test files), sized per the fleet policy's 3–5 reviewers band with one `sonnet` refute pass per finding. Nothing here destroys anything, so no `xhigh` safety lens is owed; lens 2 reads the hot path as if it were one.
+Three lenses, all `opus`, effort `high` — a fourteen-file diff (the File Structure table: six shipped files — `ccd/ccrc`, `ccd/session-hook.sh`, the two SKILL.md files, `README.md`, `CLAUDE.md` — the instrument, and seven test files), sized per the fleet policy's 3–5 reviewers band with one `sonnet` refute pass per finding. Nothing here destroys anything, so no `xhigh` safety lens is owed; lens 2 reads the hot path as if it were one.
 
-1. **Skill prose and its pins (opus, high).** Clause 16 and clause 15 are byte-identical between SKILL.md and the CONTRACT literals, straight apostrophes in the worker's, none in the coordinator's; clause 16 is one line; the count words moved in SKILL.md, README.md and CLAUDE.md in the SAME commit as each clause; `update-branch` appears exactly once in each corpus (the coordinator's census reads every reference, derived); clause 16 carries spec §4's settings prohibition, the stamp-LINE rule and the launcher's installed path; clause 15's middle sentence still lets the coordinator send the land-sync and the ejection that clause 16's third trigger reads; clause 16's triggers agree with worker clause 9 (no push after wave-done — trigger 3 arrives on `merging → working`) and with the fix-round bullet in "When something is wrong"; step 6 states its gate BEFORE its rule, names the contract's own token, keeps open-before-close, and its releasing close matches what the server does for a successor that names no session; SKILL.md's pointer does not disturb the two succession-order pins; nothing in the new prose names a destructive verb or a route the server does not register.
+1. **Skill prose and its pins (opus, high).** Clause 16 and clause 15 are byte-identical between SKILL.md and the CONTRACT literals, straight apostrophes in the worker's, none in the coordinator's; clause 16 is one line; the count words moved in SKILL.md, README.md and CLAUDE.md in the SAME commit as each clause; `update-branch` appears exactly once in each corpus (the coordinator's census reads every reference, derived); clause 16 carries spec §4's settings prohibition, the stamp-LINE rule and the launcher's installed path; clause 15's middle sentence still lets the coordinator send the land-sync and the ejection that clause 16's third trigger reads; clause 16's triggers agree with worker clause 9 (no push after wave-done — trigger 3 arrives on `merging → working`) and with the fix-round bullet in "When something is wrong"; the diff leaves `wave-lifecycle.md` and coordinator step 6's **Clean** arm untouched (the 2026-09-24 ruling), and where CCR-15 wave 3 is already on the base its worker-skill `it` survives beside this wave's two; nothing in the new prose names a destructive verb or a route the server does not register.
 2. **The hook, the CLI and the absence pin (opus, high).** The advisory never denies and prints at most one line per event; it forks nothing for a payload without (`main` or `origin`, and a sync verb) or a branch-update spelling; its regex advises on every spelling in `SYNCS` and on none in `NOT_SYNCS` — `git` in command position is what keeps a mention silent — and the reviewer tries three more of each, reporting any miss or false positive with the command; the absence pin's set is the spec's reconciled one, read from the index, and its two licensed spellings are the only lines of the set that spell the word; the event test and the tool test are each the only guard for their case (H8, H4); the block sits below README's `:2900` and the census did not move; `ccrc restamp` re-stamps only a `ccrc-edited` file, never adopts a `foreign` one, refuses a generator's own output under `~/.local/bin` or `~/.ccrc` and a symlink, uses the tree's own `mark.mjs`, and its three exits are distinct.
 3. **The instrument and its numbers (opus, high).** `_gh` is the only gh argv and it is a GET; the path grammar refuses a flag or a method smuggled in the path; `_api` reaches only `runs list` and `mail list`; an unreadable input (an empty required set, a missing `--fleet-login`, a full mail page, a null claimant) is refused or reported, never a number; git is run for object reads only; nothing is written outside `--out`; the pure decisions match the archived instruments they port, and where the port measures differently (inversions: 19 vs 5, the archived figure now retired; whole-check red-main 120.7 h vs 111.2 h) the docstring says why; `required_state` treats a cancel as unmeasured and lets the latest attempt decide; `mail-latency` counts a mail it cannot match as unmatched, never as zero; no organisation, login or host is in the file or the plan; and Task 1's reported numbers came from the instrument's own output, on the worker's run, not from this plan.

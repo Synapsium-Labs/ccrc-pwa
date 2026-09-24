@@ -16,16 +16,16 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
-| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills; wave-lifecycle step 6 written gated | skills, hook (fleet box) | — | — | planned |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1 | — | planned |
+| 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | planned |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | planned; Tasks 3–5 re-plan owed |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
 | 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
 
-**Step 6 of the wave lifecycle** — wave N+1 opens without `sessionId`, so dispatch mints a fresh child from
-current `main` — goes live only with child-reclamation's reclaim-on-close wave (CCR-15 wave 3). Wave 1 writes it
-gated on that.
+**A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
+gated on CCR-15 wave 3. CCR-15 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
+carries it (spec §5.1, amended 2026-09-24).
 
 ## Decisions & deviations
 
@@ -42,6 +42,12 @@ gated on that.
   ticket. Each wave goes to a fresh worker workspace running subagent-driven development, a review run reads the
   worker's branch, and the coordinator rules and merges; the plans reach a worker only from `main`, so the docs
   PR carrying the specs, the ledgers and the first four plans merges before the first dispatch.
+- **2026-09-24 — the plans re-measured against `main` `b501698a`.** Main moved three commits after review (#176,
+  #178, #179). Both plans' counts and line hints were re-measured and corrected. Step 6 left wave 1: child-reclamation
+  delivered it. Wave 2's Tasks 3–5 are re-planned after child-reclamation wave 3 merges: under "One PR per child" a
+  producer's run closes before its PR merges and wave 3 reclaims its workspace. So the dequeue lane has no open run
+  or registry row to key on. The landing spelling must keep `--match-head-commit`, and the merge deny has a window
+  (the plan's status block names the directions).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -64,6 +70,7 @@ gated on that.
 ## Next-wave brief
 
 Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch wave 1 on a fresh workspace with its
-plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to. After wave 2
+plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to, and is dispatched
+only after its Tasks 3–5 are re-planned against child-reclamation wave 3 (the plan's status block). After wave 2
 merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
 planned and dispatched only on that proof's result.

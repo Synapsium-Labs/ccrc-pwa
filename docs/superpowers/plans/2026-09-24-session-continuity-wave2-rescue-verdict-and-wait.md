@@ -40,8 +40,8 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
         writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
 
 - **The citation tax (S6-R11) is owed by every CITED file.** Measured for this wave's files at planning (`grep -oE '(ccd/ccd)?:[0-9]+'` over the two corpus documents and `README.md`, the file prefix OPTIONAL): the corpus cites `ccd/ccd` up to `:19131`; README carries exactly two `ccd/ccd` anchors, `:21202` (`cmd_ensure`'s `_reg_generation_init "$id"`) and `:19989-19991` (`genrc == 1`). **Every edit this wave makes above `:19131` is LINE-NEUTRAL** (`_session_hard_blocked`, `_pane_limit_banner`'s D-3100 sentence, `_auto_swap_check`, `_swap_target`, `_reg_purge`'s inventory, `_reg_get`'s census) — measured: the census does not move. The one edit between `:19131` and `:21202` — Task 1's `newest` mode in `_transcript_limit_banner` (≈20279, +16 lines) — moves README's `cmd_ensure` anchor (`21202 → 21218` measured), which the re-pointer repairs by content. Everything else sits below `:21218`. `README.md` is edited in Task 5 (prose only, no `file:line` token), and `session-hook.test.ts` is not edited.
-- **The `_reg_get` census.** Every task that adds `_reg_get` calls re-measures `ccd-reg-get-census.test.ts`'s sentence in THAT task with the header's two commands, rewrites it in place with no new cardinal within 25 of the census, and names the mover. At `905360dc` it reads 156/132; Task 2 adds three (159/135), Task 3 four (163/139), Tasks 1 and 4 none.
-- **Locate code by CONTENT.** Line numbers are "at `905360dc`" and are hints, never addresses. Waves 1, 3 and 4 of this programme and the landing-order programme edit the same file.
+- **The `_reg_get` census.** Every task that adds `_reg_get` calls re-measures `ccd-reg-get-census.test.ts`'s sentence in THAT task with the header's two commands, rewrites it in place with no new cardinal within 25 of the census, and names the mover. Task 2 adds three calls on three lines, Task 3 four on four, Tasks 1 and 4 none — so each new pair is the pair your BASE states plus that task's, whatever the base: `$SCRATCH/reg-get-census.py` (Task 2 Step 7) derives it, checks it against the two commands and refuses on any difference. At `905360dc` and at `65c5bb34` the base states 156/132 (then 159/135, 163/139); child-reclamation wave 3 moves the base when it lands first (measured 2026-09-24 on a simulation of its three census taxes: 168/140, then 171/143, 175/147).
+- **Locate code by CONTENT.** Line numbers are "at `905360dc`" and are hints, never addresses. Waves 1, 3 and 4 of this programme, the landing-order programme and child-reclamation waves 3 and 4 (CCR-15; wave 3 is in flight as run 148, dispatched 2026-09-24, and rewrites the same `_reg_get` census lines Tasks 2 and 3 do; wave 4 adds `ccd reclaim-pause` and no `_reg_get` call; wave 5 edits no `ccd/ccd`) edit the same file.
 - **Shell state does not survive between Bash calls.** Every block that names `$SCRATCH` sets it itself (`SCRATCH=<your scratchpad, absolute>`). Never run half a block; an empty `$SCRATCH` points every path at `/`.
 - **Branch discipline:** commit on this workspace's own branch only; never a separate feature branch. One commit per task.
 - **Commit trailers:** end every commit message with the attribution line your own session is given. The heredocs below end at the body for that reason.
@@ -882,31 +882,74 @@ In `cmd_swap`, directly below the two lines `  _reg_set "$id" wrapper "$target"`
 `_reg_get`'s census: measure first, with the header's own commands:
 
 ```bash
-grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect 159
-grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'             # expect 135
+grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect the base's stated calls + 3
+grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'             # expect the base's stated lines + 3
 ```
 
-Then replace these five lines (`grep -n 'this file makes 156' ccd/ccd`, ≈2888)
+The block this step rewrites has TWO possible shapes at your base, because child-reclamation wave 3 (run 148, in flight) rewrites the same lines and either wave may land first. Both are located by content that exists in both: the ONE line saying `invocations across` (`grep -n 'invocations across' ccd/ccd`, ≈2889). The line above it ends `this file makes <N>`; that line ends `<M> non-comment lines.`; then `#`; then the line starting `# THE LAST MOVE WAS` and the one continuation line under it; then `# BEFORE THAT IT WAS ROUTING SLICE 4's…`. Four of those lines change and no line is added:
+
+| Line | Base without wave 3 (`65c5bb34`) | Base with wave 3 landed | This step writes |
+|---|---|---|---|
+| `…this file makes <N>` | `156` | wave 3's figure | base's `<N>` + 3 — the first command's output |
+| `# invocations across <M> non-comment lines.` | `132` | wave 3's figure | base's `<M>` + 3 — the second command's output |
+| `# THE LAST MOVE WAS …` | `` `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it `` | `` the RECLAIM region's reads (CCR-15 wave 3, Task <k>); `` | `# THE LAST MOVE WAS the rescue verdict's three reads (continuity wave 2), the +3;` |
+| its continuation | `` `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2. `` | `` before it `_child_tmpdir`'s `.child` read and CCR-10's archive check. `` | without wave 3: `` # before it CCR-15's `.child` read, the +1, and CCR-10's two archive reads, the +2. ``; with it: `` # before it CCR-15 wave 3's RECLAIM reads, then `.child` and CCR-10's archive check. `` |
+
+What is KEPT when wave 3's text is present: its step, named first in the chain, and the two steps it names after it; the older steps' `+1`/`+2` go (wave 3's lines carry no count, and a `+N` for a step whose size this wave did not measure would be typed, not measured). Apply the table by script, never by hand — write this to `$SCRATCH/reg-get-census.py` (Task 3 Step 6 runs it again):
+
+```python
+import re, subprocess, sys
+# `_reg_get`'s census, re-measured IN PLACE and located by CONTENT — the one sentence that says
+# `invocations across` — so it applies whether or not child-reclamation wave 3 landed first.
+# `verdict` = Task 2 (+3 calls on +3 lines), `policy` = Task 3 (+4 on +4), `merged` = Task 6 Step 1 after a
+# merge took MAIN's census lines (+7 on +7 over them). Writes nothing on STOP.
+DELTA = {'verdict': 3, 'policy': 4, 'merged': 7}[sys.argv[1]]
+MOVE = {'verdict': "# THE LAST MOVE WAS the rescue verdict's three reads (continuity wave 2), the +3;",
+        'policy': "# THE LAST MOVE WAS the rescue policy's seven reads (continuity wave 2), the +7;"}
+BEFORE = {  # Task 2's second line, keyed by the predecessor the base's LAST MOVE line names
+    "`_child_tmpdir`'s `.child` read (CCR-15)":
+        "# before it CCR-15's `.child` read, the +1, and CCR-10's two archive reads, the +2.",
+    "the RECLAIM region's reads (CCR-15 wave 3":
+        "# before it CCR-15 wave 3's RECLAIM reads, then `.child` and CCR-10's archive check.",
+}
+def sh(cmd): return int(subprocess.run(['bash', '-c', cmd], capture_output=True, text=True, check=True).stdout)
+n = sh("""grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l""")
+m = sh("""grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'""")
+src = open('ccd/ccd', encoding='utf8').read().split('\n')
+hits = [i for i, l in enumerate(src) if 'invocations across' in l]
+if len(hits) != 1: sys.exit(f'STOP: {len(hits)} lines say "invocations across", want 1')
+i = hits[0]
+a = re.fullmatch(r'(# .*this file makes )(\d+)', src[i - 1])
+b = re.fullmatch(r'(# invocations across )(\d+)( non-comment lines\.)', src[i])
+if not (a and b and src[i + 1] == '#' and src[i + 2].startswith('# THE LAST MOVE WAS ')
+        and src[i + 4].startswith("# BEFORE THAT IT WAS ROUTING SLICE 4's")):
+    sys.exit(f'STOP: the census block at ccd/ccd:{i + 1} is not in the shape this step edits')
+n0, m0 = int(a.group(2)), int(b.group(2))
+if (n, m) != (n0 + DELTA, m0 + DELTA):
+    sys.exit(f'STOP: stated {n0}/{m0} + {DELTA} is not the measured {n}/{m}')
+if sys.argv[1] in ('verdict', 'merged'):
+    keys = [k for k in BEFORE if k in src[i + 2]]
+    if len(keys) != 1: sys.exit(f'STOP: the LAST MOVE line names no known predecessor: {src[i + 2]}')
+    src[i + 3] = BEFORE[keys[0]]
+elif src[i + 2] != MOVE['verdict']:
+    sys.exit(f"STOP: Task 2's LAST MOVE line is not at ccd/ccd:{i + 3}: {src[i + 2]}")
+src[i + 2] = MOVE['policy' if sys.argv[1] == 'merged' else sys.argv[1]]
+src[i - 1] = a.group(1) + str(n)
+src[i] = b.group(1) + str(m) + b.group(3)
+open('ccd/ccd', 'w', encoding='utf8').write('\n'.join(src))
+print(f'census {n0}/{m0} -> {n}/{m} at ccd/ccd:{i}-{i + 1}; LAST MOVE at ccd/ccd:{i + 3}-{i + 4}')
+```
+
+then run it from the repo root:
 
 ```bash
-# and the reason is a count rather than a preference: this file makes 156
-# invocations across 132 non-comment lines.
-#
-# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
-# `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
+SCRATCH=<your scratchpad, absolute>
+python3 "$SCRATCH/reg-get-census.py" verdict
 ```
 
-with these five (the numbers the two commands printed, if your base already moved them):
+Expected: one line, `census <N>/<M> -> <N+3>/<M+3> at ccd/ccd:2888-2889; LAST MOVE at ccd/ccd:2891-2892` (line numbers at this plan's base) — measured 2026-09-24 on `65c5bb34` with three simulated reads above `_strand_clear() {`: `census 156/132 -> 159/135`, the five lines byte-identical to the ones this step wrote before it was made content-located; and on the same tree after wave 3's census tax applied three times from ITS plan's text (Tasks 2, 4, 5; its reads simulated as its plan counts them, six on four lines, five on three, one on one): `census 168/140 -> 171/143`, the wave-3 continuation line chosen. `ccd-reg-get-census` 3/3 in both states. Any `STOP` line means nothing was written (measured: an unknown first line STOPs and leaves `ccd/ccd` byte-identical, `cmp`): a count other than `+3` means a read other than this task's three moved it (find it before continuing); an unknown `THE LAST MOVE WAS` line means a third editor reached the block first (report it — never guess its chain). Run once: a second run STOPs on its own `+3` check, measured.
 
-```bash
-# and the reason is a count rather than a preference: this file makes 159
-# invocations across 135 non-comment lines.
-#
-# THE LAST MOVE WAS the rescue verdict's three reads (continuity wave 2), the +3;
-# before it CCR-15's `.child` read, the +1, and CCR-10's two archive reads, the +2.
-```
-
-FIVE lines for five, keeping the whole history chain: the sentence below them (`# BEFORE THAT IT WAS ROUTING SLICE 4's…`) continues it, so dropping the CCR-10 step would misstate authoritative history, and a sixth line would move every line below `:2893`, the frozen corpus's anchors among them, breaking the line-neutral rule this wave's citation forecast rests on.
+Line-neutral in both states, keeping the whole history chain: the sentence below them (`# BEFORE THAT IT WAS ROUTING SLICE 4's…`) continues it, so dropping the CCR-10 step would misstate authoritative history, and a sixth line would move every line below `:2893`, the frozen corpus's anchors among them, breaking the line-neutral rule this wave's citation forecast rests on. **If wave 3 lands on `main` AFTER this task committed**, the two edits overlap and Task 6 Step 1's merge block STOPs on this hunk — by design (it resolves only the stamp line); Task 6 Step 1 then resolves it by its census recipe (main's side of the census lines, then this script's `merged` mode), never by hand.
 
 - [ ] **Step 8: Re-stamp, then pay the corpus tax**
 
@@ -964,7 +1007,8 @@ Measured before: 32 of 248 rescues fired on a banner the session carried in.
 Amends D-3100's cooldown argument in place (C12,
 D-3497).
 
-_reg_get census 156/132 -> 159/135; _reg_purge's inventory names landed and
+_reg_get census +3 calls on 3 lines, re-measured in place by
+reg-get-census.py over the base's stated pair; _reg_purge's inventory names landed and
 carriednote (41). S6-R11: every edit above the corpus is line-neutral; the
 census did not move.
 MSG
@@ -1428,15 +1472,16 @@ The first keeps `ccd-limit-banner`'s source pin (`_session_hard_blocked "$id" "$
 | `` # The 41: `` | `` # The 42: `` |
 | `` # `reaping`, `setup`, `spawn`, `stalenarrownote`, `` | `` # `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `` |
 
-Census — measure with the header's two commands (`expect 163` occurrences, `expect 139` lines), then replace the five lines Task 2 wrote with these five:
+Census — measure with the header's two commands (expect the pair Task 2 wrote, each + 4), then run Task 2 Step 7's script in its `policy` mode, from the repo root:
 
 ```bash
-# and the reason is a count rather than a preference: this file makes 163
-# invocations across 139 non-comment lines.
-#
-# THE LAST MOVE WAS the rescue policy's seven reads (continuity wave 2), the +7;
-# before it CCR-15's `.child` read, the +1, and CCR-10's two archive reads, the +2.
+grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect Task 2's stated calls + 4
+grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'             # expect Task 2's stated lines + 4
+SCRATCH=<your scratchpad, absolute>
+python3 "$SCRATCH/reg-get-census.py" policy
 ```
+
+It finds the block by the same content (the ONE `invocations across` line), writes base + 4 over both numbers, and replaces ONLY the first `# THE LAST MOVE WAS` line — which must be the one Task 2 wrote, `# THE LAST MOVE WAS the rescue verdict's three reads (continuity wave 2), the +3;`, or it STOPs — with `# THE LAST MOVE WAS the rescue policy's seven reads (continuity wave 2), the +7;`. The continuation line is KEPT as Task 2 chose it, so whichever of the two chains your base carried survives. Expected: `census <N>/<M> -> <N+4>/<M+4> at ccd/ccd:2888-2889; LAST MOVE at ccd/ccd:2891-2892` — measured 2026-09-24 on Task 2's simulated output in both states: `census 159/135 -> 163/139` on `65c5bb34` (byte-identical to the five lines this step wrote before it was made content-located), `census 171/143 -> 175/147` with wave 3's census tax applied first; `ccd-reg-get-census` 3/3 in both, and a second run STOPs on its own `+4` check.
 
 - [ ] **Step 7: Re-stamp, the corpus tax, and the tests**
 
@@ -1502,7 +1547,8 @@ today; ~/.cc-limits is not consulted. Amends D-2236 / post-swap-redrive R1 (C6, 
 D-3498). The auto-rescue line appends reset=/type=/
 row= when a row was dated.
 
-_reg_get census 159/135 -> 163/139; inventory 42 with rescuewait. S6-R11:
+_reg_get census +4 calls on 4 lines, re-measured in place by
+reg-get-census.py; inventory 42 with rescuewait. S6-R11:
 line-neutral above the corpus; the census did not move.
 MSG
 )"
@@ -1921,8 +1967,9 @@ node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:f
 bash -n ccd/ccd && echo syntax-ok
 python3 "$SCRATCH/repoint-readme.py"
 python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD
-grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect 163 — this task adds none
-cd server && ./node_modules/.bin/vitest run test/ccd-rescue-policy.test.ts test/ccd-swap-target-class.test.ts \
+grep -v '^[[:space:]]*#' ccd/ccd | grep -o '_reg_get "' | wc -l    # expect the calls Task 3's census sentence states (163 on 65c5bb34) — this task adds none
+grep -v '^[[:space:]]*#' ccd/ccd | grep -c '_reg_get "'             # expect the lines it states (139 on 65c5bb34)
+cd server && ./node_modules/.bin/vitest run test/ccd-reg-get-census.test.ts test/ccd-rescue-policy.test.ts test/ccd-swap-target-class.test.ts \
   test/ccd-swap-pin.test.ts test/ccd-login-screen.test.ts test/ccd-authdead.test.ts test/ccd-auto-swap-hold.test.ts \
   test/ccd-limit-stale.test.ts test/ccd-pane-box-draft.test.ts
 ./node_modules/.bin/vitest run test/ccd-auto-swap-pool.test.ts test/ccd-crosspool.test.ts test/ccd-project-pool.test.ts
@@ -1930,7 +1977,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-rescue-policy.test.ts test/
   test/ccd-account-ok.test.ts test/ccd-limits.test.ts test/ccd-die-containment.test.ts test/ccd-lifecycle-contain.test.ts
 ```
 
-Expected: census unmoved; all PASS (`ccd-rescue-policy` 55/55 measured on the revised prototype; the neighbouring runs 142 and 126 cases on the first draft's prototype — re-measured on the revised one: `ccd-swap-target-class` 23/23, `ccd-swap-pin` 13/13, `ccd-auto-swap-pool` 43/43, `ccd-crosspool` 125/125).
+Expected: the `_reg_get` census unmoved (its test green); all PASS (`ccd-rescue-policy` 55/55 measured on the revised prototype; the neighbouring runs 142 and 126 cases on the first draft's prototype — re-measured on the revised one: `ccd-swap-target-class` 23/23, `ccd-swap-pin` 13/13, `ccd-auto-swap-pool` 43/43, `ccd-crosspool` 125/125).
 
 - [ ] **Step 7: Mutation check, then commit**
 
@@ -2580,6 +2627,56 @@ git fetch origin main && git diff --quiet origin/main -- \
 
 Expected: the merge block prints nothing past `git log` (already up to date, or a clean merge) or `merged: the stamp hunk resolved by re-stamping` — never `STOP` (on `STOP`, report and stop: a conflict in any other line of `ccd/ccd`, or in any other file, is never resolved in this task). If the merge brought another wave's `ccd/ccd` edits, the re-stamp is required; if it moved the census, `_reg_get`'s sentence or a README anchor, re-run the S6-R11 procedure and commit the re-measured literals with the composition stated ("an assertion over the merge is only true on the merged tree"). `corpus-frozen`.
 
+**The one other conflict this step resolves: the `_reg_get` census.** When child-reclamation wave 3 (or any wave that re-measured the census) lands on `main` after this wave's Task 2 or 3 committed, the two census edits ALWAYS conflict, and the merge block STOPs. Then redo the merge by hand and resolve only those hunks and the stamp, by script — never by hand, never `git checkout --theirs` on the file. Write this to `$SCRATCH/resolve-census-merge.py`:
+
+```python
+import sys
+# After `git merge origin/main` stopped with ccd/ccd as its ONLY conflicted file: resolve the line-2 stamp
+# hunk (either side — the re-stamp rewrites it) and the `_reg_get` census hunks — comment lines only, within
+# eight lines of an `invocations across` line — (MAIN's side, which `reg-get-census.py merged` then
+# re-derives), and STOP, writing nothing, on any other hunk.
+# Reads git's default, zdiff3 and diff3 conflict styles alike.
+L = open('ccd/ccd', encoding='utf8').read().split('\n')
+census = [k for k, l in enumerate(L) if 'invocations across' in l]   # the block's anchor, in either side
+out, i, n = [], 0, 0
+while i < len(L):
+    if not L[i].startswith('<<<<<<< '):
+        out.append(L[i]); i += 1; continue
+    j, ours, theirs = i + 1, [], []
+    cur = ours
+    while not L[j].startswith('>>>>>>> '):
+        if L[j].startswith('||||||| '): cur = []          # diff3's base section: dropped
+        elif L[j] == '=======': cur = theirs
+        else: cur.append(L[j])
+        j += 1
+    if i == 1 and len(ours) == len(theirs) == 1 and all(s.startswith('# ccrc:generated ') for s in ours + theirs):
+        out += ours
+    elif all(s.startswith('#') for s in ours + theirs) and any(abs(i - z) <= 8 for z in census):
+        out += theirs
+    else:
+        sys.exit(f'STOP: a conflict at ccd/ccd:{i + 1} that is neither the stamp nor the census block')
+    n += 1; i = j + 1
+open('ccd/ccd', 'w', encoding='utf8').write('\n'.join(out))
+print(f'resolved {n} hunk(s): the stamp and the census block, main\'s side')
+```
+
+then, from the repo root:
+
+```bash
+SCRATCH=<your scratchpad, absolute>
+git merge origin/main
+git diff --name-only --diff-filter=U           # must print ccd/ccd alone — anything else: git merge --abort, report, stop
+python3 "$SCRATCH/resolve-census-merge.py"      # on STOP (it wrote nothing): git merge --abort, report, stop
+python3 "$SCRATCH/reg-get-census.py" merged     # main's stated pair + 7; this wave's LAST MOVE line; main's step kept first in the chain
+node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
+  const { markGenerated } = await import('./shared/mark.mjs'); \
+  writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
+bash -n ccd/ccd && echo syntax-ok
+git add ccd/ccd && git commit --no-edit
+```
+
+Expected — measured 2026-09-24 on a three-way `git merge-file` simulation: this plan's Tasks 2–3 census steps over seven stub reads, against wave 3's census text as its plan writes it over twelve stub reads on eight lines, in git's default and `diff3` conflict styles. The resolver prints `resolved 2 hunk(s)` (default) or `resolved 3 hunk(s)` (`diff3` splits the census hunk at the unchanged `#`). The script prints `census 168/140 -> 175/147` (on the real tree, main's stated pair + 7). No conflict marker is left, `syntax-ok` prints, and the two styles are byte-identical past line 2. The chain reads `# THE LAST MOVE WAS the rescue policy's seven reads (continuity wave 2), the +7;` then `# before it CCR-15 wave 3's RECLAIM reads, then `.child` and CCR-10's archive check.`. A conflict injected anywhere else STOPs with `STOP: a conflict at ccd/ccd:<n> that is neither the stamp nor the census block` and leaves the file byte-identical (`cmp`). Then run the re-measure commands above on the merged tree.
+
 - [ ] **Step 2: The server suite in twelve sequential shards on the merged tip, then agent and pwa**
 
 ```bash
@@ -2614,7 +2711,7 @@ Wave 2 of the session-continuity programme (spec `docs/superpowers/specs/2026-09
 3. **Rule 3 — spread, no bounce, chain wait.** From the swap log's tail: skip the accounts just left blocked, prefer a target no rescue landed on in 10 minutes (never at the price of a class degrade), and chain-wait a fourth rescue within the hour up to 30 minutes — on an Anthropic lane, never on lost auth.
 4. `$REG/<id>.rescuewait` records each wait once on entry and once on exit; `deploy/measure-continuity.py --stage 4` reads §9's stage-4 rows back, read-only.
 
-Citation corpus (S6-R11): every edit above the frozen anchors is line-neutral; the census did not move. `_reg_get` census 156/132 -> 163/139.
+Citation corpus (S6-R11): every edit above the frozen anchors is line-neutral; the census did not move. `_reg_get` census +7 calls on 7 lines over the base's stated pair (156/132 -> 163/139 on this plan's base; the two `reg-get-census.py` lines name the pair on yours).
 
 **Deploy: `ccrc rollout --to <this merge's tag>` in its default order — fleet box first. Never `--server-first`.** Sessions swapped before the deploy carry no `.landed` and keep today's verdict until their next landing.
 

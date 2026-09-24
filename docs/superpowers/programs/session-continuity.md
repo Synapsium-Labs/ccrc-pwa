@@ -61,6 +61,9 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 - **Every wave that edits `ccd/ccd`** re-stamps it (`ownership.test.ts`), pays the citation tax for every cited file
   it moves (`session-hook.test.ts` S6-R11), keeps edits above the frozen corpus anchors length-neutral, and
   re-measures `ccd-reg-get-census.test.ts`'s sentence if it adds a `_reg_get` call.
+- **Child-reclamation edits the same `ccd/ccd` lines.** Its wave 3 (run 148, dispatched 2026-09-24) rewrites the
+  `_reg_get` census sentence wave 2 also rewrites; wave 2's plan locates those lines by content and derives its
+  numbers from whatever the base states, so either may land first (re-measured 2026-09-24 against `main` `b501698a`).
 - **The instrument grows with the programme.** `deploy/measure-continuity.py` is read-only and run by hand on the
   fleet box; wave 1 creates it with the carry counter, and every later wave adds the rows of spec §9 it owns in the
   same PR as the mechanism they measure.
