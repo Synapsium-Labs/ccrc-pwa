@@ -332,6 +332,61 @@ describe('a probe that could not RUN is `unmeasured` — never a token, never te
   }, 60_000);
 });
 
+describe('a probe that could not RUN, continued — the permission pass and rung 9’s per-checkout reads', () => {
+  // Spec §5.5, rung 8's rule: a probe that did not run measured nothing, so it
+  // answers unmeasured and the lane retries it. The terminal words keep what a
+  // read PROVED.
+  itLinux.each([[125], [126], [127], [137]])('the permission pass exited %i — it never ran to the end → unmeasured, not tree-unreadable', (code) => {
+    const { wt } = makeChild(h);
+    const a = path.join(wt, 'a');
+    fs.mkdirSync(a);
+    fs.chmodSync(a, 0o000);
+    try {
+      const r = evalOf(h, { pre: `_plat_timeout() { return ${code}; };` });
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+    } finally { fs.chmodSync(a, 0o755); }
+  }, 60_000);
+
+  /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other` —
+   *  the shape rung 9 passes when every read of it succeeds. */
+  const foreignClone = (wt: string): string => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
+    h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    return clone;
+  };
+
+  it.each([
+    ['its repository could not be resolved',
+      '_ws_common_dir() { case "$1" in */vendor/other) return 1 ;; esac; git -C "$1" rev-parse --path-format=absolute --git-common-dir; };'],
+    ['its status could not be read', 'git() { case "$*" in *"/vendor/other status "*) return 128 ;; esac; command git "$@"; };'],
+    ['its commits could not be counted', 'git() { case "$*" in *"/vendor/other rev-list "*) return 128 ;; esac; command git "$@"; };'],
+  ])('a nested checkout of another repository: %s → unmeasured', (_what, pre) => {
+    const { wt } = makeChild(h);
+    foreignClone(wt);
+    expect(evalOf(h).verdict, 'the CONTROL: every read succeeds, clean and pushed').toBe('reclaimable');
+    const r = evalOf(h, { pre });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  it('a nested checkout of this repository whose top could not be read → unmeasured', () => {
+    const { wt, main } = makeChild(h);
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', path.join(wt, 'inner'));
+    const pre = 'git() { case "$*" in *"/inner rev-parse --path-format=absolute --show-toplevel"*) return 128 ;; esac; command git "$@"; };';
+    const r = evalOf(h, { pre });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+});
+
 describe('rung 9 — containment', () => {
   it('refuses a nested checkout of ANOTHER repository that holds a commit on none of its remotes', () => {
     const { wt } = makeChild(h);
@@ -499,6 +554,54 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     fs.rmSync(wt, { recursive: true, force: true });
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('containment-unproven');
+  }, 60_000);
+
+  it('a trailing slash cannot walk past the leaf: a LIVE link spelled `<wt>/` refuses, and `other` is untouched', () => {
+    // `lstat("<link>/")` follows the link, so `-L "<wt>/"` is false: the
+    // spelling itself is refused where the row is read.
+    const { main, wt } = makeChild(h);
+    const other = plantLink(main, wt);
+    fs.writeFileSync(reg('workdir'), `${wt}/`);
+    const before = snapshot(main, other);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('not one plain absolute path');
+    expect(r.token).toBe('');
+    expect(snapshot(main, other)).toEqual(before);
+  }, 60_000);
+
+  it('a trailing slash on a DANGLING link is not a vanished worktree', () => {
+    const { wt } = makeChild(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.symlinkSync(path.join(h.home, 'nowhere'), wt);
+    fs.writeFileSync(reg('workdir'), `${wt}/`);
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null;`
+      + ` printf '%s|%s' "$REAP_VERDICT" "$RECLAIM_WORKTREE"`);
+    expect(out, 'the vanished arm never fired').toBe('containment-unproven|');
+  }, 60_000);
+
+  it('every other non-canonical spelling of the workdir refuses — `/.`, `/..`, `//`, `/./`, `/../`, relative', () => {
+    const { wt } = makeChild(h);
+    const dir = path.dirname(wt);
+    for (const spelled of [`${wt}/.`, `${wt}/..`, `${dir}//quiet-basin`, `${dir}/./quiet-basin`,
+      `${dir}/../demo/quiet-basin`, path.relative(h.home, wt)]) {
+      fs.writeFileSync(reg('workdir'), spelled);
+      expect(evalOf(h).verdict, spelled).toBe('containment-unproven');
+    }
+    fs.writeFileSync(reg('workdir'), wt);
+    expect(evalOf(h).verdict, 'the CONTROL: the plain spelling').toBe('reclaimable');
+  }, 90_000);
+
+  it('refuses not-a-workspace when the row names the project’s MAIN checkout', () => {
+    // git's record for `$main` is the main worktree's own stanza (listed
+    // first): without this rung the ladder answered reclaimable on `main`.
+    const { main } = makeChild(h);
+    fs.writeFileSync(path.join(main, 'untracked-main.txt'), 'x');
+    fs.writeFileSync(reg('workdir'), main);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('not-a-workspace');
+    expect(r.detail).toContain('main checkout');
+    expect(r.token).toBe('');
   }, 60_000);
 
   itLinux('an UNLISTABLE registry answers unmeasured — never a token, never a new word', () => {

@@ -206,16 +206,19 @@ export const SENTENCES: Record<string, string> = {
   // remove") is true of one and asks nothing of anyone — and
   // `held`/`state-changed`/`in-progress` — the three whose copy names a human
   // remedy — are retryable, carried as a deferral's `detail`, never rendered.
-  // `containment-unproven` has several causes in ccd (a checkout of another
-  // repository holding work that exists nowhere else, a workdir that belongs to
-  // another repository, a workdir that is a symbolic link, a workdir another
-  // registry row names), so its sentence names them all and claims only what
-  // each one shares: the tree at that path is not proven to be the child's own.
+  // `containment-unproven` has several causes in ccd (a nested checkout that is
+  // not a worktree root of this project, or one of another repository that is
+  // dirty or holds a commit on none of its remotes; a workdir that belongs to
+  // another repository, that is a symbolic link, that is not one plain
+  // absolute path, or that another registry row names), so its sentence lists
+  // them and claims only what every one of them proves: the tree at that path
+  // is not proven to be the child's own. A read that FAILED is not among them
+  // — ccd answers that unmeasured, and the lane retries it.
   'not-a-child': 'ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees — so it is never reclaimed automatically. Nothing was removed.',
   'paused': 'Reclamation is paused fleet-wide. Nothing was removed; it resumes when the pause is lifted.',
   'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
   'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, so nothing was removed. Reclamation tries again later.',
-  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed: a checkout of another repository inside it holds changes or commits that exist nowhere else, the directory belongs to another repository, the path is a symbolic link, or another session’s record names the same path.',
+  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed. That is the answer when a checkout inside it is neither this project’s own worktree nor proven clean and pushed, when the directory belongs to another repository, when the path is a symbolic link or not one plain absolute path, or when another session’s record names the same path.',
 };
 
 export function refusalSentence(token: string): string {

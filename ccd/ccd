@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=113b85e9646e8ed55752d048322b3acc1db32f17bd430049b1a92fe526c6040a
+# ccrc:generated 1 sha256=521f50babc47807248c5f9e1f45a577a3298f40ee290f1e5550f330e7636b77a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23345,6 +23345,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_HEAD=""           # the child's HEAD commit (differs from REAP_TIP on a detached HEAD); on the
   #                           vanished arm, the HEAD git's record still names ('' when it holds none)
   RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""   # `_ws_reclaim_record`'s answer for the last path asked
+  RECLAIM_REC_MAIN=0        # 1 = that record is the project's MAIN worktree (git lists it first)
   RECLAIM_STATUSDIGEST=""   # sha256 of the child's `status --porcelain=v1 -z --untracked-files=all`
   RECLAIM_SECRETS=()        # secret-shaped untracked AND ignored paths — never staged, recorded by path
   RECLAIM_STAGE=()          # the one tree last classified: its non-secret untracked paths
@@ -23423,6 +23424,12 @@ _ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx an
     -o \( -type f ! -perm -u=r -exec chmod u+r {} \; \) \) 2>"$errf"; rc=$?
   if (( rc == 124 )); then
     rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"; return 2
+  fi
+  # find answers 0, or 1 for an entry it could not read or fix — the pass RAN.
+  # Anything else (125-127: it never started; above 128: a signal) means it did
+  # not run to the end, and what is still unreadable is not its verdict.
+  if (( rc != 0 && rc != 1 )); then
+    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not run to completion (rc $rc)"; return 2
   fi
   left=$(find -P "$d" -xdev \( -type d ! -perm -u=rwx -o -type f ! -perm -u=r \) -print -quit 2>>"$errf")
   if [[ -n "$left" || -s "$errf" ]]; then
@@ -23526,15 +23533,19 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   # A list that could not be read measured nothing (spec §5.5, rung 8's rule).
   # It also answers the HEAD the record names — a VANISHED worktree's record
   # (`prunable`) is the one place a detached child's last commit is reachable
-  # from, and the tail clears that record.
-  local main="$1" path="$2" real line listing m=0 hit=0
-  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""
+  # from, and the tail clears that record. And it says whether the record hit
+  # is the MAIN worktree's (RECLAIM_REC_MAIN=1): `worktree list` always prints
+  # the main worktree's stanza first, and no child is ever that checkout.
+  local main="$1" path="$2" real line listing m=0 hit=0 n=0
+  RECLAIM_REC_BRANCH=""; RECLAIM_REC_HEAD=""; RECLAIM_REC_MAIN=0
   listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 2
   real=$(_ws_realpath "$path")
   while IFS= read -r line; do
     case "$line" in
-      "worktree "*) m=0
-                    [[ "${line#worktree }" == "$real" || "${line#worktree }" == "$path" ]] && { m=1; hit=1; } ;;
+      "worktree "*) m=0; n=$(( n + 1 ))
+                    if [[ "${line#worktree }" == "$real" || "${line#worktree }" == "$path" ]]; then
+                      m=1; hit=1; (( n == 1 )) && RECLAIM_REC_MAIN=1
+                    fi ;;
       "HEAD "*)     (( m )) && RECLAIM_REC_HEAD="${line#HEAD }" ;;
       "branch "*)   (( m )) && RECLAIM_REC_BRANCH="${line#branch refs/heads/}" ;;
     esac
@@ -23631,13 +23642,24 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # proved nothing — a `failed` document, retried.
   [[ -n "$project" && -n "$workdir" && -n "$regbranch" ]] \
     || { _ws_reclaim_unmeasured "the registry does not say what $id is: project='$project' workdir='$workdir' branch='$regbranch'"; return 1; }
+  # THE WORKDIR IS ONE PLAIN ABSOLUTE SPELLING, OR NOTHING HERE TRUSTS IT (spec
+  # §5.5, rung 9 asked of the path). Every test below reads the path AS
+  # WRITTEN, and a spelling can defeat them: `lstat("<link>/")` follows the
+  # link, so a trailing `/` (or `/.`) walks past the leaf `-L` onto another
+  # tree, and a dangling link with one reads as a vanished worktree. ccd writes
+  # this field itself and never writes such a form, so one standing here was
+  # written by something else — refused, not normalised (the verb re-reads the
+  # row, and a local rewrite would not carry). Terminal: the same row answers
+  # the same way on every retry.
+  [[ "$workdir" == /* && "$workdir" != */ && "$workdir" != */. && "$workdir" != */.. \
+     && "$workdir" != *//* && "$workdir" != */./* && "$workdir" != */../* ]] \
+    || { _reap_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
   main="$PROJECTS_ROOT/$project"
   # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
   # (`=`): a bare `-t cc-<id>` is an fnmatch pattern and resolves a prefix to a
   # DIFFERENT session (`cmd_win_size`'s measured case). A session that does not
-  # exist has no client; a
-  # session that exists and will not list its clients is presence UNMEASURED,
-  # which is not absence.
+  # exist has no client; a session that exists and will not list its clients is
+  # presence UNMEASURED, which is not absence.
   if (( ! defer )); then
     if tmux has-session -t "=$(_tmux "$id")" 2>/dev/null; then
       clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
@@ -23697,6 +23719,13 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   fi
   (( rc == 0 )) \
     || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+  # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
+  # would pin a WIP commit onto the project's own branch and hand the tail
+  # that branch's name; no child is ever the main worktree. The vanished arm
+  # cannot reach this: `$main` was just resolved, so it exists, and a canonical
+  # path that does not exist resolves to no path that does.
+  (( ! RECLAIM_REC_MAIN )) \
+    || { _reap_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
   wthead="$RECLAIM_REC_BRANCH"
   # 6 — no in-progress git operation in the child's OWN tree.
   if (( ! defer )); then
@@ -23745,10 +23774,15 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _ws_reclaim_unmeasured "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
+    # A READ THAT FAILED MEASURED NOTHING (spec §5.5, rung 8's rule, carried
+    # here): unmeasured, retried. `containment-unproven` is kept for what the
+    # reads PROVE — a checkout that is not a worktree root, a dirty one, or a
+    # commit on none of its remotes.
     pcommon=$(_ws_common_dir "$p") \
-      || { _reap_refuse containment-unproven "could not resolve the repository of the checkout at $p"; return 1; }
+      || { _ws_reclaim_unmeasured "could not resolve the repository of the checkout at $p"; return 1; }
     if [[ "$pcommon" == "$mainreal" ]]; then
-      ptop=$(git -C "$p" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) || ptop=""
+      ptop=$(git -C "$p" rev-parse --path-format=absolute --show-toplevel 2>/dev/null) \
+        || { _ws_reclaim_unmeasured "could not read the top of the checkout at $p"; return 1; }
       [[ "$ptop" == "$p" ]] \
         || { _reap_refuse containment-unproven "the checkout at $p names $mainreal but is not a worktree root"; return 1; }
       RECLAIM_NESTED+="$p"$'\n'
@@ -23758,11 +23792,11 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     pdirt=$(git -C "$p" status --porcelain 2>"$errf"); rc=$?
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     { (( rc == 0 )) && [[ -z "$err" ]]; } \
-      || { _reap_refuse containment-unproven "could not read the checkout of another repository at $p"; return 1; }
+      || { _ws_reclaim_unmeasured "could not read the checkout of another repository at $p"; return 1; }
     [[ -z "$pdirt" ]] \
       || { _reap_refuse containment-unproven "the checkout of another repository at $p has $(printf '%s\n' "$pdirt" | grep -c .) uncommitted file(s)"; return 1; }
     pahead=$(git -C "$p" rev-list --count --all --not --remotes 2>/dev/null) \
-      || { _reap_refuse containment-unproven "could not prove every commit in $p is on one of its own remotes"; return 1; }
+      || { _ws_reclaim_unmeasured "could not count the commits in $p that are on none of its own remotes"; return 1; }
     (( pahead == 0 )) \
       || { _reap_refuse containment-unproven "$pahead commit(s) in the checkout of another repository at $p are on none of its remotes"; return 1; }
     RECLAIM_FOREIGN+="$p"$'\n'
