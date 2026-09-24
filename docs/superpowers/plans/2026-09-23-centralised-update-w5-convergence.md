@@ -9060,6 +9060,14 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
   - Task 13's formula writes `3_600_000` inline. Name the constant the code uses.
   - Task 10's Consumes line omits `isIngestibleReleaseTag`. Add it.
 
+- **From W2's fix round 3** (its own task review, carried under the same rule):
+  - **m1, a behaviour edge that the default source cannot reach.** The coordinator's ruling governs: the listing wins over `releases/tags/K` only when it names K as a **non-draft** release. `catalogue.ts`'s vouched set, built from `parseReleaseElement`'s rows, must exclude `draft` rows.
+    - Failing input (only a `CCRC_RELEASE_API_URL` mirror that lists drafts, since GitHub never lists drafts to an unauthenticated client): `/latest` names an older T, `tags/K` answers 404, and the listing carries K with `draft: true`.
+    - Wrong result: `lastLatestTag` stays pinned to a yanked K. Every poll then pays for the tag check, and T never joins `keepTags`.
+    - Pin that exact input red-first.
+  - **m2.** The B1 case must also assert that poll 2's `/latest` request carries NO `If-None-Match`. Mutation: advance `latestEtag` on a throw without advancing `lastLatestTag`. It must red; it was measured green.
+  - **m4 (nit).** The budget clock's `Math.max(0, …)` floor, which guards a non-monotonic injected time source, is unpinned. Pin it with an injected source that steps backwards.
+
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
@@ -9078,6 +9086,9 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 | P10 | delete `withdrawnAnswered()` in `applyWithdrawn` | the fail-recover-fail case |
 | C-d | delete the `currentK` warning re-arm | the throw-recover-throw case |
 | P4/C-a | delete a non-probe `stampRequest` | the send-time stamp case (if round 3 did not already) |
+| m1 | drop the `!r.draft` filter from the vouched set | the draft-listing case |
+| m2 | advance `latestEtag` on a throw | the B1 case's no-`If-None-Match` assertion |
+| m4 | delete the `Math.max(0, …)` floor | the backwards-clock case |
 
 
 ### Task 9: Docs, the gate, the PR
