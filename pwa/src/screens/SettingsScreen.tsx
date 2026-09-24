@@ -12,12 +12,13 @@
 // `.shell-detail` back at the top on every route change, this one included.
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, UPDATE_CHANNELS, UPDATE_GATE_CAP } from '../../../shared/api';
+import type { AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, UPDATE_CHANNELS, UPDATE_GATE_CAP, isReleaseTag, isUpdateChannel } from '../../../shared/api';
+import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
-import { useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
-import { ApiError, api, updateErrorText } from '../lib/api';
+import { nodeVersion, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../lib/api';
 import { elapsedWords } from '../lib/elapsed';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
@@ -151,6 +152,100 @@ export function catalogueReasonText(reason: string): string {
   }
   const http = /^http-(\d{3})$/.exec(reason);
   return http !== null ? `HTTP ${http[1]}` : reason;
+}
+
+// ── The release list (spec §13; programme wave 3 Task 8) ─────────────────────
+// One row per catalogue release, newest first. Three rules this block exists
+// to keep, each pinned in settings-screen.test.tsx:
+//   * ORDER IS SEMVER. `v0.0.10` sorts below `v0.0.9` as a string; every tag
+//     comparison here goes through shared/semver.ts behind isReleaseTag (the
+//     comparator throws RangeError on a non-tag, so nothing unvalidated reaches it).
+//   * "verified" IS A MEASUREMENT. It appears only when some node's measured
+//     provenance is `verified` while that node runs this tag. `bundleListed` is
+//     the catalogue's claim that a bundle FILE is listed, and renders as
+//     `bundle listed` — verifiedAt takes no release, so it cannot read it (§18).
+//   * NOTES ARE TEXT. Same-user-writable, capped by the poller (W2), and handed
+//     to React as one text child of a <pre>: no markdown pass, no HTML, no link
+//     detection, and no raw-HTML prop anywhere in this file (a source scan
+//     holds that literally).
+// The move button is rendered and DISABLED in this wave: its routes are
+// programme wave 5's, and MOVE_DISABLED_TEXT is the one sentence every
+// disabled move control carries (Task 5).
+
+export function sortReleases(releases: readonly ReleaseWire[]): ReleaseWire[] {
+  const tagged = releases.filter((r) => isReleaseTag(r.tag));
+  const rest = releases.filter((r) => !isReleaseTag(r.tag));
+  // `filter` returned a fresh array, so the stable in-place sort never reorders
+  // the poll's view; equal versions (v0.0.10 / v0.0.010) keep wire order.
+  tagged.sort((a, b) => compareReleaseTags(b.tag, a.tag));
+  return [...tagged, ...rest];
+}
+
+export function verifiedAt(tag: string, nodes: readonly NodeWire[]): boolean {
+  return nodes.some((n) => n.provenance === 'verified' && nodeVersion(n) === tag);
+}
+
+export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'install' | 'rollback' {
+  if (!isReleaseTag(tag) || nodes.length === 0) return 'install';
+  return nodes.every((n) => {
+    const v = nodeVersion(n);
+    return v !== null && isNewerTag(v, tag);
+  }) ? 'rollback' : 'install';
+}
+
+export function refusedLine(r: ReleaseWire, nodes: readonly NodeWire[]): string | null {
+  const refused: readonly unknown[] = Array.isArray(r.refused) ? r.refused : [];
+  const by = new Set<string>();
+  for (const x of refused) {
+    if (typeof x === 'object' && x !== null && typeof (x as { by?: unknown }).by === 'string') {
+      by.add((x as { by: string }).by);
+    }
+  }
+  if (by.size === 0) return null;
+  const m = nodes.length;
+  return `refused by ${by.size} of ${m} node${m === 1 ? '' : 's'}`;
+}
+
+export function releaseDate(ms: number): string {
+  const d = new Date(typeof ms === 'number' ? ms : Number.NaN);
+  return Number.isNaN(d.getTime()) ? '—' : d.toISOString().slice(0, 10);
+}
+
+function ReleaseItem({ release: r, nodes }: { release: ReleaseWire; nodes: readonly NodeWire[] }): ReactNode {
+  const noteId = useId();
+  const refused = refusedLine(r, nodes);
+  const direction = releaseDirection(r.tag, nodes);
+  return (
+    <li className="settings-release" data-tag={r.tag}>
+      <div className="settings-release-head">
+        <span className="settings-release-tag">{r.tag}</span>
+        <span className="settings-release-date">{releaseDate(r.publishedAt)}</span>
+        {isUpdateChannel(r.channel) && (
+          <span className={`settings-badge settings-badge--${r.channel}`}>{r.channel}</span>
+        )}
+        {verifiedAt(r.tag, nodes) && <span className="settings-badge settings-badge--verified">verified</span>}
+        {r.bundleListed === true && <span className="settings-badge">bundle listed</span>}
+        {r.yanked === true && <span className="settings-badge">yanked</span>}
+      </div>
+      {refused !== null && <p className="settings-release-refused">{refused}</p>}
+      {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
+      <div className="settings-release-actions">
+        <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>
+          {direction === 'rollback' ? 'Roll back' : 'Install'}
+        </button>
+        <span id={noteId} className="settings-move-note">{MOVE_DISABLED_TEXT}</span>
+      </div>
+    </li>
+  );
+}
+
+function ReleaseList({ releases, nodes }: { releases: readonly ReleaseWire[]; nodes: readonly NodeWire[] }): ReactNode {
+  if (releases.length === 0) return null;
+  return (
+    <ul className="settings-releases" aria-label="Releases">
+      {sortReleases(releases).map((r) => <ReleaseItem key={r.tag} release={r} nodes={nodes} />)}
+    </ul>
+  );
 }
 
 export function SettingsScreen(): ReactNode {
@@ -294,6 +389,7 @@ function UpdatesBody({ view, stale, now, reload }: {
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
       </p>
+      {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} />}
     </>
   );
 }

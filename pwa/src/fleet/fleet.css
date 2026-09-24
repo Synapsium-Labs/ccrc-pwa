@@ -3059,3 +3059,62 @@ button.proj-card-pool::before {
 }
 .settings-catalogue--amber { color: var(--status-attention-text); }
 .settings-catalogue--muted { color: var(--ink-tertiary); }
+
+/* — centralised update management W3, Task 8: the release list —
+   One row per catalogue release, newest first by semver. The row paints no
+   ground of its own (a hairline between rows, the .hotfiles-row shape), so
+   every rule below that sets `color` and no `background` is registered in
+   design/audit.mjs's INHERITED_GROUNDS against --bg-page: .settings-screen
+   paints nothing, and neither do .shell-detail's ancestors, so body's
+   --bg-page is what is behind the text. The badges and the notes block are
+   self-grounded (each sets its own background AND colour) so the auditor
+   measures them without a registration. */
+.settings-releases { list-style: none; margin: 0; padding: 0; display: grid; }
+.settings-release {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.settings-release-tag { font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono); }
+.settings-release-date { font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono); color: var(--ink-tertiary); }
+.settings-badge {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  white-space: nowrap;
+}
+/* Each variant restates its ground: a variant selector names no painted
+   ancestor, so a colour-only override would be measured at nothing. */
+.settings-badge--dev { background: var(--bg-raised); color: var(--ink-secondary); }
+.settings-badge--stable { background: var(--bg-raised); color: var(--ink-primary); }
+/* Green only for a MEASURED verdict — some node's provenance at this tag —
+   never for `bundle listed`, which keeps the base badge's quiet ink. */
+.settings-badge--verified { background: var(--bg-raised); color: var(--status-busy-text); }
+.settings-release-refused { margin: 0; font-size: var(--text-xs); color: var(--status-attention-text); }
+/* Notes are untrusted same-user text, rendered as ONE text child: wrapping
+   keeps a long line or an unbroken URL inside the phone's width, and there is
+   no markdown, HTML or link pass anywhere on this path. */
+.settings-release-notes {
+  margin: 0;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.settings-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+/* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
+   disabled ink; this only stops it filling the row. Compound on purpose: it
+   wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
+   which sheet loads last, and any disabled move button on this screen (the
+   node rows' Update / Roll back too) can carry the same pair of classes. */
+.btn-ghost.settings-move { width: auto; padding: 0 var(--sp-3); }
+.settings-move-note { font-size: var(--text-2xs); color: var(--ink-tertiary); }

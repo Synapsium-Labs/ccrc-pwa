@@ -781,6 +781,19 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the catalogue line's 'never checked' rendering in --ink-tertiary, on the same unpainted section as .settings-catalogue. Registered separately because it overrides `color` directly",
   },
+  // ── centralised update management W3, Task 8: the release list ──────────
+  'fleet.css .settings-release-date': {
+    under: ['var(--bg-page)'],
+    why: "the release row's publish date on SettingsScreen. .settings-release draws a hairline and no fill, .settings-section/.settings-screen paint no background, and neither does .shell-detail, so body's --bg-page (styles/base.css:111) is behind it — the .pool-epoch-lag reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-release-refused': {
+    under: ['var(--bg-page)'],
+    why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
+  },
+  'fleet.css .settings-move-note': {
+    under: ['var(--bg-page)'],
+    why: "the 'lands with the next release (W4)' note beside a disabled Install/Roll back button, in the same unfilled release row (and in any other unfilled row of this screen that reuses it). Same ground as .settings-release-date; the NOTE is live text and is measured, unlike the disabled button beside it (primitives.css .btn-ghost:disabled, WCAG 1.4.3)",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

@@ -14,15 +14,16 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CatalogueState, NodeWire, UpdateIntentWire, UpdatesView } from '../../shared/api';
+import type { BuildInfo } from '../../shared/buildinfo';
+import type { CatalogueState, NodeWire, ReleaseWire, UpdateIntentWire, UpdatesView } from '../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, UPDATE_GATE_CAP } from '../../shared/api';
 import {
   AUTO_LABELS, CHANNEL_SENTENCES, SettingsScreen, autoGateMissing, catalogueLine, catalogueReasonText, clockTime,
-  dayClock,
+  dayClock, refusedLine, releaseDate, releaseDirection, sortReleases, verifiedAt,
 } from '../src/screens/SettingsScreen';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ApiError, api } from '../src/lib/api';
+import { ApiError, MOVE_DISABLED_TEXT, api } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { declValue, ruleIn } from './cssRule';
 
@@ -474,5 +475,228 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     expect(declValue(ruleIn(css, '.settings-option'), 'min-height')).toBe('var(--tap-min)');
     expect(declValue(ruleIn(css, '.settings-fieldset'), 'min-width')).toBe('0');
     expect(declValue(ruleIn(css, '.settings-catalogue--amber'), 'color')).toBe('var(--status-attention-text)');
+  });
+});
+
+// ── Task 8: the release list (design 2026-09-20 §13, §18) ────────────────────
+// Fixtures are local to these two describes on purpose: Tasks 7, 9 and 10 each
+// keep their own, and a shared `node()` would couple four tasks' cases to one
+// shape nobody owns.
+const T8_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T8_NODE_A = '11111111-1111-4111-8111-111111111111';
+const T8_NODE_B = '22222222-2222-4222-8222-222222222222';
+/** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
+const t8Stamp = (version: string | undefined): BuildInfo => ({
+  sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
+  ...(version === undefined ? {} : { version }),
+});
+/** A full NodeWire, every field W2 Task 1 declares, measured and settled. */
+const t8Node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: T8_NODE_A, role: 'fleet', label: 'fleet', os: 'linux',
+  current: t8Stamp('v0.0.9'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor', 'update-gate'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: T8_T0, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+  request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+const t8Server = (over: Partial<NodeWire> = {}): NodeWire =>
+  t8Node({ nodeId: T8_NODE_B, role: 'server', label: 'server', agentOps: null, ...over });
+/** A full ReleaseWire; `version` is the tag (W2 Task 4: `version = tag`). */
+const t8Release = (tag: string, over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+  tag, version: tag, channel: 'stable', publishedAt: T8_T0, commitSha: 'c'.repeat(40),
+  bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+});
+
+describe('SettingsScreen — the release list: helpers', () => {
+  it('sortReleases: semver order, newest first — v0.0.10 above v0.0.9 — and a non-tag row last, in wire order', () => {
+    const wire = [t8Release('v0.0.9'), t8Release('vnext'), t8Release('v0.0.10'), t8Release('v0.1.0'), t8Release('v0.0.8 ')];
+    expect(sortReleases(wire).map((r) => r.tag)).toEqual(['v0.1.0', 'v0.0.10', 'v0.0.9', 'vnext', 'v0.0.8 ']);
+    // The input is not reordered in place: the view the poll holds is shared state.
+    expect(wire.map((r) => r.tag)).toEqual(['v0.0.9', 'vnext', 'v0.0.10', 'v0.1.0', 'v0.0.8 ']);
+  });
+
+  it('verifiedAt: only a node MEASURED verified and running THAT tag — provenance alone or the tag alone is not enough', () => {
+    expect(verifiedAt('v0.0.9', [t8Node()])).toBe(true);
+    expect(verifiedAt('v0.0.9', [t8Node({ provenance: 'unverified' }), t8Server({ provenance: 'unknown' })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [t8Node({ current: t8Stamp('v0.0.8') })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [t8Node({ current: null })])).toBe(false);
+    expect(verifiedAt('v0.0.9', [])).toBe(false);
+  });
+
+  it('releaseDirection: Roll back only when EVERY node runs a newer tag, compared by semver across v0.0.9/v0.0.10', () => {
+    const both10 = [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })];
+    expect(releaseDirection('v0.0.9', both10)).toBe('rollback');          // string order would call v0.0.10 older
+    expect(releaseDirection('v0.0.10', both10)).toBe('install');          // equal is not newer
+    expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: t8Stamp(undefined) })])).toBe('install');
+    expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: null, measuredAt: null })])).toBe('install');
+    expect(releaseDirection('v0.0.9', [])).toBe('install');
+    expect(releaseDirection('vnext', both10)).toBe('install');           // never handed to the comparator, which throws
+  });
+
+  it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
+    const two = [t8Node(), t8Server()];
+    expect(refusedLine(t8Release('v0.0.9'), two)).toBeNull();
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), two)).toBe('refused by 1 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', {
+      refused: [{ by: T8_NODE_A, at: T8_T0 }, { by: T8_NODE_A, at: T8_T0 + 1 }, { by: T8_NODE_B, at: T8_T0 + 2 }],
+    }), two)).toBe('refused by 2 of 2 nodes');
+    expect(refusedLine(t8Release('v0.0.9', { refused: [{ by: T8_NODE_A, at: T8_T0 }] }), [t8Node()])).toBe('refused by 1 of 1 node');
+    expect(refusedLine(t8Release('v0.0.9', { refused: {} as unknown as ReleaseWire['refused'] }), two)).toBeNull();
+    expect(refusedLine(t8Release('v0.0.9', { refused: [null, { at: 1 }] as unknown as ReleaseWire['refused'] }), two)).toBeNull();
+  });
+
+  it('releaseDate: the UTC calendar day; a time Date cannot place is the missing mark, never a throw', () => {
+    expect(releaseDate(Date.UTC(2026, 8, 23, 23, 59))).toBe('2026-09-23');
+    expect(releaseDate(Date.UTC(2026, 8, 24, 0, 0))).toBe('2026-09-24');
+    expect(releaseDate(Number.NaN)).toBe('—');
+    expect(releaseDate(1e20)).toBe('—');
+  });
+});
+
+describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13)', () => {
+  const view = (releases: ReleaseWire[], nodes: NodeWire[]): UpdatesView => ({
+    catalogue: { lastOkAt: T8_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T8_T0, setBy: 'test' }],
+  });
+  /** Render the screen over one answer and return the release list — every case reads INSIDE it, because the
+   *  inventory (Task 9) renders the same tags as node versions on the same screen. */
+  const renderList = async (releases: ReleaseWire[], nodes: NodeWire[]): Promise<HTMLElement> => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view(releases, nodes));
+    render(<SettingsScreen />);
+    return screen.findByRole('list', { name: 'Releases' });
+  };
+  const rowOf = (list: HTMLElement, tag: string): HTMLElement => {
+    const row = list.querySelector<HTMLElement>(`li[data-tag="${tag}"]`);
+    if (row === null) throw new Error(`no release row for ${tag}`);
+    return row;
+  };
+
+  it('renders "verified" when a node is measured verified at that tag (§18 "bundleListed is never verified")', async () => {
+    const list = await renderList([t8Release('v0.0.9')], [t8Node(), t8Server({ provenance: 'unverified' })]);
+    const row = rowOf(list, 'v0.0.9');
+    expect(within(row).getByText('verified')).toHaveClass('settings-badge--verified');
+    expect(within(row).getByText('bundle listed')).toBeInTheDocument();
+  });
+
+  it('bundle listed alone renders "bundle listed", never "verified"', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { bundleListed: true })],
+      [t8Node({ provenance: 'unverified' }), t8Server({ provenance: 'unknown' })],
+    );
+    const row = rowOf(list, 'v0.0.9');
+    expect(within(row).getByText('bundle listed')).toBeInTheDocument();
+    expect(within(row).queryByText('verified')).toBeNull();
+    expect(row.querySelector('.settings-badge--verified')).toBeNull();
+  });
+
+  it('a node verified on ANOTHER tag does not verify this one', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9'), t8Release('v0.0.8')],
+      [t8Node({ current: t8Stamp('v0.0.8') }), t8Server({ current: t8Stamp('v0.0.8'), provenance: 'unverified' })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).queryByText('verified')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.8')).getByText('verified')).toBeInTheDocument();
+  });
+
+  it('reads "refused by 1 of 2 nodes" off refused[]', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { refused: [{ by: T8_NODE_B, at: T8_T0 }] })],
+      [t8Node(), t8Server()],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByText('refused by 1 of 2 nodes')).toHaveClass('settings-release-refused');
+  });
+
+  it('renders notes as literal text — no markup, no image, no link (§18 "notes are capped and plain")', async () => {
+    const NOTES = '<b>bold</b> <img src=x onerror=alert(1)>\nsee https://example.com/x or javascript:alert(1)';
+    const list = await renderList([t8Release('v0.0.9', { notes: NOTES })], [t8Node()]);
+    const row = rowOf(list, 'v0.0.9');
+    const pre = row.querySelector('pre.settings-release-notes');
+    expect(pre).not.toBeNull();
+    expect(pre!.textContent).toBe(NOTES);
+    expect(row.querySelector('b, img, a, script')).toBeNull();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(within(row).queryByRole('img')).toBeNull();
+  });
+
+  it('lists v0.0.10 above v0.0.9 whatever order the wire carries (semver, never string order)', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9', { publishedAt: T8_T0 + 5 }), t8Release('v0.0.10', { publishedAt: T8_T0 })],
+      [t8Node()],
+    );
+    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-tag'))).toEqual(['v0.0.10', 'v0.0.9']);
+  });
+
+  it('names the move by direction: Roll back when every node runs a newer tag, Install otherwise', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9')],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp('v0.0.10') })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Roll back' })).toBeInTheDocument();
+    expect(within(rowOf(list, 'v0.0.10')).getByRole('button', { name: 'Install' })).toBeInTheDocument();
+  });
+
+  it('an unversioned node makes the move Install, never Roll back', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.9')],
+      [t8Node({ current: t8Stamp('v0.0.10') }), t8Server({ current: t8Stamp(undefined), provenance: 'unknown' })],
+    );
+    expect(within(rowOf(list, 'v0.0.9')).getByRole('button', { name: 'Install' })).toBeInTheDocument();
+  });
+
+  it('renders every move button DISABLED, described by the one W3 sentence (§18 "the move controls are disabled in W3")', async () => {
+    const list = await renderList(
+      [t8Release('v0.0.10'), t8Release('v0.0.9'), t8Release('v0.0.8', { channel: 'dev' })],
+      [t8Node({ current: t8Stamp('v0.0.9') }), t8Server({ current: t8Stamp('v0.0.9') })],
+    );
+    const buttons = within(list).getAllByRole('button');
+    expect(buttons.map((b) => b.textContent)).toEqual(['Install', 'Install', 'Roll back']);
+    for (const b of buttons) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
+    }
+    expect(within(list).getAllByText(MOVE_DISABLED_TEXT)).toHaveLength(3);
+  });
+
+  it('badges the channel (dev / stable, none for an unknown one) and marks a yanked release', async () => {
+    const list = await renderList(
+      [
+        t8Release('v0.0.11', { channel: 'dev' }),
+        t8Release('v0.0.10', { channel: 'stable', yanked: true }),
+        t8Release('v0.0.9', { channel: null }),
+      ],
+      [t8Node({ provenance: 'unknown' })],
+    );
+    expect(within(rowOf(list, 'v0.0.11')).getByText('dev')).toHaveClass('settings-badge', 'settings-badge--dev');
+    expect(within(rowOf(list, 'v0.0.10')).getByText('stable')).toHaveClass('settings-badge', 'settings-badge--stable');
+    expect(within(rowOf(list, 'v0.0.10')).getByText('yanked')).toHaveClass('settings-badge');
+    const unknown = rowOf(list, 'v0.0.9');
+    expect(unknown.querySelector('.settings-badge--dev, .settings-badge--stable')).toBeNull();
+    expect(within(unknown).queryByText('yanked')).toBeNull();
+    expect(within(rowOf(list, 'v0.0.11')).getByText('2026-09-23')).toHaveClass('settings-release-date');
+  });
+
+  it('renders no release list when the catalogue holds no release', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view([], [t8Node()]));
+    render(<SettingsScreen />);
+    await screen.findByText(/^checked /);   // Task 7's calm catalogue line: the view HAS landed, so absence is measured
+    expect(screen.queryByRole('list', { name: 'Releases' })).toBeNull();
+  });
+
+  it('spells no raw-HTML path anywhere in the screen (a literal-absence pin over the source)', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+    expect(src).not.toMatch(/dangerouslySetInnerHTML/);
+    expect(src).not.toMatch(/\binnerHTML\b/);
+  });
+
+  it('wraps the notes block inside the phone width (a <pre> that keeps newlines and breaks a long URL)', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const rule = ruleIn(css, '.settings-release-notes');
+    expect(declValue(rule, 'white-space')).toBe('pre-wrap');
+    expect(declValue(rule, 'overflow-wrap')).toBe('anywhere');
   });
 });
