@@ -40,6 +40,7 @@
 - **Mutation-table discipline**: every guard ships with a test that goes red when the guard is removed or mutated, measured before/after; each task names the §18 rows it pins. TDD red-first.
 - **Commit on the workspace branch only** — at least one commit per task, `feat(update): …` / `test(update): …`, never a separate feature branch.
 - **A rollback target's channel can be stale** (carried from W2's D-3215, ruling R21): an OLDER off-page stable release that is demoted while a newer stable is GitHub's latest is never re-read, so `coord.db` still reads it channel `stable`; a rollback target is chosen from `releases` rows, so its channel badge can be stale; the dispatcher never relies on a rollback target's channel (of the target's releases row, `moveRefusal`'s rollback arm asks only that it exists — yanked permitted — and that this node has not refused the tag).
+- **A lease's freshness never orders one box's clock against another's** (carried from W4's review run 155, C33). A fleet node stamps `update.json`'s `startedAt` with its own clock, while `updateStartedAt` is the server's clock at `dispatchNode`. W2's report-precedence rule compares the two with only `REPORT_TIME_RESOLUTION_MS` of allowance. So a fleet node whose clock runs about a second behind reads every report of the run just dispatched as `stale-report`: the lease never settles, the deadline fails the row, and a failed row halts the fleet. Task 8A's item C33 replaces the comparison.
 - **A known limitation carried from W2 (its review run 143, X1).** A read-fine but non-tag `~/.ccrc/floor` maps to `floorRead: 'absent'` on the server (W2's D-3213 fold, deliberate), while the node's own `_upd_floor_check` refuses a malformed floor by name. So the server can resolve, and this wave's dispatcher can send, a desired tag the node refuses. That fails safe: the node refuses, its row goes `failed` with the refusal as the detail, and the fleet halts until an operator acks. Do not "fix" it here; it needs a new read-state word, which is a W2 schema change.
 
 ## Review Focus
@@ -9105,6 +9106,13 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
     - **Ruling.** F6's fix closes this path: the kept tag leaves K at poll 2, so no later poll re-reads `tags/K` for it. Review 150's F4 fix (a `'complete'` listing's silence about K contradicts a stable check) closes it a second time. Pin F7's input as its own case. The path is closed twice, so measure three states: red with BOTH fixes reverted, and green with either one reverted alone. Record all three.
   - **The tie-break for every BEHAVIOUR item here.** When a mirror's answers disagree and no listing names K as a non-draft release, the outcome that leaves K yanked wins. A deleted release left resolvable is the defect class. An old release left unresolvable fails safe: its move is refused, and nothing is installed. Add no new column for any of this: a `coord.db` schema change is out of this task's scope.
 
+- **From W4's review run 155 (carried here because it is W2's precedence rule meeting this wave's lease).**
+  - **C33 (BEHAVIOUR).** A fleet node's report `startedAt` is node-clock seconds; the lease's `updateStartedAt` is server-clock ms. The precedence rule orders one against the other.
+    - **Ruling.** A report is fresh for a lease by CHANGE, not by clock: it counts for the lease when it differs from the node's report as measured when the lease was acquired. It never counts because its node-clock time passes the server-clock lease time.
+    - A server-role local spawn shares the server's clock, but takes the same rule, so there is one rule.
+    - If the rule needs a column to hold the report measured at acquisition, that is a migration, and a migration slot is a cross-branch namespace: mail the coordinator before taking one.
+    - Pin: a fleet node whose clock runs 5 s behind the server settles its dispatched run. A node whose report is unchanged since acquisition stays in flight until the deadline.
+
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
@@ -9133,6 +9141,7 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 | 151 F2 | the ETag-keep call site alone back to the round-4 predicate | the honest-ETag draft-listing case's `If-None-Match` |
 | 151 F6 | the draft drop cell keeps `lastLatestTag` on K | the self-disagreeing mirror case and its deleted-off-page-T variant |
 | 151 F7 | revert BOTH 151 F6's and 150 F4's fixes (each alone: green, recorded) | the drafted-then-deleted K case |
+| W4 C33 | restore the clock comparison | the node-clock-5-s-behind case |
 
 
 ### Task 9: Docs, the gate, the PR
