@@ -10,16 +10,20 @@
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.
 // It adds no scroll logic of its own — the D-161 pane reset in app.tsx puts
 // `.shell-detail` back at the top on every route change, this one included.
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import type { AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
+import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, NotifyMode, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
+import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
+import { NotificationBell } from '../fleet/NotificationBell';
 import { nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../lib/api';
+import { readAuthStatus } from '../lib/auth';
 import { elapsedWords } from '../lib/elapsed';
+import { pushSupported } from '../lib/push';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import '../fleet/fleet.css';
@@ -60,7 +64,7 @@ export const AUTO_LABELS: Record<AutoMode, string> = {
 /** The auto-install note's lead; the node labels follow, in `nodes()` order. */
 const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — not yet on: ';
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
-const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read; the screen will re-check.";
+export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read; the screen will re-check.";
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
 /** A later poll failed: what is shown is the last answer that landed, and it says so. */
@@ -411,6 +415,130 @@ function NodeList({ nodes, releases, now, onAcked }: {
   );
 }
 
+// ── Notifications (spec §13 item 2, §12's unarmed banner; programme wave 3 Task 10) ──
+// Two things live here, and one thing deliberately does not:
+//   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same
+//     component the fleet header mounts, with its four subscribe outcomes
+//     (NotificationBell.tsx:29-47). This file imports none of lib/push's
+//     lifecycle calls and spells none of those outcomes; a second copy of the
+//     toggle is how two surfaces would come to disagree about whether this
+//     browser is subscribed. `pushSupported()` is read here only to say why the
+//     bell is absent (it renders nothing where Web Push cannot work).
+//   * RELEASE NOTIFICATIONS are `update_intent['*'].notify` (W2's NotifyMode
+//     column): one native radio per NOTIFY_MODES member
+//     (D-3299), written through the one intent route.
+//     The server's notifier (Task 3) reads the '*' row alone, so a per-node
+//     scope is never offered here.
+//   * NOT HERE: the release push itself. A tap on one of these radios changes
+//     which tags the server will announce from the next sweep on; it sends
+//     nothing and marks nothing.
+//
+// THE UNARMED-EXPOSURE BANNER (spec §12) sits above both sections. Its trigger
+// is `AuthStatus.mode === 'off'` from the unauthenticated GET /api/auth/status
+// (D-3298 — /health reports no gate state), AND a
+// page origin whose hostname is not one of shared/base-url.ts's
+// LOOPBACK_HOSTS: the one list of loopback spellings, reused rather than
+// re-spelled (single-definition.test.ts's LOOP_SET scan holds that). Every
+// non-answer draws NOTHING — a failed read, an older server with no route, a
+// body without `mode` — because a red banner is a claim about this box, and a
+// status read that told us nothing is not evidence of an open gate.
+
+export const NOTIFY_LABELS: Record<NotifyMode, string> = { channel: 'on my channel', stable: 'stable only', off: 'off' };
+
+/** The ONE spelling of the §12 sentence (the W4 doctor check will name the same route). */
+export const UNARMED_EXPOSURE_TEXT =
+  "The sign-in gate is off and this page was reached over a non-loopback address — anyone who can reach it can "
+  + 'change what the fleet installs, and POST /api/updates/apply will let them install it. Arm the gate: '
+  + 'CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN, together (ccrc expose writes all three).';
+
+/** (D-3298) true iff status?.mode === 'off' exactly AND !LOOPBACK_HOSTS.includes(hostname). */
+export function unarmedExposure(status: Partial<AuthStatus> | null, hostname: string): boolean {
+  return status?.mode === 'off' && !LOOPBACK_HOSTS.includes(hostname);
+}
+
+/** One status read per mount — the AccountsScreen `AuthSection` shape, whose
+ *  argument (one extra anonymous GET on a rarely-visited screen, and a reader
+ *  that never raises auth-lost) carries over unchanged. */
+function UnarmedExposureBanner(): ReactNode {
+  const [status, setStatus] = useState<Partial<AuthStatus> | null>(null);
+  useEffect(() => {
+    let live = true;
+    void readAuthStatus()
+      .then((s) => { if (live) setStatus(s); })
+      .catch(() => { /* an older server, a proxy's 404, no network: this box told us nothing — draw nothing */ });
+    return () => { live = false; };
+  }, []);
+  if (!unarmedExposure(status, location.hostname)) return null;
+  return <div className="settings-unarmed" role="alert">{UNARMED_EXPOSURE_TEXT}</div>;
+}
+
+/** What the release-notifications radios show. `setAt: null` = a write in
+ *  flight; a number = the route's own answer, shown until the poll's '*' row is
+ *  at least that new — a controlled radio would otherwise snap back to the old
+ *  choice for the length of one poll. */
+interface ShownNotify { notify: NotifyMode; setAt: number | null }
+
+function NotificationsSection({ view, reload }: { view: UpdatesView | null; reload: () => void }): ReactNode {
+  const titleId = useId();
+  const [supported] = useState(() => pushSupported());
+  const [shown, setShown] = useState<ShownNotify | null>(null);
+  const row = view === null ? null : (view.intent.find((i) => i.scope === FLEET_SCOPE) ?? null);
+  const caughtUp = shown !== null && shown.setAt !== null && row !== null && row.setAt >= shown.setAt;
+  const checked = shown !== null && !caughtUp ? shown.notify : (row?.notify ?? null);
+  const saving = shown !== null && shown.setAt === null;
+
+  const choose = async (notify: NotifyMode): Promise<void> => {
+    if (saving) return;   // the disabled fieldset stops a finger; this stops a second call
+    setShown({ notify, setAt: null });
+    try {
+      const answer = await api.setUpdateIntent({ scope: FLEET_SCOPE, notify });
+      const stored = answer === 'unreadable' ? null : (answer?.intent ?? null);
+      if (stored === null || !isNotifyMode(stored.notify) || typeof stored.setAt !== 'number') {
+        // The write may have landed: say so, and let the poll decide what is checked.
+        setShown(null);
+        toast(UNCONFIRMED_TEXT);
+      } else {
+        setShown({ notify: stored.notify, setAt: stored.setAt });
+      }
+    } catch (err) {
+      setShown(null);
+      toast(updateErrorText(err), 'error');
+    }
+    reload();
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby={titleId}>
+      <h2 id={titleId} className="settings-section-title">Notifications</h2>
+      {supported ? (
+        <div className="settings-bell-row">
+          <NotificationBell />
+          <span>Phone notifications for this browser</span>
+        </div>
+      ) : (
+        <p className="settings-note">This browser cannot receive Web Push.</p>
+      )}
+      {view !== null && (
+        <fieldset className="settings-fieldset" disabled={saving}>
+          <legend className="settings-legend">Release notifications</legend>
+          {NOTIFY_MODES.map((m) => (
+            <label key={m} className="settings-option">
+              <input
+                type="radio"
+                name="settings-notify"
+                value={m}
+                checked={checked === m}
+                onChange={() => void choose(m)}
+              />
+              <span className="settings-option-sentence">{NOTIFY_LABELS[m]}</span>
+            </label>
+          ))}
+        </fieldset>
+      )}
+    </section>
+  );
+}
+
 export function SettingsScreen(): ReactNode {
   // ONE poll and ONE clock for the whole screen: every section reads the same
   // answer (Tasks 7–10), so two sections can never disagree about the fleet.
@@ -424,7 +552,9 @@ export function SettingsScreen(): ReactNode {
         </button>
         <h1 className="settings-title">Settings</h1>
       </header>
+      <UnarmedExposureBanner />
       <UpdatesSection poll={poll} now={now} />
+      <NotificationsSection view={poll.view} reload={poll.reload} />
     </div>
   );
 }

@@ -15,12 +15,16 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { BuildInfo } from '../../shared/buildinfo';
-import type { CatalogueState, NodeWire, ReleaseWire, UpdateIntentWire, UpdatesView } from '../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, UPDATE_GATE_CAP } from '../../shared/api';
+import type {
+  CatalogueState, IntentWriteAnswer, NodeWire, NotifyMode, ReleaseWire, UpdateIntentWire, UpdatesView,
+} from '../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
+import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
-  ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, SettingsScreen, autoGateMissing,
-  canAck, catalogueLine, catalogueReasonText, clockTime, currentIsAmber, currentText, dayClock, nodeStateLine,
-  reachabilityLine, refusedLine, releaseDate, releaseDirection, requestLine, sortReleases, verifiedAt,
+  ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, NOTIFY_LABELS, SettingsScreen,
+  UNARMED_EXPOSURE_TEXT, UNCONFIRMED_TEXT, autoGateMissing, canAck, catalogueLine, catalogueReasonText, clockTime,
+  currentIsAmber, currentText, dayClock, nodeStateLine, reachabilityLine, refusedLine, releaseDate,
+  releaseDirection, requestLine, sortReleases, unarmedExposure, verifiedAt,
 } from '../src/screens/SettingsScreen';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
@@ -1027,5 +1031,278 @@ describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §
     expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
     // The row's three buttons carry Task 8's pair; its compound rule is what keeps them inline.
     expect(declValue(ruleIn(css, '.btn-ghost.settings-move'), 'width')).toBe('auto');
+  });
+});
+
+// ── Task 10: Notifications + the unarmed banner (design 2026-09-20 §12, §13) ──
+// Fixtures are local to these describes, as Tasks 7–9 keep theirs. Every case
+// that stubs a global (`fetch`, `location`, the three Web Push globals) undoes
+// it in the describe's own afterEach, which vitest's stack order runs BEFORE
+// the file-level reset — so `navigate('/')` there never meets a stubbed
+// `location`.
+const T10_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T10_NODE = '11111111-1111-4111-8111-111111111111';
+/** One intent row. `scope` defaults to the fleet row the notifier reads. */
+const t10Intent = (over: Partial<UpdateIntentWire> = {}): UpdateIntentWire => ({
+  scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel',
+  setAt: T10_T0, setBy: 'pwa', ...over,
+});
+/** A view that is only an intent list — the Notifications section reads nothing else. A NODE row is listed
+ *  FIRST on purpose: W2 answers '*' first (`ORDER BY scope`), and a reader that took `intent[0]` would pass
+ *  every fixture that kept that order. */
+const t10View = (fleet: Partial<UpdateIntentWire> = {}): UpdatesView => ({
+  catalogue: { lastOkAt: T10_T0, lastError: null },
+  releases: [],
+  nodes: [],
+  intent: [t10Intent({ scope: T10_NODE, notify: 'off', setAt: T10_T0 - 1 }), t10Intent(fleet)],
+});
+const t10Answer = (notify: NotifyMode, setAt: number): IntentWriteAnswer =>
+  ({ ok: true, intent: t10Intent({ notify, setAt }), epoch: 2 });
+const t10Json = (status: number, body: unknown): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+/** `GET /api/auth/status` answers `answer`; any other URL is a 404 no case reads. Returns the mock, so a
+ *  "nothing renders" case can wait for the read to have HAPPENED before asserting its absence. */
+const t10AuthStatus = (answer: { status: number; body: unknown } | 'network') => {
+  const f = vi.fn(async (url: unknown): Promise<Response> => {
+    if (String(url) !== '/api/auth/status') return t10Json(404, { error: 'not-found' });
+    if (answer === 'network') throw new TypeError('Failed to fetch');
+    return t10Json(answer.status, answer.body);
+  });
+  vi.stubGlobal('fetch', f);
+  return f;
+};
+const t10Host = (hostname: string): void => { vi.stubGlobal('location', { ...window.location, hostname }); };
+/** A browser that CAN do Web Push, as far as `pushSupported()` looks (lib/push.ts:13); permission stays
+ *  'default', so the bell's mount read (`pushEnabled`) answers false without touching the worker. */
+const t10PushBrowser = (): void => {
+  vi.stubGlobal('PushManager', class {});
+  vi.stubGlobal('Notification', { permission: 'default', requestPermission: vi.fn() });
+  vi.stubGlobal('navigator', { ...navigator, serviceWorker: {} });
+};
+/** Let every microtask and 0 ms timer queued so far run (the status read's fetch → json → setState chain). */
+const t10Settle = async (): Promise<void> => {
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+};
+const t10Group = (): Promise<HTMLElement> => screen.findByRole('group', { name: 'Release notifications' });
+
+describe('SettingsScreen — notifications: helpers', () => {
+  it('unarmedExposure: the gate reported off AND a non-loopback hostname — both, and nothing else', () => {
+    expect(unarmedExposure({ mode: 'off' }, 'ccrc.example')).toBe(true);
+    for (const host of LOOPBACK_HOSTS) expect(unarmedExposure({ mode: 'off' }, host)).toBe(false);
+    expect(unarmedExposure({ mode: 'passphrase' }, 'ccrc.example')).toBe(false);
+    expect(unarmedExposure({ mode: 'locked-out' }, 'ccrc.example')).toBe(false);
+    // An older server's silence and a failed read are not "off" — a red banner is a claim about this box.
+    expect(unarmedExposure({ authed: true }, 'ccrc.example')).toBe(false);
+    expect(unarmedExposure(null, 'ccrc.example')).toBe(false);
+  });
+
+  it('unarmedExposure: the loopback spellings are shared/base-url.ts\'s own — [::1] with brackets, as URL writes it', () => {
+    expect(unarmedExposure({ mode: 'off' }, '[::1]')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, 'localhost')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, '127.0.0.1')).toBe(false);
+    expect(unarmedExposure({ mode: 'off' }, '203.0.113.7')).toBe(true);
+  });
+
+  it('the banner sentence names the route it warns about and the three settings that arm the gate', () => {
+    expect(UNARMED_EXPOSURE_TEXT).toContain('POST /api/updates/apply');
+    for (const word of ['CCRC_AUTH=on', 'CCRC_RP_ID', 'CCRC_ORIGIN']) expect(UNARMED_EXPOSURE_TEXT).toContain(word);
+  });
+
+  it('labels every NotifyMode, and nothing else', () => {
+    expect(Object.keys(NOTIFY_LABELS).sort()).toEqual([...NOTIFY_MODES].sort());
+  });
+});
+
+describe('SettingsScreen — notifications: the section (design 2026-09-20 §13 item 2)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('offers one native radio per NotifyMode, in NOTIFY_MODES order, checked from the \'*\' row', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'stable' }));
+    render(<SettingsScreen />);
+    const group = await t10Group();
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((r) => r.getAttribute('value'))).toEqual([...NOTIFY_MODES]);
+    expect(within(group).getByRole('radio', { name: 'stable only' })).toBeChecked();
+    // The node row (listed first, notify 'off') is not what the fleet setting reads.
+    expect(within(group).getByRole('radio', { name: 'off' })).not.toBeChecked();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).not.toBeChecked();
+  });
+
+  it('a tap writes {scope: \'*\', notify} once, re-polls, and keeps the stored choice checked while the poll lags', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    const write = vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    render(<SettingsScreen />);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith({ scope: FLEET_SCOPE, notify: 'stable' });
+    await t10Settle();
+    // The re-poll still answered the OLD row (setAt T0 < the answer's T0 + 1): the route's answer is shown.
+    expect(within(group).getByRole('radio', { name: 'stable only' })).toBeChecked();
+  });
+
+  it('once the poll carries a row at least as new as the answer, the poll is what is checked', async () => {
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(t10View({ notify: 'channel' }))
+      .mockResolvedValue(t10View({ notify: 'off', setAt: T10_T0 + 5 }));   // another device, later
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue(t10Answer('stable', T10_T0 + 1));
+    render(<SettingsScreen />);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked());
+  });
+
+  it('a write in flight disables the three radios, so a second tap cannot race the first', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    const write = vi.spyOn(api, 'setUpdateIntent').mockReturnValue(new Promise(() => {}));
+    render(<SettingsScreen />);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    await waitFor(() => expect(within(group).getByRole('radio', { name: 'off' })).toBeDisabled());
+    expect(within(group).getByRole('radio', { name: 'off' })).toBeChecked();
+    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('an unreadable answer says the write may have landed and shows the stored row, not a guess', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockResolvedValue('unreadable');
+    render(<><ToastHost /><SettingsScreen /></>);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'off' }));
+    expect(await screen.findByText(UNCONFIRMED_TEXT)).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+  });
+
+  it('a refusal toasts the update route\'s own sentence and puts the stored choice back', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View({ notify: 'channel' }));
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(503, { ok: false, error: 'journal-unwritable', detail: 'the intent journal could not be written — see the server log' }));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const group = await t10Group();
+    fireEvent.click(within(group).getByRole('radio', { name: 'stable only' }));
+    expect(await screen.findByText('The server cannot write its intent journal — nothing was changed.')).toBeInTheDocument();
+    expect(within(group).getByRole('radio', { name: 'on my channel' })).toBeChecked();
+    expect(within(group).getByRole('radio', { name: 'stable only' })).not.toBeChecked();
+  });
+
+  it('renders the section while /api/updates is pending and on a box with no control plane — with no release radios', async () => {
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    render(<SettingsScreen />);
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByText('This browser cannot receive Web Push.')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Release notifications' })).toBeNull();
+    cleanup();
+    vi.spyOn(api, 'updates').mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
+    render(<SettingsScreen />);
+    await screen.findByText('This box has no update control plane — it runs without a coordination database.');
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Release notifications' })).toBeNull();
+  });
+
+  it('reuses the literal NotificationBell where the browser can do Web Push', async () => {
+    t10PushBrowser();
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));
+    render(<SettingsScreen />);
+    const section = screen.getByRole('heading', { name: 'Notifications' }).closest('section')!;
+    const bell = await within(section).findByRole('button', { name: 'Notifications off' });
+    expect(bell).toHaveClass('bell');
+    expect(bell).toHaveAttribute('aria-pressed', 'false');
+    expect(within(section).getByText('Phone notifications for this browser')).toBeInTheDocument();
+    expect(within(section).queryByText('This browser cannot receive Web Push.')).toBeNull();
+  });
+
+  it('spells none of the bell\'s own outcomes — the toggle is reused, never copied (a literal-absence pin)', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'SettingsScreen.tsx'), 'utf8');
+    expect(src).toMatch(/import \{ NotificationBell \} from '\.\.\/fleet\/NotificationBell';/);
+    expect(src).toMatch(/<NotificationBell \/>/);
+    for (const copy of [/\benablePush\b/, /\bdisablePush\b/, /\bpushEnabled\b/, /Allow notifications in your browser/,
+      /Push isn't set up on the server/, /Your browser blocks web push/]) {
+      expect(src).not.toMatch(copy);
+    }
+  });
+});
+
+describe('SettingsScreen — notifications: the unarmed-exposure banner (design 2026-09-20 §12)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const banner = (): HTMLElement | null => document.querySelector<HTMLElement>('.settings-unarmed');
+
+  it('shows the red sentence when the gate reports off and the page was reached over a non-loopback name', async () => {
+    t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockReturnValue(new Promise(() => {}));   // independent of the update view
+    render(<SettingsScreen />);
+    const shown = await screen.findByText(UNARMED_EXPOSURE_TEXT);
+    expect(shown).toHaveClass('settings-unarmed');
+    expect(shown).toHaveAttribute('role', 'alert');
+    // Directly under the header: before the Updates section, not inside it.
+    const updates = screen.getByRole('heading', { name: 'Updates' });
+    expect(shown.compareDocumentPosition(updates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(shown.closest('section')).toBeNull();
+  });
+
+  it('shows nothing when the gate is off but the page is on loopback', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    t10Host('127.0.0.1');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    render(<SettingsScreen />);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('shows nothing when the gate is armed, whatever the hostname', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 1, mode: 'passphrase' } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    render(<SettingsScreen />);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('shows nothing when the status read fails — a 404 from an older server, or no network', async () => {
+    for (const answer of [{ status: 404, body: { error: 'not-found' } }, 'network'] as const) {
+      const f = t10AuthStatus(answer);
+      t10Host('ccrc.example');
+      vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+      render(<SettingsScreen />);
+      await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+      await t10Settle();
+      expect(banner()).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('shows nothing when the status body carries no mode — silence is not "off"', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: false } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    render(<SettingsScreen />);
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/auth/status', expect.anything()));
+    await t10Settle();
+    expect(banner()).toBeNull();
+  });
+
+  it('is self-grounded red, not sticky, and wraps inside the phone width; the bell row keeps the tap floor', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    const red = ruleIn(css, '.settings-unarmed');
+    expect(declValue(red, 'background')).toBe('var(--status-dead-tint-solid)');
+    expect(declValue(red, 'color')).toBe('var(--status-dead-text)');
+    expect(declValue(red, 'position')).toBeNull();
+    expect(declValue(red, 'overflow-wrap')).toBe('anywhere');
+    expect(declValue(ruleIn(css, '.settings-bell-row'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('reads the gate from /api/auth/status once per mount, never from /health', async () => {
+    const f = t10AuthStatus({ status: 200, body: { authed: true, passkeysEnrolled: 0, mode: 'off' } });
+    t10Host('ccrc.example');
+    vi.spyOn(api, 'updates').mockResolvedValue(t10View());
+    render(<SettingsScreen />);
+    await screen.findByText(UNARMED_EXPOSURE_TEXT);
+    const urls = f.mock.calls.map(([u]) => String(u));
+    expect(urls.filter((u) => u === '/api/auth/status')).toHaveLength(1);
+    expect(urls.some((u) => u.startsWith('/health'))).toBe(false);
   });
 });

@@ -3159,3 +3159,29 @@ button.proj-card-pool::before {
    and Task 8's compound .btn-ghost.settings-move already stops it filling the
    row — so no second override is written here. */
 .settings-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+/* — centralised update management W3, Task 10: Notifications + the unarmed banner —
+   .settings-unarmed is the §12 red sentence: the gate is off and this page
+   was reached over a non-loopback address. It is SELF-GROUNDED — its own
+   background AND colour, the .fleet-host-banner pair (--status-dead-text on
+   --status-dead-tint-solid, the 12% wash pre-composited on --bg-surface) — so
+   the auditor measures it with no INHERITED_GROUNDS registration, and it is
+   not sticky: it heads a screen, it does not float over a list.
+   .settings-bell-row is layout only (it sets no colour): the reused
+   NotificationBell button beside its one-line caption, at the tap floor. */
+.settings-unarmed {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--status-dead);
+  border-radius: var(--r-md);
+  background: var(--status-dead-tint-solid);
+  color: var(--status-dead-text);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.settings-bell-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--tap-min);
+}
