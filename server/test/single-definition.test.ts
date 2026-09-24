@@ -14,13 +14,13 @@
 // field-by-field, spell the union across a type alias in another file). The
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
@@ -765,7 +765,7 @@ describe('Build 7 nouns', () => {
       // because `coord.db` is also the DATABASE FILE's name and several
       // docstrings in this directory legitimately mention it as prose
       // (`token.ts`'s own `CoordDbUnmigratable` paragraph, for one).
-      const REACH = /\b(?:coord|store)\.db\s*[.,)]/;
+      // `REACH` itself is module-scope, just below this describe: the update ring at the end of this file reads it too.
       for (const f of coordFiles) {
         if (HANDLE_HOLDERS.has(path.basename(f))) continue;
         const src = readFileSync(f, 'utf8');
@@ -775,7 +775,7 @@ describe('Build 7 nouns', () => {
     });
   });
 });
-
+const REACH = /\b(?:coord|store)\.db\s*[.,)]/;
 // ── program-leverage wave 8 ────────────────────────────────────────────────
 //
 // A docstring that names its own callers is a SECOND COPY of a fact the code
@@ -3310,5 +3310,307 @@ describe('the pane read is declared once, in L0', () => {
     const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'server.ts'), 'utf8');
     expect(src, 'server.ts still defines its own PANE_HISTORY_LINES').not.toMatch(/const PANE_HISTORY_LINES\s*=/);
     expect(src, 'server.ts uses the constant without importing it').toMatch(/PANE_HISTORY_LINES/);
+  });
+});
+
+// ── Design 2026-09-20 §6: the update control plane's vocabularies ──────────
+// APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites
+// this file by line (its census carries a `server/test/single-definition.
+// test.ts` entry), so an insert above a cited line moves the census.
+describe('the update control plane — one definition per vocabulary and wire type (design 2026-09-20 §6)', () => {
+  // The `RunState` shape (`Build 7 nouns`): one declaring file, and it is
+  // shared/api.ts. A local, un-exported redeclaration counts too — it is the
+  // same second copy with one fewer keyword.
+  const TYPES = [
+    'UpdateChannel', 'UpdateState', 'BusyUpdateState', 'SettledUpdateState', 'UpdatePhase', 'InstallState',
+    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs', 'TagFileRead',
+    'CatalogueErrorReason', 'ReleaseRefusalWire', 'ReleaseWire', 'NodeRequestWire', 'NodeReportWire',
+    'NodeUpdateWire', 'NodeWire', 'UpdateIntentWire', 'CatalogueState', 'UpdatesView', 'UpdateRouteError',
+    'UpdateRouteRefusal', 'IntentWriteAnswer', 'AckAnswer',
+  ] as const;
+  // The DECLARATION shape, not the bare keyword: `type <Name> [<…>] =` or
+  // `interface <Name>`, `export`/`declare` optional. The bare `(?:type|
+  // interface)\s+<Name>\b` form also matches an inline-type import specifier
+  // that happens to open its line (`  type UpdateChannel,` inside a multi-line
+  // `import { … }`), which is exactly how store.ts, update/inventory.ts and
+  // update/routes.ts import these names in later tasks — every such file would
+  // score as a second holder. `Build 7 nouns`' `export type RunState\b` avoids
+  // it by requiring `export`; this scan keeps `export` optional (a local
+  // un-exported copy is still a copy), so it requires the `=` instead.
+  const DEF_OF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/api.ts`, () => {
+      const DEF = DEF_OF(name);
+      // Controls, per name, so a later loosening of DEF_OF reds every case:
+      // an import specifier is not a declaration; an un-exported one is.
+      expect(DEF.test(`import {\n  type ${name},\n} from '../../../shared/api.js';`), 'import specifier').toBe(false);
+      expect(DEF.test(`type ${name} = 'a';`), 'un-exported local declaration').toBe(true);
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    });
+  }
+
+  const VALUES = [
+    'UPDATE_CHANNELS', 'UPDATE_STATES', 'BUSY_UPDATE_STATES', 'SETTLED_UPDATE_STATES', 'UPDATE_PHASES',
+    'IN_FLIGHT_UPDATE_PHASES', 'INSTALL_STATES', 'PROVENANCE_STATES', 'AUTO_MODES', 'NOTIFY_MODES',
+    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
+    'FLEET_SCOPE',   // ruling R4: shared/api.ts only — store.ts (Task 6) and resolve.ts/project.ts (Task 12) import it
+    'UNIX_SECONDS_MAX',   // C5, final fix wave: resolve.ts and inventory.ts both import it; neither declares its own
+  ] as const;
+  const GUARDS = [
+    'isUpdateChannel', 'isUpdateState', 'isUpdatePhase', 'isInstallState', 'isProvenanceState', 'isAutoMode',
+    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
+  ] as const;
+  it('defines every array, pattern and guard exactly once, in shared/api.ts', () => {
+    for (const name of VALUES) {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+    for (const name of GUARDS) {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('StampRead is DERIVED from its array — a hand-written union restates ReadFailure\'s pair', () => {
+    // `'absent' | 'unreadable'` spelled in shared/api.ts would make it a second
+    // holder in "one absent/unreadable read vocabulary" above, and this file
+    // cannot import ReadFailure (peers-claims-l0.test.ts pins its three type
+    // imports). So the union comes from STAMP_READS, and update-states.test.ts
+    // holds its failure half equal to ReadFailure at compile time.
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    expect(api).toMatch(/^export const STAMP_READS = \['ok', 'absent', 'unreadable', 'malformed'\] as const;$/m);
+    expect(api).toMatch(/^export type StampRead = \(typeof STAMP_READS\)\[number\];$/m);
+  });
+
+  it('spells the tag shape once — every other reader calls isReleaseTag', () => {
+    // The literal regex SOURCE, however delimited. `shared/semver.ts` checks
+    // its precondition structurally and is held to agree with isReleaseTag by
+    // `update-semver.test.ts`, so it is not a holder here either.
+    const SHAPE_TEXT = 'v[0-9]+\\.[0-9]+\\.[0-9]+';
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes(SHAPE_TEXT)).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  // THE SQL-TUPLE SCANS — the `TERMINAL_ITEM_STATES` shape. Store code that
+  // needs one of these sets in a `WHERE` builds it from the array by `.join`
+  // (the `TERMINAL_DELIVERY_SQL` idiom), so the shipped source holds no
+  // literal tuple at all; a hand-written `IN ('pending','applying','unknown')`
+  // is a second definition of busy that nothing forces to agree.
+  //
+  // THE FINGERPRINT: a parenthesised list of TWO OR MORE quoted words, every
+  // one of them a member, in any order — a copy from memory is as likely in
+  // any order. Two or more, because a single `('stable')` states no set; a
+  // whole list, because the §6 seed row `('*', 'stable', NULL, 'off',
+  // 'channel', 0, 'migration')` carries members beside non-members and is not
+  // a copy of any vocabulary (asserted below, since Task 3 ships it).
+  // KNOWN WIDTH: a tuple of another vocabulary made only of words it shares
+  // with one of these (`('done','failed')` is RunState's and UpdatePhase's)
+  // also scores. Measured zero holders for every vocabulary at d759c914; if
+  // such a tuple ever lands legitimately it is a hand-typed SQL list of THAT
+  // vocabulary, which its own scan should be refusing.
+  const esc = (w: string): string => w.replace(/[-]/g, '\\-');
+  const tupleOf = (members: readonly string[]): RegExp => {
+    const alt = `(?:${members.map(esc).join('|')})`;
+    return new RegExp(`\\(\\s*['"]${alt}['"]\\s*(?:,\\s*['"]${alt}['"]\\s*)+\\)`);
+  };
+  const SQL_VOCABS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['UpdateChannel', UPDATE_CHANNELS], ['UpdateState', UPDATE_STATES], ['UpdatePhase', UPDATE_PHASES],
+    ['InstallState', INSTALL_STATES], ['ProvenanceState', PROVENANCE_STATES], ['AutoMode', AUTO_MODES],
+    ['NotifyMode', NOTIFY_MODES], ['RequestKind', REQUEST_KINDS], ['StampRead', STAMP_READS],
+    ['NodeRole', NODE_ROLES], ['NodeOs', NODE_OSES], ['TagFileRead', TAG_FILE_READS],
+  ];
+
+  it('the tuple fingerprint catches a copy in any order and leaves non-copies alone', () => {
+    const busy = tupleOf(UPDATE_STATES);
+    expect(busy.test("WHERE updateState IN ('pending','applying','unknown')")).toBe(true);
+    expect(busy.test("WHERE updateState IN ( 'unknown', \"pending\" )")).toBe(true);
+    expect(busy.test("WHERE updateState IN ('idle')"), 'one word is not a set').toBe(false);
+    expect(busy.test("WHERE updateState IN ('idle', 'paused')"), 'a non-member breaks the list').toBe(false);
+    expect(busy.test("['pending', 'applying', 'unknown'] as const"), 'a TS array is the definition').toBe(false);
+    const seed = "INSERT INTO update_intent VALUES ('*', 'stable', NULL, 'off', 'channel', 0, 'migration');";
+    expect(tupleOf(AUTO_MODES).test(seed), 'the §6 seed row is not an AutoMode tuple').toBe(false);
+    expect(tupleOf(NOTIFY_MODES).test(seed), 'the §6 seed row is not a NotifyMode tuple').toBe(false);
+    expect(tupleOf(UPDATE_CHANNELS).test(seed), 'the §6 seed row is not an UpdateChannel tuple').toBe(false);
+    expect(tupleOf(UPDATE_PHASES).test("('backing-up', 'installing')"), 'hyphenated members').toBe(true);
+  });
+
+  for (const [name, members] of SQL_VOCABS) {
+    it(`no source hand-types an SQL tuple of ${name}`, () => {
+      const TUPLE = tupleOf(members);
+      expect(ALL.filter((f) => TUPLE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+    });
+  }
+});
+
+// ── Design 2026-09-20 §6: the update ring ─────────────────────────────────
+// "W2 extends that describe to scan server/src/update with an EMPTY
+// allowlist" — and D-3187 leans on it: the resolver stays
+// L1 and the projection writer L3 BY THEIR IMPORTS, and no file there holds
+// the handle. The coord ring (`describe('the coord ring — …')` above)
+// allowlists five holders; this one allowlists NONE, so every read and write
+// the update modules make goes through a `CoordStore` method.
+// APPENDED, not nested inside the coord ring as the spec's sentence reads:
+// `session-hook.test.ts`'s citation audit cites this file by line, so an
+// insert above a cited line moves its census. It reads the coord ring's
+// `REACH` — module-scope, declared under that describe — not a copy.
+describe('the update ring — nothing under server/src/update holds the handle (design 2026-09-20 §6)', () => {
+  const updateDir = path.join(ccrcRoot, 'server/src/update');
+  /** Every file the ring is known to hold, appended by the task that
+   *  creates it (W2: catalogue.ts, inventory.ts, resolve.ts, project.ts,
+   *  routes.ts). A FLOOR, not a count: a new file raises it rather than
+   *  breaking it, and a listed file that is gone — a moved or renamed
+   *  directory — reds instead of disarming the scan. */
+  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts'];
+  // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
+  // too — the coord ring's `from\s+'node:sqlite'` sees neither.
+  const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;
+  const IMPORTS_DB = /(?:\bfrom\s+|\bimport\s*\(?\s*)'(?:\.{1,2}\/)+(?:coord\/)?db\.js'/;
+  const IMPORTS_UPDATE = /\bfrom\s+'(?:\.\/|(?:\.\.\/)+)update\//;
+  /** Over `[name, source]` pairs, so the CONTROL below plants its shapes as
+   *  text — no fixture directory, and so no new import line in this file. */
+  const ringViolations = (files: readonly (readonly [string, string])[]): string[] =>
+    files.flatMap(([name, src]) => [
+      ...(IMPORTS_SQLITE.test(src) ? [`${name} imports node:sqlite`] : []),
+      ...(IMPORTS_DB.test(src) ? [`${name} imports a coord db module`] : []),
+      ...(REACH.test(src) ? [`${name} names a database handle on a coord/store receiver`] : []),
+    ]);
+  const onDisk = (dir: string): (readonly [string, string])[] =>
+    sources(dir).map((f) => [path.relative(dir, f), readFileSync(f, 'utf8')] as const);
+
+  it('covers the directory — absent means nothing expects it, present means every listed file is visited (never a skip)', () => {
+    if (!existsSync(updateDir)) {
+      expect(UPDATE_RING_FILES,
+        'files are listed for an update ring that is not on disk — was the directory moved?').toEqual([]);
+      const importers = sources(path.join(ccrcRoot, 'server/src'))
+        .filter((f) => IMPORTS_UPDATE.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(importers, 'a server/src file imports from an update directory this scan cannot see').toEqual([]);
+      return;
+    }
+    const names = sources(updateDir).map((p) => path.relative(updateDir, p));
+    for (const f of UPDATE_RING_FILES) expect(names, `${f} is listed but not on disk`).toContain(f);
+    expect(names.length).toBeGreaterThanOrEqual(UPDATE_RING_FILES.length);
+  });
+
+  it('no file there imports node:sqlite or a coord db module, or reaches for a handle — an EMPTY allowlist', () => {
+    expect(existsSync(updateDir) ? ringViolations(onDisk(updateDir)) : []).toEqual([]);
+  });
+
+  it('CONTROL: each forbidden shape is caught on planted text, and a store import is not', () => {
+    expect(ringViolations([
+      ['a.ts', "import 'node:sqlite';\n"],
+      ['b.ts', "import type { DatabaseSync } from 'node:sqlite';\n"],
+      ['c.ts', "import { tx } from '../coord/db.js';\n"],
+      ['d.ts', 'export const n = (coord: { db: unknown }) => tx(coord.db, () => 1);\n'],
+      ['e.ts', "import type { CoordStore } from '../coord/store.js';\nexport const f = (s: CoordStore) => s.intents();\n"],
+    ]).sort()).toEqual([
+      'a.ts imports node:sqlite',
+      'b.ts imports node:sqlite',
+      'c.ts imports a coord db module',
+      'd.ts names a database handle on a coord/store receiver',
+    ]);
+  });
+});
+
+// — design 2026-09-20 §8: the ~/.ccrc node-file names, declared once —
+// APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
+// file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
+describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
+  /** F16 (fix round 1, dispatch E, m2): DERIVED from the import of
+   *  NODE_FILE_BASENAMES, never hand-typed — a hand-typed copy goes vacuous
+   *  SILENTLY the moment a NODE_FILES value is renamed (it would simply stop
+   *  matching anything, never redding the "declared once" case above, which
+   *  scans for a DIFFERENT literal). A DYNAMIC import, not a static
+   *  top-of-file one: this file's own lines above `EIGHT_BASENAMES` are
+   *  `session-hook.test.ts`'s citation anchors (`:32-37`, `:1274`, `:1303`),
+   *  and every edit in this describe stays END-OF-FILE only — a new
+   *  top-of-file import line would shift every one of them. */
+  let EIGHT_BASENAMES: readonly string[] = [];
+  beforeAll(async () => {
+    ({ NODE_FILE_BASENAMES: EIGHT_BASENAMES } = await import('../../shared/agent-protocol.js'));
+  });
+
+  it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export const NODE_FILES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  /** Comment lines blanked before the QUOTED scan runs — this codebase's own
+   *  convention is to name these basenames in BACKTICK-quoted PROSE inside a
+   *  docstring (`` `update-intent` is in the agent's read set `` and the
+   *  like), and F16's widened, quote-agnostic regex would otherwise read
+   *  every one of those mentions as a second CODE definition. Same shape as
+   *  `update-writer-groups.test.ts`'s `blankComments`, copied rather than
+   *  imported — a test file does not import another test file's internals. */
+  const blankComments = (src: string): string =>
+    src.split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
+
+  // F16 (m2): hoisted to describe scope and shared by both the real case and
+  // its own CONTROL below — a REDECLARED copy in the CONTROL tested nothing
+  // about the case it claimed to control (measured: reverting the real
+  // case's regex to single-quote-only stayed green, CONTROL included).
+  const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
+
+  it('the three names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
+    // `build.json`, `installed`, `floor` and `previous` are ordinary words older
+    // code already spells (`config.ts`'s `buildInfoPath`, the agent's own stamp
+    // reader), and `node-id` is also a W1 CAP word (`ccd/ccrc`'s
+    // `CCRC_CAP_WORDS`) a later task may test for; these three are new with the
+    // control plane, so a second quoted copy is a second definition. F16: a
+    // BACKREFERENCE, not a fixed `'…'` — a double-quoted or backtick re-list
+    // is the same second definition, and the un-widened regex missed both.
+    const holders = ALL.filter((f) => QUOTED.test(blankComments(readFileSync(f, 'utf8')))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it("CONTROL: the QUOTED case reads all three quote styles, not just single-quoted (F16)", () => {
+    expect(QUOTED.test('const x = "ccrc-caps";'), 'double-quoted went unseen').toBe(true);
+    expect(QUOTED.test('const x = `update-intent`;'), 'backtick-quoted went unseen').toBe(true);
+    expect(QUOTED.test("const x = 'update.json';"), 'single-quoted (the original case) regressed').toBe(true);
+    expect(QUOTED.test('const x = "update.json`;'), 'mismatched quote characters falsely matched').toBe(false);
+  });
+
+  it("the agent's read grant imports NODE_FILE_BASENAMES", () => {
+    // Renamed (F16): this checks only the import. Whether agent/src ALSO
+    // carries a second, re-typed list beside it is the next case's job — a
+    // title claiming "never re-lists it" was never itself checked here.
+    const wl = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    expect(wl).toMatch(/import\s*\{[^}]*\bNODE_FILE_BASENAMES\b[^}]*\}\s*from\s*'\.\.\/\.\.\/shared\/agent-protocol\.js'/);
+  });
+
+  /** Every file under `agent/src` (any depth) that spells ALL EIGHT basenames
+   *  as string literals (any quote style) — a file that does is a second
+   *  list, whether or not it also imports `NODE_FILE_BASENAMES`. Takes
+   *  fixture pairs so the CONTROL below can drive it without touching a real
+   *  file (F16). */
+  const agentBasenameHolders = (files: readonly { path: string; src: string }[]): string[] =>
+    files
+      .filter(({ src }) => EIGHT_BASENAMES.every((n) => new RegExp(`(['"\`])${n.replace('.', '\\.')}\\1`).test(src)))
+      .map((f) => f.path);
+
+  it('no file in agent/src re-lists all eight basenames beside the NODE_FILE_BASENAMES import (F16)', () => {
+    // Anti-vacuity (F16, m2): the derived list really does carry all eight —
+    // a NODE_FILES shrink or a broken import would otherwise let this
+    // describe run over an empty or partial set and pass for the wrong reason.
+    expect(EIGHT_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(8);
+    const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
+      .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
+    expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);
+    expect(agentBasenameHolders(files)).toEqual([]);
+  });
+
+  it('CONTROL: a planted re-list of all eight basenames beside the import reds the check above (F16)', () => {
+    const real = readFileSync(path.join(ccrcRoot, 'agent', 'src', 'whitelist.ts'), 'utf8');
+    const planted = `${real}\nconst ALSO = ["build.json", 'installed', \`ccrc-caps\`, 'floor', "previous", 'node-id', \`update.json\`, "update-intent"];\n`;
+    expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: planted }]),
+      'a planted re-list of all eight went unseen').toEqual(['agent/src/whitelist.ts']);
+    expect(agentBasenameHolders([{ path: 'agent/src/whitelist.ts', src: real }]),
+      'the real file false-reds with no re-list planted').toEqual([]);
+  });
+
+  it("the ready frame's ops field has ONE reader in server/src", () => {
+    const hits = ALL.filter((f) => rel(f).startsWith('server/src/'))
+      .flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/\bframe\.ops\b/g)].map(() => rel(f)));
+    expect(hits).toEqual(['server/src/remote/client.ts']);
   });
 });
