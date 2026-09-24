@@ -4459,6 +4459,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     };
     const harness = [
       pick(/^PROG=.*$/m, 'PROG='),
+      // Review fix round 1, N1: `_ccrc_die` now calls `_upd_redact` — this
+      // harness does not trigger a die on its green path, but a regression
+      // that DID would hit "_upd_redact: command not found" rather than
+      // the real refusal, so it is picked up here too.
+      pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
       pick(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
       pick(/^CCRC_CAP_WORDS=\(.*\)$/m, 'CCRC_CAP_WORDS=(…)'),
       pick(/^CCRC_CAP_WORDS_LINUX=\(.*\)$/m, 'CCRC_CAP_WORDS_LINUX=(…)'),

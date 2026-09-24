@@ -337,6 +337,28 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
     expect(rNoUrl.stderr).not.toContain(noUrl);
     expect(rNoUrl.stderr).toMatch(/CCRC_SERVER_URL is not set in ~\/\.ccrc\/agent\.env/);
   });
+
+  // Review fix round 1, M2: the inline python's OWN exception text — the
+  // validator's `except Exception`/`except OSError` arms, and the rename
+  // one-liner's (previously bare) failure — used to reach stderr RAW, past
+  // `say`. A `.ccrc` this puller cannot write into makes the staged write
+  // fail with a real OSError, so this measures the actual python exception
+  // text, redacted, never the fixture's absolute HOME.
+  it('a write failure inside the python validator never prints the absolute HOME (fix round 1 review M2)', () => {
+    const { home } = primed('upd-sync-redact-write-fail-');
+    chmodSync(join(home, '.ccrc'), 0o555);
+    try {
+      answer(home, intentDoc({ epoch: '9' }));
+      const r = sync(home);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr, r.stderr).not.toContain(home);
+      // A measurement, not just an absence: the run DID fail, on a write
+      // this HOME's own permissions refused.
+      expect(r.stderr.length).toBeGreaterThan(0);
+    } finally {
+      chmodSync(join(home, '.ccrc'), 0o755);
+    }
+  });
 });
 
 describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () => {

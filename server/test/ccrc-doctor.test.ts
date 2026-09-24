@@ -7093,14 +7093,19 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     const fn = /^_exp_env_write\(\) \{[\s\S]*?\n\}/m.exec(src);
     const prog = /^PROG=.*$/m.exec(src);
     const die = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
-    expect(fn && prog && die, 'ccd/ccrc lost _exp_env_write, PROG or _ccrc_die').toBeTruthy();
+    // Review fix round 1, N1: `_ccrc_die` now calls `_upd_redact` — this
+    // harness does not trigger a die on its green path, but a regression
+    // that DID would hit "_upd_redact: command not found" rather than the
+    // real refusal, so it is picked up here too.
+    const redact = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(fn && prog && die && redact, 'ccd/ccrc lost _exp_env_write, PROG, _ccrc_die or _upd_redact').toBeTruthy();
     for (const [arm, opts] of [
       ['duckdns', {}], ['byo', { duckdns: false }], ['ip', { ip: '203.0.113.9' }],
     ] as const) {
       const home = mkTmp(`ccrc-doctor-expwriter-${arm}-`);
       const real = join(home, '.ccrc', 'exposure.env');
       const w = spawnSync(BASH, ['-c', [
-        'set -uo pipefail', prog![0], die![0],
+        'set -uo pipefail', prog![0], redact![0], die![0],
         `CCRC_EXPOSURE_FILE=${shq(real)}`, `BOX_AUTH_FILE=${shq(join(home, '.ccrc', 'auth.scrypt'))}`,
         fn![0],
         `_exp_env_write ${arm} https://box.example.com ${arm === 'ip' ? "''" : 'box.example.com'} ${arm === 'ip' ? '203.0.113.9' : 'box.example.com'} fixture-token ''`,

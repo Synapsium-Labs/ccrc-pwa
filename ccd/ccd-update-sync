@@ -114,15 +114,35 @@ redact() {
   shopt -s extglob
   # Bounded to characters a URL authority actually allows before an '@' --
   # never '/' or whitespace -- so an unrelated '@' past the authority is
-  # left alone (ccd/ccrc's `_upd_redact` states the same rule).
-  s="${s//:\/\/+([^\/@[:space:]])@/:\/\/}"
+  # left alone (ccd/ccrc's `_upd_redact` states the same rule). Review fix
+  # round 1, N2 (ccd/ccrc's own copy): '?' and '#' also end the authority --
+  # excluded so the class stops at the first of '/', '?' or '#'.
+  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
   # The replacement side of a bash `${..//pattern/string}` substitution
   # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT
   # $HOME before it is ever used as a literal, so `s="${s//"$HOME"/~}"`
   # replaces $HOME with $HOME: a silent no-op (measured: the redaction did
   # nothing at all). The backslash keeps `~` literal.
-  [ -n "${HOME:-}" ] && s="${s//"$HOME"/\~}"
+  # Review fix round 1, M6 (ccd/ccrc's own copy): anchored to a path
+  # boundary -- a trailing slash stripped from HOME first (HOME of '/' or
+  # empty then strips to empty and is skipped), replaced only where it is
+  # followed by '/' (put back, never dropped) or ends a token (whitespace,
+  # a quote, ':', ')', or the end of the string), enumerated one boundary
+  # character at a time -- a bash glob substitution has no lookahead to
+  # keep an unknown trailing character while still matching on it.
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    s="${s//"$home"\//"~/"}"
+    local b
+    for b in ' ' $'\t' $'\n' '"' "'" ':' ')'; do
+      s="${s//"$home$b"/"~$b"}"
+    done
+    case "$s" in
+      *"$home") s="${s%"$home"}~" ;;
+    esac
+  fi
   printf '%s' "$s"
 }
 say() { printf 'ccd-update-sync: %s\n' "$(redact "$1")" >&2; }
@@ -211,7 +231,7 @@ fi
 # mangle the installed bytes either. A VALIDATION failure (exit 1) and a
 # WRITE failure (exit 2) are told apart, exactly as the two distinct refusal
 # sentences below name them.
-LC_ALL=C.UTF-8 python3 -c '
+verr="$(LC_ALL=C.UTF-8 python3 -c '
 import re, sys, time
 NUM = r"(?:0|[1-9][0-9]*)"
 TAG = r"(?:v[0-9]+\.[0-9]+\.[0-9]+|none)"
@@ -285,8 +305,17 @@ try:
         f.write(raw)
 except OSError as ex:
     sys.stderr.write(str(ex) + "\n"); sys.exit(2)
-' "$body_tmp" "$tmp"
+' "$body_tmp" "$tmp" 2>&1 >/dev/null)"
 prc=$?
+# Review fix round 1, M2: the validator's own diagnostic (a grammar/value
+# complaint — never a path, in the ordinary VALIDATION arm) is worth keeping,
+# but the WRITE-failure arm's `str(OSError)` embeds the absolute staged path
+# (`$tmp`) — so both are captured above (stderr only, `2>&1 >/dev/null`,
+# never bash's own plain `$( )`, which would also eat a NUL the SAME way
+# D-3280 already guards the body against) and routed through `say`, which
+# ALREADY redacts everything it is given (this file's own choke point) — no
+# second `redact` call is needed here, or every consumer would redact twice.
+[ -n "$verr" ] && say "$verr"
 if [ "$prc" -eq 2 ]; then
   rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1
 elif [ "$prc" -ne 0 ]; then
@@ -296,6 +325,11 @@ fi
 if [ ! -L "$DEST" ] && [ -d "$DEST" ]; then
   rm -f -- "$tmp"; say "a directory sits at ~/.ccrc/update-intent"; exit 1
 fi
-python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "$DEST" \
-  || { rm -f -- "$tmp"; say "could not install the projection"; exit 1; }
+# Review fix round 1, M2: the rename had no try/except at all — an OSError
+# printed a full python traceback naming both `$tmp` and `$DEST` (absolute
+# paths). Suppressed outright (`2>/dev/null`): nothing else in this file
+# keeps a validator-style diagnostic from a plain `os.rename`, and the
+# refusal below already names the safe, literal destination.
+python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "$DEST" 2>/dev/null \
+  || { rm -f -- "$tmp"; say "could not install the projection at ~/.ccrc/update-intent"; exit 1; }
 exit 0

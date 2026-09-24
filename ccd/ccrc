@@ -1825,20 +1825,34 @@ EOF
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
 # `_upd_redact <text>` — what NO die sentence, report detail, WARN or
-# announcement line may carry verbatim (review 155 C17/C18, fix round 1 item
-# 11): a URL's userinfo (`scheme://user:pass@host` -> `scheme://host`) and
-# this box's own absolute home directory (-> `~`). The CHOKE POINT is
-# `_ccrc_die` alone — the ONE place a message becomes both the printed
-# refusal (stderr) and the report detail (`_upd_phase failed`), so no die
-# site anywhere in this file, present or future, has to remember to redact
-# its own sentence. A handful of ordinary (non-dying) announcement lines
-# also print an absolute path this box built for itself — `$UPD_BACKUP_DIR`
-# is the one case in this wave's code, in `_upd_backup`, arm 3's restore
-# line, the rollback coord.db hint and `cmd_update`'s exit-4 sentence — and
-# those call `_upd_redact` directly, by hand, because they are never dies
-# and never reach `update.json` through the one hook. `ccd/ccd-update-sync`
-# is a different executable and carries its own copy of the same two rules,
-# at its own choke point (`say`).
+# announcement line may carry verbatim (review 155 C17/C18, fix round 1 items
+# 11 and M1): a URL's userinfo (`scheme://user:pass@host` -> `scheme://host`)
+# and this box's own absolute home directory (-> `~`). TWO CHOKE POINTS, not
+# one — review fix round 1 M1 found a second path that reached `update.json`
+# and the journal unredacted: `UPD_GATE_WHY` (the gate's own failure reason,
+# which can start with `$BOX_ENV_FILE`, an absolute path) flows into
+# `_upd_phase` details through `$why`/`$gate_fail`/`$reason`, none of which
+# passed through `_ccrc_die`.
+#   1. `_ccrc_die` — the ONE place a message becomes both the printed
+#      refusal (stderr) and a `failed` report detail. No die site anywhere in
+#      this file, present or future, has to remember to redact its own
+#      sentence.
+#   2. `_upd_phase` — the ONE place ANY detail (not only a die's) is written
+#      to `update.json`. Redacting `detail` there, once, catches every
+#      caller uniformly, including `_upd_restore`/its two arms and
+#      `cmd_watchdog`'s many `_upd_phase failed …: $why` calls — a second
+#      redaction of an already-redacted string is harmless.
+# Neither choke point covers a STANDALONE stdout/journal echo that never
+# reaches a die or a report — those are redacted BY HAND, at the ONE place
+# each value is built, so every consumer benefits without a scattered set of
+# call-site edits: `$UPD_BACKUP_DIR` (`_upd_backup`'s own line, arm 3's
+# restore line, the rollback coord.db hint, `cmd_update`'s exit-4 sentence);
+# `$why` (`cmd_watchdog`, redacted once at its own local definition);
+# `$gate_fail` (`cmd_update`, redacted once at its own local definition, so
+# `_upd_rollback_no_restore` and `_upd_restore` inherit it as `$reason`);
+# `$UPD_GATE_WHY` directly (`_upd_gate`'s two echoes, `cmd_update`'s exit-4
+# echo). `ccd/ccd-update-sync` is a different executable and carries its own
+# copy of the same two rules, at its own choke point (`say`).
 _upd_redact() {
   local s="${1:-}" had_extglob=0
   shopt -q extglob && had_extglob=1
@@ -1847,14 +1861,42 @@ _upd_redact() {
   # allows before an '@' — never '/' or whitespace — so an UNRELATED '@'
   # past the authority (a query string's `?email=a@example.com`) is left alone:
   # reaching it would need crossing a '/' the pattern refuses to match.
-  s="${s//:\/\/+([^\/@[:space:]])@/:\/\/}"
+  # Review fix round 1, N2: `?` and `#` also end the authority (a query
+  # string or a fragment can start right after the host, with no '/' at
+  # all) — measured, `https://h?a@b` and `https://h#a@b` both collapsed the
+  # HOST into the class, giving `https://b`. Excluded here so the class
+  # stops at the first of '/', '?' or '#', exactly where a URL authority
+  # itself ends. (A raw '@' inside a password, `user:pa@ss@host`, still
+  # takes the LAST '@' before the boundary — curl itself refuses that shape
+  # as a bad hostname, so it can never have worked; recorded, not fixed.)
+  s="${s//:\/\/+([^\/@?#[:space:]])@/:\/\/}"
   [ "$had_extglob" -eq 1 ] || shopt -u extglob
-  # The replacement side of a bash `${..//pattern/string}` substitution
-  # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT
-  # $HOME before it is ever used as a literal, so `s="${s//"$HOME"/~}"`
-  # replaces $HOME with $HOME: a silent no-op (measured: the redaction did
-  # nothing at all). The backslash keeps `~` literal.
-  [ -n "${HOME:-}" ] && s="${s//"$HOME"/\~}"
+  # Review fix round 1, M6: the OLD blind substring replace was not anchored
+  # to a path boundary — HOME=`/home/u` turned `/home/user2/f` into
+  # `~ser2/f` (a PREFIX match with no boundary check at all), and a
+  # trailing-slash HOME (`/home/u/`) turned `/home/u/.ccrc` into `~.ccrc`
+  # (the separating `/` consumed along with HOME, never put back). Fixed:
+  # strip ONE trailing slash from HOME first, so a trailing-slash HOME and a
+  # bare one are handled the same way; HOME of `/` (or empty) then strips to
+  # empty and is skipped — never replaced at all, so `https://h/p` is not
+  # turned into `https:~~h~p`. What remains is replaced ONLY where it is
+  # followed by `/` (put back as `~/`, never dropped) or ends a TOKEN —
+  # whitespace, a quote, `:`, `)`, or the end of the string — enumerated
+  # one boundary character at a time because a bash glob substitution has
+  # no lookahead to keep an unknown trailing character while still matching
+  # on it.
+  local home="${HOME:-}"
+  home="${home%/}"
+  if [ -n "$home" ]; then
+    s="${s//"$home"\//"~/"}"
+    local b
+    for b in ' ' $'\t' $'\n' '"' "'" ':' ')'; do
+      s="${s//"$home$b"/"~$b"}"
+    done
+    case "$s" in
+      *"$home") s="${s%"$home"}~" ;;
+    esac
+  fi
   printf '%s' "$s"
 }
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
@@ -12354,7 +12396,11 @@ cmd_update() {
   elif ! _upd_gate "$role" "$UPD_VERSION"; then
     # ONE failed-report line for both shapes (a completed spine, or one that
     # died after the tree): Task 6 replaces exactly this line with its restore.
-    local gate_fail="gate: $UPD_GATE_WHY"
+    # Review fix round 1, M1: redacted HERE, once — `gate_fail` becomes
+    # `$reason` in `_upd_rollback_no_restore`, `_upd_restore` and its two
+    # arms, so this one line covers every one of their stdout echoes AND
+    # `_upd_phase` calls (which redact again, harmlessly, at the choke point).
+    local gate_fail="gate: $(_upd_redact "$UPD_GATE_WHY")"
     [ -n "$UPD_SPINE_DIED" ] && gate_fail="spine died at $UPD_SPINE_DIED; $gate_fail"
     # A FAILED GATE RESTORES (design §11): a dead unit or a wrong /health
     # version is exit 4 — "reverted" — and _upd_restore runs first, under
@@ -12365,7 +12411,7 @@ cmd_update() {
     _upd_rollback_no_restore "$gate_fail"
     _upd_restore "$role" "$gate_fail" "$old_version" "$old_sha" "$old_completed"
     _upd_unlock
-    echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $(_upd_redact "$UPD_BACKUP_DIR")" >&2
+    echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($(_upd_redact "$UPD_GATE_WHY")) — exit 4. The backup taken BEFORE the install is complete at $(_upd_redact "$UPD_BACKUP_DIR")" >&2
     exit 4
   fi
   # D-3240: the box moved and answers, but its spine did
@@ -13036,7 +13082,12 @@ cmd_watchdog() {
     _upd_unlock
     return 0
   fi
-  local why="${UPD_GATE_WHY:-the probe gave no reason}" rrc=0
+  local why rrc=0
+  # Review fix round 1, M1: redacted HERE, once — every use of `$why` below,
+  # in an `_upd_phase` call (redacted again, harmlessly, at the choke point)
+  # or in one of this function's own stdout echoes, is covered by this one
+  # line.
+  why="$(_upd_redact "${UPD_GATE_WHY:-the probe gave no reason}")"
   # D-3276: the failing-probe arm is phase-split too, on the SAME array —
   # `~/.ccrc/previous` (the rollback's own baseline) is written at the END of
   # `backing-up`, so a report stale in one of the five pre-install phases
@@ -13263,6 +13314,13 @@ _upd_phase() {
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
   [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
   [[ "$UPD_REPORT_TARGET" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && target="\"$UPD_REPORT_TARGET\""
+  # Review fix round 1, M1: THE choke point for every report `detail` —
+  # `_ccrc_die` redacts its OWN sentence before it ever reaches here, but a
+  # detail built any other way (UPD_GATE_WHY, by way of $why/$reason/
+  # $gate_fail) reached this write unredacted. Redacting here, once, covers
+  # every caller uniformly, present or future — the same reasoning that made
+  # `_ccrc_die` the choke point for dies.
+  detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
   if [ -n "$now" ] \
@@ -13780,8 +13838,43 @@ _upd_marker_unsigned() {
 _upd_release_base() {
   printf '%s' "${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
 }
+
+# `_upd_validate_timeout <name> <default> [what] [max]` — ONE validator for
+# every CCRC_RELEASE_* knob (review fix round 1 M5): curl reads
+# `--max-time`/`--connect-timeout 0` as NO LIMIT AT ALL — measured, a real
+# accept-and-never-answer socket with `CCRC_RELEASE_PROBE_MAX_TIME=0` hung
+# until an external `timeout` killed it — so 0 is refused exactly like any
+# other bad value, never read as "disable the bound". A value set in the
+# user manager's environment reaches the `--detach` unit and the watchdog,
+# so a typo there must not silently misconfigure every release-host fetch: a
+# whole number from 1 up to `max` (default 3600, an hour — no release-host
+# TIMEOUT should ever need longer; `_upd_resolve`'s `CCRC_RELEASE_SPEED_LIMIT`
+# call overrides both, since that knob is bytes/second, not seconds) is used
+# unmodified; anything else (unset or empty falls to `<default>` silently,
+# the same as the file's other `: "${VAR:=default}"` knobs; `0`, negative,
+# non-numeric or over `max` WARN and fall back) — one line naming the
+# variable and what it got, never the operator guessing which one misbehaved.
+_upd_validate_timeout() {
+  local name="$1" default="$2" what="${3:-a whole number of seconds from 1 to 3600}" max="${4:-3600}" val
+  eval "val=\"\${$name:-}\""
+  [ -z "$val" ] && return 0
+  if [[ "$val" =~ ^[1-9][0-9]{0,9}$ ]] && [ "$val" -le "$max" ]; then
+    return 0
+  fi
+  echo "update: WARN: $name='${val//[![:print:]]/?}' is not $what — using $default"
+  eval "$name=$default"
+}
 _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   local to="$1" base _sum
+  # Validated HERE, once per run: every caller below (this function,
+  # `_upd_fetch`, called next in every real flow, and `_upd_asset_listed`,
+  # which ALSO validates its own pair for the caller that reaches it first)
+  # gets a bound the shipped curl calls can actually enforce.
+  _upd_validate_timeout CCRC_RELEASE_CONNECT_TIMEOUT 10
+  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15
+  _upd_validate_timeout CCRC_RELEASE_SPEED_LIMIT 1024 \
+    'a whole number of bytes/second from 1 to 100000000' 100000000
+  _upd_validate_timeout CCRC_RELEASE_SPEED_TIME 30
   base="$(_upd_release_base)"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
@@ -14290,13 +14383,13 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
   start=$SECONDS
   while :; do
     if _upd_gate_probe "$role" "$want"; then
-      echo "update: gate: $role answers on $want ($UPD_GATE_WHY)"
+      echo "update: gate: $role answers on $want ($(_upd_redact "$UPD_GATE_WHY"))"
       return 0
     fi
     [ "$((SECONDS - start))" -lt "$limit" ] || break
     sleep 2
   done
-  echo "update: gate FAILED after $((SECONDS - start))s — $UPD_GATE_WHY"
+  echo "update: gate FAILED after $((SECONDS - start))s — $(_upd_redact "$UPD_GATE_WHY")"
   return 1
 }
 
@@ -14395,8 +14488,12 @@ _upd_backup() {
   # the leaf, which fails on anything already there — refusing rather than
   # reusing a backup directory.
   mkdir -p "$BOX_BACKUP_ROOT" || _ccrc_die "cannot create $BOX_BACKUP_ROOT — refusing to install with no backup taken"
+  # Review fix round 1, N3: the verdict leads (D-3249), matching the
+  # reordered floor sentences — a wording consistency, since the redacted
+  # path (~/ccrc-backups/<ts>, about 30 characters) never comes close to
+  # the 200-character cut.
   mkdir "$UPD_BACKUP_DIR" \
-    || _ccrc_die "$UPD_BACKUP_DIR already exists (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
+    || _ccrc_die "already exists: $UPD_BACKUP_DIR (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
   if [ -f "$HOME/.ccrc/coord.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
@@ -14543,6 +14640,12 @@ _upd_restore_copy() {
 # both name the bound).
 _upd_asset_listed() {
   local rc=0 code=""
+  # Review fix round 1, M5: validated here too — `cmd_rollback`'s own
+  # pre-check reaches this function BEFORE `_upd_resolve` ever runs (arm 2's
+  # own call is the same), so `_upd_resolve`'s validation cannot be relied
+  # on to have run first.
+  _upd_validate_timeout CCRC_RELEASE_CONNECT_TIMEOUT 10
+  _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
     -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
