@@ -500,6 +500,18 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  that omits it (the off-page-stable shape D-3215 exists for) never
    *  marks it absent out from under the probe that just confirmed it. */
   let lastLatestTag: string | null = null;
+  /** Fix round 4 (F3, coordinator's ruling, review 149): true iff K is NOT
+   *  trustworthy from `lastLatestTag` alone and `currentK()` must re-read
+   *  the store — set on a `measuredCurrentK()` throw on the 200 arm (which
+   *  still sets `lastLatestTag = row.tag` so `keepTags` protects THIS
+   *  poll's `/latest` answer even though K itself stayed unmeasured), and
+   *  cleared only where a real store answer is trusted: a clean adopt (no
+   *  move-away) or `applyWithdrawn`'s own success. A move-away that is
+   *  MEASURED but not yet applied (dropped, deferred, or the check itself
+   *  failed) leaves it exactly where it was — set if a throw put it there,
+   *  so the next poll re-reads K again rather than silently trusting
+   *  `lastLatestTag`; unset if nothing has ever thrown. See `currentK()`. */
+  let kNeedsReread = false;
   /** Fix round 1, item 5 (ruling A): the moved-away tag-fetch's own dedupe
    *  key — separate from `lastWarnedLatestError` so a check that keeps
    *  failing while `/latest` itself keeps answering fine is not re-armed
@@ -599,9 +611,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  store's newest un-yanked stable release BY TAG. `null` when the store
    *  holds no such release, or the port is a test double that never
    *  implements the read (an older double, or one that never exercises this
-   *  mechanism). */
+   *  mechanism). Fix round 4 (F3, coordinator's ruling, review 149): also
+   *  re-reads when `kNeedsReread` is set — a PERSISTENT store throw on the
+   *  200 arm still lets `lastLatestTag` carry T for `keepTags`'s sake, but
+   *  that value is never K itself, so it must not be trusted here until a
+   *  real store answer clears the flag. */
   const currentK = (): string | null =>
-    lastLatestTag !== null ? lastLatestTag : (deps.store.newestUnyankedStable?.() ?? null);
+    (lastLatestTag !== null && !kNeedsReread) ? lastLatestTag : (deps.store.newestUnyankedStable?.() ?? null);
 
   /** Fix round 2 (S1): `currentK()`'s only caller-visible read that can throw
    *  — a SQLite error, or a `RangeError` from `newestTag` over any non-tag
@@ -767,6 +783,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
       if (measured.k === null) {
         lastLatestTag = null;
         latestEtag = null;
+        kNeedsReread = false;   // F3: a genuine "no K" needs no re-read
         latestAnswered();
         return null;
       }
@@ -814,19 +831,38 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // harmless (D-3215's own "T is real regardless of what happens to K");
     // nothing else here advances on the throw's account, so the very next
     // poll re-reads the store instead of trusting a stale memory.
+    //
+    // Fix round 4 (F3, coordinator's ruling, review 149): B1's refusal to
+    // advance was right for a TRANSIENT throw but left a PERSISTENT one
+    // disabling `keepTags`'s protection forever — `lastLatestTag` would stay
+    // null (or a stale pre-throw value) across every later poll, so the
+    // listing's own absence judgment would never exclude T (this poll's
+    // confirmed `/latest` answer) from a yank. `lastLatestTag = row.tag`
+    // still runs on a throw, so `keepTags` protects T THIS poll and every
+    // later one until a real K is read — but `kNeedsReread` is set alongside
+    // it, so `currentK()` never mistakes that borrowed value for K itself.
     const measured = measuredCurrentK();
-    if (measured.threw) return null;
+    if (measured.threw) {
+      lastLatestTag = row.tag;   // keepTags protects T even though K is unmeasured
+      kNeedsReread = true;       // ...but T is never mistaken for a measured K
+      return null;
+    }
     const k = measured.k;
     if (k !== null && compareReleaseTags(row.tag, k) < 0) {
       // Ruling A: moved AWAY from K to an OLDER tag T. `latestEtag`/
       // `lastLatestTag` stay pointed at K until the check resolves AND this
       // poll's listing answers fresh (R2) — never advanced to T here — so a
       // failed or deferred check cannot earn a cheap 304 in T's place next
-      // poll and is retried in full against the SAME K.
+      // poll and is retried in full against the SAME K. F3: `kNeedsReread`
+      // (if a prior throw set it) STAYS set here too — only `applyWithdrawn`'s
+      // own success clears it — so a dropped, deferred or failed check still
+      // re-reads K from the store next poll rather than trusting a value a
+      // throw once borrowed for `keepTags` alone.
       return measureWithdrawn(now, source, k, row.tag, answer.etag);
     }
     latestEtag = answer.etag;   // never advanced on any failure arm above
     lastLatestTag = row.tag;    // I3: the LISTING's yank exclusion from now on
+    kNeedsReread = false;       // F3: a real store answer was just trusted
     return null;
   }
 
@@ -942,6 +978,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (!applied.ok) { warnWithdrawn(`store-refused-${applied.why}`); return; }
     latestEtag = pending.tEtag;
     lastLatestTag = pending.t;
+    kNeedsReread = false;   // F3: this poll's own store write is a real, fresh answer
     withdrawnAnswered();
   }
 

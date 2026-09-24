@@ -2180,6 +2180,122 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     });
   });
 
+  // F3 (fix round 4, coordinator's ruling, review 149): B1 (above) fixed a
+  // TRANSIENT `measuredCurrentK()` throw on the 200 arm by refusing to
+  // advance — right for one bad read, but a PERSISTENT throw then left
+  // `lastLatestTag`/`latestEtag` null (or stale) FOREVER, so `keepTags`
+  // never protected the tag `/latest` had just confirmed and `latestEtag`
+  // never earned a 304. `kNeedsReread` fixes this: on a throw,
+  // `lastLatestTag` still moves to T (so `keepTags` protects it), but the
+  // flag tells `currentK()` never to trust that borrowed value as K itself.
+  describe('F3 — a persistent store throw on the /latest 200 arm neither loses the kept tag nor disables it', () => {
+    it('an always-throwing store: T is protected in keepTags every poll, and stays un-yanked (mutation: not setting lastLatestTag = T on a throw)', async () => {
+      const { store, port, calls } = fixture();
+      const alwaysThrows: CatalogueStore = {
+        applyReleaseListing: (listing, now, coverage, keepTags, withdrawTag) =>
+          port.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag),
+        newestUnyankedStable: () => { throw new Error('coord.db is locked'); },
+      };
+      const p = poller(alwaysThrows);
+      const t = rel('v0.0.5', '2026-08-05T00:00:00Z');
+      // A small, unrelated 'complete' listing that never lists T — the ONLY
+      // thing protecting T from this listing's own absence judgment is
+      // `keepTags`, which is exactly what a permanently-null `lastLatestTag`
+      // (the pre-F3 shape) would never supply.
+      const noise = rel('v0.1.1', '2026-08-06T00:00:00Z', { prerelease: true });
+      scriptLatest = [
+        { status: 200, etag: '"eT1"', body: t },
+        { status: 200, etag: '"eT2"', body: t },
+        { status: 200, etag: '"eT3"', body: t },
+      ];
+      script = [
+        { status: 200, etag: '"eL1"', body: [noise] },
+        { status: 200, etag: '"eL2"', body: [noise] },
+        { status: 200, etag: '"eL3"', body: [noise] },
+      ];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        for (let i = 1; i <= 3; i += 1) {
+          const state = await p.poll(i * 1000);
+          // The LISTING succeeded every poll — `lastError`/`lastOkAt` follow
+          // it alone, never the probe's own (warned-only) failure.
+          expect(state.lastError, `poll ${i}`).toBeNull();
+        }
+      } finally {
+        warn.mockRestore();
+      }
+      const listingCalls = calls.filter((c) => c.coverage === 'complete');
+      expect(listingCalls).toHaveLength(3);
+      for (const [i, c] of listingCalls.entries()) {
+        expect(c.keepTags, `poll ${i + 1}`).toEqual(['v0.0.5']);
+      }
+      expect(store.releases().find((r) => r.tag === 'v0.0.5')).toMatchObject({ yanked: false });
+      // `latestEtag` never advances while the store stays broken (F3: "NOT
+      // advanced" on a throw) — every /latest request keeps asking in full.
+      expect(seenLatest.map((s) => s.headers['if-none-match'])).toEqual([undefined, undefined, undefined]);
+    });
+
+    it('a throw, then a healthy read that finds a move-away whose tag check FAILS: the NEXT poll re-reads K from the store and re-checks it — the flag was not cleared (mutation: clearing the flag on the read instead of on apply)', async () => {
+      const { store, port } = fixture();
+      let calls = 0;
+      const throwOnceThenHealthy: CatalogueStore = {
+        applyReleaseListing: (listing, now, coverage, keepTags, withdrawTag) =>
+          port.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag),
+        newestUnyankedStable: () => {
+          calls += 1;
+          if (calls === 1) throw new Error('coord.db is locked');
+          return store.newestUnyankedStable();
+        },
+      };
+      const p = poller(throwOnceThenHealthy);
+      // Pre-seeded directly (as a restart would present it): a stable
+      // release NEWER than what `/latest` will keep reporting, so once the
+      // store answers for real it is the one `currentK()` must find — never
+      // the tag a throw once borrowed for `keepTags`' sake alone.
+      const kRow: ReleaseListingRow = {
+        tag: 'v0.0.9', channel: 'stable', publishedAt: Date.parse('2026-08-09T00:00:00Z'),
+        commitSha: null, tarballUrl: null, bundleListed: true, notes: null, draft: false,
+      };
+      store.applyReleaseListing([kRow], 500, 'complete');
+      const t = rel('v0.0.5', '2026-08-05T00:00:00Z');   // older than v0.0.9 on every poll
+      // v0.0.9 is listed explicitly every poll — never relying on `keepTags`
+      // (which only ever protects `lastLatestTag`, v0.0.5 here) to keep it
+      // alive, so a `complete` listing's own absence judgment cannot confound
+      // this pin's own mechanism.
+      const kListed = rel('v0.0.9', '2026-08-09T00:00:00Z');
+      scriptLatest = [
+        { status: 200, etag: '"eT1"', body: t },
+        { status: 200, etag: '"eT2"', body: t },
+        { status: 200, etag: '"eT3"', body: t },
+      ];
+      script = [
+        { status: 200, etag: '"eL1"', body: [kListed] },
+        { status: 200, etag: '"eL2"', body: [kListed] },
+        { status: 200, etag: '"eL3"', body: [kListed] },
+      ];
+      // Unscripted — both default to 500 (a failed check), never an answer.
+      scriptWithdrawn = [];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await p.poll(1000);
+        expect(seenWithdrawn, 'poll 1: currentK() threw — no tag check attempted').toHaveLength(0);
+        await p.poll(2000);
+        // The store answered for real: currentK() found v0.0.9 (never the
+        // stale v0.0.5 a throw once borrowed), and /latest's older v0.0.5
+        // triggers a move-away check against it — which then fails (500).
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.9');
+        await p.poll(3000);
+        // The flag was NOT cleared by the failed check — poll 3 re-reads K
+        // from the store again and re-checks the SAME tag, never silently
+        // falling back to trusting `lastLatestTag` (still v0.0.5, stale).
+        expect(seenWithdrawn).toHaveLength(2);
+        expect(seenWithdrawn[1]!.url).toBe(seenWithdrawn[0]!.url);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 
   // B3 (fix round 3, D-3218 amended, review 146): "each request stamps the
   // clock at its OWN send time, never the poll's shared start `now`." Every
