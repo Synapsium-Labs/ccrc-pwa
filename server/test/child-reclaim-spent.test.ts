@@ -252,7 +252,7 @@ describe('childSpent — the live lookup', () => {
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live' });
   });
 
-  // Review fr2-review 145 (fix round 1), M3: a `tip` KEY ABSENT (not merely
+  // Fix round 2's own review (not review 145), its M3 (a): a `tip` KEY ABSENT (not merely
   // `null`) must ALSO answer unmeasured — the check is `typeof line.tip !==
   // 'string'`, not `line.tip === null`, and a mutant narrowing to the latter
   // stayed green because every other case in this file sends `tip:null`
@@ -265,7 +265,7 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
   });
 
-  // M3: `branch: null` (an explicit non-string, not merely an absent key) must
+  // That review's M3 (b): `branch: null` (an explicit non-string, not merely an absent key) must
   // ALSO answer unmeasured — the check is `typeof line.branch !== 'string'`,
   // not `line.branch === undefined`; test (vii) above only deletes the key.
   it('(xiii) a line whose branch is explicitly null (not merely an absent key) → unmeasured', async () => {
@@ -277,7 +277,7 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
   });
 
-  // M3: pins the order the comment above (viii) claims — `unplaceable` is
+  // That review's M3 (c): pins the order the comment above (viii) claims — `unplaceable` is
   // checked AFTER `sameRepo`, so a genuine same-repo same-branch row still
   // wins even when an unplaceable non-fork row is ALSO present. A mutant that
   // moved the `unplaceable` check above `sameRepo` would answer `unmeasured`

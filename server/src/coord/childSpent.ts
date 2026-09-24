@@ -127,9 +127,10 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
       ? 'pr-state answered no line for this session'
       : `pr-state answered ${failure.reason ?? 'unknown'}` };
   }
-  // D-3351: without this check, a line with no `branch` at all falls through
-  // to `phaseFor` and answers `unspent` — not by matching anything below, but
-  // by matching NOTHING: `r.headRefName === line.branch` answers `false` for
+  // D-3351: without this check, a line with no `branch` at all (and a string
+  // `tip`, and only rows with string heads) falls through to `phaseFor` and
+  // answers `unspent` — not by matching anything below, but by matching
+  // NOTHING: `r.headRefName === line.branch` answers `false` for
   // every row with a string head, so they fall OUT of `sameBranch` rather than
   // into it, and the same undefined `line.branch` makes `phaseFor`'s own
   // `boundRow` conjunct fail identically, landing on `row === null` →

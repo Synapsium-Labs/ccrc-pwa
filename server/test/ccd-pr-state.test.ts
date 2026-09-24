@@ -110,20 +110,16 @@ describe('the per-session call asks about one branch', () => {
   // same reader's same named second parameter — and the wide window was ninety-
   // nine other branches' PRs fetched so that `bound()` could drop them.
   //
-  // NARROWING IS SAFE HERE AND THE PROOF IS EXHAUSTIVE, not a judgement: every
-  // consumer of these rows conjoins `headRefName == branch`, so a head-filtered
-  // answer is a strict SUPERSET of what anything reads. `_pr_py`'s `bound()`,
-  // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
-  // the ccd side; `boundRow()` and `isMergedRow()` on the server's. `line.rows`
-  // now has TWO server-side readers — `phaseFor`'s `boundRow(line.rows, …)` and
-  // `childSpent`'s own scans (D-3347, fix round A; D-3351, fix round 2) — and
-  // the superset argument still holds for both: `childSpent`'s spent rung
-  // conjoins `headRefName === line.branch` exactly as `boundRow` does, so
-  // neither needs a row this filter would have dropped. Its `unplaceable` rung
-  // (D-3351) is different — it asks a narrower question with NO branch
-  // conjunct at all, whether any non-fork row's head cannot even be read — but
-  // `--head` narrowing can only SHRINK the row set, never grow it, so that rung
-  // needs nothing this filter would have dropped either.
+  // NARROWING IS SAFE HERE. Every BRANCH-MATCHING consumer of these rows
+  // conjoins `headRefName == branch`, so a head-filtered answer is a strict
+  // SUPERSET of what any of them reads: `_pr_py`'s `bound()`, `is_merged()`
+  // (which conjoins `bound`) and `pick()` (which filters by it) on the ccd
+  // side; `boundRow()` and `isMergedRow()` on the server's, and `childSpent`'s
+  // spent rung (D-3347), which conjoins `headRefName === line.branch` exactly
+  // as `boundRow` does. `childSpent`'s `unplaceable` rung (D-3351) has NO
+  // branch conjunct — it asks whether any non-fork row's head cannot be read —
+  // but a row `--head` drops is one gh placed on a DIFFERENT, readable head,
+  // so it is never unplaceable: that rung loses nothing to the filter either.
   //
   // `--project` is a different question — every workspace of the repo at once,
   // from one call — and keeps the wide window; the second test is that guard.
