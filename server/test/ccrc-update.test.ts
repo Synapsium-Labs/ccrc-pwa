@@ -3451,6 +3451,13 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       `_upd_phase() { _upd_json_str "\$2" > ${JSON.stringify(detailOut)}; }`,
       'UPD_FAIL_PREFIX=""',
       'UPD_REPORTING=1',
+      // Batch E review fix round 1, X1: `_ccrc_die` redacts only while
+      // `UPD_REDACT_ACTIVE=1`, set at the top of `cmd_update` (and its
+      // update-family siblings) in the shipped file — this harness calls
+      // `_upd_floor_check` directly, standing in for code that runs INSIDE
+      // `cmd_update`, so it sets the same flag `cmd_update`'s own preamble
+      // would have set by the time this helper runs.
+      'UPD_REDACT_ACTIVE=1',
       'BOX_FLOOR_FILE="$HOME/.ccrc/floor"',
       '_upd_floor_check --to 0 cli',
     ].join('\n');

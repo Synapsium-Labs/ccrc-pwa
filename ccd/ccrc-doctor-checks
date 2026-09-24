@@ -1703,11 +1703,13 @@ _check_exposure() {
 # routes are routes like any other. The sentences below say "the update
 # routes" rather than naming one (fix round 1 item 25 / review 155 Q7): this
 # check's ORIGINAL text named `POST /api/updates/apply`, wave 5's route to
-# move this box, before that wave landed — no such route exists on this repo
-# yet (`server/src/update/routes.ts` registers only `GET /api/updates`,
-# `POST /api/updates/intent`, `/refresh` and `/ack`, none of which "moves"
-# anything), so a box read with THIS wave's ccrc would have been told to
-# worry about a route that could not be reached because it did not exist. The
+# move this box, before that wave landed — measured at the time (batch E
+# review fix round 1, M2: cited by symbol, never by an exhaustive list that
+# a later wave would make stale), the W2 update routes registered in
+# `server/src/update/routes.ts` were read-and-write ones (`GET /api/updates`,
+# `POST /api/updates/intent`, `/refresh`, `/ack`) but NONE of them moves this
+# box, so a box read with THIS wave's ccrc would have been told to worry
+# about a route that could not be reached because it did not exist. The
 # generic phrase stays true across every wave that adds a write route here,
 # which naming one by name cannot.
 # So this check is two measurements, and the obvious reading of each is wrong:
@@ -3777,10 +3779,10 @@ _check_pool-sync() {
 
 # ── update-sync: the EFFECT the puller's own ACTIVE state cannot prove ────
 # Fix round 1 item 6 / review 155 C3, same class as `_check_pool-sync` right
-# above (and the same gap `_inst_units`' own comment at ccd/ccrc:10696-10698
-# names for this exact sibling): `_check_services`' `known` array (:840)
-# measures `ccd-update-sync.timer`'s ACTIVATION state, which stays `active`
-# while its oneshot fails every run — a missing or rotated
+# above (and the same gap `_inst_units`'s OWN COMMENT, at its `ccd-pool-sync`
+# placement arm, names for this exact sibling): `_check_services`' `known`
+# array measures `ccd-update-sync.timer`'s ACTIVATION state, which stays
+# `active` while its oneshot fails every run — a missing or rotated
 # `~/.cc-secrets/ccrc-mail.token` and a non-200 from the control plane both
 # print PASS there. Nothing else here reported `~/.ccrc/update-intent` at
 # all, so a fleet node whose puller has never once succeeded stayed green
@@ -3793,18 +3795,38 @@ _check_pool-sync() {
 # re-checked value bounds (C23, fix round 1 item 15). A second parser here
 # would be the drift this file's own header warns against, for a document a
 # node's own `ccrc update`/`ccrc channel` already parse authoritatively.
-# This check calls it and reports its words, never its own.
+# This check calls it and reports its words, never its own — including its
+# REMEDY (batch E review fix round 1, M3): `_upd_intent_say` already picks
+# the remedy by `UPD_INTENT_ROLE` (the puller's own oneshot on a fleet node,
+# or restarting `ccrc.service` on server/both, whose own process is the
+# writer there) — this check calls it rather than hard-coding the puller's
+# remedy, which would be the WRONG one on the one box where this arm is
+# actually reachable: a server/both box carrying a LEFTOVER timer file (a
+# role changed after install — `CCRC_ROLE` is seed-once, `_inst_env`).
 #
 # INSTALLED, not merely present, gates whether ABSENCE is even a finding —
 # same test `_check_pool-sync` uses (`CCRC_UNIT_DIR`/`_dr_unit_file`). A box
 # with no `ccd-update-sync.timer` file has no puller BY CONFIGURATION: only
-# a `--role fleet` install ever places this pair (`_inst_units`,
-# ccd/ccrc:10702-10717) — a server/both box's own process writes
-# `~/.ccrc/update-intent` itself, and macOS ships neither unit (timers are
-# systemd-only). `_upd_intent_state`'s own server/both and macOS arms are
-# consequently unreachable from here: this check only ever measures past the
-# SKIP on a box that HAS the puller.
+# a `--role fleet` install ever places this pair (`_inst_units`'s own
+# `ccd-update-sync` placement, gated identically to `ccd-pool-sync`'s right
+# beside it) — a server/both box's own process writes `~/.ccrc/update-intent`
+# itself, and macOS ships neither unit (timers are systemd-only).
+# `_upd_intent_state`'s own macOS arm is consequently unreachable from here.
+# Its `not-configured` arm (role fleet/"", timer file ABSENT) is ALSO
+# unreachable past this check's own SKIP, which already requires that exact
+# file to exist — but handled explicitly anyway (M3), rather than falling
+# into the FAIL arm's "every update without --to refuses" claim, which is
+# false for `not-configured` (a box in that state follows stable).
 _check_update-sync() {
+  # M4: the loaded-guard every sibling check that calls a function declared
+  # in `ccrc` carries (`_check_pool-sync` needs none of its own — it calls
+  # nothing outside this file — so `_check_update-exposure`'s own guard is
+  # the shape to match).
+  if ! declare -F _upd_intent_state >/dev/null 2>&1; then
+    _dr_fail update-sync "ccrc's own update-intent reader is not loaded, so this box's projection freshness was never measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_update-sync calls _upd_intent_state, declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
   local unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-update-sync.timer)"
   if [ ! -f "$unit_path" ]; then
     _dr_skip update-sync "ccd-update-sync.timer is not installed on this box — no puller here (only a --role fleet install places it; a server/both box's own process writes ~/.ccrc/update-intent itself, and macOS ships no systemd timer)"
@@ -3816,6 +3838,9 @@ _check_update-sync() {
     ok|none)
       _dr_pass update-sync "this box's update-intent projection is present and within its lease — the control plane is reaching it"
       return 0 ;;
+    not-configured)
+      _dr_skip update-sync "~/.ccrc/update-intent reads not-configured (${UPD_INTENT_WHY:-no reason given}) though ccd-update-sync.timer is installed here — unreachable on a consistently configured box; this box follows stable, which is not a fault to FAIL on"
+      return 3 ;;
   esac
 
   # GRACE, mirroring pool-sync's own (same constant, same reasoning: one
@@ -3840,7 +3865,7 @@ _check_update-sync() {
   fi
 
   _dr_fail update-sync "update-sync-${UPD_INTENT_STATE}: ~/.ccrc/update-intent is ${UPD_INTENT_STATE} (${UPD_INTENT_WHY}) — every 'ccrc update' without --to on this box refuses" \
-    "read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service)) — a missing or rotated \$HOME/.cc-secrets/ccrc-mail.token and a non-200 from the control plane are the two measured causes; \`systemctl --user start ccd-update-sync.service\` forces an immediate retry once fixed"
+    "$(_upd_intent_say)"
   return 1
 }
 

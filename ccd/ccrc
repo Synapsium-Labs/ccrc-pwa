@@ -1512,6 +1512,20 @@ UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by
 # child — is a different run and keeps its own.
 UPD_FROM="cli"          # --from's word; `from` in every report
 UPD_REPORTING=0         # 1 once cmd_update is past its refusals: from then on a _ccrc_die is a `failed` report
+# Review fix round 1, X1: `_ccrc_die` is EVERY verb's own die — `cmd_expose`,
+# `cmd_install`, `cmd_passwd`, all of them — and only the UPDATE FAMILY's own
+# dies may carry a redacted sentence. Set to 1 at the very first line of
+# `cmd_update`, `cmd_rollback`, `cmd_watchdog`, `cmd_rollout` and
+# `cmd_channel`, before their own argument parsing (so a die reached WHILE
+# parsing their own flags is redacted too, matching every die reached once
+# they are running) — never anywhere else, and never exported: a child
+# `ccrc` (the staged spine, a restore child) is a different verb's own
+# process and decides this for itself, the same reasoning `UPD_REPORTING`'s
+# own comment gives. `_upd_phase`'s OWN redaction (below) is UNCONDITIONAL
+# and untouched by this flag: a report detail is always redacted regardless
+# of which verb's `_ccrc_die` produced it, because `_upd_phase` is the ONE
+# place any detail reaches `update.json`.
+UPD_REDACT_ACTIVE=0
 UPD_REPORT_TARGET=""    # the tag a report names: --to at parse, UPD_VERSION once resolved
 UPD_REPORT_STARTED=""   # unix seconds (date +%s) of this process's first report
 UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
@@ -1905,13 +1919,20 @@ _upd_redact() {
 # also the run's `failed` report (design §10): the ONE hook, so no die site
 # carries a report call of its own. `$BASHPID = $$` because a die inside a
 # command substitution ends only that subshell, not the run, and must not
-# report a failure the run never had. ONE LINE ON PURPOSE —
+# report a failure the run never had.
+# REDACTION IS SCOPED (fix round 1 X1, review 155-batch-E-fix1): `_ccrc_die`
+# is EVERY verb's own die, not only the update family's, and `$UPD_REDACT_ACTIVE`
+# (set at the top of `cmd_update`/`cmd_rollback`/`cmd_watchdog`/`cmd_rollout`/
+# `cmd_channel`, never anywhere else) is what tells the two apart — `cmd_expose`'s
+# own refusal sentences, which deliberately name absolute paths
+# (`ccrc-expose.test.ts`'s "shadow refusal" cases), must print byte-for-byte
+# what they always did. ONE LINE ON PURPOSE —
 # `ccrc-install.test.ts` and `ccrc-update.test.ts` extract this definition
 # by `^_ccrc_die\(\) \{.*\}$` and run it alone under `set -u` (hence
-# `${UPD_FAIL_PREFIX:-}`) — each harness that actually triggers a die also
-# picks `_upd_redact`'s definition beside it, the same way it already picks
-# `PROG=`.
-_ccrc_die() { local m; m="$(_upd_redact "$*")"; echo "$PROG: $m" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$m"; exit 1; }
+# `${UPD_FAIL_PREFIX:-}` and `${UPD_REDACT_ACTIVE:-0}` both defaulting) —
+# each harness that actually triggers a die also picks `_upd_redact`'s
+# definition beside it, the same way it already picks `PROG=`.
+_ccrc_die() { local m="$*"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && m="$(_upd_redact "$m")"; echo "$PROG: $m" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$m"; exit 1; }
 # The one place "unknown argument" is spelled, so the unknown-verb and
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
@@ -11834,6 +11855,7 @@ _inst_floor() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
+  UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -12527,6 +12549,7 @@ cmd_update() {
 # --to <tag> --downgrade --allow-unsigned`. A bundle that FAILS refuses either
 # way.
 cmd_rollback() {
+  UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0
   local -a extra=()
   while [ $# -gt 0 ]; do
@@ -12859,6 +12882,7 @@ UPD_IN_FLIGHT_PHASES=(queued resolving fetching verifying backing-up installing 
 # this ONE array, never a hand-copied case pattern.
 UPD_PRE_INSTALL_PHASES=(queued resolving fetching verifying backing-up)
 cmd_watchdog() {
+  UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   case "${1:-}" in -h|--help) usage; exit 0 ;; esac
   [ $# -eq 0 ] || _ccrc_usage_die "$1"
   if [ "$CCD_OS" = darwin ]; then
@@ -13860,6 +13884,7 @@ _upd_target() {
 # decision 15 forbids that token any intent write — so every argument is
 # refused and the channel is set from the console.
 cmd_channel() {
+  UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   case "${1-}" in -h|--help) usage; exit 0 ;; esac
   if [ $# -gt 0 ]; then
     echo "$PROG: channel: set the channel from the console — a node never writes intent (decision 15)" >&2
@@ -15267,23 +15292,47 @@ _rollout_role_why() {
   return 0
 }
 
-# ── _rollout_exit3_detail <ssh-target> — the box's OWN measured cause of an
-# exit-3 `ccrc update` (fix round 1 item 4 / review 155 C34). `update`'s exit
-# 3 carries two different deaths under one code (D-3114): the staged spine
-# completed and its trailing doctor failed, OR the spine completed but died
-# inside `_inst_installed` writing ~/.ccrc/floor, before doctor ever ran (W1
-# minor M1). Rollout used to assume every exit 3 was the first shape and told
-# the operator to read doctor FAIL lines that, in the second shape, were
-# never printed. One extra READ-ONLY ssh, run only on this rare path, reads
-# the box's own `~/.ccrc/update.json` `detail` (`_upd_phase`'s report) rather
-# than assuming. Prints nothing itself and never dies: a pre-W4 box (no
-# update.json yet), an unreadable file or a transport hiccup all answer "",
-# which the caller's fallback (the doctor sentence) treats as the pre-W4
-# truth — that spine never had a floor step to die in.
+# ── _rollout_exit3_detail <ssh-target> — the box's OWN update.json, read
+# BOUNDED and GUARDED (fix round 1 item 4 / review 155 C34; bound added in
+# batch E's own review fix round 1, I1). `update`'s exit 3 carries two
+# different deaths under one code (D-3114): the staged spine completed and
+# its trailing doctor failed, OR the spine completed but died inside
+# `_inst_installed` writing ~/.ccrc/floor, before doctor ever ran (W1 minor
+# M1). Rollout used to assume every exit 3 was the first shape and told the
+# operator to read doctor FAIL lines that, in the second shape, were never
+# printed. One extra READ-ONLY ssh, run only on this rare path, reads the
+# box's own `~/.ccrc/update.json` rather than assuming — the caller (below)
+# derives `.detail` and `.target` from what this prints.
+#
+# I1's own finding: the first cut of this call was `cat ~/.ccrc/update.json`
+# with no guard and no time bound at all — the ONE guard every OTHER reader
+# of this file shares (`_upd_report_readable`'s own header: "the ONE guard
+# before ANY read of ~/.ccrc/update.json") was missed for this new remote
+# reader, in this round's own delta. Fixed the same way, mirrored onto a
+# remote shell rather than called locally (a `jq`/`_plat_size` call has to
+# run WHERE the file is, and `_upd_report_readable` cannot ssh):
+#   - `[ -L "$f" ]` refused OUTRIGHT, before anything else, exactly as
+#     `_upd_report_readable` refuses a symlink first;
+#   - `[ -f "$f" ] && [ -r "$f" ]` — a FIFO fails `-f` (not a regular file),
+#     so this remote command never opens one, never blocks on one, and needs
+#     no separate FIFO case of its own;
+#   - `head -c 65536` — the SAME byte cap `_upd_report_readable` enforces
+#     (`UPD_REPORT_CAP`), so an oversized file is truncated at the same
+#     bound this file already trusts everywhere else, never read whole into
+#     a shell variable.
+# ALSO BOUNDED IN TIME, which no other rollout ssh call in this file is
+# (out of THIS item's scope — see I1's own text): `ConnectTimeout` bounds
+# the handshake, `ServerAliveInterval`/`ServerAliveCountMax` bound a
+# connection that came up and then went quiet, together well under a test's
+# own spawn timeout and nowhere near `UPDATE_SPAWN_TIMEOUT_MS`. `exit 0`
+# unconditionally: an absent, unreadable or refused file is not this
+# function's failure to report, only nothing to print — the empty answer is
+# read the same way by every caller either way.
 _rollout_exit3_detail() {
-  local box="$1" out=""
-  out="$("${ROLLOUT_SSH[@]}" "$box" 'cat ~/.ccrc/update.json 2>/dev/null' 2>/dev/null)" || out=""
-  printf '%s' "$out" | jq -r '.detail // empty' 2>/dev/null || printf ''
+  local box="$1"
+  "${ROLLOUT_SSH[@]}" -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 "$box" \
+    'f=~/.ccrc/update.json; [ -L "$f" ] || { [ -f "$f" ] && [ -r "$f" ] && head -c 65536 "$f"; }; exit 0' \
+    2>/dev/null
 }
 
 # ── _rollout_field <line> <key> — one ` key=value` field off a box's line ─
@@ -15366,6 +15415,7 @@ _rollout_channel() {
 # touched when box one fails; and the result is RE-MEASURED (`ccrc version`
 # on each box, `/health` on the server), never read off update's stdout.
 cmd_rollout() {
+  UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
   local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -15610,17 +15660,48 @@ cmd_rollout() {
     # else non-zero is a box that did not move, and the rollout stops there.
     if [ "$rc" -eq 3 ]; then
       unhealthy=1
-      local exit3_detail=""
-      exit3_detail="$(_rollout_exit3_detail "${boxes[$i]}")"
-      case "$exit3_detail" in
-        *"floor was not raised"*)
+      # I2 (review 155, batch E review fix round 1): "measured" needs BOTH
+      # halves — a detail that matches one of the two known shapes AND a
+      # `.target` that names THIS run's version. Either half missing (no
+      # report, an unreadable one, a report whose target is some OTHER run —
+      # a stale pre-W4 report a rollback left behind, or one
+      # `_upd_report_is_mine` would itself refuse) is UNMEASURED: this box's
+      # own die sentence must never assume which of the two exit-3 shapes it
+      # hit just because a report happened to be readable.
+      local report_json="" exit3_detail="" exit3_target="" exit3_shape=""
+      report_json="$(_rollout_exit3_detail "${boxes[$i]}")"
+      if [ -n "$report_json" ]; then
+        exit3_detail="$(printf '%s' "$report_json" | jq -r '.detail // empty' 2>/dev/null)" || exit3_detail=""
+        exit3_target="$(printf '%s' "$report_json" | jq -r '.target // empty' 2>/dev/null)" || exit3_target=""
+      fi
+      # M5 (batch E review fix round 1): the box's own detail is
+      # same-user-writable data (spec §8), not this run's own text — control
+      # characters and embedded newlines are stripped before it ever reaches
+      # a `rollout:` line, so a crafted detail cannot forge one.
+      exit3_detail="$(printf '%s' "$exit3_detail" | tr -d '\000-\037')"
+      if [ "$exit3_target" = "$ROLLOUT_VERSION" ]; then
+        case "$exit3_detail" in
+          *"floor was not raised"*) exit3_shape=floor ;;
+          *"doctor exited"*) exit3_shape=doctor ;;
+        esac
+      fi
+      case "$exit3_shape" in
+        floor)
           # M1 one layer up (fix round 1 item 4 / review 155 C34): this box's
           # own report names the floor-write death, not doctor — doctor never
           # ran, so there are no FAIL lines to point at.
           echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its floor write died before ccrc doctor ever ran — its floor was not raised, not its health; its own report: $exit3_detail"
           ;;
-        *)
+        doctor)
           echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+          ;;
+        *)
+          # UNMEASURED (I2): no report, an unreadable one, or one naming a
+          # different run's target — never assumed as doctor. Names BOTH
+          # possible causes and points at the box's own already-relayed
+          # `update:` lines, which is the one place a genuine answer is
+          # still readable when this box's own report is not.
+          echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION (exit 3) — this box's own report could not be read (absent, unreadable, or naming a different run), so which of two things happened is unmeasured here: either its trailing doctor failed, or its floor write died before doctor ran. Its own '${labels[$i]}: update: ...' lines above say which."
           ;;
       esac
     elif [ "$rc" -eq 4 ]; then

@@ -2550,6 +2550,41 @@ describe('ccrc doctor: update-sync', () => {
     expect(line).toContain('within its lease');
     expect(runDoctor(home).code).toBe(0);
   });
+
+  // Batch E review fix round 1, M3: the remedy is `_upd_intent_say`'s own,
+  // role-aware — never a hard-coded puller remedy. The one box where the
+  // hard-coded remedy was wrong: a server/both box carrying a LEFTOVER
+  // `ccd-update-sync.timer` file (a role changed after install — `CCRC_ROLE`
+  // is seed-once). There `_upd_intent_state` answers `unreadable (absent)`,
+  // never `never synced` (that WHY is the fleet/no-role arm's own), so this
+  // check's grace window never applies and falls straight to FAIL with the
+  // SERVER remedy, not the puller's.
+  itLinux('a leftover ccd-update-sync.timer on a server/both box gets the SERVER remedy from _upd_intent_say, never the puller one (M3)', () => {
+    const home = healthy('ccrc-doctor-update-sync-leftover-timer-');
+    writeCcrcEnv(home, 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=server\n');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-unreadable');
+    expect(lines[i]).toContain('absent');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: ~\/\.ccrc\/update-intent is unreadable \(absent\) — restart ccrc\.service/);
+    expect(lines[i + 1]).not.toContain('ccd-update-sync.service');
+  });
+
+  // Batch E review fix round 1, M4: the loaded-guard every sibling check
+  // that calls a function declared in `ccrc` carries. Sourced bare (this
+  // file alone, never `ccrc`), `_upd_intent_state` is undefined.
+  it('says so, rather than guessing, when ccrc\'s own update-intent reader is not loaded', () => {
+    const nowhere = join(REPO, 'no-such-home-for-check-update-sync');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_update-sync`],
+      { encoding: 'utf8', env: { HOME: nowhere, PATH: nowhere, LC_ALL: 'C' } });
+    expect(r.stdout).toMatch(/^FAIL update-sync: ccrc's own update-intent reader is not loaded/m);
+    expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
+    expect(r.status).toBe(1);
+  });
 });
 
 // ── the box's own config file ─────────────────────────────────────────────
@@ -7112,6 +7147,24 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(line(r.stdout), r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
     noRunnerBugLine(r.stdout, 'update-exposure');
     expect(r.code).toBe(1);
+  });
+
+  // Batch E review fix round 1, M1 (item 7 was only half-pinned): the OTHER
+  // half of "absent and empty are two conditions" — exposure.env PRESENT,
+  // but naming NO CCRC_AUTH line AT ALL, must still fall through to
+  // ccrc.env's own value, exactly as an ABSENT exposure.env does. Mutating
+  // `_box_env_value`'s trailing `[ "$found" -eq 1 ]` to `true` folds this
+  // case into "present and empty" (a FAIL) without this pin catching it.
+  it('exposure.env present but naming NO CCRC_AUTH line at all falls through to ccrc.env — PASS, the absent half of C13\'s "two conditions"', () => {
+    const home = unexposed('ccrc-doctor-upx-exp-no-auth-line-',
+      'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });   // present, no CCRC_AUTH line
+    const r = runDoctor(home);
+    // This box's OWN verdict, not the run's overall rc — writeExposureEnv
+    // alone (with no matching Caddyfile ceremony) trips `caddyfile`'s own
+    // check, unrelated to what this pin is about.
+    expect(line(r.stdout), r.stdout).toMatch(/^PASS update-exposure: CCRC_AUTH=on \(read from .*ccrc\.env\)/);
+    noRunnerBugLine(r.stdout, 'update-exposure');
   });
 
   it('quadrant 2: ccrc.env armed + loopback → PASS', () => {

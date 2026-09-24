@@ -30,12 +30,18 @@ interface Result { code: number; stdout: string; stderr: string }
 function plantHost(home: string, host: string, o: {
   role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean;
   caps?: string; floor?: string; checkState?: string; oldCheck?: boolean; channelLine?: string;
-  /** Fix round 1 item 4 / review 155 C34: the RAW bytes `cat
-   *  ~/.ccrc/update.json` answers on this host, read by rollout's own extra
-   *  read-only ssh ONLY after an exit-3 update. Undefined (the default) is a
-   *  pre-W4 box: no file, `cat` prints nothing, exactly `_rollout_exit3_detail`
-   *  must tolerate. */
+  /** Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
+   *  fix round 1 (I1): the RAW bytes at this host's `~/.ccrc/update.json`,
+   *  under a FAKE home the ssh stub really `bash -c`s the printed remote
+   *  command against (`$d/boxhome`) — so the guard shell snippet
+   *  `_rollout_exit3_detail` sends is exercised for REAL, not pattern-matched.
+   *  Undefined (the default) is a pre-W4 box: no file at all, exactly what
+   *  the guard's `[ -f ]` arm must answer nothing for. */
   updateJson?: string;
+  /** I1's own FIFO case: a real FIFO at `~/.ccrc/update.json` under the fake
+   *  home — the guard's `[ -f "$f" ]` must answer false for it (a FIFO is
+   *  not a regular file), so this never blocks. Exclusive with `updateJson`. */
+  updateJsonFifo?: boolean;
 } = {}): void {
   const d = join(home, 'hosts', host);
   mkdirSync(d, { recursive: true });
@@ -59,12 +65,24 @@ function plantHost(home: string, host: string, o: {
   optional('check-state', o.checkState);
   optional('old-check', o.oldCheck === true ? 'yes' : undefined);
   optional('channel-line', o.channelLine);
-  // No trailing newline forced — a real update.json ends in one `mv -f`'d
-  // JSON line, and a test that wants to probe a malformed byte stream plants
-  // it directly rather than through this helper.
-  const ujf = join(d, 'update-json');
-  if (o.updateJson !== undefined) writeFileSync(ujf, o.updateJson);
-  else if (existsSync(ujf)) rmSync(ujf);
+  // The fake box home the ssh stub redirects HOME to before running the
+  // exit-3 detail command for real. Cleared and rebuilt on every plant, the
+  // same "no stale state from an earlier plant" rule the files above follow.
+  const boxHomeCcrc = join(d, 'boxhome', '.ccrc');
+  rmSync(join(d, 'boxhome'), { recursive: true, force: true });
+  if (o.updateJson !== undefined || o.updateJsonFifo === true) {
+    mkdirSync(boxHomeCcrc, { recursive: true });
+    const ujf = join(boxHomeCcrc, 'update.json');
+    if (o.updateJsonFifo === true) {
+      const r = spawnSync('mkfifo', [ujf]);
+      if (r.status !== 0) throw new Error(`fixture mkfifo failed: ${r.stderr?.toString() ?? r.status}`);
+    } else {
+      // No trailing newline forced — a real update.json ends in one
+      // `mv -f`'d JSON line, and a test that wants to probe a malformed
+      // byte stream plants it directly rather than through this helper.
+      writeFileSync(ujf, o.updateJson as string);
+    }
+  }
 }
 
 function plantBox(home: string): void {
@@ -132,12 +150,18 @@ function plantBox(home: string): void {
     '  "ccrc channel")',
     '    [ -f "$d/channel-line" ] || { echo "ccrc: unknown argument: channel" >&2; exit 2; }',
     '    cat "$d/channel-line"; exit 0 ;;',
-    // Fix round 1 item 4 / review 155 C34: `_rollout_exit3_detail`'s own
-    // extra read-only ssh, sent ONLY after an exit-3 update. Absent file
-    // (the default) means a pre-W4 box: `cat` prints nothing, exit 0 —
-    // `_rollout_exit3_detail` must tolerate that, not die on it.
-    '  "cat ~/.ccrc/update.json 2>/dev/null")',
-    '    [ -f "$d/update-json" ] && cat "$d/update-json"',
+    // Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
+    // fix round 1 (I1): `_rollout_exit3_detail`'s own extra read-only ssh,
+    // sent ONLY after an exit-3 update. Rather than pattern-match the
+    // guarded remote shell snippet, this stub really `bash -c`s the exact
+    // `$cmd` it received, with HOME redirected to this host's fake box home
+    // (`$d/boxhome`) — so `[ -L ]`/`[ -f ]`/`head -c 65536` all run for
+    // real, against a real (possibly FIFO) file, exactly as they would on
+    // the real remote box. An absent `boxhome/.ccrc/update.json` (the
+    // default — no plantHost updateJson/updateJsonFifo) means a pre-W4 box:
+    // the guard's own `[ -f ]` arm answers nothing, exit 0.
+    '  "f=~/.ccrc/update.json;"*)',
+    '    HOME="$d/boxhome" bash -c "$cmd"',
     '    exit 0 ;;',
     '  "ccrc version") echo "ccrc $sha (release, built 2026-09-18T00:00:00Z)"; [ -n "$ver" ] && echo "version $ver"; exit 0 ;;',
     '  *"/health"*)',
@@ -181,13 +205,20 @@ function twoBoxFleet(prefix: string): string {
   return home;
 }
 
-function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result {
+/** `timeoutMs`: batch E review fix round 1, I1 — a pin that could hang (the
+ *  FIFO case) carries a spawn timeout so a hang reads red (killed, `code`
+ *  falls to -1, no output to match) rather than stalling this suite. Every
+ *  other caller leaves it unset (`spawnSync`'s own default: no timeout). */
+function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}, timeoutMs?: number): Result {
   const env = ghContainedEnv(home, { ...process.env, HOME: home, ...extraEnv });
   for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT', 'CCRC_RELEASE_BASE_URL', 'CCRC_DEPLOY_ENV']) delete env[k];
   env['CCRC_DEPLOY_ENV'] = join(home, 'deploy.env');
   env['CCRC_RELEASE_BASE_URL'] = `local://${home}/releases`;
   env['TMPDIR'] = join(home, 'tmp'); mkdirSync(env['TMPDIR'], { recursive: true });
-  const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', ...args], { env, encoding: 'utf8' });
+  const opts: { env: NodeJS.ProcessEnv; encoding: 'utf8'; timeout?: number; killSignal?: NodeJS.Signals } =
+    { env, encoding: 'utf8' };
+  if (timeoutMs !== undefined) { opts.timeout = timeoutMs; opts.killSignal = 'SIGKILL'; }
+  const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', ...args], opts);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const sshCalls = (home: string): string[] => (existsSync(join(home, 'ssh-argv'))
@@ -378,6 +409,15 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(r.stdout).toMatch(/^fleet: update: fixture ran on user@fleet-host/m);   // streamed, prefixed
   });
 
+  // Batch E review fix round 1, I2: "measured" needs the box's own report
+  // AND that report's `.target` naming THIS run's version. This box's
+  // update.json now says so (as the real writer, `_upd_phase`, would).
+  const findReportOf = (b: string): ReturnType<typeof JSON.stringify> => JSON.stringify({
+    target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2,
+    detail: `doctor exited ${b} — the box moved; its health is ccrc doctor's`,
+    from: 'rollout', pid: 12345,
+  });
+
   it('a box that MOVED but whose trailing doctor failed (update exit 3) does not stop the rollout: the next box runs, both are verified, exit 3 names it (D-3114)', () => {
     // Measured 2026-09-20 on the live fleet: the server box wrote its record
     // and was on the new build, its doctor FAILed on four pre-existing box
@@ -385,7 +425,7 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     // remains the fallback" over a box that had moved. Exit 3 from update is
     // "moved, unhealthy"; rollout relays it and carries on.
     const home = twoBoxFleet('ccrc-rollout-doctor-failed-');
-    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJson: findReportOf('1') });
     const r = run(home);
     expect(r.code, r.stderr).toBe(3);
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
@@ -423,19 +463,82 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(r.stderr).not.toMatch(/stopped here/);
     // The extra read-only ssh reached exactly the box that exited 3, exactly
     // once — never the server box, which moved clean (exit 0).
-    const catCalls = sshCalls(home).filter((l) => l.includes('cat ~/.ccrc/update.json'));
-    expect(catCalls).toEqual([`${FLEET} cat ~/.ccrc/update.json 2>/dev/null`]);
+    const detailCalls = sshCalls(home).filter((l) => l.includes('f=~/.ccrc/update.json;'));
+    expect(detailCalls).toEqual([`${FLEET} f=~/.ccrc/update.json; [ -L "$f" ] || { [ -f "$f" ] && [ -r "$f" ] && head -c 65536 "$f"; }; exit 0`]);
   });
 
-  // The tolerate-a-pre-W4-box half of the same item: no update.json at all
-  // (plantHost's default) still ends in the EXISTING doctor sentence, never
-  // a crash or a hang on the extra ssh's empty answer.
-  it('a pre-W4 box (no ~/.ccrc/update.json at all) on exit 3 falls back to the doctor sentence — tolerated, not a death', () => {
-    const home = twoBoxFleet('ccrc-rollout-floor-prew4-');
-    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });   // no updateJson
+  // Batch E review fix round 1, I2: no report, an unreadable one, or one
+  // naming a DIFFERENT run's target are all UNMEASURED — never assumed as
+  // doctor. Three sibling cases, one sentence.
+  it('exit 3 with an UNMEASURED cause (no update.json, or one naming a different run) never assumes doctor — a neutral sentence naming both possible causes', () => {
+    // (a) a pre-W4 box: no ~/.ccrc/update.json at all. Tolerated, not a
+    // death, and no crash or hang on the extra ssh's empty answer — but no
+    // longer reported as doctor either (I2 corrects the false "pre-W4 spine
+    // never had a floor step" comment: origin/main's own _inst_installed
+    // writes the floor file too and can die in it; it simply writes no
+    // update.json at all, so THIS box's report is unreadable, not "safe").
+    const preW4 = twoBoxFleet('ccrc-rollout-floor-prew4-');
+    plantHost(preW4, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });   // no updateJson
+    const rPreW4 = run(preW4);
+    expect(rPreW4.code, rPreW4.stderr).toBe(3);
+    expect(rPreW4.stdout).toMatch(
+      /^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read \(absent, unreadable, or naming a different run\), so which of two things happened is unmeasured here: either its trailing doctor failed, or its floor write died before doctor ran\. Its own 'fleet: update: \.\.\.' lines above say which\.$/m,
+    );
+    // The OLD verbatim sentences (distinguished by their own remedy text,
+    // never a bare substring of the new neutral one, which legitimately
+    // says "doctor failed" as one of the two named possibilities).
+    expect(rPreW4.stdout).not.toContain('FAIL lines above');
+    expect(rPreW4.stdout).not.toContain("its floor was not raised, not its health");
+
+    // (b) a report EXISTS and even names the doctor shape, but for a
+    // DIFFERENT target — a stale pre-W4 report a rollback left behind, or
+    // one `_upd_report_is_mine` itself would refuse. Still unmeasured.
+    const foreign = twoBoxFleet('ccrc-rollout-floor-foreign-');
+    plantHost(foreign, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJson: findReportOf('1').replace('v2.0.0', 'v1.9.0') });
+    const rForeign = run(foreign);
+    expect(rForeign.code, rForeign.stderr).toBe(3);
+    expect(rForeign.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read/m);
+    expect(rForeign.stdout).not.toContain('FAIL lines above');
+  });
+
+  // Batch E review fix round 1, I1: the FIFO case, with a spawn timeout so a
+  // hang reads red rather than stalling the whole suite. The unbounded
+  // `cat` this call replaced would block forever on this exact fixture.
+  it('exit 3 with a FIFO at the box\'s own ~/.ccrc/update.json returns promptly with the unmeasured sentence, never a hang', () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-fifo-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJsonFifo: true });
+    const r = run(home, [], {}, 8000);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read/m);
+  });
+
+  // Batch E review fix round 1, M5: the box's own `detail` is
+  // same-user-writable data (spec §8), not this run's own text — a control
+  // character or an embedded newline in it must never forge a second
+  // `rollout:` line or inject terminal escapes into this run's own stdout.
+  it("exit 3 with control characters and an embedded newline in the box's own report never forges a second line (M5)", () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-ctrl-');
+    const evil = 'the floor write died inside _inst_installed - the box moved; its floor was not raised'
+      + '\x1b[31mFAKE\nrollout: fleet: EVERYTHING IS FINE';
+    plantHost(home, FLEET, {
+      role: 'fleet', version: 'v1.0.0', updateExit: 3,
+      updateJson: JSON.stringify({
+        target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2, detail: evil, from: 'rollout', pid: 1,
+      }),
+    });
     const r = run(home);
     expect(r.code, r.stderr).toBe(3);
-    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0, but its doctor failed — read the fleet: FAIL lines above; that is the box's health, not the rollout's$/m);
+    const lines = r.stdout.split('\n');
+    const sentence = lines.find((l) => l.startsWith('rollout: fleet: moved to v2.0.0, but its floor write died')) ?? '';
+    expect(sentence, r.stdout).not.toBe('');
+    // No escape byte reached stdout, and the injected "newline" is stripped,
+    // not turned into an actual line break — the two halves land contiguous
+    // on the ONE sentence line.
+    // eslint-disable-next-line no-control-regex
+    expect(sentence).not.toMatch(/[\x00-\x1f]/);
+    expect(sentence).toContain('FAKErollout: fleet: EVERYTHING IS FINE');
+    // And no SEPARATE forged line exists anywhere in this run's stdout.
+    expect(lines).not.toContain('rollout: fleet: EVERYTHING IS FINE');
   });
 
   it('a box whose update failed its health gate (update exit 4) stops the rollout with its own sentence — the other box is never touched (design §11)', () => {
