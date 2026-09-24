@@ -8610,3 +8610,10 @@ export type TagFileRead = (typeof TAG_FILE_READS)[number];
 export function isTagFileRead(v: unknown): v is TagFileRead {
   return typeof v === 'string' && (TAG_FILE_READS as readonly string[]).includes(v);
 }
+
+/** The ccrc-caps word a node must list before `auto ≠ off` may reach it (design 2026-09-20 §9; written by the
+ *  node's install spine, programme wave 4). Declared HERE, in L0, since programme wave 3
+ *  (D-3305): the resolver's `autoGateBlockers` (the intent route's advisory 409) and the
+ *  settings screen, which disables its auto-install control before a tap (D-3297), read
+ *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
+export const UPDATE_GATE_CAP = 'update-gate';

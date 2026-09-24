@@ -764,6 +764,23 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: 'the pressed state of the same door, with the same two grounds and the same second measurement in contrast.test.ts; registered separately because it overrides `color` directly (the .mail-chip[data-on] reason)',
   },
+  // ── centralised update management W3, Task 7: the Updates section ───────
+  'fleet.css .settings-note': {
+    under: ['var(--bg-page)'],
+    why: "SettingsScreen's explanatory lines (the auto-install gate note, the Check now answer, the not-configured and stale-read sentences). .settings-section and .settings-screen paint no background, and neither does .shell-detail, so body's --bg-page (styles/base.css:111) is behind them — the .pool-epoch-lag reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-catalogue': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's calm rendering ('checked 4m ago') in the same unpainted Updates section on SettingsScreen. Same ground and same reason as .settings-note",
+  },
+  'fleet.css .settings-catalogue--amber': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's amber rendering (couldn't reach GitHub …), retinted to --status-attention-text on the same unpainted section. Registered separately because it overrides `color` directly — the .build-line-side--warn reason",
+  },
+  'fleet.css .settings-catalogue--muted': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's 'never checked' rendering in --ink-tertiary, on the same unpainted section as .settings-catalogue. Registered separately because it overrides `color` directly",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

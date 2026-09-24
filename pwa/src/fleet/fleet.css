@@ -3007,3 +3007,55 @@ button.proj-card-pool::before {
    class chooser. No row gap: every control on the group is already a 44px
    box. */
 .fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+
+/* — centralised update management W3, Task 7: SettingsScreen's Updates section —
+   The section is a hairline-topped block on the screen's own ground, not a
+   card: .settings-screen and .settings-section paint no background, and
+   neither does .shell-detail, so body's --bg-page is what sits behind every
+   line here. Each rule below that sets `color` is therefore registered in
+   design/audit.mjs's INHERITED_GROUNDS against --bg-page; the rules that set
+   none inherit body's --ink-primary, which the page ground already measures.
+   The three selectors are native radios (D-3299):
+   a <label> row is the whole tap target, floored at --tap-min. */
+.settings-section {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-section-title { font: var(--weight-semibold) var(--text-sm) / var(--leading-tight) var(--font-ui); }
+/* A fieldset's UA default is `min-inline-size: min-content`, which lets one
+   long sentence push the page sideways on a phone; zero it like every grid
+   child in this file. */
+.settings-fieldset { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-legend {
+  padding: 0;
+  margin-bottom: var(--sp-1);
+  font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
+}
+.settings-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: var(--tap-min);
+  cursor: pointer;
+}
+.settings-option input { flex: none; width: 18px; height: 18px; margin: 0; }
+.settings-fieldset:disabled .settings-option { cursor: default; }
+.settings-option-sentence { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.settings-note { font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--ink-secondary); }
+/* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
+   disabled ink; this only stops it filling the section's width. */
+.settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }
+/* The catalogue line: three renderings, and the amber one is never the calm
+   one (spec §13). Calm is the secondary ink, "never checked" the tertiary,
+   and an unreached catalogue borrows the attention amber BuildLine's warn
+   side already uses. */
+.settings-catalogue {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+.settings-catalogue--amber { color: var(--status-attention-text); }
+.settings-catalogue--muted { color: var(--ink-tertiary); }

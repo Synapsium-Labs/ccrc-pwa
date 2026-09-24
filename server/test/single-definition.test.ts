@@ -3624,3 +3624,39 @@ describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', (
     expect(holders).toEqual(['shared/update-summary.ts']);
   });
 });
+
+// Design 2026-09-20 §9/§13 (programme wave 3, Task 7; D-3305):
+// the ccrc-caps word the auto-install gate reads is spelled ONCE. W2 declared it
+// in the server's L1 resolver, which the PWA cannot import — and the settings
+// screen now disables its auto-install control on the same word
+// (D-3297), so a second literal in pwa/src would be two
+// spellings of one gate that nothing forces to agree. The declaration moved to
+// L0 and `server/src/update/resolve.ts` re-exports it, so every W2 importer
+// keeps its path. KNOWN WIDTH: the literal scan reads single- and double-quoted
+// strings; a backticked mention is prose (`routes.ts`'s docstring names the word
+// that way) and a template-literal copy in code would pass it. APPENDED after the
+// file's last line: `session-hook.test.ts`'s citation audit cites this file by
+// line, so nothing above may move (R13).
+describe('the auto-install gate word is declared once, in L0 (programme wave 3)', () => {
+  const LITERAL = /(['"])update-gate\1/;
+  const DEF = /^\s*(?:export\s+)?(?:const|let|var)\s+UPDATE_GATE_CAP\b/m;
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not a re-export or a prose mention', () => {
+    expect(DEF.test("export const UPDATE_GATE_CAP = 'update-gate';")).toBe(true);
+    expect(DEF.test('const UPDATE_GATE_CAP = GATE;'), 'an un-exported copy is still a copy').toBe(true);
+    expect(DEF.test('export { UPDATE_GATE_CAP };'), 'a re-export declares nothing').toBe(false);
+    expect(DEF.test("import { UPDATE_GATE_CAP } from '../../../shared/api.js';"), 'an import declares nothing').toBe(false);
+    expect(LITERAL.test("caps.includes('update-gate')")).toBe(true);
+    expect(LITERAL.test('caps.includes("update-gate")')).toBe(true);
+    expect(LITERAL.test('lacks `update-gate` in its measured caps'), 'a backticked prose mention').toBe(false);
+    expect(LITERAL.test("'update-gates'"), 'another word').toBe(false);
+  });
+
+  it('UPDATE_GATE_CAP is declared in shared/api.ts and nowhere else — resolve.ts re-exports it', () => {
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the word is quoted in shared/api.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+});
