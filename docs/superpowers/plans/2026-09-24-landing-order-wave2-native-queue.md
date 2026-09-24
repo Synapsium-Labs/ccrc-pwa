@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make this repository ready for GitHub's native merge queue and make the queue's one silent failure loud — without changing a single repository setting. `ci.yml` answers `merge_group` (so a queue entry gets its required checks), skips the two non-required macOS legs on a queue run, and cancels a superseded `pull_request` run; `ccd pr-state --project` makes ONE GraphQL query per repository per sweep, under its own timeout, and stamps every full line with an additive `queue` word (`queued | dequeued | landed | none | unmeasured`); the server turns a `dequeued` reading into a `queue` feed record and a `status` mail to the run's coordinator, once per removal; the session hook DENIES `gh pr merge` to any session whose hold names a programme wave, and lets the coordinator's plain `gh pr merge <n>` (which enqueues) through; coordinator clause 15 says so. The last task is the operator's post-merge runbook: the queue ruleset, approvals to 0, R9's break-glass, and the proof run that gates wave 2b.
+**Goal:** Make this repository ready for GitHub's native merge queue and make the queue's one silent failure loud — without changing a single repository setting. `ci.yml` answers `merge_group` (so a queue entry gets its required checks), skips the two non-required macOS legs on a queue run, and cancels a superseded `pull_request` run; `ccd pr-state --project` makes ONE GraphQL query per repository per sweep, under its own timeout, and stamps every full line with an additive `queue` word (`queued | dequeued | landed | none | unmeasured`); the server turns a `dequeued` reading into a `queue` feed record and a `status` mail to the run's coordinator, once per removal — across a server restart too, and never latched as told when the read or the mail failed; the session hook DENIES `gh pr merge` to any session whose hold names a programme wave, and lets the coordinator's plain `gh pr merge <n>` (which enqueues) through; coordinator clause 15 says so. The last task is the operator's post-merge runbook: the queue ruleset, approvals to 0, R9's break-glass, and the proof run that gates wave 2b.
 
-**Architecture:** Five mechanisms, each with a test that reds when it is deleted or mutated. (1) `ci.yml`: a `merge_group` trigger, `if: github.event_name != 'merge_group'` on every job that `runs-on: macos-*` and on no other job, and a workflow `concurrency` whose `pull_request` arm is keyed by PR number and cancels, while every other event gets a run-unique group. (2) `ccd/ccd`: `_gh_pr_queue` (one constant GraphQL document, `-f` variables, `PR_GH_QUEUE_TIMEOUT`), `_pr_queue_stamp` and `_pr_queue_py` — all three placed below `cmd_clip`, beneath every frozen citation anchor — wired into `cmd_pr_state` by ONE in-place line that pipes the per-session loop through the stamp; the stamp buffers the sweep and falls back to the unstamped lines on any failure of its own. The server's outer bound on `pr-state` rises 20 s → 25 s so the three calls' timeouts still leave `pr-timeout-budget.test.ts`'s 30 % for the local loop. (3) `server/src/prstate.ts`: `queueFor(line)`, the ONE reader of `queue`/`queueAt`, answering the five words plus `absent` (a line from an older ccd or from `--session`, never folded into `unmeasured`). (4) `server/src/watch.ts`: `sweepDequeued`, after `sweepMerged`, latched per (workspace, PR, removal time), raising a new `NotifyEvent` kind `queue` (additive; `shared/api.ts` line-neutral, `MailScreen`'s two total maps) and, only when an open run names the workspace and its coordinator resolves, `queueSystemMail(..., kind:'status', subject:'dequeued:#<n>')`. (5) `ccd/session-hook.sh`: the hold grammar hoisted to ONE spelling, `CCRC_HOLD_WAVE_RE` (line-neutral), and a PreToolUse block below the graph gate that denies a command-head `gh pr merge` when `_ct_read`'s hold is within `CCRC_HOLD_MAX` and matches that grammar; a deny replaces an `additionalContext` advisory on the same call and never replaces the graph gate's deny.
+**Architecture:** Five mechanisms, each with a test that reds when it is deleted or mutated. (1) `ci.yml`: a `merge_group` trigger, `if: github.event_name != 'merge_group'` on every job that `runs-on: macos-*` and on no other job, and a workflow `concurrency` whose `pull_request` arm is keyed by PR number and cancels, while every other event gets a run-unique group. (2) `ccd/ccd`: `_gh_pr_queue` (one constant GraphQL document — the hundred NEWEST open PRs, `gh pr list`'s own order — `-f` variables, `PR_GH_QUEUE_TIMEOUT`), `_pr_queue_stamp` and `_pr_queue_py` — all three placed below `cmd_clip`, beneath every frozen citation anchor — wired into `cmd_pr_state` by ONE in-place line that pipes the per-session loop through the stamp; the stamp buffers the sweep and falls back to the unstamped lines on any failure of its own. The server's outer bound on `pr-state` rises 20 s → 25 s so the three calls' timeouts still leave `pr-timeout-budget.test.ts`'s 30 % for the local loop. (3) `server/src/prstate.ts`: `queueFor(line)`, the ONE reader of `queue`/`queueAt`, answering the five words plus `absent` (a line from an older ccd or from `--session`, never folded into `unmeasured`). (4) `server/src/watch.ts`: `sweepDequeued`, after `sweepMerged`, once per (workspace, PR, removal time) — an in-memory latch written only AFTER the notice landed, and a DURABLE "already told" read (`CoordStore.hasMailWithSubject`, every delivery state; `CoordStore.hasFeedEvent` for the feed-only arm) so a restart re-announces nothing; unreadable run rows defer rather than fold into "no open run" — raising a new `NotifyEvent` kind `queue` (additive; `shared/api.ts` line-neutral, `MailScreen`'s two total maps) and, only when an open run names the workspace and its coordinator resolves, `queueSystemMail(..., kind:'status', subject:'dequeued:#<n>@<queueAt>')` BEFORE the feed record, so a thrown mail is retried without a second record. (5) `ccd/session-hook.sh`: the hold grammar hoisted to ONE spelling, `CCRC_HOLD_WAVE_RE` (line-neutral), and a PreToolUse block below the graph gate that denies a command-head `gh pr merge` (quoted text removed first, in the same jq that reads the command, so a commit message or PR body that mentions it passes) when `_ct_read`'s hold is within `CCRC_HOLD_MAX` and matches that grammar; a deny replaces an `additionalContext` advisory on the same call and never replaces the graph gate's deny.
 
 **Tech Stack:** bash 5.2 (`ccd/ccd`, `ccd/session-hook.sh`), python 3.12 (the stamping pass, embedded in `ccd/ccd`), TypeScript (server, shared, pwa), GitHub Actions YAML, GitHub's GraphQL API through `gh api graphql` (gh 2.45 on the fleet box), vitest 4.1.
 
@@ -35,14 +35,14 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 - **Rings:** L0 `shared/*.ts` imports nothing — this wave changes two lines of `shared/api.ts` IN PLACE (the `NotifyEvent.kind` union and `NOTIFY_KINDS`) and imports nothing. `queueFor` is L1-pure (no fs, no clock). **No overloaded null at a seam:** `queueFor` answers `absent` for "nothing was asked" and `unmeasured` for "asked, not answered"; `_pr_queue_py` keeps "the call did not answer" (`None` → `unmeasured` on every line) apart from "the bound PR is not in the window" (`unmeasured` for that line only) and from "no bound PR" (`none`).
 - **Wire discipline — additive-only.** `queue` and `queueAt` are new keys on the ccd→server `pr-state` line, emitted only by `--project`, read by exactly one function (`queueFor`); absence permits. `NotifyEvent.kind` gains `queue`; an older client degrades it to `unknown` through `reviveNotifyEvent`, and an older server reads a stored `queue` row through `isNotifyKind` as `unknown`. `PrState` and `FleetSession` do NOT change. **`FLEET_PROTO` is NOT bumped.**
 - **Workflow-file safety.** Every expression this wave adds to `ci.yml` reads `github.event_name`, `github.workflow`, `github.event.pull_request.number` or `github.run_id` — none of them attacker-controlled text — and none of them appears in a `run:` line. `pull_request` stays, `pull_request_target` stays absent, `permissions: contents: read` stays (`oss-metadata.test.ts`).
-- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on a prototype of exactly these edits at `905360dc`, each restored from a saved COPY of the file (never `git checkout --`), and its red is quoted. The rows that depend on wave 1 (Task 4's advisory row, Task 5's clause rows) say how they were measured and what the worker re-measures.
+- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on a prototype of exactly these edits at `905360dc`, each restored from a saved COPY of the file (never `git checkout --`), and its red is quoted. The review revision re-measured at `af64d9d2` (`905360dc` plus two docs-only commits): Q1 and the new Q9 (Task 2), every Task 3 row except P1 (L1–L14, K1), every Task 4 row (H1–H14, C1, C2), and the red-first counts of `pr-queue-lane` and `session-hook-merge-deny`. The rows that depend on wave 1 (Task 4's advisory row, Task 5's clause rows) say how they were measured and what the worker re-measures.
 - **`ccd/ccd` is a provenance-STAMPED file** (line 2 is `# ccrc:generated 1 sha256=…`). **Every task that edits `ccd/ccd` re-stamps before running any suite**, or `server/test/ownership.test.ts` reds:
 
       node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
         const { markGenerated } = await import('./shared/mark.mjs'); \
         writeFileSync('ccd/ccd', markGenerated(readFileSync('ccd/ccd', 'utf8')))"
 
-- **The citation tax is owed by every CITED file.** `server/test/session-hook.test.ts` audits every `file:line` in two FROZEN corpus documents and `README.md`. This wave edits THREE cited files: `ccd/ccd` (Task 2), `ccd/session-hook.sh` (Task 4) and `shared/api.ts` (Task 3). The plan pays by LAYOUT: every added line in `ccd/ccd` sits below `cmd_clip` (below every frozen anchor and below both README anchors); every added line in `session-hook.sh` sits below the graph gate (below every frozen anchor and README's `ccd/session-hook.sh:2900`), and its three edits above that are line-neutral in place; `shared/api.ts`'s two edits are in place. Measured on the prototype with the instrument (see "The citation tax, mechanised"): `147 / 195 / 53 / 35`, stated == base == tree, empty composition, both corpus documents untouched. **Nothing in `session-hook.test.ts` changes in this wave.** If the instrument shows movement, an insertion landed above an anchor — find out why before going on.
+- **The citation tax is owed by every CITED file.** `server/test/session-hook.test.ts` audits every `file:line` in two FROZEN corpus documents and `README.md`. This wave edits THREE cited files: `ccd/ccd` (Task 2), `ccd/session-hook.sh` (Task 4) and `shared/api.ts` (Task 3). The plan pays by LAYOUT: every added line in `ccd/ccd` sits below `cmd_clip` (below every frozen anchor and below both README anchors); every added line in `session-hook.sh` sits below the graph gate (below every frozen anchor and README's `ccd/session-hook.sh:2900`), and its three edits above that are line-neutral in place; `shared/api.ts`'s two edits are in place. Measured on the prototype with the instrument (see "The citation tax, mechanised"): `147 / 195 / 53 / 35`, stated == base == tree, empty composition, both corpus documents untouched — and again at `af64d9d2` with the review revision's Tasks 2–4 applied (the hook-aware instrument, both files swapped): the same four numbers, `other byFile keys moved: none`. **Nothing in `session-hook.test.ts` changes in this wave.** If the instrument shows movement, an insertion landed above an anchor — find out why before going on.
 - **The `_reg_get` census:** this wave adds NO `_reg_get` call to `ccd/ccd` (the stamp reads the line's `number`, never the registry). Task 2 runs `ccd-reg-get-census.test.ts` to prove it.
 - **Locate code by CONTENT.** Line numbers are "at `905360dc`" and are hints, never addresses. Wave 1 edits `session-hook.sh`, both skills and their pins; CI test selection (spec on `ws/ccrc-ci-runs-optimization`) reshapes `ci.yml`; centralised-update-management and child-reclamation are live against `ccd/ccd`.
 - **Every forecast number is "at `905360dc`"** (`origin/main` `a3a93b41` plus the two approved specs and the programme ledgers). Where the base has moved, a different line number or test total with every case PASSING is not a red — the instrument's output is the authority and the difference goes in the commit message. Stop only on a FAILING case or a moved census composition you cannot explain.
@@ -57,13 +57,14 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 
 ## Review Focus
 
-Five inputs or failure modes the spec implies and nothing on `main` tests. Each is given a test in its owning task, and each test has a mutation row that reds it.
+Six inputs or failure modes the spec implies and nothing on `main` tests. Each is given a test in its owning task, and each test has a mutation row that reds it.
 
 1. **A required leg skipped on a queue run reads as PASSING.** GitHub reports a job skipped by `if:` as success, so an `if: github.event_name != 'merge_group'` on `test` or `build-pwa` would let the queue merge a tree nobody tested. → Task 1, case "skips merge_group on every macOS job, and on no other job"; row M3.
 2. **A shared concurrency group drops runs the queue needs.** GitHub keeps ONE pending run per group and cancels the older pending one even with `cancel-in-progress: false`; a group shared by `merge_group` runs (or by `push` runs on `main`) would cancel another entry's checks or a merge's post-merge run. → Task 1, case "cancels a superseded pull_request run and nothing else"; rows M4, M5.
 3. **The queue read must never cost the rows, and must never say `none` for a read that did not happen.** A failed call, an answer of the wrong shape, and a stamping pass that itself fails each leave `phase`, `number`, `rows` and `checks` exactly as `_pr_state_one` printed them. → Task 2, describe "the queue read may not cost the rows"; rows Q5, Q6.
 4. **No evidence, no notice — and no guessed recipient.** A line from an older ccd, a `--session` line, and an `unmeasured` read never produce a dequeue notice; a dequeued PR whose workspace no open run names is recorded in the feed and mailed to NOBODY, even when `resolveCoordinator(null)` would answer the one active programme's coordinator. → Task 3, cases "says nothing for…" and "with no open run…"; rows L5, L6, L7.
-5. **The deny holds at every parseable command head, never fires on a mention, and never treats a hold that is not a whole, readable wave hold as one.** → Task 4, cases "refuses every spelling…", "leaves every other gh…", "lets a hold that names no programme wave through…"; rows H3–H7 and H2.
+5. **The deny holds at every parseable command head — reserved words, grouping and wrappers included — never fires on a QUOTED mention (a commit message, a PR body, a grep pattern), and never treats a hold that is not a whole, readable wave hold as one.** What it cannot parse is stated in its header, not hidden. → Task 4, cases "refuses every spelling…", "leaves every other gh…", "lets a hold that names no programme wave through…"; rows H2–H7, H9–H14.
+6. **One notice per removal — across a restart, and never lost to a failure.** The latch is in memory and a rollout restarts the server, while `queueSystemMail`'s dedupe sees only OUTSTANDING mail: without a durable read an acked notice is mailed again after every restart, and a PR can sit dequeued through a whole fix round. And a latch set before the read or the mail turns a transient `run-unreadable` or a thrown `database is locked` into a removal nobody hears about. → Task 3, describe "the dequeue lane latches only what it told"; rows L3, L9–L13.
 
 ---
 
@@ -80,11 +81,12 @@ Five inputs or failure modes the spec implies and nothing on `main` tests. Each 
 | `server/test/ccd-pr-queue.test.ts` | Create (Task 2) | One call per sweep, `-f` variables, its own timeout, the five words, and "may not cost the rows" |
 | `server/src/prstate.ts` | Modify — `CcdPrLine.queue`/`queueAt` (raw), `PR_QUEUE_MAP`, `PrQueue`, `PrQueueRead`, `queueFor` (Task 3) | The ONE reader of the new fields |
 | `server/src/watch.ts` | Modify — import, `prQueues`, `dequeuedNotified`, one line in `sweepPr`'s full-line arm, one call after `sweepMerged`, `sweepDequeued`, `dequeuedSubject`, `renderDequeueBrief` (Task 3) | The dequeue lane |
+| `server/src/coord/store.ts` | Modify — two reads: `hasMailWithSubject` after `hasOutstandingMail`, `hasFeedEvent` after `feedEvents` (Task 3) | The dequeue lane's durable "already told" |
 | `server/src/coord/rundefs.ts` | Modify — the `operator` sender gloss; `queueSystemMail`'s caller list (Task 3) | Says who raises the dequeue notice |
 | `shared/api.ts` | Modify — two lines IN PLACE: `NotifyEvent.kind` and `NOTIFY_KINDS` gain `'queue'` (Task 3) | The eighth feed kind |
 | `pwa/src/screens/MailScreen.tsx` | Modify — `KIND_WORD`/`KIND_GLYPH` gain `queue` (Task 3) | The two total maps name it |
 | `pwa/test/mail-screen.test.tsx` | Modify — one `it` after the coord-kind one (Task 3) | The word and glyph actually render |
-| `server/test/pr-queue-lane.test.ts` | Create (Task 3) | `queueFor`'s answers; the lane's once-per-removal feed record and mail, its silences |
+| `server/test/pr-queue-lane.test.ts` | Create (Task 3) | `queueFor`'s answers; the lane's once-per-removal feed record and mail, its silences; a deferred read, a thrown mail, a restart |
 | `ccd/session-hook.sh` | Modify — `CCRC_HOLD_WAVE_RE` (line-neutral), `_hook_hold_card`'s gate reads it (in place), the class note (in place), the deny block above the subagent block (Task 4) | The worker merge deny |
 | `server/test/run-routes.test.ts` | Modify — the hold-grammar pin reads the hoisted spelling (Task 4) | One grammar, pinned where it is assigned |
 | `server/test/session-hook-merge-deny.test.ts` | Create (Task 4) | The deny's refusals and its passes |
@@ -100,15 +102,16 @@ Five inputs or failure modes the spec implies and nothing on `main` tests. Each 
 Each was measured on a prototype of this plan's exact edits in an isolated worktree at `905360dc`. They are why the tasks look the way they do.
 
 1. **The existing budget has no room for a third call.** `pr-timeout-budget.test.ts` requires the gh timeouts to sum to at most 70 % of `CCD_VERB_TIMEOUT_MS['pr-state']`: `8 + 5 = 13 ≤ 14` at 20 s, so a third call could have at most 1 s. The queue query measured 0.72–1.39 s, so 1 s is not a bound. The plan raises the outer bound to 25 s and gives the call 4 s: `8 + 5 + 4 = 17 ≤ 17.5`. Row B1 (bound back at 20) reds with `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14`.
-2. **The query, measured read-only against this project's own public repository** (`gh api graphql`, no mutation; the owner is not written here): the single-window form (`first: 100, states: [OPEN, MERGED], orderBy UPDATED_AT`) answered in 2.13–2.69 s over four runs; the two-window form this plan ships (100 OPEN, the 20 most recently updated MERGED) answered in 0.72–1.39 s over five runs, rc 0, `{open: 11 nodes, merged: 20 nodes}`, every node carrying `number`, `state`, `mergeQueueEntry` (null — no queue exists yet) and `timelineItems` (empty). So the schema accepts every field the query names.
+2. **The query, measured read-only against this project's own public repository** (`gh api graphql`, no mutation; the owner is not written here): the single-window form (`first: 100, states: [OPEN, MERGED], orderBy UPDATED_AT`) answered in 2.13–2.69 s over four runs; the two-window form this plan ships (100 OPEN, the 20 most recently updated MERGED) answered in 0.72–1.39 s over five runs, rc 0, `{open: 11 nodes, merged: 20 nodes}`, every node carrying `number`, `state`, `mergeQueueEntry` (null — no queue exists yet) and `timelineItems` (empty). So the schema accepts every field the query names. Re-measured at review with the open window ordered `CREATED_AT DESC` (the form this plan now ships): 0.74–1.12 s over five runs, rc 0, `{open: 12, merged: 20}`, the open numbers newest-first. `gh pr list` itself orders `CREATED_AT DESC` (read from gh 2.45's embedded `pullRequests(… orderBy: {field: CREATED_AT, direction: DESC})` query), so every open PR `_gh_pr_list`'s `--state all --limit 100` window can bind is inside the queue read's hundred.
 3. **The spec's "last `REMOVED_FROM_MERGE_QUEUE_EVENT`" alone is ambiguous** for a MERGED PR: "dequeued, re-enqueued, landed" and "dequeued, then merged by hand" both have a removal and no entry. The query asks for the last queue act of EITHER kind (`timelineItems(last: 1, itemTypes: [ADDED_…, REMOVED_…])`). Pinned by the case "none — a MERGED PR whose last queue act is a removal was merged BY HAND"; row Q4 (`MERGED` alone reads as landed) reds it.
 4. **`GH_STUB` answers every `gh` call with the rows**, so every existing `ccd-pr-state.test.ts` case now meets a list where the GraphQL object should be. `_pr_queue_py` reads that as "not the query's shape" → `unmeasured`, and the existing suite stays green: `ownership` + `ccd-pr-state` 113/113 on the prototype. No existing test asserted an exact line object or a call count that the third call moves.
 5. **`NotifyEvent.kind` is closed and `MailScreen`'s `KIND_WORD`/`KIND_GLYPH` are TOTAL `Record`s**, so a new kind is a compile error until both name it, and at runtime a missing entry renders NOTHING (the coord-kind precedent's measured note). `watch.ts`'s `tellSender` comment argues for reusing a kind to avoid that edit; a dequeue fits none (`merged` would render "merged" beside a PR that did not merge; `mail` is what the coordinator's notice already records). So `queue` is the eighth kind, and `shared/api.ts`'s two edits are made IN PLACE so its cited lines do not move.
 6. **`run-routes.test.ts` pins the hook's hold grammar INLINE** (`'[[ "$h" =~ ^program:[A-Za-z0-9._-]+\' \'wave:…'`). A second inline spelling in the deny would be the drift the single-definition doctrine forbids and that pin could not see, so the grammar is hoisted to `CCRC_HOLD_WAVE_RE`, the card reads it, the deny reads it, and the pin moves to the assignment (rows C1, C2). The assignment sits in the constants block that runs before the event `case`, so the card never reads it unset; the paragraph above it is rewrapped so the block stays exactly fifteen lines.
 7. **The hook runs under `set -u`.** A first mutation that deleted the hold predicate outright crashed the hook (`$CT_V` unbound → exit 1) — a red for the wrong reason. Row H2 is therefore spelled "the hold is read, never judged", which reds on the assertion it names.
 8. **The citation census does not move**: `147 / 195 / 53 / 35`, stated == base == tree, empty composition, measured by `cite-remeasure.py` (for `ccd/ccd`) and by its one-line variant that also swaps `ccd/session-hook.sh` (for Task 4), with `repoint-readme.py` leaving README byte-identical (`cmd_ensure mint -> ccd/ccd:21202`, `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc`).
-9. **The repository's current settings, measured read-only** (`gh api …/rulesets`, `…/rulesets/<id>`, `…/branches/main/protection`, `…/<repo>`): the `main` ruleset has ONE rule, `pull_request`, with `required_approving_review_count: 1` and `allowed_merge_methods: [merge, squash, rebase]`, and TWO bypass actors — `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `bypass_mode: pull_request`; classic protection requires the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `strict: false`, `enforce_admins: true`, approvals 0; `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. Task 7 is written against these values. R9 reads "the repository-admin role STAYS the ruleset's only bypass actor", and the maintain role is a second one today — an operator decision, recorded in Task 7 Step 3.
-10. **Red-first, measured at `905360dc` with each new test written first:** `ci-merge-queue` 3 failed of 3; `ccd-pr-queue` 10 failed | 3 passed (the three that pass are the "absence" and "passes through" guards, true before and after); `pr-queue-lane` 6 failed | 1 passed (vitest leaves a missing named export `undefined`, so the reds are `TypeError: queueFor is not a function` and empty feeds, not an import crash); `session-hook-merge-deny` 4 failed | 3 passed (the three that pass are the pass-through cases).
+9. **The repository's current settings, measured read-only** (`gh api …/rulesets`, `…/rulesets/<id>`, `…/branches/main/protection`, `…/<repo>`): the `main` ruleset has ONE rule, `pull_request`, with `required_approving_review_count: 1` and `allowed_merge_methods: [merge, squash, rebase]`, and TWO bypass actors — `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `bypass_mode: pull_request`; classic protection requires the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `strict: false`, `enforce_admins: true`, approvals 0; `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. Task 7 is written against these values. R9 reads "the repository-admin role STAYS the ruleset's only bypass actor", and the maintain role is a second one today — RULED (the orchestrator's decision record, 2026-09-24): the runbook removes it, R9 as ruled; Task 7 Step 3 records it. The rulesets LIST endpoint returns summaries only (no `conditions`, `rules` or `bypass_actors` — measured), so Task 7 finds the main ruleset by reading each ruleset in full.
+10. **Red-first, measured at `905360dc` with each new test written first:** `ci-merge-queue` 3 failed of 3; `ccd-pr-queue` 10 failed | 3 passed (the three that pass are the "absence" and "passes through" guards, true before and after; re-measured at `af64d9d2` with the ordered-window assertion, unchanged); `pr-queue-lane` 10 failed | 1 passed, re-measured at `af64d9d2` with the review revision's four new cases (vitest leaves a missing named export `undefined`, so the reds are `TypeError: queueFor is not a function` and empty feeds, not an import crash); `session-hook-merge-deny` 4 failed | 3 passed (the three that pass are the pass-through cases; re-measured at `af64d9d2` with the widened lists, unchanged).
+11. **Two shapes of the first deny were measured wrong at review, and are why Task 4 strips quotes and widens the head.** Probed through the real hook with a wave hold: it DENIED ``git commit -m "the coordinator lands with `gh pr merge <n>` …"``, `git commit -m "docs (gh pr merge 42)"`, a heredoc commit message quoting `` `gh pr merge --admin` `` and ``gh pr create --body '… `gh pr merge <n>` …'`` — the commit messages and PR bodies this very programme writes — and it PASSED `if gh pr checks 42; then gh pr merge 42; fi`, `for …; do gh pr merge $n; done`, `{ gh pr merge 42; }`, `! …`, `time …`, `timeout 60 …`, `env GH_TOKEN=x …` and `gh pr --repo o/r merge 42`. The revised block removes '…' spans and $(-free "…" spans in the jq it already runs (no new fork), drops the backtick from the head separators, and accepts reserved-word, grouping and wrapper heads and flags between `pr` and `merge`; the new cases and rows H9–H14 pin both directions.
 
 ---
 
@@ -639,6 +642,9 @@ describe('pr-state --project reads the merge queue once per sweep', () => {
     expect(q).toContain('mergeQueueEntry');
     expect(q).toContain('REMOVED_FROM_MERGE_QUEUE_EVENT');
     expect(q).toContain('ADDED_TO_MERGE_QUEUE_EVENT');
+    // The NEWEST hundred open PRs, in `gh pr list`'s own order: unordered,
+    // GitHub answers the OLDEST hundred and a busy repository's live PRs fall out.
+    expect(q).toContain('open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC})');
     // The document is a constant: the slug is a variable, never text in it.
     expect(q).not.toContain('"o"');
     expect(q).toContain('$owner');
@@ -779,9 +785,13 @@ Expected (measured at `905360dc`): `10 failed | 3 passed (13)`. The three that p
 # none of their anchors: `cmd_pr_state` pays one in-place line for it.
 #
 # WHAT IT ASKS. `gh pr list --json` has no field for a merge-queue entry, so the
-# sweep asks GitHub's GraphQL API directly, with ONE constant query: every OPEN
-# pull request's `mergeQueueEntry`, and the twenty most recently updated MERGED
-# ones, each with the LAST queue act on its timeline. The spec names
+# sweep asks GitHub's GraphQL API directly, with ONE constant query: the hundred
+# NEWEST open pull requests' `mergeQueueEntry` — newest by creation, which is
+# `gh pr list`'s own order, so every open PR `_gh_pr_list`'s hundred-row window
+# can bind is inside this one (with no `orderBy` GitHub answers the OLDEST
+# hundred, and on a busy repository the PRs being landed would all read
+# `unmeasured`) — and the twenty most recently updated MERGED ones, each with
+# the LAST queue act on its timeline. The spec names
 # `mergeQueueEntry` and the last `REMOVED_FROM_MERGE_QUEUE_EVENT`; the last act
 # of EITHER kind is read instead, because a removal alone cannot tell "dequeued,
 # re-enqueued, landed" from "dequeued, then merged by hand" — the ADDED event
@@ -803,8 +813,9 @@ Expected (measured at `905360dc`): `10 failed | 3 passed (13)`. The three that p
 # ITS OWN BOUND, AND IT MAY NOT COST THE ROWS. `PR_GH_QUEUE_TIMEOUT` is summed
 # with the other two calls' against the server's outer bound by
 # `pr-timeout-budget.test.ts`. Measured 2026-09-23 on this project's own
-# repository (11 open PRs, the 20 most recent merged): 0.72-1.39 s over five
-# runs, so 4 s is about three times the worst. A failed call, an unreadable
+# repository (11-12 open PRs, the 20 most recent merged): 0.72-1.39 s over five
+# runs, and 0.74-1.12 s over five more with the open window ordered, so 4 s is
+# about three times the worst. A failed call, an unreadable
 # answer, and a stamping pass that itself fails each leave every row, phase and
 # `checks` value exactly as `_pr_state_one` printed them; the first two say
 # `unmeasured`, the third prints the lines unstamped.
@@ -816,7 +827,7 @@ Expected (measured at `905360dc`): `10 failed | 3 passed (13)`. The three that p
 PR_GH_QUEUE_TIMEOUT=4
 PR_QUEUE_QUERY='query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    open: pullRequests(first: 100, states: [OPEN]) { nodes { ...Q } }
+    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }
     merged: pullRequests(first: 20, states: [MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...Q } }
   }
 }
@@ -1126,7 +1137,7 @@ python3 "$SCRATCH/repoint-readme.py" && git diff --quiet -- README.md && echo re
 python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD
 ```
 
-Expected (measured on the prototype): `syntax-ok`; `185	25	ccd/ccd` (the 160-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21202` and `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc` (the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, and EMPTY `ENTERED`/`LEFT` everywhere.
+Expected (measured on the prototype at `af64d9d2`, with the ordered open window): `syntax-ok`; `190	25	ccd/ccd` (the 165-line block plus the stamp, the loop line and the two in-place rewrites — nothing net above `cmd_clip` but the stamp line's own bytes; `185	25` before the review revision's five comment lines); the re-pointer prints `cmd_ensure mint -> ccd/ccd:21202` and `genrc == 1 arm -> ccd/ccd:19989-19991` at `905360dc` (the instrument's values are the authority on a moved base) and `readme-untouched`; the re-measurer prints `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, and EMPTY `ENTERED`/`LEFT` everywhere.
 
 - [ ] **Step 9: Run the tests to verify they pass**
 
@@ -1145,7 +1156,7 @@ Expected (measured on the prototype): `13 passed (13)`; `113 passed (113)` (owne
 
 - [ ] **Step 10: Mutation check, then commit**
 
-Ten mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"` and `cp server/src/remote/runner.ts "$SCRATCH/runner.task2"` after Step 8; restore with `cp` back — the copy is already stamped, so no re-stamp is needed between rows; never `git checkout --`). Every red below was measured on the prototype:
+Eleven mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"` and `cp server/src/remote/runner.ts "$SCRATCH/runner.task2"` after Step 8; restore with `cp` back — the copy is already stamped, so no re-stamp is needed between rows; never `git checkout --`). Every red below was measured on the prototype:
 
 | # | Exact edit | Command (from `server/`) | Expected red |
 |---|---|---|---|
@@ -1157,6 +1168,7 @@ Ten mutations, each restored from a saved copy (`cp ccd/ccd "$SCRATCH/ccd.task2"
 | Q6 | `ccd/ccd`: in `facts_in`, `        raw = ''\n    if not raw:\n        return None` → `… return {}` | same | "a failed call says unmeasured on every line…" only — `expected 'none' to be 'unmeasured'` (the no-bound-PR line) |
 | Q7 | `ccd/ccd`: delete `  if [[ $mode != --project ]]; then printf '%s\n' "$lines"; return 0; fi` | same | "--session makes no queue call…" only — `expected [ 'api graphql' ] to deeply equal []` |
 | Q8 | `ccd/ccd`: `    at = at if isinstance(at, str) and ISO.match(at) else None` → `    at = at if isinstance(at, str) else None` | same | "drops a queueAt that is not shaped like a timestamp…" only — `expected true to be false` |
+| Q9 | `ccd/ccd`: `    open: pullRequests(first: 100, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) { nodes { ...Q } }` → `    open: pullRequests(first: 100, states: [OPEN]) { nodes { ...Q } }` (GitHub's default order: the OLDEST hundred) | same | "makes one GraphQL call…" only — `1 failed \| 12 passed`, `expected 'query=query($owner: String!, $name: S…' to contain 'open: pullRequests(first: 100, states…'` (measured at `af64d9d2`) |
 | B1 | `server/src/remote/runner.ts`: `  'pr-state': 25_000,` → `  'pr-state': 20_000,` | `./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts test/remote-runner.test.ts` | `2 failed` — `the three gh calls (8s + 5s + 4s) leave only 3s of the 20s pr-state bound … expected 17 to be less than or equal to 14` and `expected 20000 to be 25000` |
 | B2 | `ccd/ccd`: `PR_GH_QUEUE_TIMEOUT=4` → `PR_GH_QUEUE_TIMEOUT=6` | `./node_modules/.bin/vitest run test/pr-timeout-budget.test.ts` | `1 failed` — `the three gh calls (8s + 5s + 6s) leave only 6s of the 25s pr-state bound … expected 19 to be less than or equal to 17.5` |
 
@@ -1166,9 +1178,10 @@ git add ccd/ccd server/src/remote/runner.ts server/test/remote-runner.test.ts \
 git commit -m "$(cat <<'MSG'
 feat(ccd): pr-state --project reads the merge queue, once per repository per sweep
 
-One constant GraphQL query per sweep (every OPEN PR's mergeQueueEntry and the
-20 most recently updated MERGED ones, each with its last queue act of EITHER
-kind — a removal alone cannot tell re-enqueued-then-landed from hand-merged),
+One constant GraphQL query per sweep (the 100 newest OPEN PRs' mergeQueueEntry,
+newest by creation as gh pr list orders its own window, and the 20 most
+recently updated MERGED ones, each with its last queue act of EITHER kind — a
+removal alone cannot tell re-enqueued-then-landed from hand-merged),
 under its own PR_GH_QUEUE_TIMEOUT, owner and name as raw -f variables. Every
 full line gains an additive `queue` — queued | dequeued | landed | none |
 unmeasured — and `queueAt` when the last act has a well-shaped time. A failed
@@ -1196,14 +1209,15 @@ MSG
 **Files:**
 - Modify: `server/src/prstate.ts` — `CcdPrLine.queue`/`queueAt`; `PR_QUEUE_MAP`, `PrQueue`, `PrQueueRead`, `queueFor` directly above `repoCellFor`'s docstring
 - Modify: `server/src/watch.ts` — the `./prstate.js` import; `prQueues` and `dequeuedNotified` after `mergedNotified`; one line after `this.prStates.set(line.id, phaseFor(line));`; one call after `this.sweepMerged(records);`; `sweepDequeued` after `sweepMerged`; `dequeuedSubject` and `renderDequeueBrief` directly above `renderAskBrief`'s docstring
+- Modify: `server/src/coord/store.ts` — `hasMailWithSubject` directly after `hasOutstandingMail`; `hasFeedEvent` directly after `feedEvents`
 - Modify: `server/src/coord/rundefs.ts` — the `operator` gloss; `queueSystemMail`'s caller list
 - Modify: `shared/api.ts` — two lines in place
 - Modify: `pwa/src/screens/MailScreen.tsx`, `pwa/test/mail-screen.test.tsx`
 - Test: `server/test/pr-queue-lane.test.ts` (new)
 
 **Interfaces:**
-- Consumes: Task 2's `queue`/`queueAt` on full `pr-state` lines; `CoordStore.openRunsForSession`, `CoordStore.resolveCoordinator(runId)`, `queueSystemMail`, `FleetWatcher.pushOne`.
-- Produces: `queueFor(line: CcdPrLine): PrQueueRead` (`{ state: PrQueue | 'absent'; at: string | null }`); `NotifyEvent.kind` `'queue'`; a `feed_events` row of kind `queue` per (workspace, PR, removal time); a `status` mail with subject `dequeued:#<n>` from `operator` to the run's coordinator, on that run. Task 5's clause-15 sentence is what the mail's body points the coordinator at.
+- Consumes: Task 2's `queue`/`queueAt` on full `pr-state` lines; `CoordStore.openRunsForSession` (and its `run-unreadable` arm), `CoordStore.resolveCoordinator(runId)`, `queueSystemMail`, `FleetWatcher.pushOne`.
+- Produces: `queueFor(line: CcdPrLine): PrQueueRead` (`{ state: PrQueue | 'absent'; at: string | null }`); `NotifyEvent.kind` `'queue'`; `CoordStore.hasMailWithSubject(fromId, runId, toId, subject)` (every delivery state) and `CoordStore.hasFeedEvent(kind, sessionId, body)`; `dequeuedSubject(pr, at)`; a `feed_events` row of kind `queue` per (workspace, PR, removal time), its body carrying the removal time; a `status` mail with subject `dequeued:#<n>@<queueAt>` from `operator` to the run's coordinator, on that run — neither repeated after a server restart. Task 5's clause-15 sentence is what the mail's body points the coordinator at.
 
 - [ ] **Step 1: Write the failing test** — `server/test/pr-queue-lane.test.ts`:
 
@@ -1212,8 +1226,10 @@ MSG
  * The server half of landing-order wave 2 (spec §5.2): `queueFor`, the ONE
  * reader of ccd's additive `queue`/`queueAt` fields, and the dequeue lane that
  * turns a `dequeued` reading into a `queue` feed record and a `status` mail to
- * the run's coordinator — once per (workspace, PR, removal), and never for any
- * other word, for an unmeasured read, or for a line from an older ccd.
+ * the run's coordinator — once per (workspace, PR, removal), across a server
+ * restart too, and never for any other word, for an unmeasured read, or for a
+ * line from an older ccd. A read that fails or a mail that throws is retried,
+ * never latched as told.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -1230,6 +1246,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 
 const ID = 'demo-quiet-basin';
+const T1 = '2026-09-23T11:30:00Z';
+const T2 = '2026-09-23T12:05:00Z';
 
 function seed(): string {
   const home = mkTmp('ccrc-queue-');
@@ -1275,17 +1293,22 @@ async function harness(first: string, withRun = true) {
   await log.load();
   const sent: PushPayload[] = [];
   let out = first;
-  const w = new FleetWatcher({ ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
-    push: { notify: async (p: PushPayload) => { sent.push(p); } } as never }, new Bus(), 10_000);
+  const deps = { ...testDeps(home, runnerFor(() => out)), coord, notifyLog: log,
+    push: { notify: async (p: PushPayload) => { sent.push(p); } } as never };
+  let w = new FleetWatcher(deps, new Bus(), 10_000);
   const sweep = async (next?: string): Promise<void> => {
     if (next !== undefined) out = next;
     (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
     await w.tick();
     await vi.waitFor(() => expect((w as unknown as { prSweepStartedAt: number }).prSweepStartedAt).toBe(0));
   };
+  /** A server restart: a NEW watcher — every in-memory latch empty — over the
+   *  SAME coord.db, which is what a rollout or a crash leaves behind. */
+  const restart = (): void => { w.stop(); w = new FleetWatcher(deps, new Bus(), 10_000); };
+  const stop = (): void => { w.stop(); };
   const queueFeed = () => coord.feedEvents(200).filter((e) => e.kind === 'queue');
   const mail = () => coord.mailForRecipient('ccrc-pwa-coordinator');
-  return { w, sweep, sent, queueFeed, mail, runId };
+  return { coord, sweep, restart, stop, sent, queueFeed, mail, runId };
 }
 
 describe('queueFor — the one reader of the queue fields', () => {
@@ -1304,47 +1327,52 @@ describe('queueFor — the one reader of the queue fields', () => {
   });
 
   it('keeps queueAt only when it is shaped like a timestamp', () => {
-    expect(queueFor(line({ queue: 'dequeued', queueAt: '2026-09-23T11:30:00Z' })).at).toBe('2026-09-23T11:30:00Z');
+    expect(queueFor(line({ queue: 'dequeued', queueAt: T1 })).at).toBe(T1);
     expect(queueFor(line({ queue: 'dequeued', queueAt: '$(reboot)' })).at).toBeNull();
   });
 });
 
 describe('the dequeue lane', () => {
   it('records a queue feed event and mails the run\'s coordinator, once', async () => {
-    const f = await harness(openLine({ queue: 'dequeued', queueAt: '2026-09-23T11:30:00Z' }));
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
     expect(f.queueFeed()[0]!.title).toBe('⤺ dequeued › quiet-basin');
     expect(f.queueFeed()[0]!.runId).toBe(f.runId);
     const m = f.mail();
     expect(m).toHaveLength(1);
-    expect(m[0]!.subject).toBe(dequeuedSubject(42));
+    expect(m[0]!.subject).toBe(`dequeued:#42@${T1}`);
+    expect(m[0]!.subject).toBe(dequeuedSubject(42, T1));
     expect(m[0]!.kind).toBe('status');
     expect(m[0]!.runId).toBe(f.runId);
-    expect(f.sent.find((p) => p.tag === `queue-${ID}#42@2026-09-23T11:30:00Z`)).toBeDefined();
-    // The same reading on the next sweep is the same fact: no second anything.
+    expect(f.sent.find((p) => p.tag === `queue-${ID}#42@${T1}`)).toBeDefined();
+    // The same reading on the next sweep is the same fact: no second anything —
+    // and, latched in memory, it costs no second read of the run rows.
+    const reads = vi.spyOn(f.coord, 'openRunsForSession');
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
     expect(f.mail()).toHaveLength(1);
-    f.w.stop();
+    expect(reads, 'a latched removal re-read the run rows on the next sweep').not.toHaveBeenCalled();
+    f.stop();
   });
 
   it('announces a SECOND removal of the same PR — the latch carries the removal time', async () => {
-    const f = await harness(openLine({ queue: 'dequeued', queueAt: '2026-09-23T11:30:00Z' }));
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
     await f.sweep();
     await f.sweep(openLine({ queue: 'queued', queueAt: '2026-09-23T11:40:00Z' }));
-    await f.sweep(openLine({ queue: 'dequeued', queueAt: '2026-09-23T12:05:00Z' }));
+    await f.sweep(openLine({ queue: 'dequeued', queueAt: T2 }));
     expect(f.queueFeed()).toHaveLength(2);
-    f.w.stop();
+    expect(f.mail().map((m) => m.subject).sort()).toEqual([`dequeued:#42@${T1}`, `dequeued:#42@${T2}`]);
+    f.stop();
   });
 
   it('with no open run, records the feed event and mails nobody', async () => {
-    const f = await harness(openLine({ queue: 'dequeued', queueAt: '2026-09-23T11:30:00Z' }), false);
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), false);
     await f.sweep();
     expect(f.queueFeed()).toHaveLength(1);
     expect(f.queueFeed()[0]!.body).toContain('No open run names a coordinator');
     expect(f.mail()).toEqual([]);
-    f.w.stop();
+    f.stop();
   });
 
   it('says nothing for queued, landed, none, unmeasured, or a line from an older ccd', async () => {
@@ -1354,8 +1382,75 @@ describe('the dequeue lane', () => {
       await f.sweep();
       expect(f.queueFeed(), JSON.stringify(extra)).toEqual([]);
       expect(f.mail(), JSON.stringify(extra)).toEqual([]);
-      f.w.stop();
+      f.stop();
     }
+  });
+});
+
+describe('the dequeue lane latches only what it told', () => {
+  it('an unreadable run read is not "no open run": it defers, records nothing, and mails once it reads', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const real = f.coord.openRunsForSession.bind(f.coord);
+    let n = 0;
+    vi.spyOn(f.coord, 'openRunsForSession').mockImplementation((id, ex) => (n++ === 0
+      ? { ok: false, kind: 'run-unreadable', detail: 'fixture' } : real(id, ex)));
+    await f.sweep();
+    expect(f.queueFeed(), 'an unreadable run read was announced as "no open run"').toEqual([]);
+    expect(f.mail()).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('deferred (run rows unreadable: fixture)'));
+    await f.sweep();
+    expect(f.mail(), 'the deferred notice was never sent').toHaveLength(1);
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.queueFeed()[0]!.body).toContain('Mailed coordinator ccrc-pwa-coordinator');
+    warn.mockRestore();
+    f.stop();
+  });
+
+  it('a mail that throws is retried on the next sweep, and leaves exactly one record', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // `hasOutstandingMail` is `queueSystemMail`'s first statement: a throw
+    // there is `node:sqlite`'s 'database is locked' reaching the lane.
+    const real = f.coord.hasOutstandingMail.bind(f.coord);
+    let n = 0;
+    vi.spyOn(f.coord, 'hasOutstandingMail').mockImplementation((...a) => {
+      if (n++ === 0) throw new Error('database is locked');
+      return real(...a);
+    });
+    await f.sweep();
+    expect(f.mail()).toEqual([]);
+    expect(f.queueFeed(), 'a record was left for a notice that was never sent').toEqual([]);
+    await f.sweep();
+    expect(f.mail(), 'the thrown notice was never retried').toHaveLength(1);
+    expect(f.queueFeed()).toHaveLength(1);
+    warn.mockRestore();
+    f.stop();
+  });
+
+  it('a restart re-announces nothing it already mailed — acked or not — and still hears a new removal', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }));
+    await f.sweep();
+    const m = f.mail();
+    expect(m).toHaveLength(1);
+    // Acked, so `queueSystemMail`'s OUTSTANDING-only dedupe no longer sees it.
+    f.coord.markAcked(m[0]!.deliveryId, Date.now());
+    f.restart();
+    await f.sweep();
+    expect({ mail: f.mail().length, feed: f.queueFeed().length }).toEqual({ mail: 1, feed: 1 });
+    await f.sweep(openLine({ queue: 'dequeued', queueAt: T2 }));
+    expect({ mail: f.mail().length, feed: f.queueFeed().length }).toEqual({ mail: 2, feed: 2 });
+    f.stop();
+  });
+
+  it('a restart re-records no feed-only notice either', async () => {
+    const f = await harness(openLine({ queue: 'dequeued', queueAt: T1 }), false);
+    await f.sweep();
+    f.restart();
+    await f.sweep();
+    expect(f.queueFeed()).toHaveLength(1);
+    expect(f.mail()).toEqual([]);
+    f.stop();
   });
 });
 ```
@@ -1366,7 +1461,7 @@ describe('the dequeue lane', () => {
 cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
 ```
 
-Expected (measured at `905360dc`): `6 failed | 1 passed (7)` — `TypeError: queueFor is not a function` on the three reader cases and `expected [] to have a length of 1 but got +0` on the lane cases; "says nothing for…" passes (nothing announces yet) and must stay passing.
+Expected (measured at `af64d9d2`): `10 failed | 1 passed (11)` — `TypeError: queueFor is not a function` on the three reader cases and `expected [] to have a length of 1 but got +0` (or its `of 2` form, or `the thrown notice was never retried`) on the seven lane cases; "says nothing for…" passes (nothing announces yet) and must stay passing.
 
 - [ ] **Step 3: The one reader, in `server/src/prstate.ts`.** In `CcdPrLine`, directly after `  checksUnmeasured?: boolean;`, insert:
 
@@ -1508,11 +1603,16 @@ Directly after `  private mergedNotified = new Set<string>();`, insert:
    *  (`queueFor`), kept beside `prStates` and written by the same arm of
    *  `sweepPr`. Read by `sweepDequeued` and nothing else. */
   private prQueues = new Map<string, PrQueueRead>();
-  /** `sweepDequeued`'s latch, per (workspace, PR, removal time) — the
-   *  `mergedNotified` shape plus the removal's own timestamp, because a PR can
-   *  be dequeued, re-enqueued and dequeued AGAIN, and each removal is a new
-   *  fact the coordinator has to hear. In-memory for `mergedNotified`'s reason:
-   *  a restart may repeat one notice, and the tag collapses the repeat. */
+  /** `sweepDequeued`'s in-memory latch, per (workspace, PR, removal time) —
+   *  the `mergedNotified` shape plus the removal's own timestamp, because a PR
+   *  can be dequeued, re-enqueued and dequeued AGAIN, and each removal is a new
+   *  fact the coordinator has to hear. Written only AFTER the notice landed, or
+   *  after a durable read proved an earlier process sent it — never before: a
+   *  latch set ahead of a failed read or a thrown mail would make that removal
+   *  a landing that silently stops. It is NOT what stops a restart
+   *  re-announcing (a PR can sit dequeued through a whole fix round, and every
+   *  rollout restarts this process); that is `sweepDequeued`'s DURABLE read.
+   *  This set spares a latched removal the coord.db reads on every later sweep. */
   private dequeuedNotified = new Set<string>();
 ```
 
@@ -1537,22 +1637,39 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
    * re-enqueue a PR its merge queue removed, so a removal nobody hears about is
    * a landing that silently stops. Once per (workspace, PR, removal):
    *
-   *  - a `queue` FEED record, always — `recordAlways`, because a removal is a
-   *    fact about the programme whether or not the operator is watching this
-   *    pane. A NEW kind rather than `merged` or `mail`: a dequeue is the one PR
-   *    outcome that is not a merge, and `MailScreen`'s two total maps name it;
-   *    an older client degrades it to `unknown` through `reviveNotifyEvent`.
    *  - a `status` MAIL to the coordinator, when the workspace belongs to an
    *    open run whose coordinator resolves. The coordinator re-enqueues or
    *    sends a fix round; this lane decides neither and acts on nothing — no
    *    enqueue, no merge, no re-run. With no open run there is no coordinator to
    *    tell without guessing (`resolveCoordinator(null)`'s arm is a guess here,
    *    `tellSender`'s reason), so the feed record is the whole notice.
+   *  - a `queue` FEED record, always — `recordAlways`, because a removal is a
+   *    fact about the programme whether or not the operator is watching this
+   *    pane. A NEW kind rather than `merged` or `mail`: a dequeue is the one PR
+   *    outcome that is not a merge, and `MailScreen`'s two total maps name it;
+   *    an older client degrades it to `unknown` through `reviveNotifyEvent`.
+   *
+   * ONCE ACROSS RESTARTS TOO. Before announcing, the lane asks coord.db whether
+   * this removal was ALREADY told: the mail arm through `hasMailWithSubject` —
+   * the subject carries the removal time, and every delivery state counts,
+   * because `queueSystemMail`'s own dedupe sees OUTSTANDING rows only and an
+   * acked notice would otherwise be mailed again after every rollout — and the
+   * feed-only arm through `hasFeedEvent` on the exact body, which carries the
+   * removal time too. A hit latches and says nothing.
+   *
+   * THREE OUTCOMES, KEPT APART. Run rows that cannot be read are NOT "no open
+   * run" (the overloaded null `sweepMerged` also refuses): the lane defers,
+   * says nothing and latches nothing, and the next sweep re-reads. A mail that
+   * throws (`node:sqlite`, synchronously) is caught with nothing recorded and
+   * nothing latched, so the next sweep tries again — the mail is queued BEFORE
+   * the feed record for exactly that reason, so a retry leaves one record. Only
+   * a notice that landed, or one a durable read found, is latched.
    *
    * `unmeasured` and `absent` NEVER announce, and neither do `queued`,
    * `landed` or `none`: the lane fires on the one word that asks for an act.
    */
   private sweepDequeued(records: SessionRecord[]): void {
+    const coord = this.deps.coord;
     for (const r of records) {
       if (measuredIdentity(r) === null) continue;
       if (r.workspace === null || r.archivedAt !== null) continue;
@@ -1561,28 +1678,39 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
       if (q?.state !== 'dequeued' || number === null) continue;
       const key = `${r.id}#${number}@${q.at ?? ''}`;
       if (this.dequeuedNotified.has(key)) continue;
-      this.dequeuedNotified.add(key);
       // ONE BAD ROW MAY NOT COST THE REST OF THE SWEEP: `node:sqlite` throws
       // synchronously, and this runs inside the void-dispatched `sweepPr`.
       try {
-        const sib = this.deps.coord?.openRunsForSession(r.id);
-        const run = sib?.ok ? sib.siblings[sib.siblings.length - 1] : undefined;
-        const coordinator = run !== undefined ? this.deps.coord!.resolveCoordinator(run.id) : null;
-        this.pushOne({
-          kind: 'queue', sessionId: r.id, project: r.project,
-          title: `⤺ dequeued › ${r.workspace}`,
-          body: `PR #${number} left the merge queue without landing; GitHub does not re-enqueue it. `
-            + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`),
-          runId: run?.id ?? null,
-          tag: `queue-${key}`,
-          recordAlways: true,
-        }, this.activeProjects);
-        if (run !== undefined && coordinator !== null) {
-          queueSystemMail(this.deps.coord!, run, {
-            fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
-            subject: dequeuedSubject(number), body: renderDequeueBrief(r.id, number),
-          });
+        const sib = coord?.openRunsForSession(r.id);
+        if (sib !== undefined && !sib.ok) {
+          console.warn(`ccrc-server: dequeue notice for ${r.id} deferred (run rows unreadable: ${sib.detail})`);
+          continue;
         }
+        const run = sib?.ok ? sib.siblings[sib.siblings.length - 1] : undefined;
+        const coordinator = run !== undefined ? coord!.resolveCoordinator(run.id) : null;
+        const subject = dequeuedSubject(number, q.at);
+        const body = `PR #${number} left the merge queue without landing`
+          + (q.at === null ? '' : ` (removed ${q.at})`) + '; GitHub does not re-enqueue it. '
+          + (coordinator === null ? 'No open run names a coordinator to tell.' : `Mailed coordinator ${coordinator}.`);
+        const told = run !== undefined && coordinator !== null
+          ? coord!.hasMailWithSubject('operator', run.id, coordinator, subject)
+          : coord?.hasFeedEvent('queue', r.id, body) === true;
+        if (!told) {
+          if (run !== undefined && coordinator !== null) {
+            queueSystemMail(coord!, run, {
+              fromId: 'operator', toId: coordinator, runId: run.id, kind: 'status',
+              subject, body: renderDequeueBrief(r.id, number),
+            });
+          }
+          this.pushOne({
+            kind: 'queue', sessionId: r.id, project: r.project,
+            title: `⤺ dequeued › ${r.workspace}`, body,
+            runId: run?.id ?? null,
+            tag: `queue-${key}`,
+            recordAlways: true,
+          }, this.activeProjects);
+        }
+        this.dequeuedNotified.add(key);
       } catch (err) {
         console.warn(`ccrc-server: dequeue notice for ${r.id} failed (${err instanceof Error ? err.message : String(err)})`);
       }
@@ -1593,11 +1721,13 @@ After `sweepMerged`'s closing brace (its last statement is `      this.announceM
 Directly above the docstring that begins `/**\n * The parent's ENTIRE evidentiary surface (design spec §6.1)` (the one above `function renderAskBrief(`), insert:
 
 ```typescript
-/** The dequeue notice's subject. Unique per PR, not per removal: mail dedupe
- *  is subject-keyed over OUTSTANDING rows, so a second removal of the same PR
- *  while the coordinator has not acked the first is the same fact restated —
- *  and after the ack, a new removal mails again. */
-export const dequeuedSubject = (pr: number): string => `dequeued:#${pr}`;
+/** The dequeue notice's subject, unique per REMOVAL: the PR and the removal's
+ *  own time (`queueAt`, shape-gated by `queueFor`), so `sweepDequeued`'s
+ *  durable read tells "this removal was already mailed" from "a new removal of
+ *  the same PR". A reading with no well-shaped time falls back to the PR alone,
+ *  which is what `dequeuedNotified`'s key does with it too. */
+export const dequeuedSubject = (pr: number, at: string | null): string =>
+  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;
 
 /** The dequeue notice's body. Every value in it is this server's own — a PR
  *  number, a registry-validated session id — and nothing GitHub wrote (the
@@ -1613,7 +1743,47 @@ export function renderDequeueBrief(sessionId: string, pr: number): string {
 
 ```
 
-- [ ] **Step 6: Say who raises it, in `server/src/coord/rundefs.ts`.** Replace
+- [ ] **Step 6: The two durable reads, in `server/src/coord/store.ts`.** Directly after `hasOutstandingMail`'s closing brace (its last statement is `    return row !== undefined;`, one hit inside that method), insert:
+
+```typescript
+
+  /** Whether ANY mail with this exact (fromId, runId, toId, subject) was ever
+   *  queued — in EVERY delivery state, which is the whole difference from
+   *  `hasOutstandingMail` above. `sweepDequeued`'s durable "already told" read
+   *  (landing-order wave 2): its latch is in memory, `queueSystemMail`'s dedupe
+   *  sees outstanding rows only, and a PR that stays dequeued through a fix
+   *  round would otherwise be mailed again after every server restart once its
+   *  first notice was acked. `mail` is never pruned, so this answer does not
+   *  decay. `toId` is the mail row's own, which for system mail is the resolved
+   *  session id `queueSystemMail` was handed. */
+  hasMailWithSubject(fromId: string, runId: number | null, toId: string, subject: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
+    ).get(fromId, runId, toId, subject);
+    return row !== undefined;
+  }
+```
+
+Directly after `feedEvents`'s closing brace (the method that begins `  feedEvents(limit: number): NotifyEvent[] {`), insert:
+
+```typescript
+
+  /** Whether the feed archive holds a record of this kind, about this session,
+   *  with exactly this body — `sweepDequeued`'s durable "already told" read for
+   *  a removal no open run names (landing-order wave 2), whose body carries the
+   *  removal time. Bounded by `FEED_RETENTION` like every feed read: a record
+   *  pruned out of the archive reads as never recorded, and is announced again. */
+  hasFeedEvent(kind: string, sessionId: string, body: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 AS x FROM feed_events WHERE kind = ? AND sessionId = ? AND body = ? LIMIT 1',
+    ).get(kind, sessionId, body);
+    return row !== undefined;
+  }
+```
+
+Both are reads: neither names `mail_deliveries`, so `mail-hardening.test.ts`'s delivery-writer census and `single-definition.test.ts`'s state-set scans do not see them (measured: 18 and 160 passed with both in). `mail` has no pruning writer anywhere in `server/src/coord/`; `feed_events` prunes to `FEED_RETENTION`, which the second docstring says.
+
+- [ ] **Step 7: Say who raises it, in `server/src/coord/rundefs.ts`.** Replace
 
 ```typescript
     'watcher on their behalf (the ask nudge); never a session speaking for itself',
@@ -1647,7 +1817,7 @@ with
     // throw per row) — deliberately:
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [ ] **Step 8: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
@@ -1660,28 +1830,34 @@ cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
 cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx test/feed.test.ts test/notifymark.test.ts
 ```
 
-Expected (measured on the prototype): `7 passed (7)`; `95 passed (95)`; `329 passed (329)`; PASS; `tsc-ok`; `7 passed | 326 skipped` (the two in-place `shared/api.ts` lines moved no citation); `52 passed (52)` and `Type Errors  no errors` (26 mail-screen cases, the new one among them).
+Expected (measured on the prototype at `af64d9d2`): `11 passed (11)`; `95 passed (95)`; `329 passed (329)`; `18 passed (18)`; `tsc-ok`; `7 passed | 326 skipped` (the two in-place `shared/api.ts` lines moved no citation); `52 passed (52)` and `Type Errors  no errors` (26 mail-screen cases, the new one among them).
 
-- [ ] **Step 8: Mutation check, then commit**
+- [ ] **Step 9: Mutation check, then commit**
 
-Ten mutations, each restored from a saved copy (`cp` of `server/src/watch.ts`, `server/src/prstate.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` into `$SCRATCH` after Step 7; restore with `cp`). Every red below was measured on the prototype:
+Sixteen mutations, each restored from a saved copy (`cp` of `server/src/watch.ts`, `server/src/prstate.ts`, `shared/api.ts`, `pwa/src/screens/MailScreen.tsx` into `$SCRATCH` after Step 8; restore with `cp`). Every red below was measured on the prototype — L1–L14 and K1 re-measured at `af64d9d2` against the revised lane (P1 as the planner measured it at `905360dc`). "The lane cases" are the seven that expect a record: once, second removal, no open run, and the four in "latches only what it told":
 
 | # | Exact edit | Command | Expected red |
 |---|---|---|---|
-| L1 | `watch.ts`: delete `      this.sweepDequeued(records);` | `cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts` | `3 failed` — the three lane cases that expect a record: `expected [] to have a length of 1 but got +0`, `… of 2 but got +0` |
-| L2 | `watch.ts`: delete `          this.prQueues.set(line.id, queueFor(line));` (mutate the CALL SITE, not the reader) | same | same three, same reds |
-| L3 | `watch.ts`: delete `      if (this.dequeuedNotified.has(key)) continue;` | same | "…mails the run's coordinator, once" only — `expected [ { seq: 1, …(6) }, { seq: 3, …(6) } ] to have a length of 1 but got 2` |
-| L4 | `watch.ts`: ``const key = `${r.id}#${number}@${q.at ?? ''}`;`` → ``const key = `${r.id}#${number}`;`` | same | "announces a SECOND removal…" — `expected [ { seq: 1, … } ] to have a length of 2 but got 1` (and the tag lookup in the first case, `expected undefined to be defined`) |
+| L1 | `watch.ts`: delete `      this.sweepDequeued(records);` | `cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts` | `7 failed \| 4 passed` — the seven lane cases: `expected [] to have a length of 1 but got +0`, `… of 2 but got +0`, `expected "warn" to be called with arguments: [ StringContaining{…} ]` |
+| L2 | `watch.ts`: delete `          this.prQueues.set(line.id, queueFor(line));` (mutate the CALL SITE, not the reader) | same | same seven, same reds |
+| L3 | `watch.ts`: delete `      if (this.dequeuedNotified.has(key)) continue;` | same | "…mails the run's coordinator, once" only — `a latched removal re-read the run rows on the next sweep: expected "openRunsForSession" to not be called at all, but actually been called 1 times` (the durable read still stops a second notice; the in-memory latch is what spares the reads) |
+| L4 | `watch.ts`: ``const key = `${r.id}#${number}@${q.at ?? ''}`;`` → ``const key = `${r.id}#${number}`;`` | same | `3 failed` — "announces a SECOND removal…" (`expected [ { seq: 1, … } ] to have a length of 2 but got 1`), the first case's tag lookup (`expected undefined to be defined`) and the restart case's new removal (`expected { mail: 1, feed: 1 } to deeply equal { mail: 2, feed: 2 }`) |
 | L5 | `watch.ts`: `if (q?.state !== 'dequeued' \|\| number === null) continue;` → `if ((q?.state !== 'dequeued' && q?.state !== 'unmeasured') \|\| number === null) continue;` | same | "says nothing for…" only — `{"queue":"unmeasured"}: expected [ { seq: 1, … } ] to deeply equal []` |
-| L6 | `watch.ts`: `const coordinator = run !== undefined ? this.deps.coord!.resolveCoordinator(run.id) : null;` → `const coordinator = this.deps.coord!.resolveCoordinator(run?.id ?? null);` (guess the coordinator) | same | "with no open run…" only — `expected 'PR #42 left the merge queue without l…' to contain 'No open run names a coordinator'` |
+| L6 | `watch.ts`: `const coordinator = run !== undefined ? coord!.resolveCoordinator(run.id) : null;` → `const coordinator = coord!.resolveCoordinator(run?.id ?? null);` (guess the coordinator) | same | "with no open run…" only — `expected 'PR #42 left the merge queue without l…' to contain 'No open run names a coordinator'` |
 | L7 | `prstate.ts`: `return { state: 'absent', at: null };` → `return { state: 'unmeasured', at: null };` | same | "answers absent…" only — `expected { state: 'unmeasured', at: null } to deeply equal { state: 'absent', at: null }` |
 | L8 | `prstate.ts`: `typeof line.queueAt === 'string' && QUEUE_AT_RE.test(line.queueAt)` → `typeof line.queueAt === 'string'` | same | "keeps queueAt only when…" only — `expected '$(reboot)' to be null` |
-| K1 | `shared/api.ts`: `'run', 'coord', 'queue', 'unknown'];` → `'run', 'coord', 'unknown'];` | same | the same three lane cases — the stored row reads back through `isNotifyKind` as `unknown`: `expected [] to have a length of 1 but got +0` |
+| L9 | `watch.ts`: latch BEFORE the lookup — insert `      this.dequeuedNotified.add(key);` directly after `      if (this.dequeuedNotified.has(key)) continue;` | same | `2 failed` — "an unreadable run read is not…" (`the deferred notice was never sent: expected [] to have a length of 1 but got +0`) and "a mail that throws is retried…" (`the thrown notice was never retried: expected [] to have a length of 1 but got +0`) |
+| L10 | `watch.ts`: delete the four-line `if (sib !== undefined && !sib.ok) { … continue; }` guard (fold unreadable into "no open run") | same | "an unreadable run read is not…" only — `an unreadable run read was announced as "no open run": expected [ { seq: 1, … } ] to deeply equal []` |
+| L11 | `watch.ts`: `? coord!.hasMailWithSubject('operator', run.id, coordinator, subject)` → `? coord!.hasOutstandingMail('operator', run.id, coordinator, subject)` (the outstanding-only dedupe) | same | "a restart re-announces nothing it already mailed…" only — `expected { mail: 2, feed: 2 } to deeply equal { mail: 1, feed: 1 }` |
+| L12 | `watch.ts`: `: coord?.hasFeedEvent('queue', r.id, body) === true;` → `: false;` | same | "a restart re-records no feed-only notice either" only — `expected [ { seq: 1, …(6) }, { seq: 2, …(6) } ] to have a length of 1 but got 2` |
+| L13 | `watch.ts`: inside `if (!told) { … }`, move the `this.pushOne({ … }, this.activeProjects);` statement ABOVE the `if (run !== undefined && coordinator !== null) { queueSystemMail(…); }` statement (record before mail) | same | "a mail that throws is retried…" only — `a record was left for a notice that was never sent: expected [ { seq: 1, … } ] to deeply equal []` |
+| L14 | `watch.ts`: ``  at === null ? `dequeued:#${pr}` : `dequeued:#${pr}@${at}`;`` → ``  `dequeued:#${pr}`;`` (subject per PR, not per removal) | same | `3 failed` — `expected 'dequeued:#42' to be 'dequeued:#42@2026-09-23T11:30:00Z'`, "announces a SECOND removal…" (`… to have a length of 2 but got 1`) and the restart case's new removal (`expected { mail: 1, feed: 1 } to deeply equal { mail: 2, feed: 2 }`) |
+| K1 | `shared/api.ts`: `'run', 'coord', 'queue', 'unknown'];` → `'run', 'coord', 'unknown'];` | same | the same seven lane cases — the stored row reads back through `isNotifyKind` as `unknown`: `expected [] to have a length of 1 but got +0` |
 | P1 | `MailScreen.tsx`: delete `queue: '⤺', ` | `cd pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx` | "renders a queue-kind feed record…" only — `no glyph for queue: expected '' to be '⤺'` |
 
 ```bash
-git add server/src/prstate.ts server/src/watch.ts server/src/coord/rundefs.ts shared/api.ts \
-  pwa/src/screens/MailScreen.tsx pwa/test/mail-screen.test.tsx server/test/pr-queue-lane.test.ts
+git add server/src/prstate.ts server/src/watch.ts server/src/coord/store.ts server/src/coord/rundefs.ts \
+  shared/api.ts pwa/src/screens/MailScreen.tsx pwa/test/mail-screen.test.tsx server/test/pr-queue-lane.test.ts
 git commit -m "$(cat <<'MSG'
 feat(server): a merge-queue dequeue becomes a feed record and a coordinator mail
 
@@ -1689,9 +1865,16 @@ queueFor is the ONE reader of ccd's additive queue/queueAt fields: the five
 words, a stranger token as unmeasured, and absent for a line that never asked
 (an older ccd, or --session) — never folded into unmeasured. sweepDequeued,
 after sweepMerged, fires on `dequeued` alone, once per (workspace, PR, removal
-time): a `queue` feed record always, and a `status` mail `dequeued:#<n>` to
-the coordinator only when an open run names the workspace — never to a
-guessed one. It enqueues, merges and re-runs nothing (spec §5.2, R5).
+time): a `status` mail `dequeued:#<n>@<queueAt>` to the coordinator only when
+an open run names the workspace — never to a guessed one — and then a `queue`
+feed record always. It enqueues, merges and re-runs nothing (spec §5.2, R5).
+
+Once means once across a restart too: CoordStore.hasMailWithSubject (every
+delivery state — queueSystemMail's dedupe sees outstanding rows only) and
+hasFeedEvent (the feed-only arm) say "already told", and a hit latches and
+says nothing. The in-memory latch is written only after the notice landed:
+unreadable run rows defer (never "no open run"), and a thrown mail is retried
+on the next sweep with no record left behind.
 
 `queue` is the eighth NotifyEvent kind: additive, degraded to `unknown` by an
 older client, named in MailScreen's two total maps. shared/api.ts's two lines
@@ -1713,7 +1896,7 @@ MSG
 - Test: `server/test/session-hook-merge-deny.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `$REG/<id>.hold` (read through `_ct_read`, judged under `CCRC_HOLD_MAX` by `CCRC_HOLD_WAVE_RE`), the PreToolUse payload's `tool_name` and `tool_input.command`, `_hook_deny_json`, `pre_json` and its single print site.
+- Consumes: `$REG/<id>.hold` (read through `_ct_read`, judged under `CCRC_HOLD_MAX` by `CCRC_HOLD_WAVE_RE`), the PreToolUse payload's `tool_name` and `tool_input.command` (read by the one jq, which also removes quoted spans — jq's `gsub`, Oniguruma, lookahead included; measured with jq 1.7), `_hook_deny_json`, `pre_json` and its single print site.
 - Produces: `CCRC_HOLD_WAVE_RE` — the ONE spelling of "a hold that names a programme wave" in the hook; a PreToolUse deny whose reason quotes the hold and says the coordinator lands. Wave 2b extends this block with the every-session `--admin` deny and the `gh api` pulls-merge deny.
 
 - [ ] **Step 1: Write the failing test** — `server/test/session-hook-merge-deny.test.ts`:
@@ -1810,6 +1993,15 @@ describe('the worker merge deny', () => {
       'GH_TOKEN=x gh pr merge 42', 'env gh pr merge 42', 'command gh pr merge 42',
       '/usr/bin/gh pr merge 42', 'gh -R owner/repo pr merge 42', 'echo ok; gh pr merge 42',
       'x=$(gh pr merge 42)', 'echo ok\ngh pr merge 42',
+      // The heads an agent writes for "wait for checks, then merge": reserved
+      // words, grouping, and the wrappers a command can sit behind.
+      'if gh pr checks 42 --watch; then gh pr merge 42; fi', 'for n in 42; do gh pr merge $n; done',
+      'while true; do gh pr merge 42; done', '{ gh pr merge 42; }', '! gh pr merge 42',
+      'time gh pr merge 42', 'timeout 60 gh pr merge 42', 'nohup gh pr merge 42',
+      'env GH_TOKEN=x gh pr merge 42', 'gh pr --repo o/r merge 42',
+      // A "…" span that holds a `$(` runs it, so it is never stripped; and a
+      // quote INSIDE a "…" span does not open a '…' one.
+      'x="$(gh pr merge 42)"', 'echo "it\'s" && gh pr merge 42',
     ]) {
       expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
     }
@@ -1830,6 +2022,14 @@ describe('the worker merge deny', () => {
     for (const c of [
       'gh pr view 42', 'gh pr list --search merge', 'gh pr merged 42',
       "grep -rn 'gh pr merge' docs", 'echo "gh pr merge 42"', 'ghx pr merge 42',
+      'echo run gh pr merge later',
+      // What a wave on THIS feature writes about it: commit messages and PR
+      // bodies that quote the command, in Markdown code spans and in prose.
+      'git commit -m "docs (gh pr merge 42 enqueues)"',
+      'git commit -m "fix; gh pr merge is the coordinator\'s"',
+      'git commit -m "the coordinator lands with `gh pr merge <n>`, never --admin"',
+      "git commit -m \"$(cat <<'MSG'\nfeat(hook): deny `gh pr merge --admin` in every session\nMSG\n)\"",
+      "gh pr create --title t --body 'landing is `gh pr merge <n>` with no --admin'",
     ]) {
       expect(bash(c).deny, `denied: ${c}`).toBeNull();
     }
@@ -1923,11 +2123,23 @@ The case's own `hookGrammar` regex below it is unchanged — it already spells t
 # plain `gh pr merge`. So a session whose hold names a programme wave — a
 # dispatched worker's or reviewer's, the only sessions a dispatch holds — is
 # DENIED `gh pr merge` in every spelling this file can parse at a COMMAND HEAD:
-# after a line start or `;` `&` `|` `(` a backtick or `$(`, past `VAR=value`
-# prefixes, `env`/`command`/`exec`, a path to the binary, and gh's own global
-# flags (`-R owner/repo`). `--auto`, `--squash`, `--admin` and every other
-# merge flag are the same act from a worker and are denied with it. A merge
-# hidden inside a quoted string (`bash -c "…"`) is not parsed and passes: the
+# after a line start or `;` `&` `|` `(` or `$(`; past `VAR=value` prefixes,
+# the reserved words and grouping a head can follow (`if` `then` `do` `else`
+# `elif` `while` `until` `{` `!`), the wrappers `time` `env` `command` `exec`
+# `nohup` `sudo` and `timeout <n>` (in any order, `env`'s assignments too); a
+# path to the binary; and gh's own flags before `pr` or between `pr` and
+# `merge` (`-R owner/repo`). `--auto`, `--squash`, `--admin` and every other
+# merge flag are the same act from a worker and are denied with it.
+#
+# QUOTED TEXT IS REMOVED BEFORE MATCHING, in the same jq that reads the
+# command: every '…' span, and every "…" span that holds no `$(` — so a commit
+# message, a PR body or a grep pattern that MENTIONS `gh pr merge` passes. A
+# "…" span that holds a `$(` is kept, because that substitution runs.
+# WHAT PASSES UNPARSED, said rather than hidden: a merge inside a quoted
+# string (`bash -c "…"`), a quoted command word (`"gh" pr merge`), a legacy
+# backtick substitution, and `xargs`-style indirection. What is DENIED though
+# it is not a merge: a heredoc BODY line that begins `gh pr merge` (heredocs
+# are not stripped) — write such text through a quoted string instead. The
 # hook is a contract the fleet honours, not an access boundary (spec §4), and
 # identity on this box is attribution. A session with NO wave hold — the
 # coordinator's, the operator's — is never asked, so the coordinator's plain
@@ -1946,10 +2158,11 @@ The case's own `hookGrammar` regex below it is unchanged — it already spells t
 # for this same call (the Read nudge, or a sync advisory); the merge deny
 # replaces it. It never replaces the graph gate's DENY, which has already
 # counted the denial it prints (D-1689) — that call is refused either way.
-GH_MERGE_RE=$'(^|[;&|(`\n]|\\$\\()[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((env|command|exec)[[:space:]]+)*([^[:space:];&|()`]*/)?gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'
+GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[[:space:]]*(([!{]|if|then|do|else|elif|while|until|time|env|command|exec|nohup|sudo)[[:space:]]+|timeout[[:space:]]+[^[:space:]]+[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:];&|()]*/)?gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+merge([[:space:]]|$)'
 if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mcmd=$(jq -r 'if .tool_name == "Bash" then (.tool_input.command // "") else "" end' \
+  mcmd=$(jq -r --arg q "'" 'if .tool_name == "Bash" then ((.tool_input.command // "")
+      | gsub($q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\$]|\\\\.|\\$(?!\\())*\""; "")) else "" end' \
     <<<"$payload" 2>/dev/null) || mcmd=""
   if [[ -n "$mcmd" && "$mcmd" =~ $GH_MERGE_RE ]] && _ct_read "$REG/$id.hold" \
      && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
@@ -1961,7 +2174,7 @@ fi
 
 ```
 
-(The block ends with one blank line, so the subagent block keeps its blank separator.) The deny is PRINTED at the file's one PreToolUse print site, after the hookstate rename — so, like the graph gate's, a registry the hook cannot write prints nothing (the file's standing fail-open).
+(The block ends with one blank line, so the subagent block keeps its blank separator. The single quote the strip needs reaches jq as `--arg q "'"`, because the jq program is itself single-quoted.) The deny is PRINTED at the file's one PreToolUse print site, after the hookstate rename — so, like the graph gate's, a registry the hook cannot write prints nothing (the file's standing fail-open).
 
 - [ ] **Step 5: Pay (and prove) the citation tax — the hook-aware instrument**
 
@@ -1972,7 +2185,7 @@ git diff --numstat -- ccd/session-hook.sh
 python3 "$SCRATCH/cite-remeasure-hook.py" "$SCRATCH" HEAD
 ```
 
-Expected (measured on the prototype at `905360dc`): `syntax-ok`; `57	14	ccd/session-hook.sh` (the 43-line deny block below the graph gate; the three in-place edits balance); `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty. On a tree carrying wave 1 the numstat differs by nothing (this task's own lines) and the census is whatever wave 1 left, unmoved.
+Expected (measured on the prototype at `af64d9d2`): `syntax-ok`; `70	14	ccd/session-hook.sh` (the 56-line deny block below the graph gate; the three in-place edits balance); `stated == base == tree` on all four lines (`147 / 195 / 53 / 35`), `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty. On a tree carrying wave 1 the numstat differs by nothing (this task's own lines) and the census is whatever wave 1 left, unmoved.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1983,11 +2196,11 @@ cd server && ./node_modules/.bin/vitest run test/session-hook-merge-deny.test.ts
 ./node_modules/.bin/vitest run test/ask-instance-guard.test.ts test/install-session-hooks.test.ts test/hookstate.test.ts
 ```
 
-Expected (measured on the prototype): `7 passed (7)`; `1 passed | 220 skipped`; `333 passed (333)` (≈110 s — every hold-card case still speaks through the hoisted grammar; the citation cases are green); PASS (measured as `75 passed` for these three files plus `mail-hardening.test.ts` in one run).
+Expected (measured on the prototype at `af64d9d2`): `7 passed (7)`; `1 passed | 220 skipped`; `333 passed (333)` (≈113 s — every hold-card case still speaks through the hoisted grammar; the citation cases are green); PASS (measured as `75 passed` for these three files plus `mail-hardening.test.ts` in one run).
 
 - [ ] **Step 7: Mutation check, then commit**
 
-Ten mutations, each restored from a saved copy (`cp ccd/session-hook.sh "$SCRATCH/hook.task4"` after Step 6; restore with `cp`). Every red below was measured on the prototype, except row H8, which needs wave 1's advisory:
+Sixteen mutations, each restored from a saved copy (`cp ccd/session-hook.sh "$SCRATCH/hook.task4"` after Step 6; restore with `cp`). Every red below was measured on the prototype at `af64d9d2`, except row H8, which needs wave 1's advisory. A row on a list case names the FIRST command of that list that reds — vitest stops the case there:
 
 | # | Exact edit in `ccd/session-hook.sh` | Command (from `server/`) | Expected red |
 |---|---|---|---|
@@ -1995,10 +2208,16 @@ Ten mutations, each restored from a saved copy (`cp ccd/session-hook.sh "$SCRATC
 | H2 | the hold is read, never judged: ` && _ct_read "$REG/$id.hold" \`⏎`     && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` → ` && { _ct_read "$REG/$id.hold"; true; }; then` | same | `2 failed` — "lets a coordinator's plain enqueue through…" (`expected 'ccrc: this workspace\'s hold reads ``…' to be null`) and "lets a hold that names no programme wave through…" (`a hand hold is not a worker wave`). (Deleting the predicate OUTRIGHT crashes the hook under `set -u` — exit 1, a red for the wrong reason; Pre-flight finding 7.) |
 | H3 | delete `(( ${#CT_V} <= CCRC_HOLD_MAX )) && ` | same | "lets a hold that names no programme wave through…" only — `an oversized hold is unspeakable, never a wave: expected 'ccrc: this workspace\'s hold reads \`p…' to be null` |
 | H4 | `[[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then` (in the deny) → `[[ -n "$CT_V" ]]; then` | same | same case — `a hand hold is not a worker wave: expected 'ccrc: this workspace\'s hold reads \`o…' to be null` |
-| H5 | unanchored: `GH_MERGE_RE=$'(^\|[;&\|(`\n]\|\\$\\()[[:space:]]*` → `GH_MERGE_RE=$'[[:space:]]*` | same | "leaves every other gh…" only — `denied: echo "gh pr merge 42": expected 'ccrc: …' to be null` |
-| H6 | no global-flag arm: `gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr` → `gh[[:space:]]+pr` | same | "refuses every spelling…" only — `not denied: gh -R owner/repo pr merge 42: expected null not to be null` |
-| H7 | no path-prefix arm: `((env\|command\|exec)[[:space:]]+)*([^[:space:];&\|()`]*/)?gh(` → `((env\|command\|exec)[[:space:]]+)*gh(` | same | same case — `not denied: /usr/bin/gh pr merge 42: expected null not to be null` |
-| H8 | a deny no longer supersedes advice: `&& "$pre_json" != *'"permissionDecision":"deny"'* ]]; then` → `&& -z "$pre_json" ]]; then` | same | **UNMEASURED at `905360dc`** — nothing on that tree puts a non-deny envelope on a Bash call, so this row is green there. Measure it on this branch (wave 1 merged): the expected red is "a deny supersedes a sync advisory…" — `the advisory won and the merge went through` or the one-line assertion. If it stays GREEN on the wave-1 tree, wave 1's advisory does not fire on `git merge origin/main && …`: report the measured command set rather than weakening the case. |
+| H5 | unanchored: `GH_MERGE_RE=$'(^\|[;&\|(\n]\|\\$\\()[[:space:]]*` → `GH_MERGE_RE=$'[[:space:]]*` | same | "leaves every other gh…" only — `denied: echo run gh pr merge later: expected 'ccrc: …' to be null` |
+| H6 | no global-flag arm: `gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr(` → `gh[[:space:]]+pr(` | same | "refuses every spelling…" only — `not denied: gh -R owner/repo pr merge 42: expected null not to be null` |
+| H7 | no path-prefix arm: `([^[:space:];&\|()]*/)?gh(` → `gh(` | same | same case — `not denied: /usr/bin/gh pr merge 42: expected null not to be null` |
+| H8 | a deny no longer supersedes advice: `&& "$pre_json" != *'"permissionDecision":"deny"'* ]]; then` → `&& -z "$pre_json" ]]; then` | same | **UNMEASURED at `905360dc` and at `af64d9d2`** — nothing on those trees puts a non-deny envelope on a Bash call, so this row is green there (measured green at `af64d9d2`, `7 passed`). Measure it on this branch (wave 1 merged): the expected red is "a deny supersedes a sync advisory…" — `the advisory won and the merge went through` or the one-line assertion. If it stays GREEN on the wave-1 tree, wave 1's advisory does not fire on `git merge origin/main && …`: report the measured command set rather than weakening the case. |
+| H9 | no reserved-word or grouping head: `([!{]\|if\|then\|do\|else\|elif\|while\|until\|time\|env\|command\|exec\|nohup\|sudo)` → `(time\|env\|command\|exec\|nohup\|sudo)` | same | "refuses every spelling…" only — `not denied: if gh pr checks 42 --watch; then gh pr merge 42; fi: expected null not to be null` |
+| H10 | the backtick back among the head separators: `GH_MERGE_RE=$'(^\|[;&\|(\n]\|\\$\\()` → ``GH_MERGE_RE=$'(^\|[;&\|(`\n]\|\\$\\()`` | same | "leaves every other gh…" only — ``denied: git commit -m "$(cat <<'MSG'`` (the heredoc commit message quoting `` `gh pr merge --admin` ``: its `"…"` holds a `$(` and is kept, so only the separator class decides) |
+| H11 | no quote strip: the jq line `      \| gsub($q + "[^" + $q + "]*" + $q + "\|\"(?:[^\"\\\\$]\|\\\\.\|\\$(?!\\())*\""; "")) else "" end' \` → `      ) else "" end' \` | same | "leaves every other gh…" only — `denied: git commit -m "docs (gh pr merge 42 enqueues)": expected 'ccrc: this workspace\'s hold reads \`p…' to be null` |
+| H12 | strip a `"…"` span even when it holds a `$(`: `\|\\$(?!\\())*` → `\|\\$)*` | same | "refuses every spelling…" only — `not denied: x="$(gh pr merge 42)": expected null not to be null` |
+| H13 | no flags between `pr` and `merge`: `pr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+merge` → `pr[[:space:]]+merge` | same | same case — `not denied: gh pr --repo o/r merge 42: expected null not to be null` |
+| H14 | no assignment prefix: `\|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:];&\|()]*/)?gh` → `)*([^[:space:];&\|()]*/)?gh` | same | same case — `not denied: GH_TOKEN=x gh pr merge 42: expected null not to be null` |
 | C1 | `_hook_hold_card`: `  [[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| return 0` → the old inline regex line | `./node_modules/.bin/vitest run test/run-routes.test.ts -t 'binds the shared cap'` | `1 failed` — `expected '#!/usr/bin/env bash\n# session-hook.s…' to contain '[[ "$h" =~ $CCRC_HOLD_WAVE_RE ]] \|\| r…'` |
 | C2 | `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'` → `CCRC_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:'` | same | `1 failed` — `… to contain 'CCRC_HOLD_WAVE_RE=\'^program:[A-Za-z0…'` |
 
@@ -2010,15 +2229,23 @@ feat(hook): deny gh pr merge to a programme wave's session
 The coordinator merges, workers never do (landing-order R5). Once the
 operator sets approvals to 0, a plain `gh pr merge` from any session holding
 the fleet's login would land, so the PreToolUse arm now denies it wherever a
-command head spells it — after ; & | ( a backtick or $(, past VAR=value
-prefixes, env/command/exec, a path to the binary, and gh's global flags —
-in a session whose hold is whole (<= CCRC_HOLD_MAX) and names a programme
-wave. No hold, a hand hold, an unreadable or oversized one: passes, so the
-coordinator's plain `gh pr merge <n>` enqueues. A deny replaces an advisory
-on the same call and never replaces the graph gate's counted deny. A merge
-inside a quoted string is not parsed: the hook is a contract, not an access
-boundary (spec §4). The every-session --admin deny and the gh api merge deny
-are wave 2b's, after the proof run.
+command head spells it — after ; & | ( or $(, past VAR=value prefixes, the
+reserved words and grouping a head follows (if/then/do/else/elif/while/
+until, { and !), the wrappers time/env/command/exec/nohup/sudo/timeout <n>,
+a path to the binary, and gh's flags before or after `pr` — in a session
+whose hold is whole (<= CCRC_HOLD_MAX) and names a programme wave. No hold,
+a hand hold, an unreadable or oversized one: passes, so the coordinator's
+plain `gh pr merge <n>` enqueues. A deny replaces an advisory on the same
+call and never replaces the graph gate's counted deny.
+
+Quoted text is removed before matching, in the jq that already reads the
+command: '...' spans and "..." spans holding no $( — so a commit message or
+PR body that quotes the command passes, and a "$(...)" that runs it does
+not. What it cannot parse (bash -c "...", a quoted command word, legacy
+backticks, xargs) is stated in the block's header, as is the one known false
+deny: a heredoc body line that begins with the command. The hook is a
+contract, not an access boundary (spec §4). The every-session --admin deny
+and the gh api merge deny are wave 2b's, after the proof run.
 
 The hold grammar is spelled ONCE now, CCRC_HOLD_WAVE_RE, read by the card and
 the deny; run-routes.test.ts pins it where it is assigned. The assignment and
@@ -2153,9 +2380,9 @@ Wave 2 of the landing-order programme (spec `docs/superpowers/specs/2026-09-23-l
 What it does:
 
 1. **`ci.yml`** — `merge_group` beside `pull_request`, so a queue entry gets its required checks; `test-macos` and `probe-macos` skip a queue run (and `ci-merge-queue.test.ts` pins that NO other job mentions `merge_group`, because a job skipped by `if:` reports as passing); a `concurrency` group `ci-<workflow>-pr-<number>` cancels a superseded PR run, and every other event gets a run-unique group (one pending run per group).
-2. **`ccd pr-state --project`** — ONE GraphQL query per repository per sweep (open PRs' `mergeQueueEntry`, the 20 most recent merged, each with its last queue act of either kind), own 4 s timeout, `-f` variables, answering `queued | dequeued | landed | none | unmeasured` in an additive `queue` field (+ `queueAt`). A failed or garbled read says `unmeasured` and never touches a row, phase or checks value. The server's `pr-state` bound rises 20 s → 25 s so the three timeouts keep the budget test's 30 % for the local loop.
-3. **Server** — `queueFor`, the one reader (`absent` for an older ccd, kept apart from `unmeasured`); `sweepDequeued` records a `queue` feed event (the eighth `NotifyEvent` kind, additive) and mails the run's coordinator `dequeued:#<n>` once per removal — never a guessed coordinator. Nothing enqueues or merges.
-4. **Hook** — PreToolUse denies `gh pr merge` at any parseable command head in a session whose hold names a programme wave; the coordinator's plain `gh pr merge <n>` passes. The hold grammar is spelled once (`CCRC_HOLD_WAVE_RE`).
+2. **`ccd pr-state --project`** — ONE GraphQL query per repository per sweep (the 100 newest open PRs' `mergeQueueEntry`, in `gh pr list`'s own order, and the 20 most recently updated merged, each with its last queue act of either kind), own 4 s timeout, `-f` variables, answering `queued | dequeued | landed | none | unmeasured` in an additive `queue` field (+ `queueAt`). A failed or garbled read says `unmeasured` and never touches a row, phase or checks value. The server's `pr-state` bound rises 20 s → 25 s so the three timeouts keep the budget test's 30 % for the local loop.
+3. **Server** — `queueFor`, the one reader (`absent` for an older ccd, kept apart from `unmeasured`); `sweepDequeued` mails the run's coordinator `dequeued:#<n>@<removal time>` and records a `queue` feed event (the eighth `NotifyEvent` kind, additive) once per removal — never a guessed coordinator; once across a server restart too (two durable `CoordStore` reads), and never latched as told when the run rows were unreadable or the mail threw. Nothing enqueues or merges.
+4. **Hook** — PreToolUse denies `gh pr merge` at any parseable command head (reserved words, grouping and wrappers included) in a session whose hold names a programme wave; quoted text is removed first, so a commit message or PR body that quotes the command passes; the coordinator's plain `gh pr merge <n>` passes. The hold grammar is spelled once (`CCRC_HOLD_WAVE_RE`).
 5. **Coordinator clause 15** — "On a native-queue project, landing is `gh pr merge <n>` with no `--admin`, which enqueues."
 
 Citation corpus (S6-R11): every added line sits below the frozen anchors; census 147 / 195 / 53 / 35 unmoved, README untouched. No `FLEET_PROTO` bump.
@@ -2185,13 +2412,13 @@ echo "merge: $M  tag: ${TAG:-<none yet>}"
 if [ -n "$M" ] && [ -n "$TAG" ]; then
   ccrc rollout --to "$TAG" --server-first
   echo "rollout rc=$?"
-  ccrc rollout --check
+  ccrc rollout --check --to "$TAG"
 else
   echo "STOP: no release tag on this PR's merge commit yet — wait for release-main.yml and re-run this block"
 fi
 ```
 
-Expected: `merge: <sha>  tag: vX.Y.Z`, then both boxes report that tag, converged. A rollout exits 3 when a box moved but its doctor has FAIL lines — read them first.
+Expected: `merge: <sha>  tag: vX.Y.Z`, then the check prints one `rollout: <server|fleet>: <box> (<sha>) → vX.Y.Z [current]` line per box. The check names `--to "$TAG"` because a bare `ccrc rollout --check` pins its target from `latest/download` — the newest STABLE release — and this wave's build is a dev prerelease, so the bare form would report two converged boxes as behind an older stable. A rollout exits 3 when a box moved but its doctor has FAIL lines — read them first.
 
 (c) Prove the fleet box carries both halves — READ-ONLY, on the fleet box:
 
@@ -2221,50 +2448,80 @@ Every `gh api` path below uses `{owner}/{repo}`, which `gh` fills in from the ch
 ```bash
 git fetch origin main
 git show origin/main:.github/workflows/ci.yml | grep -c '^  merge_group:$'
-gh run list --workflow ci.yml --branch main --event push --limit 1 --json conclusion,headSha --jq '.[0]'
-ccrc rollout --check
+RID=$(gh run list --workflow ci.yml --branch main --event push --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run view "$RID" --json jobs \
+  --jq '.jobs[] | select(.name | test("^(test \\((server|agent|pwa)\\)|build-pwa)$")) | [.name, .conclusion] | @tsv'
+ssh <fleet box> ccrc version | grep '^version '
+ssh <server box> ccrc version | grep '^version '
+ccrc rollout --check --to <the tag those two lines name>
 ```
 
-Expected: `1`; the newest push run on `main` concluded `success`; both boxes converged on this wave's tag or later. **Stop if the first answers `0`** — enabling the queue before `merge_group` is on `main` leaves every entry waiting for checks that never report (spec §5.2 rollout step 1 before step 2).
+Expected: `1`; the four REQUIRED jobs of the newest push run on `main` — `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa` — each `success` (the run's own conclusion is usually `cancelled`, because the non-required `test-macos` leg on `main` hits its 55-minute cap; that is not a failure of this precondition, and `test-macos`/`probe-macos` are deliberately not read); both boxes name the same `version`, equal to Task 6's tag or a later one; the check prints `[current]` for both boxes. (`--to` because a bare `--check` measures against the newest STABLE release, not the dev build the fleet is on.) **Stop if the first answers `0`** — enabling the queue before `merge_group` is on `main` leaves every entry waiting for checks that never report (spec §5.2 rollout step 1 before step 2). **Stop on any required job that is not `success`.**
 
 - [ ] **Step 2: Read the settings as they stand**
 
 ```bash
-gh api 'repos/{owner}/{repo}/rulesets' --jq '.[] | [.id, .name, .enforcement, (.conditions.ref_name.include | join(","))] | @tsv'
-RS=$(gh api 'repos/{owner}/{repo}/rulesets' --jq '.[] | select(.conditions.ref_name.include == ["refs/heads/main"]) | .id')
-echo "main ruleset: $RS"
-gh api "repos/{owner}/{repo}/rulesets/$RS" --jq '{bypass: .bypass_actors, rules: [.rules[] | {type, parameters}]}'
+gh api 'repos/{owner}/{repo}/rulesets' --jq '.[] | [.id, .name, .enforcement] | @tsv'
+# The LIST endpoint answers summaries — no conditions, rules or bypass actors —
+# so each ruleset is read in full to learn which branch it guards.
+for id in $(gh api 'repos/{owner}/{repo}/rulesets' --jq '.[].id'); do
+  gh api "repos/{owner}/{repo}/rulesets/$id" --jq '[.id, .name, (.conditions.ref_name.include | join(","))] | @tsv'
+done
+RS=$(for id in $(gh api 'repos/{owner}/{repo}/rulesets' --jq '.[].id'); do
+       gh api "repos/{owner}/{repo}/rulesets/$id" --jq 'select(.conditions.ref_name.include == ["refs/heads/main"]) | .id'
+     done)
+if [ -n "$RS" ] && [ "$(printf '%s\n' "$RS" | wc -l)" -eq 1 ]; then
+  echo "main ruleset: $RS"
+  gh api "repos/{owner}/{repo}/rulesets/$RS" --jq '{bypass: .bypass_actors, rules: [.rules[] | {type, parameters}]}'
+else
+  echo "STOP: not exactly one ruleset guards refs/heads/main (got: '${RS}')"
+fi
 gh api 'repos/{owner}/{repo}/branches/main/protection' \
   --jq '{strict: .required_status_checks.strict, contexts: .required_status_checks.contexts, enforce_admins: .enforce_admins.enabled, approvals: .required_pull_request_reviews.required_approving_review_count}'
 gh api 'repos/{owner}/{repo}' --jq '{allow_squash_merge, allow_auto_merge, allow_update_branch, delete_branch_on_merge}'
 ```
 
-Expected (measured 2026-09-23): two rulesets, one on `refs/heads/main` and one on `refs/heads/stable`; the main ruleset's ONE rule is `pull_request` with `required_approving_review_count: 1`, and its bypass actors are `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `pull_request` mode; classic protection `strict: false`, the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `enforce_admins: true`, approvals 0; `allow_squash_merge: true`, `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. Save the ruleset before touching it: `gh api "repos/{owner}/{repo}/rulesets/$RS" > ruleset-before.json`. **Stop on any difference you did not make** — somebody else changed the settings, and this runbook was measured against the values above.
+Expected (measured 2026-09-23): two rulesets, one on `refs/heads/main` and one on `refs/heads/stable`; the main ruleset's ONE rule is `pull_request` with `required_approving_review_count: 1`, and its bypass actors are `RepositoryRole` 5 (admin) and `RepositoryRole` 2 (maintain), both `pull_request` mode; classic protection `strict: false`, the four contexts `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, `enforce_admins: true`, approvals 0; `allow_squash_merge: true`, `allow_auto_merge: false`, `allow_update_branch: false`, `delete_branch_on_merge: true`. (Step 4 saves the ruleset before touching it.) **Stop on a `STOP:` line, and on any difference you did not make** — somebody else changed the settings, and this runbook was measured against the values above.
 
-- [ ] **Step 3: Decide R9's bypass set — the one decision this runbook needs from the operator**
+- [ ] **Step 3: R9's bypass set — ruled, not decided here**
 
-R9 (spec §3): "the repository-admin role STAYS the ruleset's only bypass actor". Measured, the main ruleset has TWO bypass actors — admin and maintain. The transform in Step 4 implements R9 as written (admin only). If the maintain role's bypass is to be kept, delete the `bypass_actors:` line from the Step 4 transform, and record that ruling in the programme ledger before applying.
+R9 (spec §3, ruled): the repository-admin role stays the ruleset's ONLY bypass actor. The maintain role's bypass, measured present today, is removed by Step 4's transform (the orchestrator's decision record, 2026-09-24: "the runbook removes it (R9 as ruled)"). Record the removal in the programme ledger with Step 7's results.
 
 - [ ] **Step 4: WRITE — require the queue, approvals to 0 (operator only)**
 
-Either in GitHub's UI (Settings → Rules → Rulesets → the `main` ruleset: under "Require a pull request before merging" set required approvals to 0; enable "Require merge queue" with merge method Squash, build concurrency 1, minimum and maximum group size 1, wait time 0, "only merge non-failing pull requests", status-check timeout 60 minutes; bypass list per Step 3), or from the operator's own shell:
+Either in GitHub's UI (Settings → Rules → Rulesets → the `main` ruleset: under "Require a pull request before merging" set required approvals to 0; enable "Require merge queue" with merge method Squash, build concurrency 1, minimum and maximum group size 1, wait time 0, "only merge non-failing pull requests", status-check timeout 60 minutes; remove the maintain role from the bypass list, per Step 3), or from the operator's own shell, in two blocks — (4a) prepares and shows, and writes nothing to GitHub:
 
 ```bash
-RS=$(gh api 'repos/{owner}/{repo}/rulesets' --jq '.[] | select(.conditions.ref_name.include == ["refs/heads/main"]) | .id')
-gh api "repos/{owner}/{repo}/rulesets/$RS" > ruleset-before.json
-jq '{name, target, enforcement, conditions,
-     bypass_actors: [.bypass_actors[] | select(.actor_type == "RepositoryRole" and .actor_id == 5)],
-     rules: ([.rules[] | select(.type != "merge_queue")
-              | if .type == "pull_request" then .parameters.required_approving_review_count = 0 else . end]
-             + [{type: "merge_queue", parameters: {merge_method: "SQUASH", max_entries_to_build: 1,
-                 min_entries_to_merge: 1, max_entries_to_merge: 1, min_entries_to_merge_wait_minutes: 0,
-                 grouping_strategy: "ALLGREEN", check_response_timeout_minutes: 60}}])}' \
-  ruleset-before.json > ruleset-after.json
-diff <(jq -S . ruleset-before.json) <(jq -S . ruleset-after.json)
-gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-after.json --jq '{id, rules: [.rules[].type], bypass: .bypass_actors}'
+RS=$(for id in $(gh api 'repos/{owner}/{repo}/rulesets' --jq '.[].id'); do
+       gh api "repos/{owner}/{repo}/rulesets/$id" --jq 'select(.conditions.ref_name.include == ["refs/heads/main"]) | .id'
+     done)
+if [ -n "$RS" ] && [ "$(printf '%s\n' "$RS" | wc -l)" -eq 1 ]; then
+  echo "main ruleset: $RS"
+  gh api "repos/{owner}/{repo}/rulesets/$RS" > ruleset-before.json
+  # The writable projection of the SAME body — the diff's left side and the rollback.
+  jq '{name, target, enforcement, conditions, bypass_actors, rules}' ruleset-before.json > ruleset-rollback.json
+  jq '{name, target, enforcement, conditions,
+       bypass_actors: [.bypass_actors[] | select(.actor_type == "RepositoryRole" and .actor_id == 5)],
+       rules: ([.rules[] | select(.type != "merge_queue")
+                | if .type == "pull_request" then .parameters.required_approving_review_count = 0 else . end]
+               + [{type: "merge_queue", parameters: {merge_method: "SQUASH", max_entries_to_build: 1,
+                   min_entries_to_merge: 1, max_entries_to_merge: 1, min_entries_to_merge_wait_minutes: 0,
+                   grouping_strategy: "ALLGREEN", check_response_timeout_minutes: 60}}])}' \
+    ruleset-before.json > ruleset-after.json
+  diff <(jq -S . ruleset-rollback.json) <(jq -S . ruleset-after.json)
+else
+  echo "STOP: not exactly one ruleset guards refs/heads/main (got: '${RS}') — nothing was saved"
+fi
 ```
 
-Expected: the diff shows exactly three changes — the approval count 1 → 0, the `merge_queue` rule added, the maintain bypass removed (or kept, per Step 3) — and the PUT answers the ruleset with `rules: ["pull_request","merge_queue"]`. The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's third command. Keep `ruleset-before.json`: `gh api -X PUT … --input ruleset-before.json` (after stripping its read-only keys the same way) is the rollback.
+Expected: `main ruleset: <id>`, and the diff shows exactly three changes — the maintain bypass actor (`actor_id: 2`) removed, the approval count 1 → 0, the `merge_queue` rule added. Both sides are the same six keys, so no read-only key (`id`, `source`, `node_id`, `_links`, `created_at`, `updated_at`, `current_user_can_bypass`) appears in it. (Measured offline at review: this transform and this diff, run against the main ruleset's body as read on 2026-09-23, print exactly those three hunks.) **Stop on a `STOP:` line or on any other difference.** Then (4b), the WRITE — in the same shell, so `RS` is the one (4a) printed:
+
+```bash
+[ "$(jq -r .id ruleset-before.json)" = "$RS" ] \
+  && gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-after.json --jq '{id, rules: [.rules[].type], bypass: .bypass_actors}'
+```
+
+Expected: the ruleset, with `rules: ["pull_request","merge_queue"]` and one bypass actor (`RepositoryRole` 5). No output at all means the saved `ruleset-before.json` is not the ruleset `RS` names (or `RS` is empty), so nothing was written — re-run (4a). The `merge_queue` parameter names are GitHub's REST ruleset schema; they were NOT exercised while planning (no write was made). If the PUT refuses a parameter, use the UI and re-read with Step 2's per-ruleset read. Keep `ruleset-rollback.json`: `gh api -X PUT "repos/{owner}/{repo}/rulesets/$RS" --input ruleset-rollback.json` is the rollback, and restores the ruleset exactly as it was, maintain bypass included.
 
 - [ ] **Step 5: THE PROOF RUN — spec §5.2 rollout step 3, stage 2's own gate**
 
@@ -2285,7 +2542,20 @@ for l in sys.stdin:
         v = json.loads(l); print(v.get("id"), v.get("number"), v.get("phase"), v.get("queue"), v.get("queueAt"))'
 ```
 
-Expected: while waiting, the three workspaces read `open … queued <time>`; after each lands, `merged … landed`.
+Expected: while waiting, the three workspaces read `open … queued <time>`; after each lands, `merged … landed`. **If a queue-merged PR reads `merged … none` instead of `landed`**, GitHub records a removal on a SUCCESSFUL merge, so the last queue act of a landed PR is a removal: record it with (a2)'s read and report it — `landed` is then unreachable, and wave 2b's plan must account for it (stop rule 6).
+
+(a2) **Does a successful queue merge leave a trailing removal?** — the orchestrator's accepted decision: the proof run measures it. For each of the three landed PRs, read-only:
+
+```bash
+gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f query='
+  query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) {
+    state timelineItems(first: 20, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+      nodes { __typename ... on AddedToMergeQueueEvent { createdAt } ... on RemovedFromMergeQueueEvent { createdAt } } } } } }' \
+  --jq '.data.repository.pullRequest | [.state, (.timelineItems.nodes | map(.__typename + "@" + .createdAt) | join(" "))] | @tsv'
+~/.local/bin/ccrc-api feed list --limit 20
+```
+
+Expected: `MERGED`, and the LAST node an `AddedToMergeQueueEvent`; and NO `queue` event in the feed names any of the three workspaces. A trailing `RemovedFromMergeQueueEvent`, or a `queue` event for a PR that landed (a sweep read the removal in the moment before the state flipped to MERGED), is stop rule 6.
 
 (b) **One push, one CI push run and one prerelease PER MERGE:**
 
@@ -2325,7 +2595,7 @@ Expected: `merged <its PR number> None` for all three — never `unknown merge-u
 ~/.local/bin/ccrc-api feed list --limit 10
 ```
 
-Expected: one `queue` event titled `⤺ dequeued › <workspace>`; and, if that workspace belongs to an open run, its coordinator received a `status` mail `dequeued:#<n>`. Close the fourth PR afterwards.
+Expected: one `queue` event titled `⤺ dequeued › <workspace>`, its body naming `(removed <time>)`; and, if that workspace belongs to an open run, its coordinator received a `status` mail `dequeued:#<n>@<time>`; and still NO `queue` event names any of the three PRs that landed in (a)–(b) — one that does is a spurious dequeue (stop rule 6). Close the fourth PR afterwards.
 
 (f) **A worker cannot merge** — in a session whose workspace hold names a programme wave (a live worker's, or a scratch workspace held with `POST /api/sessions/:id/hold` and a `program:<slug> wave:1/1` reason, released afterwards), ask the session to run `gh pr merge <any closed PR number>`. Expected: the tool call is refused with `ccrc: this workspace's hold reads …`.
 
@@ -2335,13 +2605,14 @@ Stop, report to the coordinator, and do NOT plan or dispatch wave 2b if any of t
 
 1. **A single push to `main` carried more than one commit** (b), or a merge sha has no tag: the group settings did not take. Keep group size and build concurrency at 1 and re-run the proof; if they ARE 1, `release-main.sh` must tag every commit in the pushed range before the queue is used (spec §5.2 step 3) — a new wave.
 2. **`is_ours` failed to bind** after a queue merge (d): a finding against `pr-state`; the queue stays on only if the operator rules so.
-3. **A `merge_group` run failed for a reason that is not the PR's own** (c) — e.g. a guard that needs a base the queue checkout does not have. Roll back: re-apply `ruleset-before.json` (queue off, approvals 1). Landing returns to `--admin` exactly as before this runbook, because the every-session `--admin` deny (wave 2b) is not live.
+3. **A `merge_group` run failed for a reason that is not the PR's own** (c) — e.g. a guard that needs a base the queue checkout does not have. Roll back: re-apply `ruleset-rollback.json` (queue off, approvals 1, maintain bypass back). Landing returns to `--admin` exactly as before this runbook, because the every-session `--admin` deny (wave 2b) is not live.
 4. **`gh pr merge <n>` (no `--admin`) was refused as needing an approval**: Step 4 did not take; re-read with Step 2.
 5. **An entry sat queued past the status-check timeout**: the required contexts are not reporting on `merge_group`; roll back as in 3.
+6. **A successful queue merge leaves a trailing removal** ((a) reads `merged … none`, or (a2)'s last node is a `RemovedFromMergeQueueEvent`), **or a `queue` event names a PR that landed** ((a2), (e)). `landed` is then unreachable, and the dequeue lane can announce a removal for a PR that merged: the lane must not announce until it has seen the removal on two consecutive sweeps with the PR still OPEN — a fix wave before 2b, with the (a2) readings as its evidence. The queue may stay on (nothing is merged wrongly; the cost is a false notice), if the operator rules so.
 
 - [ ] **Step 7: Record the result**
 
-The coordinator writes the proof run's measured answers — (a) through (f), with the run ids, shas, tags and times — into `docs/superpowers/programs/landing-order.md` under "Decisions & deviations", on its own ledger PR (coordinator clause 15), and the wave-2 row's state. Wave 2b is planned only on a clean proof; it is the deny on `--admin` in every fleet session and on a `gh api` call to the pulls merge endpoint.
+The coordinator writes the proof run's measured answers — (a), (a2) and (b) through (f), with the run ids, shas, tags and times, and Step 3's bypass removal — into `docs/superpowers/programs/landing-order.md` under "Decisions & deviations", on its own ledger PR (coordinator clause 15), and the wave-2 row's state. Wave 2b is planned only on a clean proof; it is the deny on `--admin` in every fleet session and on a `gh api` call to the pulls merge endpoint.
 
 ---
 
@@ -2357,8 +2628,8 @@ The pre-flight findings above are not deviations: they were measured before this
 
 ## Review lenses
 
-Three lenses for this wave, all `opus`, effort `high` — a nineteen-file diff (the File Structure table: eleven shipped files and eight test files), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, so lens 2 reads it as security-sensitive.
+Three lenses for this wave, all `opus`, effort `high` — a twenty-file diff (the File Structure table: eleven shipped files and nine test files), sized per the fleet policy (3–5 reviewers for a 4-file PR; three concerns cover this diff because most of it is tests each lens reads against its own concern), one `sonnet` refute pass per finding. The hook is the gate R5 leans on, so lens 2 reads it as security-sensitive.
 
-1. **The queue read and its wire (opus, high).** `_gh_pr_queue` sends one constant document with `-f` variables only, under `PR_GH_QUEUE_TIMEOUT`, and only in `--project`; the stamp buffers and falls back to the unstamped lines on its own failure, never costs a row, phase or `checks`, and says `unmeasured` — never `none` — for a read that did not happen; the five words are derived the way the spec's §5.2 intends, with the last act of either kind; `queueAt` is shape-gated before it reaches a latch key; `queueFor` is the ONE reader and keeps `absent` apart from `unmeasured`; the budget test sums THREE timeouts and the 25 s bound is argued; the server-first deploy order matches `CLAUDE.md`'s reader-widening rule; no `FLEET_PROTO` bump, no `PrState` change.
-2. **The worker merge deny and the dequeue lane's authority (opus, high, security-sensitive).** The deny fires at every command head the regex claims and on no mention (the pass list); a hold is a wave only if whole (≤ `CCRC_HOLD_MAX`) and matching `CCRC_HOLD_WAVE_RE` — the card's own reader, bound and grammar, spelled once; a deny replaces advice and never the graph gate's counted deny; exit 0 and a silent stderr on every path; what it does NOT stop is stated in its header (quoted strings; `--admin` and `gh api` for non-workers are wave 2b's). The dequeue lane enqueues, merges and re-runs nothing; it mails only a coordinator an open run names, never `resolveCoordinator(null)`'s guess; its mail body carries no GitHub-sourced string.
-3. **CI shape, guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason (H2's `set -u` crash is the counter-example the plan already fixed; H8 is measured on the wave-1 tree); `ci-merge-queue.test.ts` derives the macOS set from `runs-on` and forbids `merge_group` on every other job; the concurrency groups cannot drop a queue run; the CI test selection overlap is handled by merging shapes; the census stayed `147 / 195 / 53 / 35` with the hook-aware instrument, `shared/api.ts` changed in place, README untouched; Task 7's commands are read-only except the two marked writes, name no owner, and its stop rules cover every proof-run failure the spec names.
+1. **The queue read and its wire (opus, high).** `_gh_pr_queue` sends one constant document with `-f` variables only, under `PR_GH_QUEUE_TIMEOUT`, and only in `--project`, its open window the newest hundred in `gh pr list`'s own order; the stamp buffers and falls back to the unstamped lines on its own failure, never costs a row, phase or `checks`, and says `unmeasured` — never `none` — for a read that did not happen; the five words are derived the way the spec's §5.2 intends, with the last act of either kind; `queueAt` is shape-gated before it reaches a latch key; `queueFor` is the ONE reader and keeps `absent` apart from `unmeasured`; the budget test sums THREE timeouts and the 25 s bound is argued; the server-first deploy order matches `CLAUDE.md`'s reader-widening rule; no `FLEET_PROTO` bump, no `PrState` change.
+2. **The worker merge deny and the dequeue lane's authority (opus, high, security-sensitive).** The deny fires at every command head the regex claims and on no quoted mention (the pass list), and its header states what it cannot parse and its one known false deny; a hold is a wave only if whole (≤ `CCRC_HOLD_MAX`) and matching `CCRC_HOLD_WAVE_RE` — the card's own reader, bound and grammar, spelled once; a deny replaces advice and never the graph gate's counted deny; exit 0 and a silent stderr on every path; what it does NOT stop is stated in its header (quoted strings; `--admin` and `gh api` for non-workers are wave 2b's). The dequeue lane enqueues, merges and re-runs nothing; it mails only a coordinator an open run names, never `resolveCoordinator(null)`'s guess; its mail body carries no GitHub-sourced string; it latches only what it told (an unreadable run read defers, a thrown mail retries) and a restart repeats nothing (the two durable reads).
+3. **CI shape, guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason (H2's `set -u` crash is the counter-example the plan already fixed; H8 is measured on the wave-1 tree); `ci-merge-queue.test.ts` derives the macOS set from `runs-on` and forbids `merge_group` on every other job; the concurrency groups cannot drop a queue run; the CI test selection overlap is handled by merging shapes; the census stayed `147 / 195 / 53 / 35` with the hook-aware instrument, `shared/api.ts` changed in place, README untouched; Task 7's commands are read-only except the marked writes, name no owner, find the main ruleset through the per-ruleset read (the list endpoint carries no conditions), check the fleet with `--to` the dev tag, read main's REQUIRED jobs rather than the run's conclusion, and its stop rules cover every proof-run failure the spec names plus the trailing-removal question.
