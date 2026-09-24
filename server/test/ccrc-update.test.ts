@@ -46,6 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { UPDATE_PHASES } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2559,11 +2560,11 @@ const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'fro
 const REPORT_TIME = /^\d{10}$/;
 
 describe('ccrc update: update.json at every phase, and --from (design §10)', () => {
-  // Spec §6's UpdatePhase minus `unknown` — which is the READER's word for a
-  // token outside the vocabulary and which no writer ever writes. Task 15
-  // swaps this literal for W2's `UPDATE_PHASES` once W2 has merged.
-  const WRITTEN_PHASES = ['queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
-    'restarting', 'checking', 'restoring', 'done', 'reverted', 'failed'];
+  // W2's L0 array, not a hand copy of spec §6 (W4a Task 15): the phases this
+  // writer must produce are the ones the console's reader knows, by
+  // construction. `unknown` is the READER's word for a report it cannot
+  // parse; no writer ever writes it.
+  const WRITTEN_PHASES = UPDATE_PHASES.filter((p) => p !== 'unknown');
   // `queued` is written only by `--detach`, which macOS refuses (decision 17),
   // so on Darwin it can never be written. Kept apart from PENDING because Task 6
   // deletes PENDING, and this set must outlive it.
