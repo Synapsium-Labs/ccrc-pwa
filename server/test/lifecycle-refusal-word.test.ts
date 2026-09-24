@@ -88,3 +88,26 @@ describe('lcRefusalWord — null is a POSITIVE answer, not a failure', () => {
     // caller's and the null is how L0 says "not mine".
   });
 });
+
+describe('ws-reclaim’s failure words claim only what is true at EVERY site that emits them (child reclamation, wave 3)', () => {
+  // `pin-failed` and `unit-still-active` ride the fresh arm, the vanished arm
+  // (no worktree at all) and every resumed arm (an earlier attempt may have
+  // removed the worktree or the branch), so neither may promise either is
+  // intact — only that nothing FURTHER was deleted.
+  it.each(['pin-failed', 'unit-still-active'] as const)('%s says nothing further went, and never that anything is intact', (t) => {
+    expect(LC_REFUSAL_WORD[t]).not.toMatch(/intact/);
+    expect(LC_REFUSAL_WORD[t]).toMatch(/anything further/);
+  });
+
+  // Three reap words that ws-reclaim's tail also emits, each widened to be
+  // true of every site: a removal refused because a tree (or a checkout inside
+  // it) could not be PROVEN the workspace's own, not only because git refused;
+  // a branch kept because the record names no commit to delete it at, not only
+  // because it moved; a cleanup record that could not be READ, not only one
+  // that could not be written.
+  it('the three reused reap words name the reclaim tail’s causes too', () => {
+    expect(SENTENCES['worktree-remove-failed']).toMatch(/could not prove that the tree at that path — or a checkout inside it — is this workspace’s own/);
+    expect(SENTENCES['branch-moved']).toMatch(/names no commit to delete it at/);
+    expect(SENTENCES['tombstone-unwritable']).toMatch(/write, update or read/);
+  });
+});

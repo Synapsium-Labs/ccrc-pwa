@@ -169,6 +169,10 @@ describe('every literal refusal argument ccd carries is a token L0 or wsaudit al
     const found = new Set<string>();
     for (const m of src.matchAll(/_lc_refuse\s+[a-z-]+\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     for (const m of src.matchAll(/_lc_fail\s+[a-z-]+\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
+    // `_ws_reclaim_fail id lctx <token> detail` (child reclamation, wave 3) is
+    // `_lc_fail reclaim` with its stdout document written from the same detail:
+    // its third argument IS the journal token, so it is a literal position too.
+    for (const m of src.matchAll(/_ws_reclaim_fail\s+"[^"]*"\s+"[^"]*"\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     for (const m of src.matchAll(/_lc_emit\s+[a-z-]+\s+refused\s+"[^"]*"\s+""\s+verb\s+[a-z-]+\s+refusal\s+([a-z][a-z0-9-]*)/g)) found.add(m[1]!);
     expect(found.size, 'the scan found almost no tokens — it is vacuous').toBeGreaterThanOrEqual(14);
     expect([...found].filter((t) => !known.has(t)).sort(), 'tokens no vocabulary owns').toEqual([]);

@@ -7640,17 +7640,21 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   'purge-mechanism-absent':
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
   // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
-  // attic pins — failed, so the verb stopped BEFORE its first deletion. Only
-  // ever rides `_lc_fail`: the act started (a WIP commit may already exist,
-  // which destroys nothing), and a retry pins again.
+  // attic pins, or the settle's re-pin once the session is stopped — failed, so
+  // the verb stopped BEFORE its next deletion. Only ever rides `_lc_fail`: the
+  // act started (a WIP commit may already exist, which destroys nothing), and a
+  // retry pins again. The sentence claims nothing about the worktree or the
+  // branch: on the vanished arm there is no worktree, and on a resumed act an
+  // earlier attempt may already have removed either.
   'pin-failed':
-    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting any of it. The worktree and the branch are intact, and reclamation tries again.',
+    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting anything further. Reclamation tries again.',
   // Child reclamation, wave 3. The tail disabled the child's unit, then asked
   // the service manager, and it did not answer "stopped" — a Restart=always
   // unit left up would respawn against a workspace with no row. Only ever
-  // rides `_lc_fail`; the breadcrumb stays and a retry disables it again.
+  // rides `_lc_fail`; the breadcrumb stays and a retry disables it again. As
+  // above, it claims only what is true on every arm: nothing FURTHER went.
   'unit-still-active':
-    'ccrc could not confirm this session’s service had stopped, so it stopped before deleting anything. The worktree and the branch are intact, and reclamation tries again.',
+    'ccrc could not confirm this session’s service had stopped, so it stopped before deleting anything further. Reclamation tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

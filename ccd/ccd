@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a051101f8fd4ca2d9b4eeddc1d69d07acceb337e94a29c4d3042034a0dc44955
+# ccrc:generated 1 sha256=54d764bceb7b2034039c598d42bd873b7d2d48d6119694b4df1bf5a2f4a6d783
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,8 +2885,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 168
-# invocations across 140 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 170
+# invocations across 141 non-comment lines.
 #
 # THE LAST MOVE WAS the RECLAIM region's reads (CCR-15 wave 3, Task 4);
 # before it `_child_tmpdir`'s `.child` read and CCR-10's archive check.
@@ -24291,7 +24291,7 @@ _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclai
 }
 
 _ws_tombstone_patch() {   # id json-object -> merges its keys into the EXISTING tombstone and rewrites it
-  #                          atomically; `secretsDropped` is UNIONED, every other key replaced. rc 1 when
+  #                          atomically; `secretsDropped`/`keptBranches` are UNIONED, the rest replaced; rc 1 when
   #                          the tombstone is missing or could not be rewritten.
   # `_ws_tombstone_reclip`'s shape, widened: the settle re-pin moves `tip` and
   # `wip`, and the residue probe fills `residueBytes`, both after the tombstone
@@ -24307,7 +24307,7 @@ patch = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 with open(path, "r", encoding="utf-8") as fh:
     doc = json.load(fh)
 for k, v in patch.items():
-    if k == "secretsDropped" and isinstance(doc.get(k), list) and isinstance(v, list):
+    if k in ("secretsDropped", "keptBranches") and isinstance(doc.get(k), list) and isinstance(v, list):
         doc[k] = sorted(set(doc[k]) | set(v))
     else:
         doc[k] = v
@@ -24403,35 +24403,131 @@ _ws_reclaim_children_merge() {   # recorded settled -> the nested-checkout lines
   printf '%s' "$out"
 }
 
+_ws_reclaim_fail() {   # id lctx token detail [k v]... -> journals a post-start failure and prints its
+  #                         document, both from ONE detail; always rc 1
+  # ONE STRING, TWO READERS. A failure after the act started is written twice —
+  # the journal row (`_lc_fail`, read by the mirror) and the `"failed"` document
+  # on stdout (read by the server) — and two spellings of one detail drift: they
+  # already had. So both are written from the one `$4` here.
+  local id="$1" lctx="$2" tok="$3" msg="$4"; shift 4
+  _lc_fail reclaim "$id" "$lctx" "$tok" "$msg" verb ws-reclaim "$@"
+  _ws_reclaim_failed_json "$tok" "$msg"
+  return 1
+}
+
+_WS_OWNED_WHY=''
+_ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still provably the child's own;
+  #                          1 (_WS_OWNED_WHY) when it is not, or when that could not be asked
+  # THE LADDER'S IDENTITY RUNGS, RE-ASKED AT REMOVAL TIME (spec §5.5, rung 9
+  # asked of the path), on the fresh arm AND every resumed one: the resumed arm
+  # has no ladder in front of it, and on every arm the tree stands until the
+  # tail removes it. One plain absolute spelling (a trailing `/` makes `-L`
+  # follow the link it asks about); a LEAF that is not a link (a symlinked
+  # ancestor stays legal); git's record of it, read from $main — a list that
+  # could not be read asked nothing, and a tree that stands with no record is
+  # not one of $main's worktrees; not the MAIN checkout, asked twice (git's
+  # first stanza, and the resolved path against $main's); and no OTHER registry
+  # row naming it, literally or resolved — an unlistable registry asked nothing.
+  local id="$1" wd="$2" main="$3" rc
+  _WS_OWNED_WHY=''
+  _ws_reclaim_plain_path "$wd" \
+    || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
+  [[ ! -L "$wd" ]] || { _WS_OWNED_WHY="$wd is a symbolic link — ccd never follows a link to a tree it would pin or remove"; return 1; }
+  [[ ! -e "$wd" || -d "$wd" ]] || { _WS_OWNED_WHY="something that is not a directory stands at $wd"; return 1; }
+  _ws_reclaim_record "$main" "$wd"; rc=$?
+  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 1; }
+  [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 1; }
+  (( ! RECLAIM_REC_MAIN )) || { _WS_OWNED_WHY="$wd is $main's main checkout"; return 1; }
+  [[ "$(_ws_realpath "$wd")" != "$(_ws_realpath "$main")" ]] || { _WS_OWNED_WHY="$wd is the project directory $main itself"; return 1; }
+  _ws_reclaim_workdir_shared "$id" "$wd" \
+    || { _WS_OWNED_WHY="could not ask whether another registry row names $wd: $_WS_SHARED_WHY"; return 1; }
+  [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
+  return 0
+}
+
+_WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''
+_ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie inside the resolved tree wdreal
+  #                                  (_WS_NPROOF_GONE=1: it no longer exists); 1 (_WS_NPROOF_WHY) when not
+  # CONTAINMENT IS PROVEN AT REMOVAL TIME, NOT READ OFF A STRING (spec §5.5,
+  # rung 9). A recorded nested path that merely STARTS with the child's
+  # resolved path proves nothing: a directory between the two swapped for a
+  # link sends the path — and `git worktree remove --force` on it — into
+  # ANOTHER worktree (measured: its uncommitted work was deleted unpinned). So:
+  # one plain absolute spelling strictly below the root; EVERY component from
+  # the root down to the leaf asked in turn — none a link, each a directory —
+  # until one is simply absent (a checkout already gone, which has nothing left
+  # on disk to remove); and a checkout that stands must resolve (`pwd -P`) to
+  # exactly the recorded path.
+  local root="$1" p="$2" rest cur seg real
+  _WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''
+  [[ -n "$root" ]] || { _WS_NPROOF_WHY="the child's own tree could not be resolved, so no checkout inside it can be proven to be there"; return 1; }
+  { _ws_reclaim_plain_path "$p" && [[ "$p" == "$root"/?* ]]; } \
+    || { _WS_NPROOF_WHY="the record names $p, which is not one plain path strictly inside $root"; return 1; }
+  rest="${p#"$root"/}"; cur="$root"
+  while [[ -n "$rest" ]]; do
+    seg="${rest%%/*}"; cur="$cur/$seg"
+    if [[ "$rest" == */* ]]; then rest="${rest#*/}"; else rest=""; fi
+    [[ ! -L "$cur" ]] || { _WS_NPROOF_WHY="$cur is a symbolic link — ccd never follows a link to a tree it would remove"; return 1; }
+    [[ -e "$cur" ]] || { _WS_NPROOF_GONE=1; return 0; }
+    [[ -d "$cur" ]] || { _WS_NPROOF_WHY="$cur is not a directory"; return 1; }
+  done
+  real=$(cd -- "$p" >/dev/null 2>&1 && pwd -P) || { _WS_NPROOF_WHY="could not resolve $p"; return 1; }
+  [[ "$real" == "$p" ]] || { _WS_NPROOF_WHY="$p resolves to $real, not to itself"; return 1; }
+  return 0
+}
+
+_WS_NREC_BRANCH=''
+_ws_reclaim_nested_record() {   # main cpath -> rc 0 with _WS_NREC_BRANCH ('' = detached) when one of $main's
+  #                                  worktree records names exactly cpath; 1 when none does; 2 when the list
+  #                                  could not be READ
+  # MATCHED BY THE RECORD'S OWN PATH, LITERALLY — never by resolving the nested
+  # path: resolving it is what let a link inside the child's tree resolve to
+  # ANOTHER worktree's record and have git remove that tree. git records the
+  # RESOLVED path of a worktree added through a symlinked ancestor (measured,
+  # git 2.43), and cpath is resolved too (`_ws_nested_checkouts`, then proven by
+  # `_ws_reclaim_nested_proven` to resolve to itself), so the two spellings
+  # meet. A record some other git wrote unresolved does not match: the tail
+  # then stops, which is the safe direction.
+  local main="$1" p="$2" listing line m=0 hit=0
+  _WS_NREC_BRANCH=''
+  listing=$(git -C "$main" worktree list --porcelain 2>/dev/null) || return 2
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) m=0; [[ "${line#worktree }" == "$p" ]] && { m=1; hit=1; _WS_NREC_BRANCH=''; } ;;
+      "branch "*)   (( m )) && _WS_NREC_BRANCH="${line#branch refs/heads/}" ;;
+    esac
+  done <<< "$listing"
+  (( hit )) || return 1
+  return 0
+}
+
+_ws_reclaim_kept_read() {   # tombstone -> the nested branches a reclaim KEPT (`keptBranches`), '; '-joined
+  [[ -s "$1" ]] || return 1
+  LC_ALL=C.UTF-8 python3 -c '
+import json, sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    doc = json.load(fh)
+v = doc.get("keptBranches") or []
+sys.stdout.write("; ".join(x for x in v if isinstance(x, str)))
+' "$1" 2>/dev/null
+}
+
 _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|'') — the journalled
   #                        destructive sequence for a CHILD. Its OWN arm (spec §5.6), never
   #                        `_ws_reap_tail`: that tail refuses `not-archived` (a child never is) and
   #                        skips unsupervise and the pane kill on resume (safe there only because
   #                        `ws-archive` did both first — nothing did for a child).
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
-  local project workdir main tomb branch tip wip attic residue wtout stamp unitstate rec
-  local childlines recorded merged cj first cline cpath crest cbr chead holders wdreal tdir troot cdir croot
-  project=$(_reg_get "$id" project); workdir=$(_reg_get "$id" workdir)
-  main="$PROJECTS_ROOT/$project"
+  local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec
+  local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
+  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
-    *)
-      _lc_fail reclaim "$id" "$lctx" reaping-phase-unknown \
-        "breadcrumb phase 'reclaim:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran" verb ws-reclaim
-      _ws_reclaim_failed_json reaping-phase-unknown "breadcrumb phase 'reclaim:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
-      return 1 ;;
+    *) _ws_reclaim_fail "$id" "$lctx" reaping-phase-unknown \
+         "breadcrumb phase 'reclaim:$phase' for $id is not one ccd ever writes — refusing to guess which steps already ran"
+       return 1 ;;
   esac
-  # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
-  # resumed alike: the fresh arm wrote it a moment ago, the resumed arm finds it.
-  branch=$(_ws_tomb_str "$tomb" branch) || branch=""
-  tip=$(_ws_tomb_str "$tomb" tip) || tip=""
-  wip=$(_ws_tomb_str "$tomb" wip) || wip=""
-  if [[ -z "$branch" ]]; then
-    _lc_fail reclaim "$id" "$lctx" tombstone-unwritable "could not read the tombstone at $tomb — refusing to delete anything it does not describe" verb ws-reclaim
-    _ws_reclaim_failed_json tombstone-unwritable "could not read the tombstone at $tomb — refusing to delete anything it does not describe"
-    return 1
-  fi
   # (1) UNSUPERVISE AND KILL THE PANE — FIRST, UNCONDITIONALLY, on the fresh arm
   # AND on every resumed one (spec §5.6), whatever phase the tail enters at —
   # the vanished-worktree arm, entering at the branch, included: a session whose
@@ -24443,6 +24539,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # The stamp is the declared surface when one arrived and `ccd` otherwise; the
   # DECLARATION is passed only when one arrived (`none` is the journal's word
   # for "nothing was declared", never a surface `_ws_unsupervise` may record).
+  # Nothing here reads the record or the row, so no failure below can skip it.
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
@@ -24458,23 +24555,42 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   unitstate=$(_svc_is_active "claude-session@$id")
   case "$unitstate" in
     inactive|failed) : ;;
-    *)
-      _lc_fail reclaim "$id" "$lctx" unit-still-active \
-        "claude-session@$id answered '${unitstate:-no answer}' after it was disabled — nothing was deleted, and the next attempt disables it again" verb ws-reclaim
-      _ws_reclaim_failed_json unit-still-active "claude-session@$id answered '${unitstate:-no answer}' after it was disabled — nothing was deleted"
-      return 1 ;;
+    *) _ws_reclaim_fail "$id" "$lctx" unit-still-active \
+         "claude-session@$id answered '${unitstate:-no answer}' after it was disabled — nothing further was deleted, and the next attempt disables it again"
+       return 1 ;;
   esac
-  # THE ROW THIS TAIL RE-READ IS HELD TO THE LADDER'S SPELLING (spec §5.5, rung
-  # 9 asked of the path). The resumed arm has no ladder in front of it, and
-  # every leaf test below reads the path AS WRITTEN: `lstat("<link>/")` follows
-  # the link, so a trailing `/` would walk a dangling link past the
-  # removal-time `-L` test and read it as a worktree that is gone. One plain
-  # absolute spelling (`_ws_reclaim_plain_path`, the ladder's and the pin's own
-  # predicate) and a project, or nothing past this line runs.
-  if [[ -z "$project" ]] || ! _ws_reclaim_plain_path "$workdir"; then
-    _lc_fail reclaim "$id" "$lctx" worktree-remove-failed \
-      "the registry now names project '$project' and workdir '$workdir' for $id — not a project and one plain absolute path, so nothing further was deleted" verb ws-reclaim
-    _ws_reclaim_failed_json worktree-remove-failed "the registry now names project '$project' and workdir '$workdir' for $id — not a project and one plain absolute path, so nothing further was deleted"
+  # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
+  # resumed alike: the fresh arm wrote it a moment ago, the resumed arm finds
+  # it. The PROJECT, the WORKDIR and the BRANCH come from it — never from the
+  # registry, which is a file on disk a resume re-reads after an arbitrary gap
+  # (spec §5.6, "a crash may not launder a refusal"). The record must be
+  # readable and must say whose it is (its `id`, and the `uuid` the registry
+  # minted for this session); an unreadable one measured nothing.
+  if ! tid=$(_ws_tomb_str "$tomb" id) || ! tuuid=$(_ws_tomb_str "$tomb" uuid) \
+     || ! project=$(_ws_tomb_str "$tomb" project) || ! workdir=$(_ws_tomb_str "$tomb" workdir) \
+     || ! branch=$(_ws_tomb_str "$tomb" branch) || ! tregbranch=$(_ws_tomb_str "$tomb" registryBranch) \
+     || ! tip=$(_ws_tomb_str "$tomb" tip) || ! wip=$(_ws_tomb_str "$tomb" wip) \
+     || [[ "$tid" != "$id" || -z "$tuuid" || -z "$project" || -z "$workdir" || -z "$branch" ]]; then
+    _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable \
+      "the record at $tomb could not be read, or does not name $id's project, workdir, branch and uuid — refusing to delete anything it does not describe"
+    return 1
+  fi
+  main="$PROJECTS_ROOT/$project"
+  # THE ROW AND THE RECORD MUST AGREE. The registry row is what every other
+  # verb reads; a row whose project, workdir, uuid or branch no longer says
+  # what the record says is no longer provably this act's child (a re-pointed
+  # `.workdir` would hand the tail ANOTHER session's tree — measured).
+  regproject=$(_reg_get "$id" project); regworkdir=$(_reg_get "$id" workdir)
+  reguuid=$(_reg_get "$id" uuid); regbranch=$(_reg_get "$id" branch)
+  if [[ "$regproject" != "$project" || "$regworkdir" != "$workdir" || "$reguuid" != "$tuuid" \
+        || ( -n "$tregbranch" && "$regbranch" != "$tregbranch" ) ]]; then
+    _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+      "the registry row of $id (project '$regproject', workdir '$regworkdir', branch '$regbranch') and the record its pin wrote (project '$project', workdir '$workdir', branch '$tregbranch') disagree — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
+    return 1
+  fi
+  if ! _ws_reclaim_owned "$id" "$workdir" "$main"; then
+    _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+      "$_WS_OWNED_WHY — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
     return 1
   fi
   # (2) THE SETTLE: the session is dead now, so anything it wrote between the
@@ -24482,14 +24598,10 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # workdir fails here, in the pin's own leaf test, before any commit.
   if [[ ( "$phase" == children || "$phase" == worktree ) && -d "$workdir" ]]; then
     if ! _ws_reclaim_pin "$id" "$workdir" "$main" "$branch" "$childof"; then
-      _lc_fail reclaim "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY" verb ws-reclaim
-      _ws_reclaim_failed_json pin-failed "$RECLAIM_PIN_WHY"
-      return 1
+      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"; return 1
     fi
     recorded=$(_ws_tomb_children "$tomb") || {
-      _lc_fail reclaim "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb" verb ws-reclaim
-      _ws_reclaim_failed_json tombstone-unwritable "could not read the nested checkouts from $tomb"
-      return 1
+      _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
     }
     merged=$(_ws_reclaim_children_merge "$recorded" "$REAP_CHILDLINES")
     if [[ -n "$RECLAIM_WIP" || "$REAP_TIP" != "$tip" || "$merged" != "$recorded" ]]; then
@@ -24504,100 +24616,107 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       if ! _ws_tombstone_patch "$id" "$(printf '{"tip":%s,"wip":%s,"secretsDropped":%s,"children":%s}' \
              "$(_json_str "$tip")" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
              "$(_ws_reclaim_secrets_json)" "$cj")"; then
-        _lc_fail reclaim "$id" "$lctx" tombstone-unwritable "could not record the settle's pins in $tomb — refusing to delete what the record does not name" verb ws-reclaim
-        _ws_reclaim_failed_json tombstone-unwritable "could not record the settle's pins in $tomb — refusing to delete what the record does not name"
+        _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable \
+          "could not record the settle's pins in $tomb — refusing to delete what the record does not name"
         return 1
       fi
     fi
   fi
-  # (3) Registered nested children of THIS repository, innermost first — each
-  # re-proven inside the child's own tree, never trusted off the record alone.
-  # EACH LINE'S HEAD IS WHAT ITS BRANCH IS DELETED AT, so a line that does not
-  # name one (empty, or not a commit id) stops the tail before that checkout is
-  # touched: an empty value handed to `update-ref -d` is not a compare. The
-  # checkout's LEAF is never followed — git's record is matched by the resolved
-  # path as well as the literal one (`_ws_reclaim_record`, so a symlinked
-  # ancestor cannot hide it), and a link swapped in at that path would resolve
-  # to ANOTHER worktree's record and remove that tree. A checkout already gone
-  # from disk has only its record cleared (no force flag, exactly as step (5)
-  # clears the child's own), or git's stale record would hold its branch.
+  # (3) Registered nested children of THIS repository, innermost first. EACH
+  # IS PROVEN BEFORE IT IS TOUCHED, AT THIS INSTANT (spec §5.5, rung 9):
+  # `_ws_reclaim_nested_proven` walks every component from the child's
+  # resolved tree down to it — no link, each a directory — and a checkout that
+  # stands must resolve to exactly its recorded path and carry git's own record
+  # of it (`_ws_reclaim_nested_record`, the record's own path, literally) on
+  # the branch the record says. EACH LINE'S HEAD IS WHAT ITS BRANCH IS DELETED
+  # AT, so a line that does not name one (empty, or not a commit id) stops the
+  # tail before that checkout is touched: an empty value handed to `update-ref
+  # -d` is no compare at all (measured, git 2.43: rc 0, the branch deleted). A
+  # checkout already gone from disk has only its record cleared (no force flag,
+  # exactly as step (5) clears the child's own). A nested branch another
+  # checkout still holds — or whose holders could not be listed — is KEPT, and
+  # recorded as kept (`keptBranches` in the record, and the done row), never
+  # kept in silence.
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
-      _lc_fail reclaim "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb" verb ws-reclaim
-      _ws_reclaim_failed_json tombstone-unwritable "could not read the nested checkouts from $tomb"
-      return 1
+      _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
     }
     wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || wdreal=""
     while IFS= read -r -u 9 cline; do
       [[ -n "$cline" ]] || continue
       cpath="${cline%%$'\t'*}"; crest="${cline#*$'\t'}"
       cbr="${crest%%$'\t'*}"; chead="${crest#*$'\t'}"; chead="${chead%%$'\t'*}"
-      [[ -n "$wdreal" && "$cpath" == "$wdreal"/* ]] || continue
+      if ! _ws_reclaim_nested_proven "$wdreal" "$cpath"; then
+        _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+          "$_WS_NPROOF_WHY — ccd cannot prove the checkout at $cpath is inside $id's own tree, so nothing further was deleted"
+        return 1
+      fi
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
          && ! [[ "$chead" =~ ^[0-9a-f]{40}$ ]]; then
-        _lc_fail reclaim "$id" "$lctx" branch-moved "the record names no commit for $cbr (the checkout at $cpath) — a branch is never deleted at an unknown head, so nothing further was deleted" verb ws-reclaim
-        _ws_reclaim_failed_json branch-moved "the record names no commit for $cbr (the checkout at $cpath) — a branch is never deleted at an unknown head, so nothing further was deleted"
+        _ws_reclaim_fail "$id" "$lctx" branch-moved \
+          "the record names no commit for $cbr (the checkout at $cpath) — a branch is never deleted at an unknown head, so nothing further was deleted"
         return 1
       fi
-      if [[ -L "$cpath" ]]; then
-        _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "$cpath is a symbolic link — ccd never follows a link to a tree it would remove, so nothing further was deleted" verb ws-reclaim
-        _ws_reclaim_failed_json worktree-remove-failed "$cpath is a symbolic link — ccd never follows a link to a tree it would remove, so nothing further was deleted"
-        return 1
-      fi
-      _ws_reclaim_record "$main" "$cpath"; rec=$?
+      _ws_reclaim_nested_record "$main" "$cpath"; rec=$?
       if (( rec == 2 )); then
-        _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "could not read $main's worktree list, so whether git records $cpath was never asked — nothing further was deleted" verb ws-reclaim
-        _ws_reclaim_failed_json worktree-remove-failed "could not read $main's worktree list, so whether git records $cpath was never asked — nothing further was deleted"
+        _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+          "could not read $main's worktree list, so whether git records $cpath was never asked — nothing further was deleted"
         return 1
-      elif (( rec == 0 )); then
-        if [[ -d "$cpath" ]]; then
-          wtout=$(git -C "$main" worktree remove --force "$cpath" 2>&1); rec=$?
-        elif [[ ! -e "$cpath" ]]; then
-          wtout=$(git -C "$main" worktree remove "$cpath" 2>&1); rec=$?
-        fi
-        if (( rec != 0 )); then
-          _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)" verb ws-reclaim
-          _ws_reclaim_failed_json worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"
+      fi
+      if (( ! _WS_NPROOF_GONE )); then
+        if (( rec != 0 )) || [[ "$_WS_NREC_BRANCH" != "$cbr" ]]; then
+          _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+            "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
           return 1
         fi
+        wtout=$(git -C "$main" worktree remove --force "$cpath" 2>&1) \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
+      elif (( rec == 0 )); then
+        wtout=$(git -C "$main" worktree remove "$cpath" 2>&1) \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr"; then
-        holders=$(_ws_branch_holders "$main" "$cbr") || holders="?"
-        if [[ -z "$holders" ]]; then
+        if ! holders=$(_ws_branch_holders "$main" "$cbr"); then
+          kept+=("$cbr (its holders could not be listed)")
+        elif [[ -n "$holders" ]]; then
+          kept+=("$cbr (checked out at ${holders//$'\n'/, })")
+        else
           git -C "$main" update-ref -d "refs/heads/$cbr" "$chead" 2>/dev/null || {
-            _lc_fail reclaim "$id" "$lctx" branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted" verb ws-reclaim
-            _ws_reclaim_failed_json branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted"
+            _ws_reclaim_fail "$id" "$lctx" branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted"
             return 1
           }
         fi
       fi
     done 9< <(printf '%s\n' "$childlines" | awk -F'\t' 'NF { print length($1) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
+    if (( ${#kept[@]} )); then
+      keptjson="["; first=1
+      for k in "${kept[@]}"; do (( first )) || keptjson+=","; first=0; keptjson+="$(_json_str "$k")"; done
+      keptjson+="]"
+      _ws_tombstone_patch "$id" "{\"keptBranches\":$keptjson}" || {
+        _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable \
+          "could not record in $tomb that the nested branch(es) ${kept[*]} were kept — refusing to go on as if they were not"
+        return 1
+      }
+    fi
     _reg_set "$id" reaping reclaim:worktree
     phase=worktree
   fi
   # (4) The worktree. `--force` because the secret-shaped files the pin phase
   # refused to stage are still in it, untracked, and die with the tree. THE
-  # LEAF IS RE-JUDGED HERE, AT REMOVAL TIME (spec §5.5), on the fresh arm and
-  # every resumed one — `_ws_reclaim_resume_eval` never reads the tree, and
-  # wave 1's `_child_tmpdir` checks its leaf once. A link at the workdir is
-  # never handed to `git worktree remove`: with the child's own record gone,
-  # git resolves the link and removes the tree it points at. DEFENCE IN DEPTH,
-  # stated as such: a LIVE link standing here at entry is stopped first by the
-  # settle's own leaf test (step 2), so this test is the one that stands for a
-  # link the settle cannot see — a DANGLING one (no directory, so no settle),
-  # or one swapped in after the settle ran.
+  # LEAF IS RE-JUDGED HERE, AT REMOVAL TIME (spec §5.5) — `_ws_reclaim_owned`
+  # asked it above, and the settle and the nested steps ran since. DEFENCE IN
+  # DEPTH, stated as such: no fixture can put a link here between that check
+  # and this one without racing the tail, so deleting this test alone leaves
+  # the suite green (measured); it stands for the window a racing writer has.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
-      _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "$workdir is a symbolic link — ccd never follows a link to a tree it would remove, so nothing further was deleted" verb ws-reclaim
-      _ws_reclaim_failed_json worktree-remove-failed "$workdir is a symbolic link — ccd never follows a link to a tree it would remove, so nothing further was deleted"
+      _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+        "$workdir is a symbolic link — ccd never follows a link to a tree it would remove, so nothing further was deleted"
       return 1
     fi
     if [[ -d "$workdir" ]]; then
-      wtout=$(git -C "$main" worktree remove --force "$workdir" 2>&1) || {
-        _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)" verb ws-reclaim
-        _ws_reclaim_failed_json worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"
-        return 1
-      }
+      wtout=$(git -C "$main" worktree remove --force "$workdir" 2>&1) \
+        || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
     fi
     _reg_set "$id" reaping reclaim:branch
     phase=branch
@@ -24623,34 +24742,27 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if [[ ! -e "$workdir" && ! -L "$workdir" ]]; then
       _ws_reclaim_record "$main" "$workdir"; rec=$?
       if (( rec == 0 )); then
-        wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) || {
-          _lc_fail reclaim "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)" verb ws-reclaim
-          _ws_reclaim_failed_json worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"
-          return 1
-        }
+        wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) \
+          || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
     fi
     if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
       if ! [[ "$tip" =~ ^[0-9a-f]{40}$ ]]; then
-        _lc_fail reclaim "$id" "$lctx" branch-moved "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept" verb ws-reclaim
-        _ws_reclaim_failed_json branch-moved "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept"
+        _ws_reclaim_fail "$id" "$lctx" branch-moved \
+          "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept and nothing further was deleted"
         return 1
       fi
       holders=$(_ws_branch_holders "$main" "$branch") || {
-        _lc_fail reclaim "$id" "$lctx" branch-elsewhere "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked — the branch was kept" verb ws-reclaim
-        _ws_reclaim_failed_json branch-elsewhere "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked — the branch was kept"
+        _ws_reclaim_fail "$id" "$lctx" branch-elsewhere \
+          "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked — the branch was kept"
         return 1
       }
       if [[ -n "$holders" ]]; then
-        _lc_fail reclaim "$id" "$lctx" branch-elsewhere "$branch is now checked out at ${holders//$'\n'/, } — the branch was kept" verb ws-reclaim
-        _ws_reclaim_failed_json branch-elsewhere "$branch is now checked out at ${holders//$'\n'/, } — the branch was kept"
+        _ws_reclaim_fail "$id" "$lctx" branch-elsewhere "$branch is now checked out at ${holders//$'\n'/, } — the branch was kept"
         return 1
       fi
-      git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null || {
-        _lc_fail reclaim "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted" verb ws-reclaim
-        _ws_reclaim_failed_json branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"
-        return 1
-      }
+      git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
+        || { _ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"; return 1; }
     fi
     _reg_set "$id" reaping reclaim:artifacts
     phase=artifacts
@@ -24696,28 +24808,29 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local _rcl_prc=0
   _reg_purge "$id" || _rcl_prc=$?
   if (( _rcl_prc == 3 )); then
-    _lc_fail reclaim "$id" "$lctx" purge-incomplete \
+    _ws_reclaim_fail "$id" "$lctx" purge-incomplete \
       "the reclaim completed — worktree, branch, clips and temp root are gone — and the registry row WAS purged, but $REG_PURGE_UNREMOVED could not be removed and still stands" \
-      verb ws-reclaim meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
-    _ws_reclaim_failed_json purge-incomplete "the registry row was purged, but $REG_PURGE_UNREMOVED could not be removed"
+      meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
     return 1
   elif (( _rcl_prc == 2 )); then
-    _lc_fail reclaim "$id" "$lctx" purge-mechanism-absent \
+    _ws_reclaim_fail "$id" "$lctx" purge-mechanism-absent \
       "the reclaim completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: the compaction lock's mechanism is absent on this box while $REG/$id.generation is present" \
-      verb ws-reclaim meas.branch "$branch"
-    _ws_reclaim_failed_json purge-mechanism-absent "the registry row could not be purged: the compaction lock's mechanism is absent on this box"
+      meas.branch "$branch"
     return 1
   elif (( _rcl_prc != 0 )); then
     local _rcl_why; _rcl_why=$(_compact_lock_why_remedy "$id" ws-reclaim)
-    _lc_fail reclaim "$id" "$lctx" purge-refused \
+    _ws_reclaim_fail "$id" "$lctx" purge-refused \
       "the reclaim completed — worktree, branch, clips and temp root are gone — but the registry row could not be purged: $_rcl_why" \
-      verb ws-reclaim meas.branch "$branch"
-    _ws_reclaim_failed_json purge-refused "the registry row could not be purged: $_rcl_why"
+      meas.branch "$branch"
     return 1
   fi
+  # A NESTED BRANCH THIS ACT KEPT is said on the done row, whichever attempt
+  # kept it: the record carries it across a resume.
+  keptall=$(_ws_reclaim_kept_read "$tomb") || keptall=""
   _lc_done reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$childof" meas.branch "$branch" \
     meas.tip "$tip" meas.wip "$wip" meas.tombstone "$tomb" meas.attic "${attic:-0}" \
-    meas.residueBytes "$residue" meas.resumed "$resumed"
+    meas.residueBytes "$residue" meas.resumed "$resumed" \
+    detail "${keptall:+kept nested branch(es): $keptall}"
   printf '{"reclaimed":%s,"childOf":%s,"wip":%s,"attic":%s,"residueBytes":%s}\n' \
     "$(_json_str "$id")" "$childof" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
     "${attic:-0}" "$residue"
@@ -24856,8 +24969,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
       _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$RECLAIM_CHILDOF" && pinned=1
     fi
     if (( ! pinned )); then
-      _lc_fail reclaim "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY" verb ws-reclaim
-      _ws_reclaim_failed_json pin-failed "$RECLAIM_PIN_WHY"
+      _ws_reclaim_fail "$id" "$lctx" pin-failed "$RECLAIM_PIN_WHY"
       return 1
     fi
     # THE RECORD MUST BE THIS ROW'S. `_ws_tombstone` cannot say whether its
@@ -24871,8 +24983,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     if [[ ! -s "$REG/.reaped/$id.json" ]] \
        || [[ "$(_ws_tomb_str "$REG/.reaped/$id.json" uuid)" != "$(_reg_get "$id" uuid)" ]] \
        || ! _reg_set "$id" reaping "reclaim:$start"; then
-      _lc_fail reclaim "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed" verb ws-reclaim
-      _ws_reclaim_failed_json tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
+      _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
       return 1
     fi
     phase="$start"

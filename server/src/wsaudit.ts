@@ -113,7 +113,7 @@ export const SENTENCES: Record<string, string> = {
   'reap-interrupted': 'A previous cleanup of this workspace stopped part-way and its worktree is already gone. Finish it from ccd — there is nothing left here to confirm.',
   'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
   'in-progress': 'Another cleanup of this workspace is already running.',
-  'worktree-remove-failed': 'git refused to remove the worktree. The session is stopped and nothing further was deleted.',
+  'worktree-remove-failed': 'ccrc stopped before removing a worktree: git refused to remove it, or ccrc could not prove that the tree at that path — or a checkout inside it — is this workspace’s own. The session is stopped and nothing further was deleted.',
   // Whole-branch review, finding I6: the teardown loop's merge-base
   // pre-probe (`git -C $main merge-base --is-ancestor`) never calls
   // `worktree remove` at all — it is checking, ahead of time, whether
@@ -125,7 +125,7 @@ export const SENTENCES: Record<string, string> = {
   // squash-merge landing at origin before `$main`'s local checkout fetched
   // it, so the remedy is a pull, not a retry.
   'child-branch-unmerged-locally': 'A nested checkout’s branch is merged at origin but not in the local project checkout — run `git pull` in the project checkout, then re-check.',
-  'branch-moved': 'The branch moved while cleaning up — nothing was deleted after the worktree.',
+  'branch-moved': 'The branch moved while cleaning up, or the cleanup record names no commit to delete it at, so it was kept — nothing further was deleted.',
   // Added by Task 7, executing the Task 6 gate's required hardening: a resume
   // whose `reaping` breadcrumb holds a phase ccd never wrote (not one of
   // `worktree|branch|clips`) now refuses here rather than silently skipping
@@ -138,7 +138,7 @@ export const SENTENCES: Record<string, string> = {
   // original run saw. If that rewrite itself fails (a hand-edited or
   // corrupted tombstone), the resume refuses rather than destroy clips a
   // document could not be made to name truthfully.
-  'tombstone-unwritable': 'ccrc could not update this workspace’s cleanup record before finishing, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
+  'tombstone-unwritable': 'ccrc could not write, update or read this workspace’s cleanup record, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
   // Final-round confirmation-surface review, the sixteenth instance of the
   // measurement-forgery class. The clips directory EXISTS and ccd could not
   // list what is in it, so the sheet cannot name what the delete would

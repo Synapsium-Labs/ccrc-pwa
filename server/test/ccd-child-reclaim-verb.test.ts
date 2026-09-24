@@ -8,14 +8,13 @@
 // commit and the attic pins are read back from git refs; unsupervise runs on
 // the resumed arm.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
-  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, otherSnapshot, plantOther,
+  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, otherSnapshot, plantOther,
   wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 
@@ -49,7 +48,7 @@ const refusedWith = (r: { code: number; stdout: string; stderr: string }): strin
 /** A previous reclaim that died right after its pin phase wrote the tombstone
  *  and the breadcrumb — and before its tail unsupervised or killed anything. */
 const interrupted = (c: Child, phase: string): void => {
-  h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 ${CHILD_RUN} >/dev/null`
+  h.sh(`${CHILD_STUBS} export ${CHILD_ENV}; _ws_reclaim_eval ${CHILD_ID} 0 ${CHILD_RUN} >/dev/null`
     + ` && _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" "$REAP_BRANCH" ${CHILD_RUN}`
     + ` && _ws_tombstone ${CHILD_ID} '[]' "$(_ws_reclaim_tomb_fields ${CHILD_RUN})" >/dev/null`
     + ` && _reg_set ${CHILD_ID} reaping reclaim:${phase}`);
@@ -57,6 +56,21 @@ const interrupted = (c: Child, phase: string): void => {
 };
 const resumeToken = (phase: string): string =>
   h.sh(`_ws_reclaim_resume_eval ${CHILD_ID} 0 ${CHILD_RUN} ${phase} >/dev/null; printf '%s' "$REAP_TOKEN"`);
+/** Point BOTH the registry row and the record the pin wrote at another
+ *  project and/or workdir — so they agree, and the rung under test is the one
+ *  that answers, not the agreement rung. */
+const repoint = (project: string | undefined, workdir: string): void => {
+  if (project !== undefined) fs.writeFileSync(reg('project'), project);
+  fs.writeFileSync(reg('workdir'), workdir);
+  h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify(project === undefined ? { workdir } : { project, workdir })}'`);
+};
+/** The journal row and the stdout document of a failure say ONE detail. */
+const failedPairAgrees = (r: { stdout: string }): void => {
+  const doc = JSON.parse(r.stdout) as { failed: string; detail: string };
+  const row = eventsOf(h.home, 'reclaim').filter((e) => e['outcome'] === 'failed').pop()!;
+  expect(row['refusal'], 'the journal names the failure the document names').toBe(doc.failed);
+  expect(row['detail'], 'the journal and the document carry one detail').toBe(doc.detail);
+};
 /** Every entry under `dir` — path, type, mode, bytes — or `gone`. */
 const treeOf = (dir: string): string[] | 'gone' => {
   if (!fs.existsSync(dir)) return 'gone';
@@ -214,7 +228,7 @@ describe('a refusal destroys nothing, and every one is journaled', () => {
       [`--actor`, 'usage: ccd ws-reclaim'],
       [`--expect ${tok} --child-of 7 --session ${CHILD_ID} --actor ' '`, '--actor must be non-blank'],
     ] as const) {
-      const r = h.run(`${CHILD_STUBS} cmd_ws_reclaim ${argv}`);
+      const r = h.run(`${CHILD_STUBS} ${CHILD_ENV} cmd_ws_reclaim ${argv}`);
       expect(r.code, argv).toBe(1);
       expect(r.stderr, argv).toContain(said);
     }
@@ -226,7 +240,7 @@ describe('a refusal destroys nothing, and every one is journaled', () => {
     const c = makeChild(h);
     const loc = wideDigitLocale(h);
     if (loc === '') { ctx.skip(); return; }
-    const r = h.run(`${CHILD_STUBS} LC_ALL=${loc}; cmd_ws_reclaim --expect ${'a'.repeat(64)} --child-of '1²' --session ${CHILD_ID}`);
+    const r = h.run(`${CHILD_STUBS} LC_ALL=${loc}; ${CHILD_ENV} cmd_ws_reclaim --expect ${'a'.repeat(64)} --child-of '1²' --session ${CHILD_ID}`);
     expect(r.code, r.stdout).toBe(1);
     expect(r.stderr).toContain('bad run id');
     intact(c);
@@ -357,7 +371,9 @@ describe('the resumed arm', () => {
 
 describe('the tail re-judges the workdir LEAF at removal time, on every arm (spec §5.5)', () => {
   it('(c1) a LIVE link planted at resume phase `worktree` fails at the first rung that meets it, and removes nothing', () => {
-    // The settle re-pin meets it first: `_ws_reclaim_pin`'s own leaf test.
+    // The tail's own identity rungs meet it first (`_ws_reclaim_owned`'s leaf
+    // test, re-asked on every arm before the settle); the settle re-pin's leaf
+    // test stands behind them.
     const c = makeChild(h);
     interrupted(c, 'worktree');
     const tok = resumeToken('worktree');
@@ -366,7 +382,8 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     const r = childReclaimVerb(h, tok);
     expect(otherSnapshot(h, c, other), '`other` was neither removed nor committed into').toEqual(before);
     expect(r.code, r.stdout + r.stderr).toBe(1);
-    expect(JSON.parse(r.stdout).failed).toBe('pin-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('symbolic link');
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:worktree');
     expect(h.reg(CHILD_ID, 'uuid')).not.toBeNull();
@@ -375,8 +392,8 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
   for (const [label, dropRecord] of [['git’s record of it standing', false], ['git’s record of it gone', true]] as const) {
     it(`(c2) a DANGLING link planted at resume phase \`worktree\`, ${label}, reaches the removal step and fails worktree-remove-failed — nothing removed`, () => {
       // The settle is skipped here (no directory stands at the path), so the
-      // removal-time leaf test is the ONLY rung between this link and the rest
-      // of the tail.
+      // tail's identity rungs (`_ws_reclaim_owned`, asked on every arm) are what
+      // stands between this link and the rest of the tail.
       const c = makeChild(h);
       interrupted(c, 'worktree');
       const tok = resumeToken('worktree');
@@ -395,16 +412,18 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     }, 90_000);
   }
 
-  it('the re-read row is held to one plain absolute spelling — a trailing slash cannot walk past the leaf test', () => {
+  it('the workdir is held to one plain absolute spelling — a trailing slash cannot walk past the leaf test', () => {
     // `lstat("<link>/")` follows the link, so `-L` on that spelling is false and
     // a dangling link reads as nothing at all. The ladder refuses such a row;
-    // the RESUMED arm has no ladder, so the tail asks it of the row it re-reads.
+    // the RESUMED arm has no ladder, so the tail asks it on every arm.
     const c = makeChild(h);
     interrupted(c, 'worktree');
     const tok = resumeToken('worktree');
     fs.rmSync(c.wt, { recursive: true, force: true });
     fs.symlinkSync(path.join(h.home, 'nowhere'), c.wt);
-    fs.writeFileSync(reg('workdir'), `${c.wt}/`);
+    // The row AND the record spell it so — they agree, so the agreement rung
+    // passes and the spelling rung is the one that answers.
+    repoint(undefined, `${c.wt}/`);
     const r = childReclaimVerb(h, tok);
     // The walk past the leaf test shows HERE first: the breadcrumb advances.
     expect(h.reg(CHILD_ID, 'reaping'), 'the tail did not walk past the removal step').toBe('reclaim:worktree');
@@ -423,6 +442,7 @@ describe('failures after the act started', () => {
     const r = childReclaimVerb(h, evalOf(h).token, { pre: '_ws_wip_commit() { RECLAIM_WIP_WHY="the disk is full"; return 1; };' });
     expect(r.code).toBe(1);
     expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full' });
+    failedPairAgrees(r);
     expect(h.reg(CHILD_ID, 'reaping')).toBeNull();
     intact(c);
     expect(eventsOf(h.home, 'reclaim').map((e) => e['outcome'])).toEqual(['intent', 'failed']);
@@ -438,6 +458,7 @@ describe('failures after the act started', () => {
       const r = childReclaimVerb(h, evalOf(h).token, { pre: `_svc_is_active() { printf '${answer}'; };` });
       expect(r.code, answer).toBe(1);
       expect(JSON.parse(r.stdout).failed, answer).toBe('unit-still-active');
+      failedPairAgrees(r);
       expect(fs.existsSync(c.wt), 'nothing was deleted').toBe(true);
       expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toContain(CHILD_BRANCH);
       expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:children');
@@ -451,6 +472,7 @@ describe('failures after the act started', () => {
     const r = childReclaimVerb(h, evalOf(h).token, { pre: '_reg_purge() { return 2; };' });
     expect(r.code).toBe(1);
     expect(JSON.parse(r.stdout).failed).toBe('purge-mechanism-absent');
+    failedPairAgrees(r);
     expect(fs.existsSync(c.wt)).toBe(false);
     expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:artifacts');
   }, 90_000);
@@ -466,6 +488,7 @@ describe('failures after the act started', () => {
     r = childReclaimVerb(h, resumeToken('branch'));
     expect(r.code).toBe(1);
     expect(JSON.parse(r.stdout).failed).toBe('branch-moved');
+    failedPairAgrees(r);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toContain(CHILD_BRANCH);
   }, 90_000);
 
@@ -543,13 +566,15 @@ describe('nested checkouts and artifacts', () => {
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
     fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    // Through the harness's git (HOME = the fixture HOME), never the vitest
+    // process's own environment and its real git configuration.
+    h.git(h.home, 'init', '--bare', '-q', '-b', 'main', origin);
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    h.git(h.home, 'init', '-q', '-b', 'main', seedRepo);
     fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
     h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
-    execFileSync('git', ['clone', '-q', origin, path.join(c.wt, 'vendor', 'other')]);
+    h.git(h.home, 'clone', '-q', origin, path.join(c.wt, 'vendor', 'other'));
     const r = childReclaimVerb(h, evalOf(h).token);
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(fs.existsSync(c.wt)).toBe(false);
@@ -615,14 +640,16 @@ describe('nested checkouts and artifacts', () => {
     expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:children');
   }, 90_000);
 
-  it('a nested record list that could not be READ stops the tail before the child’s tree goes — never "no record"', () => {
+  for (const [label, pre] of [
+    ['git’s list (the tail’s own identity rung reads it first)', 'git() { case "$*" in *"worktree list"*) return 128 ;; esac; command git "$@"; };'],
+    ['the nested step’s own read of it', '_ws_reclaim_nested_record() { return 2; };'],
+  ] as const) it(`a worktree list that could not be READ stops the tail before the child’s tree goes — never "no record": ${label}`, () => {
     const c = makeChild(h);
     const inner = path.join(c.wt, 'inner');
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
     interrupted(c, 'children');
     const tok = resumeToken('children');
-    const r = childReclaimVerb(h, tok,
-      { pre: 'git() { case "$*" in *"worktree list"*) return 128 ;; esac; command git "$@"; };' });
+    const r = childReclaimVerb(h, tok, { pre });
     expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree survives').toBe(true);
     expect(fs.existsSync(inner), 'the nested checkout survives').toBe(true);
     expect(h.git(c.main, 'branch', '--list', 'ws/nested')).toContain('ws/nested');
@@ -785,4 +812,214 @@ describe('a vanished worktree is reclaimed from what is left; a directory git do
     expect(refusalsOf(h.home)).toContainEqual({ act: 'reclaim', token: 'no-worktree-record' });
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`)), 'no tombstone').toBe(false);
   }, 60_000);
+});
+
+describe('the tail proves the tree is the child’s own at removal time, on EVERY arm — from the record the pin wrote (spec §5.5-§5.6)', () => {
+  for (const phase of ['worktree', 'children'] as const) {
+    it(`P1: a registry row re-pointed at ANOTHER worktree is never followed on a resume at \`${phase}\``, () => {
+      // The review's probe P1. The row is a file on disk a resume re-reads
+      // after an arbitrary gap; the tail takes the workdir from the RECORD the
+      // pin wrote, and a row that no longer agrees with it stops the tail.
+      const c = makeChild(h);
+      interrupted(c, phase);
+      const tok = resumeToken(phase);
+      const other = path.join(h.home, 'worktrees', 'demo', 'other');
+      h.git(c.main, 'worktree', 'add', '--detach', other, 'main');
+      fs.writeFileSync(path.join(other, 'dirty.txt'), 'another session\n');
+      const before = treeOf(other);
+      fs.writeFileSync(reg('workdir'), other);
+      const r = childReclaimVerb(h, tok);
+      expect(treeOf(other), 'the other worktree was not removed').toEqual(before);
+      expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'nor was the child’s').toBe(true);
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain('disagree');
+      failedPairAgrees(r);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe(`reclaim:${phase}`);
+    }, 90_000);
+  }
+
+  it('a record that does not say it is THIS child’s stops the tail before anything is deleted', () => {
+    const c = makeChild(h);
+    interrupted(c, 'worktree');
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '{"id":"demo-someone-else"}'`);
+    const r = childReclaimVerb(h, resumeToken('worktree'));
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the tree survives').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('tombstone-unwritable');
+  }, 90_000);
+
+  it('another registry row naming the same workdir stops a RESUMED tail (A10 re-asked), and an unlistable registry does too', () => {
+    const c = makeChild(h);
+    interrupted(c, 'worktree');
+    const tok = resumeToken('worktree');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'), 'u-twin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'), c.wt);
+    let r = childReclaimVerb(h, tok);
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the tree the other row names survives').toBe(true);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('demo-twin');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'));
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'));
+    const regdir = path.join(h.home, '.cc-sessions');
+    fs.chmodSync(regdir, 0o300);
+    try {
+      r = childReclaimVerb(h, tok);
+    } finally { fs.chmodSync(regdir, 0o755); }
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'an unlistable registry proved nothing, and nothing went').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).detail).toContain('another registry row');
+  }, 90_000);
+
+  it('a tree that stands with NO record in git of it is not removed by a resumed tail', () => {
+    // The ladder's `no-worktree-record`, re-asked on every arm: a directory
+    // $main does not record is not provably one of its worktrees.
+    const c = makeChild(h);
+    interrupted(c, 'worktree');
+    const tok = resumeToken('worktree');
+    fs.rmSync(path.join(c.main, '.git', 'worktrees', 'quiet-basin'), { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the tree survives').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('no worktree record');
+  }, 90_000);
+
+  it('a workdir that is the project’s MAIN checkout, or the project directory itself, is never removed — both rungs', () => {
+    // The ladder's two not-a-workspace rungs, re-asked by the tail. The record
+    // and the row are re-pointed TOGETHER, so the agreement rung passes.
+    const c = makeChild(h);
+    interrupted(c, 'worktree');
+    const tok = resumeToken('worktree');
+    // (a) the first stanza: the project is a LINKED worktree (`demo2`), and
+    // the row names the repository's REAL main checkout — only git's first
+    // stanza says what it is.
+    const demo2 = path.join(h.home, 'projects', 'demo2');
+    h.git(c.main, 'worktree', 'add', '-b', 'proj2-main', demo2);
+    fs.writeFileSync(path.join(c.main, 'main-work.txt'), 'the project’s own uncommitted work\n');
+    repoint('demo2', c.main);
+    let r = childReclaimVerb(h, tok);
+    expect(fs.existsSync(path.join(c.main, 'main-work.txt')), 'the main checkout survives').toBe(true);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('main checkout');
+    // (b) the resolved path: the row names the project directory, a linked
+    // worktree that is not the first stanza.
+    fs.writeFileSync(path.join(demo2, 'proj-work.txt'), 'the project’s own uncommitted work\n');
+    repoint('demo2', demo2);
+    r = childReclaimVerb(h, tok);
+    expect(fs.existsSync(path.join(demo2, 'proj-work.txt')), 'the project directory survives').toBe(true);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('project directory');
+  }, 90_000);
+});
+
+describe('a nested checkout is PROVEN inside the child’s tree before it is removed — every component, and git’s record (spec §5.5)', () => {
+  /** The review's probe P2b: a nested worktree at `wt/sub/inner`, a sibling
+   *  worktree `other2` at `$HOME/x/inner` holding uncommitted work, and
+   *  `wt/sub` swapped for a link to `$HOME/x` with the nested record pruned —
+   *  so a string-prefix test passes and git resolves the path to `other2`. */
+  const nestedBehindLink = (c: Child): { other2: string; swap: string } => {
+    fs.mkdirSync(path.join(c.wt, 'sub'));
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', path.join(c.wt, 'sub', 'inner'));
+    const x = path.join(h.home, 'x');
+    fs.mkdirSync(x);
+    const other2 = path.join(x, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/other2', other2);
+    fs.writeFileSync(path.join(other2, 'keep.txt'), 'another session\n');
+    const sub = path.join(c.wt, 'sub');
+    return { other2, swap: `rm -rf "${sub}"; command git -C "${c.main}" worktree prune; ln -s "${x}" "${sub}";` };
+  };
+
+  it('P2b, the fresh arm: a directory between the child and its nested checkout swapped for a link — nothing of the other worktree goes', () => {
+    const c = makeChild(h);
+    const { other2, swap } = nestedBehindLink(c);
+    const before = treeOf(other2);
+    const late = `_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; ${swap} };`;
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: late });
+    expect(treeOf(other2), 'the other worktree was not removed through the link').toEqual(before);
+    expect(h.git(c.main, 'branch', '--list', 'ws/other2')).toContain('ws/other2');
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree stands: the tail stopped').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain('symbolic link');
+    failedPairAgrees(r);
+    expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:children');
+  }, 90_000);
+
+  it('P2b, a resume at the nested phase: the same swap, made while the act was down', () => {
+    const c = makeChild(h);
+    const { other2, swap } = nestedBehindLink(c);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    h.sh(swap);
+    const before = treeOf(other2);
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(other2), 'the other worktree was not removed through the link').toEqual(before);
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree stands').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('symbolic link');
+  }, 90_000);
+
+  it('a nested line whose path is NOT inside the child’s tree is never acted on — a clean sibling worktree survives', () => {
+    // The record is a file on disk: a line naming a path outside the child's
+    // resolved tree is not a nested checkout of this child, however its string
+    // begins. Without the strict-descendant rung the walk finds nothing and
+    // reads the path as "already gone", and git would clear — and, for a clean
+    // tree, REMOVE — the worktree that line names.
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const sibling = path.join(h.home, 'worktrees', 'demo', 'sibling');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/sibling', sibling);
+    const head = h.git(sibling, 'rev-parse', 'HEAD');
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${fs.realpathSync(sibling)}\tws/sibling\t${head}`] })}'`);
+    const before = treeOf(sibling);
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(sibling), 'the sibling worktree survives').toEqual(before);
+    expect(h.git(c.main, 'branch', '--list', 'ws/sibling')).toContain('ws/sibling');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('strictly inside');
+  }, 90_000);
+
+  it('a nested directory that stands but that git no longer records as a worktree is not removed as one', () => {
+    // Its `.git` and git's admin entry both gone: the settle sees an ordinary
+    // directory of the child (and pins its files into the child's WIP), and the
+    // nested step — which would `worktree remove --force` the recorded path —
+    // finds no record of it and stops. git's own "is not a working tree" stands
+    // behind this rung; the rung is what says why.
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    fs.writeFileSync(path.join(inner, 'unpinned.txt'), 'written after the pin\n');
+    fs.rmSync(path.join(inner, '.git'), { force: true });
+    fs.rmSync(path.join(c.main, '.git', 'worktrees', 'inner'), { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(fs.existsSync(path.join(inner, 'unpinned.txt')), 'the unrecorded checkout survives').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('missing');
+  }, 90_000);
+
+  it('a nested branch another checkout still holds is KEPT — and recorded as kept, in the record and on the done row', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    // A second checkout of the same branch, outside the child (`-f`: git
+    // allows it only when told to).
+    h.git(c.main, 'worktree', 'add', '-f', path.join(h.home, 'elsewhere'), 'ws/nested');
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the held branch was kept').toContain('ws/nested');
+    expect((tombOf()['keptBranches'] as string[]).join('\n')).toContain('ws/nested');
+    const done = eventsOf(h.home, 'reclaim').find((e) => e['outcome'] === 'done')!;
+    expect(String(done['detail']), 'the done row says what it kept').toContain('ws/nested');
+  }, 90_000);
 });
