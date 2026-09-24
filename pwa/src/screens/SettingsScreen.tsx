@@ -88,9 +88,16 @@ function gateRefusalOf(err: unknown): string[] | null {
   return ids.length > 0 ? ids : null;
 }
 
+/** THE ONE invalid-Date predicate (fix round 1): a `lastOkAt`/`lastError.at`/`publishedAt` magnitude this
+ *  build's `Date` cannot place — `asUpdatesView` only guards `Number.isFinite`, and 1e20 is finite but
+ *  `new Date(1e20)` is Invalid Date (review R-b). Used by `catalogueLine`'s classification of `lastOkAt`
+ *  AND by every renderer that prints a clock or a date off a wire instant — `clockTime`, `dayClock`,
+ *  `releaseDate` — so there is exactly one place that decides "this build's Date cannot place it". */
+const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
+
 export function clockTime(ms: number): string {
+  if (!isPlaceableInstant(ms)) return '—';
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return '—';
   const pad = (v: number): string => String(v).padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -101,20 +108,14 @@ export function clockTime(ms: number): string {
  *  already print ("14:02 · 22 Sep"); resetClock itself is not reused because it reads epoch SECONDS and has no
  *  '—' arm for an instant Date cannot place. */
 export function dayClock(ms: number, now: number): string {
+  if (!isPlaceableInstant(ms)) return '—';
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return '—';
   const n = new Date(now);
   const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
   return sameDay ? clockTime(ms) : `${clockTime(ms)} · ${d.getDate()} ${d.toLocaleString('en', { month: 'short' })}`;
 }
 
 export interface CatalogueLine { text: string; tone: 'calm' | 'amber' | 'muted' }
-
-/** A `lastOkAt`/`lastError.at` magnitude this build's Date cannot place — `asUpdatesView` only guards
- *  `Number.isFinite`, and 1e20 is finite but `new Date(1e20)` is Invalid Date (review R-b). Not the
- *  guard `catalogueLine` uses to CLASSIFY `lastOkAt` (below): this one only tells clockTime/dayClock
- *  when to print '—'. */
-const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
 
 export function catalogueLine(c: CatalogueState, now: number): CatalogueLine {
   // review R-b: a lastOkAt this build's Date cannot place is UNMEASURED, not a
@@ -207,8 +208,7 @@ export function refusedLine(r: ReleaseWire, nodes: readonly NodeWire[]): string 
 }
 
 export function releaseDate(ms: number): string {
-  const d = new Date(typeof ms === 'number' ? ms : Number.NaN);
-  return Number.isNaN(d.getTime()) ? '—' : d.toISOString().slice(0, 10);
+  return typeof ms === 'number' && isPlaceableInstant(ms) ? new Date(ms).toISOString().slice(0, 10) : '—';
 }
 
 function ReleaseItem({ release: r, nodes }: { release: ReleaseWire; nodes: readonly NodeWire[] }): ReactNode {

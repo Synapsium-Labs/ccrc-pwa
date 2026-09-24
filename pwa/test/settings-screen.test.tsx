@@ -553,6 +553,10 @@ describe('SettingsScreen — the release list: helpers', () => {
     expect(releaseDate(Date.UTC(2026, 8, 24, 0, 0))).toBe('2026-09-24');
     expect(releaseDate(Number.NaN)).toBe('—');
     expect(releaseDate(1e20)).toBe('—');
+    // fix round 1: a non-number (the wire never sends one, but the guard is
+    // load-bearing) must not fall through to `new Date(null)`, which is the
+    // valid 1970-01-01 instant, not the missing mark.
+    expect(releaseDate(null as unknown as number)).toBe('—');
   });
 });
 
