@@ -142,6 +142,8 @@ symlink is admitted and lstats honestly as `symlink` too. `checkPath`'s signatur
 
 - **D-3218** — Found by the coordinator, fix round 2, ruling on R1 (review run 143); corrected fix round 2, C3 (review 143). Spec §7 rate-limits `POST /api/updates/refresh` "to one call per minute in the route" (D-3203's own reading), and D-3215's text called the poller's request rate safe at that cadence — but D-3215 (fix round 1, item 5, ruling A) had by then made a single `poll()` cost up to THREE requests (the latest-release probe, the listing, and the rare moved-away tag check), so a refresh door admitting one poll a MINUTE could spend up to 180 requests an hour against spec §7's unauthenticated 60/hour budget — three times over, and neither D-3203 nor D-3215 was amended to say so when the tag check was added. `routes.ts`'s `REFRESH_MIN_INTERVAL_MS` is now DERIVED, never hand-typed — but R1's OWN derivation (two named constants declared once in `catalogue.ts` — `CATALOGUE_MAX_REQUESTS_PER_POLL` (3) and `UNAUTHENTICATED_HOURLY_REQUEST_BUDGET` (60) — giving `(CATALOGUE_MAX_REQUESTS_PER_POLL / UNAUTHENTICATED_HOURLY_REQUEST_BUDGET) * 60 * 60_000` = 180,000 ms) sized the door as if it were the ONLY source of requests against the budget. **CORRECTED (C3, ruled by the coordinator):** the SCHEDULED poll runs on its own clock (`watch.ts`'s `tick()`, `CATALOGUE_POLL_INTERVAL_MS`, independent of the door's own `lastRequestAt()` clock), so the door's worst case is `(door polls + scheduled polls) × CATALOGUE_MAX_REQUESTS_PER_POLL` against the SAME hourly budget, not the door's polls alone — the R1 derivation therefore did NOT "land exactly on the budget" once the scheduled lane's own share is counted (worst case 20 door polls + 2 scheduled polls × 3 requests = 66 against 60, as review 143 measured). The interval is now `HOUR_MS · CATALOGUE_MAX_REQUESTS_PER_POLL / (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET − SCHEDULED_POLLS_PER_HOUR · CATALOGUE_MAX_REQUESTS_PER_POLL)`, where `SCHEDULED_POLLS_PER_HOUR` is derived from `CATALOGUE_POLL_INTERVAL_MS` (never hand-typed) — with today's values, `3600000·3 / (60 − 2·3)` = 200,000 ms (200 s), the gap that now sizes the two lanes TOGETHER to fit the budget. The route's own gate logic (measured against `lastRequestAt()`, a future timestamp never refusing) is unchanged; only the interval's VALUE and its derivation change. The `429` answer shape is unchanged. Pinned by: `REFRESH_MIN_INTERVAL_MS` equal to the (corrected) derivation formula and to 200,000 exactly; three refreshes a minute apart admitting only the first poll, not three, across two full minutes; the door opening again only once the full derived interval has elapsed. Mutation, measured red: hand-typing `REFRESH_MIN_INTERVAL_MS = 60_000` back reds both the exact-value assertion and the door-behaviour assertions (a refresh one minute after the first would then be admitted); reverting the formula to R1's door-alone shape (180,000) also reds the exact-value assertion. Cost if wrong: an operator (or a monitoring script) hitting refresh once a minute spends up to three times the unauthenticated budget, and GitHub answers `403`/`429` (`rate-limited`) for the rest of the hour — the catalogue then goes stale for everyone on that IP, not just the caller who over-spent it; under-correcting (R1's own fix) still lets the scheduled lane push the true worst case over budget on a box with many door refreshes.
 
+  Amended, fix round 3 (B3, coordinator's ruling, review 146): the C3 derivation above still left ZERO headroom — 18 door polls plus 2 scheduled polls, times 3 requests, lands EXACTLY on 60 — so two real shapes still exceeded spec §7's 60/hour: (a) a RESTART, where `requestedAt` (the door's own clock) and `lastCatalogueAt` (`watch.ts`'s scheduled clock) both live only in process memory and both reset to nothing, so the scheduled lane's first tick polls immediately (D-3182) on top of whatever the door had already spent that hour; (b) STAMP TIMING, where all three `stampRequest(now)` calls stamped the poll's shared START `now` rather than each request's own send time, so a poll whose tag check or listing goes out one or two 10 s deadlines later than the probe was undercounted against the hour it actually landed in — the security lens built a timeline fitting 61 requests into one 3600 s window. Both fixed together: each `stampRequest` call now stamps `now` PLUS how far an injectable `elapsedMs()` (default `performance.now()`, read once at the poll's own start and again immediately before each of the three fetch sites) has moved since that baseline — floored at 0, since `routes.ts`'s door treats a `lastRequestAt` in the FUTURE as "the clock stepped back" and ADMITS, so a stamp must never land ahead of a later caller's own `now`. The derivation gains ONE named term, `MARGIN_POLLS_PER_HOUR` (=1) — covering exactly one extra poll inside the hour, which is what shape (a)'s restart costs — added to `SCHEDULED_POLLS_PER_HOUR` before the door's own share is subtracted from the budget, and the whole result rounded UP (`Math.ceil`) so a fractional remainder never under-shoots and re-opens the door early: `HOUR_MS · CATALOGUE_MAX_REQUESTS_PER_POLL / (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET − (SCHEDULED_POLLS_PER_HOUR + MARGIN_POLLS_PER_HOUR) · CATALOGUE_MAX_REQUESTS_PER_POLL)` — with today's values, `3600000·3 / (60 − (2+1)·3)` = 211,764.7… ms, rounded up to 211,765 ms, SUPERSEDING the 200,000 ms value above. Pinned by: a controllable elapsed source the fixture itself advances as each request actually reaches it, proving `lastRequestAt()` reads the LAST request's own send time (not the poll's shared start) across a poll issuing more than one request; `REFRESH_MIN_INTERVAL_MS` equal to the (twice-corrected) formula INCLUDING the margin term, and to 211,765 exactly, with the existing door-behaviour assertions re-measured against it. Mutation, measured red: stamping with the poll's shared start `now` again (dropping the `elapsedMs()`/baseline offset) reds the send-time pin; dropping the margin term (or setting it to 0) reds the exact-value pin, reverting to 200,000.
+
 ## File structure
 
 **New**
@@ -6405,11 +6407,12 @@ export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; stor
 export interface CataloguePoller {
   poll(now: number): Promise<CatalogueState>;   // single-flight: a poll during a poll returns the in-flight promise
   state(): CatalogueState;                      // {lastOkAt: null, lastError: null} until the first answer
-  // null = never requested. CORRECTION (fix round 2, R5/C1): the refresh
-  // route's guard is not a bare minute — it is REFRESH_MIN_INTERVAL_MS,
-  // derived (D-3218, corrected C3) from CATALOGUE_MAX_REQUESTS_PER_POLL,
-  // UNAUTHENTICATED_HOURLY_REQUEST_BUDGET and CATALOGUE_POLL_INTERVAL_MS —
-  // 200,000 ms with today's values, never a hand-typed one.
+  // null = never requested. CORRECTION (fix round 2, R5/C1; value corrected
+  // fix round 3, B3, D-3218 amended): the refresh route's guard is not a
+  // bare minute — it is REFRESH_MIN_INTERVAL_MS, derived (D-3218) from
+  // CATALOGUE_MAX_REQUESTS_PER_POLL, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET,
+  // CATALOGUE_POLL_INTERVAL_MS and a one-poll margin — 211,765 ms with
+  // today's values, never a hand-typed one.
   lastRequestAt(): number | null;
 }
 export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller;
@@ -10266,15 +10269,19 @@ EOF
 - Produces:
 
 ```ts
-// CORRECTION (fix round 2, R5/C1): DERIVED, never the hand-typed 60_000
-// shown here originally — see D-3218 (corrected C3). With today's values
-// (CATALOGUE_MAX_REQUESTS_PER_POLL = 3, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET
-// = 60, CATALOGUE_POLL_INTERVAL_MS = 1_800_000) this is 200_000 (200 s),
-// sized so the refresh door AND the scheduled poll's own cadence together
-// fit the hourly budget, never the door alone.
-export const REFRESH_MIN_INTERVAL_MS =
+// CORRECTION (fix round 2, R5/C1; value corrected fix round 3, B3, D-3218
+// amended): DERIVED, never the hand-typed 60_000 shown here originally — see
+// D-3218. With today's values (CATALOGUE_MAX_REQUESTS_PER_POLL = 3,
+// UNAUTHENTICATED_HOURLY_REQUEST_BUDGET = 60, CATALOGUE_POLL_INTERVAL_MS =
+// 1_800_000, MARGIN_POLLS_PER_HOUR = 1) this is 211_765 (Math.ceil of
+// 211,764.7… ms), sized so the refresh door, the scheduled poll's own
+// cadence AND one restart's margin poll together fit the hourly budget,
+// never the door alone.
+export const REFRESH_MIN_INTERVAL_MS = Math.ceil(
   (3_600_000 * CATALOGUE_MAX_REQUESTS_PER_POLL) /
-  (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - (3_600_000 / CATALOGUE_POLL_INTERVAL_MS) * CATALOGUE_MAX_REQUESTS_PER_POLL);
+  (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET -
+    (3_600_000 / CATALOGUE_POLL_INTERVAL_MS + MARGIN_POLLS_PER_HOUR) * CATALOGUE_MAX_REQUESTS_PER_POLL),
+);
 export const INTENT_BODY_KEYS = ['scope', 'channel', 'pinnedTag', 'auto', 'notify'] as const;
 export function toReleaseWire(row: ReleaseRow): ReleaseWire;
 export function toNodeWire(row: NodeRow): NodeWire;          // current = buildInfoOfRow(row); request null unless tag AND kind AND at; report null iff reportedPhase null; floorRead/previousRead ALWAYS sent (fix round 2, R4)

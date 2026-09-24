@@ -564,8 +564,17 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     return { store, port, calls };
   }
 
-  function poller(port: CatalogueStore, over: Partial<{ source: ReleaseSourceRead; apiUrl: string; timeoutMs: number }> = {}): CataloguePoller {
-    return createCataloguePoller({ source: SOURCE, apiUrl: base, store: port, ...over });
+  function poller(
+    port: CatalogueStore,
+    over: Partial<{ source: ReleaseSourceRead; apiUrl: string; timeoutMs: number; elapsedMs: () => number }> = {},
+  ): CataloguePoller {
+    // B3 (fix round 3): a FROZEN elapsed source by default, so every
+    // pre-existing `lastRequestAt()).toBe(<now>)`-shaped assertion in this
+    // file keeps holding exactly — `stampRequest`'s new offset is
+    // `Math.floor(elapsedMs() - pollStartElapsed)`, which is always 0 when
+    // the clock never moves. A case proving the clock DOES move at each
+    // send overrides it explicitly (see the B3 describe block below).
+    return createCataloguePoller({ source: SOURCE, apiUrl: base, store: port, elapsedMs: () => 0, ...over });
   }
 
   // D-3182: a fresh process says "never checked"
@@ -2059,6 +2068,46 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       expect(seen, 'the listing has not been sent yet').toHaveLength(0);
       await pr;   // let the probe time out and the (unscripted) listing run, so afterEach closes cleanly
     });
+  });
+
+  // B3 (fix round 3, D-3218 amended, review 146): "each request stamps the
+  // clock at its OWN send time, never the poll's shared start `now`." Every
+  // OTHER case in this file uses `poller()`'s FROZEN default `elapsedMs`
+  // (`() => 0`), so this describe builds its poller directly, injecting a
+  // controllable source the fixture itself advances as each request
+  // actually reaches it — proving the offset is real, not just plumbed.
+  describe('B3 — each request stamps the clock at its own send time, with margin (D-3218 amended)', () => {
+    it('lastRequestAt() is the LAST request\'s own send time, not the poll\'s shared start now (mutation: stamp with the poll\'s start now again)', async () => {
+      const { port } = fixture();
+      let elapsed = 0;
+      // The fixture's OWN request handler already answers from `script`/
+      // `scriptLatest`/`scriptWithdrawn`; a second 'request' listener on the
+      // SAME server advances the fake clock as each request actually
+      // arrives — after the CURRENT stamp was already taken (stamping is
+      // synchronous, before the request is even sent), so it only affects a
+      // LATER site's own stamp, exactly as a real request's round trip would.
+      server.on('request', () => { elapsed += 100; });
+      const p = createCataloguePoller({ source: SOURCE, apiUrl: base, store: port, elapsedMs: () => elapsed });
+      // No kept K yet: the probe and the listing only, no tag check — two
+      // stamps, so the LAST one is unambiguous.
+      scriptLatest = [{ status: 404 }];
+      script = [{ status: 200, etag: '"e1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] }];
+      await p.poll(1000);
+      // The probe stamps at elapsed 0 (now + 0 = 1000); by the time the
+      // listing stamps, the probe's OWN request has already reached the
+      // fixture (elapsed 100), so the listing's stamp is now + 100 = 1100 —
+      // the LAST request's own send time, never the poll's shared start.
+      expect(p.lastRequestAt()).toBe(1100);
+    });
+
+    // Mutation (measured by hand): reverting `stampRequest` to
+    // `requestedAt = now;` (dropping the `elapsedMs()`/`pollStartElapsed`
+    // offset) reds the case above — `lastRequestAt()` would read 1000, the
+    // poll's shared start, never 1100.
+    //
+    // The margin term itself (`MARGIN_POLLS_PER_HOUR`) lives in `routes.ts`,
+    // the door's own file — see `update-routes.test.ts`'s
+    // `REFRESH_MIN_INTERVAL_MS` exact-value pin.
   });
 });
 

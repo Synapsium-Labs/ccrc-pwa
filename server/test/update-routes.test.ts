@@ -576,7 +576,11 @@ describe('POST /api/updates/refresh', () => {
     expect(b.json()).toMatchObject({ ok: false, error: 'rate-limited' });
     const retry = b.json().retryAfterS as number;
     expect(retry).toBeGreaterThanOrEqual(1);
-    expect(retry).toBeLessThanOrEqual(REFRESH_MIN_INTERVAL_MS / 1000);
+    // Fix round 3 (B3): REFRESH_MIN_INTERVAL_MS is no longer a clean multiple
+    // of 1000 (211,765 ms) — the route's own `Math.ceil((interval - since) /
+    // 1000)` can round UP to one whole second past the raw division, so the
+    // bound here is the SAME ceiling, not the bare quotient.
+    expect(retry).toBeLessThanOrEqual(Math.ceil(REFRESH_MIN_INTERVAL_MS / 1000));
     expect(b.headers['retry-after']).toBe(String(retry));
     expect(p.polls(), 'the refused refresh reached the poller').toBe(1);
     // The FULL derived interval on, the door opens again — an interval, not a latch.
@@ -601,20 +605,32 @@ describe('POST /api/updates/refresh', () => {
   // the SCHEDULED poll's own share of the same budget (C3): the door's
   // interval is now sized so (door polls + scheduled polls) ×
   // `CATALOGUE_MAX_REQUESTS_PER_POLL` fits the hour, never a hand-typed
-  // number. This pins the actual DOOR BEHAVIOUR the derivation buys: three
-  // refreshes a minute apart admit only ONE poll, not three, and the door
-  // stays shut for the FULL derived interval after any admitted poll (worst
-  // case or not — the route has no way to know how many requests a poll
-  // actually sent, so it always assumes the worst).
-  it('REFRESH_MIN_INTERVAL_MS is derived, never hand-typed, and accounts for the scheduled lane: three refreshes a minute apart admit one poll, not three', async () => {
+  // number.
+  //
+  // Fix round 3 (B3, D-3218 amended, review 146): C3's own derivation still
+  // left ZERO headroom (18 door polls + 2 scheduled polls, × 3 requests,
+  // lands EXACTLY on 60) — a restart's immediate first poll (both clocks
+  // live only in process memory) or a request stamped a deadline late could
+  // still push a real hour over budget. `marginPollsPerHour` below mirrors
+  // `routes.ts`'s own private `MARGIN_POLLS_PER_HOUR` (not exported — this
+  // formula is the pin on its VALUE, not a second copy of the constant
+  // itself), and the whole result is rounded UP so a fractional remainder
+  // never under-shoots. This pins the actual DOOR BEHAVIOUR the derivation
+  // buys: three refreshes a minute apart admit only ONE poll, not three, and
+  // the door stays shut for the FULL derived interval after any admitted
+  // poll (worst case or not — the route has no way to know how many
+  // requests a poll actually sent, so it always assumes the worst).
+  it('REFRESH_MIN_INTERVAL_MS is derived, never hand-typed, and accounts for the scheduled lane AND a restart\'s margin poll: three refreshes a minute apart admit one poll, not three', async () => {
     const scheduledPollsPerHour = 3_600_000 / CATALOGUE_POLL_INTERVAL_MS;
-    expect(REFRESH_MIN_INTERVAL_MS).toBe(
+    const marginPollsPerHour = 1;
+    expect(REFRESH_MIN_INTERVAL_MS).toBe(Math.ceil(
       (3_600_000 * CATALOGUE_MAX_REQUESTS_PER_POLL) /
-      (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - scheduledPollsPerHour * CATALOGUE_MAX_REQUESTS_PER_POLL),
-    );
-    // 3600000·3 / (60 − 2·3) = 200,000 ms (200 s): the two lanes' worst
-    // cases summed, not the door alone.
-    expect(REFRESH_MIN_INTERVAL_MS).toBe(200_000);
+      (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - (scheduledPollsPerHour + marginPollsPerHour) * CATALOGUE_MAX_REQUESTS_PER_POLL),
+    ));
+    // 3600000·3 / (60 − (2+1)·3) = 211,764.7… ms, rounded UP to 211,765 ms:
+    // the two scheduled polls, the margin poll and the door's own worst
+    // case, all against the SAME hourly budget.
+    expect(REFRESH_MIN_INTERVAL_MS).toBe(211_765);
 
     const p = scriptedPoller();
     const f = await open({ catalogue: p.poller });
@@ -622,7 +638,7 @@ describe('POST /api/updates/refresh', () => {
     expect(a.statusCode).toBe(200);
 
     // One minute elapsed — a bare one-minute gate (D-3215's own text) would
-    // have admitted this; the derived three-minute gate must not.
+    // have admitted this; the derived gate must not.
     p.setLast(Date.now() - 60_000);
     const b = await post(f.app, '/api/updates/refresh', {});
     expect(b.statusCode).toBe(429);
@@ -650,6 +666,7 @@ describe('POST /api/updates/refresh', () => {
   // GitHub — never `vi.stubGlobal('fetch')`, the `update-catalogue.test.ts`
   // convention — behind the real route, and reads the outcome back off the
   // SAME `CoordStore` the route itself writes through.
+  //
   // B2 (fix round 3, coordinator's ruling, review 146) amends this case's OWN
   // outcome. Before that ruling, R2's evidence gate applied a confirmed
   // withdrawal on any fresh listing, even one that itself still named K as a

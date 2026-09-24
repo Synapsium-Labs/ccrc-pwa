@@ -53,7 +53,13 @@ import { isIngestibleReleaseTag } from './resolve.js';
  * requests; deriving the door's interval from the door alone (R1's first
  * fix) still ignored the SCHEDULED poll's own share of the same budget
  * (C3) — the two lanes' worst cases are summed before the door's interval
- * is sized. No token is ever sent (decision 4: the repo carries no
+ * is sized. Fix round 3 (B3, D-3218 amended): that sizing now also leaves
+ * `MARGIN_POLLS_PER_HOUR` (`routes.ts`) worth of headroom, covering a
+ * restart's immediate first poll (both clocks live only in this process's
+ * memory), and each request stamps the budget clock at its OWN send time —
+ * never the poll's shared start `now` — so a poll whose tag check or
+ * listing goes out a deadline late is not under-counted against the hour it
+ * actually lands in. No token is ever sent (decision 4: the repo carries no
  * secrets, and the server holds none for GitHub).
  *
  * Fail-soft, and the failure is an answer: every LISTING error arm sets
@@ -136,7 +142,15 @@ export interface CatalogueStore {
   newestUnyankedStable?(): string | null;
 }
 
-export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
+/** Fix round 3 (B3, D-3218 amended, review 146): an injectable monotonic
+ *  clock — `performance.now()` by default — the ONE thing `stampRequest`
+ *  (below) reads to know how far a given request's own send sits past the
+ *  poll's start. A test injects a controllable source so `lastRequestAt()`
+ *  can be pinned to an exact value across a poll issuing more than one
+ *  request; production never overrides it. */
+export interface CatalogueDeps {
+  source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number; elapsedMs?: () => number;
+}
 
 /** F3 (fix round 1): a REFUSED base must never put a working URL — with or
  *  without credentials — into a log line. `new URL` is re-parsed here inside
@@ -425,6 +439,10 @@ async function readCappedBody(res: Response): Promise<string | null> {
 
 export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   const timeoutMs = deps.timeoutMs !== undefined && deps.timeoutMs > 0 ? deps.timeoutMs : CATALOGUE_TIMEOUT_MS;
+  /** Fix round 3 (B3, D-3218 amended, review 146): read once at the START of
+   *  each poll (`pollOnce`) and again immediately before each of the three
+   *  `stampRequest` call sites — never cached across polls. */
+  const elapsedMs = deps.elapsedMs ?? ((): number => performance.now());
   /** D-3209: computed once, not per poll — an unusable base is a boot-time
    *  fact, not a per-request one. */
   const baseProblem = apiBaseProblem(deps.apiUrl);
@@ -496,6 +514,11 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  later poll need not force the listing's ETag away purely on the
    *  pending's account (see `pollOnce`). */
   let lastAcceptedListingTags: ReadonlySet<string> | null = null;
+  /** Fix round 3 (B3, D-3218 amended, review 146): `elapsedMs()`'s reading at
+   *  THIS poll's own start — captured once, at the top of `pollOnce`, so
+   *  every `stampRequest` call this poll measures its own request's send
+   *  time relative to the SAME baseline, never a moving one. */
+  let pollStartElapsed = 0;
 
   /** Fix round 2 (S1, review 143): ruling 1's "every catalogue REQUEST stamps
    *  the budget clock" — the ONE place `requestedAt` moves, called at every
@@ -504,8 +527,23 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  call, so a request that is SENT is what stamps the clock — never a
    *  side effect of some other site's success. Fixing the class here (one
    *  helper, three call sites) rather than at each site's own assignment is
-   *  what keeps them from drifting apart again. */
-  const stampRequest = (now: number): void => { requestedAt = now; };
+   *  what keeps them from drifting apart again.
+   *
+   *  Fix round 3 (B3, D-3218 amended, review 146): `now` alone used to BE the
+   *  stamp — every one of the three sites shared the SAME poll-start value,
+   *  even though the tag check and the listing can go out one or two
+   *  deadlines later than the probe, letting up to 61 requests land inside
+   *  one nominal GitHub hour. The stamp is now `now` PLUS how far
+   *  `elapsedMs()` has moved since `pollStartElapsed` was captured at this
+   *  poll's start, so a call made after a real request's round trip stamps
+   *  LATER than one made before it. Floored at 0 — `elapsedMs()` is
+   *  monotonic in practice, but `routes.ts`'s door treats a `lastRequestAt`
+   *  in the future as "the clock stepped back" and ADMITS, so a stamp must
+   *  never land ahead of a LATER caller's own `now` either; the floor keeps
+   *  every stamp within `[now, now + observed elapsed]`. */
+  const stampRequest = (now: number): void => {
+    requestedAt = now + Math.max(0, Math.floor(elapsedMs() - pollStartElapsed));
+  };
 
   const snapshot = (): CatalogueState => ({ lastOkAt, lastError: lastError === null ? null : { ...lastError } });
   /** Every error arm: `lastOkAt` is untouched (§18 "errors never move lastOkAt"). */
@@ -853,6 +891,10 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   }
 
   async function pollOnce(now: number): Promise<CatalogueState> {
+    // B3 (fix round 3, D-3218 amended): captured ONCE, at this poll's own
+    // start, so every `stampRequest` call this poll measures its own
+    // request's send time against the SAME baseline.
+    pollStartElapsed = elapsedMs();
     // D-3209: an unusable base is exactly as unusable as a missing release
     // source — same reason, no request, `requestedAt` untouched.
     if (baseProblem !== null || validatedBase === null) return failed(now, 'no-release-source');

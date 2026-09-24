@@ -61,17 +61,38 @@ const refuse = (reply: FastifyReply, code: number, body: Omit<UpdateRouteRefusal
  *  the true worst case per hour is (door polls + scheduled polls) ×
  *  `CATALOGUE_MAX_REQUESTS_PER_POLL`. `SCHEDULED_POLLS_PER_HOUR` is derived
  *  from that SAME cadence constant catalogue.ts owns (never a hand-typed
- *  2), and the door's interval is sized so the two lanes TOGETHER fit the
- *  budget: `HOUR_MS · CATALOGUE_MAX_REQUESTS_PER_POLL / (BUDGET −
- *  SCHEDULED_POLLS_PER_HOUR · CATALOGUE_MAX_REQUESTS_PER_POLL)` — with
- *  today's values, 3600000·3 / (60 − 2·3) = 200,000 ms (200 s). The 429
- *  answer shape is unchanged; only the interval's value and its derivation
- *  change. */
+ *  2).
+ *
+ *  Fix round 3 (B3, D-3218 amended, review 146): that derivation left ZERO
+ *  headroom — 18 door polls plus 2 scheduled polls, times 3 requests, lands
+ *  EXACTLY on the 60/hour budget — so two real shapes still exceeded it: (a)
+ *  a restart, whose `requestedAt`/`lastCatalogueAt` both live only in
+ *  process memory and both reset to nothing, so `watch.ts`'s first tick
+ *  polls immediately (D-3182) on top of whatever the door had already
+ *  spent that hour; (b) a request stamped at the poll's shared start `now`
+ *  rather than its own send time, undercounting a poll whose tag check or
+ *  listing goes out a deadline later (see `catalogue.ts`'s `stampRequest`).
+ *  `MARGIN_POLLS_PER_HOUR` leaves room for exactly ONE such extra poll
+ *  inside the hour — a single NAMED term in the one formula, never a
+ *  hand-typed result — and the door's interval is sized so the door, the
+ *  scheduled lane AND that margin TOGETHER fit the budget: `HOUR_MS ·
+ *  CATALOGUE_MAX_REQUESTS_PER_POLL / (BUDGET − (SCHEDULED_POLLS_PER_HOUR +
+ *  MARGIN_POLLS_PER_HOUR) · CATALOGUE_MAX_REQUESTS_PER_POLL)`, rounded UP
+ *  (`Math.ceil`) so a fractional remainder never under-shoots and re-opens
+ *  the door early — with today's values, 3600000·3 / (60 − (2+1)·3) =
+ *  211,764.7… ms, so 211,765 ms. The 429 answer shape is unchanged; only the
+ *  interval's value and its derivation change. */
 const HOUR_MS = 3_600_000;
 const SCHEDULED_POLLS_PER_HOUR = HOUR_MS / CATALOGUE_POLL_INTERVAL_MS;
-export const REFRESH_MIN_INTERVAL_MS =
+/** Fix round 3 (B3, D-3218 amended, review 146): see the derivation above —
+ *  one extra poll's worth of headroom inside the hour, covering a restart's
+ *  immediate first poll and the send-time stamping fix together, never a
+ *  hand-typed slice of the formula's result. */
+const MARGIN_POLLS_PER_HOUR = 1;
+export const REFRESH_MIN_INTERVAL_MS = Math.ceil(
   (HOUR_MS * CATALOGUE_MAX_REQUESTS_PER_POLL) /
-  (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - SCHEDULED_POLLS_PER_HOUR * CATALOGUE_MAX_REQUESTS_PER_POLL);
+  (UNAUTHENTICATED_HOURLY_REQUEST_BUDGET - (SCHEDULED_POLLS_PER_HOUR + MARGIN_POLLS_PER_HOUR) * CATALOGUE_MAX_REQUESTS_PER_POLL),
+);
 export const INTENT_BODY_KEYS = ['scope', 'channel', 'pinnedTag', 'auto', 'notify'] as const;
 
 export function toReleaseWire(row: ReleaseRow): ReleaseWire {
