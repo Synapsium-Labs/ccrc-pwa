@@ -3614,3 +3614,13 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     expect(hits).toEqual(['server/src/remote/client.ts']);
   });
 });
+
+describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', () => {
+  // D-3301: the release push's body (server) and the update banner (pwa) say the same
+  // clause. A second spelling in either package is a sentence to keep in step by hand, so it has ONE holder
+  // across the four TS roots — the L0 module both import.
+  it("'fleet and server are on ' is spelled in shared/update-summary.ts and nowhere else", () => {
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes('fleet and server are on ')).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
+});

@@ -73,3 +73,30 @@ export function releaseToNotify(input: NotifyInput): ReleaseNotification | null 
   const push = measured.some((n) => !isReleaseTag(n.currentVersion) || isNewerTag(tag, n.currentVersion));
   return { tag, channel, push };
 }
+
+// ── The release push's copy (plan W3 Task 3; design 2026-09-20 §13) ──────────────────────────────────────
+// Pure strings, beside the decision they announce. The summary clause is the CALLER's argument
+// (`versionsSummary`, shared/update-summary.ts), so this file spells no part of it and imports nothing new.
+
+/** Where the tap lands: the settings screen's release list (push-sw.js prefers a payload `url`, Task 4). */
+export const RELEASE_PUSH_URL = '/settings';
+
+/** The tray collapse key — the ONE spelling, as `mergedKey` is the one spelling of the merged tag
+ *  (`watch.ts`'s `mergedKey`). One tag, one notification: a repeat (which the persisted mark exists to prevent)
+ *  would replace, never stack. */
+export function releasePushTag(tag: string): string {
+  return `release-${tag}`;
+}
+
+export interface ReleasePushCopy { title: string; body: string; tag: string; url: string }
+
+/** title `ccrc <tag> is out`; body `On <channel> — <summary>. Tap to see what's new.`; the collapse tag;
+ *  the url. `n.push` is not read: a mark-only decision builds no copy, and the caller never asks. */
+export function releasePushCopy(n: ReleaseNotification, summary: string): ReleasePushCopy {
+  return {
+    title: `ccrc ${n.tag} is out`,
+    body: `On ${n.channel} — ${summary}. Tap to see what's new.`,
+    tag: releasePushTag(n.tag),
+    url: RELEASE_PUSH_URL,
+  };
+}

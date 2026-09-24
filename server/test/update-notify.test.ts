@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  releaseToNotify, type NotifyInput, type NotifyNodeRow, type NotifyReleaseRow,
+  RELEASE_PUSH_URL, releasePushCopy, releasePushTag, releaseToNotify, type NotifyInput, type NotifyNodeRow, type NotifyReleaseRow, type ReleaseNotification,
 } from '../src/update/notify.js';
 import type { NodeRow, ReleaseRow, UpdateIntentRow } from '../src/coord/store.js';
 import type { NotifyMode, UpdateChannel } from '../../shared/api.js';
@@ -155,5 +155,29 @@ describe('the ring (design 2026-09-20 §6; the update ring scan in single-defini
     expect(specs.length).toBeGreaterThan(0);
     expect(new Set(specs)).toEqual(new Set(['../../../shared/api.js', '../../../shared/semver.js', './resolve.js']));
     expect(/\brequire\(|import\(/.test(src)).toBe(false);
+  });
+});
+
+describe('the release push copy (plan W3 Task 3, design 2026-09-20 §13)', () => {
+  const n: ReleaseNotification = { tag: 'v0.0.9', channel: 'stable', push: true };
+
+  it('spells the title, body, collapse tag and url once', () => {
+    expect(releasePushCopy(n, 'fleet and server are on v0.0.7')).toEqual({
+      title: 'ccrc v0.0.9 is out',
+      body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
+      tag: 'release-v0.0.9',
+      url: '/settings',
+    });
+  });
+
+  it("carries the per-side summary verbatim, on the notification's own channel", () => {
+    expect(releasePushCopy({ tag: 'v0.0.10', channel: 'dev', push: true }, 'fleet v0.0.7 · server v0.0.9').body)
+      .toBe('On dev — fleet v0.0.7 · server v0.0.9. Tap to see what\'s new.');
+  });
+
+  it('the collapse tag is release-<tag>, spelled once, and the tap lands on /settings', () => {
+    expect(releasePushTag('v0.0.10')).toBe('release-v0.0.10');
+    expect(releasePushCopy(n, 'x').tag).toBe(releasePushTag(n.tag));
+    expect(RELEASE_PUSH_URL).toBe('/settings');
   });
 });

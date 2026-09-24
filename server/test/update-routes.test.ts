@@ -30,6 +30,7 @@ import {
   CATALOGUE_MAX_REQUESTS_PER_POLL, CATALOGUE_POLL_INTERVAL_MS, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET,
   createCataloguePoller, type CataloguePoller,
 } from '../src/update/catalogue.js';
+import type { PushPayload } from '../src/push.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
 import { REFRESH_MIN_INTERVAL_MS, parseIntentBody, toNodeWire } from '../src/update/routes.js';
@@ -132,7 +133,7 @@ const writeSecret = async (home: string): Promise<void> => {
 
 const open = async (
   o: {
-    auth?: boolean; watcher?: boolean; catalogue?: CataloguePoller; remote?: boolean;
+    auth?: boolean; watcher?: boolean; catalogue?: CataloguePoller; remote?: boolean; push?: { notify: (p: PushPayload) => Promise<void> };
     // C2 (fix round 2): a REAL `createCataloguePoller` needs the SAME `CoordStore`
     // instance the route's `deps.coord` uses (so its writes are visible through
     // the route and `f.coord`), which does not exist until `open()` creates it —
@@ -158,6 +159,7 @@ const open = async (
     updateIntentLog: new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir)),
     ...(o.catalogue ? { catalogue: o.catalogue } : {}),
     ...(o.catalogueFactory ? { catalogue: o.catalogueFactory(coord) } : {}),
+    ...(o.push ? { push: o.push as never } : {}),
     // Task 11's `fleetState` fixture shape, disconnected: the sweep writes the
     // agent connection's row as unreachable on the sweep that sees it.
     ...(o.remote
@@ -1016,5 +1018,28 @@ describe('NodeWire.floorRead/previousRead — "no floor" vs "floor never measure
     // this mapper never exercises that: both keys are always present.
     expect(Object.prototype.hasOwnProperty.call(wire, 'floorRead')).toBe(true);
     expect(Object.prototype.hasOwnProperty.call(wire, 'previousRead')).toBe(true);
+  });
+});
+
+describe('POST /api/updates/refresh announces what its poll listed (plan W3 Task 3)', () => {
+  // The route polls `deps.catalogue` itself, outside `tick()`: without its own call site a release found by
+  // *Check now* would wait up to a minute for the next inventory run to be announced.
+  it('a refresh whose poll lists a newer tag sends ONE release push, from the request itself', async () => {
+    const sent: PushPayload[] = [];
+    const p = scriptedPoller();
+    let store: CoordStore | null = null;
+    const poller: CataloguePoller = { ...p.poller, poll: async (now) => { catalogue(store!); return p.poller.poll(now); } };
+    const f = await open({ watcher: true, catalogue: poller, push: { notify: async (x) => { sent.push(x); } } });
+    store = f.coord;
+    // This process's first inventory run — the GET's on-demand sweep — measures the box (unversioned: the fixture
+    // home has no stamp). Until one run has finished, the catalogue side decides nothing
+    // (D-3314).
+    expect((await f.app.inject({ method: 'GET', url: '/api/updates' })).statusCode).toBe(200);
+    expect(f.coord.releases()).toEqual([]);   // control: nothing is listed before the refresh
+    expect(sent).toEqual([]);
+    const r = await post(f.app, '/api/updates/refresh', {});
+    expect(r.statusCode, r.body).toBe(200);
+    expect(sent.map((x) => [x.title, x.tag, x.url])).toEqual([['ccrc v0.0.10 is out', 'release-v0.0.10', '/settings']]);
+    expect(f.coord.releases().find((x) => x.tag === 'v0.0.10')?.notifiedAt).toEqual(expect.any(Number));
   });
 });
