@@ -12178,6 +12178,28 @@ cmd_rollback() {
     esac
   fi
 
+  # D-3285 (final review, B3(i)): a box already running `to`, with a
+  # COMPLETED install of it, falls into `cmd_update`'s own converged no-op —
+  # which prints "pass --force to reinstall". `rollback` has no `--force`,
+  # and `update --to <to> --force` is refused by the floor (M7). A
+  # read-only equivalent of `_upd_converged` (which needs a staged tree this
+  # command never fetches): the running stamp's own version and sha against
+  # the completed-install record, exactly the comparison `_upd_write_previous`
+  # (D-3283) now makes. Caught HERE, before any network call or lock, so a
+  # repeated bare `ccrc rollback` — or `ccrc rollback --to <current>` — is
+  # told a command that can actually run.
+  local rb_version="" rb_sha="" rb_rc=0 rb_rec=""
+  _box_build_fields || rb_rc=$?
+  if [ "$rb_rc" -eq 0 ]; then
+    rb_version="${BOX_BUILD[4]}"
+    rb_sha="${BOX_BUILD[0]}"
+  fi
+  if [ "$rb_rc" -eq 0 ] && [ -n "$rb_version" ] && [ "$rb_version" = "$to" ] \
+     && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE" 2>/dev/null && [ -n "$rb_rec" ] && [ "$rb_rec" = "$rb_sha" ]; then
+    echo "rollback: this box already runs $to ($rb_sha) and that install completed — nothing to do (to reinstall it: ccrc update --to $to --downgrade --force)"
+    return 0
+  fi
+
   command -v curl >/dev/null 2>&1 \
     || _ccrc_die "curl is required by 'ccrc rollback' but is not on PATH — nothing on this box was changed"
   _upd_asset_listed "$to" SHA256SUMS || erc=$?
@@ -12225,9 +12247,17 @@ _upd_rollback_no_restore() {   # <the reason _upd_restore would be given>
 # spine that died after the tree moved. `update --force` does not pass the
 # floor (M7), and a rollback's target is below it, so a rollback's remedy is
 # the rollback itself: the box reads `incomplete`, so it re-installs.
+# D-3285 (final review, B3(ii)): a `--from restore` run is arm 2's child —
+# it re-installs `previous`, a tag below the floor the PARENT's completed
+# spine already raised — so its own dead-mid-install rerun is exactly the
+# rollback shape, not the bare `--force` one the floor refuses. Grouped with
+# rollback|watchdog rather than given `--downgrade --force`: `ccrc rollback
+# --to <v>` already carries `--downgrade` and reads `~/.ccrc/previous`-free
+# by naming the tag explicitly, so it is the one form guaranteed runnable
+# regardless of which record survived the death.
 _upd_rerun_hint() {
   case "$UPD_FROM" in
-    rollback|watchdog) printf 'ccrc rollback --to %s' "$UPD_VERSION" ;;
+    rollback|watchdog|restore) printf 'ccrc rollback --to %s' "$UPD_VERSION" ;;
     *) printf 'ccrc update --to %s --force' "$UPD_VERSION" ;;
   esac
 }
@@ -12549,13 +12579,16 @@ cmd_watchdog() {
   # an update this run never applied. And a box whose running stamp carries
   # no version is never rolled back either — see the comment above the probe.
   if [ "$pre_install" -eq 1 ]; then
-    _upd_phase failed "abandoned by its updater; box unhealthy ($why) and its tree never moved; nothing reverted"
+    # B6 (final review, wording only, D-3249's own rule — no number): the
+    # verdict now leads so the 200-char cut can only drop `$why`'s tail,
+    # never the verdict itself.
+    _upd_phase failed "abandoned by its updater; tree never moved, nothing reverted; box unhealthy: $why"
     echo "watchdog: stale report ($phase, ${age}s) fails its health probe ($why), but its tree never moved — recorded as abandoned; nothing was reverted"
     _upd_unlock
     return 0
   fi
   if [ -z "$cur_v" ]; then
-    _upd_phase failed "abandoned by its updater; box unhealthy ($why) on an unversioned tree; not reverting"
+    _upd_phase failed "abandoned by its updater; unversioned tree, not reverting; box unhealthy: $why"
     echo "watchdog: stale report ($phase, ${age}s) fails its health probe ($why) on an unversioned tree — recorded as abandoned; not reverting"
     _upd_unlock
     return 0
@@ -13173,14 +13206,17 @@ _upd_fetch() {
   # and verified by the INSTALLED tree's verifier — `$CCRC_HERE/../deploy/`,
   # the resolution `_upd_backup` makes for backup-coord.mjs (decision 12):
   # never the tarball's own copy, which would be self-attestation. Three
-  # answers, never folded: a 404 is ABSENT (a release older than provenance,
-  # a fork with no attest step — the one shape --allow-unsigned admits, and
-  # it is RECORDED); any other download failure is a failure; a bundle that
-  # FAILS to verify is refused, --allow-unsigned or not.
+  # answers, never folded: a MEASURED 404 is ABSENT (a release older than
+  # provenance, a fork with no attest step — the one shape --allow-unsigned
+  # admits, and it is RECORDED); any other download failure is a transient
+  # node fault, never a verdict on the release (D-3284, same rule
+  # `_upd_asset_listed`/D-3261 already applies to the asset-listing fetch); a
+  # bundle that FAILS to verify is refused, --allow-unsigned or not.
   bundle="$UPD_STAGE/$UPD_TARNAME.sigstore.json"
   UPD_PROVENANCE=""
+  local bundle_code=""
   echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME.sigstore.json …"
-  curl -fsSL -o "$bundle" "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" || rc=$?
+  bundle_code="$(curl -fsSL -o "$bundle" -w '%{http_code}' "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ]; then
     verifier="$CCRC_HERE/../deploy/verify-provenance.mjs"
     vrc=0
@@ -13209,21 +13245,29 @@ _upd_fetch() {
       _ccrc_die "could not RUN the installed verifier ($verifier exited $vrc) — this is not a verdict on the bundle; nothing on this box was changed"
     fi
     UPD_PROVENANCE=verified
-  elif [ "$rc" -eq 22 ]; then
-    # D-3143 (Task 12 review, minor): curl -f's exit 22 means ANY HTTP
-    # status >= 400, not specifically 404 — a 403 or a 500 from the release
-    # host would have been mis-reported as "answered 404" on EITHER branch
-    # below (the WARN that admits it as absence, and the refusal that does
-    # not). Both say what was actually measured.
+  elif [ "$rc" -eq 22 ] && [ "$bundle_code" = 404 ]; then
+    # D-3143 (Task 12 review, minor) then D-3284 (final review, I-2): curl
+    # -f's exit 22 means ANY HTTP status >= 400, not specifically 404 — a
+    # 403 or a 5xx from the release host is a transient fault, never "this
+    # release ships no bundle". Only a MEASURED 404 (via -w, exactly as
+    # `_upd_asset_listed` measures it) reaches this arm; every other status
+    # or curl failure falls to the unprefixed die below.
     if [ "$allow_unsigned" -eq 1 ]; then
-      echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (the release host answered an HTTP error — curl exit 22) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
+      echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (the release host answered 404) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
       UPD_PROVENANCE=unsigned
     else
       UPD_FAIL_PREFIX="provenance: "
-      _ccrc_die "the release ships no provenance bundle ($UPD_URL_DIR/$UPD_TARNAME.sigstore.json answered an HTTP error — curl exit 22) — refusing; a release older than provenance, or a fork without the attest step, installs only with --allow-unsigned (recorded on the box as unsigned); nothing on this box was changed"
+      _ccrc_die "the release ships no provenance bundle ($UPD_URL_DIR/$UPD_TARNAME.sigstore.json answered 404) — refusing; a release older than provenance, or a fork without the attest step, installs only with --allow-unsigned (recorded on the box as unsigned); nothing on this box was changed"
     fi
   else
-    _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json (curl exit $rc, not a 404 — the tarball came from the same place a moment ago) — nothing on this box was changed"
+    # D-3284: a non-404 status (or a curl failure with no status at all,
+    # e.g. rc 7/28) is a NODE fault, not a verdict on the release — it must
+    # never carry UPD_FAIL_PREFIX, or W2's sweep turns a transient 5xx/403
+    # into a lasting per-node refusal of a good tag (D-3239). Verdict FIRST
+    # (constraints §"printable ASCII", D-3249): the 200-char cut must trim
+    # only the URL tail, never the words that say this is not a release
+    # refusal.
+    _ccrc_die "a transient fetch failure (curl exit $rc${bundle_code:+, HTTP $bundle_code}, not a 404) fetching the provenance bundle — not a verdict on this release: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json; nothing on this box was changed"
   fi
 
   UPD_TREE="$UPD_STAGE/tree"
@@ -13290,13 +13334,18 @@ _upd_converged() {
 # the rerun its own sentence prescribes (`ccrc update --to <v> --force`)
 # would then record `previous: <v>` — the release that just failed — and
 # lose the tag that last completed. (a) the stamp already reads the tag this
-# run installs: a reinstall is not a new baseline. (b) the record is ABSENT
-# (read here, before `cmd_update` removes it for this run): an earlier
-# update's spine never finished. Absent only, not a record that disagrees —
-# a `deploy.sh` push leaves the old record beside its own stamp, and that
-# tree IS what ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2);
-# with none, the stamp is written as before — a keep never invents an
-# absence.
+# run installs AND the completed-install record is absent or names a sha
+# OTHER than the running stamp's own: a reinstall is not a new baseline.
+# D-3283: when the record names the RUNNING stamp's own sha, the running
+# build completed installing — it IS a baseline, and is written as
+# `previous` like any other completed build (an `update --to <running tag>
+# --force` whose gate then fails must not leave arm 2 restoring a release
+# BELOW the one that box actually ran). (b) the record is ABSENT (read here,
+# before `cmd_update` removes it for this run): an earlier update's spine
+# never finished. Absent only, not a record that disagrees — a `deploy.sh`
+# push leaves the old record beside its own stamp, and that tree IS what
+# ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2); with none, the
+# stamp is written as before — a keep never invents an absence.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -13306,7 +13355,14 @@ _upd_write_previous() {
       why="a --from $UPD_FROM run returns to a known tag; it is not a new baseline" ;;
     *)
       if [ "$line1" != untagged ] && [ "$line1" = "$UPD_VERSION" ]; then
-        why="this box's stamp already reads $UPD_VERSION, the tag this run installs; a reinstall is not a new baseline"
+        local installed_rec=""
+        { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r installed_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || installed_rec=""
+        # D-3283: a record naming THIS stamp's own sha means the running
+        # build completed installing — it is a baseline, not a reinstall-in-
+        # progress, so this arm does NOT keep (falls through and writes it).
+        if [ -z "$installed_rec" ] || [ "$installed_rec" != "$line2" ]; then
+          why="this box's stamp already reads $UPD_VERSION, the tag this run installs; a reinstall is not a new baseline"
+        fi
       elif [ ! -e "$BOX_INSTALLED_FILE" ]; then
         why="this box's stamp has no completed-install record, so an earlier update's spine never finished and the stamp is not a new baseline"
       fi
@@ -13687,7 +13743,8 @@ _upd_backup_pairs() {
 }
 
 # `_upd_restore_copy <backup copy> <live path>` — rc 0 placed, 1 not (and the
-# live path is as it was). Staged BESIDE the live path and placed by RENAME
+# live path is as it was), 2 not (and the live path is GONE — B4, see
+# below). Staged BESIDE the live path and placed by RENAME
 # (D-3259): `~/.local/bin/ccd` is the file every live
 # `ccd supervise` is executing, and a `cp` onto that inode would rewrite a
 # running bash script under it — `_inst_atomic`'s reason, applied backwards.
@@ -13696,6 +13753,17 @@ _upd_backup_pairs() {
 # `_plat_mv_notdir` (GNU `mv -fT`, its Darwin twin): a plain `mv -f` onto a
 # symlink that names a directory would move the copy INTO that directory
 # and answer 0 — the shape `_inst_step`'s marker write (Task 4) refuses.
+#
+# Final review, B4 — D-3259's own promise, unnumbered (no new deviation): the
+# move-back of `aside` on a failed stage→live rename was UNCHECKED. If it also fails,
+# `$live` is gone entirely and the new install's own copy sits at `$aside`,
+# yet the caller (arm 3) printed "left as the new install placed it" — a
+# claim that is false once `$live` does not exist. Checked now: rc 2 is that
+# second failure; the caller reconstructs `$aside` from `$live` with this
+# function's own naming convention (same process, same `$$`), rather than a
+# new global carrying it back. The `rm -rf -- "$aside"` on the SUCCESS path
+# is checked too, but only for a WARN — it leaves disk debris, not a wrong
+# claim about where the tree is.
 _upd_restore_copy() {
   local back="$1" live="$2" stage aside
   stage="$live.ccrc-restore.$$"
@@ -13706,11 +13774,15 @@ _upd_restore_copy() {
   if [ -d "$live" ] && [ ! -L "$live" ]; then
     _plat_mv_notdir "$live" "$aside" || { rm -rf -- "$stage"; return 1; }
     if ! _plat_mv_notdir "$stage" "$live"; then
-      _plat_mv_notdir "$aside" "$live"
+      if _plat_mv_notdir "$aside" "$live"; then
+        rm -rf -- "$stage"
+        return 1
+      fi
       rm -rf -- "$stage"
-      return 1
+      return 2
     fi
-    rm -rf -- "$aside"
+    rm -rf -- "$aside" \
+      || echo "update: WARN: could not remove $aside (the pre-restore copy of $live) — harmless debris, left behind; remove by hand" >&2
     return 0
   fi
   _plat_mv_notdir "$stage" "$live" || { rm -rf -- "$stage"; return 1; }
@@ -13781,8 +13853,12 @@ _upd_restore_arm2() {
     case "$lrc" in
       0) ;;
       1)
-        echo "update: arm2-refused: $UPD_PREV_TAG ships no bundle — run ccrc update --to $UPD_PREV_TAG --allow-unsigned by hand"
-        _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --allow-unsigned by hand"
+        # D-3285 (final review, B3(iii)): the spine already completed and
+        # raised the floor to the NEW (now-failing) tag, so a below-floor
+        # by-hand rerun needs `--downgrade` or the floor refuses it — the
+        # same command `cmd_rollback`'s own D-3263 header already prints.
+        echo "update: arm2-refused: $UPD_PREV_TAG ships no bundle — run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
+        _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         return 1 ;;
       *)
         echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle (curl failed, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
@@ -13825,7 +13901,7 @@ _upd_restore_arm2() {
 # and node_modules are the new install's, the dists the old one's — and the
 # remedy for that is deploy.sh, which the sentence names.
 _upd_restore_arm3() {
-  local role="$1" reason="$2" class src name back main=ccrc.service n=0 bad=0 rrc=0 note="" unrec=""
+  local role="$1" reason="$2" class src name back main=ccrc.service n=0 bad=0 missing=0 rrc=0 crc2=0 note="" unrec=""
   [ "$role" = fleet ] && main=ccrc-agent.service
   # D-3260 — FIRST, before a single row moves. A
   # spine that COMPLETED and then failed the gate has already written the new
@@ -13849,9 +13925,21 @@ _upd_restore_arm3() {
     back="$UPD_BACKUP_DIR/$name"
     [ -e "$back" ] || [ -L "$back" ] || continue
     n=$((n + 1))
-    if ! _upd_restore_copy "$back" "$src"; then
+    crc2=0
+    _upd_restore_copy "$back" "$src" || crc2=$?
+    if [ "$crc2" -ne 0 ]; then
       bad=$((bad + 1))
-      echo "update: arm 3: could not copy $back back to $src — left as the new install placed it"
+      if [ "$crc2" -eq 2 ]; then
+        # Final review, B4 (no new deviation): the move-back of the pre-restore copy
+        # also failed — `$src` is GONE, not "left as the new install placed
+        # it" (that claim is false once the path does not exist at all).
+        # `_upd_restore_copy` names its own aside path `<live>.ccrc-replaced.$$`;
+        # this loop runs in the same process (no subshell), so `$$` matches.
+        missing=$((missing + 1))
+        echo "update: arm 3: $src is now MISSING — the new install's copy could not be moved back and sits at $src.ccrc-replaced.$$ — move it back by hand"
+      else
+        echo "update: arm 3: could not copy $back back to $src — left as the new install placed it"
+      fi
     fi
   done < <(_upd_backup_pairs)
   if [ "$CCD_OS" = darwin ]; then
@@ -13882,8 +13970,15 @@ _upd_restore_arm3() {
   fi
   [ "$bad" -eq 0 ] || note=" ($bad of $n rows could not be copied back)$note"
   note="$note$unrec"
-  echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."
-  _upd_phase reverted "arm3: tree MIXED, deploy.sh is the remedy$note; $reason"
+  if [ "$missing" -eq 0 ]; then
+    echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."
+    _upd_phase reverted "arm3: tree MIXED, deploy.sh is the remedy$note; $reason"
+  else
+    # Final review, B4 (no new deviation): a missing row is not "left in
+    # place" — say so in the summary too, not only in the per-row line above.
+    echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED AND $missing path(s) are MISSING (read the arm 3 lines above for where); the remedy is deploy.sh. Best effort."
+    _upd_phase reverted "arm3: tree MIXED with $missing path(s) MISSING, deploy.sh is the remedy$note; $reason"
+  fi
 }
 
 # ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────

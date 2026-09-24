@@ -4420,7 +4420,13 @@ _check_provenance() {
   # variable, and clearing it on read's EOF status would lose it.
   { IFS= read -r rec || :; IFS= read -r prov || :; } < "$BOX_INSTALLED_FILE"
   if [ "$prov" = unsigned ]; then
-    _dr_pass provenance "unsigned — this install was not verified by ccrc update (a checkout install, install.sh's trust-on-first-use, or --allow-unsigned); the next ccrc update verifies"
+    # D-3286 (final review, B5): "the next ccrc update verifies" is false on
+    # a box already at its target — that run no-ops at `_upd_converged`
+    # before the staged spine ever runs, so the mark and this PASS survive
+    # unchanged until a newer release ships or the operator types --force.
+    # Reworded to match README's own fix for the same sentence; the verdict
+    # (PASS, D-139) is unchanged.
+    _dr_pass provenance "unsigned — this install was not verified by ccrc update (a checkout install, install.sh's trust-on-first-use, or --allow-unsigned); the next ccrc update that installs a release (a newer one, or --force on this one) verifies it and clears the mark"
     return 0
   fi
   _dr_pass provenance "the completed-install record carries no unsigned mark"

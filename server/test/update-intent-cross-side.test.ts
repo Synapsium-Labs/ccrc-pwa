@@ -221,26 +221,37 @@ function releaseLayout(root: string, dir: string, tag: string): void {
 }
 
 /** A `local://` curl stub matching `_upd_resolve`/`_upd_fetch`'s PLAIN
- *  `curl -fsSL -o dest url` invocation (no `-K`/`-w`, unlike the intent
- *  route's) — the same shape `fleetNode`'s own `local://` case and
- *  `ccrc-update.test.ts`'s combined stub use whenever `-o` is present. */
+ *  `curl -fsSL -o dest [-w '%{http_code}'] url` invocation (no `-K`, unlike
+ *  the intent route's) — the same shape `fleetNode`'s own `local://` case
+ *  and `ccrc-update.test.ts`'s combined stub use whenever `-o` is present.
+ *  D-3284 (final review): `_upd_fetch`'s bundle fetch now measures the
+ *  status via `-w`, exactly as `_upd_asset_listed` (D-3261) already did —
+ *  this stub answers it the same way the combined stub does, or `-w`'s
+ *  VALUE argument (a bare `%{http_code}`, matching no `-*` case) would be
+ *  misread as the URL by the positional-argument arm below. */
 function plainLocalCurl(home: string): void {
   const bin = path.join(home, '.local', 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(bin, 'curl'), [
     '#!/bin/sh',
-    'dest=""; url=""',
+    'dest=""; url=""; wfmt=""',
     'while [ $# -gt 0 ]; do',
     '  case "$1" in',
     '    -o) dest="$2"; shift 2 ;;',
+    '    -w) wfmt="$2"; shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
     '  esac',
     'done',
     'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
     'src="${url#local://}"',
-    '[ -f "$src" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }',
+    '[ -f "$src" ] || { [ -n "$wfmt" ] && printf 404; echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }',
+    // `if … fi`, not `[ -n "$wfmt" ] && printf 200`: with no `-w` (every
+    // OTHER caller of this stub) that `&&` is FALSE and, being the script's
+    // last command, would make a successful `cp` report exit 1 — the exact
+    // shape `_upd_resolve`'s SHA256SUMS fetch reads as "download failed".
     'cp "$src" "$dest"',
+    'if [ -n "$wfmt" ]; then printf 200; fi',
     '',
   ].join('\n'), { mode: 0o755 });
 }

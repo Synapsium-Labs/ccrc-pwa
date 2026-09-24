@@ -6874,7 +6874,7 @@ describe('ccrc doctor: provenance (design §11 — a fresh install ends green; D
     const home = healthy('ccrc-doctor-prov-unsigned-');
     record(home, `${HEALTHY_SHA}\nunsigned\n`);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS provenance: unsigned — this install was not verified by ccrc update \(a checkout install, install\.sh's trust-on-first-use, or --allow-unsigned\); the next ccrc update verifies$/m);
+    expect(r.stdout).toMatch(/^PASS provenance: unsigned — this install was not verified by ccrc update \(a checkout install, install\.sh's trust-on-first-use, or --allow-unsigned\); the next ccrc update that installs a release \(a newer one, or --force on this one\) verifies it and clears the mark$/m);
     // A PASS prints no remedy line — `remedyFor` only matches a WARN/FAIL
     // verdict line, so "no match" is its own honest signal of "none".
     expect(remedyFor(r.stdout, 'provenance')).toBe('');

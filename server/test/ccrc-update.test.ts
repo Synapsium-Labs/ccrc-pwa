@@ -164,7 +164,11 @@ function healthyBox(home: string): void {
     'case "$url" in',
     '  local://*)',
     '    case "$url" in *.sigstore.json)',
-    '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi ;;',
+    '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi',
+    // D-3284 (final review, B2): a status OTHER than 404 on the bundle fetch
+    // alone (not the tarball, not SHA256SUMS) — the measured-`-w` knob
+    // `_upd_fetch`'s fixed code now reads.
+    '      if [ -f "$HOME/fixture-bundle-http" ]; then IFS= read -r hc < "$HOME/fixture-bundle-http"; [ -n "$wfmt" ] && printf \'%s\' "$hc"; echo "curl: (22) The requested URL returned error: $hc for $url" >&2; exit 22; fi ;;',
     '    esac',
     // Task 6: the release host answering an HTTP error that is NOT a 404 (a
     // 403 rate limit, a 5xx) — a FILE knob naming the status, for every
@@ -1295,16 +1299,44 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(r.stdout).toMatch(new RegExp(`^update: previous: kept \\(v0\\.9\\.0\\) — a --from ${from} run returns to a known tag; it is not a new baseline$`, 'm'));
   });
 
-  // D-3254: the rerun D-3240
-  // prescribes (`ccrc update --to <v> --force`) runs on a box whose stamp
-  // already reads <v> — left there by the spine that died after `_inst_stamp`.
-  // Written from that stamp, `previous` would name the release that just
-  // failed, and a failing rerun's arm 2 would re-install it.
-  it('a --force reinstall of the tag the box already runs keeps previous — a reinstall is not a new baseline (D-3254)', () => {
+  // D-3254 then D-3283 (final review, B1): the rerun D-3240 prescribes
+  // (`ccrc update --to <v> --force`) runs on a box whose stamp already
+  // reads <v> — left there by the spine that died after `_inst_stamp`, with
+  // NO completed-install record (or one naming a DIFFERENT sha) — because
+  // that spine never reached `_inst_installed`. Written from that stamp,
+  // `previous` would name the release that just failed, and a failing
+  // rerun's arm 2 would re-install it. But when the record names the
+  // RUNNING stamp's OWN sha, the running build DID complete — it is a real
+  // baseline, not a reinstall-in-progress, and D-3283 fixes the arm that
+  // used to keep the old `previous` even then (a failed `--force` reinstall
+  // of a box's own running tag must not leave arm 2 restoring a release
+  // BELOW the one the box actually ran).
+  it('a --force reinstall of a COMPLETED baseline writes previous from the running build, not kept (D-3283, was D-3254 (a))', () => {
     const home = freshUpdateBox('ccrc-update-prev-reinstall-');
     plantOldBox(home, { version: 'v2.0.0' });
-    // The record is PRESENT, so only the same-tag arm can keep previous here.
+    // The record names the RUNNING stamp's OWN sha: this box completed
+    // installing v2.0.0 before this rerun. Per D-3283 that is a baseline,
+    // so it must be WRITTEN as `previous`, not kept.
     writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the reinstall never ran — the write below would be vacuous').toBe(true);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe(`v2.0.0\n${OLD_SHA}\n`);
+    expect(previous(home)).toBe(`v2.0.0\n${OLD_SHA}\n`);
+    expect(r.stdout).toMatch(new RegExp(`^update: previous: v2\\.0\\.0 \\(${OLD_SHA}\\) — the tag a restore or a bare 'ccrc rollback' returns to$`, 'm'));
+  });
+
+  // The keep D-3254 (a) actually protects: the record is present but names a
+  // DIFFERENT sha than the running stamp — the running build's OWN install
+  // never completed (this record is a stale leftover from an earlier build
+  // that happened to carry the same tag), so it is not yet a baseline.
+  it('a --force reinstall of the tag the box already runs, with a record naming a DIFFERENT sha, keeps previous — the running build has not itself completed (D-3254 (a))', () => {
+    const home = freshUpdateBox('ccrc-update-prev-reinstall-stale-record-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    // Present, but NOT the running stamp's own sha.
+    writeFileSync(join(home, '.ccrc', 'installed'), 'differentsha00000000000000000000000000\n');
     writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r = runUpdate(home, ['--force']);
@@ -1313,9 +1345,9 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
     expect(previous(home)).toBe('v1.0.0\nbaselinesha\n');
     expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
-    // …and with NO previous to keep (a box whose first move was made by a
-    // pre-W4 `ccrc`, as Task 16's live `rollout --force` is), the reinstall
-    // writes its stamp as today.
+  });
+
+  it('a --force reinstall of the tag the box already runs, with NO previous to keep, writes its stamp as today regardless of the record (D-3254)', () => {
     const first = freshUpdateBox('ccrc-update-prev-reinstall-none-');
     plantOldBox(first, { version: 'v2.0.0' });
     writeFileSync(join(first, '.ccrc', 'installed'), `${OLD_SHA}\n`);
@@ -1652,9 +1684,9 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(verifyArgv(home)).toEqual([]);
     r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    // D-3143: curl -f's exit 22 means ANY HTTP status >= 400, not
-    // specifically 404 — say what was actually measured.
-    expect(r.stdout).toMatch(/^update: WARN: .*sigstore\.json is absent \(the release host answered an HTTP error — curl exit 22\) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned$/m);
+    // D-3143 then D-3284: curl -f's exit 22 means ANY HTTP status >= 400, not
+    // specifically 404 — so only a MEASURED 404 (via -w) reaches this WARN.
+    expect(r.stdout).toMatch(/^update: WARN: .*sigstore\.json is absent \(the release host answered 404\) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned$/m);
     // m9 (Ruling 32): the closing transcript line for this success path was
     // previously unasserted — pin it distinct from the verified-bundle case's
     // own closing line (the OK-flavour test above).
@@ -1719,7 +1751,9 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     writeFileSync(join(home, 'fixture-curl-exit'), '7\n');
     const r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/download failed: .*sigstore\.json \(curl exit 7, not a 404/);
+    // D-3284: verdict-first now — "not a verdict on this release" survives
+    // the 200-char cut even when the URL is long; the URL itself follows.
+    expect(r.stderr).toMatch(/a transient fetch failure \(curl exit 7, not a 404\) fetching the provenance bundle — not a verdict on this release: .*sigstore\.json/);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
@@ -2749,6 +2783,62 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(d).not.toMatch(/^provenance:/);
   });
 
+  // D-3284 (final review, B2, I-2): a MEASURED non-404 status on the bundle
+  // fetch (a 503, a 403 rate limit) is a transient node fault, not "this
+  // release ships no bundle" — it must NOT carry `UPD_FAIL_PREFIX`, or W2's
+  // sweep (`startsWith('provenance:')`) turns a passing release, from a
+  // release host that merely blipped, into a lasting per-node refusal
+  // (D-3239). Only a MEASURED 404 keeps the prefix — pinned unchanged below.
+  it.each([['503'], ['403']])('a bundle fetch answering a measured %s is a transient fetch failure, never "provenance: " — exit 1, the status is named (D-3284)', (status) => {
+    const detailOf = (home: string): string => {
+      const rep = lastReport(home);
+      expect(rep['phase']).toBe('failed');
+      return String(rep['detail']);
+    };
+    const home = freshUpdateBox(`ccrc-update-json-prov-http${status}-`);
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-bundle-http'), `${status}\n`);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    const d = detailOf(home);
+    expect(d).not.toMatch(/^provenance:/);
+    // Verdict-first (D-3284): "not a verdict on this release" leads, so it
+    // survives the 200-character cut even with a long release URL.
+    expect(d).toMatch(/^a transient fetch failure \(curl exit 22, HTTP \d+, not a 404\) fetching the provenance bundle - not a verdict on this release:/);
+    expect(r.stderr).toMatch(new RegExp(`a transient fetch failure \\(curl exit 22, HTTP ${status}, not a 404\\) fetching the provenance bundle — not a verdict on this release: .*sigstore\\.json`));
+    // --allow-unsigned does not turn a transient fault into "absence" either.
+    const withFlag = freshUpdateBox(`ccrc-update-json-prov-http${status}-flag-`);
+    plantOldBox(withFlag, { version: 'v1.0.0' });
+    packRelease(withFlag, stubTree(withFlag, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(withFlag, 'fixture-bundle-http'), `${status}\n`);
+    const r2 = runUpdate(withFlag, ['--allow-unsigned']);
+    expect(r2.code, `stderr: ${r2.stderr}`).toBe(1);
+    expect(detailOf(withFlag)).not.toMatch(/^provenance:/);
+  });
+
+  // 404 keeps its ORIGINAL behaviour: unchanged, still `provenance: `-prefixed,
+  // still admitted under --allow-unsigned — the D-3284 fix narrows what
+  // COUNTS as absence, it does not touch the 404 arm itself.
+  it('a bundle fetch answering a measured 404 is unchanged: `provenance: `-prefixed, admitted only with --allow-unsigned (D-3284)', () => {
+    const refused = freshUpdateBox('ccrc-update-json-prov-http404-refused-');
+    plantOldBox(refused, { version: 'v1.0.0' });
+    packRelease(refused, stubTree(refused, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(refused, 'fixture-bundle-http'), '404\n');
+    const r = runUpdate(refused);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(String(lastReport(refused)['detail'])).toMatch(/^provenance: the release ships no provenance bundle /);
+    expect(r.stderr).toMatch(/the release ships no provenance bundle .*answered 404.*installs only with --allow-unsigned/);
+
+    const admitted = freshUpdateBox('ccrc-update-json-prov-http404-admitted-');
+    plantOldBox(admitted, { version: 'v1.0.0' });
+    packRelease(admitted, stubTree(admitted, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(admitted, 'fixture-bundle-http'), '404\n');
+    const r2 = runUpdate(admitted, ['--allow-unsigned']);
+    expect(r2.code, `stderr: ${r2.stderr}`).toBe(0);
+    expect(r2.stdout).toMatch(/WARN: .*sigstore\.json is absent \(the release host answered 404\)/);
+  });
+
   it('a detail is printable ASCII, at most 200 characters, cut BEFORE it is escaped: a die naming a hostile URL arrives exactly', () => {
     // CCRC_RELEASE_BASE_URL is the one knob that puts arbitrary bytes into a
     // die sentence: `_upd_resolve`'s "download failed: <url>/SHA256SUMS …".
@@ -3702,10 +3792,14 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
-    expect(r.stdout).toMatch(/^update: arm2-refused: v1\.0\.0 ships no bundle — run ccrc update --to v1\.0\.0 --allow-unsigned by hand$/m);
+    // D-3285 (final review, B3(iii)): the spine already completed and
+    // raised the floor to the new tag, so the by-hand command needs
+    // --downgrade or the floor refuses it — `cmd_rollback`'s own D-3263
+    // header already prints the same shape.
+    expect(r.stdout).toMatch(/^update: arm2-refused: v1\.0\.0 ships no bundle — run ccrc update --to v1\.0\.0 --downgrade --allow-unsigned by hand$/m);
     expect(restoreChildArgv(home), 'arm 2 ran a child for a release it had just refused').toBeNull();
     const details = reportWrites(home).map((w) => String(w['detail']));
-    expect(details).toContain('arm2-refused: v1.0.0 ships no bundle; run ccrc update --to v1.0.0 --allow-unsigned by hand');
+    expect(details).toContain('arm2-refused: v1.0.0 ships no bundle; run ccrc update --to v1.0.0 --downgrade --allow-unsigned by hand');
     const last = lastReport(home);
     expect(last['phase']).toBe('reverted');
     expect(String(last['detail'])).toMatch(/^arm3: tree MIXED, deploy\.sh is the remedy; gate: /);
@@ -3950,6 +4044,127 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
   });
 });
 
+// Final review, B4 — D-3259's own promise, unnumbered (no new deviation):
+// arm 3's per-row placement, sourced directly with `_plat_mv_notdir`
+// shadowed so a specific call can be made to fail without a real filesystem
+// race. Every case needs `live` to already be a REAL directory (not a
+// symlink) — the branch `_upd_restore_copy` takes the aside/stage path for
+// at all.
+describe('_upd_restore_copy (arm 3\'s per-row placement): the move-back is checked (B4, was unchecked)', () => {
+  const setup = (prefix: string): { home: string; back: string; live: string } => {
+    // freshUpdateBox, not bare mkTmp: `sourcedCcrc` runs under `updateEnv`,
+    // which plants its stubs into `~/.local/bin` and expects it to exist.
+    const home = freshUpdateBox(prefix);
+    const back = join(home, 'back');
+    const live = join(home, 'live');
+    mkdirSync(back, { recursive: true });
+    writeFileSync(join(back, 'NEW-CONTENT'), 'the backup copy\n');
+    mkdirSync(live, { recursive: true });
+    writeFileSync(join(live, 'CURRENT-CONTENT'), 'what the new install placed\n');
+    return { home, back, live };
+  };
+  /** `n=2` fails the stage→live rename; `n=3` (if reached) fails the
+   *  move-back. Every other call is the REAL `mv -fT`, so the fixture
+   *  measures the function's own recovery, not a mocked filesystem. */
+  const shadow = (failCalls: number[]): string => [
+    'n=0',
+    '_plat_mv_notdir() {',
+    '  n=$((n + 1))',
+    `  case " ${failCalls.join(' ')} " in *" \${n} "*) return 1 ;; esac`,
+    '  mv -fT -- "$1" "$2"',
+    '}',
+  ].join('\n');
+
+  itLinux('both the stage→live rename AND the move-back fail: rc 2, live is GONE, the new install\'s copy survives at aside', () => {
+    const { home, back, live } = setup('ccrc-restore-copy-rc2-');
+    const r = sourcedCcrc(home, [
+      shadow([2, 3]),
+      `_upd_restore_copy '${back}' '${live}'; echo "rc=$?"`,
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('rc=2');
+    expect(existsSync(live), 'arm 3 must never claim the row was "left as placed" when live does not exist').toBe(false);
+    const leftover = readdirSync(home).find((n) => n.startsWith('live.ccrc-replaced.'));
+    expect(leftover, 'the new install\'s own copy must survive somewhere findable').toBeDefined();
+    expect(readFileSync(join(home, leftover!, 'CURRENT-CONTENT'), 'utf8')).toBe('what the new install placed\n');
+    // The staging copy of the backup is cleaned up either way.
+    expect(readdirSync(home).some((n) => n.startsWith('live.ccrc-restore.'))).toBe(false);
+  });
+
+  itLinux('the stage→live rename fails but the move-back SUCCEEDS: rc 1, live is unchanged — the ordinary "left as placed" arm', () => {
+    const { home, back, live } = setup('ccrc-restore-copy-rc1-');
+    const r = sourcedCcrc(home, [
+      shadow([2]),
+      `_upd_restore_copy '${back}' '${live}'; echo "rc=$?"`,
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('rc=1');
+    expect(existsSync(live)).toBe(true);
+    expect(readFileSync(join(live, 'CURRENT-CONTENT'), 'utf8')).toBe('what the new install placed\n');
+    expect(existsSync(join(live, 'NEW-CONTENT'))).toBe(false);
+    // No aside or stage copy left behind — this is the ordinary failure arm.
+    expect(readdirSync(home).some((n) => n.startsWith('live.ccrc-replaced.'))).toBe(false);
+    expect(readdirSync(home).some((n) => n.startsWith('live.ccrc-restore.'))).toBe(false);
+  });
+
+  itLinux('every rename succeeds: rc 0, live now holds the backup, and a failed `rm -rf` on the pre-restore copy is a WARN, not a failure', () => {
+    const { home, back, live } = setup('ccrc-restore-copy-rc0-');
+    const r = sourcedCcrc(home, `_upd_restore_copy '${back}' '${live}'; echo "rc=$?"`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('rc=0');
+    expect(readFileSync(join(live, 'NEW-CONTENT'), 'utf8')).toBe('the backup copy\n');
+    expect(existsSync(join(live, 'CURRENT-CONTENT'))).toBe(false);
+    expect(readdirSync(home).some((n) => n.startsWith('live.ccrc-replaced.'))).toBe(false);
+
+    // B4 (no new deviation): a `rm -rf` failure on the pre-restore copy is
+    // disk debris, not a wrong claim about where the tree is — checked, but
+    // only for a WARN.
+    const { home: home2, back: back2, live: live2 } = setup('ccrc-restore-copy-rm-warn-');
+    const r2 = sourcedCcrc(home2, [
+      // Only the ONE call arm 3's fix added — removing the pre-restore
+      // copy on the SUCCESS path — fails; every other `rm` (the stage
+      // dir's own setup/teardown) is the real command, or the function
+      // could never reach the row it is meant to test.
+      'rm() {',
+      '  case "$*" in',
+      '    "-rf -- "*.ccrc-replaced.*) return 1 ;;',
+      '  esac',
+      '  command rm "$@"',
+      '}',
+      `_upd_restore_copy '${back2}' '${live2}'; echo "rc=$?"`,
+    ].join('\n'));
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(r2.stdout).toContain('rc=0');
+    expect(r2.stderr).toMatch(/WARN: could not remove .*\.ccrc-replaced\..* \(the pre-restore copy of/);
+    expect(readFileSync(join(live2, 'NEW-CONTENT'), 'utf8')).toBe('the backup copy\n');
+  });
+
+  // Final review, B4 (no new deviation): `_upd_restore_arm3`'s own wiring of
+  // a `_upd_restore_copy` rc-2 row — shadowed directly here rather than
+  // through a full spine, so this measures arm 3's MESSAGE, not the
+  // filesystem race the tests above already cover.
+  itLinux('arm 3 never says "left as the new install placed it" for a row `_upd_restore_copy` reports MISSING (B4)', () => {
+    const home = freshUpdateBox('ccrc-restore-arm3-missing-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'installed'), 'somesha0000000000000000000000000000000\n');
+    mkdirSync(join(home, 'backups'), { recursive: true });
+    const r = sourcedCcrc(home, [
+      // One row, forced to the rc-2 (move-back also failed) arm — the exact
+      // naming convention `_upd_restore_copy` itself uses.
+      `_upd_backup_pairs() { printf 'tree\\t%s/live-row\\t%s\\n' "$HOME" 'live-row'; }`,
+      'mkdir -p "$HOME/backups/live-row"',
+      '_upd_restore_copy() { return 2; }',
+      'UPD_BACKUP_DIR="$HOME/backups"',
+      '_upd_restore_arm3 server "gate: fixture reason"',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`arm 3: ${home}/live-row is now MISSING — the new install's copy could not be moved back and sits at ${home}/live-row\\.ccrc-replaced\\.\\d+ — move it back by hand`));
+    expect(r.stdout).not.toMatch(/left as the new install placed it/);
+    expect(r.stdout).toMatch(/tree is MIXED AND 1 path\(s\) are MISSING/);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+  });
+});
+
 describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
   // A rollback IS update's own path, run in-process under update's lock as
   // `cmd_update --to <tag> --downgrade --from rollback|watchdog`
@@ -4064,6 +4279,55 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(bad, 'curl-argv'))).toBe(false);
   });
 
+  // D-3285 (final review, B3(i)): a box already running `to`, with a
+  // COMPLETED install of it, used to fall into `cmd_update`'s own converged
+  // no-op — "pass --force to reinstall", a command `rollback` has no
+  // `--force` for, and `update --force` is refused by the floor (M7).
+  // Caught in `cmd_rollback` itself now, before any network call or lock.
+  it('rolling back to the release already running, whose install completed, prints a runnable remedy and exits 0 — nothing fetched, no lock, no report (D-3285)', () => {
+    const home = rollbackBox('ccrc-rollback-converged-');
+    const r = runRollback(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toBe(
+      'rollback: this box already runs v2.0.0 (oldsha0000000000000000000000000000000000)'
+      + ' and that install completed — nothing to do'
+      + ' (to reinstall it: ccrc update --to v2.0.0 --downgrade --force)\n');
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the converged check').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  // Bare `ccrc rollback` twice: the first run does not rewrite `previous`
+  // (`--from rollback` is one of `_upd_write_previous`'s D-3254 keeps), so a
+  // second bare run resolves the SAME tag from ~/.ccrc/previous — this is
+  // the scenario the MUST-FIX text names directly.
+  it('a bare rollback run twice: the second run is the converged case above, resolved from ~/.ccrc/previous (D-3285)', () => {
+    const home = rollbackBox('ccrc-rollback-converged-twice-', { previous: 'v2.0.0\noldsha0000000000000000000000000000000000\n' });
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^rollback: this box already runs v2\.0\.0 \(oldsha0+\) and that install completed — nothing to do \(to reinstall it: ccrc update --to v2\.0\.0 --downgrade --force\)$/m);
+    expect(existsSync(join(home, 'curl-argv'))).toBe(false);
+  });
+
+  // The converged check reads the RUNNING stamp's own sha against the
+  // record — a box whose completed-install record names a DIFFERENT sha (a
+  // stale record from before the running build) is not converged and must
+  // still roll back normally.
+  it('a record naming a DIFFERENT sha than the running stamp is NOT converged — the rollback proceeds (D-3285)', () => {
+    const home = rollbackBox('ccrc-rollback-not-converged-', {
+      previous: PREV,
+      marker: 'differentsha00000000000000000000000000\n',
+    });
+    // Publish v2.0.0 too, beside rollbackBox's default v1.0.0, so a genuine
+    // (non-converged) rollback to the box's own running tag has somewhere
+    // to fetch from.
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runRollback(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/nothing to do/);
+    expect(existsSync(join(home, 'curl-argv')), 'the ordinary rollback path must still run').toBe(true);
+  });
+
   it('an unpublished tag is refused at exit 2 before the lock and before any backup — its SHA256SUMS is the ONE request (§18 "`rollback` refuses an unknown tag")', () => {
     const home = rollbackBox('ccrc-rollback-unknown-', { previous: PREV });
     const r = runRollback(home, ['--to', 'v7.7.7']);
@@ -4164,7 +4428,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     });
     let r = runRollback(unsigned);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^update: WARN: .*ccrc-v1\.0\.0\.tar\.gz\.sigstore\.json is absent \(the release host answered an HTTP error — curl exit 22\) — proceeding on the transport checksum alone because --allow-unsigned was typed/m);
+    expect(r.stdout).toMatch(/^update: WARN: .*ccrc-v1\.0\.0\.tar\.gz\.sigstore\.json is absent \(the release host answered 404\) — proceeding on the transport checksum alone because --allow-unsigned was typed/m);
     expect(readFileSync(join(unsigned, 'staged-ccrc-env'), 'utf8')).toBe('unset\n');
     const verified = rollbackBox('ccrc-rollback-verified-', { previous: PREV, bundle: false });
     r = runRollback(verified);
@@ -4243,6 +4507,24 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(out).not.toMatch(/rerun: ccrc update --to v1\.0\.0 --force/);
     expect(systemctlCalls(home)).not.toMatch(/try-restart/);
     expect(report(home)['phase']).toBe('failed');
+  });
+
+  // D-3285 (final review, B3(ii)): `_upd_rerun_hint`, sourced directly for
+  // its full `UPD_FROM` vocabulary — `restore` is arm 2's own child, and its
+  // dead-mid-install rerun is refused by the floor the PARENT's completed
+  // spine already raised, exactly like `rollback` and `watchdog`.
+  it('_upd_rerun_hint groups restore with rollback|watchdog — the floor refuses `--force` for all three (D-3285)', () => {
+    const home = freshUpdateBox('ccrc-update-rerun-hint-');
+    for (const from of ['rollback', 'watchdog', 'restore']) {
+      const r = sourcedCcrc(home, `UPD_FROM=${from} UPD_VERSION=v1.0.0 _upd_rerun_hint`);
+      expect(r.code, `${from}: ${r.stderr}`).toBe(0);
+      expect(r.stdout, from).toBe('ccrc rollback --to v1.0.0');
+    }
+    for (const from of ['cli', 'pwa', 'rollout']) {
+      const r = sourcedCcrc(home, `UPD_FROM=${from} UPD_VERSION=v1.0.0 _upd_rerun_hint`);
+      expect(r.code, `${from}: ${r.stderr}`).toBe(0);
+      expect(r.stdout, from).toBe('ccrc update --to v1.0.0 --force');
+    }
   });
 
   // PLATFORM-ONLY: --detach is Linux-only (decision 17) — a transient
@@ -5101,6 +5383,14 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     r = runWatchdog(home2);
     expect(r.code, r.stderr).toBe(0);
     expect(readReport(home2).detail).toBe('abandoned by its updater; box answers healthy on v2.0.0 but its install never completed (the completed-install record does not name its stamp); rerun: ccrc rollback --to v2.0.0');
+    // D-3285 (final review, B3(ii)): `restore` — arm 2's own child — is the
+    // SAME shape: the PARENT's completed spine already raised the floor to
+    // the tag that just failed, so `update --to <prev> --force` is refused
+    // there too; `_upd_rerun_hint` now groups `restore` with `rollback`.
+    report(home2, { phase: 'installing', ageS: 90, from: 'restore' });
+    r = runWatchdog(home2);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readReport(home2).detail).toBe('abandoned by its updater; box answers healthy on v2.0.0 but its install never completed (the completed-install record does not name its stamp); rerun: ccrc rollback --to v2.0.0');
     // A report with no target (null) is never "converged", and stays null.
     const home3 = watchBox('ccrc-watchdog-healthy-notarget-');
     report(home3, { phase: 'resolving', ageS: 90, target: null });
@@ -5324,7 +5614,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       const now = readReport(home);
       expect(now.phase, phase).toBe('failed');
       expect(String(now.detail), phase)
-        .toMatch(/^abandoned by its updater; box unhealthy \(.+\) and its tree never moved; nothing reverted$/);
+        .toMatch(/^abandoned by its updater; tree never moved, nothing reverted; box unhealthy: .+$/);
       expect(r.stdout, phase)
         .toMatch(/^watchdog: stale report \([a-z-]+, 9\ds\) fails its health probe \(.+\), but its tree never moved — recorded as abandoned; nothing was reverted$/m);
       expect(existsSync(join(home, 'launcher-argv')), phase).toBe(false);
@@ -5347,7 +5637,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     const now = readReport(home);
     expect(now.phase).toBe('failed');
     expect(String(now.detail))
-      .toMatch(/^abandoned by its updater; box unhealthy \(.+\) on an unversioned tree; not reverting$/);
+      .toMatch(/^abandoned by its updater; unversioned tree, not reverting; box unhealthy: .+$/);
     expect(r.stdout)
       .toMatch(/^watchdog: stale report \(installing, 9\ds\) fails its health probe \(.+\) on an unversioned tree — recorded as abandoned; not reverting$/m);
     expect(existsSync(join(home, 'launcher-argv'))).toBe(false);

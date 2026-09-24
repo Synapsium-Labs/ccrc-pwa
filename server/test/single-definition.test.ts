@@ -1509,6 +1509,12 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // cmd_rollback (D-3285, final review B3(i)): a read-only convergence
+      // check — the running stamp's version and sha against the completed-
+      // install record — before any network call or lock, so a rollback
+      // already converged on its target prints a runnable remedy instead of
+      // falling into `cmd_update`'s own `--force`-to-reinstall no-op.
+      '&& IFS= read -r rb_rec < "$BOX_INSTALLED_FILE" 2>/dev/null && [ -n "$rb_rec" ] && [ "$rb_rec" = "$rb_sha" ]; then',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
       // above). Measured (not the brief's claimed anchor, which put this
@@ -1526,6 +1532,11 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       '{ IFS= read -r m1; IFS= read -r m2; } < "$BOX_INSTALLED_FILE" || :',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
+      // _upd_write_previous (D-3283, final review B1): a record naming the
+      // running stamp's OWN sha means the running build completed
+      // installing — a real baseline, not a reinstall-in-progress — so the
+      // same-tag keep (below) does NOT fire for it.
+      '{ [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r installed_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || installed_rec=""',
       // W4 Task 4 (D-3254): `_upd_write_previous`
       // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
       // with no record is not a completed baseline.
