@@ -9071,6 +9071,25 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
   - **F5 (W2's review run 149).** `update-routes.test.ts`'s C2 preamble says the sibling case keeps the original "withdrawal really applies" shape. C2b's own comment now says the opposite: the listing's `'complete'` coverage yanks v0.0.10 without `applyWithdrawn`. Correct the preamble.
   - m1 was settled by W2's fix round 4 (its ruling: draft rows never vouch), so it is expected closed on arrival.
 
+- **From W2's review run 150 (its fix round 4).** Two BEHAVIOUR items (fix these, red-first), then prose:
+  - **F3 (behaviour, predates round 4).** A pending `'demote'` whose `tags/K` check answers 200 non-draft (K is alive), beside a fresh listing that does not name K because K is inside a `'newest-page'` window but off the page (the I3 shape in W2's plan), applies. The kept tag moves to T, so K leaves `keepTags`, and the NEXT poll's absence judgment yanks the live K.
+    - The same check answer is dropped when the listing names K as stable, so one `tags/K` answer gives opposite outcomes depending on whether K is on the page.
+    - Fix: a non-draft check keeps K protected. Either K stays the kept tag, or K stays in `keepTags` until a listing judges it.
+    - Pin the reviewer's input: K is v0.0.9 stable, with a full page of 30 dev releases that never names it. K must end un-yanked.
+  - **F4 (behaviour, predates round 4).** A stale `tags/K` 200 stable for a deleted K, beside a `'complete'` listing that no longer names K, re-upserts K as stable and moves the kept tag to T. From then on the listing answers 304, and K is never re-judged, so `newestUnyankedStable()` keeps answering the deleted release.
+    - Under `'complete'` coverage, K's absence IS a verdict. Fix: a `'complete'` listing's silence about K contradicts a stable check (the listing wins, and K is yanked).
+    - Pin the reviewer's input.
+  - **F2 (behaviour, store that throws on every read).** This is the same shape as W2 fix round 4's m2. The T that the 200 arm borrowed under `kNeedsReread` is never released on the 404 arm, so a deleted T stays in `keepTags`. Fix: clear the borrowed T on the 404 arm while the flag is set. Pin an always-throwing store followed by a `/latest` 404.
+  - **Prose F5–F10.**
+    - F5: D-3215's ETag-keep list omits the non-draft DEV row case.
+    - F6: a 304 poll with nothing pending makes 2 requests, not 3.
+    - F7: two comments are false under `kNeedsReread`: the borrowed T, not K, is what `keepTags` protects.
+    - F8: `measureWithdrawn`'s docstring and the module docstring (K is re-derived also while `kNeedsReread` is set).
+    - F9: the B2 describe preamble.
+    - F10: the "stale next to it" sentence.
+
+    Correct each against the code on `main`.
+
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
@@ -9092,6 +9111,9 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 | m1 | drop the `!r.draft` filter from the vouched set | the draft-listing case |
 | m2 | advance `latestEtag` on a throw | the B1 case's no-`If-None-Match` assertion |
 | m4 | delete the `Math.max(0, …)` floor | the backwards-clock case |
+| F3 | revert K's protection under a non-draft check | the off-page live-K case |
+| F4 | revert the complete-coverage contradiction | the deleted-K stale-check case |
+| F2 | drop the 404 arm's release of the borrowed T | the always-throwing-store case |
 
 
 ### Task 9: Docs, the gate, the PR
