@@ -72,16 +72,36 @@ export function readChanges(repoDir, fromSha, toRef = 'HEAD') {
 
 /** Every `*.test.ts` file tracked under `server/test` at `ref`, repo-relative
  *  POSIX paths, recursive (matches vitest's own `test/**\/*.test.ts` include).
+ *  THE one listing of the live tests: select.mjs builds every list from it,
+ *  and map-build reads it through this module's `live-tests` subcommand.
+ *
+ *  `-z`, and nothing trimmed (final review FR-2): without it git C-QUOTES a
+ *  path holding a non-ASCII byte, `"`, `\\` or a control character
+ *  (`"server/test/caf\\303\\251.test.ts"`), which fails the `.test.ts`
+ *  filter below — the test would leave every list, and the full run and the
+ *  stable gate would go green without it. A name no shard list can carry is
+ *  refused by `unsafeTestPaths`' callers, loudly, never dropped here.
  *  @param {string} repoDir @param {string} [ref] @returns {string[]} */
 export function liveTestFiles(repoDir, ref = 'HEAD') {
-  const raw = execFileSync('git', ['ls-tree', '-r', '--name-only', ref, '--', 'server/test'], {
+  const raw = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', ref, '--', 'server/test'], {
     cwd: repoDir, maxBuffer: 64 * 1024 * 1024,
   }).toString('utf8');
-  return raw.split('\n')
-    .map((l) => l.trim())
+  return raw.split('\0')
     .filter((l) => l.length > 0 && l.endsWith('.test.ts'))
     .map(toPosix)
     .sort();
+}
+
+/** A character no list of test paths here can carry: whitespace (every
+ *  matrix joins its files with spaces), a control character (the list files
+ *  are one path per line), a double quote or a backslash (the characters git
+ *  and the shell steps quote or escape). Non-ASCII passes: it travels as-is. */
+export const UNSAFE_TEST_PATH = /[\s\x00-\x1f\x7f"\\]/;
+
+/** The paths among `paths` that `UNSAFE_TEST_PATH` refuses.
+ *  @param {string[]} paths @returns {string[]} */
+export function unsafeTestPaths(paths) {
+  return paths.filter((p) => UNSAFE_TEST_PATH.test(p));
 }
 
 /** Curried `git cat-file -e <ref>:<path>` — true iff SOMETHING (blob or tree)
@@ -288,8 +308,30 @@ export function selectTests({ map, changes, liveTests, existsAt }) {
   return { mode: 'selected', tests: selected };
 }
 
+/** `live-tests [--repo DIR]`: `liveTestFiles` at HEAD, one path per line —
+ *  map-build's live list, so there is ONE listing. Refuses (exit 1, nothing
+ *  printed) a name `UNSAFE_TEST_PATH` refuses, as select.mjs does: a line
+ *  cannot carry a newline, and a list read line by line must not split one.
+ *  @param {string[]} args */
+function liveTestsCli(args) {
+  const opt = {};
+  for (let i = 0; i < args.length; i += 2) {
+    if (args[i]?.startsWith('--')) opt[args[i].slice(2)] = args[i + 1];
+  }
+  const live = liveTestFiles(opt.repo ?? process.cwd());
+  const unsafe = unsafeTestPaths(live);
+  if (unsafe.length > 0) {
+    throw new Error(`select-tests.mjs live-tests: a live test path a list cannot carry: ${unsafe.map((p) => JSON.stringify(p)).join(', ')}`);
+  }
+  process.stdout.write(live.map((f) => `${f}\n`).join(''));
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  if (args[0] === 'live-tests') {
+    liveTestsCli(args.slice(1));
+    return;
+  }
   const opt = {};
   for (let i = 0; i < args.length; i += 2) {
     if (args[i]?.startsWith('--')) opt[args[i].slice(2)] = args[i + 1];

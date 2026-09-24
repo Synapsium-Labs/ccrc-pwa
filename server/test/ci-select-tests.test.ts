@@ -578,6 +578,54 @@ describe('readChanges (git-backed)', () => {
 });
 
 describe('liveTestFiles (git-backed)', () => {
+  // Final review FR-2: without `-z`, git C-QUOTES a path holding a non-ASCII byte, `"`, `\\` or a control
+  // character (`"server/test/caf\\303\\251.test.ts"`), which fails the `.test.ts` suffix filter — and the test
+  // silently leaves every list select.mjs builds (selected, full, trace, count). The listing is NUL-delimited and
+  // unquoted; refusing the names a shard list cannot carry is select.mjs's job, never a silent drop here.
+  it('lists a non-ASCII name, and a name holding a double quote or a backslash, exactly as they are (-z)', () => {
+    const dir = mkTmp('ccrc-ci-select-live-quoted-');
+    initRepo(dir);
+    writeIn(dir, 'server/test/a.test.ts', '// a\n');
+    writeIn(dir, 'server/test/café.test.ts', '// non-ASCII\n');
+    writeIn(dir, 'server/test/q"uote.test.ts', '// a double quote\n');
+    writeIn(dir, 'server/test/back\\slash.test.ts', '// a backslash\n');
+    commitAll(dir, 'names git would quote');
+    expect(liveTestFiles(dir)).toEqual([
+      'server/test/a.test.ts', 'server/test/back\\slash.test.ts', 'server/test/café.test.ts', 'server/test/q"uote.test.ts',
+    ]);
+  });
+
+  it('the live-tests subcommand prints the same one listing, one path per line (what map-build hands testmap.mjs)', () => {
+    const dir = mkTmp('ccrc-ci-select-live-cli-');
+    initRepo(dir);
+    writeIn(dir, 'server/test/a.test.ts', '// a\n');
+    writeIn(dir, 'server/test/café.test.ts', '// non-ASCII\n');
+    writeIn(dir, 'server/test/helper.ts', '// not a test\n');
+    commitAll(dir, 'seed');
+    const cli = path.resolve(__dirname, '../../.github/ci/select-tests.mjs');
+    const out = execFileSync(process.execPath, [cli, 'live-tests', '--repo', dir], { encoding: 'utf8' });
+    expect(out).toBe('server/test/a.test.ts\nserver/test/café.test.ts\n');
+  });
+
+  it('the live-tests subcommand refuses a name a line cannot carry, rather than print it', () => {
+    const dir = mkTmp('ccrc-ci-select-live-cli-nl-');
+    initRepo(dir);
+    writeIn(dir, 'server/test/a.test.ts', '// a\n');
+    writeIn(dir, 'server/test/new\nline.test.ts', '// a newline\n');
+    commitAll(dir, 'a newline in a name');
+    const cli = path.resolve(__dirname, '../../.github/ci/select-tests.mjs');
+    let status = 0; let stdout = ''; let stderr = '';
+    try {
+      stdout = execFileSync(process.execPath, [cli, 'live-tests', '--repo', dir], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (e) {
+      const err = e as { status?: number, stdout?: string, stderr?: string };
+      status = err.status ?? -1; stdout = err.stdout ?? ''; stderr = err.stderr ?? '';
+    }
+    expect(status).not.toBe(0);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('server/test/new\\nline.test.ts');
+  });
+
   it('finds test files recursively, including a brand-new subdirectory (Review Focus b), excludes non-test files', () => {
     const dir = mkTmp('ccrc-ci-select-live-');
     initRepo(dir);

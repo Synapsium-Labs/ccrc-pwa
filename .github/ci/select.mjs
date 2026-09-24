@@ -13,15 +13,17 @@
 // because each would otherwise produce a GREEN run that tested nothing, or the
 // wrong thing: a live-test list that cannot be read or is empty (`full` with
 // zero files skips every shard, and a skip with count 0 is a pass), and a
-// live test path containing whitespace (every matrix joins its files with
-// spaces, so such a path would split into two filters that match nothing).
+// live test path no list can carry (`UNSAFE_TEST_PATH`: whitespace — every
+// matrix joins its files with spaces, so such a path would split into two
+// filters that match nothing — a control character, a double quote or a
+// backslash; final review FR-2). Non-ASCII names pass and run.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap } from './testmap.mjs';
-import { readChanges, liveTestFiles, gitExistsAt, selectTests, RULE_NAMES } from './select-tests.mjs';
+import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, RULE_NAMES } from './select-tests.mjs';
 import { planShards, toMatrix, PROFILES } from './shards.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
@@ -104,9 +106,10 @@ function liveTestsOrRefuse(repoDir) {
   if (live.length === 0) {
     throw new Error(`select.mjs: no live server test files under server/test in ${repoDir}`);
   }
-  const spaced = live.filter((f) => /\s/.test(f));
-  if (spaced.length > 0) {
-    throw new Error(`select.mjs: a live test path contains whitespace, which the space-joined shard lists cannot carry: ${spaced.join(', ')}`);
+  const unsafe = unsafeTestPaths(live);
+  if (unsafe.length > 0) {
+    throw new Error('select.mjs: a live test path contains whitespace, a control character, a double quote or a backslash, '
+      + `which the space-joined shard lists and the one-per-line list files cannot carry: ${unsafe.map((f) => JSON.stringify(f)).join(', ')}`);
   }
   return live;
 }

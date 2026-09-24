@@ -427,6 +427,42 @@ describe('select.mjs CLI — pull_request', () => {
     expect(outputs).toEqual({});
   });
 
+  // Final review FR-2: a name git would C-quote (a non-ASCII byte, `"`, `\\`, a control character) used to fail
+  // the `.test.ts` filter and silently leave every list — so the daily run and the stable gate went green
+  // without it. Non-ASCII names now pass and run; the names a space-joined shard list or a one-per-line list
+  // file cannot carry are refused by name, loudly, like whitespace.
+  it('a non-ASCII test name is listed, counted and sharded in a full run (and traced in its rebuild)', () => {
+    const repo = initRepo();
+    writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+    writeFile(repo, 'server/test/café.test.ts', "it('c', () => {});\n");
+    commitAll(repo, 'a non-ASCII test name');
+    const { status, outputs } = runSelect(repo, { event: 'schedule' });
+    expect(status).toBe(0);
+    expect(outputs.tests).toBe('full');
+    expect(outputs.count).toBe('2');
+    expect(uniqueFilesInMatrix(outputs.server_matrix)).toEqual(new Set(['test/a.test.ts', 'test/café.test.ts']));
+    expect(uniqueFilesInMatrix(outputs.macos_matrix)).toEqual(new Set(['test/a.test.ts', 'test/café.test.ts']));
+    expect(uniqueFilesInMatrix(outputs.trace_matrix)).toEqual(new Set(['test/a.test.ts', 'test/café.test.ts']));
+  });
+
+  for (const [what, name] of [
+    ['a double quote', 'server/test/q"uote.test.ts'],
+    ['a backslash', 'server/test/back\\slash.test.ts'],
+    ['a control character', 'server/test/bell\u0007.test.ts'],
+    ['a newline', 'server/test/new\nline.test.ts'],
+  ] as const) {
+    it(`a live test path with ${what} -> exits non-zero, naming it, and writes no outputs`, () => {
+      const repo = initRepo();
+      writeFile(repo, 'server/test/a.test.ts', "it('a', () => {});\n");
+      writeFile(repo, name, "it('q', () => {});\n");
+      commitAll(repo, `a test name with ${what}`);
+      const { status, stderr, outputs } = runSelect(repo, { event: 'schedule' });
+      expect(status).not.toBe(0);
+      expect(stderr).toContain(JSON.stringify(name));
+      expect(outputs).toEqual({});
+    });
+  }
+
   it("--input-mode full on a pull_request (its pipeline changed) -> tests full, no map consulted", () => {
     const { repo, mapFile } = buildMainFixture();
     const { status, outputs, summary } = runSelect(repo, { event: 'pull_request', inputMode: 'full', mapFile });

@@ -427,14 +427,22 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     g('init', '-q');
     mkdirSync(join(ws, 'server', 'test'), { recursive: true });
     writeFileSync(join(ws, 'server', 'test', 'a.test.ts'), '1\n');
+    // A name git would C-quote without -z (final review FR-2): the live list must carry it.
+    writeFileSync(join(ws, 'server', 'test', 'café.test.ts'), '1\n');
+    // The real listing module, where the step looks for it: the live list runs it for real.
+    mkdirSync(join(ws, '.github', 'ci'), { recursive: true });
+    writeFileSync(join(ws, '.github', 'ci', 'select-tests.mjs'), read('.github/ci/select-tests.mjs'));
     g('add', '-A'); g('commit', '-qm', 'fixture');
     const rt = join(ws, 'rt');
     mkdirSync(join(rt, 'records', 'records-1'), { recursive: true });
     writeFileSync(join(rt, 'records', 'records-1', 'records.json'), '{}');
     return { ws, rt };
   }
-  // node: `-e` answers the matrix length (1); the testmap call logs its arguments and exits $FAKE_RC.
-  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo 1; exit 0; fi\necho "$*" >> "$NODE_LOG"\nexit "$FAKE_RC"' });
+  // node: `-e` answers the matrix length (1); the live list runs the REAL node on the copied select-tests.mjs; the
+  // testmap call logs its arguments and exits $FAKE_RC.
+  const fakeNode = () => fakeBin({ node: 'if [ "$1" = "-e" ]; then echo 1; exit 0; fi\n'
+    + 'if [ "$1" = .github/ci/select-tests.mjs ] && [ "$2" = live-tests ]; then exec "$REAL_NODE" "$@"; fi\n'
+    + 'echo "$*" >> "$NODE_LOG"\nexit "$FAKE_RC"' });
   function build(rc: number, opts: { trace?: string, mapSha?: string, handedMap?: boolean } = {}) {
     const { ws, rt } = buildRepo();
     if (opts.handedMap) {
@@ -444,9 +452,24 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     const r = runStep(step(job('map-build'), 'Build the map'), ws, {
       PATH: `${fakeNode()}:${process.env.PATH}`, RUNNER_TEMP: rt, TRACE: opts.trace ?? 'rebuild', MAP_SHA: opts.mapSha ?? '',
       TRACE_MATRIX: '{"include":[{}]}', GITHUB_SHA: 'f'.repeat(40), FAKE_RC: String(rc), NODE_LOG: join(ws, 'node.log'),
+      GITHUB_WORKSPACE: ws, REAL_NODE: process.execPath,
     });
-    return { ...r, log: existsSync(join(ws, 'node.log')) ? readFileSync(join(ws, 'node.log'), 'utf8') : '' };
+    return {
+      ...r,
+      log: existsSync(join(ws, 'node.log')) ? readFileSync(join(ws, 'node.log'), 'utf8') : '',
+      live: existsSync(join(rt, 'live.txt')) ? readFileSync(join(rt, 'live.txt'), 'utf8') : null,
+    };
   }
+
+  it('the live list a refresh is handed is THE one listing (select-tests.mjs live-tests), non-ASCII names included', () => {
+    const script = runScript(step(job('map-build'), 'Build the map'));
+    expect(script, 'no second listing of the live tests').not.toMatch(/ls-tree|ls-files/);
+    expect(script).toContain('node .github/ci/select-tests.mjs live-tests --repo "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/live.txt"\n');
+    const r = build(0, { trace: 'refresh', mapSha: 'a'.repeat(40), handedMap: true });
+    expect(r.status).toBe(0);
+    expect(r.live).toBe('server/test/a.test.ts\nserver/test/café.test.ts\n');
+    expect(r.log).toMatch(/ --live \S+\/live\.txt /);
+  });
 
   it('exit 0, 3 or 4 from testmap.mjs: the step succeeds and says which; any other exit fails it', () => {
     expect(build(0)).toMatchObject({ status: 0, output: 'rc=0\n' });

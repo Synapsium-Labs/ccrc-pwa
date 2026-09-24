@@ -756,7 +756,9 @@ jobs:
             echo "::error::$got of $want trace shards left records; no map is written for this commit"
             exit 1
           fi
-          git ls-tree -r --name-only HEAD -- server/test | grep '\.test\.ts$' > "$RUNNER_TEMP/live.txt"
+          # The live tests, from THE one listing select.mjs builds every list
+          # from (NUL-delimited, never git's quoted form — final review FR-2).
+          node .github/ci/select-tests.mjs live-tests --repo "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/live.txt"
           old=()
           if [ -f "$RUNNER_TEMP/select-inputs/testmap.json" ]; then old=(--old "$RUNNER_TEMP/select-inputs/testmap.json"); fi
           rc=0
