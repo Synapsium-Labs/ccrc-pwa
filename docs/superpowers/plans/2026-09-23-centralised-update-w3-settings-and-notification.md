@@ -1936,11 +1936,11 @@ mut src/watch.ts "      marked = coord.markReleaseNotified(n.tag, now);" "      
 mut src/watch.ts "      const fleetIntent = coord.intentFor(FLEET_SCOPE);" "      const fleetIntent = { ...coord.intentFor(FLEET_SCOPE)!, notify: 'channel' as const };"
 # M3 — §18 "the push lands on settings": url dropped from the payload
 mut src/watch.ts ", url: copy.url };" " };"
-# M4 — dev:sessionless-push: the send routed through pushOne, the session-keyed lane
+# M4 — D-3296: the send routed through pushOne, the session-keyed lane
 mut src/watch.ts "    const sending = sender.notify(payload);" "    this.pushOne({ kind: 'coord', sessionId: 'cc-a', project: '', title: payload.title, body: payload.body, tag: payload.tag }, new Set()); const sending: Promise<void> = Promise.resolve();"
 # M5 — the server-role gate removed
 mut src/watch.ts "    if (role !== 'server' && role !== 'both') return { did: 'skipped', why: 'not-server-role' };" ""
-# M6 — dev:notify-mark-before-send: the mark moved AFTER the send starts
+# M6 — D-3295: the mark moved AFTER the send starts
 mut src/watch.ts "      marked = coord.markReleaseNotified(n.tag, now);" "      marked = { ok: true, notifiedAt: now };" \
   "    void sending.catch(" "    coord.markReleaseNotified(n.tag, now); void sending.catch("
 # M7 — a lost mark still sends
@@ -1962,11 +1962,11 @@ mut ../shared/update-summary.ts "typeof fleet.version === 'string' && " ""
 T='test/update-routes.test.ts' mut src/update/routes.ts "    watcher?.pushReleaseAfterPoll(Date.now());" ""
 # M16 — the no-push-service arm removed: a box with no sender decides, marks, and throws on the send
 mut src/watch.ts "    if (sender === undefined) return { did: 'skipped', why: 'no-push-service' };" ""
-# M17 — dev:notify-waits-for-this-process-sweep: the catalogue side decides before this process has swept
+# M17 — D-3314: the catalogue side decides before this process has swept
 mut src/watch.ts "    if (!this.inventorySwept) return { did: 'skipped', why: 'not-yet-swept' };" ""
 # M18 — the flag is never set: the catalogue side never decides
 mut src/watch.ts "    this.inventorySwept = true;" ""
-# M14 — dev:one-summary-sentence: a second holder of the clause (the single-definition scan)
+# M14 — D-3301: a second holder of the clause (the single-definition scan)
 node -e 'const fs=require("fs");const f="src/update/notify.ts";const a="export const RELEASE_PUSH_URL = '"'"'/settings'"'"';";const s=fs.readFileSync(f,"utf8");
   if(s.split(a).length!==2)process.exit(9);fs.writeFileSync(f,s.replace(a,()=>a+" // fleet and server are on "));'
 ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'release summary clause' 2>&1 | grep -E '^ +×|Tests |deeply equal'
