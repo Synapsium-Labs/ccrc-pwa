@@ -9113,6 +9113,25 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
     - If the rule needs a column to hold the report measured at acquisition, that is a migration, and a migration slot is a cross-branch namespace: mail the coordinator before taking one.
     - Pin: a fleet node whose clock runs 5 s behind the server settles its dispatched run. A node whose report is unchanged since acquisition stays in flight until the deadline.
 
+
+- **From W3's review run 161 (W3 merged with these carried, by the bar its coordinator announced before that review).** W3's files are on `main`; this wave already edits `SettingsScreen.tsx`, `UpdateBanner.tsx`, BuildLine and `useUpdatesView.ts` (Task 8), so the items land here. Anchor each by symbol.
+  - **F-A (BEHAVIOUR; the coordinator's ruling).** After a 409 from the auto route, the write's own immediate reload IS the "later poll" W3's F5 meant: the latest measurement supersedes the route's node list. Two things follow.
+    - Make the prose true: `SettingsScreen`'s comments (they say the opposite) and D-3315's text (W3's plan, on `main`).
+    - The stored view is the one current when the 409 LANDS, not the one captured at tap time. Otherwise a 60 s poll landing mid-write hides the route's list entirely. Pin it without relying on a mock that reuses one response object.
+  - **F-B (BEHAVIOUR, reachable only from a non-conforming server).** `isNodeElement` keeps a node whose `reachable` is absent, which `statedOf`/`pendingTag` read as unreachable while `reachabilityLine` reads it as reachable. `NodeWire.reachable` is a required boolean, so drop an element without one. Pin it.
+  - **Pins with no red** (measure each red after adding it):
+    - F-D: the "sides from every row, never a pre-filtered subset" rule needs a case with more than one row per role, where a pre-filter changes the answer.
+    - F-G: `sweptEnoughToDecide`'s refused case.
+    - F-J: `statedOf`'s single definition. The scan must also catch an inline three-clause copy, and `pendingTag`'s inline copy goes through `statedOf`. Re-title push-copy's F14 case to what it pins, or pin the decision half there.
+    - F-K: `isNodeElement`'s `role` and `measuredAt` clauses.
+    - F-L: `update-summary.test.ts`'s "an omitted `stated` defaults to stated" case can never fail. Delete it or make it true, and remove the dead `versionsSummary` if nothing ships a call to it.
+  - **Prose** (correct each against `main`):
+    - F-C: W3's plan mutation rows and step code made stale by its fix round (Task 3's M9/M18 and Step (g); Task 11 Step 8 rows 1 and 6; Task 12's step code).
+    - F-E: D-3307's stated red set; measure it.
+    - F-F: D-3303's band claim. It holds only at 390 px as measured; narrower phones wrap too. Measure the fit threshold in a real browser before writing a number.
+    - F-H: `inventorySwept`'s and `pushReleaseAfterPoll`'s docstrings.
+    - F-I: "measured this sweep" where `statedOf` checks "ever measured".
+    - F-M: D-3313's text (`remoteSides` is now L0, and it feeds the push and banner too) and its M6 prediction.
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, for each item, read the named code or text and decide whether it is open. Write the list (open / closed-on-arrival, with a one-line reason) to `$SCRATCH/w5-t8a-remeasure.md`.
@@ -9142,6 +9161,11 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
 | 151 F6 | the draft drop cell keeps `lastLatestTag` on K | the self-disagreeing mirror case and its deleted-off-page-T variant |
 | 151 F7 | revert BOTH 151 F6's and 150 F4's fixes (each alone: green, recorded) | the drafted-then-deleted K case |
 | W4 C33 | restore the clock comparison | the node-clock-5-s-behind case |
+| W3 F-A | store the tap-time view instead of the 409-time view | the poll-lands-mid-write case |
+| W3 F-B | keep an element with no boolean `reachable` | the absent-`reachable` element case |
+| W3 F-D | pre-filter the rows before `remoteSides` | the two-rows-per-role case |
+| W3 F-G | count `refused` as measured in `sweptEnoughToDecide` | the refused-row boot case |
+| W3 F-K | delete the `role` (then the `measuredAt`) clause of `isNodeElement` | the malformed-element cases |
 
 
 ### Task 9: Docs, the gate, the PR
