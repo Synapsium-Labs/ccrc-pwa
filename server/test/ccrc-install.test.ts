@@ -3646,8 +3646,16 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const ccrc = ccrcIn(treeRoot(home));
     const env = ccrcEnv(home);
     replantDoctorStubs(home);
+    // The trailing `exit $?` (the fixture legacy-parent tests' own idiom,
+    // above) is LOAD-BEARING: without a statement after the install
+    // command, bash's own tail-call exec optimisation would REPLACE this
+    // `bash -c` process's image with the install process directly, so the
+    // install's own $PPID would resolve to whatever spawned THIS test's
+    // `bash -c` (the test runner), never to a `bash -c '...'` argv at all —
+    // the mutation this pin exists to catch would then be invisible to it.
     const cmd = 'bash probe.sh; true # ccrc update --to v1\n'
-      + `env CCRC_UPDATE_VERIFIED=1 bash '${ccrc}' install\n`;
+      + `env CCRC_UPDATE_VERIFIED=1 bash '${ccrc}' install\n`
+      + 'exit $?\n';
     const r = spawnSync(BASH, ['-c', cmd], { env, encoding: 'utf8' });
     expect(r.status, r.stderr ?? '').toBe(0);
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
