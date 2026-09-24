@@ -11451,26 +11451,33 @@ _inst_wrappers() {
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
-# ── _inst_legacy_verified_parent — the transition arm (review fix round 1 I1) ─
+# ── _inst_legacy_verified_parent — the transition arm (review fix round 1 I1;
+# tightened fix round 1 item 0 / batch A rereview N1) ──────────────────────
 # rc 0 iff THIS process's own parent (never assumed — measured with `ps -o
-# args=`, portable on Linux and macOS alike) is itself a `ccrc … update`
-# invocation: a word ending in `ccrc`, then the word `update`, as separate
-# argv tokens (so `ccrc-doctor update-foo` does not match, and neither does
-# an unrelated `update` argument elsewhere in a longer command line). Every
-# released `cmd_update` before this wave runs its staged spine as `env
-# CCRC_UPDATE_VERIFIED=1 bash "$UPD_TREE/ccd/ccrc" install` with no
-# `CCRC_UPDATE_SPINE` at all (`git show origin/main:ccd/ccrc | grep -n
-# spine_env`) — so THIS is the shape its child's own parent process has.
-# FAILS CLOSED: `ps` absent, or the read failing for any reason (the PPID
-# already exited, a sandboxed `ps` that cannot see it), answers rc 1 —
-# unverified is always the safe direction, same as every other guard in this
-# function.
+# args=`, portable on Linux and macOS alike) is a `ccrc … update` SCRIPT
+# INVOCATION, not merely a command line that mentions the words somewhere:
+# argv[0] itself is a word ending in `ccrc`, then the word `update` next —
+# or ONE interpreter word (`bash`, `/bin/sh`, …) followed by a word ending
+# in `ccrc`, then `update`. Every released `cmd_update` before this wave
+# runs its staged spine as `env CCRC_UPDATE_VERIFIED=1 bash
+# "$UPD_TREE/ccd/ccrc" install` with no `CCRC_UPDATE_SPINE` at all (`git show
+# origin/main:ccd/ccrc | grep -n spine_env`) — so THIS is the shape its
+# child's own parent process has: argv[0]=bash, argv[1]=…/ccrc, argv[2]=update.
+# ANCHORED AT THE START of the reconstructed argv, so a `bash -c '… ccrc
+# update …'` command STRING does not match: its argv[1] is the literal `-c`,
+# never a path ending in `ccrc`, however much `ccrc update` text the quoted
+# string carries after it (N1: an operator's or an agent's `ssh box 'ccrc
+# update --to vX --force || ccrc install'` must not forge a VERIFIED record
+# for the `ccrc install` half). FAILS CLOSED: `ps` absent, or the read
+# failing for any reason (the PPID already exited, a sandboxed `ps` that
+# cannot see it), answers rc 1 — unverified is always the safe direction,
+# same as every other guard in this function.
 _inst_legacy_verified_parent() {
   command -v ps >/dev/null 2>&1 || return 1
   local args=""
   args="$(ps -o args= -p "$PPID" 2>/dev/null)" || return 1
   [ -n "$args" ] || return 1
-  [[ "$args" =~ (^|[[:space:]])[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
+  [[ "$args" =~ ^([^[:space:]]+[[:space:]]+)?[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
 }
 
 # ── _inst_installed — the completed-install record, the spine's LAST write ─
@@ -11748,19 +11755,42 @@ cmd_update() {
     echo "$PROG: update: --check and --from are exclusive — --check measures and writes nothing, --from attributes a run that moves this box; pick one" >&2
     exit 2
   fi
-  # D-3257 — `--from restore` is the one word
-  # that exempts a run from the floor (Task 1), from `previous` (Task 4) and
-  # from the supervisor sweep (below). It is spoken by exactly one caller:
-  # `_upd_restore_arm2`, whose child carries CCRC_UPDATE_LOCK_HELD=<parent>.
-  # Typed by hand it would be the floor's second door, beside --downgrade —
-  # which spec §9 says is the only one. Any marker other than this process's
-  # own parent can never inherit (Task 2's rule), so refuse before anything is
-  # detached, locked or written; a marker that IS the parent is measured by
-  # `_upd_lock` itself and dies there if nobody holds the lock.
-  if [ "$UPD_FROM" = restore ] && [ "${CCRC_UPDATE_LOCK_HELD:-}" != "$PPID" ]; then
-    echo "$PROG: update: --from restore is the automatic restore's own word — it runs only as the child of an update holding ~/.ccrc/update.lock (it skips the floor, previous and the sweep); to move this box to a tag by hand: ccrc update --to <tag> --downgrade" >&2
-    exit 2
-  fi
+  # D-3257 (AMENDED, fix round 1 item 10 / review 155 C16, both copies) —
+  # `restore`, `rollback` and `watchdog` are all CALLER words (spec §9's own
+  # floor-exemption trio, "when that verb is the caller"), not operator
+  # words: each exempts a run from the floor (Task 1), from `previous`
+  # (Task 4) and from the supervisor sweep (below), and each is spoken by
+  # exactly ONE caller. `restore` is spoken only by `_upd_restore_arm2`'s
+  # child — a SEPARATE PROCESS that inherits its parent's lock fd, proven by
+  # `CCRC_UPDATE_LOCK_HELD` matching THIS run's own $PPID (any other marker
+  # can never inherit, Task 2's rule; a marker that IS the parent is
+  # measured again by `_upd_lock` itself and dies there if nobody holds the
+  # lock). `rollback` and `watchdog` are spoken only by `cmd_rollback`
+  # calling `cmd_update` IN-PROCESS — no fork, so $PPID never changes and
+  # restore's own check cannot tell that call apart from a hand-typed one.
+  # The guard there is a PROCESS-LOCAL caller marker instead:
+  # `UPD_FROM_CALLER_PID`, a plain shell variable `cmd_rollback` sets to
+  # `$$` (THIS PROCESS's own pid) immediately before its in-process call,
+  # never exported. An externally EXPORTED guess of the same name can never
+  # match it: the value it would have to guess is this exact `ccrc update`
+  # process's own pid, assigned only once that process already exists — no
+  # shell invoking it from outside can know it in advance. Typed by hand,
+  # any of the three would be the floor's second door, beside --downgrade —
+  # which spec §9 says is the only one — so refuse before anything is
+  # detached, locked or written.
+  case "$UPD_FROM" in
+    restore)
+      if [ "${CCRC_UPDATE_LOCK_HELD:-}" != "$PPID" ]; then
+        echo "$PROG: update: --from restore is the automatic restore's own word — it runs only as the child of an update holding ~/.ccrc/update.lock (it skips the floor, previous and the sweep); to move this box to a tag by hand: ccrc update --to <tag> --downgrade" >&2
+        exit 2
+      fi ;;
+    rollback|watchdog)
+      if [ "${UPD_FROM_CALLER_PID:-}" != "$$" ]; then
+        echo "$PROG: update: --from $UPD_FROM is ccrc rollback's own word — it runs only as ccrc rollback's in-process call (it skips the floor and previous the same way --from restore does); to move this box to a tag by hand: ccrc rollback --to <tag>" >&2
+        exit 2
+      fi ;;
+  esac
+  unset UPD_FROM_CALLER_PID
   if [ "$check" -eq 1 ] && [ "$detach" -eq 1 ]; then
     echo "$PROG: update: --check and --detach are exclusive — --check measures and writes nothing, --detach hands a run that moves this box to a transient unit; pick one" >&2
     exit 2
@@ -11831,7 +11861,10 @@ cmd_update() {
           _ccrc_die "$UPD_TARGET_LINE; this box records no release version to compare against — name one with --to <tag>"
         fi
         UPD_VERSION=none
-        again="name a target with --to <tag> (with no --to, update refuses the same way: its control plane projection is $UPD_TARGET_PROJECTION, and this box records no release version either)"
+        # No `again=` assignment here (batch A rereview N4: the one this arm
+        # used to set was DEAD — `state` can only reach `incomplete`, the
+        # sole reader of `again`, when `box` equals `UPD_VERSION`, and `box`
+        # stays the literal `unversioned` throughout this arm, never `none`).
       else
         UPD_VERSION="$box"
         if [ -n "$UPD_TARGET_PROJECTION" ]; then
@@ -11857,11 +11890,12 @@ cmd_update() {
     # other. A current box keeps `current`: it has nothing to move.
     local chk_floor chk_caps="" w
     chk_floor="$(_upd_floor_word)"
-    # m5's unversioned+broken-projection case (above) leaves UPD_VERSION
-    # EMPTY rather than dying — guard `_ver_newer` with the same shape
-    # check the floor side already gets, so an empty (or otherwise
-    # non-version) UPD_VERSION never reaches its arithmetic (bash treats a
-    # non-numeric field as a parse error, not "0").
+    # m5's unversioned+broken-projection case (above; text fixed fix round 1
+    # item 0 / batch A rereview N4) sets UPD_VERSION to the literal `none`
+    # rather than dying — guard `_ver_newer` with the same shape check the
+    # floor side already gets, so a non-version-shaped UPD_VERSION (`none`,
+    # or anything else that is not vX.Y.Z) never reaches its arithmetic
+    # (bash treats a non-numeric field as a parse error, not "0").
     if [ "$state" != current ] && [[ "$UPD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
        && [[ "$chk_floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
        && _ver_newer "$chk_floor" "$UPD_VERSION"; then
@@ -12396,15 +12430,43 @@ cmd_rollback() {
     fi
   fi
 
+  # Fix round 1 item 3 / review 155 C31: from THIS point on — past argument
+  # parsing — a run whose `--from` is NOT the operator's own hand-typed
+  # word REPORTS. This is the shape a `--detach` PARENT already ran once
+  # (before ever writing `queued`) and the DETACHED CHILD runs a second
+  # time (`_upd_detach` hands it the SAME `--to`, so this ask can still fail
+  # if the tag vanished between parent and child); a `--from cli` run keeps
+  # reporting nothing here — its terminal IS the operator's own, read
+  # directly, exactly as before. `_ccrc_die` already writes a `failed`
+  # report once `UPD_REPORTING=1` (its own hook); the 404 arm below, which
+  # is a bare `exit 2` rather than a die, gets the same write by hand — a
+  # `queued` phase with nothing past it is EXACTLY C31's hazard: W5 reads it
+  # as in-flight forever, and no fleet-box watchdog covers the rollback verb.
+  if [ "$from" != cli ]; then
+    UPD_REPORTING=1
+    UPD_REPORT_TARGET="$to"
+    UPD_FROM="$from"
+  fi
   command -v curl >/dev/null 2>&1 \
     || _ccrc_die "curl is required by 'ccrc rollback' but is not on PATH — nothing on this box was changed"
   _upd_asset_listed "$to" SHA256SUMS || erc=$?
   case "$erc" in
     0) ;;
     1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
+       [ "$UPD_REPORTING" = 1 ] \
+         && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
        exit 2 ;;
     *) _ccrc_die "rollback: could not ask the release host whether $to exists (curl failed, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
   esac
+  # RESET: this scope's own reporting window closes here. `cmd_update`'s own
+  # argument-refusal block (D-3257, item 10, the tool preflight — all
+  # reached below, whether through `--detach` or straight through) is
+  # DELIBERATELY silent until ITS OWN `UPD_REPORTING=1`, right after ITS OWN
+  # `_upd_lock` ("a run refused there reports nothing" — cmd_update's own
+  # header comment); leaving this scope's `UPD_REPORTING=1` set would make
+  # that block start reporting for a rollback-invoked call only, which is
+  # not this item's ask.
+  UPD_REPORTING=0
 
   if [ "$detach" -eq 1 ]; then
     _upd_detach rollback "$to" "$from"
@@ -12420,6 +12482,11 @@ cmd_rollback() {
   # refuses a bundle-less target instead of admitting it.
   _upd_marker_unsigned && extra+=(--allow-unsigned)
   echo "rollback: returning this box to $to (named by $via; asked by --from $from) — update's own path, as --from $run_from --downgrade: below the floor if need be, and the floor itself is never lowered"
+  # Fix round 1 item 10 / review 155 C16: the process-local caller marker
+  # `cmd_update`'s own argument-refusal block requires for `--from
+  # rollback|watchdog` — set immediately before the in-process call it
+  # covers, never exported, so it never reaches a spawned child either.
+  local UPD_FROM_CALLER_PID="$$"
   cmd_update --to "$to" --downgrade --from "$run_from" ${extra[@]+"${extra[@]}"}
 }
 
@@ -12543,6 +12610,21 @@ _upd_watchdog_probe_gap_s() {
 # is never set by this verb, so its refusals leave `update.json` exactly as
 # they found it. Every detail it writes is printable ASCII — `_upd_json_str`
 # turns each non-ASCII byte into `?`.
+#
+# A ROLLBACK REFUSED ONCE IS TERMINAL, NEVER RETRIED (Q1, fix round 1 —
+# accepted as designed): when `ccrc rollback --from watchdog` answers
+# non-zero, this run records `failed` and stops; the next tick's stale
+# report reads a TERMINAL phase and takes the "nothing to do" branch. A
+# refusal needs the operator — automatically retrying it is not this verb's
+# job. Fix round 1 item 18 (review 155 C29) makes the KILLED case terminal
+# the SAME way: a stale in-flight report whose `from` is already `watchdog`
+# — reached with the lock FREE, so whatever ran it is gone — can only mean
+# a PRIOR watchdog rollback died mid-flight (rather than being cleanly
+# refused), and this run records `failed` and stops there too, without even
+# re-probing. Item 8 (review 155 C14) closes the third way a "success" word
+# could stand for a box this run measured unhealthy: when the box is
+# already converged on what a rollback would target, there is nothing to
+# revert TO, and that too is recorded `failed`, never `done`.
 UPD_IN_FLIGHT_PHASES=(queued resolving fetching verifying backing-up installing restarting checking restoring)
 # D-3276 (fix round 1, reviewing Task 9): the phases `~/.ccrc/previous`
 # predates — `_upd_write_previous` runs at the END of `backing-up`, so a
@@ -12569,10 +12651,16 @@ cmd_watchdog() {
     echo "watchdog: a fleet node is covered by the server's own deadline — nothing to watch here"
     return 0
   fi
-  if [ ! -e "$BOX_UPDATE_JSON" ] && [ ! -L "$BOX_UPDATE_JSON" ]; then
-    echo "watchdog: no update report"
-    return 0
-  fi
+  # fix round 1 item 9 / review 155 C15, C21: refused UNOPENED, before the
+  # first `jq` — the ONE shared guard (`_upd_report_readable`) every reader
+  # of this file uses, so a FIFO planted at the path can never block this
+  # tick (it would otherwise wedge for the unit's whole TimeoutStartSec).
+  local rrc0=0
+  _upd_report_readable || rrc0=$?
+  case "$rrc0" in
+    1) echo "watchdog: no update report"; return 0 ;;
+    2) echo "watchdog: ~/.ccrc/update.json is unreadable or malformed — not acting on what cannot be read"; return 0 ;;
+  esac
   command -v jq >/dev/null 2>&1 \
     || _ccrc_die "watchdog: jq is not on PATH, so ~/.ccrc/update.json cannot be read — nothing was re-measured or reverted"
   # ONE parse into a fixed seven-line shape closed by an END sentinel —
@@ -12669,7 +12757,18 @@ cmd_watchdog() {
   # overwrite a FRESH updater's live report (`lrc` 1, the wedged arm). One
   # more `jq` read, always, before either: if `phase` or `updatedAt` moved
   # since the first read, stand down rather than act on what has changed.
-  local out2="" phase2="" upd2=""
+  # fix round 1 item 9 / review 155 C15: the SAME shared guard, again,
+  # before this SECOND read — a FIFO swapped in during the window between
+  # the two reads must not wedge this one either, and "something is now
+  # unsafe to read" is itself a change since the first read, so it takes
+  # this same stand-down arm.
+  local out2="" phase2="" upd2="" rrc2=0
+  _upd_report_readable || rrc2=$?
+  if [ "$rrc2" -ne 0 ]; then
+    _upd_unlock
+    echo "watchdog: the report moved while measuring — next tick"
+    return 0
+  fi
   out2="$(jq -r '
     try (
       if type == "object" then "\(.phase)\n\(.updatedAt)" else empty end
@@ -12691,6 +12790,23 @@ cmd_watchdog() {
       return 0
     fi
     echo "watchdog: updater pid $who holds ~/.ccrc/update.lock — its report is ${age}s old; not acting while it lives"
+    return 0
+  fi
+  # Fix round 1 item 18 / review 155 C29: a stale IN-FLIGHT report whose
+  # `from` is already `watchdog` — reached here (`lrc` 0: the lock is FREE,
+  # so whatever process wrote this report is gone) — can only mean one
+  # thing: a PRIOR `ccrc rollback --from watchdog` this same watchdog ran
+  # died mid-flight (OOM, the unit's own TimeoutStartSec). Rolling back
+  # AGAIN retries with no bound — each attempt takes a fresh backup, re-runs
+  # the spine and restarts the unit, forever, if the box keeps dying the
+  # same way. One revert attempt only: record `failed` and stop, leaving the
+  # next move to the operator (Q1's own header comment states the same
+  # terminal rule for a rollback REFUSED outright — this is the killed case,
+  # made terminal the same way).
+  if [ "$from" = watchdog ]; then
+    _upd_phase failed "the watchdog's own rollback died in $phase; not retrying — box unhealthy: needs the operator"
+    echo "watchdog: stale report ($phase, ${age}s), from watchdog — a PRIOR watchdog rollback died mid-flight; not retrying, recorded as failed"
+    _upd_unlock
     return 0
   fi
   # ── RE-MEASURE, holding the lock. The three facts "converged" is made of
@@ -12789,6 +12905,26 @@ cmd_watchdog() {
     _upd_unlock
     return 0
   fi
+  # Fix round 1 item 8 / review 155 C14: a watchdog that MEASURED FAILURE
+  # never writes a success word. `ccrc rollback --from watchdog` (below)
+  # resolves with NO --to, exactly as a bare `ccrc rollback` does, and when
+  # `~/.ccrc/previous` already names THIS box's own running, COMPLETED tag,
+  # `cmd_update`'s converged no-op (D-3285's own class, the same read-only
+  # shape `cmd_rollback`'s pre-check and this function's own passing-probe
+  # arm above both use) fires inside it — the rollback call returns 0 having
+  # moved nothing, and its own `_upd_phase done "already converged at …"`
+  # would stand as the report, claiming success on a box THIS run just
+  # measured unhealthy. Caught here, read-only, before that call: there is
+  # nothing for a rollback to revert TO, so recording `failed` is the truth,
+  # not the rollback's silence.
+  local prev_rc=0
+  _upd_read_previous || prev_rc=$?
+  if [ "$prev_rc" -eq 0 ] && [ "$UPD_PREV_TAG" = "$cur_v" ] && [ -n "$cur_sha" ] && [ "$rec" = "$cur_sha" ]; then
+    _upd_phase failed "abandoned by its updater; nothing to revert to; box unhealthy: $why"
+    echo "watchdog: stale report ($phase, ${age}s) fails its health probe ($why), but ~/.ccrc/previous already names $cur_v, the release this box is already converged on — recorded as abandoned; nothing was reverted"
+    _upd_unlock
+    return 0
+  fi
   echo "watchdog: stale report ($phase, ${age}s) and the box fails its health probe ($why) — rolling back"
   # Released FIRST: the rollback takes the lock itself, and a child that
   # inherited this descriptor would pin it past this process (the D-2605
@@ -12875,7 +13011,20 @@ _upd_detach() {
   UPD_REPORT_TARGET="$tag"
   UPD_FROM="$from"
   _upd_phase queued
-  _svc_run_detached "$HOME/.local/bin/ccrc" "$verb" --to "$tag" --from "$from" "$@" || rc=$?
+  # D-3282 (fixed BY CLASS, fix round 1 item 19 / review 155 C30): the SAME
+  # PREPEND `ccrc-update-watchdog.service`'s `ExecStart` uses, for the SAME
+  # reason — a `node` (or any other tool) reachable only through one of the
+  # user manager's own environment.d fragments must still be found, and a
+  # rollback this transient unit may run is a whole `ccrc update`, whose
+  # preflight would otherwise die on a box where the manager's PATH carries
+  # something this shell's own does not. `--setenv=PATH=…` cannot do this:
+  # it would have to bake in THIS process's own current PATH (which may
+  # already be enriched well past what the manager gives `ccrc.service`,
+  # e.g. an interactive shell's extra dirs) rather than the manager's own —
+  # so, exactly like the unit file, a `/bin/sh -c` wrapper that reads `$PATH`
+  # FRESH, inside the spawned unit's own environment, and prepends to it.
+  _svc_run_detached /bin/sh -c 'PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@"' \
+    ccrc-detach "$verb" --to "$tag" --from "$from" "$@" || rc=$?
   if [ "$rc" -ne 0 ]; then
     _upd_phase failed "detach: systemd-run exited $rc"
     _ccrc_die "update: could not start the detached run (systemd-run exited $rc) — nothing on this box was changed"
@@ -12965,18 +13114,48 @@ _upd_lock_probe() {
     case "$r" in 0|1) exit "$r" ;; *) exit 3 ;; esac )
 }
 
+# ── _upd_report_readable [path] — the ONE guard before ANY read of
+# ~/.ccrc/update.json (fix round 1 item 9 / review 155 C15, C21) ──────────
+# By class this also covers batch A's `_upd_report_is_mine` and this
+# function's own `_upd_lock_holder`, below — every reader of the file
+# shares this ONE check rather than repeating (or missing) its own. The
+# file is same-user-writable by every session on the box (spec §8): a FIFO
+# planted there blocks `jq`/`read` forever (measured, C15 — the watchdog's
+# own tick would then wedge for its whole unit TimeoutStartSec, silencing
+# the one actor meant to bound a dead self-update), and an unbounded read
+# admits a file of any size. rc 0 only for a plain REGULAR file (`-L`
+# checked FIRST and refused outright — `-f` alone follows a symlink to
+# wherever it points, same-user-writable or not) that is readable and
+# strictly under `UPD_REPORT_CAP` bytes. rc 1 ABSENT (neither a file nor a
+# symlink at the path) — every caller's own "nothing here yet" arm. rc 2
+# PRESENT but unsafe to open (a symlink, a FIFO/device/socket, unreadable,
+# or at/over the cap) — every caller treats this exactly like a malformed
+# report, never like an absent one; `_plat_size` (its own portable `stat`)
+# never blocks on a FIFO, because `[ -f ]` above has already refused it.
+UPD_REPORT_CAP=65536
+_upd_report_readable() {
+  local f="${1:-$BOX_UPDATE_JSON}" sz=""
+  { [ -e "$f" ] || [ -L "$f" ]; } || return 1
+  [ -L "$f" ] && return 2
+  { [ -f "$f" ] && [ -r "$f" ]; } || return 2
+  sz="$(_plat_size "$f" 2>/dev/null)" || return 2
+  [[ "$sz" =~ ^[0-9]+$ ]] || return 2
+  [ "$sz" -lt "$UPD_REPORT_CAP" ] || return 2
+  return 0
+}
+
 # `_upd_lock_holder` → "pid <n>, target <v>" off update.json. The file is
 # same-user-writable by every session on the box (spec §8), so each field is
 # shape-checked before it is printed and anything else reads "unknown" —
-# as do an absent, unreadable or non-JSON file and a box with no jq (the
-# lock is taken BEFORE the preflight that names jq). jq TYPES each field
-# before bash splits the line — the pid only when it is a JSON number, the
-# target only as a JSON string through @json (one line, quoted), `-` for
-# anything else — so the line is always two tokens and one field's value
-# can never land in the other's slot. rc 0.
+# as do an absent, unreadable, oversized or non-JSON file and a box with no
+# jq (the lock is taken BEFORE the preflight that names jq). jq TYPES each
+# field before bash splits the line — the pid only when it is a JSON
+# number, the target only as a JSON string through @json (one line,
+# quoted), `-` for anything else — so the line is always two tokens and one
+# field's value can never land in the other's slot. rc 0.
 _upd_lock_holder() {
   local out="" pid="unknown" target="unknown" a="" b=""
-  if [ -f "$BOX_UPDATE_JSON" ] && [ -r "$BOX_UPDATE_JSON" ] && command -v jq >/dev/null 2>&1; then
+  if _upd_report_readable && command -v jq >/dev/null 2>&1; then
     out="$(jq -r 'if type == "object" then "\(if (.pid | type) == "number" then .pid else "-" end) \(if (.target | type) == "string" then (.target | @json) else "-" end)" else empty end' "$BOX_UPDATE_JSON" 2>/dev/null)" || out=""
   fi
   read -r a b <<<"$out"
@@ -13269,7 +13448,10 @@ _upd_target() {
     *)
       if [ "$mode" = check ]; then
         UPD_TARGET_PROJECTION="$UPD_INTENT_STATE"
-        UPD_TARGET_LINE="update: $(_upd_intent_say); --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses"
+        # "this box against itself" (batch A rereview N4), never "this box's
+        # own version" — an UNVERSIONED box reaches this exact line too
+        # (above), and has no version to report.
+        UPD_TARGET_LINE="update: $(_upd_intent_say); --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses"
       else
         _ccrc_die "update: $(_upd_intent_say)"
       fi ;;
@@ -13550,12 +13732,18 @@ _upd_converged() {
 # run installs: `previous` NAMES THE LAST DIFFERENT RELEASE THAT RAN BEFORE
 # THE CURRENT ONE (fix round 1, review 155 C1, amending D-3283 in place — see
 # below), so a same-tag run is never a new baseline, whether or not THIS
-# box's own install of that tag ever completed. (b) the record is ABSENT
-# (read here, before `cmd_update` removes it for this run): an earlier
-# update's spine never finished. Absent only, not a record that disagrees —
-# a `deploy.sh` push leaves the old record beside its own stamp, and that
-# tree IS what ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2); with
-# none, the stamp is written as before — a keep never invents an absence.
+# box's own install of that tag ever completed — this keep is UNCONDITIONAL
+# (review fix round 1 I2, amending this entry in place too: the same-tag run
+# needs no baseline TO keep, so it reports directly off whatever `previous`
+# already holds — a tag, `untagged`, `none` or `unreadable` — and writes
+# nothing, in every case). (b) the record is ABSENT (read here, before
+# `cmd_update` removes it for this run): an earlier update's spine never
+# finished. Absent only, not a record that disagrees — a `deploy.sh` push
+# leaves the old record beside its own stamp, and that tree IS what ran.
+# ONLY keep (b) needs a WELL-FORMED `previous` (rc 0 or 2) to keep in the
+# first place; with none there, the stamp is written as before — a keep
+# never invents an absence. Keep (a) needs no such baseline: it never falls
+# into this well-formedness gate at all (batch A rereview N2).
 #
 # D-3283 (amended, fix round 1 item 2 / review 155 C1): this arm used to keep
 # (a) ONLY when the completed-install record was absent or named a sha OTHER
@@ -13571,10 +13759,18 @@ _upd_converged() {
 # tag that last completed as a rollback target. The restore-target half of
 # the old D-3283 argument (arm 2 restoring "a release one BELOW the one the
 # box actually ran") is answered structurally instead: `_upd_restore_arm2`
-# now SKIPS itself outright whenever this run's target is the tag that was
-# already running — re-installing that tag is what just failed its gate, so
-# there is nothing for arm 2 to restore TO — and falls straight to arm 3,
-# the pre-update backup, which for a same-tag run IS that same release.
+# now SKIPS itself whenever this run's target is the tag that was already
+# running AND that running build was itself a COMPLETED install of its own
+# tag (`old_completed`, review fix round 1 I4, NARROWING this same amendment:
+# a same-tag RERUN over a HALF-installed tree — the record absent, or naming
+# some OTHER sha — is not "re-installing what just failed its gate", so arm 2
+# still restores `previous`, the last DIFFERENT completed release, there) —
+# re-installing a COMPLETED same tag is what just failed its gate, so there
+# is nothing for arm 2 to restore TO — and falls straight to arm 3, the
+# pre-update backup, which for a same-tag run whose staged sha equals the old
+# build's own IS that same release (D-3288, review fix round 1 I3); a
+# same-tag run whose staged sha DIFFERS is still a MIXED tree, exactly as
+# arm 3 always reported.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -14499,9 +14695,13 @@ _upd_sweep() {
 # WARN per phase) is UNCONFIRMED, not "foreign": this guard's job is
 # catching a real second run's report, never inventing a new failure mode
 # for a box that already cannot write update.json at all — that box's
-# writes proceed exactly as before, each one its own WARN if it fails.
+# writes proceed exactly as before, each one its own WARN if it fails. A
+# symlink or an oversized file (fix round 1 item 9 / review 155 C15,
+# `_upd_report_readable`) is the SAME "unconfirmed" arm as unreadable or
+# malformed — this guard never opens either to find out; not opening it is
+# the whole point (a FIFO there must not block this run's own final write).
 _upd_report_is_mine() {
-  [ -f "$BOX_UPDATE_JSON" ] || return 0
+  _upd_report_readable || return 0
   local pid=""
   pid="$(jq -r 'if type == "object" and (.pid | type == "number") then (.pid | tostring) else empty end' \
     -- "$BOX_UPDATE_JSON" 2>/dev/null)" || pid=""

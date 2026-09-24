@@ -3629,6 +3629,30 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(readFileSync(join(legacyOther, '.ccrc', 'installed'), 'utf8')).toBe(`${legacyOtherSha}\nunsigned\n`);
   });
 
+  // Pin (3), fix round 1 item 0 / batch A rereview N1: the tightened regex is
+  // ANCHORED at the start of the parent's own argv, not a substring search —
+  // a `bash -c '…'` command STRING whose TEXT happens to contain the words
+  // `ccrc update` (a compound `ssh box 'ccrc update --to vX --force || ccrc
+  // install'`, or a Bash-tool shell whose command text mentions both) must
+  // NOT match: argv[1] there is the literal `-c`, never a path ending in
+  // `ccrc`. Built by hand (not `runInstall`'s `from`, which always shapes the
+  // parent as `bash <script-path> <args>`): the parent here IS the `bash -c`
+  // invocation itself — the `install` child is forked (not exec'd) from
+  // inside that `-c` string, so its own $PPID resolves, via `ps`, to this
+  // exact `bash -c '…'` argv.
+  it('CCRC_UPDATE_VERIFIED stays stripped when the parent is a `bash -c` STRING that only MENTIONS `ccrc update` (fix round 1 item 0 / batch A rereview N1)', () => {
+    const home = freshBox('ccrc-install-installed-bashc-mention-');
+    const sha = gitInit(treeRoot(home));
+    const ccrc = ccrcIn(treeRoot(home));
+    const env = ccrcEnv(home);
+    replantDoctorStubs(home);
+    const cmd = 'bash probe.sh; true # ccrc update --to v1\n'
+      + `env CCRC_UPDATE_VERIFIED=1 bash '${ccrc}' install\n`;
+    const r = spawnSync(BASH, ['-c', cmd], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr ?? '').toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+  });
+
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {
     // Three variables in one sentence, because `CCRC_AUTH=on` alone produces a
     // console that can read and cannot act: the same unvalidated `CCRC_ORIGIN`

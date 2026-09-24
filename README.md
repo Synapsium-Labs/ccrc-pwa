@@ -542,7 +542,7 @@ arm 2 re-installs `previous`'s tag through a child `ccrc update --to <previous> 
 under the parent's lock, passing `--allow-unsigned` only when the replaced install was itself unsigned (a verified box
 whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); the child exiting **3** (its
 own spine completed but ITS doctor FAILed) still counts as arm 2 restored, never a fall to arm 3 — arm 3 runs only when
-arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — a MIXED tree, whose remedy is `deploy.sh`.
+arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — usually a MIXED tree, whose remedy is `deploy.sh` (the one exception is a same-tag run whose staged sha turns out equal to the build that was running: a genuine repeat, not a rebuild, so nothing is mixed).
 `update.json` ends `reverted`, naming the arm; neither `coord.db` nor `~/.ccrc/memory` is ever restored, and the
 restore does not sweep. A spine that dies before it replaces the tree changed nothing and exits 1
 (`~/.ccrc/install-step` names the step it died in; a spine older than W4 writes none, and counts as after the tree

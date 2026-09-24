@@ -47,6 +47,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
+// Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
+// the same import pattern `update-intent-cross-side.test.ts` already uses.
+import { reportFrom, type NodeFileRead } from '../src/update/inventory.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -67,6 +70,41 @@ const REAL_MV = realPath('mv');
 const FLOCK = realPath('flock');
 
 interface Result { code: number; stdout: string; stderr: string }
+
+/** GNU `timeout -k`, probed the same way `ccrc-doctor.test.ts`'s own
+ *  `DOCTOR_DEADLINE_BIN` is (fix round 1 items 9 and 23-C21): a FIFO block
+ *  happens inside a GRANDCHILD (`jq`'s or `flock`'s own open), which a bare
+ *  `spawnSync` `timeout` option cannot reach — only `timeout -k`, which puts
+ *  the child in its own process group and signals the GROUP, kills it. A
+ *  busybox-shaped `timeout` that refuses `-k` is PROBED with a known-124
+ *  command first, so a candidate that does not answer 124 is treated as
+ *  absent rather than silently bounding nothing. */
+const UPD_DEADLINE_BIN: string | null = (() => {
+  for (const candidate of ['timeout', 'gtimeout']) {
+    const found = spawnSync('sh', ['-c', `command -v ${candidate}`], { encoding: 'utf8' });
+    if (found.status !== 0) continue;
+    const bin = (found.stdout ?? '').trim();
+    if (!bin) continue;
+    const probe = spawnSync(bin, ['-k', '1', '0.1', 'sleep', '5'], { encoding: 'utf8' });
+    if (probe.status === 124) return bin;
+  }
+  return null;
+})();
+
+/** Runs `argv` bounded by the process GROUP — a hang becomes a readable
+ *  failure, never a hung suite. Shared by every FIFO pin in this file. */
+function runBounded(argv: string[], env: NodeJS.ProcessEnv, ms = 10000): Result {
+  if (UPD_DEADLINE_BIN === null) {
+    throw new Error('runBounded: no usable `timeout`/`gtimeout` — cannot bound this call safely');
+  }
+  const r = spawnSync(UPD_DEADLINE_BIN, ['-k', '1', String(ms / 1000), ...argv], { env, encoding: 'utf8' });
+  if (r.status === 124) {
+    throw new Error(
+      `runBounded did not return within ${ms}ms — either a FIFO guard regressed `
+      + 'or this box is loaded; re-run in isolation before concluding');
+  }
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
 
 // ── The box fixture (freshBox's pieces, trimmed to this file's needs) ─────
 
@@ -966,19 +1004,24 @@ function pathWithoutJq(home: string): string {
   // Task 2: `flock` and `mkdir` join because the lock (`_upd_lock`) is taken
   // BEFORE the tool preflight — without them this PATH dies at the lock's
   // own flock sentence (or at "cannot create ~/.ccrc"), never at jq's, and
-  // the D-3140 case below measures the wrong refusal.
-  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir']) symlinkSync(realPath(b), join(d, b));
+  // the D-3140 case below measures the wrong refusal. `stat` joins (fix
+  // round 1 item 9 / review 155 C15) because `cmd_watchdog` now runs
+  // `_upd_report_readable` (its own portable `_plat_size`, i.e. `stat`)
+  // before its `command -v jq` preflight — without it this PATH would die
+  // at "unreadable or malformed" (rc 2, `stat` missing), never at jq's.
+  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir', 'stat']) symlinkSync(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
 /** F5 (fix round 1, Task 9): the watchdog's own `flock` preflight, the twin
  *  of `pathWithoutJq` above — everything the watchdog calls before its
- *  `command -v flock` check (jq, and `date` for its `now="$(date +%s)"`)
- *  stays real, only `flock` itself is missing. */
+ *  `command -v flock` check (jq, `stat` — fix round 1 item 9's
+ *  `_upd_report_readable` — and `date` for its `now="$(date +%s)"`) stays
+ *  real, only `flock` itself is missing. */
 function pathWithoutFlock(home: string): string {
   const d = join(home, 'no-flock-bin');
   mkdirSync(d, { recursive: true });
-  for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date']) symlinkSync(realPath(b), join(d, b));
+  for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat']) symlinkSync(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -1327,12 +1370,23 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
   });
 
   // `restore` is not typed here: bare, it is refused at exit 2 (Task 6); its `previous: kept` is read off the real child in Task 6's FULL case.
+  // `rollback`/`watchdog` are refused on the CLI door too, since fix round 1
+  // item 10 / review 155 C16 (both are now CALLER words, like `restore`) —
+  // their real "kept, below the floor" behaviour is measured end-to-end on
+  // the real caller elsewhere ("bare `ccrc rollback` returns to previous…",
+  // "`ccrc rollback --from watchdog` — the REAL in-process path…"). THIS
+  // test's own subject is `_upd_write_previous`'s own branch on `$UPD_FROM`
+  // in isolation, so it calls the function directly (`sourcedCcrc`, Task
+  // 3's idiom), the same way item 10's caller-marker guard never reaches —
+  // that guard lives in `cmd_update`'s argument-refusal block, one layer
+  // above the function this test targets.
   it.each([['rollback'], ['watchdog']])('a --from %s run does NOT rewrite previous — it returns to a known tag, not a new baseline (§18 "…and not by a restore")', (from) => {
-    const home = stubBox(`ccrc-update-prev-keep-${from}-`);
+    const home = freshUpdateBox(`ccrc-update-prev-keep-${from}-`);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nbaselinesha\n');
-    const r = runUpdate(home, ['--from', from]);
+    const r = sourcedCcrc(home, `UPD_FROM=${from} _upd_write_previous v2.0.0 ${OLD_SHA}`);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(previous(home)).toBe('v0.9.0\nbaselinesha\n');
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v0.9.0\nbaselinesha\n');
     expect(r.stdout).toMatch(new RegExp(`^update: previous: kept \\(v0\\.9\\.0\\) — a --from ${from} run returns to a known tag; it is not a new baseline$`, 'm'));
   });
 
@@ -3018,20 +3072,30 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
   });
 
-  it('--from rollback|watchdog go below the floor with a WARN naming the caller, and the floor stays; --from pwa is refused by W1\'s sentence (spec §9; --from restore\'s WARN is measured by Task 6\'s FULL restore case)', () => {
-    // `restore` is not typed here: bare, it is refused at exit 2 (Task 6,
-    // D-3257); its WARN is read off a real
-    // restore child in Task 6's FULL case.
-    for (const from of ['rollback', 'watchdog']) {
+  it('--from restore|rollback|watchdog typed BY HAND on the update verb are all refused, exit 2, before anything is fetched — naming the verb to use (fix round 1 item 10 / review 155 C16, amends D-3257); --from pwa is refused by W1\'s sentence (spec §9)', () => {
+    // The three CALLER words: `restore` (D-3257, unchanged), and now
+    // `rollback`/`watchdog` too — each is spoken only by its one real
+    // caller (`_upd_restore_arm2`'s child; `cmd_rollback`'s own in-process
+    // call), never by an operator's hand-typed `ccrc update --from …`. Their
+    // real WARN-below-the-floor behaviour is measured on the REAL caller,
+    // not here: `restore`'s in Task 6's FULL restore case, `rollback`'s in
+    // "bare `ccrc rollback` returns to previous…", `watchdog`'s in
+    // "`ccrc rollback --from watchdog` — the REAL in-process path…".
+    for (const from of ['restore', 'rollback', 'watchdog']) {
       const home = freshUpdateBox(`ccrc-update-json-floor-${from}-`);
       plantOldBox(home, { version: 'v3.0.0' });
       plantFloor(home, 'v3.0.0');
       packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
       const r = runUpdate(home, ['--to', 'v2.0.0', '--from', from]);
-      expect(r.code, `${from} — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-      expect(r.stdout).toMatch(new RegExp(`^update: WARN: v2\\.0\\.0 is below this box's floor v3\\.0\\.0 \\(resolved by --to v2\\.0\\.0\\) — proceeding because this run is --from ${from}; the floor stays v3\\.0\\.0$`, 'm'));
+      expect(r.code, `${from} — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+      if (from === 'restore') {
+        expect(r.stderr).toMatch(/--from restore is the automatic restore's own word .* ccrc update --to <tag> --downgrade/);
+      } else {
+        expect(r.stderr).toMatch(new RegExp(`--from ${from} is ccrc rollback's own word .* ccrc rollback --to <tag>`));
+      }
+      expect(existsSync(join(home, 'curl-argv')), `${from}: a fetch ran before the refusal`).toBe(false);
       expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
-      expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+      expect(existsSync(join(home, 'staged-ccrc-argv')), `${from}: something was staged before the refusal`).toBe(false);
     }
     const pwa = freshUpdateBox('ccrc-update-json-floor-pwa-');
     plantOldBox(pwa, { version: 'v3.0.0' });
@@ -3042,6 +3106,26 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0 .* ccrc update --to v2\.0\.0 --downgrade/);
     expect(existsSync(join(pwa, 'ccrc-backups'))).toBe(false);
     expect(lastReport(pwa)['phase']).toBe('failed');
+  });
+
+  // Fix round 1 item 10 / review 155 C16 — spoofing: neither door opens for
+  // an EXPORTED marker of the same name (the value it would have to guess
+  // is a pid that does not exist yet), and `_upd_lock`'s own $PPID-matching
+  // for `restore` needs the SAME kind of externally-unknowable value.
+  it('the process-local caller markers cannot be spoofed by exporting a variable of the same name (fix round 1 item 10 / review 155 C16)', () => {
+    const home = freshUpdateBox('ccrc-update-json-floor-spoof-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    for (const [from, marker, value] of [
+      ['rollback', 'UPD_FROM_CALLER_PID', '1'] as const,
+      ['watchdog', 'UPD_FROM_CALLER_PID', '1'] as const,
+      ['restore', 'CCRC_UPDATE_LOCK_HELD', '1'] as const,
+    ]) {
+      const r = runUpdate(home, ['--to', 'v2.0.0', '--from', from], { [marker]: value });
+      expect(r.code, `${from}/${marker} — stderr: ${r.stderr}`).toBe(2);
+      expect(existsSync(join(home, 'curl-argv')), `${from}: a fetch ran before the refusal`).toBe(false);
+    }
   });
 
   it('_ccrc_die reports `failed` only once the run is reporting, only from the run\'s own shell, with the prefix in front (the one hook)', () => {
@@ -3164,6 +3248,25 @@ describe('ccrc update: one update at a time (the lock)', () => {
       expect(r.stderr, name).not.toMatch(/pwned/);
     }
   });
+
+  // Fix round 1 item 23-C21: `_upd_lock_holder`'s FIFO guard (now
+  // `_upd_report_readable`, shared with item 9) ships with no test that
+  // goes red when it is deleted — with the guard gone, a busy-lock refusal
+  // would hang reading a FIFO instead of printing "pid unknown, target
+  // unknown" promptly. Bounded by `runBounded` (GNU `timeout -k`) because
+  // the hang would be inside jq, a grandchild of the update process.
+  it.skipIf(UPD_DEADLINE_BIN === null)(
+    'a FIFO at update.json with the lock held: exit 1 promptly with "pid unknown, target unknown", never blocked reading it (fix round 1 item 23-C21 / review 155 C21)', () => {
+      const home = freshUpdateBox('ccrc-update-lock-holder-fifo-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      expect(spawnSync('mkfifo', [join(home, '.ccrc', 'update.json')]).status, 'mkfifo').toBe(0);
+      holdLock(home);
+      const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+      replantDoctorStubs(home);
+      const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'update'], env, 5000);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(pid unknown, target unknown\)$/m);
+    }, 15000);
 
   it.skipIf(process.getuid?.() === 0)('a lock that cannot be MEASURED — the file there, not openable — is neither held nor free: the restore child refuses naming probe rc 3, and a plain run refuses to open it (ruling R16)', () => {
     // Plan D-3250: rc 3 folded into "held" would exempt
@@ -3317,7 +3420,7 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     return home;
   };
 
-  itLinux('the re-exec goes through _svc_run_detached with the ABSOLUTE launcher and the spec argv, writes queued, and returns 0 having done none of the work (§18 "--detach escapes the cgroup")', () => {
+  itLinux('the re-exec goes through _svc_run_detached with the ABSOLUTE launcher and the spec argv, through the D-3282 PATH-prepend wrapper, writes queued, and returns 0 having done none of the work (§18 "--detach escapes the cgroup"; fix round 1 item 19 / review 155 C30)', () => {
     const home = detachedBox('ccrc-update-detach-');
     const t0 = Date.now();
     const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
@@ -3325,7 +3428,8 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(elapsed, 'the parent waited on the run it detached').toBeLessThan(10_000);
     expect(detachArgv(home)).toEqual([
-      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from cli`,
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach update --to v2.0.0 --from cli',
     ]);
     expect(r.stdout).toMatch(/^update: detached — 'update --to v2\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
     const rep = report(home);
@@ -3419,7 +3523,8 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
       ['--allow-unsigned', '--detach', '--from', 'pwa', '--downgrade', '--to', 'v2.0.0', '--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(detachArgv(home)).toEqual([
-      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from pwa --force --downgrade --allow-unsigned`,
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach update --to v2.0.0 --from pwa --force --downgrade --allow-unsigned',
     ]);
     expect(report(home)).toMatchObject({ phase: 'queued', from: 'pwa', target: 'v2.0.0' });
   });
@@ -3753,12 +3858,17 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     expect(reportOf(home)['phase']).toBe('done');
   });
 
-  itLinux('--detach carries a typed --no-gate into the detached argv, after the other typed flags (the D-3139 trap: a flag the caller typed is never dropped)', () => {
+  itLinux('--detach carries a typed --no-gate into the detached argv, after the other typed flags (the D-3139 trap: a flag the caller typed is never dropped), through the D-3282 PATH-prepend wrapper (fix round 1 item 19 / review 155 C30)', () => {
     const home = gateBox('ccrc-update-gate-detach-', 'server');
     const r = runUpdate(home, ['--detach', '--to', 'v2.0.0', '--no-gate']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // The SAME `/bin/sh -c 'PATH="$HOME/.local/bin:$PATH" exec …'` shape
+    // `ccrc-update-watchdog.service`'s own `ExecStart` uses (D-3282, fixed
+    // by class) — never `--setenv=PATH=…`, which would bake in the CALLING
+    // process's own PATH rather than reading the manager's fresh.
     expect(lines(home, 'systemd-run-argv')).toEqual([
-      `--user --collect --quiet ${join(home, '.local', 'bin', 'ccrc')} update --to v2.0.0 --from cli --no-gate`,
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach update --to v2.0.0 --from cli --no-gate',
     ]);
   });
 
@@ -4774,6 +4884,17 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(existsSync(join(home, 'tmux-argv')), 'the sweep reached for tmux').toBe(false);
   });
 
+  itLinux('`ccrc rollback --from watchdog` — the REAL in-process path, not the watchdog\'s own stub launcher — still goes below the floor with its WARN: the process-local caller marker item 10 adds does not block the caller it is FOR (fix round 1 item 10 / review 155 C16)', () => {
+    const home = rollbackBox('ccrc-rollback-watchdog-caller-', { previous: PREV });
+    const r = runRollback(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^rollback: returning this box to v1\.0\.0 \(named by ~\/\.ccrc\/previous; asked by --from watchdog\) — update's own path, as --from watchdog --downgrade/m);
+    expect(r.stdout).toMatch(/^update: WARN: v1\.0\.0 is below this box's floor v2\.0\.0 \(resolved by --to v1\.0\.0\) — proceeding because this run is --from watchdog; the floor stays v2\.0\.0$/m);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
+    const rep = report(home);
+    expect(rep['from']).toBe('watchdog');
+  });
+
   itLinux('with KillMode not process, the rollback\'s sweep is REFUSED — DEGRADED verbatim, no try-restart — and the rollback still exits 0 (R1 inherited, never re-argued)', () => {
     const home = rollbackBox('ccrc-rollback-degraded-', { previous: PREV });
     writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
@@ -4897,8 +5018,11 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     const home = rollbackBox('ccrc-rollback-detach-', { previous: PREV });
     const r = runRollback(home, ['--detach', '--from', 'pwa']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // The D-3282 PATH-prepend wrapper (fix round 1 item 19 / review 155
+    // C30), the SAME shape the watchdog unit's own `ExecStart` uses.
     expect(readFileSync(join(home, 'systemd-run-argv'), 'utf8').split('\n').filter((l) => l !== ''))
-      .toEqual([`--user --collect --quiet ${home}/.local/bin/ccrc rollback --to v1.0.0 --from pwa`]);
+      .toEqual(['--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+        + 'ccrc-detach rollback --to v1.0.0 --from pwa']);
     expect(r.stdout).toMatch(/^update: detached — 'rollback --to v1\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
     const rep = report(home);
     expect(rep['phase']).toBe('queued');
@@ -4912,7 +5036,46 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     const p = runRollback(pinned, ['--to=v1.0.0', '--detach']);
     expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
     expect(readFileSync(join(pinned, 'systemd-run-argv'), 'utf8').trim())
-      .toBe(`--user --collect --quiet ${pinned}/.local/bin/ccrc rollback --to v1.0.0 --from cli`);
+      .toBe('--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+        + 'ccrc-detach rollback --to v1.0.0 --from cli');
+  });
+
+  // Fix round 1 item 3 / review 155 C31: a `queued` report with nothing
+  // past it wedges W5's `busy` handling and W2's lease sweep forever — no
+  // fleet-box watchdog covers the rollback verb. Review 155's own recipe:
+  // write `queued` EXACTLY as `_upd_detach` does, then run the detached
+  // CHILD's own argv (`cmd_rollback --to <tag> --from pwa`, no `--detach`)
+  // against a release that does not exist, so its own SECOND
+  // `_upd_asset_listed` check (the parent's first check is not this test's
+  // subject) answers 404. The queued report must not survive: W2's REAL
+  // `reportFrom` must read a TERMINAL phase off what is left.
+  itLinux('a detached rollback child whose second release-host check 404s ends the `queued` report in a TERMINAL `failed` phase — W2\'s real reportFrom never sees it stuck (fix round 1 item 3 / review 155 C31)', () => {
+    const home = freshUpdateBox('ccrc-rollback-c31-queued-');
+    replantDoctorStubs(home);
+    const script = [
+      `CCRC_RELEASE_BASE_URL="local://${home}/releases"`,
+      'UPD_REPORT_TARGET=v0.0.9',
+      'UPD_FROM=pwa',
+      '_upd_phase queued',
+      '( cmd_rollback --to v0.0.9 --from pwa )',
+    ].join('\n');
+    const r = sourcedCcrc(home, script);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v0\.0\.9 is not a published release \(its SHA256SUMS answered 404\) — nothing on this box was changed$/m);
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const doc = JSON.parse(raw) as Record<string, unknown>;
+    expect(doc.phase, `update.json: ${raw}`).toBe('failed');
+    expect(doc.target).toBe('v0.0.9');
+    expect(doc.from).toBe('pwa');
+    expect(String(doc.detail)).toMatch(/^rollback: v0\.0\.9 is not a published release/);
+    // W2's own reader — never IN_FLIGHT_UPDATE_PHASES (which `queued` is a
+    // member of): a fleet node's `busy` handling and W2's lease sweep both
+    // key on this, not on the raw JSON.
+    const read: NodeFileRead = { ok: true, content: raw };
+    const rep = reportFrom(read);
+    expect(rep, `reportFrom(${raw})`).not.toBeNull();
+    expect(rep!.phase).toBe('failed');
+    expect(IN_FLIGHT_UPDATE_PHASES as readonly string[]).not.toContain(rep!.phase);
   });
 
   itDarwin('--detach refuses on macOS by name before anything runs (decision 17)', () => {
@@ -5173,7 +5336,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(checkLine(r.stdout), role).toBe(
         `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=unreadable state=incomplete`);
       expect(r.stdout, role).toMatch(new RegExp(
-        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
       expect(localUrls(home), role).toEqual([]);
     }
   });
@@ -5197,7 +5360,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(checkLine(r.stdout), role).toBe(
         `check: box=unversioned sha=none target=none caps=${CAPS_NOW} floor=none projection=unreadable state=unversioned`);
       expect(r.stdout, role).toMatch(new RegExp(
-        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
       expect(r.stdout, role).toMatch(/^this box: unversioned \(none\) · latest: none — a release install would be the first on this box$/m);
       expect(localUrls(home), role).toEqual([]);
     }
@@ -5288,7 +5451,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(checkLine(r.stdout), role).toBe(
         `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=stale state=incomplete`);
       expect(r.stdout, role).toMatch(new RegExp(
-        `^update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+        `^update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
       expect(r.stdout, role).toMatch(
         /^this box: v1\.0\.0 \(\S+\) · latest: v1\.0\.0 — same version, but the install never completed \(ccrc version explains\); 'ccrc update --to v1\.0\.0' will reinstall \(with no --to, update refuses: its control plane projection is stale\)$/m);
       // Nothing fetched: the self-compare skips `_upd_resolve` entirely,
@@ -5766,6 +5929,30 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(probed(home)).toBe(false);
   });
 
+  // Fix round 1 item 9 / review 155 C15: a FIFO at ~/.ccrc/update.json must
+  // not block the watchdog's tick — `_upd_report_readable` refuses it
+  // UNOPENED, before the first `jq`, so the run returns within its own
+  // deadline rather than sitting wedged for the unit's whole
+  // TimeoutStartSec. Bounded by `runBounded` (GNU `timeout -k`, the process
+  // GROUP) because a plain spawnSync timeout cannot reach a hang inside
+  // jq, a grandchild of the watchdog process.
+  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+    'a FIFO at ~/.ccrc/update.json is refused UNOPENED, promptly, never blocking the tick (fix round 1 item 9 / review 155 C15)', () => {
+      const home = watchBox('ccrc-watchdog-fifo-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      rmSync(jsonPath(home), { force: true });
+      expect(spawnSync('mkfifo', [jsonPath(home)]).status, 'mkfifo').toBe(0);
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const env: NodeJS.ProcessEnv = {
+        ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_UPDATE_DEADLINE_MS: DEADLINE_MS,
+        CCRC_WATCHDOG_PROBE_GAP_S: '0',
+      };
+      replantDoctorStubs(home);
+      const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'watchdog'], env, 5000);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toBe('watchdog: ~/.ccrc/update.json is unreadable or malformed — not acting on what cannot be read\n');
+    }, 15000);
+
   itLinux('acts on exactly the nine in-flight phases — W2\'s IN_FLIGHT_UPDATE_PHASES — declared once in ccd/ccrc', () => {
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const m = /^UPD_IN_FLIGHT_PHASES=\(([^)]*)\)$/m.exec(src);
@@ -5780,6 +5967,27 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       expect(readReport(home).phase, phase).toBe('failed');
       expect(readReport(home).detail, phase).toBe('abandoned by its updater; box measures converged at v2.0.0');
     }
+  });
+
+  // Fix round 1 item 23-C6 / review 155 C6: the closed `from` vocabulary
+  // (`known_from`) ships with no test that goes red when it is deleted.
+  // `from` is read straight off update.json — a file every session on the
+  // box can write (spec §8) — and `_upd_phase` prints it UNESCAPED into
+  // `"from":"%s"`. A quote-bearing `from` is the one shape that could
+  // corrupt the REWRITTEN report's own JSON; the guard's fallback to the
+  // literal `watchdog` is what stops that.
+  itLinux('a stale report whose `from` carries a quote is rewritten with `from: watchdog`, and the rewrite still parses as JSON (fix round 1 item 23-C6 / review 155 C6)', () => {
+    const home = watchBox('ccrc-watchdog-from-quote-');
+    const doc = { target: 'v2.0.0', phase: 'installing', startedAt: nowS() - 135, updatedAt: nowS() - 90,
+      detail: null, from: 'a"b', pid: 4242 };
+    writeFileSync(jsonPath(home), `${JSON.stringify(doc)}\n`);
+    const r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const raw = readFileSync(jsonPath(home), 'utf8');
+    let parsed: Record<string, unknown> = {};
+    expect(() => { parsed = JSON.parse(raw) as Record<string, unknown>; }, `not valid JSON:\n${raw}`).not.toThrow();
+    expect(parsed.from, raw).toBe('watchdog');
+    expect(parsed.phase, raw).toBe('failed');
   });
 
   itLinux('stale, no holder, and the box measures CONVERGED at the target: rewritten failed: abandoned…converged, the updater\'s attribution kept, NO rollback (§18 "the watchdog re-measures before it reverts")', () => {
@@ -5897,28 +6105,31 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   });
 
   // RE-REVIEW regression (D-3285, one clause added): every OTHER test in
-  // this describe uses the STUB `LAUNCHER` at `.local/bin/ccrc`, which never
-  // runs real ccrc code — so it cannot see the bug the re-review found:
-  // `cmd_rollback --from watchdog` on a box whose PREVIOUS tag is its own
-  // RUNNING tag (already converged) used to hit the converged pre-check's
-  // early `return 0`, which writes NO report at all. `cmd_watchdog` records
-  // only when the rollback it ran answers non-zero, so update.json stayed
-  // stuck `checking` forever, and the NEXT tick would see the same stale
-  // report and roll back again — looping every tick. This test installs a
-  // REAL `ccrc` as the launcher so the real `cmd_rollback`/`cmd_update`
-  // convergence path actually runs, then measures TWO ticks.
-  itLinux('a real, converged `ccrc rollback --from watchdog` closes its report — done, not stuck — and a second tick does not run it again (re-review fix)', () => {
+  // Fix round 1 item 8 / review 155 C14, REPLACING the re-review's own
+  // outcome: a watchdog that MEASURED FAILURE never writes a success word.
+  // The scenario is unchanged (previous names the box's own RUNNING,
+  // COMPLETED tag — a bare `rollback --from watchdog` would converge on
+  // nothing), but the re-review's fix — closing the report as `done` once
+  // `cmd_rollback`'s own convergence path ran — is now ITSELF the C14
+  // defect: it claims success on a box this run just measured UNHEALTHY.
+  // `cmd_watchdog`'s own read-only pre-check (the same shape D-3285's
+  // `cmd_rollback` pre-check and this function's own passing-probe arm
+  // both use) now catches this BEFORE ever invoking `ccrc rollback` — so
+  // the REAL binary substitution the re-review's test needed is no longer
+  // reached, kept anyway as a control: were the pre-check ever bypassed,
+  // this box's real `cmd_rollback` would converge exactly as before,
+  // proving the pre-check's read matches what the real path would do.
+  itLinux('a stale report on a box whose `previous` already names its own RUNNING, COMPLETED tag: `failed`, nothing to revert to — not `done` (fix round 1 item 8 / review 155 C14)', () => {
     const home = watchBox('ccrc-watchdog-revert-converged-');
-    // The REAL binary, not the stub LAUNCHER: this is the one case in this
-    // describe that must exercise `cmd_rollback`'s own convergence logic.
+    // The REAL binary, not the stub LAUNCHER — the control described above.
     cpSync(join(REPO, 'ccd', 'ccrc'), join(home, '.local', 'bin', 'ccrc'));
     chmodSync(join(home, '.local', 'bin', 'ccrc'), 0o755);
     // previous == the box's own running tag (v2.0.0, watchBox's default) —
-    // the scenario the regression needs: a bare `rollback --from watchdog`
-    // (no --to) resolves `to` from here.
+    // the scenario needs: a bare `rollback --from watchdog` (no --to)
+    // resolves `to` from here, and it names what this box is ALREADY on.
     writeFileSync(join(home, '.ccrc', 'previous'), 'v2.0.0\noldsha0000000000000000000000000000000000\n');
     // Published, its build.json sha matching the box's own stamp — the
-    // shape `_upd_converged` (reached for real now) needs to answer yes.
+    // shape `_upd_converged` needs to answer yes, were it reached for real.
     // `packRelease` derives `<home>/releases/…` itself — the same
     // `CCRC_RELEASE_BASE_URL` shape `runUpdate`'s own default uses.
     packRelease(home, selfConvergedTree(home, 'v2.0.0', 'oldsha0000000000000000000000000000000000'),
@@ -5928,18 +6139,20 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     const releaseUrl = `local://${home}/releases`;
     const r = runWatchdog(home, [], { CCRC_RELEASE_BASE_URL: releaseUrl });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^watchdog: stale report \(checking, 9\ds\) and the box fails its health probe \(.+\) — rolling back$/m);
+    // Never reaches "— rolling back": the pre-check returns first.
+    expect(r.stdout).not.toMatch(/rolling back/);
+    expect(r.stdout).toMatch(/^watchdog: stale report \(checking, 9\ds\) fails its health probe \(.+\), but ~\/\.ccrc\/previous already names v2\.0\.0, the release this box is already converged on — recorded as abandoned; nothing was reverted$/m);
     const rep1 = readReport(home);
-    expect(rep1['phase'], `stdout: ${r.stdout}`).toBe('done');
-    expect(rep1['detail']).toBe('already converged at v2.0.0');
+    expect(rep1['phase'], `stdout: ${r.stdout}`).toBe('failed');
+    expect(rep1['detail']).toMatch(/^abandoned by its updater; nothing to revert to; box unhealthy: .+$/);
     expect(lockFree(home)).toBe(true);
-    // Second tick: the report is now TERMINAL (`done`), so the watchdog
+    // Second tick: the report is now TERMINAL (`failed`), so the watchdog
     // takes the NOT_IN_FLIGHT "nothing to do" branch — it must not probe,
     // must not touch the lock, must not run rollback again.
     const before = readFileSync(jsonPath(home), 'utf8');
     const r2 = runWatchdog(home, [], { CCRC_RELEASE_BASE_URL: releaseUrl });
     expect(r2.code, `stderr: ${r2.stderr}`).toBe(0);
-    expect(r2.stdout).toBe('watchdog: last update done — nothing to do\n');
+    expect(r2.stdout).toBe('watchdog: last update failed — nothing to do\n');
     expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
   });
 
@@ -5966,6 +6179,52 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     r = runWatchdog(home2);
     expect(r.code).toBe(1);
     expect(readFileSync(jsonPath(home2), 'utf8')).toBe(own);
+  });
+
+  // Fix round 1 item 18 / review 155 C29: a killed watchdog rollback must
+  // not be retried with no bound. Two ticks, one launcher that RECORDS ITS
+  // OWN ARGV AND DIES (review C29's own measured shape): tick 0's report is
+  // NOT yet `from: watchdog`, so the watchdog invokes `ccrc rollback --from
+  // watchdog` for the first (and only allowed) time; the launcher simulates
+  // being killed mid-flight — it leaves its OWN stale, in-flight report,
+  // `from: watchdog`, and exits non-zero. Tick 1 must see that report, MUST
+  // NOT invoke the launcher again (one line in launcher-argv, not two), and
+  // must record `failed` — not retry.
+  itLinux('a stale in-flight report whose `from` is already `watchdog` is never rolled back again — exactly one revert attempt across two ticks (fix round 1 item 18 / review 155 C29)', () => {
+    const home = watchBox('ccrc-watchdog-killed-retry-');
+    // ageS DIFFERS from the died report's own `updatedAt` below (120s vs
+    // 90s) so the post-refusal "did the report move?" guard
+    // (`$after != $upd`) reads a real change and never overwrites what the
+    // launcher itself wrote.
+    report(home, { phase: 'installing', ageS: 120, from: 'pwa' });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home, 'fixture-rollback-exit'), '137\n');
+    // The DYING launcher's own report: in-flight, `from: watchdog`, and
+    // already STALE (updatedAt 90s in the past) — no real sleep needed, the
+    // fixture controls the clock directly, exactly as `report()` does.
+    const died = `${JSON.stringify({ target: 'v1.0.0', phase: 'installing', startedAt: nowS() - 135,
+      updatedAt: nowS() - 90, detail: null, from: 'watchdog', pid: 5150 })}\n`;
+    writeFileSync(join(home, 'fixture-rollback-report'), died);
+
+    let r = runWatchdog(home);
+    expect(r.code, `tick 0 — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(137);
+    expect(r.stdout).toMatch(/^watchdog: stale report \(installing, 1[12]\ds\) and the box fails its health probe \(.+\) — rolling back$/m);
+    expect(r.stdout).toMatch(/^watchdog: ccrc rollback --from watchdog exited 137$/m);
+    expect(readFileSync(jsonPath(home), 'utf8')).toBe(died);
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+
+    r = runWatchdog(home);
+    expect(r.code, `tick 1 — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/rolling back/);
+    // The age is real elapsed wall-clock time since the "died" fixture's
+    // fixed `updatedAt` (nowS() - 90), so a wildcard, not an exact 90s,
+    // tolerates however long tick 0 itself took to run.
+    expect(r.stdout).toMatch(/^watchdog: stale report \(installing, \d+s\), from watchdog — a PRIOR watchdog rollback died mid-flight; not retrying, recorded as failed\n$/);
+    // NOT invoked a second time.
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+    const rep = readReport(home);
+    expect(rep.phase).toBe('failed');
+    expect(rep.detail).toBe("the watchdog's own rollback died in installing; not retrying - box unhealthy: needs the operator");
   });
 
   itLinux('a LIVE holder of ~/.ccrc/update.lock is never acted on — exit 0 and the sentence, nothing probed, the report byte-identical (§18 "the watchdog reverts a dead updater": the lock check)', async () => {
@@ -6003,6 +6262,27 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       expect(existsSync(join(home, 'launcher-argv'))).toBe(false);
       // The verdict is terminal: the next tick leaves it alone.
       expect(runWatchdog(home).stdout).toBe('watchdog: last update failed — nothing to do\n');
+    } finally { release(holder); }
+  });
+
+  // Fix round 1 item 23-C7 / review 155 C7: nothing tested WHERE the wedged
+  // threshold sits — the shipped cases use only a 90s report (well under
+  // 2x the 60s deadline) and a 200s one (well past it), so any multiplier
+  // between them (e.g. 3x instead of spec §11's 2x) would still pass. This
+  // one sits strictly between 2x (120s) and 3x (180s) — 150s — and must be
+  // WEDGED; a `2 * lim` -> `3 * lim` mutation reds this case alone.
+  itLinux('a holder whose report is 150s old (strictly between 2x and 3x a 60s deadline) is ALSO recorded WEDGED — the multiplier is 2, not 3 (fix round 1 item 23-C7 / review 155 C7)', async () => {
+    const home = watchBox('ccrc-watchdog-wedged-150-');
+    const was = report(home, { phase: 'installing', ageS: 150, pid: 4321, from: 'cli' });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const holder = await holdLock(home);
+    try {
+      const r = runWatchdog(home);
+      expect(r.code, r.stderr).toBe(0);
+      const now = readReport(home);
+      expect(now.phase).toBe('failed');
+      expect(now.detail).toBe(`watchdog: updater pid 4321 wedged holding ~/.ccrc/update.lock since ${String(was.updatedAt)}`);
+      expect(r.stdout).toMatch(/recorded as wedged; nothing was reverted$/m);
     } finally { release(holder); }
   });
 
