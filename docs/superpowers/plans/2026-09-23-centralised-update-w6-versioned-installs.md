@@ -8090,6 +8090,38 @@ git add docs/superpowers/plans/2026-09-23-centralised-update-w6-versioned-instal
 git commit -m "docs(plan): the W6 rehearsal record — migration, a crash in the window and its completion, two flips, rollback by arm 1, versions and prune, against the real N-1 and N"
 ```
 
+### Task 8A: W4's carried residue — restore onto an older release, a stale `previous`, and the floor's refusal
+
+Programme wave 4 (PR #181) merged with three node-side items carried, by the rule its coordinator announced before its review results existed: the round after the full fix round sent back only a narrow class of behaviour defect, and everything else carried to the next wave that edits `ccd/ccrc`. That wave is this one. Two of the three are answered structurally by this wave's versioned installs and arm 1.
+
+**First step, before any item:** re-measure each item on `main`, anchored by symbol, never by line. W4's fix round changed `previous` (a same-tag reinstall no longer rewrites it) and put the converged check before the floor check. An item closed on arrival is reported as such in the wave-done mail, and gets no commit.
+
+**Items** (the C-numbers are W4's review run 155's):
+
+- **C26 (BEHAVIOUR).** Arm 2 runs its restore child from the tree just installed. After `ccrc update --to <pre-W4 tag> --downgrade` whose gate fails, that tree's `ccrc` does not know `--no-gate` or `--from`, so the child exits 2, and arm 3 leaves a MIXED tree. This wave keeps the pre-update version directory, so arm 1 (the flip back) answers the case before arm 2 is reached.
+  - Pin: a gate-failed downgrade onto a pre-W4 release fixture ends on arm 1, with the previous version directory active and no mixed tree.
+- **C27 (BEHAVIOUR).** `~/.ccrc/previous` goes stale when a box rolls back to a pre-W4 release and that release's own `ccrc`, which never writes `previous`, moves it forward. A bare `ccrc rollback` then targets a tag that was not the build before the last update.
+  - Ruling: the bare-rollback target is checked against what this wave's layout records as having run. When `previous` disagrees with that record, `ccrc rollback` refuses, naming both, instead of guessing.
+  - Pin the detour.
+- **The floor's refusal after a restore (C28's root).** `_inst_installed` raises `~/.ccrc/floor` inside the staged spine, before the health gate, and spec §9 says a restore never lowers it. So a failed update that restored leaves the floor above the running release. W4 made a converged box ignore the floor, so nothing is stuck.
+  - Ruling: spec §9's placement stays; there is no departure here. The refusal a later move meets names the floor AND the update that raised it (the tag, and that its gate failed and was restored), so the operator can see why `--downgrade` is being asked for.
+  - Pin that sentence.
+
+**Steps:**
+
+- [ ] **Step 1: Re-measure.** On `main`, decide for each item whether it is open. Write the list (open or closed-on-arrival, with a one-line reason) to `$SCRATCH/w6-t8a-remeasure.md`.
+- [ ] **Step 2: Pins first, red first.** For each open item, write the case, see it green on the unmutated tree, then revert the item's fix on a scratch copy (`cp`, never `git checkout --`) and see it red. Restore with `cp` and `cmp` it byte-identical.
+- [ ] **Step 3: Suites.** `cd server && ./node_modules/.bin/vitest run test/ccrc-update.test.ts test/ccrc-rollout.test.ts`. Expected: PASS. Task 9's full gate follows.
+- [ ] **Step 4: Commit.** `git add` the files you touched, then `git commit -m "test(update): W4's carried residue — arm 1 onto an older release, a stale previous, the floor's refusal"`.
+
+**Mutation table** (filled in by Step 2 with measured results; a row without a measured red is not done):
+
+| Item | Mutation | Expected red |
+|---|---|---|
+| C26 | arm 1 skipped for a pre-W4 target | the gate-failed downgrade onto a pre-W4 release |
+| C27 | `ccrc rollback` trusts `previous` without the layout check | the pre-W4 detour |
+| floor | the refusal drops the raising update's tag | the post-restore move below the floor |
+
 ### Task 9: Docs, the citation corpus, the gate, the PR
 
 **Files:**
