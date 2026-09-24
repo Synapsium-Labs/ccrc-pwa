@@ -44,7 +44,8 @@ gated on that.
 - **Another programme edits `ci.yml`.** CI test selection (spec on `ws/ccrc-ci-runs-optimization`, awaiting the
   operator's review) reshapes the same workflow. Wave 2's `merge_group` trigger, macOS skip and concurrency group
   are written to survive that reshaping, and whichever lands second merges the other's shape rather than
-  overwriting it.
+  overwriting it. Two points that programme must carry: a `merge_group` run keeps a run-unique concurrency group
+  (never its shared push-to-main refresh group, which may drop runs), and its mode table needs a `merge_group` row.
 - **The skill pins move with the clauses.** `worker-skill.test.ts`, `coordinator-skill.test.ts`, and the
   clause-count words in `README.md` and `CLAUDE.md` that both pins read move in the same commit as a clause.
   session-continuity wave 8 appends its clauses after this programme's wave 1.
@@ -56,6 +57,6 @@ gated on that.
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned; wave 2 needs wave 1's clause 15 to append its native-queue sentence to. After wave 2
+Waves 1 and 2 are planned and reviewed; wave 2 needs wave 1's clause 15 to append its native-queue sentence to. After wave 2
 merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
 planned and dispatched only on that proof's result.

@@ -151,8 +151,9 @@ can pause or remove, never choose a successor (stage 5).
 
 Triggers 1 and 2 each license at most one absorption per PR; a second occurrence before the first absorption
 lands is not a second license. Trigger 3 is bounded by the coordinator's naming. Under every trigger: `git merge`
-only, never a rebase, a force-push or `update-branch` by any route including `gh api -X PUT`; generated files are
-never hand-resolved (take either side, then run the regenerator); a red that main also shows is reported once as
+only, never a rebase, a force-push or `update-branch` by any route including `gh api -X PUT`; a generated stamp is
+never hand-resolved (take either side of the stamp line only, resolve every other hunk of the file as the source it
+is, then run the regenerator — taking either side of the whole file drops the other side's hunks); a red that main also shows is reported once as
 `main-red` and left alone; never maintain a local `main`, read `origin/HEAD` after one fetch.
 
 **Coordinator clause 15** (14 → 15). The coordinator never calls `update-branch`, never writes rulesets,
@@ -176,8 +177,9 @@ This covers the 27% of sync episodes in sessions with no skill.
 
 **The regenerator gets a CLI.** `ccd/ccd`'s line 2 carries a digest of the file's body with the marker line
 stripped; the regenerator exists as `markGenerated` in `shared/mark.mjs`, and `server/test/ownership.test.ts`
-is already red on an unstamped file. Stage 1 adds a one-line CLI around it (`ccrc restamp <file>`) and clause 16
-names it; 17 of 25 hand resolutions on that file were the stamp alone.
+is already red on an unstamped file. Stage 1 adds a one-line CLI around it (`ccrc restamp <file>`, which refuses a
+generator's own output under `~/.local/bin` or `~/.ccrc`) and clause 16 names it; 17 of 25 hand resolutions on that
+file were the stamp alone.
 
 **Pins.** `update-branch` is pinned ABSENT from executable source (`server/src`, `agent/src`, `shared/`,
 `deploy/`, `ccd/ccd`, `ccd/ccd-*`, `ccd/ccrc`, `ccd/session-hook.sh`), with two allowed spellings, pinned as the

@@ -11,8 +11,8 @@ where work is lost: the swap carry skips a session's journals on a return visit,
 nothing specific, a resumed session is rescued again on the limit banner it brought with it, the operator's
 `/model` reverts, and Claude Code's pressure reap kills the watchers of idle sessions while real orphans go
 uncollected. This programme makes a restart a place where work is handed over. It adds no revival: the swap stays
-the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14); every §11 decision was ruled on
-2026-09-23.
+the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14); §11 items 1–5 were ruled on
+2026-09-23, and item 6, found at plan review, is open.
 
 ## Waves
 
@@ -71,7 +71,7 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned; dispatch either on a fresh workspace with its plan path and this file. Wave 1's first
-task is the write-model measurement its rules depend on — if it contradicts the spec's append-in-place assumption,
-the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
+Waves 1 and 2 are planned and reviewed; dispatch either on a fresh workspace with its plan path and this file.
+Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
+records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
 its safety lens is `xhigh`.

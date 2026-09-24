@@ -255,19 +255,27 @@ has one caller, `cmd_swap`, so the slot covers every path that carries — rescu
 `swap-self` — not only the ones that pass through `_dispatch_swap`; a supervisor revival never changes account and
 never carries. The byte budget, `CARRY_MERGE_BUDGET` (512 MiB per sidecar directory), is charged by a dry `lstat`
 pass over the whole walk — every byte it would read to compare and every byte it would copy — before anything
-moves: all or nothing. When the slot is busy, or the walk is over budget, the carry falls back to today's `(kept)`,
-logged as `(kept: busy)` or `(kept: budget)`, and the destination is exactly as it was. A walk that cannot run —
+moves. The actions are then placed in order of their value to a resume, until the next would pass the budget:
+first the records a resume reads (`workflows/<runId>.json`, `workflows/scripts/*`, `agent-*.meta.json`), then the
+append-only logs (`journal.jsonl` first, then every other `*.jsonl`, newest first), then everything else, newest
+first. An action that does not fit is counted and never half done; the verdict is `(merged +N ~R !D, deferred K)`.
+Each visit places the most valuable bytes first and the backlog shrinks by what it placed, so repeat visits
+converge; an all-or-nothing budget would instead refuse the same backlog on every visit and strand that session's
+new journals on the pair for good. When the slot is busy the carry falls back to today's `(kept)`, logged
+`(kept: busy)`; `(kept: budget)` means not even the first action fits the budget, and the destination is exactly as
+it was. A walk that cannot run —
 no `flock`, the lock file unopenable, no `python3`, a destination that is not a real directory, the walker's own
 failure — is `(kept: error)`, its own word because its remedy differs. It never waits, because the unit is already
-stopped. At 512 MiB, 43 of the 673 return-visit pairs on the box fall back to `(kept: budget)` on their first merge
-(87 without the quick check); they are the stranded backlog C9 does not backfill.
+stopped. At 512 MiB, 43 of the 673 return-visit pairs on the box are priced over budget on their first merge (87
+without the quick check); they are the stranded backlog C9 does not backfill, and they defer rather than refuse.
 
 Tests under `makeCcdHarness` with fixture homes, each red when its rule is removed: a return visit carries new
 journals; an equal file is untouched and uncounted; equality is never decided on size alone; a prefix journal is
 extended; a longer destination is kept; a diverged journal is kept and counted; a newer record replaces; a
 differing unclassified file is kept and counted; a non-regular source entry is not followed; nothing is deleted; no
-nesting on an existing destination; a partial destination is repaired; the budget falls back before any byte
-moves; a walk that cannot run is `(kept: error)`. The `ccd/ccd` edit re-stamps the generated header and follows
+nesting on an existing destination; a partial destination is repaired; a walk over budget places records, then
+journals, then the rest, and defers the remainder whole; a second visit places what the first deferred; a lone
+action over budget touches nothing; a walk that cannot run is `(kept: error)`. The `ccd/ccd` edit re-stamps the generated header and follows
 the compaction-card citation-corpus procedure.
 
 The historical backlog on source accounts is not recovered (§11).
@@ -604,8 +612,8 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | 7 | restarts that revert an operator's `/model` | this session's case | 0 |
 
 Stage 1's first merges meet the backlog C9 does not backfill: 43 of the 673 return-visit pairs on the box exceed
-`CARRY_MERGE_BUDGET` and fall back to `(kept: budget)`. Its row is therefore reported over all carries and over
-carries whose pair was not stranded before its deploy.
+`CARRY_MERGE_BUDGET` and defer part of their walk. Its row is therefore reported over all carries and over carries
+whose pair was not stranded before its deploy, with deferred actions counted apart.
 
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
 redesigned.

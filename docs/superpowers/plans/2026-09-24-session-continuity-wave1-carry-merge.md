@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make a return visit carry a session's work. When `cmd_swap` carries a session's sidecar directory (`<root>/projects/<pdir>/<uuid>/`: subagent transcripts, workflow journals, tool results) onto an account where that directory already exists, `_swap_carry_sidecars` today logs `(kept)` and skips the whole tree — 774 of 1,310 carries in the baseline window, and every one of the 8 "journal … is not on disk" resume refusals came after only `(kept)` carries. After this wave the existing-destination branch walks the source file by file and decides on content and size by the spec's table, logs `sidecar <uuid> -> <dst> (merged +N ~R !D)`, deletes nothing, and repairs a destination an earlier failure left partial — bounded by a box-wide non-blocking slot and a byte budget that fall back to `(kept: busy)` / `(kept: budget)` without waiting. The first carry to an account keeps today's path byte for byte. Plus the programme's instrument, `deploy/measure-continuity.py`, with the two stage-1 rows of spec §9 — the carry row reported over every carry AND over the carries whose pair was not stranded before this wave's deploy (§9's own wording).
+**Goal:** Make a return visit carry a session's work. When `cmd_swap` carries a session's sidecar directory (`<root>/projects/<pdir>/<uuid>/`: subagent transcripts, workflow journals, tool results) onto an account where that directory already exists, `_swap_carry_sidecars` today logs `(kept)` and skips the whole tree — 774 of 1,310 carries in the baseline window, and every one of the 8 "journal … is not on disk" resume refusals came after only `(kept)` carries. After this wave the existing-destination branch walks the source file by file and decides on content and size by the spec's table, logs `sidecar <uuid> -> <dst> (merged +N ~R !D)`, deletes nothing, and repairs a destination an earlier failure left partial — bounded by a box-wide non-blocking slot that falls back to `(kept: busy)`, and by a byte budget spent as a PRIORITY FILL: the records a resume needs first, then the journals, then the rest, each placed whole until the next would overrun the budget, the rest deferred to the next visit and logged `(merged +N ~R !D, deferred K)` — so a backlog bigger than one budget drains over repeat visits instead of stranding the pair (`(kept: budget)` only when the first action alone is over it). Nothing waits. The first carry to an account keeps today's path byte for byte. Plus the programme's instrument, `deploy/measure-continuity.py`, with the two stage-1 rows of spec §9 — the carry row reported over every carry AND over the carries whose pair was not stranded before this wave's deploy (§9's own wording).
 
-**Architecture:** Four pieces, each with tests that red when it is deleted or mutated, and all of it in one place in `ccd/ccd`, directly above `_swap_beat() {`, below every line-anchored citation into the file. (1) `_swap_carry_merge_walk src dst budget` — ONE embedded python3 program (fd-3 heredoc, `_pr_py`'s idiom): a dry pass over `lstat` alone that charges the byte budget BEFORE anything moves (all or nothing, rc 3 over budget), then the table: absent → hardlink else copy (`+N`); same inode, or equal size and equal nanosecond mtime, or equal bytes → nothing; `*.jsonl` whose destination is a strict prefix → replace by temp-and-rename (`~R`); a longer destination the source prefixes → keep; neither a prefix of the other → keep and count (`!D`, printed with the longer copy's path); a rewritten record (`workflows/<runId>.json`, `agent-*.meta.json`, `workflows/scripts/*`) whose source is newer → replace (`~R`); any other file whose bytes differ → keep and count (`!D`). (2) `_carry_slot_take` — `$REG/.carry.lock`, `flock -n`, never unlinked, three answers (taken / contended — `flock`'s own conflict code 1 and nothing else / no mechanism — no `flock`, an unopenable lock file, or any other `flock` failure); the lock file is a twelfth dot-prefixed `$REG` artifact, so `_ws_project_valid`'s R-3 boundary paragraph names it (a line-neutral rewording, far above every citation anchor). (3) `_swap_carry_sidecars`'s existing-destination branch — takes the slot once, at the first existing destination, calls the walk, logs one verdict per sidecar: `(merged +N ~R !D)`, `(kept: busy)`, `(kept: budget)` or `(kept: error)`, plus one `diverged <kept> longer <longer>` row per `!D`, and releases the slot on its one way out. (4) `deploy/measure-continuity.py` — read-only, run by hand on the fleet box, built to the programme's one cross-wave shape (`STAGES = {N: stageN}`, `stageN(ctx)`; wave 1 owns `1: stage1`, wave 2 owns `4: stage4`, whichever lands first creates the file): the carry counter over `swap.log` by mode and reason — over every carry and, with `--deployed`, without the pairs stranded before the deploy — and the resume-refusal count over the transcripts, deduplicated by tool-use id.
+**Architecture:** Four pieces, each with tests that red when it is deleted or mutated, and all of it in one place in `ccd/ccd`, directly above `_swap_beat() {`, below every line-anchored citation into the file. (1) `_swap_carry_merge_walk src dst budget` — ONE embedded python3 program (fd-3 heredoc, `_pr_py`'s idiom): a dry pass over `lstat` alone that prices every action BEFORE anything moves; a PRIORITY FILL that orders the actions by resume value — the rewritten records (`workflows/<runId>.json`, `workflows/scripts/*`, `agent-*.meta.json`), then every `journal.jsonl`, then `agent-*.jsonl` and every other `*.jsonl`, then everything else, newest source mtime first within each — and places them whole, in that order, until the next would overrun the budget, deferring that one and every one after it (counted `K`, never started; rc 3 only when the FIRST action is priced over the budget on its own); then, for each placed action, the table: absent → hardlink else copy (`+N`); same inode, or equal size and equal nanosecond mtime, or equal bytes → nothing; `*.jsonl` whose destination is a strict prefix → replace by temp-and-rename (`~R`); a longer destination the source prefixes → keep; neither a prefix of the other → keep and count (`!D`, printed with the longer copy's path); a rewritten record (`workflows/<runId>.json`, `agent-*.meta.json`, `workflows/scripts/*`) whose source is newer → replace (`~R`); any other file whose bytes differ → keep and count (`!D`). (2) `_carry_slot_take` — `$REG/.carry.lock`, `flock -n`, never unlinked, three answers (taken / contended — `flock`'s own conflict code 1 and nothing else / no mechanism — no `flock`, an unopenable lock file, or any other `flock` failure); the lock file is a twelfth dot-prefixed `$REG` artifact, so `_ws_project_valid`'s R-3 boundary paragraph names it (a line-neutral rewording, far above every citation anchor). (3) `_swap_carry_sidecars`'s existing-destination branch — takes the slot once, at the first existing destination, calls the walk, logs one verdict per sidecar: `(merged +N ~R !D)`, `(merged +N ~R !D, deferred K)` when K actions did not fit, `(kept: busy)`, `(kept: budget)` or `(kept: error)`, plus one `diverged <kept> longer <longer>` row per `!D`, and releases the slot on its one way out. (4) `deploy/measure-continuity.py` — read-only, run by hand on the fleet box, built to the programme's one cross-wave shape (`STAGES = {N: stageN}`, `stageN(ctx)`; wave 1 owns `1: stage1`, wave 2 owns `4: stage4`, whichever lands first creates the file): the carry counter over `swap.log` by mode and reason, with the budget's deferred counts (merges cut short, actions deferred) — over every carry and, with `--deployed`, without the pairs stranded before the deploy — and the resume-refusal count over the transcripts, deduplicated by tool-use id.
 
 **Tech Stack:** bash 5.2 (`ccd/ccd`, `set -uo pipefail`, no `-e`), python 3.12 (the embedded walk; the instrument; three read-only measurement tools run from the scratchpad, never committed), TypeScript + vitest 4.1 (tests), util-linux `flock`.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-session-continuity-design.md` — §5.1 (stage 1: the table, "Bounded", the tests), §1.2 mechanism 1, §3 C8 (the reversal this wave mints), §8 "Mass rescue I/O", §9 stage 1's row and its instrument clause, §11 item 1 (no backfill). Programme ledger: `docs/superpowers/programs/session-continuity.md` (wave 1).
+**Spec:** `docs/superpowers/specs/2026-09-23-session-continuity-design.md` — §5.1 (stage 1: the table, "Bounded" — its priority-fill budget, amended at the source on 2026-09-24 — and the tests), §1.2 mechanism 1, §3 C8 (the reversal this wave mints), §8 "Mass rescue I/O", §9 stage 1's row and its instrument clause, §11 item 1 (no backfill). Programme ledger: `docs/superpowers/programs/session-continuity.md` (wave 1).
 
 ---
 
@@ -18,8 +18,8 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 
 - **Deploy class for THIS wave: AGENT-FIRST.** The only shipped code is `ccd/ccd` (fleet box) and a read-only `deploy/` script nothing runs automatically. `ccrc rollout`'s DEFAULT order (fleet box first) is the order; this wave NEVER uses `--server-first`. Nothing in `server/src`, `agent/src`, `shared/` or `pwa/` changes, and no wire field, capability token or argv flag is added — `FLEET_PROTO` is untouched.
 - **The first carry to an account is today's path, unchanged** (spec §5.1): `cp -al`, then the clear-then-copy `cp -a` fallback, logged `(link)` / `(copy)`, taking no slot. Only a destination that already exists reaches the merge. Task 2's "a first carry takes no slot" pins it.
-- **Nothing is deleted.** The walk only creates files, creates directories and renames a temp file over a destination name. A destination-only file survives; the source is never written. Task 2's "deletes nothing" pins it, and its mutation row 6 (today's clear-then-copy applied to an existing destination) reds it.
-- **Never wait.** The unit is already stopped when the carry runs, so a contended slot and an overrun budget both fall back to `(kept: …)` at once (spec §5.1 "Bounded", §8).
+- **Nothing is deleted, and nothing is half-placed.** The walk only creates files, creates directories and renames a temp file over a destination name. A destination-only file survives; the source is never written. An action the budget defers is never started — no file, no directory, no temp. Task 2's "deletes nothing" and "deletes nothing under a budget, and a deferred action leaves no partial file" pin it; mutation row 6 (today's clear-then-copy applied to an existing destination) reds both, and row 33 (the budget checked after a placement instead of before) reds the second.
+- **Never wait.** The unit is already stopped when the carry runs, so a contended slot falls back to `(kept: busy)` at once (spec §5.1 "Bounded", §8), and the budget never holds the carry either: what does not fit this visit is deferred to the next, not queued.
 - **SAFETY — sacred.** NEVER run destructive `ccd` verbs against the live host (`ws-rm`, `ws-reap`, `ws-gc --prune`, `ws-archive`/`ws-restore`). NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly — this wave's measurements READ `swap.log`, the account roots' `projects/` trees and the system manager's mount units with `stat`, `cat`, `find`, `findmnt` and `systemctl show`/`list-units`, and write nothing anywhere outside the scratchpad. NEVER print secret file CONTENTS.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`), whose `h.sh` spawns bash through `ghContainedEnv(home, …, { systemd: true, tmux: true })`. The new `ccd-swap-carry-merge.test.ts` spawns bash ONLY through `h.sh`, so `ccd-workspaces.test.ts`'s scan ("routes EVERY bash call site in every ccd test file through ALL THREE poisons") stays green; `measure-continuity.test.ts` spawns `python3` directly with `--home` pointed at the fixture HOME, and never reads the live one.
 - **No root `package.json`, no root runner.** Four packages, each `"type":"module"`, run cd'd in:
@@ -31,8 +31,8 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 - **Single suite: `./node_modules/.bin/vitest run test/foo.test.ts` from inside the package. NEVER bare `npx vitest`.**
 - **Run suites in the FOREGROUND, timeout ≥600000ms, one at a time.** The fleet box is memory-bound (a pane scope throttles at 8G and dies at 12G with its session): never two suites at once from one pane, never a backgrounded suite. The whole server suite runs as sequential shards (Task 4).
 - **Known load flakes** (re-run IN ISOLATION before calling a real break): `ccd-ws-gc`, `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`.
-- **Rings / no overloaded null at a seam:** `_carry_slot_take` answers three codes because its caller logs three different things (taken / `kept: busy` / `kept: error`) — and only `flock`'s conflict exit (1) is "contended": util-linux `flock` exits a sysexits code (65 `EX_DATAERR` for EBADF, 71 `EX_OSERR` for ENOLCK/ENOMEM) when it cannot lock at all, and folding that into 1 would give the operator the "someone else is carrying" remedy for a "this box cannot lock" fault; the walk answers rc 0 / rc 3 / anything else because budget and failure are different verdicts. `(kept: error)` is its own word, never folded into `busy`: "another carry holds the slot" and "this box cannot merge" have different remedies.
-- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on a prototype of exactly these edits, one row at a time, the file restored from a SAVED COPY after each (never `git checkout --`), and its red is quoted. The prototype for this revision stood on `af64d9d2`, whose code is byte-identical to `905360dc` (`git diff --stat 905360dc af64d9d2` names only the four plans and the two specs), so every "at `905360dc`" forecast holds for it.
+- **Rings / no overloaded null at a seam:** `_carry_slot_take` answers three codes because its caller logs three different things (taken / `kept: busy` / `kept: error`) — and only `flock`'s conflict exit (1) is "contended": util-linux `flock` exits a sysexits code (65 `EX_DATAERR` for EBADF, 71 `EX_OSERR` for ENOLCK/ENOMEM) when it cannot lock at all, and folding that into 1 would give the operator the "someone else is carrying" remedy for a "this box cannot lock" fault; the walk answers rc 0 (merged, `K` actions perhaps deferred) / rc 3 (the first action alone over budget, nothing touched) / anything else because a partial merge, an unmergeable budget and a failure are three different verdicts — and a deferral is carried as its own number `K`, never folded into `!D` or into `(kept: budget)`. `(kept: error)` is its own word, never folded into `busy`: "another carry holds the slot" and "this box cannot merge" have different remedies.
+- **Mutation-table discipline:** a new guard ships WITH a test that goes RED when the guard is deleted/mutated, measured before/after. Every mutation row in this plan was run on a prototype of exactly these edits, one row at a time, the file restored from a SAVED COPY after each (never `git checkout --`), and its red is quoted. The prototype for this revision (the priority-fill budget) stood on `469ce7b6`, whose code is byte-identical to `905360dc` (`git diff --stat 905360dc 469ce7b6` names only the four plans, the programme ledger and the two specs), so every "at `905360dc`" forecast holds for it; every row in Tasks 2 and 3 was re-run on it, one at a time, `--maxWorkers=1`.
 - **`ccd/ccd` is a provenance-STAMPED file** (line 2 is `# ccrc:generated 1 sha256=…`). **Every task that edits `ccd/ccd` re-stamps before running any suite**, or `server/test/ownership.test.ts` reds:
 
       node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
@@ -54,13 +54,14 @@ Copied from `CLAUDE.md`, the spec and the programme ledger. Every task's require
 
 ## Review Focus
 
-Five inputs or failure modes the spec implies and names no test for; each is given a test in the task that owns it.
+Six inputs or failure modes the spec implies and names no test for; each is given a test in the task that owns it.
 
 1. **A destination `<uuid>` that is a symlink (or not a directory).** A walk that followed it would write the session's files somewhere outside the account root. Owned by Task 2: "a destination that is a symlink is not walked into: (kept: error)" (mutation row 12).
 2. **A temp file a killed walk left behind** (`.ccd-carry-*`, on either side). Carried, it would land as a bogus file; counted, it would inflate `+N`; tripped on, it would fail the next walk. Owned by Task 2: "never carries, counts or trips on a temp a killed walk left" (row 16).
 3. **The slot outliving the carry.** An fd left open would be inherited by the restarted unit's `systemctl start` chain and make every later carry `(kept: busy)` for as long as that process lives. Owned by Task 2: "releases the slot on the way out, and never unlinks the lock file" (row 10).
 4. **A replace that writes THROUGH a destination inode another name shares** (a hardlinked first carry, or any second name). It would rewrite the other name too. Owned by Task 2: "extends a journal … by temp-and-rename", with a sibling hardlink that must keep the old bytes (row 5).
-5. **ccd and the instrument disagreeing on the log line.** §9's stage-1 metric is read off `swap.log` by `measure-continuity.py`; a format drift would report zero merges while the carry works. Owned by Task 3: "counts what the real carry writes", which runs the real `_swap_carry_sidecars` and then the instrument over the same fixture HOME (row 19).
+5. **ccd and the instrument disagreeing on the log line.** §9's stage-1 metric is read off `swap.log` by `measure-continuity.py`; a format drift would report zero merges while the carry works. Owned by Task 3: "counts what the real carry writes", which runs the real `_swap_carry_sidecars` — once under a budget that defers, so ccd's own `, deferred K` suffix is read too — and then the instrument over the same fixture HOME (rows 19, 40).
+6. **A backlog bigger than one budget.** An all-or-nothing budget moves nothing on such a walk, so the next visit prices the same backlog plus the new bytes and the pair stays stranded for good — the measured defect this revision fixes; a fill that stopped part way through a file would leave a partial one; a fill that skipped past an action that did not fit, or that ordered by recency alone, would spend the budget on tool results while a journal waited. Owned by Task 2's five fill cases: a budget smaller than the walk places the records and journals and defers the tool results; the resume order, pinned position by position; an action over budget on its own is `(kept: budget)` and the fill never skips past it; a second visit places what the first deferred; nothing is deleted and a deferred action leaves no partial file (rows 8, 31–39).
 
 ---
 
@@ -68,11 +69,11 @@ Five inputs or failure modes the spec implies and names no test for; each is giv
 
 | File | Created / Modified | Its one responsibility |
 |---|---|---|
-| `ccd/ccd` | Modify — the whole `_swap_carry_sidecars` function (header to closing `}`, directly above `_swap_beat() {`, ≈21615–21706 at `905360dc`) is replaced by one block: the section header, `CARRY_MERGE_BUDGET`, `_carry_slot_take`, `_swap_carry_merge_walk`, and the rewritten `_swap_carry_sidecars`; and three comment lines of `_ws_project_valid`'s R-3 boundary paragraph (≈6116–6123) are reworded one line for one line to name the carry slot (Task 2) | The merge, its slot and its budget; the first carry unchanged; the dot-prefixed `$REG` census kept true |
-| `server/test/ccd-swap-carry-merge.test.ts` | Create (Task 2) | Every rule of the table, the bounds, the fallbacks, the first carry unchanged |
+| `ccd/ccd` | Modify — the whole `_swap_carry_sidecars` function (header to closing `}`, directly above `_swap_beat() {`, ≈21615–21706 at `905360dc`) is replaced by one block: the section header, `CARRY_MERGE_BUDGET`, `_carry_slot_take`, `_swap_carry_merge_walk`, and the rewritten `_swap_carry_sidecars`; and three comment lines of `_ws_project_valid`'s R-3 boundary paragraph (≈6116–6123) are reworded one line for one line to name the carry slot (Task 2) | The merge, its slot and its budget (a priority fill); the first carry unchanged; the dot-prefixed `$REG` census kept true |
+| `server/test/ccd-swap-carry-merge.test.ts` | Create (Task 2) | Every rule of the table, the bounds, the fill's order, deferral and convergence, the fallbacks, the first carry unchanged |
 | `server/test/ccd-swap.test.ts` | Modify — the `(kept)` case becomes the merged case; one comment corrected (Task 2) | The real `cmd_swap` reaches the merge |
 | `deploy/measure-continuity.py` | Create — or, if wave 2 merged first, extend with the stage-1 block only (Task 3) | The programme's read-only instrument: stage 1's carry and resume sections |
-| `server/test/measure-continuity.test.ts` | Create (Task 3) | The instrument reads what ccd writes; windows; the stranded-pair split; resume dedupe |
+| `server/test/measure-continuity.test.ts` | Create (Task 3) | The instrument reads what ccd writes, the deferred suffix included; windows; the stranded-pair split; the deferred counts; resume dedupe |
 
 **Not modified, deliberately:** `README.md` (its two `ccd/ccd` anchors sit above every line this wave adds, the R-3 rewording is line-neutral, and README describes no sidecar rule), `server/test/ccd-account-auth.test.ts` (its census is derived; the paragraph moves to meet it, not the test), `server/test/session-hook.test.ts` (the census does not move), `CLAUDE.md`, `server/test/ccd-swap-carry.test.ts` (the transcript carry is untouched), everything under `server/src`, `agent/`, `shared/`, `pwa/`. `ccd-account-ok.test.ts` and `ccd-swap-pin.test.ts` stub `_swap_carry_sidecars() { :; }` by name — the name is kept, so they are untouched and stay green (measured).
 
@@ -86,7 +87,7 @@ Each was measured on the fleet box or on a prototype of this plan's exact edits 
 2. **The `(copy)` fallbacks on a one-device box, explained.** Every account root is its own bind mount of the one data volume (`findmnt`: 20 roots, one source device), and `link(2)` across two mount points answers `EXDEV` even inside one filesystem — measured with a scratch file hardlinked across two mounts of the same volume: `ln: failed to create hard link … Invalid cross-device link`, and `cp -al` left an empty skeleton, exactly the shape the carry's fallback clears. Joined against each root's mount activation time (`linkmode.py`, Task 1): every dated `(copy)` involved a root that was already a mount (262 of 262), and every dated `(link)` ran while both roots were still plain directories (163 of 163); 202 lines name a root with no mount unit today and get no verdict. The roots were moved onto bind mounts one at a time, from 2026-08-21 to 2026-09-22; since the box's mount table last changed (2026-09-22 21:52) every carry is `(copy)` — 17 of 17 at planning. Consequence for the design: on this fleet every `+N` is a copy, never a link, and every carried file is an independent inode — so a return visit cannot find "equal by identity", and the budget is what bounds it.
 3. **Park-and-wake R4's box-wide release lock has NOT shipped:** `grep -c 'release.lock' ccd/ccd` → `0` at `905360dc`. Per spec §5.1 the carry takes a slot of its own, `$REG/.carry.lock`.
 4. **Every path that carries goes through ONE call.** `_swap_carry_sidecars` has exactly one caller, `cmd_swap` (`grep -n '_swap_carry_sidecars "' ccd/ccd` → one hit, ≈22790), and rescue, auto-home (both via `_dispatch_swap`), manual/PWA swaps and `swap-self` all run `cmd_swap`. A supervisor revival never changes account and never carries. So a slot taken inside the function covers every path the spec names.
-5. **The sidecar census, and the budget.** Over every sidecar on the box: 1,095 directories; bytes p50 20 MB, p90 222 MB, p99 1.29 GB, max 2.18 GB; files p50 71, p90 727, p99 3,497, max 6,142 (hence one python process, not a fork per file). Over the 673 real return-visit pairs on the box (the same `<pdir>/<uuid>` under two roots), the walk's byte cost: with the size+mtime quick check p50 5.6 MiB, p90 208 MiB, p99 1,091 MiB — equal to the bytes that are actually new at every percentile; comparing bytes alone, p50 80 MiB, p90 764 MiB, p99 1,561 MiB. At `CARRY_MERGE_BUDGET` = 512 MiB, 43 of the 673 pairs would fall back to `(kept: budget)` with the quick check and 87 without. The pairs are today's stranded backlog (C9: not backfilled), which the first merge of each session carries once — except a pair priced over `CARRY_MERGE_BUDGET`, which falls back to `(kept: budget)` on EVERY return visit, because nothing moves on an over-budget walk and the next dry pass prices the same backlog plus whatever is new; for every other pair, after the first merge a return visit costs what was written since the last one. §9 therefore reports the stage-1 row both over every carry and without the pairs stranded before the deploy (`--deployed`, Task 3), and counts the pairs whose every visit since the deploy was `(kept: budget)` (`stranded_pairs_budget_every_visit`). The dry pass over this planning session's own stranded sidecar (a copy on another root) took 0.13 s and priced the merge at 88.6 MB.
+5. **The sidecar census, and the budget.** Over every sidecar on the box: 1,095 directories; bytes p50 20 MB, p90 222 MB, p99 1.29 GB, max 2.18 GB; files p50 71, p90 727, p99 3,497, max 6,142 (hence one python process, not a fork per file). Over the 673 real return-visit pairs on the box (the same `<pdir>/<uuid>` under two roots), the walk's byte cost: with the size+mtime quick check p50 5.6 MiB, p90 208 MiB (214 MiB re-measured 2026-09-24), p99 1,091 MiB — equal to the bytes that are actually new at every percentile; comparing bytes alone, p50 80 MiB, p90 764 MiB, p99 1,561 MiB. At `CARRY_MERGE_BUDGET` = 512 MiB the whole walk of 43 of the 673 pairs is priced over the budget with the quick check, and of 87 without (re-measured 2026-09-24: 43 and 87 again). The pairs are today's stranded backlog (C9: not backfilled). **Under the all-or-nothing budget this plan first carried, each of those 43 pairs fell back to `(kept: budget)` on EVERY return visit** — nothing moved on an over-budget walk, so the next dry pass priced the same backlog plus whatever was new, and the session's new journals stayed stranded on that pair for good. That is the defect this revision fixes with the priority fill (Planning decisions). **The fill, measured** (2026-09-24, `fill-census.py`, read-only, scratchpad: it `lstat`s the `~/.claude*/projects/*/<uuid>/` trees and nothing else, runs the walk's own dry pass, prices and resume order on every pair — src the root holding the newest file, dst each other root — and fills at 512 MiB): of the 673 pairs, **630 place everything on the first visit, 43 defer some actions, 0 are `(kept: budget)`** — no single action on the box is priced over the budget on its own (the largest is 64 MiB, an absent file). A deferring first visit leaves p50 535 actions / 289 MiB behind, at most 1,966 actions / 938 MiB. Simulating repeat visits with NO new bytes (a placement leaves the destination equal and drops out; a compare that can place nothing — 37 same-size compares and 81 longer-destination logs on the whole box — is priced again every visit), **all 43 converge: 27 in 2 visits, 16 in 3.** None stalls behind compares that place nothing, and none is headed by an action over budget. Two assumptions, because the census reads no byte: a shorter destination log IS a prefix of its source (the logs are appended in place, finding 1), and a same-size newer record differs from its destination. §9 therefore reports the stage-1 row both over every carry and without the pairs stranded before the deploy (`--deployed`, Task 3), and the budget's cut beside it: `deferred_carries` (merges logged `, deferred K`) and `deferred_actions` (the summed `K`), with `kept: budget` its own count. The dry pass over this planning session's own stranded sidecar (a copy on another root) took 0.13 s and priced the merge at 88.6 MB.
 6. **The citation census does not move** (Global Constraints). `repoint-readme.py` printed `ccd/ccd:21202` and `ccd/ccd:19989-19991` and left README byte-identical; `cite-remeasure.py … HEAD` printed `stated == base == tree` on all four lines — `147 / 195 / 53 / 35` — with EMPTY `ENTERED`/`LEFT` everywhere.
 7. **The existing `(kept)` pin reverses.** `ccd-swap.test.ts` "leaves an existing destination sidecar alone — a tree is not replaced in one step" reds on the prototype: `expected '… carry b7001948-22…' to contain '(kept)'`, the log now reading `(merged +0 ~0 !1)` (its differing tool result is kept and counted). Task 2 rewrites that case in the same commit; it is the pin C8 reverses.
 8. **The instrument reproduces the spec's baseline exactly, read-only, on the fleet box** (re-measured 2026-09-23 with this revision's `STAGES` instrument; the box's zone is UTC, so its local-time window reading equals the UTC text one the first cut used). `measure-continuity.py --stage 1 --since 2026-09-08 --until '2026-09-23 08:50'` → `carry`: 1,310 carries, `kept` 774, `copy` 389, `link` 147; `--stage 1 --since 2026-09-08 --until '2026-09-23 18:26'` → `resume`: 72 resume calls: ok 55, journal-missing 8, script-path 5, other-error 4 (spec §1.2: 72; 8; 5; "ok with 0 swaps 36; ok with ≥1 swap 19"; 3 still running + 1 parse error). Each run reads both sections, 57 s. The resume row reads only the LARGEST transcript copy of each session uuid (44.6 GB of names in the window collapse to 6.4 GB) and skips a file with no `resumeFromRunId` in C (`mmap.find`). A first cut that read every copy line by line was killed at 15 minutes.
@@ -96,14 +97,14 @@ Each was measured on the fleet box or on a prototype of this plan's exact edits 
 
 ## Planning decisions the spec did not make
 
-Each is built as written below; each is named in `spec_gaps` for the coordinator, and none is a deviation from a spec rule unless the coordinator rules it one.
+Each is built as written below; each is named in `spec_gaps` for the coordinator, and none is a deviation from a spec rule unless the coordinator rules it one — except the priority-fill budget, which departs from spec §5.1's written "all or nothing" by orchestrator decision and says so in its own entry.
 
 - **The quick check.** Spec §5.1's second row reads "equal size and equal bytes → nothing". This plan decides "equal" in three ways, in order: the same inode (equal by identity — identity decides only EQUAL, never DIFFERENT, so the spec's "never on inode identity" holds for every other verdict); equal size AND equal nanosecond mtime (rsync's default quick check — every carry on this fleet is a `cp -a` or python `copy2`, both of which preserve `mtime_ns`); otherwise a byte compare. Measured cost (finding 5): it takes the p90 return visit from 764 MiB to 208 MiB. Named cost: two different files of identical size AND identical nanosecond mtime read as equal. Pinned so it cannot widen: "decides equality on size AND mtime, never on size alone" (mutation row 1).
 - **A third fallback word, `(kept: error)`.** The spec names `busy` and `budget`. A walk that cannot run at all — no `flock`, the lock file unopenable, a `flock` that fails for any reason but a conflict, no `python3`, a destination that is not a real directory, or the walker failing — is neither, and folding it into either would give the operator the wrong remedy. The instrument counts it separately and reports `kept_other_than_busy_budget` (legacy `kept` + `error`) against §9's target.
-- **The budget is charged by a dry pass, all or nothing.** "The walk exceeds its byte budget" could mean a walk that stops half way. This plan prices the whole walk from `lstat` first (the bytes it would read to compare plus the bytes it would copy) and falls back BEFORE the first byte moves, so `(kept: budget)` means exactly today's `(kept)`: the destination as it was.
+- **The budget is a PRIORITY FILL, not all or nothing — decided at plan review by the orchestrator (2026-09-24), and amended into spec §5.1 and §9 at the source in the same commit as this plan.** The spec's first text charged the whole walk and fell back to `(kept: budget)` when it was over, "all or nothing", and §9's note counted 43 pairs that "fall back to `(kept: budget)`". Measured (finding 5), that strands each such pair on every return visit for good, which defeats the wave's purpose. So the dry pass still prices every action from `lstat` before anything moves (the bytes it would read to compare plus the bytes it would copy), and then orders the actions by resume value and places them in that order until the next one would exceed the budget: (1) the rewritten records a resume needs — `workflows/<runId>.json`, `workflows/scripts/*`, `agent-*.meta.json`; (2) the append-only logs — every `journal.jsonl` first, then `agent-*.jsonl` and every other `*.jsonl`; (3) everything else (tool results and the rest); newest source mtime first within each. Each placed action is exactly the table's action (a link, or a temp renamed into place; nothing deleted). The action that would overrun the budget and every one after it are DEFERRED: counted, never started, never half-done. The verdict is `(merged +N ~R !D)` when everything fit and `(merged +N ~R !D, deferred K)` when K did not; `(kept: busy)` and `(kept: error)` are unchanged, and `(kept: budget)` is logged only when not even the first action fits — it is priced over the budget on its own — and then the destination is exactly as it was. Because every visit places the most valuable bytes first and the next visit finds them equal (a link is the same inode, a copy keeps size and `mtime_ns`), the backlog shrinks by what was placed and repeat visits converge — measured: all 43 of the box's over-budget pairs in 2 or 3 visits with no new bytes. The fill STOPS at the first action that does not fit; it never skips past it to a smaller one, so a lower-value action never goes ahead of a higher-value one. Two named costs, both measured at zero on the box today (finding 5): an action priced over the budget on its own heads its queue and holds everything behind it (the largest action on the box is 64 MiB, an eighth of the budget); and a compare that can place nothing (a same-size file that is not a newer record, a log whose destination is longer) is priced again on every visit, so enough of them ahead of a placement could hold it back. `deferred_carries` / `deferred_actions` (Task 3) make either visible if it ever appears. The spec's §5.1 "Bounded" paragraph, its test list ("the budget falls back before any byte moves") and §9's stranded-backlog note still describe all-or-nothing; they are owed an amendment, and the coordinator decides whether this departure takes a number (see `## Deviations found`).
 - **Files the table does not classify.** A file outside the three named classes whose bytes differ (a tool result is written once) is kept and counted `!D`; a destination entry of another type where the source has a regular file is kept and counted `!D`; a non-regular source entry (a symlink, a fifo) is never followed and never copied. The spec's "named in the manifest with the longer copy's path" has no manifest until stage 3 (wave 6), so this wave writes one `sidecar <uuid> diverged <kept path> longer <longer path>` row to `swap.log` per `!D` — the input wave 6's manifest will read.
-- **`CARRY_MERGE_BUDGET` = 512 MiB,** per sidecar directory, from finding 5; a knob beside the function, not in the tuning block near the top of the file (that would move every citation anchor below it). The dry pass prices a same-size record replace as its compare (both sides) PLUS the copy the replace then makes, so a walk can never run over the budget it was priced under.
-- **"Stranded before the deploy" (§9's split), made measurable from `swap.log` alone.** A carry's pair is `(session uuid, destination account root)`. It is stranded when that root held the session before `--deployed`: a sidecar line dated before it names the root, or a `swap` line dated before it names that root's wrapper as either side — the `from` side is what catches the root a session was BORN on, which no sidecar line ever names and which is where auto-home returns a session. The instrument reports the carry section over every carry and again as `excluding_stranded`, plus `stranded_pairs_budget_every_visit`. Named cost: a wrapper that never received a sidecar carry has no learned root, so a born-there pair on it reads as not stranded — measured at 0 unmapped wrappers on the box today (finding 9).
+- **`CARRY_MERGE_BUDGET` = 512 MiB,** per sidecar directory per visit, from finding 5: at 512 MiB 630 of the box's 673 return-visit pairs place everything on the first visit and the other 43 drain in 2 or 3; a knob beside the function, not in the tuning block near the top of the file (that would move every citation anchor below it). The dry pass prices a same-size record replace as its compare (both sides) PLUS the copy the replace then makes, so a visit can never run over the budget it was priced under.
+- **"Stranded before the deploy" (§9's split), made measurable from `swap.log` alone.** A carry's pair is `(session uuid, destination account root)`. It is stranded when that root held the session before `--deployed`: a sidecar line dated before it names the root, or a `swap` line dated before it names that root's wrapper as either side — the `from` side is what catches the root a session was BORN on, which no sidecar line ever names and which is where auto-home returns a session. The instrument reports the carry section over every carry and again as `excluding_stranded`, each with the budget's `deferred_carries` and `deferred_actions` beside `kept: budget`. Named cost: a wrapper that never received a sidecar carry has no learned root, so a born-there pair on it reads as not stranded — measured at 0 unmapped wrappers on the box today (finding 9).
 - **The instrument's shape is the programme's cross-wave contract,** not this wave's choice: `STAGES = {N: stageN}`, `stageN(ctx)` returning named sections, `ctx` a dict of `home`, `swap_log`, `since`, `until`, `deployed` (epochs) and `all_copies`; CLI `--stage N` (repeatable), `--home`, `--swap-log`, `--since`, `--until`, `--deployed`, `--all-copies`, `--json`. Whichever of waves 1 and 2 lands first creates the file; the other adds only its own `# ── stage N` block, its `STAGES` entry and any missing flag (Task 3 Step 3).
 
 ---
@@ -508,10 +509,10 @@ Expected: one source device for every account root (planning: `20 /dev/…`), an
 **Interfaces:**
 - Consumes: `_sidecar_matches "$srccfg" "$uuid"` (unchanged), `$REG`, `cmd_swap`'s one call `_swap_carry_sidecars "$srccfg" "$dstcfg" "$uuid"` (unchanged; the function still always answers rc 0).
 - Produces:
-  - `CARRY_MERGE_BUDGET=536870912` — bytes one sidecar's merge walk may read + copy.
+  - `CARRY_MERGE_BUDGET=536870912` — bytes one sidecar's merge walk may read + copy per visit; what does not fit is deferred to the next visit.
   - `_carry_slot_take` → rc 0 with the CALLER's `local CARRY_SLOT_FD` set | rc 1 contended (`flock -n`'s conflict exit, 1, and only that) | rc 2 no mechanism (no `flock`, the lock file unopenable, or `flock` exiting anything else — 65 on EBADF, 71 on ENOLCK/ENOMEM). The lock file is `$REG/.carry.lock`, never unlinked. Stage 3's manifest scan (wave 6) "takes the same slot" (spec §5.3) — it calls this function, it does not re-spell the path.
-  - `_swap_carry_merge_walk <src> <dst> <budget>` → stdout `diverged <kept> longer <longer>` rows then `merged <N> <R> <D>`, rc 0 | `budget <cost>`, rc 3, nothing touched | anything else: failed.
-  - `swap.log` lines: `<date> sidecar <uuid> -> <dst> (merged +N ~R !D)`, `(kept: busy)`, `(kept: budget)`, `(kept: error)`; and `<date> sidecar <uuid> diverged <kept path> longer <longer path>`. Task 3's instrument and wave 6's manifest read them. The first-carry lines `(link)` / `(copy)` are unchanged; bare `(kept)` is never written again.
+  - `_swap_carry_merge_walk <src> <dst> <budget>` → stdout `diverged <kept> longer <longer>` rows then `merged <N> <R> <D> <K>` (K = actions deferred to the next visit, 0 when everything fit), rc 0 | `budget <the first action's cost>`, rc 3, nothing touched (the first action in resume order is priced over the budget on its own) | anything else: failed.
+  - `swap.log` lines: `<date> sidecar <uuid> -> <dst> (merged +N ~R !D)`, `(merged +N ~R !D, deferred K)` (K > 0 only), `(kept: busy)`, `(kept: budget)`, `(kept: error)`; and `<date> sidecar <uuid> diverged <kept path> longer <longer path>`. Task 3's instrument and wave 6's manifest read them. The first-carry lines `(link)` / `(copy)` are unchanged; bare `(kept)` is never written again.
 
 - [ ] **Step 0: Confirm the base, and that the surface is green before any edit**
 
@@ -538,8 +539,10 @@ Expected: `base carries 905360dc`; the merge either `Already up to date.` or cle
  * since it last left an account — subagent transcripts, workflow journals —
  * stayed on the source (774 of 1,310 carries). The existing-destination branch
  * now walks the source file by file under a box-wide non-blocking slot and a
- * byte budget. Every rule of the spec's table has a case here that reds when
- * the rule is removed; the first carry's own path is pinned unchanged.
+ * byte budget spent as a priority fill (records, then journals, then the rest;
+ * what does not fit is deferred to the next visit, never half-placed). Every
+ * rule of the spec's table has a case here that reds when the rule is
+ * removed; the first carry's own path is pinned unchanged.
  *
  * The REAL function runs against a fixture HOME (`makeCcdHarness`): two config
  * dirs, `.claude` (source) and `.claude-d` (destination), planted by hand.
@@ -578,12 +581,21 @@ const swapLog = (): string => {
   const p = path.join(h.home, '.cc-sessions', 'swap.log');
   return fs.existsSync(p) ? read(p) : '';
 };
-/** The one `sidecar <uuid> -> <dst> (…)` verdict for our destination. */
+/** Every `sidecar <uuid> -> <dst> (…)` verdict for our destination, oldest first. */
+const verdicts = (): string[] =>
+  swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> ${DST()} (`)).map((l) => l.replace(/^.* \(/, '('));
+/** The one verdict for our destination. */
 const verdict = (): string => {
-  const rows = swapLog().split('\n').filter((l) => l.includes(` sidecar ${UUID} -> ${DST()} (`));
+  const rows = verdicts();
   expect(rows, swapLog()).toHaveLength(1);
-  return rows[0]!.replace(/^.* \(/, '(');
+  return rows[0]!;
 };
+/** Every regular file under a directory, relative, sorted. */
+const tree = (dir: string): string[] =>
+  fs.readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => path.relative(dir, path.join(e.parentPath, e.name)))
+    .sort();
 
 /** The real function, with an optional prefix (a held slot, a budget). */
 const carry = (prefix = ''): string =>
@@ -752,7 +764,114 @@ describe('the copy fallback', () => {
   });
 });
 
-describe('bounded: the slot and the budget fall back to (kept), never wait', () => {
+describe('the budget is a priority fill: the most valuable actions first, the rest deferred to the next visit', () => {
+  it('a budget smaller than the whole walk places the records and journals and defers the tool results (deferred K)', () => {
+    // Priced by the dry pass: the record replace 21, the journal extend
+    // 2·2 + 6 = 10, the absent agent log 8 — 39 of a 50-byte budget — and
+    // then a 100-byte tool result that would overrun it. The tool results are
+    // the NEWEST files here: newest-first alone would have placed them first.
+    const rec = put(SRC('workflows/wf_1.json'), '{"state":"completed"}', T0 + 60);
+    put(DST('workflows/wf_1.json'), '{"state":"running"}');
+    put(SRC('subagents/workflows/wf_1/journal.jsonl'), 'A\nB\nC\n', T0 + 60);
+    put(DST('subagents/workflows/wf_1/journal.jsonl'), 'A\n');
+    put(SRC('subagents/workflows/wf_1/agent-a1.jsonl'), '{"t":1}\n', T0 + 60);
+    put(SRC('tool-results/big-1.txt'), 'x'.repeat(100), T0 + 100);
+    put(SRC('tool-results/big-2.txt'), 'y'.repeat(100), T0 + 90);
+    carry('CARRY_MERGE_BUDGET=50;');
+    expect(verdict()).toBe('(merged +1 ~2 !0, deferred 2)');
+    expect(read(DST('workflows/wf_1.json'))).toBe(read(rec));
+    expect(read(DST('subagents/workflows/wf_1/journal.jsonl'))).toBe('A\nB\nC\n');
+    expect(read(DST('subagents/workflows/wf_1/agent-a1.jsonl'))).toBe('{"t":1}\n');
+    expect(fs.existsSync(DST('tool-results')), 'a deferred action creates nothing, not even its directory').toBe(false);
+  });
+
+  it('places in resume order: records, then journal.jsonl newest first, then the other logs newest first, then the rest newest first', () => {
+    // Every action costs the same 10 bytes (all absent), so a budget of 10·k
+    // places exactly the first k: the order is read off which files landed.
+    // The mtimes run AGAINST the tiers — the records are the oldest files, a
+    // tool result the newest — so newest-first across tiers reds here.
+    const ORDER: Array<[string, number]> = [
+      ['subagents/agent-a1.meta.json', T0 - 400],
+      ['workflows/scripts/s.js', T0 - 450],
+      ['workflows/wf_1.json', T0 - 500],
+      ['subagents/workflows/wf_2/journal.jsonl', T0 - 100],
+      ['subagents/workflows/wf_1/journal.jsonl', T0 - 200],
+      ['subagents/agent-a2.jsonl', T0 - 10],
+      ['subagents/agent-a1.jsonl', T0 - 50],
+      ['tool-results/new.txt', T0 + 100],
+      ['tool-results/old.txt', T0 - 300],
+    ];
+    for (const [rel, t] of ORDER) put(SRC(rel), '0123456789', t);
+    for (let k = 1; k <= ORDER.length; k++) {
+      fs.rmSync(DST(), { recursive: true, force: true });
+      fs.mkdirSync(DST(), { recursive: true });
+      fs.rmSync(path.join(h.home, '.cc-sessions', 'swap.log'), { force: true });
+      carry(`CARRY_MERGE_BUDGET=${10 * k};`);
+      const missing = ORDER.slice(0, k).map(([rel]) => rel).filter((rel) => !fs.existsSync(DST(rel)));
+      expect(missing.join(' '), `budget ${10 * k}: not placed`).toBe('');
+      expect(tree(DST()), `budget ${10 * k}: placed beyond the first ${k}`).toHaveLength(k);
+      const left = ORDER.length - k;
+      expect(verdict(), `budget ${10 * k}`).toBe(left ? `(merged +${k} ~0 !0, deferred ${left})` : `(merged +${k} ~0 !0)`);
+    }
+  });
+
+  it('an action priced over the budget on its own gives (kept: budget) and touches nothing — the fill never skips past it', () => {
+    put(SRC('workflows/wf_1.json'), 'x'.repeat(100));   // first in resume order, 100 bytes
+    put(SRC('tool-results/small.txt'), 'y');             // would fit on its own
+    fs.mkdirSync(DST(), { recursive: true });
+    carry('CARRY_MERGE_BUDGET=50;');
+    expect(verdict()).toBe('(kept: budget)');
+    expect(fs.readdirSync(DST())).toEqual([]);
+  });
+
+  it('a second visit with the same budget places what the first deferred — repeat visits converge', () => {
+    // Five absent files of 10 bytes, a 20-byte budget: 2, then 2, then 1 —
+    // each visit finds the ones already placed equal and prices only the rest.
+    const rels = ['tool-results/r1.txt', 'tool-results/r2.txt', 'tool-results/r3.txt', 'tool-results/r4.txt', 'tool-results/r5.txt'];
+    rels.forEach((rel, i) => put(SRC(rel), '0123456789', T0 + i));
+    fs.mkdirSync(DST(), { recursive: true });
+    const VISITS = ['(merged +2 ~0 !0, deferred 3)', '(merged +2 ~0 !0, deferred 1)', '(merged +1 ~0 !0)', '(merged +0 ~0 !0)'];
+    VISITS.forEach((want, v) => {
+      carry('CARRY_MERGE_BUDGET=20;');
+      expect(verdicts()[v], `visit ${v + 1}`).toBe(want);
+    });
+    expect(tree(DST())).toEqual(rels);
+  });
+
+  it('deletes nothing under a budget, and a deferred action leaves no partial file', () => {
+    // The record (12) fits a 12-byte budget; the journal extend (2·2 + 6 = 10)
+    // and the new tool result (4) are deferred. The deferred journal keeps its
+    // old bytes and inode, the deferred file is absent, no temp is left.
+    put(SRC('workflows/wf_1.json'), '{"s":"done"}', T0 + 60);
+    const sj = put(SRC('subagents/workflows/wf_1/journal.jsonl'), 'A\nB\nC\n', T0 + 60);
+    const dj = put(DST('subagents/workflows/wf_1/journal.jsonl'), 'A\n');
+    const st = put(SRC('tool-results/new.txt'), 'NEW\n');
+    put(DST('tool-results/only-here.txt'), 'MINE\n');
+    const snap = (p: string): unknown[] => [read(p), fs.statSync(p).mtimeMs, ino(p)];
+    const before = { src: [sj, st].map(snap), dj: snap(dj) };
+    carry('CARRY_MERGE_BUDGET=12;');
+    expect(snap(dj), 'the deferred journal was touched').toEqual(before.dj);
+    expect(fs.existsSync(DST('tool-results/new.txt')), 'the deferred file was placed').toBe(false);
+    expect(read(DST('tool-results/only-here.txt'))).toBe('MINE\n');
+    expect([sj, st].map(snap)).toEqual(before.src);
+    expect(tree(DST()).filter((f) => f.split('/').pop()!.startsWith('.ccd-carry-')), 'a temp left behind').toEqual([]);
+    expect(fs.existsSync(DST('workflows/wf_1.json')), 'the record that fit was not placed').toBe(true);
+    expect(tree(DST())).toEqual(['subagents/workflows/wf_1/journal.jsonl', 'tool-results/only-here.txt', 'workflows/wf_1.json']);
+    expect(verdict()).toBe('(merged +1 ~0 !0, deferred 2)');
+  });
+
+  it('prices the copy a same-size record replace makes, not only its compare', () => {
+    // 12 bytes each side: the compare reads 24, the newer record is then
+    // copied — 12 more. Priced at 36 on its own, it cannot fit a budget of 24.
+    put(SRC('workflows/wf_1.json'), '{"s":"done"}', T0 + 60);
+    const d = put(DST('workflows/wf_1.json'), '{"s":"runn"}');
+    carry('CARRY_MERGE_BUDGET=24;');
+    expect(verdict()).toBe('(kept: budget)');
+    expect(read(d)).toBe('{"s":"runn"}');
+  });
+});
+
+describe('bounded: a busy slot falls back to (kept), and nothing waits', () => {
   it('a busy slot falls back to (kept: busy) and touches nothing', () => {
     put(SRC('tool-results/new.txt'), 'NEW\n');
     fs.mkdirSync(DST(), { recursive: true });
@@ -760,15 +879,6 @@ describe('bounded: the slot and the budget fall back to (kept), never wait', () 
     expect(out).not.toContain('HOLD-FAILED');
     expect(verdict()).toBe('(kept: busy)');
     expect(fs.existsSync(DST('tool-results/new.txt'))).toBe(false);
-  });
-
-  it('the budget falls back to (kept: budget) before a byte moves', () => {
-    put(SRC('tool-results/big.txt'), 'x'.repeat(100));
-    put(SRC('tool-results/small.txt'), 'y');
-    fs.mkdirSync(DST(), { recursive: true });
-    carry('CARRY_MERGE_BUDGET=50;');
-    expect(verdict()).toBe('(kept: budget)');
-    expect(fs.readdirSync(DST()), 'all or nothing: the file that fit was not placed either').toEqual([]);
   });
 
   it('a first carry takes no slot — today\'s path, unchanged, even while the slot is held', () => {
@@ -817,16 +927,6 @@ describe('bounded: the slot and the budget fall back to (kept), never wait', () 
     expect(verdict()).toBe('(kept: error)');
     expect(fs.existsSync(DST('tool-results/new.txt'))).toBe(false);
   });
-
-  it('prices the copy a same-size record replace makes, not only its compare', () => {
-    // 12 bytes each side: the compare reads 24, the newer record is then
-    // copied — 12 more. A budget of 24 must refuse the walk before it starts.
-    put(SRC('workflows/wf_1.json'), '{"s":"done"}', T0 + 60);
-    const d = put(DST('workflows/wf_1.json'), '{"s":"runn"}');
-    carry('CARRY_MERGE_BUDGET=24;');
-    expect(verdict()).toBe('(kept: budget)');
-    expect(read(d)).toBe('{"s":"runn"}');
-  });
 });
 ```
 
@@ -834,7 +934,7 @@ describe('bounded: the slot and the budget fall back to (kept), never wait', () 
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-swap-carry-merge.test.ts`
 
-Expected: FAIL — `Tests 18 failed | 3 passed (21)` (measured on today's ccd, byte-identical to `905360dc`). The three that pass are the controls, true of today's ccd and required to stay true: "deletes nothing …", "a first carry takes no slot …" and "releases the slot on the way out …". The eighteen fail on today's `(kept)` verdict (`expected '(kept)' to be '(merged +1 ~0 !0)'`, `expected '(kept)' to be '(kept: busy)'`, `expected '(kept)' to be '(kept: error)'` for the two unlockable-slot cases, `expected '(kept)' to be '(kept: budget)'` for both budget cases, and their kin) or on files that were never carried (`ENOENT: no such file or directory, open '…/subagents/workflows/wf_1/journal.jsonl'`). On a box without `/dev/shm` on a separate filesystem (macOS) the copy-fallback case is skipped, not failed.
+Expected: FAIL — `Tests 22 failed | 3 passed (25)` (measured on today's ccd, byte-identical to `905360dc`). The three that pass are the controls, true of today's ccd and required to stay true: "deletes nothing — a destination-only file survives …", "a first carry takes no slot …" and "releases the slot on the way out …". The twenty-two fail on today's `(kept)` verdict (`expected '(kept)' to be '(merged +1 ~0 !0)'`, `expected '(kept)' to be '(kept: busy)'`, `expected '(kept)' to be '(kept: error)'` for the symlinked destination and the two unlockable-slot cases, `expected '(kept)' to be '(kept: budget)'` for the over-budget action and the priced record copy, `expected '(kept)' to be '(merged +1 ~2 !0, deferred 2)'` for the partial fill, `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''` for the resume order, `visit 1: expected '(kept)' to be '(merged +2 ~0 !0, deferred 3)'` for convergence, `the record that fit was not placed: expected false to be true` for "deletes nothing under a budget …", and their kin) or on files that were never carried (`ENOENT: no such file or directory, open '…/subagents/workflows/wf_1/journal.jsonl'`). On a box without `/dev/shm` on a separate filesystem (macOS) the copy-fallback case is skipped, not failed.
 
 - [ ] **Step 3: Replace `_swap_carry_sidecars` with the carry-merge block**
 
@@ -851,9 +951,9 @@ Write the block below to `$SCRATCH/carry-merge-block.sh`, exactly — it starts 
 # destination branch now WALKS the source tree file by file and decides on
 # content and size — `_swap_carry_merge_walk`, below — and nothing is deleted.
 #
-# BOUNDED, BECAUSE THE WALK READS WHERE `(kept)` READ NOTHING. Two bounds, both
-# of which fall back to exactly today's `(kept)` rather than wait — the unit is
-# already stopped, so a carry that queued would be a session held down:
+# BOUNDED, BECAUSE THE WALK READS WHERE `(kept)` READ NOTHING. Two bounds,
+# neither of which waits — the unit is already stopped, so a carry that queued
+# would be a session held down:
 #   - a BOX-WIDE NON-BLOCKING SLOT, `$REG/.carry.lock`, taken inside the carry
 #     itself, so every path that carries is covered — the tick's rescue and
 #     auto-home, a manual or PWA swap, `swap-self` — not only `_dispatch_swap`'s
@@ -861,11 +961,20 @@ Write the block below to `$SCRATCH/carry-merge-block.sh`, exactly — it starts 
 #     shipped when this was written, measured, so this slot is the carry's
 #     own). A supervisor revival carries nothing (it never changes account),
 #     so it never reaches here. Contended: `(kept: busy)`.
-#   - a BYTE BUDGET, CARRY_MERGE_BUDGET, charged by a dry pass over `lstat`
-#     alone BEFORE the first byte moves: every byte the walk would read to
-#     compare, plus every byte it would copy. Over budget: `(kept: budget)`, and
-#     the destination is exactly as it was — all or nothing, never half a walk
-#     billed to a budget it overran.
+#   - a BYTE BUDGET, CARRY_MERGE_BUDGET, spent as a PRIORITY FILL. A dry pass
+#     over `lstat` alone prices every action BEFORE the first byte moves (the
+#     bytes it would read to compare, plus the bytes it would copy), orders
+#     them by what a resume needs — the rewritten records, then the runs'
+#     journals, then every other log, then the rest, newest first within each
+#     — and places them whole, in that order, until the next one would overrun
+#     the budget. That one and every one after it is DEFERRED: counted, never
+#     started, priced again on the next visit, which finds the placed ones
+#     equal — so a backlog bigger than one budget drains over repeat visits.
+#     (An all-or-nothing budget moved nothing on an over-budget walk, so the
+#     next visit priced the same backlog plus the new bytes and the pair
+#     stayed stranded for good.) `(merged +N ~R !D, deferred K)`; and
+#     `(kept: budget)` only when the FIRST action is priced over the budget on
+#     its own — nothing touched, the destination exactly as it was.
 # A walk that could not run at all — no `flock`, no python3, a destination that
 # is not a real directory, the walker's own failure — is `(kept: error)`, with
 # the cause on stderr: a third word, because "someone else is carrying" and
@@ -875,7 +984,7 @@ Write the block below to `$SCRATCH/carry-merge-block.sh`, exactly — it starts 
 # is how two processes come to hold "the lock" on two inodes), and it is held
 # only for the existing-destination branch — a FIRST carry to an account is
 # today's `cp -al`/`cp -a` path, unchanged, and takes no slot.
-CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy (512 MiB) before `(kept: budget)`
+CARRY_MERGE_BUDGET=536870912    # bytes one sidecar's merge walk may read + copy per visit (512 MiB); what does not fit is deferred
 
 _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 contended | 2 no mechanism (no flock, the lock file, any other flock failure)
   command -v flock >/dev/null 2>&1 || return 2
@@ -887,7 +996,7 @@ _carry_slot_take() {   # -> 0 and the CALLER's local CARRY_SLOT_FD set | 1 conte
   CARRY_SLOT_FD=$fd
 }
 
-_swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged | 3 over budget (nothing touched) | other: failed
+_swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged (K deferred) | 3 the first action alone over budget (nothing touched) | other: failed
   # THE WALK, one python3 process rather than a fork per file: the measured
   # sidecar census at planning ran to 6,142 files in one directory (p99 3,497),
   # and a `stat`+`cmp` pair per file would hold the unit down for that long.
@@ -909,7 +1018,27 @@ _swap_carry_merge_walk() {   # src dst budget -> stdout rows; rc 0 merged | 3 ov
   #   any other file whose bytes differ (a tool result is written once)  !D
   #   a destination entry of another type where the source has a file    !D
   # Every !D prints `diverged <kept path> longer <longer copy's path>` for
-  # stage 3's manifest to name; the summary row is `merged <N> <R> <D>`.
+  # stage 3's manifest to name; the summary row is `merged <N> <R> <D> <K>`.
+  #
+  # THE FILL. Every row above that costs bytes (an absent file, a compare, a
+  # replace) is an ACTION, priced by the dry pass from `lstat` alone; a verdict
+  # `lstat` decides by itself (equal, or another type in the way) costs nothing
+  # and is taken on every visit. The actions are placed in RESUME ORDER —
+  #   1. the rewritten records a resume reads: workflows/<runId>.json,
+  #      workflows/scripts/*, agent-*.meta.json;
+  #   2. the append-only logs: every journal.jsonl, then agent-*.jsonl and
+  #      every other *.jsonl;
+  #   3. everything else (tool results and the rest);
+  # newest source mtime first within each — each one WHOLE, until the next
+  # would overrun the budget. That one and every one after it is deferred:
+  # counted (K), never started, so no deferred action leaves a partial file.
+  # The next visit finds every placed file equal (a link is the same inode; a
+  # copy keeps size and mtime_ns) and prices only what is left plus what is
+  # new, so a backlog drains, most valuable bytes first. Measured on the box's
+  # 673 real return-visit pairs at 512 MiB: 630 place everything at once, 43
+  # defer some, and with no new bytes those 43 drain in 2 visits (27) or 3
+  # (16); the largest single action priced 64 MiB. Not even the first action
+  # fits (it is priced over the budget on its own): `budget <its cost>`, rc 3.
   #
   # IDENTITY DECIDES ONLY "EQUAL", NEVER "DIFFERENT": a same-inode pair is the
   # same bytes by definition, and every other pair is decided on size and
@@ -944,6 +1073,16 @@ def is_record(rel):
     if len(parts) >= 3 and parts[0] == 'workflows' and parts[1] == 'scripts':
         return True
     return parts[-1].startswith('agent-') and parts[-1].endswith('.meta.json')
+
+def tier(rel):
+    """Resume value, highest first: 0 a rewritten record, 1 a run's journal, 2 any other log, 3 the rest."""
+    if is_record(rel):
+        return 0
+    if rel.split('/')[-1] == 'journal.jsonl':
+        return 1
+    if is_log(rel):
+        return 2
+    return 3
 
 def prefix_equal(a, b, n):
     """True iff the first n bytes of a and b are identical."""
@@ -983,38 +1122,55 @@ def dst_blocked(rel):
             return True
     return False
 
-plan, cost = [], 0
+# THE DRY PASS: lstat alone, nothing read, nothing moved. `todo` holds every
+# action that costs bytes, priced; `diverged` every !D lstat decides alone.
+todo, diverged = [], []
+
+def queue(cost, kind, rel, s, d):
+    todo.append(((tier(rel), -s.st_mtime_ns, rel), cost, kind, rel, s, d))
+
 for rel in files(src):
-    s = os.lstat(os.path.join(src, rel))
+    sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
+    s = os.lstat(sp)
     if dst_blocked(rel):
-        plan.append(('diverged', rel, None)); continue
+        diverged.append((dp, sp)); continue
     try:
-        d = os.lstat(os.path.join(dst, rel))
+        d = os.lstat(dp)
     except FileNotFoundError:
-        plan.append(('absent', rel, None)); cost += s.st_size; continue
+        queue(s.st_size, 'absent', rel, s, None); continue
     if not stat.S_ISREG(d.st_mode):
-        plan.append(('diverged', rel, None)); continue
+        diverged.append((dp, sp)); continue
     if (d.st_dev, d.st_ino) == (s.st_dev, s.st_ino):
         continue
     if d.st_size == s.st_size:
         if d.st_mtime_ns == s.st_mtime_ns:
             continue
         # both read to compare; a newer record is then copied as well, and priced here
-        cost += 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)
-        plan.append(('same-size', rel, (s, d))); continue
+        cost = 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)
+        queue(cost, 'same-size', rel, s, d); continue
     if is_log(rel):
-        cost += 2 * min(s.st_size, d.st_size) + (s.st_size if d.st_size < s.st_size else 0)
-        plan.append(('log', rel, (s, d))); continue
+        cost = 2 * min(s.st_size, d.st_size) + (s.st_size if d.st_size < s.st_size else 0)
+        queue(cost, 'log', rel, s, d); continue
     if is_record(rel):
         if s.st_mtime_ns > d.st_mtime_ns:
-            cost += s.st_size
-            plan.append(('replace', rel, None))
+            queue(s.st_size, 'replace', rel, s, d)
         continue
-    plan.append(('diverged', rel, (s, d)))
+    diverged.append((dp, sp if s.st_size > d.st_size else dp))
 
-if cost > budget:
-    print(f'budget {cost}')
+# THE FILL: resume order (tier, then the newest source first), each action
+# placed WHOLE until the next would overrun the budget; it and every one after
+# it are deferred, never started. Not even the first fits: nothing is touched.
+todo.sort(key=lambda a: a[0])
+spent, go = 0, []
+for a in todo:
+    if spent + a[1] > budget:
+        break
+    spent += a[1]
+    go.append(a)
+if todo and not go:
+    print(f'budget {todo[0][1]}')
     sys.exit(3)
+deferred = len(todo) - len(go)
 
 def mkparents(rel):
     parts = rel.split('/')[:-1]
@@ -1040,8 +1196,7 @@ def replace(rel):
         raise
 
 added = replaced = 0
-diverged = []
-for kind, rel, st in plan:
+for key, cost, kind, rel, s, d in go:
     sp, dp = os.path.join(src, rel), os.path.join(dst, rel)
     if kind == 'absent':
         mkparents(rel)
@@ -1063,7 +1218,6 @@ for kind, rel, st in plan:
     elif kind == 'replace':
         replace(rel); replaced += 1
     elif kind == 'same-size':
-        s, d = st
         if prefix_equal(sp, dp, s.st_size):
             continue
         if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns:
@@ -1073,7 +1227,6 @@ for kind, rel, st in plan:
         else:
             diverged.append((dp, sp))
     elif kind == 'log':
-        s, d = st
         if d.st_size < s.st_size:
             if prefix_equal(sp, dp, d.st_size):
                 replace(rel); replaced += 1
@@ -1081,16 +1234,10 @@ for kind, rel, st in plan:
                 diverged.append((dp, sp))
         elif not prefix_equal(sp, dp, s.st_size):
             diverged.append((dp, dp))
-    else:
-        if st is None:
-            diverged.append((dp, sp))
-        else:
-            s, d = st
-            diverged.append((dp, sp if s.st_size > d.st_size else dp))
 
 for kept, longer in diverged:
     print(f'diverged {kept} longer {longer}')
-print(f'merged {added} {replaced} {len(diverged)}')
+print(f'merged {added} {replaced} {len(diverged)} {deferred}')
 PY
 }
 
@@ -1115,10 +1262,11 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   #
   # AN EXISTING DESTINATION IS MERGED, NOT LEFT ALONE (C8, reversing this
   # branch's old rule): `_swap_carry_merge_walk` above, under the carry slot and
-  # CARRY_MERGE_BUDGET, logging `(merged +N ~R !D)` or `(kept: busy|budget|error)`.
-  # A destination a failed first carry left partial is repaired by the same
-  # walk — it simply finds the missing files absent — so `(kept)` is no longer
-  # permanent.
+  # CARRY_MERGE_BUDGET, logging `(merged +N ~R !D)`, `(merged +N ~R !D,
+  # deferred K)` when K actions did not fit this visit's budget, or
+  # `(kept: busy|budget|error)`. A destination a failed first carry left
+  # partial is repaired by the same walk — it simply finds the missing files
+  # absent — so `(kept)` is no longer permanent.
   #
   # THE FIRST-CARRY PATH IS UNCHANGED, and so is its anti-nesting guard:
   # `_sidecar_matches` strips the source's trailing slash, and `$dst` (the
@@ -1138,7 +1286,7 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
   # C-collated sort: no destination is ever contested, so ordering changes only
   # the order of the swap.log lines a human reads, which is kept reproducible.
   local srccfg="$1" dstcfg="$2" uuid="$3" src pdir dst mode rc
-  local slot="" slot_rc=0 wout wrc line n r dv CARRY_SLOT_FD=""
+  local slot="" slot_rc=0 wout wrc line n r dv k dfr CARRY_SLOT_FD=""
   local -a sidecars=() rows=()
   mapfile -t sidecars < <(_sidecar_matches "$srccfg" "$uuid" | LC_ALL=C sort)
   (( ${#sidecars[@]} )) || return 0
@@ -1167,22 +1315,25 @@ _swap_carry_sidecars() {   # srccfg dstcfg uuid — carry every sidecar: a first
       wout=$(_swap_carry_merge_walk "$src" "$dst" "$CARRY_MERGE_BUDGET"); wrc=$?
       mapfile -t rows <<< "$wout"
       if (( wrc == 3 )); then
-        echo "ccd: sidecar at $dst not merged — the walk would exceed CARRY_MERGE_BUDGET (${rows[0]#budget } bytes); left alone" >&2
+        echo "ccd: sidecar at $dst not merged — its first action alone would exceed CARRY_MERGE_BUDGET (${rows[0]#budget } bytes); left alone" >&2
         echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: budget)" >> "$REG/swap.log"
         continue
       fi
       line="${rows[${#rows[@]}-1]}"
-      if (( wrc != 0 )) || [[ ! "$line" =~ ^merged\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+      if (( wrc != 0 )) || [[ ! "$line" =~ ^merged\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
         echo "ccd: warn: the merge walk into $dst failed (rc $wrc); every file it placed is whole, the rest stays on the source" >&2
         echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: error)" >> "$REG/swap.log"
         continue
       fi
-      n="${BASH_REMATCH[1]}"; r="${BASH_REMATCH[2]}"; dv="${BASH_REMATCH[3]}"
+      n="${BASH_REMATCH[1]}"; r="${BASH_REMATCH[2]}"; dv="${BASH_REMATCH[3]}"; k="${BASH_REMATCH[4]}"
       for line in "${rows[@]}"; do
         [[ "$line" == diverged\ * ]] || continue
         echo "$(date '+%F %T') sidecar $uuid diverged ${line#diverged }" >> "$REG/swap.log"
       done
-      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv)" >> "$REG/swap.log"
+      # K > 0: the budget ran out part way. What was placed is whole; the K
+      # actions left wait on the source for the next visit, which prices them first.
+      if (( k > 0 )); then dfr=", deferred $k"; else dfr=""; fi
+      echo "$(date '+%F %T') sidecar $uuid -> $dst (merged +$n ~$r !$dv$dfr)" >> "$REG/swap.log"
       continue
     fi
     mkdir -p "$dstcfg/projects/$pdir"
@@ -1234,7 +1385,7 @@ PY
 bash -n ccd/ccd && echo syntax-ok
 ```
 
-Expected: `replaced ccd/ccd:21615-21706 with 370 lines` and `syntax-ok`.
+Expected: `replaced ccd/ccd:21615-21706 with 421 lines` and `syntax-ok`.
 
 - [ ] **Step 3b: Name the carry slot in the R-3 boundary paragraph — line-neutral**
 
@@ -1267,7 +1418,7 @@ SCRATCH=<your scratchpad, absolute>
 python3 "$SCRATCH/r3.py"
 ```
 
-Expected: `R-3 reworded, line count unchanged at 23639` (the count after Step 3's splice; a moved `main` gives another number — what is checked is that the script's own assertion held). If an `old` line is not found exactly once, another branch already reworded the paragraph: re-derive the cardinal from `ccd-account-auth`'s red message and reword by hand, still line for line.
+Expected: `R-3 reworded, line count unchanged at 23690` (the count after Step 3's splice; a moved `main` gives another number — what is checked is that the script's own assertion held). If an `old` line is not found exactly once, another branch already reworded the paragraph: re-derive the cardinal from `ccd-account-auth`'s red message and reword by hand, still line for line.
 
 - [ ] **Step 4: Reverse the `(kept)` pin in `server/test/ccd-swap.test.ts`, and correct one comment**
 
@@ -1347,7 +1498,7 @@ git fetch origin main && git diff --quiet origin/main -- \
   docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md && echo corpus-frozen
 ```
 
-Expected (measured on the prototype): `338	60	ccd/ccd` (the splice, the stamp line, and the three R-3 lines, each counted once as removed and once as added) and `13	8	server/test/ccd-swap.test.ts`; the re-pointer prints `cmd_ensure mint   -> ccd/ccd:21202` and `genrc == 1 arm    -> ccd/ccd:19989-19991`, then `readme-unchanged`; the re-measurer prints `stated 147  base 147  tree 147`, `stated 195  base 195  tree 195`, `other byFile keys moved: none`, and `stated 53  base 53  tree 53` / `stated 35  base 35  tree 35` with EMPTY `ENTERED`/`LEFT` everywhere; `corpus-frozen`. **Nothing in `session-hook.test.ts` or `README.md` changes in this task.** Any movement means a line was added or removed above `:21202` (the R-3 rewording of Step 3b is line-neutral by its own assertion) — find out why before going on.
+Expected (measured on the prototype): `389	60	ccd/ccd` (the splice, the stamp line, and the three R-3 lines, each counted once as removed and once as added) and `13	8	server/test/ccd-swap.test.ts`; the re-pointer prints `cmd_ensure mint   -> ccd/ccd:21202` and `genrc == 1 arm    -> ccd/ccd:19989-19991`, then `readme-unchanged`; the re-measurer prints `stated 147  base 147  tree 147`, `stated 195  base 195  tree 195`, `other byFile keys moved: none`, and `stated 53  base 53  tree 53` / `stated 35  base 35  tree 35` with EMPTY `ENTERED`/`LEFT` everywhere; `corpus-frozen`. **Nothing in `session-hook.test.ts` or `README.md` changes in this task.** Any movement means a line was added or removed above `:21202` (the R-3 rewording of Step 3b is line-neutral by its own assertion) — find out why before going on.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -1366,35 +1517,44 @@ cd server && ./node_modules/.bin/vitest run test/ccd-swap-carry-merge.test.ts te
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'
 ```
 
-Expected: all PASS — `ccd-swap-carry-merge` 21/21 (the copy-fallback case RUNS on the fleet box, where `/dev/shm` is a tmpfs and the fixture HOME is not); `ccd-swap` 16, `ccd-swap-carry` 19, `ownership` 14, `ccd-reg-get-census` 3, `ccd-swap-pin` 13, `ccd-account-ok` 25; the four scans `276 passed | 14 skipped` (`topology-clean` 55, now scanning the new test); the containment scan `1 passed | 78 skipped`; the dot-prefixed census `1 passed | 56 skipped`; the citation cases `7 passed | 326 skipped`. (`ownership` proves the re-stamp landed; `ccd-reg-get-census` proves no `_reg_get` was added; `ccd-account-auth`'s census proves the R-3 paragraph names the slot; `ccd-swap-pin` and `ccd-account-ok` stub the function by its unchanged name.)
+Expected: all PASS — `ccd-swap-carry-merge` 25/25 (the copy-fallback case RUNS on the fleet box, where `/dev/shm` is a tmpfs and the fixture HOME is not); `ccd-swap` 16, `ccd-swap-carry` 19, `ownership` 14, `ccd-reg-get-census` 3, `ccd-swap-pin` 13, `ccd-account-ok` 25; the four scans `276 passed | 14 skipped` (`topology-clean` 55, now scanning the new test); the containment scan `1 passed | 78 skipped`; the dot-prefixed census `1 passed | 56 skipped`; the citation cases `7 passed | 326 skipped`. (`ownership` proves the re-stamp landed; `ccd-reg-get-census` proves no `_reg_get` was added; `ccd-account-auth`'s census proves the R-3 paragraph names the slot; `ccd-swap-pin` and `ccd-account-ok` stub the function by its unchanged name.)
 
 - [ ] **Step 7: Mutation check, then commit**
 
-Twenty-one rows — 1–17 and 23–26; 18–22 are Task 3's, numbered when first planned and kept stable — each applied to the working file after saving a copy of it (`cp ccd/ccd "$SCRATCH/ccd.saved"`), run, then restored from that saved copy (`cp "$SCRATCH/ccd.saved" ccd/ccd`, never `git checkout --`) and re-stamped before the next. Every red below was measured on the prototype (code byte-identical to `905360dc`), running `cd server && ./node_modules/.bin/vitest run test/ccd-swap-carry-merge.test.ts` unless the row names another command. `        except OSError:` occurs five times in `ccd/ccd`: locate row 13's by its `absent`-arm context (the line directly under `            os.link(sp, dp)`), never by the bare text.
+Thirty rows — 1–17, 23–26 and 31–39; 18–22, 27–29 and 40–42 are Task 3's (its row 30 is retired), numbered when first planned and kept stable — each applied to the working file after saving a copy of it (`cp ccd/ccd "$SCRATCH/ccd.saved"`), run, then restored from that saved copy (`cp "$SCRATCH/ccd.saved" ccd/ccd`, never `git checkout --`) and re-stamped before the next. Every red below was measured on the prototype (code byte-identical to `905360dc`), one row at a time, running `cd server && ./node_modules/.bin/vitest run --maxWorkers=1 test/ccd-swap-carry-merge.test.ts` unless the row names another command. `        except OSError:` occurs five times in `ccd/ccd`: locate row 13's by its `absent`-arm context (the line directly under `            os.link(sp, dp)`), never by the bare text. The five fill cases are named by letter: (a) "a budget smaller than the whole walk places the records and journals …", (b) "places in resume order …", (c) "an action priced over the budget on its own gives (kept: budget) …", (d) "a second visit with the same budget places what the first deferred …", (e) "deletes nothing under a budget, and a deferred action leaves no partial file". Row 8 was re-cut for the fill (it was "`if cost > budget:` → `if False:`"); the all-or-nothing case it used to red is gone, and row 31 now pins the opposite.
 
 | # | Exact edit in `ccd/ccd` (in `_swap_carry_merge_walk`'s python unless named) | Expected red |
 |---|---|---|
 | 1 | the quick check widened to size alone: `        if d.st_mtime_ns == s.st_mtime_ns:` → `        if True:` | 2 failed: "decides equality on size AND mtime, never on size alone …" — `expected '(merged +0 ~0 !0)' to be '(merged +0 ~0 !1)'`; and "prices the copy a same-size record replace makes …" — `expected '(merged +0 ~0 !0)' to be '(kept: budget)'` (the widened check reads the differing record as equal, so it is neither priced nor replaced) |
 | 2 | the extend rule without its prefix check: `            if prefix_equal(sp, dp, d.st_size):` → `            if True:` | "keeps a DIVERGED journal …" only — `expected 'A\nB\nC\n' to be 'A\nX\n'` |
 | 3 | a longer destination never counted: `        elif not prefix_equal(sp, dp, s.st_size):` → `        elif False:` | "keeps a DIVERGED journal …" only — `expected '(merged +0 ~0 !1)' to be '(merged +0 ~0 !2)'` |
-| 4 | a record replaced whatever its age: in the dry pass, `        if s.st_mtime_ns > d.st_mtime_ns:` (the `cost += s.st_size` arm) → `        if True:` | "replaces a rewritten record when the source is newer …" only — `an OLDER source record replaced a newer destination: expected '{"v":1}' to be '{"v":22}'` |
+| 4 | a record replaced whatever its age: in the dry pass, `        if s.st_mtime_ns > d.st_mtime_ns:` (the `queue(s.st_size, 'replace', rel, s, d)` arm) → `        if True:` | "replaces a rewritten record when the source is newer …" only — `an OLDER source record replaced a newer destination: expected '{"v":1}' to be '{"v":22}'` |
 | 5 | replace writes THROUGH the inode: in `replace()`, the two lines `shutil.copy2(os.path.join(src, rel), tmp)` / `os.replace(tmp, target)` → `shutil.copyfile(os.path.join(src, rel), target)` | "extends a journal … by temp-and-rename" only — `the replace wrote through the destination inode: expected 'A\nB\nC\n' to be 'A\n'` |
-| 6 | today's clear-then-copy applied to an EXISTING destination (bash branch): `wout=$(_swap_carry_merge_walk "$src" "$dst" "$CARRY_MERGE_BUDGET"); wrc=$?` → `rm -rf "$dst"; cp -a "$src" "$dst"; wout="merged 0 0 0"; wrc=0` | 14 failed, among them "deletes nothing …" — `ENOENT: no such file or directory, open '…/tool-results/only-here.txt'` |
-| 7 | a directory copy onto an existing destination (the nesting shape): the same line → `cp -a "$src" "$dst"; wout="merged 0 0 0"; wrc=0` | 12 failed, among them "never nests the tree inside an existing destination" — `a <uuid>/<uuid> nest: expected true to be false` |
-| 8 | no budget: `if cost > budget:` → `if False:` | 2 failed, the two budget cases: "the budget falls back to (kept: budget) before a byte moves" — `expected '(merged +2 ~0 !0)' to be '(kept: budget)'`; "prices the copy a same-size record replace makes …" — `expected '(merged +0 ~1 !0)' to be '(kept: budget)'` |
+| 6 | today's clear-then-copy applied to an EXISTING destination (bash branch): `wout=$(_swap_carry_merge_walk "$src" "$dst" "$CARRY_MERGE_BUDGET"); wrc=$?` → `rm -rf "$dst"; cp -a "$src" "$dst"; wout="merged 0 0 0 0"; wrc=0` | 18 failed, among them "deletes nothing — a destination-only file survives …" — `ENOENT: no such file or directory, open '…/tool-results/only-here.txt'`; and (e) — `the deferred journal was touched: expected [ 'A\nB\nC\n', 1780000060000, … ] to deeply equal [ 'A\n', 1780000000000, … ]` |
+| 7 | a directory copy onto an existing destination (the nesting shape): the same line → `cp -a "$src" "$dst"; wout="merged 0 0 0 0"; wrc=0` | 16 failed, among them "never nests the tree inside an existing destination" — `a <uuid>/<uuid> nest: expected true to be false` |
+| 8 | no budget: in the fill, `    if spent + a[1] > budget:` → `    if False:` | 6 failed, every budget case: (a) `expected '(merged +3 ~2 !0)' to be '(merged +1 ~2 !0, deferred 2)'`; (b) `budget 10: placed beyond the first 1: expected [ 'subagents/agent-a1.jsonl', …(8) ] to have a length of 1 but got 9`; (c) `expected '(merged +2 ~0 !0)' to be '(kept: budget)'`; (d) `visit 1: expected '(merged +5 ~0 !0)' to be '(merged +2 ~0 !0, deferred 3)'`; (e) `the deferred journal was touched: …`; "prices the copy …" `expected '(merged +0 ~1 !0)' to be '(kept: budget)'` |
 | 9 | the slot ignores contention (`_carry_slot_take`): `  flock -n "$fd" 2>/dev/null \|\| frc=$?` → `  : \|\| frc=$?` | 2 failed: "a busy slot falls back to (kept: busy) …" — `expected '(merged +1 ~0 !0)' to be '(kept: busy)'`; and "a lock flock refuses for any reason but contention …" — `expected '(merged +1 ~0 !0)' to be '(kept: error)'` (its shadowed `flock` is never called) |
 | 10 | the slot is never released: delete the line `  if [[ -n "$CARRY_SLOT_FD" ]]; then { exec {CARRY_SLOT_FD}>&-; } 2>/dev/null; fi` | "releases the slot on the way out …" only — `expected 'SLOT-HELD' to contain 'SLOT-FREE'` |
 | 11 | the FIRST carry takes the slot too: directly under `    dst="$dstcfg/projects/$pdir/$uuid"`, add `    if [[ -z "$slot" ]]; then _carry_slot_take; slot_rc=$?; slot=taken; fi` and `    if (( slot_rc == 1 )); then echo "$(date '+%F %T') sidecar $uuid -> $dst (kept: busy)" >> "$REG/swap.log"; continue; fi` | "a first carry takes no slot …" only — `expected '(kept: busy)' to match /^\((link\|copy)\)$/` |
 | 12 | a symlinked destination walked into: `[[ -L "$dst" \|\| ! -d "$dst" ]]` → `[[ ! -d "$dst" ]]` | "a destination that is a symlink is not walked into …" only — `expected '(merged +1 ~0 !0)' to be '(kept: error)'` |
 | 13 | no copy fallback when linking fails: in the `absent` arm, `        except OSError:` (directly under `            os.link(sp, dp)`) → `        except KeyError:` | "copies an absent file when linking fails (EXDEV) …" only — `ENOENT: no such file or directory, open '…/tool-results/r.txt'` (the walk died on EXDEV: `(kept: error)`) |
-| 14 | the log format drifts: `(merged +$n ~$r !$dv)` → `(merged $n/$r/$dv)` | 10 failed — `expected '(merged 2/0/0)' to be '(merged +2 ~0 !0)'` (Task 3's parity case reds on the same edit, row 19) |
+| 14 | the log format drifts (bash): `(merged +$n ~$r !$dv$dfr)` → `(merged $n/$r/$dv$dfr)` | 14 failed — `expected '(merged 2/0/0)' to be '(merged +2 ~0 !0)'`, and on a cut-short merge `expected '(merged 1/2/0, deferred 2)' to be '(merged +1 ~2 !0, deferred 2)'` (Task 3's parity case reds on the same edit, row 19) |
 | 15 | a differing unclassified file swallowed: the `same-size` arm's last branch `            diverged.append((dp, sp))` (under `elif is_record(rel): continue` / `else:`) → `            continue` | "decides equality on size AND mtime …" only — `expected '(merged +0 ~0 !0)' to be '(merged +0 ~0 !1)'` |
 | 16 | a killed walk's temp carried: in `files()`, delete `            if f.startswith(TMP):` and its `                continue` | "never carries, counts or trips on a temp a killed walk left …" only — `expected true to be false` |
-| 17 | the whole merge removed (today's ccd, `git show 905360dc:ccd/ccd`) — command `./node_modules/.bin/vitest run test/ccd-swap.test.ts` | "merges into an existing destination sidecar …" only (`1 failed \| 15 passed (16)`) — `expected '… carry b7001948-22…' to contain '(merged +0 ~0 !1)'`; and `ccd-swap-carry-merge` reds 18 of 21 (Step 2) |
+| 17 | the whole merge removed (today's ccd, `git show 905360dc:ccd/ccd`) — command `./node_modules/.bin/vitest run --maxWorkers=1 test/ccd-swap.test.ts` | "merges into an existing destination sidecar …" only (`1 failed \| 15 passed (16)`) — `expected '… carry b7001948-22…' to contain '(merged +0 ~0 !1)'`; and `ccd-swap-carry-merge` reds 22 of 25 (Step 2) |
 | 23 | an unopenable lock file read as contention (`_carry_slot_take`): `  { exec {fd}>>"$REG/.carry.lock"; } 2>/dev/null \|\| return 2` → `… \|\| return 1` | "a slot whose lock file cannot be opened is (kept: error), never (kept: busy)" only — `expected '(kept: busy)' to be '(kept: error)'` |
 | 24 | every `flock` failure read as contention (`_carry_slot_take`): `(( frc == 1 )) && return 1; return 2; fi` → `return 1; fi` | "a lock flock refuses for any reason but contention is (kept: error) …" only — `expected '(kept: busy)' to be '(kept: error)'` |
-| 25 | the replace's copy left unpriced (dry pass): `        cost += 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)` → `        cost += 2 * s.st_size` | "prices the copy a same-size record replace makes, not only its compare" only — `expected '(merged +0 ~1 !0)' to be '(kept: budget)'` |
-| 26 | the R-3 paragraph left as it was (Step 3b reverted: the three lines back to `ELEVEN dot-prefixed`, `these six are`, `The six:`) — command `./node_modules/.bin/vitest run test/ccd-account-auth.test.ts -t 'census, not a memory'` | "names every dot-prefixed artifact the shipped bash actually writes" (`1 failed \| 56 skipped`) — `AssertionError: $REG/.carry is written by ccd's own bash and the R-3 boundary paragraph does not name it` (… `to contain '.carry'`) |
+| 25 | the replace's copy left unpriced (dry pass): `        cost = 2 * s.st_size + (s.st_size if is_record(rel) and s.st_mtime_ns > d.st_mtime_ns else 0)` → `        cost = 2 * s.st_size` | "prices the copy a same-size record replace makes, not only its compare" only — `expected '(merged +0 ~1 !0)' to be '(kept: budget)'` |
+| 26 | the R-3 paragraph left as it was (Step 3b reverted: the three lines back to `ELEVEN dot-prefixed`, `these six are`, `The six:`) — command `./node_modules/.bin/vitest run --maxWorkers=1 test/ccd-account-auth.test.ts -t 'census, not a memory'` | "names every dot-prefixed artifact the shipped bash actually writes" (`1 failed \| 56 skipped`) — `AssertionError: $REG/.carry is written by ccd's own bash and the R-3 boundary paragraph does not name it` (… `to contain '.carry'`) |
+| 31 | ALL OR NOTHING restored — the defect this revision fixes: `if todo and not go:` → `if len(go) < len(todo):` | 4 failed: (a) `expected '(kept: budget)' to be '(merged +1 ~2 !0, deferred 2)'`; (b) `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''`; (d) `visit 1: expected '(kept: budget)' to be '(merged +2 ~0 !0, deferred 3)'`; (e) `the record that fit was not placed: expected false to be true` |
+| 32 | the fill skips past an action that does not fit: in the fill, the `        break` under `    if spent + a[1] > budget:` → `        continue` | (c) only — `expected '(merged +1 ~0 !0, deferred 1)' to be '(kept: budget)'` (the small tool result went ahead of the record) |
+| 33 | the budget checked after a placement, not before: the four lines `    if spent + a[1] > budget:` / `        break` / `    spent += a[1]` / `    go.append(a)` → `    spent += a[1]` / `    go.append(a)` / `    if spent > budget:` / `        break` | 6 failed, among them (e) — `the deferred journal was touched: expected [ 'A\nB\nC\n', 1780000060000, … ] to deeply equal [ 'A\n', 1780000000000, … ]`; and (a) — `expected '(merged +2 ~2 !0, deferred 1)' to be '(merged +1 ~2 !0, deferred 2)'` (one action placed past the budget) |
+| 34 | newest first across the tiers: `todo.sort(key=lambda a: a[0])` → `todo.sort(key=lambda a: a[0][1:])` | 4 failed: (b) `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''`; (a) `expected '(kept: budget)' to be '(merged +1 ~2 !0, deferred 2)'` (the newest file, a 100-byte tool result, now heads the queue); (c) `expected '(merged +1 ~0 !0, deferred 1)' to be '(kept: budget)'`; (e) `the deferred journal was touched: …` |
+| 35 | no order at all (the walk's own path order): delete the line `todo.sort(key=lambda a: a[0])` | 4 failed: (b) `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''`; (a) `expected '(merged +1 ~1 !0, deferred 3)' to be '(merged +1 ~2 !0, deferred 2)'`; (c) `expected '(merged +1 ~0 !0, deferred 1)' to be '(kept: budget)'`; (e) `the deferred journal was touched: …` |
+| 36 | oldest first within a tier: in `queue()`, `(tier(rel), -s.st_mtime_ns, rel)` → `(tier(rel), s.st_mtime_ns, rel)` | (b) only — `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''` |
+| 37 | a run's journal no longer ahead of the other logs: in `tier()`, the `        return 1` under `    if rel.split('/')[-1] == 'journal.jsonl':` → `        return 2` | (b) only — `budget 40: not placed: expected 'subagents/workflows/wf_2/journal.jsonl' to be ''` |
+| 38 | the deferral not logged (bash): `      if (( k > 0 )); then dfr=", deferred $k"; else dfr=""; fi` → `      dfr=""` | 4 failed: (a) `expected '(merged +1 ~2 !0)' to be '(merged +1 ~2 !0, deferred 2)'`; (b) `budget 10: expected '(merged +1 ~0 !0)' to be '(merged +1 ~0 !0, deferred 8)'`; (d) `visit 1: expected '(merged +2 ~0 !0)' to be '(merged +2 ~0 !0, deferred 3)'`; (e) `expected '(merged +1 ~0 !0)' to be '(merged +1 ~0 !0, deferred 2)'` |
+| 39 | the budget exclusive at its edge: `    if spent + a[1] > budget:` → `    if spent + a[1] >= budget:` | 3 failed: (b) `budget 10: not placed: expected 'subagents/agent-a1.meta.json' to be ''`; (d) `visit 1: expected '(merged +1 ~0 !0, deferred 4)' to be '(merged +2 ~0 !0, deferred 3)'`; (e) `the record that fit was not placed: expected false to be true` |
 
 A green row is a finding: report it, never delete it.
 
@@ -1419,12 +1579,21 @@ destination is repaired by the same walk.
 
 Bounded: a box-wide non-blocking slot ($REG/.carry.lock, never unlinked,
 taken inside the carry so every path is covered — park-and-wake R4's lock
-has not shipped) and CARRY_MERGE_BUDGET (512 MiB), priced by a dry lstat pass
-before a byte moves; contended (flock's conflict exit, 1) -> (kept: busy),
-over budget -> (kept: budget), cannot run (no flock, an unopenable lock
-file, any other flock failure, no python3, a destination that is not a real
-directory, the walker failing) -> (kept: error). The first carry to an
-account is unchanged.
+has not shipped) and CARRY_MERGE_BUDGET (512 MiB per visit), spent as a
+priority fill: a dry lstat pass prices every action before a byte moves,
+then places them whole in resume order — the rewritten records, then the
+runs' journals, then every other log, then the rest, newest first within
+each — until the next would overrun the budget; that one and the rest are
+deferred, never started, and logged (merged +N ~R !D, deferred K). The next
+visit finds the placed files equal and prices only what is left, so a
+backlog drains instead of stranding the pair for good, as an all-or-nothing
+budget did: on the box's 673 return-visit pairs, 630 fit at once and the
+other 43 drain in 2 or 3 visits. Contended (flock's conflict exit, 1) ->
+(kept: busy); the first action alone over budget -> (kept: budget); cannot
+run (no flock, an unopenable lock file, any other flock failure, no
+python3, a destination that is not a real directory, the walker failing)
+-> (kept: error). The first carry to an account is unchanged. The fill is
+spec §5.1's budget as amended at the source on 2026-09-24.
 
 ccd-swap.test.ts's (kept) case is the pin C8 reverses: rewritten to the
 merged verdict in this commit. The carry slot is a twelfth dot-prefixed
@@ -1448,12 +1617,12 @@ MSG
 - Test: `server/test/measure-continuity.test.ts` (new)
 
 **Interfaces:**
-- Consumes: Task 2's `swap.log` lines (`(merged +N ~R !D)`, `(kept: busy|budget|error)`, `diverged … longer …`), the legacy `(kept)` / `(link)` / `(copy)` lines, `cmd_swap`'s `swap <id>: <from> -> <to> (uuid <uuid>)` line (unchanged; it follows the carry's sidecar lines, which is how the instrument learns each wrapper's root), and Claude Code's session transcripts (`<root>/projects/<pdir>/<uuid>.jsonl`): a `Workflow` `tool_use` carrying `resumeFromRunId`, and its `tool_result`.
+- Consumes: Task 2's `swap.log` lines (`(merged +N ~R !D)`, `(merged +N ~R !D, deferred K)`, `(kept: busy|budget|error)`, `diverged … longer …`), the legacy `(kept)` / `(link)` / `(copy)` lines, `cmd_swap`'s `swap <id>: <from> -> <to> (uuid <uuid>)` line (unchanged; it follows the carry's sidecar lines, which is how the instrument learns each wrapper's root), and Claude Code's session transcripts (`<root>/projects/<pdir>/<uuid>.jsonl`): a `Workflow` `tool_use` carrying `resumeFromRunId`, and its `tool_result`.
 - Produces — the programme's CROSS-WAVE CONTRACT for this file, which both continuity waves write exactly, whichever lands first:
   - One registry `STAGES = {N: stageN}`; `stageN(ctx)` returns a dict of named sections. Wave 1 owns `1: stage1` (sections `carry`, `resume`); wave 2 owns `4: stage4`.
   - `ctx` is a dict: `home`, `swap_log` (default `<home>/.cc-sessions/swap.log`), `since`, `until` and `deployed` as EPOCH seconds (swap.log stamps are LOCAL time, converted with `time.mktime`; transcript ISO `Z` stamps with `calendar.timegm`), and `all_copies`.
   - CLI: `python3 deploy/measure-continuity.py [--stage N]… [--home DIR] [--swap-log PATH] [--since T] [--until T] [--deployed T] [--all-copies] [--json]`, `T` = `YYYY-MM-DD[ HH:MM[:SS]]` local; default every registered stage; read-only; exit 0 on success. `--json` prints `{"stage<N>": {<section>: {…}}}`.
-  - Stage 1's JSON keys: `stage1.carry.{carries, by_mode{link, copy, merged, kept, kept: busy, kept: budget, kept: error, other}, kept_total, kept_share, kept_other_than_busy_budget, merged_added, merged_replaced, merged_diverged, diverged_rows, excluding_stranded{the same keys but diverged_rows} | null, stranded_pairs_budget_every_visit | null}` (the last two `null` without `--deployed`), `stage1.resume.{resume_calls, by_outcome{ok, journal-missing, script-path, other-error, no-result}}`.
+  - Stage 1's JSON keys: `stage1.carry.{carries, by_mode{link, copy, merged, kept, kept: busy, kept: budget, kept: error, other}, kept_total, kept_share, kept_other_than_busy_budget, merged_added, merged_replaced, merged_diverged, deferred_carries, deferred_actions, diverged_rows, excluding_stranded{the same keys but diverged_rows} | null}` (`excluding_stranded` is `null` without `--deployed`; `deferred_carries` counts the merges logged `, deferred K`, `deferred_actions` sums their K, and `by_mode["kept: budget"]` stays its own count), `stage1.resume.{resume_calls, by_outcome{ok, journal-missing, script-path, other-error, no-result}}`.
 
 - [ ] **Step 1: Write the failing test** — create `server/test/measure-continuity.test.ts`:
 
@@ -1505,19 +1674,24 @@ const writeLog = (rows: string[]): void => {
 };
 
 describe('the carry section', () => {
-  it('counts what the real carry writes: a merge with its +N ~R !D, a diverged row, and a (kept: busy)', () => {
+  it('counts what the real carry writes: a merge the budget cut short, a whole merge, their diverged rows, and a (kept: busy)', () => {
+    // The diverged log is compared first (8 bytes) and fits a 10-byte budget;
+    // the new tool result (4 more) does not: `(merged +0 ~0 !1, deferred 1)`.
+    // The next carry, at the default budget, places it: `(merged +1 ~0 !1)`.
     put('.claude', 'subagents/agent-a1.jsonl', 'A\nB\n', T0 + 60);
     put('.claude-d', 'subagents/agent-a1.jsonl', 'A\nX\nY\n');
     put('.claude', 'tool-results/new.txt', 'NEW\n');
     const CARRY = `_swap_carry_sidecars "$HOME/.claude" "$HOME/.claude-d" ${UUID} 2>/dev/null`;
+    h.sh(`CARRY_MERGE_BUDGET=10; ${CARRY}`);
     h.sh(CARRY);
     h.sh(`exec 7>>"$REG/.carry.lock"; flock -n 7; ${CARRY}`);
     const c = measure().carry;
-    expect(c.carries).toBe(2);
-    expect(c.by_mode.merged).toBe(1);
+    expect(c.carries).toBe(3);
+    expect(c.by_mode.merged).toBe(2);
     expect(c.by_mode['kept: busy']).toBe(1);
-    expect([c.merged_added, c.merged_replaced, c.merged_diverged]).toEqual([1, 0, 1]);
-    expect(c.diverged_rows).toBe(1);
+    expect([c.merged_added, c.merged_replaced, c.merged_diverged]).toEqual([1, 0, 2]);
+    expect(c.diverged_rows).toBe(2);
+    expect([c.deferred_carries, c.deferred_actions]).toEqual([1, 1]);
     expect(c.kept_other_than_busy_budget).toBe(0);
   });
 
@@ -1556,21 +1730,24 @@ describe('the carry section', () => {
       sc('2026-09-10 10:00:00', U, D, 'copy'), sw('2026-09-10 10:00:01', U, 'claude', 'claude-d'),
       // After: U goes home to the root it was born on — stranded, though no
       // sidecar line before the deploy names it (only the swap's `from` does) —
-      // and its backlog is over budget.
-      sc('2026-09-24 10:00:00', U, A, 'kept: budget'), sw('2026-09-24 10:00:01', U, 'claude-d', 'claude'),
-      // And back to claude-d, which a sidecar line before the deploy names.
-      sc('2026-09-24 11:00:00', U, D, 'merged +1 ~0 !0'), sw('2026-09-24 11:00:01', U, 'claude', 'claude-d'),
+      // and its backlog drains in part: 40 actions deferred to the next visit.
+      sc('2026-09-24 10:00:00', U, A, 'merged +3 ~1 !0, deferred 40'), sw('2026-09-24 10:00:01', U, 'claude-d', 'claude'),
+      // And back to claude-d, which a sidecar line before the deploy names;
+      // its first action alone is over budget.
+      sc('2026-09-24 11:00:00', U, D, 'kept: budget'), sw('2026-09-24 11:00:01', U, 'claude', 'claude-d'),
       // W starts after the deploy: out to claude-e and home again — nothing stranded.
       sc('2026-09-24 12:00:00', W, E, 'copy'), sw('2026-09-24 12:00:01', W, 'claude', 'claude-e'),
-      sc('2026-09-24 13:00:00', W, A, 'merged +2 ~0 !0'), sw('2026-09-24 13:00:01', W, 'claude-e', 'claude'),
+      sc('2026-09-24 13:00:00', W, A, 'merged +2 ~0 !0, deferred 5'), sw('2026-09-24 13:00:01', W, 'claude-e', 'claude'),
     ]);
     const c = measure('--since', '2026-09-20', '--deployed', '2026-09-20').carry;
     expect(c.carries).toBe(4);
     expect(c.kept_share).toBe(0.25);
+    expect(c.by_mode['kept: budget'], 'kept: budget is its own count').toBe(1);
+    expect([c.deferred_carries, c.deferred_actions]).toEqual([2, 45]);
     expect(c.excluding_stranded.carries, 'U\'s two return visits are the stranded backlog').toBe(2);
     expect(c.excluding_stranded.kept_share).toBe(0);
     expect(c.excluding_stranded.by_mode['kept: budget']).toBe(0);
-    expect(c.stranded_pairs_budget_every_visit).toBe(1);
+    expect([c.excluding_stranded.deferred_carries, c.excluding_stranded.deferred_actions]).toEqual([1, 5]);
     const plain = measure('--since', '2026-09-20').carry;
     expect(plain.excluding_stranded, 'no --deployed, no split').toBeNull();
     expect(plain.carries).toBe(4);
@@ -1673,7 +1850,12 @@ def read_lines(path):
 #         link, copy, merged, and `kept` by reason: `kept` alone is the
 #         pre-merge rule (an existing destination, skipped); `kept: busy`,
 #         `kept: budget` and `kept: error` are the merge's three fallbacks —
-#         plus the merged walks' summed +N ~R !D and the `diverged` rows.
+#         plus the merged walks' summed +N ~R !D, the `diverged` rows, and
+#         the budget's cut: `deferred_carries` counts the merges that ended
+#         `, deferred K` (the budget ran out part way; what was placed is
+#         whole) and `deferred_actions` sums their K — the backlog the next
+#         visit prices first. `kept: budget` stays its own count: a walk
+#         whose FIRST action alone was over budget and placed nothing.
 #         §9's target: `kept` only as busy/budget, under 2% of carries,
 #         reported over every carry AND (`--deployed`) over the carries whose
 #         pair — the session's uuid and the destination's account root — was
@@ -1686,10 +1868,9 @@ def read_lines(path):
 #         `swap <id>: <from> -> <to> (uuid <uuid>)` line — so a wrapper that
 #         never received a sidecar carry cannot be mapped, and a born-there
 #         pair on it reads as not stranded: the named cost of reading swap.log
-#         alone. `stranded_pairs_budget_every_visit` counts the stranded pairs
-#         whose every carry since the deploy was `(kept: budget)`: nothing
-#         moves on an over-budget walk, so such a pair re-prices the same
-#         backlog on every return visit.
+#         alone. The deferred counts are split the same way, so the stranded
+#         backlog draining (deferred on a stranded pair) is told apart from a
+#         steady state that still overruns the budget.
 # resume  every Workflow tool call carrying `resumeFromRunId`, deduplicated by
 #         tool-use id across the account-root copies a swapping session
 #         accumulates, classified by its tool result: ok, journal-missing
@@ -1712,19 +1893,22 @@ def in_window(t, ctx):
 CARRY = re.compile(TS + r" sidecar (\S+) -> (.+) \(([^()]*)\)$")
 DIVERGED = re.compile(TS + r" sidecar (\S+) diverged (.+) longer (.+)$")
 SWAP = re.compile(TS + r" swap \S+: (\S+) -> (\S+) \(uuid (\S+)\)$")
-MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)$")
+MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?$")
 KEPT_REASONS = ("busy", "budget", "error")
 
 
 def carry_counts(modes_seen):
     modes = {"link": 0, "copy": 0, "merged": 0, "kept": 0,
              "kept: busy": 0, "kept: budget": 0, "kept: error": 0, "other": 0}
-    added = replaced = diverged = 0
+    added = replaced = diverged = deferred_carries = deferred_actions = 0
     for mode in modes_seen:
         mm = MERGED.match(mode)
         if mm:
             modes["merged"] += 1
             added += int(mm.group(1)); replaced += int(mm.group(2)); diverged += int(mm.group(3))
+            k = int(mm.group(4) or 0)
+            deferred_carries += 1 if k else 0
+            deferred_actions += k
         elif mode in modes:
             modes[mode] += 1
         else:
@@ -1738,6 +1922,7 @@ def carry_counts(modes_seen):
         "kept_share": round(kept_all / total, 4) if total else None,
         "kept_other_than_busy_budget": modes["kept"] + modes["kept: error"],
         "merged_added": added, "merged_replaced": replaced, "merged_diverged": diverged,
+        "deferred_carries": deferred_carries, "deferred_actions": deferred_actions,
     }
 
 
@@ -1781,16 +1966,8 @@ def carry_section(ctx):
                 stranded.add((uuid, root_of[w]))
     out = carry_counts(mode for _, _, _, mode in carries)
     out["diverged_rows"] = diverged_rows
-    if deployed is None:
-        out["excluding_stranded"] = None
-        out["stranded_pairs_budget_every_visit"] = None
-        return out
-    out["excluding_stranded"] = carry_counts(mode for _, u, r, mode in carries if (u, r) not in stranded)
-    since_deploy = collections.defaultdict(set)
-    for t, u, r, mode in carries:
-        if (u, r) in stranded and t >= deployed:
-            since_deploy[(u, r)].add(mode)
-    out["stranded_pairs_budget_every_visit"] = sum(1 for s in since_deploy.values() if s == {"kept: budget"})
+    out["excluding_stranded"] = None if deployed is None else \
+        carry_counts(mode for _, u, r, mode in carries if (u, r) not in stranded)
     return out
 
 
@@ -1936,7 +2113,7 @@ git add -N deploy/measure-continuity.py server/test/measure-continuity.test.ts
 cd server && ./node_modules/.bin/vitest run test/measure-continuity.test.ts test/ccd-swap-carry-merge.test.ts test/topology-clean.test.ts
 ```
 
-Expected: PASS — `measure-continuity` 4/4, `ccd-swap-carry-merge` 21/21, `topology-clean` 55/55 (measured; the fixture's `/h/.claude*` roots and `demo-*` ids are placeholders, not a user home path). The cases hold under any `TZ` — measured again with `TZ=America/Los_Angeles`: 4/4 — because every window the tests write is read in the same local zone.
+Expected: PASS — `measure-continuity` 4/4, `ccd-swap-carry-merge` 25/25, `topology-clean` 55/55 (measured; the fixture's `/h/.claude*` roots and `demo-*` ids are placeholders, not a user home path). The cases hold under any `TZ` — measured again with `TZ=America/Los_Angeles`: 4/4 — because every window the tests write is read in the same local zone.
 
 - [ ] **Step 5: Reproduce the spec's stage-1 baseline, read-only, on the fleet box**
 
@@ -1945,23 +2122,25 @@ python3 deploy/measure-continuity.py --stage 1 --since 2026-09-08 --until '2026-
 python3 deploy/measure-continuity.py --stage 1 --since 2026-09-08 --until '2026-09-23 18:26'
 ```
 
-Read `[carry]` from the first and `[resume]` from the second. Expected (re-measured 2026-09-23 with this file, 57 s each — each run reads both sections): `carries 1310` with `"kept": 774`, `"copy": 389`, `"link": 147`; `resume_calls 72` with `"ok": 55, "journal-missing": 8, "script-path": 5, "other-error": 4, "no-result": 0` — spec §1.2's 774 of 1,310, 8 of 72 and 5 of 72. The fleet box's zone is UTC, which makes these local-time windows the same instants the spec's UTC baseline used; on a box in another zone, set `TZ` to the fleet box's. A later run of the same windows can only ADD rows if a transcript copy grew; a smaller number is a finding. This is the baseline §9 compares the rollout against (Task 4, Step 7).
+Read `[carry]` from the first and `[resume]` from the second. Expected (re-measured 2026-09-23 with this file, 57 s each — each run reads both sections): `carries 1310` with `"kept": 774`, `"copy": 389`, `"link": 147`; `resume_calls 72` with `"ok": 55, "journal-missing": 8, "script-path": 5, "other-error": 4, "no-result": 0` — spec §1.2's 774 of 1,310, 8 of 72 and 5 of 72. (Re-measured 2026-09-24 with this revision's carry section alone, which reads only `swap.log`: `carries 1310`, `"kept": 774`, `"copy": 389`, `"link": 147`, `deferred_carries 0`, `deferred_actions 0` — no merge ran in the baseline window.) The fleet box's zone is UTC, which makes these local-time windows the same instants the spec's UTC baseline used; on a box in another zone, set `TZ` to the fleet box's. A later run of the same windows can only ADD rows if a transcript copy grew; a smaller number is a finding. This is the baseline §9 compares the rollout against (Task 4, Step 7).
 
 - [ ] **Step 6: Mutation check, then commit**
 
-Each row edits `deploy/measure-continuity.py` (row 19: `ccd/ccd`, re-stamped after restore), restored from a saved copy (never `git checkout --`); command `cd server && ./node_modules/.bin/vitest run test/measure-continuity.test.ts`; every red measured on the prototype, one row at a time:
+Each row edits `deploy/measure-continuity.py` (row 19: `ccd/ccd`, re-stamped after restore), restored from a saved copy (never `git checkout --`); command `cd server && ./node_modules/.bin/vitest run --maxWorkers=1 test/measure-continuity.test.ts`; every red measured on the prototype, one row at a time. Row 30 (it mutated `stranded_pairs_budget_every_visit`) is RETIRED with that key: the key counted the pairs an all-or-nothing budget stranded on every visit, which the priority fill no longer does, and the deferred counts (rows 40, 41 and 42) replace it.
 
 | # | Exact edit | Expected red |
 |---|---|---|
 | 18 | the refusal text unrecognised: delete `    if "is not on disk" in text:` and its `        return "journal-missing"` | "counts resume refusals by tool-use id …" only — `expected { 'journal-missing': +0, …(4) } to deeply equal { ok: 1, 'journal-missing': 1, …(3) }` |
-| 19 | ccd's log format drifts (`ccd/ccd`): `(merged +$n ~$r !$dv)` → `(merged $n/$r/$dv)` | "counts what the real carry writes …" only — `expected +0 to be 1` (the merge fell into `other`) |
+| 19 | ccd's log format drifts (`ccd/ccd`): `(merged +$n ~$r !$dv$dfr)` → `(merged $n/$r/$dv$dfr)` | "counts what the real carry writes …" only — `expected +0 to be 2` (both merges fell into `other`) |
 | 20 | no dedupe across copies — the calls keyed by (copy, id), the lookup still by id: `calls.setdefault(b.get("id"), row.get("timestamp") or "")` → `calls[(path, b.get("id"))] = row.get("timestamp") or ""` AND `    for i, ts in calls.items():` → `    for (_p, i), ts in calls.items():` | "counts resume refusals by tool-use id …" only — `--all-copies: expected 3 to be 2` (the default largest-copy pass reads one file and stays green; the red is in the `--all-copies` pass, which is the one dedupe governs) |
 | 21 | no window: `in_window`'s two-line `return t is not None and (ctx["since"] … < ctx["until"])` → `    return True` | 2 failed: "keeps the legacy `(kept)` apart … and honours the window" — `expected 5 to be 3`; "reports every carry and, with --deployed, …" — `expected 5 to be 4` (the pre-deploy `(copy)` enters its window) |
 | 22 | the legacy rule folded out of the target: `"kept_other_than_busy_budget": modes["kept"] + modes["kept: error"],` → `"kept_other_than_busy_budget": modes["kept: error"],` | "keeps the legacy `(kept)` apart …" only — `legacy kept + error, never budget: expected 1 to be 2` |
 | 27 | the born-on root not stranded (only a swap's `to` side counted): `        for w in (frm, to):` → `        for w in (to,):` | "reports every carry and, with --deployed, …" only — `U's two return visits are the stranded backlog: expected 3 to be 2` |
 | 28 | the deploy time ignored for swap lines: `            if early(t):` / `                visits.append((uuid, frm, to))` → `            if True:` / `                visits.append((uuid, frm, to))` | the same case only — `U's two return visits are the stranded backlog: expected +0 to be 2` (every pair reads as stranded) |
 | 29 | no split at all: `carry_counts(mode for _, u, r, mode in carries if (u, r) not in stranded)` → `carry_counts(mode for _, u, r, mode in carries)` | the same case only — `U's two return visits are the stranded backlog: expected 4 to be 2` |
-| 30 | every stranded pair counted as permanently over budget: `sum(1 for s in since_deploy.values() if s == {"kept: budget"})` → `len(since_deploy)` | the same case only — `expected 2 to be 1` |
+| 40 | the instrument and ccd disagree on the deferred suffix: in `MERGED`, `(?:, deferred (\d+))?$")` → `(?:; deferred (\d+))?$")` | 2 failed: "counts what the real carry writes …" — `expected 1 to be 2` (the cut-short merge fell into `other`); "reports every carry and, with --deployed, …" — `expected [ +0, +0 ] to deeply equal [ 2, 45 ]` |
+| 41 | every merge counted as cut short: `            deferred_carries += 1 if k else 0` → `            deferred_carries += 1` | "counts what the real carry writes …" only — `expected [ 2, 1 ] to deeply equal [ 1, 1 ]` |
+| 42 | the deferred carries counted instead of their actions: `            deferred_actions += k` → `            deferred_actions += 1 if k else 0` | "reports every carry and, with --deployed, …" only — `expected [ 2, 2 ] to deeply equal [ 2, 45 ]` |
 
 The row this table carried before revision — `calls[f"{path}:{b.get('id')}"] = …` alone — was re-run and reds for the wrong reason: the bare-id lookup `results.get(i)` never matches a `path:id` key, so every call becomes `no-result` in the DEFAULT pass (`expected { 'journal-missing': +0, …(4) } to deeply equal …`, received `"no-result": 2`), where only one copy is read and dedupe is never exercised. Row 20 above keeps the lookup working and removes only the dedupe.
 
@@ -1979,13 +2158,14 @@ all_copies.
 
 - carry: every sidecar line in swap.log by mode — link, copy, merged, the
   pre-merge (kept), and the merge's three fallbacks (kept: busy|budget|error)
-  — with the merged walks' summed +N ~R !D and the diverged rows. With
+  — with the merged walks' summed +N ~R !D, the diverged rows, and the
+  budget's cut: deferred_carries (merges logged ", deferred K") and
+  deferred_actions (their summed K), kept: budget its own count. With
   --deployed, the same counts again without the pairs stranded before the
   deploy (the destination root held the session then: a sidecar line names
   it, or a swap line names its wrapper, from or to — each wrapper's root is
-  learned from the log), and the stranded pairs whose every visit since was
-  (kept: budget). §9's target is kept only as busy/budget, under 2% of
-  carries, reported both ways.
+  learned from the log). §9's target is kept only as busy/budget, under 2%
+  of carries, reported both ways.
 - resume: every Workflow resumeFromRunId call, deduplicated by tool-use id,
   classified by its result (ok, journal-missing, script-path, other-error,
   no-result). §9's target is journal-missing 0.
@@ -2075,10 +2255,10 @@ Wave 1 of the session-continuity programme (spec `docs/superpowers/specs/2026-09
 What it does:
 
 1. **A return visit merges.** When a swap carries a session's sidecar directory onto an account where it already exists, `_swap_carry_sidecars` no longer logs `(kept)` and skips it (774 of 1,310 baseline carries; every "journal … is not on disk" resume refusal followed only `(kept)` carries). It walks the source file by file, by spec §5.1's table, and logs `sidecar <uuid> -> <dst> (merged +N ~R !D)`; a divergence is kept, counted and named in a `diverged … longer …` row. The first carry to an account is unchanged.
-2. **Bounded.** A box-wide non-blocking slot (`$REG/.carry.lock`, inside the carry, so every swap path is covered) and a 512 MiB byte budget priced by a dry pass before anything moves; they fall back to `(kept: busy)` / `(kept: budget)` and never wait. A walk that cannot run — including a `flock` that fails other than by conflict — is `(kept: error)`. The slot is the twelfth dot-prefixed `$REG` artifact, so `_ws_project_valid`'s R-3 boundary paragraph now names it (reworded line for line).
-3. **`deploy/measure-continuity.py`** — the programme's read-only instrument (`STAGES = {1: stage1}`, the cross-wave shape wave 2's `4: stage4` shares), stage 1's rows: the carry counter over `swap.log` — over every carry and, with `--deployed`, without the pairs stranded before the deploy — and the journal-missing resume refusals. It reproduces the spec's baseline exactly on the fleet box.
+2. **Bounded, and a big backlog still drains.** A box-wide non-blocking slot (`$REG/.carry.lock`, inside the carry, so every swap path is covered) falls back to `(kept: busy)`. A 512 MiB byte budget per visit is spent as a priority fill: a dry pass prices every action before anything moves, then the actions are placed whole in resume order — the rewritten records, then the runs' journals, then every other log, then the rest, newest first within each — until the next would overrun the budget; the rest are deferred to the next visit, never started, and the verdict reads `(merged +N ~R !D, deferred K)`. `(kept: budget)` only when the first action alone is over budget. Measured on the box's 673 return-visit pairs: 630 fit at once, the other 43 drain in 2 or 3 visits — where an all-or-nothing budget would have stranded all 43 for good. Nothing waits. A walk that cannot run — including a `flock` that fails other than by conflict — is `(kept: error)`. The slot is the twelfth dot-prefixed `$REG` artifact, so `_ws_project_valid`'s R-3 boundary paragraph now names it (reworded line for line).
+3. **`deploy/measure-continuity.py`** — the programme's read-only instrument (`STAGES = {1: stage1}`, the cross-wave shape wave 2's `4: stage4` shares), stage 1's rows: the carry counter over `swap.log`, with the budget's deferred counts — over every carry and, with `--deployed`, without the pairs stranded before the deploy — and the journal-missing resume refusals. It reproduces the spec's baseline exactly on the fleet box.
 
-Measured first (spec prerequisite): Claude Code appends `journal.jsonl` and `agent-*.jsonl` in place and writes `workflows/<runId>.json` whole at the run's end; the `(copy)` fallbacks are link(2) answering EXDEV across the account roots' separate bind mounts of one volume. Planning decisions the spec left open (the size+mtime quick check, the `error` fallback word, the all-or-nothing budget) are listed in the plan.
+Measured first (spec prerequisite): Claude Code appends `journal.jsonl` and `agent-*.jsonl` in place and writes `workflows/<runId>.json` whole at the run's end; the `(copy)` fallbacks are link(2) answering EXDEV across the account roots' separate bind mounts of one volume. Planning decisions the spec left open (the size+mtime quick check, the `error` fallback word) are listed in the plan, beside the one departure from the spec's text: its "all or nothing" budget became the priority fill by orchestrator decision, and the spec amendment is owed.
 
 Citation corpus (S6-R11): every added or removed line sits below the lowest line-anchored citation into `ccd/ccd`, and the R-3 rewording above them is line-neutral; the census did not move and README is unchanged.
 
@@ -2128,7 +2308,7 @@ R='<rollout time in the fleet box local zone (UTC there), YYYY-MM-DD HH:MM>'
 python3 deploy/measure-continuity.py --stage 1 --since "$R" --deployed "$R" --json
 ```
 
-Report to the coordinator for the programme ledger, from `stage1`: `carry.kept_share` and `carry.kept_other_than_busy_budget` (every carry); `carry.excluding_stranded.kept_share` and `carry.excluding_stranded.kept_other_than_busy_budget` (the carries whose pair was not stranded before the deploy); `carry.stranded_pairs_budget_every_visit`; and `resume.by_outcome`. §9's stage-1 targets, read against BOTH carry views: `kept` only as `busy`/`budget`, under 2% of carries (`kept_other_than_busy_budget` 0 and `kept_share` < 0.02); journal-missing refusals 0. The `excluding_stranded` view is the mechanism's steady state; a failing every-carry view beside a passing `excluding_stranded` view is the C9 backlog, not the merge — and `stranded_pairs_budget_every_visit` names how much of it can never clear on its own, because an over-budget pair re-prices the same backlog on every visit (Pre-flight finding 5). A bare `(kept)` after the rollout means an old ccd ran a carry — check the fleet box's `ccd` before anything else. Rolling back, if ever needed: `ccrc update --to <the previous tag> --downgrade` on the fleet box; a merged destination stays merged, which the old ccd reads as `(kept)`.
+Report to the coordinator for the programme ledger, from `stage1`: `carry.kept_share` and `carry.kept_other_than_busy_budget` (every carry); `carry.excluding_stranded.kept_share` and `carry.excluding_stranded.kept_other_than_busy_budget` (the carries whose pair was not stranded before the deploy); `carry.by_mode["kept: budget"]`, `carry.deferred_carries` and `carry.deferred_actions` in BOTH views; and `resume.by_outcome`. §9's stage-1 targets, read against BOTH carry views: `kept` only as `busy`/`budget`, under 2% of carries (`kept_other_than_busy_budget` 0 and `kept_share` < 0.02); journal-missing refusals 0. The `excluding_stranded` view is the mechanism's steady state; a failing every-carry view beside a passing `excluding_stranded` view is the C9 backlog, not the merge. The deferred counts say how that backlog is draining: deferred merges on stranded pairs are the backlog being placed a budget at a time, most valuable bytes first, and should thin out visit by visit (planning measured every over-budget pair on the box draining within 3 visits, Pre-flight finding 5); deferred merges in the `excluding_stranded` view mean the steady state itself overruns 512 MiB a visit, and any `kept: budget` means an action priced over the budget on its own is holding its whole queue — each is a finding to report with the pairs it names, not a pass. A bare `(kept)` after the rollout means an old ccd ran a carry — check the fleet box's `ccd` before anything else. Rolling back, if ever needed: `ccrc update --to <the previous tag> --downgrade` on the fleet box; a merged destination stays merged, which the old ccd reads as `(kept)`.
 
 ---
 
@@ -2140,9 +2320,11 @@ Two deliberate absences: no block is written as a range, and no headroom account
 
 The pre-flight findings and the planning decisions above are not deviations: they were measured or decided before this plan existed and shaped it. They are recorded there, with their tools, so a reviewer comparing the diff against the spec can see why each departure from the obvious shape was taken.
 
+One of them changed the spec's TEXT rather than filling a gap, and is named here so it cannot pass as a planner's choice: the byte budget is a PRIORITY FILL (Planning decisions), where spec §5.1 "Bounded", its test list and §9's stranded-backlog note first said "all or nothing". The orchestrator decided it on 2026-09-24, after this plan measured that an all-or-nothing budget strands every over-budget pair on every return visit (Pre-flight finding 5), and amended the spec at the source in the same commit as this plan, before any code: it is not a deviation and carries no number.
+
 D-3496 was ISSUED at plan time — the allocator's block for this programme's amendment slugs, beside wave 2's D-3497 and D-3498 — for the slug `sidecar-carry-merges`, and is defined here in that same act (the spec's C8 row names it: "Slug `sidecar-carry-merges`, D-3496"). It is not a planner's guess and not a number a worker may reuse. Departures found while executing this plan draw from the block the coordinator mints at this wave's run-open, as the paragraph above says.
 
-- **D-3496** — spec §3 C8, REVERSING the sidecar carry's rule "an existing destination sidecar is LEFT ALONE rather than merged" (the old `_swap_carry_sidecars` header, and the `ccd-swap.test.ts` case "leaves an existing destination sidecar alone — a tree is not replaced in one step", which pinned it with `(kept)`). From this wave, an existing destination is merged file by file by spec §5.1's table — absent → link else copy (`+N`); equal → nothing; a journal the destination holds a strict prefix of, or a rewritten record whose source is newer → replaced by temp-and-rename (`~R`); a longer destination the source prefixes → kept; anything diverged → kept and counted (`!D`) — under a box-wide non-blocking slot (`$REG/.carry.lock`) and `CARRY_MERGE_BUDGET`, falling back to `(kept: busy)`, `(kept: budget)` or `(kept: error)`; nothing is deleted, and the first carry keeps its `cp -al` / clear-then-copy path. What survives of the old rule: a tree is still never replaced in one step, and `cp` is never run onto an existing destination (the anti-nesting guard). Measured reversal: the old pin reds against the new ccd (`expected '… carry b7001948-22…' to contain '(kept)'`) and its rewrite reds against the old (`… to contain '(merged +0 ~0 !1)'`).
+- **D-3496** — spec §3 C8, REVERSING the sidecar carry's rule "an existing destination sidecar is LEFT ALONE rather than merged" (the old `_swap_carry_sidecars` header, and the `ccd-swap.test.ts` case "leaves an existing destination sidecar alone — a tree is not replaced in one step", which pinned it with `(kept)`). From this wave, an existing destination is merged file by file by spec §5.1's table — absent → link else copy (`+N`); equal → nothing; a journal the destination holds a strict prefix of, or a rewritten record whose source is newer → replaced by temp-and-rename (`~R`); a longer destination the source prefixes → kept; anything diverged → kept and counted (`!D`) — under a box-wide non-blocking slot (`$REG/.carry.lock`, contended → `(kept: busy)`) and `CARRY_MERGE_BUDGET` spent as a priority fill (records, then journals, then the rest, each placed whole; what does not fit is deferred to the next visit and logged `(merged +N ~R !D, deferred K)`; `(kept: budget)` only when the first action alone is over budget), and `(kept: error)` when the walk cannot run; nothing is deleted, and the first carry keeps its `cp -al` / clear-then-copy path. What survives of the old rule: a tree is still never replaced in one step, and `cp` is never run onto an existing destination (the anti-nesting guard). Measured reversal: the old pin reds against the new ccd (`expected '… carry b7001948-22…' to contain '(kept)'`) and its rewrite reds against the old (`… to contain '(merged +0 ~0 !1)'`).
 
 ---
 
@@ -2150,6 +2332,6 @@ D-3496 was ISSUED at plan time — the allocator's block for this programme's am
 
 Three lenses, all `opus` — a five-file diff (two shipped files, `ccd/ccd` and `deploy/measure-continuity.py`; three test files), sized per the fleet policy at the low end of its 3–5 band because two of the five are tests each lens reads against its own concern (one `sonnet` refute pass per finding). Lens 1 runs at `xhigh`: this wave deletes nothing, but it REPLACES files inside live account roots on every return-visit swap, which is the one irreversible act in it.
 
-1. **The merge's semantics and its safety (opus, xhigh).** Nothing is deleted on any path, including a walk killed half way (every placement is a link or a temp renamed into place; a stale `.ccd-carry-*` is skipped on both sides); a replace never writes through a destination inode; the extend rule fires only on a STRICT prefix, a longer destination is never shortened, and a record is replaced only when the source is strictly newer; the quick check is size AND `mtime_ns`, never size alone, and identity decides only "equal"; a symlinked or non-directory destination is never walked into; the dry pass prices every byte the walk will read or copy (including the copy a same-size record replace makes after its compare), and rc 3 leaves the destination byte-identical; the slot is taken only for an existing destination, is non-blocking, is released on the one way out, and its lock file is never unlinked; the first carry is byte-for-byte today's path; `(kept: error)` is never folded into `busy` — neither an unopenable lock file nor a `flock` exit other than 1 reads as contention; the function still answers rc 0 always, so `cmd_swap`'s restart is unaffected.
-2. **Guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason, not an adjacent one; the new `ccd-*` test spawns bash only through `h.sh`, so the containment scan holds; every added or removed line sits below `:21202` and the R-3 rewording above it is line-neutral (and names the slot with the cardinal `ccd-account-auth`'s census derives), `repoint-readme.py` left README unchanged and `cite-remeasure.py` reported no movement on THIS tree, re-run after any merge of `origin/main`; `ccd/ccd` was re-stamped after its last edit; no `_reg_get` was added; the `ccd-swap.test.ts` rewrite is the reversal C8 names and nothing wider.
-3. **The measurement (opus, high).** Task 1's verdict came from the tools on the day, not from this plan's numbers, and its stop rule was applied; `measure-continuity.py` opens nothing for writing and runs no subprocess; its carry row reads exactly the lines ccd writes (pinned by the real-carry parity case) and keeps the legacy `(kept)` apart from the three new reasons; its carry row is reported both over every carry and without the pairs stranded before `--deployed`, the stranded rule catches a born-on root (a swap's `from`) and its named cost (an unmapped wrapper) is stated; swap.log stamps are read as local time and transcript stamps as UTC; its resume row deduplicates by tool-use id and its largest-copy shortcut is stated with its named cost (`--all-copies`); it reproduces spec §1.2's 774 / 1,310 and 8 / 72; the file follows the cross-wave contract exactly (`STAGES = {1: stage1}`, `stage1(ctx)`, the contract's flags), so wave 2's `4: stage4` lands beside it without touching stage 1's block, and vice versa.
+1. **The merge's semantics and its safety (opus, xhigh).** Nothing is deleted on any path, including a walk killed half way (every placement is a link or a temp renamed into place; a stale `.ccd-carry-*` is skipped on both sides); a replace never writes through a destination inode; the extend rule fires only on a STRICT prefix, a longer destination is never shortened, and a record is replaced only when the source is strictly newer; the quick check is size AND `mtime_ns`, never size alone, and identity decides only "equal"; a symlinked or non-directory destination is never walked into; the dry pass prices every action's bytes read or copied (including the copy a same-size record replace makes after its compare) before anything moves; the fill places whole actions in resume order (records, then every `journal.jsonl`, then the other logs, then the rest, newest source first within each), stops at the FIRST action that would overrun the budget and never skips past it, and a deferred action is never started — no file, directory or temp — so a deferred journal keeps its old bytes and inode; the verdict carries `K` as its own number, and rc 3 (`(kept: budget)`) happens only when the first action alone is over budget and leaves the destination byte-identical; repeat visits converge, because each finds the placed files equal and prices only what is left (and the plan's census measured it: 43 over-budget pairs, 2–3 visits); the two named costs of the fill (an action over budget on its own holds its queue; a compare that places nothing is priced every visit) are stated and measured; the slot is taken only for an existing destination, is non-blocking, is released on the one way out, and its lock file is never unlinked; the first carry is byte-for-byte today's path; `(kept: error)` is never folded into `busy` — neither an unopenable lock file nor a `flock` exit other than 1 reads as contention; the function still answers rc 0 always, so `cmd_swap`'s restart is unaffected.
+2. **Guard fidelity and the citation tax (opus, high).** Every mutation row really mutates the guard it names and reds for the stated reason, not an adjacent one — row 31 in particular restores the all-or-nothing budget this revision replaced and must red the fill cases on their deferral, not on a crash; the new `ccd-*` test spawns bash only through `h.sh`, so the containment scan holds; every added or removed line sits below `:21202` and the R-3 rewording above it is line-neutral (and names the slot with the cardinal `ccd-account-auth`'s census derives), `repoint-readme.py` left README unchanged and `cite-remeasure.py` reported no movement on THIS tree, re-run after any merge of `origin/main`; `ccd/ccd` was re-stamped after its last edit; no `_reg_get` was added; the `ccd-swap.test.ts` rewrite is the reversal C8 names and nothing wider.
+3. **The measurement (opus, high).** Task 1's verdict came from the tools on the day, not from this plan's numbers, and its stop rule was applied; `measure-continuity.py` opens nothing for writing and runs no subprocess; its carry row reads exactly the lines ccd writes, the `, deferred K` suffix included (pinned by the real-carry parity case, which runs one carry under a budget that defers), keeps the legacy `(kept)` apart from the three new reasons, and reports `deferred_carries` / `deferred_actions` beside `kept: budget` without folding either into the other; its carry row is reported both over every carry and without the pairs stranded before `--deployed`, the stranded rule catches a born-on root (a swap's `from`) and its named cost (an unmapped wrapper) is stated; swap.log stamps are read as local time and transcript stamps as UTC; its resume row deduplicates by tool-use id and its largest-copy shortcut is stated with its named cost (`--all-copies`); it reproduces spec §1.2's 774 / 1,310 and 8 / 72; the file follows the cross-wave contract exactly (`STAGES = {1: stage1}`, `stage1(ctx)`, the contract's flags), so wave 2's `4: stage4` lands beside it without touching stage 1's block, and vice versa.
