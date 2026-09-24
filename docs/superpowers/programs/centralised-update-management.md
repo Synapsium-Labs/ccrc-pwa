@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **scoped review of round 3** (run 128, PR #176 at `24e3379c`); review run 149 dispatched 2026-09-24 01:2x UTC; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **narrow fix round 4, the last send-back** (run 128, PR #176); review run 149 at `24e3379c`: 1 important behaviour (F1); plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -309,6 +309,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Committed before its results exist:** a behaviour finding reachable only through a non-default release source
     (a `CCRC_RELEASE_API_URL` mirror) carries to Task 8A. Only a behaviour defect reachable against the default source,
     in round 3's delta, goes back.
+
+- **Review run 149, scoped to round 3, at `24e3379c` (2026-09-24).** 42 agents, 3 Opus lenses; 7 findings.
+  - B1, B2's alternation, and B3 are closed.
+  - **F1** is an important behaviour defect that round 3 introduced and the default source reaches (an ordinary
+    `gh release edit --prerelease`). A pending `'demote'` that the listing CONFIRMED was dropped, so the kept tag stayed
+    pinned to K: 3 requests every poll, and a later-deleted off-page stable stayed resolvable until restart. The
+    cause was the coordinator's B2 ruling's shape.
+  - **Ruling reshaped:** the listing wins only when it DISAGREES with the tag check. When the two agree, the pending
+    action applies and the kept tag moves. Draft rows never vouch (m1).
+  - F3, a minor behaviour defect in the same arm (a persistent store throw disabled the kept tag), rides with F1.
+  - F4 and F5 go to Task 8A. F6 and F7 are the same sentences F1's amendment rewrites.
+  - **Round 4 is the last send-back of any kind.** After its scoped review, #176 merges, unless round 4's delta yanks a
+    release it should not, keeps a withdrawn release resolvable, or leaks a secret.
 
 ## Carried constraints
 
