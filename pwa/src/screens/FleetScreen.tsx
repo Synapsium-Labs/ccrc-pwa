@@ -598,7 +598,7 @@ export function FleetScreen({
         </div>
       </header>
 
-      <FleetHostBanner health={fleetHealth} />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
       <UpdateBanner updates={updates.view} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
@@ -958,7 +958,7 @@ export function FleetScreen({
         onReaped={() => setReapId(null)}
       />
 
-      <BuildLine health={fleetHealth} />
+      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} />
     </main>
   );
 }

@@ -2677,3 +2677,48 @@ describe('the update banner on the fleet screen', () => {
     expect(document.querySelector('.update-banner')).toBeNull();
   });
 });
+
+// ── centralised-update W3 Task 12: both skew readers on the screen's one poll ─
+//
+// BuildLine and FleetHostBanner's skew arm moved together from the health
+// route's stamp pair onto NodeWire[] (spec §14). The pin is the SCREEN: both
+// read the one /api/updates answer Task 11 threads down, and the health
+// answer's decoy pair (v9.9.9) is never what either renders.
+
+describe('BuildLine and the skew banner read the screen\'s one /api/updates poll', () => {
+  const stampOf = (sha: string, version: string) => ({
+    sha, ref: 'release', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const rowOf = (nodeId: string, role: 'fleet' | 'server', sha: string, version: string, desiredTag: string): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf(sha, version), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: version, previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag, resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+
+  it('both readers name the inventory\'s versions, never the health route\'s pair', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({
+      mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed',
+      builds: { fleet: stampOf('9'.repeat(40), 'v9.9.9'), own: stampOf('9'.repeat(40), 'v9.9.9') },
+    });
+    const view: UpdatesView = {
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [
+        rowOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet', 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', 'v0.0.7', 'v0.0.9'),
+        rowOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server', '2985b9d1000000000000000000000000000000000', 'v0.0.9', 'v0.0.9'),
+      ],
+      intent: [],
+    };
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view);
+    render(<FleetScreen store={makeStore()} />);
+    await waitFor(() =>
+      expect(document.querySelector('.build-line')?.textContent).toBe('fleet v0.0.7 → v0.0.9 · server v0.0.9'));
+    expect(screen.getByText(/run different builds/i)).toHaveTextContent('fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1).');
+    expect(document.body.textContent).not.toContain('v9.9.9');
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+});

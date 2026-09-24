@@ -743,6 +743,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same .fleet ground as the base rule above. Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
   },
+  'fleet.css .build-line-next': {
+    under: ['var(--bg-page)'],
+    why: "centralised-update W3 Task 12: BuildLine's ' → vX' affix, a span inside a .build-line-side span inside .build-line, the last child of FleetScreen's own <main class=\"fleet\"> — no ancestor between it and the app shell paints a background, so its ground is --bg-page, the same as the two build-line rules above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone.",
+  },
   // ── centralised update management W3, Task 6: the /settings shell and its door ──
   'fleet.css .settings-back': {
     under: ['var(--bg-page)'],

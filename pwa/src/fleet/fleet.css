@@ -3231,3 +3231,11 @@ button.proj-card-pool::before {
   flex-basis: 100%;
   font-size: var(--text-xs);
 }
+
+/* BuildLine's affix (centralised-update design 2026-09-20 §13): " → v0.0.9"
+ * after a side whose node the inventory says should move up (`pendingTag`).
+ * Amber like the warn side — something to do, not a fault — and a rule of its
+ * own, so the contrast audit measures it (audit.mjs INHERITED_GROUNDS). */
+.build-line-next {
+  color: var(--status-attention-text);
+}
