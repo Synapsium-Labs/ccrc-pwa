@@ -219,6 +219,11 @@ export const SENTENCES: Record<string, string> = {
   'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
   'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, so nothing was removed. Reclamation tries again later.',
   'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed. That is the answer when a checkout inside it is neither this project’s own worktree nor proven clean and pushed, when the directory belongs to another repository, when the path is a symbolic link or not one plain absolute path, or when another session’s record names the same path.',
+  // The flavour pair (spec §5.6): neither verb finishes the other's interrupted
+  // work. `reap-in-progress` is ws-reclaim's refusal of a ws-reap breadcrumb;
+  // `reclaim-in-progress` is ws-reap's refusal of a `reclaim:` one.
+  'reap-in-progress': 'An interrupted clean-up of this workspace belongs to ws-reap, and reclamation never finishes another verb’s work. Nothing was removed.',
+  'reclaim-in-progress': 'An interrupted reclamation of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
 export function refusalSentence(token: string): string {

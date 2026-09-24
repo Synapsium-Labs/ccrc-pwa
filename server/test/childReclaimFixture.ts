@@ -73,3 +73,55 @@ export function evalOf(
   const [verdict = '', token = '', detail = ''] = out.split('\x1f');
   return { verdict, token, detail };
 }
+
+/** `ws-reclaim` through the sourced function, answering instead of throwing
+ *  (a refusal exits 0, a failure 1, a usage error 1 with nothing on stdout).
+ *  `CHILD_ENV` rides every call, so the residue probe never leaves the HOME. */
+export function childReclaimVerb(
+  h: PrHarness, token: string, opts: { childOf?: number; extra?: string; pre?: string } = {},
+): { code: number; stdout: string; stderr: string } {
+  return h.run(`${CHILD_STUBS} ${opts.pre ?? ''} ${CHILD_ENV} cmd_ws_reclaim --expect ${token}`
+    + ` --child-of ${opts.childOf ?? CHILD_RUN} --session ${CHILD_ID} ${opts.extra ?? ''}`);
+}
+
+/** A sibling worktree `other` of the child's OWN repository, left DIRTY, and
+ *  the child's directory replaced by a link to it — the shape in which a
+ *  reclaim that followed the leaf would commit `other`'s work into the
+ *  child's WIP and remove `other`'s tree (spec §5.5). The same shape the
+ *  ladder suite builds, here for the verb end to end. */
+export function plantOther(h: PrHarness, c: Child): string {
+  const other = path.join(h.home, 'other');
+  h.git(c.main, 'worktree', 'add', '-b', 'ws/other', other);
+  fs.writeFileSync(path.join(other, 'dirty.txt'), 'uncommitted work of another session\n');
+  fs.appendFileSync(path.join(other, 'README.md'), 'edited\n');
+  fs.rmSync(c.wt, { recursive: true, force: true });
+  fs.symlinkSync(other, c.wt);
+  return other;
+}
+
+/** Everything of `other` a reclaim could change: every entry under it (path,
+ *  type, mode, bytes), git's record of it, its branch tip, its status and its
+ *  branch's subjects — or `gone` when the tree itself is not there. */
+export function otherSnapshot(h: PrHarness, c: Child, other: string): Record<string, unknown> {
+  if (!fs.existsSync(other)) return { gone: true };
+  const tree: string[] = [];
+  const walk = (d: string): void => {
+    for (const n of fs.readdirSync(d).sort()) {
+      const p = path.join(d, n);
+      const st = fs.lstatSync(p);
+      const rel = path.relative(other, p);
+      if (st.isDirectory()) { tree.push(`d ${st.mode.toString(8)} ${rel}`); walk(p); }
+      else tree.push(`f ${st.mode.toString(8)} ${rel} ${fs.readFileSync(p).toString('base64')}`);
+    }
+  };
+  walk(other);
+  const stanza = h.git(c.main, 'worktree', 'list', '--porcelain').split('\n\n')
+    .find((s) => s.startsWith(`worktree ${other}\n`)) ?? '<no record>';
+  return {
+    tree,
+    record: stanza,
+    tip: h.git(c.main, 'rev-parse', 'refs/heads/ws/other'),
+    status: h.git(other, 'status', '--porcelain=v1', '--untracked-files=all'),
+    subjects: h.git(c.main, 'log', '--format=%s', 'refs/heads/ws/other'),
+  };
+}

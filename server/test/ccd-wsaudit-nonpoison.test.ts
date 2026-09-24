@@ -89,29 +89,53 @@ describe('the lifecycle block cannot poison wsaudit.test.ts\'s scan', () => {
     // and the set difference is exactly the five ladder words that task gave
     // `SENTENCES` copy for (ENTERED below; LEFT none). A later word, in or out
     // of the region, reds one of these three assertions or the pin above.
+    // 60 -> 62 (Task 4, the verb): `reap-in-progress` (ws-reclaim's refusal of
+    // a ws-reap breadcrumb) and `reclaim-in-progress` (ws-reap's refusal of a
+    // `reclaim:` one), both given `SENTENCES` copy. The second is ws-reap's own
+    // word, so its literal is in neither place: not among ws-reap's lines
+    // (the pin above would move) and not in the RECLAIM region (whose words
+    // are ws-reclaim's fourteen alone). It stands in its own `MIRROR-BEGIN`…
+    // `MIRROR-END` block below the region (`_ws_reclaim_mirror`, called from
+    // `_ws_reap_locked` in one line), which `src` cuts out exactly as it cuts
+    // the region — so the pin above stays 55 and byte-identical. Measured the
+    // same way: base 60 -> tree 62, ENTERED those two, LEFT none; the scan
+    // outside both blocks answers 55 at both.
     const full = readFileSync(CCD, 'utf8');
-    expect.soft(scan(full)).toHaveLength(60);
+    expect.soft(scan(full)).toHaveLength(62);
     expect.soft(scan(full).filter((t) => !scan(src).includes(t)))
-      .toEqual(['attached', 'containment-unproven', 'not-a-child', 'paused', 'tree-busy']);
+      .toEqual(['attached', 'containment-unproven', 'not-a-child', 'paused', 'reap-in-progress', 'reclaim-in-progress',
+        'tree-busy']);
     expect.soft(reclaimRegion(full).length, 'the region was found — an empty cut proves nothing').toBeGreaterThan(5000);
+    expect.soft(markedBlock(full, 'MIRROR-BEGIN', 'MIRROR-END'), 'the mirror block was found, and holds its one word')
+      .toContain('"refused":"reclaim-in-progress"');
   });
 });
 
 /** The `RECLAIM-BEGIN`…`RECLAIM-END` region of `ccd/ccd`, whole lines, or ''
  *  when the markers are absent. */
 function reclaimRegion(text: string): string {
-  const b = text.indexOf('RECLAIM-BEGIN');
-  const e = text.indexOf('RECLAIM-END');
+  return markedBlock(text, 'RECLAIM-BEGIN', 'RECLAIM-END');
+}
+
+/** The whole lines from the one holding `begin` to the one holding `end`, or
+ *  '' when either marker is absent. */
+function markedBlock(text: string, begin: string, end: string): string {
+  const b = text.indexOf(begin);
+  const e = text.indexOf(end);
   if (b < 0 || e < b) return '';
   const from = text.lastIndexOf('\n', b) + 1;
   const nl = text.indexOf('\n', e);
   return text.slice(from, nl < 0 ? text.length : nl + 1);
 }
 
-/** `text` with that region cut out. A function DECLARATION, so it is hoisted
- *  and `src` can use it on its own line without moving the lines the corpus
- *  cites. */
+/** `text` with that region — and ws-reap's mirror block below it, which holds
+ *  ws-reap's refusal of a reclaim breadcrumb (child reclamation wave 3, Task 4)
+ *  — cut out. A function DECLARATION, so it is hoisted and `src` can use it on
+ *  its own line without moving the lines the corpus cites. */
 function withoutReclaim(text: string): string {
-  const region = reclaimRegion(text);
-  return region === '' ? text : text.replace(region, '');
+  let out = text;
+  for (const block of [reclaimRegion(text), markedBlock(text, 'MIRROR-BEGIN', 'MIRROR-END')]) {
+    if (block !== '') out = out.replace(block, '');
+  }
+  return out;
 }

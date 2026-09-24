@@ -7368,6 +7368,22 @@ export interface LifecycleMeas {
    *  removed and there is nothing to name — the two must not be told apart by
    *  reading a sentence. It is prose for a person and never a parsed list. */
   readonly unremoved: string | null;
+  /** The run a `reclaim` act's CHILD was minted for — `ws-reclaim --child-of`,
+   *  equal to the box's `.child` marker or the act never started (child
+   *  reclamation, spec 2026-09-22 §5.5). The decimal string ccd wrote: every
+   *  `meas.` value crosses the encoder as a string, so a reader parses it
+   *  rather than trusting a `number` this seam never carried. */
+  readonly childOf: string | null;
+  /** The WIP commit a `reclaim` made of the child's uncommitted work, or null
+   *  when the tree was clean and no commit was made (ccd passes an empty value,
+   *  which the encoder omits). */
+  readonly wip: string | null;
+  /** The bytes `ws-reclaim`'s residue probe measured OUTSIDE the child's temp
+   *  root and left in place — the decimal string ccd wrote, or the literal
+   *  string `null` when the probe could not measure it (`ws-reap`'s
+   *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
+   *  the key was absent: an act that is not a reclaim. */
+  readonly residueBytes: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -7389,7 +7405,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -7560,7 +7576,9 @@ export type LcRefusalToken =
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
-  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): the pin phase could not keep the child's work, so the verb stopped before its first deletion
+  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit did not answer "stopped" after unsupervise, so the tail stopped before its first deletion
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7621,6 +7639,18 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // because one map entry serves four callers.
   'purge-mechanism-absent':
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
+  // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
+  // attic pins — failed, so the verb stopped BEFORE its first deletion. Only
+  // ever rides `_lc_fail`: the act started (a WIP commit may already exist,
+  // which destroys nothing), and a retry pins again.
+  'pin-failed':
+    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting any of it. The worktree and the branch are intact, and reclamation tries again.',
+  // Child reclamation, wave 3. The tail disabled the child's unit, then asked
+  // the service manager, and it did not answer "stopped" — a Restart=always
+  // unit left up would respawn against a workspace with no row. Only ever
+  // rides `_lc_fail`; the breadcrumb stays and a retry disables it again.
+  'unit-still-active':
+    'ccrc could not confirm this session’s service had stopped, so it stopped before deleting anything. The worktree and the branch are intact, and reclamation tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the
