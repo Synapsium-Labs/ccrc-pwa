@@ -2,9 +2,9 @@
 // design 2026-09-20 §13). Two sections and no more — Updates (the channel,
 // auto-install, *Check now*, the catalogue line, the release list, the node
 // inventory) and Notifications (the bell, release notifications, the
-// unarmed-exposure banner) — which Tasks 7–10 of the W3 plan add below the
-// header. This task lands the shell alone, because the route's pin
-// (app.test.tsx) needs the screen's own heading.
+// unarmed-exposure banner) — both shipped in this file, below the header
+// (Tasks 7–10 of the W3 plan; fix rounds 1–2 widened several of their
+// guards in place — see the plan's `## Deviations found`, D-3315/D-3316).
 //
 // The AccountsScreen skeleton, class for class (`.settings-screen/-head/-back/
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.

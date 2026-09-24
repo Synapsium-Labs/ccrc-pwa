@@ -47,7 +47,12 @@
    already leave only ~38px of slack at 390px, so this is sized to fit inside
    that margin for the common short case ("epoch 12 / observed 11") rather
    than assumed to have room. A sustained large gap producing a long string
-   is the one case this has not been measured against in a real browser. */
+   is the one case this has not been measured against in a real browser.
+   (Centralised update management, Task 6, D-3303, later added a FIFTH item
+   — the settings door — to this group; the four-item, 38px figure above is
+   unchanged by that addition, and the group now WRAPS at 390px rather than
+   holding everything on the one line this note assumes — see the override
+   comment near `.settings-door` below.) */
 .pool-epoch-lag {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -69,6 +74,11 @@
  * hold a `<select>` sized to its widest option, "Coordinator row", which
  * measures 167px. No floor, cap or shrink factor closes a 129px deficit; only
  * leaving the row does. Measured in Chromium from 320px to 1440px.
+ * (Centralised update management, Task 6, D-3303, later added a FIFTH item —
+ * the settings door — to this same group; "four other items" above still
+ * names only the ones this note measured, unaffected by that addition, and a
+ * fortiori closes no more of the 129px deficit — see the `.fleet-head-right`
+ * wrap override near `.settings-door` for what the fifth item does instead.)
  *
  * It does not get a row of its own either — that read as an orphan, a lone
  * right-aligned control on an otherwise empty band. `.fleet-runs-row` was
@@ -3004,7 +3014,14 @@ button.proj-card-pool::before {
    and not a measurement — cannot fit that, and nor could a glyph-only door at
    the 44px floor. Without this rule the head would push the fleet screen past
    the viewport, the defect #116 shipped. With it, a group that does not fit
-   breaks onto a second right-aligned line, and where it fits nothing moves.
+   breaks onto a second right-aligned line. CORRECTED (R3 + the coordinator's
+   parked note): "where it fits nothing moves" is not true at every width
+   this rule reaches — measured in Chromium, the group does NOT fit on one
+   line at exactly the 390px viewport this note's own math is about (the
+   fleet header grows from 48px to 92px there), nor in the desktop sidebar
+   between roughly 300px and 380px wide, so it wraps in both places; outside
+   those two bands the group does fit and the header stays a single 48px
+   row, which is the one case "nothing moves" still describes correctly.
    The descendant form out-specifies `.fleet-head-right` (0,2,0 against
    0,1,0), so it wins from any position — the cascade trap documented at the
    class chooser. No row gap: every control on the group is already a 44px
