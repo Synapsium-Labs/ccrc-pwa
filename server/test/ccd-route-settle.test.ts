@@ -1,5 +1,6 @@
 // server/test/ccd-route-settle.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -110,5 +111,38 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     h.sh(`${STUBS} _inject_spawn_effort cc-myid`, { PANE_TEXT: 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ' });
     h.sh(`${STUBS} _inject_spawn_effort cc-myid`, { PANE_TEXT: READY, BOX_DRAFT: 'half a sentence' });
     expect(typed()).toEqual([]);
+  });
+});
+
+// The spawn's `/effort` injection answers Opus 5's switch confirmation — but
+// only the DIALOG, which hides the prompt box and the statusline row (real
+// 2.1.280 captures). It used to grep the whole pane for "Yes, switch", so a
+// reply quoting the dialog above an idle box got an Enter of its own.
+describe('_inject_spawn_effort confirms ONLY a real switch dialog', () => {
+  const RULE = '─'.repeat(40);
+  const IDLE = [RULE, '❯ ', RULE, '  👤 acct-a │ 🤖 Opus 5 · high │ ⎇ main', '  ⏸ manual mode on'].join('\n');
+  const DIALOG = ['❯ /effort ultracode', RULE, '  Change effort level?', '  Your next response will be slower and use more tokens',
+    '  ❯ 1. Yes, switch to xhigh', '    2. No, go back'].join('\n');
+  const QUOTED = ['⏺ The capture shows:', '  Change effort level?', '  ❯ 1. Yes, switch to xhigh', '    2. No, go back', IDLE].join('\n');
+  /** tmux whose pane is a FILE, and whose first Enter swaps in `after` — the
+   *  screen Claude Code shows once `/effort ultracode` is submitted. */
+  const run = (after: string): number => {
+    seed();
+    fs.writeFileSync(`${h.home}/pane.txt`, IDLE);
+    fs.writeFileSync(`${h.home}/after.txt`, after);
+    h.sh(`sleep() { :; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
+        case "\${1:-}" in
+          capture-pane) cat "$HOME/pane.txt" ;;
+          send-keys) [[ "\${*: -1}" == Enter && -f "$HOME/after.txt" ]] && mv "$HOME/after.txt" "$HOME/pane.txt" ;;
+        esac; return 0; };
+      _inject_spawn_effort cc-myid`);
+    return h.calls().filter((l) => /send-keys -t cc-myid Enter$/.test(l)).length;
+  };
+  it('a quoted dialog above the idle box gets no confirming Enter', () => {
+    expect(run(QUOTED)).toBe(1);
+  });
+  it('control: the real dialog gets one', () => {
+    expect(run(DIALOG)).toBe(2);
   });
 });

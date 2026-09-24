@@ -49,7 +49,7 @@ export interface ReadinessDeps {
    * `cfg.mailTokenPath` describes the SERVER box (`<home>/.ccrc/mail.token`).
    * On the live topology `CCRC_FLEET=remote` is standing config, so `io` is
    * the agent-backed FleetIO — handing it that path asks the FLEET box's agent
-   * about a server-box file. The agent's whitelist has no `.ccrc` arm, the
+   * about a server-box file. The agent admits only eight `.ccrc` node files, never `mail.token`, the
    * refusal maps to `unreadable`, and `boxToken` pins at `unmeasurable`
    * forever, so the verdict could never answer `ready` in production.
    * Whitelisting it would be worse than the bug: the fleet host's own token

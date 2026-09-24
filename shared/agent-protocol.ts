@@ -81,10 +81,23 @@ export interface AgentHello { t: 'hello'; token: string }
  *  older server reads — and `remote/client.ts`'s `onReady` still parses it
  *  into `FleetState.observedEpoch`, but that field is no longer consumed by
  *  the pools wire; see that handler's own comment for what, if anything,
- *  still reads it. */
+ *  still reads it.
+ *
+ *  `ops` names the request ops this agent answers beyond the closed set every
+ *  agent has always had (design 2026-09-20 §8/§10) — `['update']` from W4's
+ *  agent. ABSENT from every agent before that, and absence is tolerated and
+ *  grants nothing: the server's one reader (`remote/client.ts`'s
+ *  `readReadyOps`) reads an absent field, a non-array, and a list with any
+ *  word off `CAP_WORD` or more than `MAX_CAP_WORDS` words as the same `[]` —
+ *  "this link named no op I may send" — which the inventory stores as `''`
+ *  and which is NOT the server row's `NULL` ("no agent at all", decision 11).
+ *  Unlike `observedEpoch` above, handshake cadence is the RIGHT cadence for
+ *  this field: the ops an agent process answers cannot change without that
+ *  process restarting, and a restart is a new `ready`. */
 export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
+  ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
 }
 
 /**
@@ -114,6 +127,39 @@ export interface AgentReady {
  * dangerous, but the whole feature silently stops with no red anywhere.
  */
 export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
+
+/**
+ * The `~/.ccrc` NODE FILES — design 2026-09-20 §8's EXACT-BASENAME set, the
+ * one agent read grant that is not a directory prefix. Declared here, and not
+ * in either package's `src/`, for `POOL_EPOCH_FILE_NAME`'s reason above: the
+ * agent's `checkPath` (`agent/src/whitelist.ts`) admits exactly these names
+ * and the server's inventory sweep (`server/src/update/inventory.ts`) reads
+ * exactly these names, and a name spelled twice is a sweep that reads a file
+ * the agent refuses — `unreadable` forever, with no red anywhere.
+ *
+ * `~/.ccrc` ALSO holds `agent.env` (this agent's own bearer), `auth.scrypt`,
+ * `coord.db`, `deploy.env` and every other secret-bearing file `ccd/ccrc`
+ * writes. Nothing may ever be added to this object that names one of them —
+ * the grant derives from it, so an entry here IS a read grant.
+ * `projection` (`update-intent`) is in the set so the server can SHOW what a
+ * fleet node last received; it is never read back as authority (§8).
+ *
+ * Writers: `ccd/ccrc` writes `build.json`, `installed`, `ccrc-caps`, `floor`
+ * and `node-id` today (its `BOX_*_FILE` constants — bash cannot import this,
+ * so those spellings are its own); `previous` and `update.json` are W4's; the
+ * server process writes its OWN box's `update-intent` from W2, and W4's
+ * `ccd-update-sync` writes a fleet node's. A name read before its writer
+ * exists answers `absent`, which is the truth about that node.
+ */
+export const CCRC_DIR_NAME = '.ccrc';
+export const NODE_FILES = {
+  stamp: 'build.json', installed: 'installed', caps: 'ccrc-caps', floor: 'floor', previous: 'previous',
+  nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
+} as const;
+export type NodeFileKey = keyof typeof NODE_FILES;
+/** The eight names as one list, DERIVED — the agent's admission set and every
+ *  scan over it read this, never a restatement. */
+export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 
 /**
  * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s

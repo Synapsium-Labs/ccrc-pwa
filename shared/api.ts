@@ -90,6 +90,16 @@ export interface FleetSession {
    *  per-lane window table this project's account-name enumeration ban
    *  forbids. */
   ctxPct: number | null;
+  /** The pane's width in columns, as far as THIS tick could see it: the
+   *  length of the prompt box's bottom border (`Statusline.boxCols`), which
+   *  Claude Code draws exactly as wide as the pane. A reading never
+   *  OVERSTATES the width — no captured row is wider than its pane — so
+   *  `paneCols >= READER_MIN_COLS` proves ccd's readers can see this pane.
+   *  `null` when this tick saw no prompt box (a startup gate, a menu or an
+   *  overlay is up, the pane is dead) or the server predates the field: both
+   *  are "unmeasured", and neither may be read as wide. Additive, no
+   *  `FLEET_PROTO` bump; read it through `paneWidth` below. */
+  paneCols: number | null;
   tasks: TaskProgress | null;                // plan progress; null = this session has no task list
   /** This workspace's pull request, or null for a main checkout — which is the
    *  ONLY thing that suppresses the header control. */
@@ -673,6 +683,13 @@ export function sessionAsk(
  */
 export function ctxPressure(s: { ctxPct?: number | null }): number | null {
   return tolerantCount(s.ctxPct);
+}
+
+/** Tolerant read of `FleetSession.paneCols` off a cast live frame — the same
+ *  ladder as `ctxPressure`: absent (an older server), null, or unusable all
+ *  read as `null`, "unmeasured", which no caller may treat as wide. */
+export function paneWidth(s: { paneCols?: number | null }): number | null {
+  return tolerantCount(s.paneCols);
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1322,6 +1339,9 @@ export interface WsTombstone {
  *   - a NULLABLE field, absent            → null  (an older build lacked it)
  *   - a token from a newer build, where the type has a designated "we do not
  *     know" member                        → that member ('unchecked', null)
+ *     — ONE caller-chosen exception: `spawnState` in the PWA's offline
+ *     snapshot keeps the word itself (`UnnamedSpawnWord`), because the live
+ *     frame it copies is cast and renders the word as itself
  *   - a NON-NULLABLE field absent, or ANY field of the wrong type
  *                                         → the whole snapshot is rejected
  *
@@ -2829,8 +2849,20 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
   };
 }
 
+/** What a revival does with a `spawnState` STRING this build cannot name.
+ *  `unrecognised` is the uniform rule's designated-ignorance member, and the
+ *  SERVER's choice: its state-cache is read back by whatever build is running,
+ *  and after a rollback that older build's own `spawnVerdict` computes
+ *  `unrecognised` for the same rc live. `keep` is the PWA's: its offline
+ *  snapshot holds what a live frame carried, and `spawnWords.ts` renders a
+ *  word the bundle cannot name AS ITSELF (`? <word>`, loud) — rewriting it
+ *  would make the offline chip quiet where the live one is loud, borrowing a
+ *  member that means "the server could not name ccd's rc". Either way the
+ *  rest of the snapshot survives, and a non-string still rejects. */
+export type UnnamedSpawnWord = 'unrecognised' | 'keep';
+
 /** One persisted session in today's shape, or null if it cannot be one. */
-export function reviveFleetSession(raw: unknown): FleetSession | null {
+export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnWord = 'unrecognised'): FleetSession | null {
   try {
     const o = asObj(raw, 'session');
 
@@ -2889,15 +2921,33 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('lifecycle');
     }
 
-    // Absent → null ("not recorded"). An unrecognised STRING rejects the whole
-    // session rather than being laundered — the same rule `lifecycle` above
-    // follows. Note the asymmetry with L0: an unrecognised RC becomes
-    // `'unrecognised'` inside `spawnVerdict`, because an rc is ccd's own output
-    // and a word off a cache is not.
-    const spawnRaw = optStr(o, 'spawnState');
-    if (spawnRaw !== null && !isSpawnVerdict(spawnRaw)) {
-      throw new MalformedSnapshot('spawnState');
-    }
+    // `paneCols` is TYPE-checked here — `optNum` throws on a non-number, so a
+    // malformed field rejects the snapshot like any other — and then revived
+    // as null regardless (at the field, below).
+    optNum(o, 'paneCols');
+
+    // Absent → null ("not recorded"). A STRING this build cannot name revives
+    // — by DEFAULT, the server's state-cache — as `unrecognised`: this file's
+    // own uniform rule above ("a token from a newer build, where the type has a
+    // designated 'we do not know' member → that member") and the fleet-robustness spec's (§ spawn verdict: "a rc
+    // this build has never heard of must revive as `unrecognised`, not as a
+    // throw"). It used to reject the WHOLE snapshot instead, and #174 is what
+    // made that cost real: its `narrow` (rc 6) is a word every older build
+    // lacks, so a rollback past it met one narrow row and discarded the
+    // server's state-cache and the PWA's offline fleet whole. `unrecognised`
+    // is also exactly what that older build's own `spawnVerdict(6)` computes
+    // live, so the snapshot and the next live frame agree. The PWA passes
+    // `keep` instead: its snapshot copies live frames, which carry the word
+    // itself (`UnnamedSpawnWord`). Nothing decides on the field: the actions
+    // sheet is advisory, and dispatch reads its own registry fact. A
+    // non-string is still the wrong TYPE, and still rejects either way.
+    const spawnWord = optStr(o, 'spawnState');
+    const spawnRaw: SpawnVerdict | null =
+      spawnWord === null ? null
+        : isSpawnVerdict(spawnWord) ? spawnWord
+        // The same cast the live frame gets (`stores/fleet.ts`'s `asFleetMsg`).
+        : unnamedSpawnWord === 'keep' ? spawnWord as SpawnVerdict
+        : 'unrecognised';
 
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
@@ -2925,6 +2975,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // against). Present-but-not-a-finite-number throws inside `optNum`,
       // which this function's catch turns into "reject the whole session".
       ctxPct: optNum(o, 'ctxPct'),
+      // ALWAYS null — "unmeasured" — whatever the snapshot holds (its TYPE is
+      // still checked, above): the field is THIS tick's
+      // width, and a revived row is by definition not this tick. A persisted 220 would quiet a `narrow` chip
+      // over a pane nobody can see (a fleet-box outage, an offline PWA), the
+      // one direction that chip must not err in.
+      paneCols: null,
       tasks,
       pr,
       archivedAt: optNum(o, 'archivedAt'),
@@ -3035,11 +3091,11 @@ export function repoLabel(repo: ProjectRepoWire | undefined): string | null {
 
 /** A persisted `sessions` array in today's shape, or null — one unrevivable
  *  session rejects the file, which both readers already handle as "no data". */
-export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
+export function reviveFleetSessions(raw: unknown, unnamedSpawnWord: UnnamedSpawnWord = 'unrecognised'): FleetSession[] | null {
   if (!Array.isArray(raw)) return null;
   const out: FleetSession[] = [];
   for (const item of raw as unknown[]) {
-    const session = reviveFleetSession(item);
+    const session = reviveFleetSession(item, unnamedSpawnWord);
     if (session === null) return null;
     out.push(session);
   }
@@ -3256,8 +3312,8 @@ export interface FleetHealth {
   build?: BuildAgreement;
   /**
    * The EVIDENCE beside the decision (release/rollout design §6): what THIS
-   * box's stamp says and what the fleet host's stamp said on its last
-   * `ready`, each `null` when that side has no readable stamp. `build`
+   * box's stamp and the fleet host's say, per the node inventory (design
+   * 2026-09-20 §14, `derivedBuilds`); `null` = no readable stamp. `build`
    * above still decides — a reader renders `skewed`/`agreed`/`unknown`
    * from it and uses these only to SAY which versions are involved
    * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
@@ -8266,3 +8322,381 @@ export type PaneHistoryReply =
  * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.
  */
 export const READER_MIN_COLS = 120;
+
+/* ---------------------------------------------------------------------------
+ * CENTRALISED UPDATE MANAGEMENT — the control plane's vocabularies and wire
+ * (design 2026-09-20 §6, §8, §12; W2 plan Task 1).
+ *
+ * AT THE END OF THE FILE, deliberately, and not beside `BuildAgreement` where
+ * the topic would put it: `README.md` cites this file BY LINE
+ * (`lcRefusalWord`'s purge refusals), and `session-hook.test.ts`'s citation
+ * audit reds on any line inserted above them — measured, a ten-line insert
+ * after `BuildAgreement` reds two of its cases. An append moves no cited line.
+ *
+ * Every vocabulary below is ONE union, ONE runtime array checked against it
+ * with `as const satisfies` (a member the union lacks is a compile error), and
+ * ONE guard that casts the constant, never the input — `isRunState`'s idiom.
+ * `server/test/update-states.test.ts` holds each array equal to its union in
+ * the other direction and each guard equal to its array. SQL that needs a set
+ * builds it from the array by `.join`; `single-definition.test.ts` refuses a
+ * hand-typed SQL tuple of any of these words.
+ * ------------------------------------------------------------------------- */
+
+/** A release channel (decision 2): `dev` is every merge, `stable` a promotion
+ *  of an existing release. No we-do-not-know member, on purpose: a channel
+ *  token this build cannot name reads `null` (the ClaimState stance, §6) and
+ *  the resolver resolves NOTHING for that node — never the fleet default,
+ *  which would be fail-open. */
+export type UpdateChannel = 'stable' | 'dev';
+export const UPDATE_CHANNELS = ['stable', 'dev'] as const satisfies readonly UpdateChannel[];
+/** Use THIS, never `UPDATE_CHANNELS.includes(x as UpdateChannel)` — `isRunState`'s rule. */
+export function isUpdateChannel(v: unknown): v is UpdateChannel {
+  return typeof v === 'string' && (UPDATE_CHANNELS as readonly string[]).includes(v);
+}
+
+/** A node's LEASE state (`nodes.updateState`, §6). `unknown` is the designated
+ *  we-do-not-know member: never written by a settled path, it is what a token
+ *  from a newer build reads as — and it counts as BUSY below. */
+export type UpdateState = 'idle' | 'pending' | 'applying' | 'reverted' | 'failed' | 'unknown';
+export const UPDATE_STATES = ['idle', 'pending', 'applying', 'reverted', 'failed', 'unknown'] as const satisfies
+  readonly UpdateState[];
+/** Use THIS, never `UPDATE_STATES.includes(x as UpdateState)` — `isRunState`'s rule. */
+export function isUpdateState(v: unknown): v is UpdateState {
+  return typeof v === 'string' && (UPDATE_STATES as readonly string[]).includes(v);
+}
+/** BUSY = a lease is held, or might be: nothing may be dispatched to the node.
+ *  `unknown` is here for the reason `RunState`'s `unknown` is ACTIVE for the
+ *  cap (`ACTIVE_RUN_STATES`): a node whose state cannot be read must not be
+ *  dispatched to, and §10's deadline turns a stale `unknown` into `failed`.
+ *  SETTLED = the complement; a dispatch acquires only from one of these.
+ *  Every `UpdateState` is in exactly one list (`update-states.test.ts`). */
+export const BUSY_UPDATE_STATES = ['pending', 'applying', 'unknown'] as const satisfies readonly UpdateState[];
+export const SETTLED_UPDATE_STATES = ['idle', 'reverted', 'failed'] as const satisfies readonly UpdateState[];
+export type BusyUpdateState = (typeof BUSY_UPDATE_STATES)[number];
+export type SettledUpdateState = (typeof SETTLED_UPDATE_STATES)[number];
+
+/** The phase a node's own updater REPORTS in `~/.ccrc/update.json` (§8). `unknown`
+ *  is what a phase token outside this list reads as — distinct from a NULL
+ *  `reportedPhase`, which means there is no report file at all. */
+export type UpdatePhase = 'queued' | 'resolving' | 'fetching' | 'verifying' | 'backing-up' | 'installing'
+  | 'restarting' | 'checking' | 'restoring' | 'done' | 'reverted' | 'failed' | 'unknown';
+export const UPDATE_PHASES = [
+  'queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
+  'restarting', 'checking', 'restoring', 'done', 'reverted', 'failed', 'unknown',
+] as const satisfies readonly UpdatePhase[];
+/** Use THIS, never `UPDATE_PHASES.includes(x as UpdatePhase)` — `isRunState`'s rule. */
+export function isUpdatePhase(v: unknown): v is UpdatePhase {
+  return typeof v === 'string' && (UPDATE_PHASES as readonly string[]).includes(v);
+}
+/** §8's phase table, first row: every phase here derives `updateState =
+ *  'applying'`. The other four (`done`, `reverted`, `failed`, `unknown`) each
+ *  have a row of their own and are deliberately NOT a list — each is decided
+ *  by name. */
+export const IN_FLIGHT_UPDATE_PHASES = [
+  'queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
+  'restarting', 'checking', 'restoring',
+] as const satisfies readonly UpdatePhase[];
+
+/** Whether the node's completed-install marker names its stamp (§8, `~/.ccrc/installed`
+ *  line 1). `unknown` = the stamp could not be read, so nothing can be compared. */
+export type InstallState = 'complete' | 'incomplete' | 'unknown';
+export const INSTALL_STATES = ['complete', 'incomplete', 'unknown'] as const satisfies readonly InstallState[];
+/** Use THIS, never `INSTALL_STATES.includes(x as InstallState)` — `isRunState`'s rule. */
+export function isInstallState(v: unknown): v is InstallState {
+  return typeof v === 'string' && (INSTALL_STATES as readonly string[]).includes(v);
+}
+
+/** A MEASUREMENT of the node's marker line 2 (§8), and the only word on the
+ *  wire ever spelled "verified" (§13) — `ReleaseWire.bundleListed` is a claim
+ *  about a filename, not this. */
+export type ProvenanceState = 'verified' | 'unverified' | 'unknown';
+export const PROVENANCE_STATES = ['verified', 'unverified', 'unknown'] as const satisfies
+  readonly ProvenanceState[];
+/** Use THIS, never `PROVENANCE_STATES.includes(x as ProvenanceState)` — `isRunState`'s rule. */
+export function isProvenanceState(v: unknown): v is ProvenanceState {
+  return typeof v === 'string' && (PROVENANCE_STATES as readonly string[]).includes(v);
+}
+
+/** Unattended updating, per intent scope (§6 `update_intent.auto`). No
+ *  we-do-not-know member: an out-of-vocabulary token READS as `off` — the
+ *  direction in which nothing moves unattended. */
+export type AutoMode = 'off' | 'stable' | 'channel';
+export const AUTO_MODES = ['off', 'stable', 'channel'] as const satisfies readonly AutoMode[];
+/** Use THIS, never `AUTO_MODES.includes(x as AutoMode)` — `isRunState`'s rule. */
+export function isAutoMode(v: unknown): v is AutoMode {
+  return typeof v === 'string' && (AUTO_MODES as readonly string[]).includes(v);
+}
+
+/** Which releases the operator is told about (§6 `update_intent.notify`, read
+ *  by W3). An out-of-vocabulary token READS as `channel` — the operator hears
+ *  of more, never of nothing. */
+export type NotifyMode = 'channel' | 'stable' | 'off';
+export const NOTIFY_MODES = ['channel', 'stable', 'off'] as const satisfies readonly NotifyMode[];
+/** Use THIS, never `NOTIFY_MODES.includes(x as NotifyMode)` — `isRunState`'s rule. */
+export function isNotifyMode(v: unknown): v is NotifyMode {
+  return typeof v === 'string' && (NOTIFY_MODES as readonly string[]).includes(v);
+}
+
+/** What an operator request asks a node to do (§6 request columns; written by
+ *  W4's `requestNode`). */
+export type RequestKind = 'update' | 'rollback';
+export const REQUEST_KINDS = ['update', 'rollback'] as const satisfies readonly RequestKind[];
+/** Use THIS, never `REQUEST_KINDS.includes(x as RequestKind)` — `isRunState`'s rule. */
+export function isRequestKind(v: unknown): v is RequestKind {
+  return typeof v === 'string' && (REQUEST_KINDS as readonly string[]).includes(v);
+}
+
+/** How the read of a node's `~/.ccrc/build.json` went (§6 `nodes.stampRead`,
+ *  §8). `ok` with a NULL `currentVersion` is an unversioned build (a
+ *  `deploy.sh` push); `unreadable` is NEVER "unversioned" (D-1396's lesson at
+ *  a new seam). A token outside the list reads `unreadable`.
+ *
+ *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
+ *  widened by `ok` and `malformed`. This file cannot import that type (its
+ *  three type-only imports are pinned, `peers-claims-l0.test.ts`), so the
+ *  union is DERIVED from the array rather than restated beside it, and
+ *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`
+ *  EQUAL to `ReadFailure` at compile time: a third read-failure word added
+ *  there is a type error here until this list names it too. */
+export const STAMP_READS = ['ok', 'absent', 'unreadable', 'malformed'] as const;
+export type StampRead = (typeof STAMP_READS)[number];
+/** Use THIS, never `STAMP_READS.includes(x as StampRead)` — `isRunState`'s rule. */
+export function isStampRead(v: unknown): v is StampRead {
+  return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
+}
+
+/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
+ *  token outside the list reads `null` on the wire. */
+export type NodeRole = 'server' | 'fleet' | 'both';
+export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
+/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
+export function isNodeRole(v: unknown): v is NodeRole {
+  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
+}
+
+/** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
+ *  `unknown` = no caps file, or one that failed validation. */
+export type NodeOs = 'linux' | 'darwin' | 'unknown';
+export const NODE_OSES = ['linux', 'darwin', 'unknown'] as const satisfies readonly NodeOs[];
+/** Use THIS, never `NODE_OSES.includes(x as NodeOs)` — `isRunState`'s rule. */
+export function isNodeOs(v: unknown): v is NodeOs {
+  return typeof v === 'string' && (NODE_OSES as readonly string[]).includes(v);
+}
+
+/** The canonical form of a version everywhere (decision 2): the TAG, `vX.Y.Z`.
+ *  No flags — a `g` would make `.test` stateful through `lastIndex`. JS `$`
+ *  without `m` matches only at the end of the input, so `'v0.0.9\n'` is
+ *  refused. `deploy/release-main.sh`'s `SHAPE` is the bash twin, held equal
+ *  by `update-states.test.ts`. */
+export const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+/** The ONE tag-shape guard: the routes, the resolver, the inventory's
+ *  validators and the agent all call this, never the regex. */
+export function isReleaseTag(v: unknown): v is string {
+  return typeof v === 'string' && RELEASE_TAG.test(v);
+}
+
+/** One word of `~/.ccrc/ccrc-caps` or of `AgentReady.ops` (§8, decision 13) —
+ *  pool-epoch's NAME grammar. */
+export const CAP_WORD = /^[a-z][a-z0-9-]{0,31}$/;
+export const MAX_CAP_WORDS = 32;
+/** The ONE validator for a caps or ops word list. `null` = REFUSED: an element
+ *  that is not a string matching `CAP_WORD`, more than `MAX_CAP_WORDS`
+ *  elements, or not an array at all. `[]` = a valid EMPTY list. The two are
+ *  kept apart here so a caller can say which it saw; §8's storage rule then
+ *  writes both as `''` — one bad word drops the whole file, never just that
+ *  word. */
+export function validCapWords(words: readonly unknown[]): string[] | null {
+  if (!Array.isArray(words) || words.length > MAX_CAP_WORDS) return null;
+  const out: string[] = [];
+  for (const w of words) {
+    if (typeof w !== 'string' || !CAP_WORD.test(w)) return null;
+    out.push(w);
+  }
+  return out;
+}
+
+/** Why the last catalogue poll did not land (§7). `http-<status>` carries the
+ *  status the listing answered with. `redirect` (fix round 1, F9): the
+ *  listing fetch sends `redirect: 'error'`, so a 3xx answers a thrown
+ *  `TypeError` rather than a status — named on its own, never folded into
+ *  the generic `no-egress` a network failure gets, because a redirect is a
+ *  server telling this box to ask somewhere else, not silence. */
+export type CatalogueErrorReason =
+  'no-egress' | 'rate-limited' | `http-${number}` | 'malformed' | 'no-release-source' | 'redirect';
+
+/** One node's refusal of one release, rolled up for DISPLAY (`node_release_refusals`).
+ *  `by` is the refusing node's id. Never a predicate: eligibility reads the
+ *  table for THIS node (decision 16), not this roll-up. */
+export interface ReleaseRefusalWire { by: string; at: number }
+/** One row of the release catalogue (§6 `releases`, §12). `channel` is `null`
+ *  for a token this build cannot name (the ClaimState stance, §6). */
+export interface ReleaseWire {
+  tag: string; version: string; channel: UpdateChannel | null; publishedAt: number; commitSha: string | null;
+  bundleListed: boolean; yanked: boolean;
+  refused: ReleaseRefusalWire[];
+  notes: string | null;
+}
+/** An operator request standing on a node (§6 request columns). */
+export interface NodeRequestWire { tag: string; kind: RequestKind; at: number }
+/** The node's own report, validated (§8). Times are epoch ms on the wire;
+ *  `~/.ccrc/update.json` carries unix SECONDS, converted once by the reader. */
+export interface NodeReportWire {
+  phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null;
+  detail: string | null;
+}
+/** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
+export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
+/** One node of the inventory (§6 `nodes`, §12). `agentOps` NULL = no agent by
+ *  construction (the server's own row); `[]` = an agent too old to say.
+ *  `floorRead`/`previousRead` (fix round 2, R4): the STORED read-state
+ *  (`TagFileRead`) beside `highestVersion`/`previousVersion` — additive and
+ *  OPTIONAL so an older fixture or consumer that never set them still
+ *  type-checks. `toNodeWire` (`server/src/update/routes.ts`) always sends
+ *  both for a build that has them; a reader on an OLDER wire, or ANY reader
+ *  that never checks, sees `undefined` and MUST treat that as "not reported
+ *  by this build" — never as `'measured'` and never as evidence the floor
+ *  was never measured either. Absence here is silence, not a value: it is
+ *  the same shape `agentOps` already uses (NULL/undefined ≠ a real answer).
+ *  Without this pair a `null` `highestVersion` is ambiguous on the wire
+ *  between "no floor, unconstrained" (`floorRead: 'absent'`) and "floor never
+ *  measured, nothing resolves" (`floorRead: 'unmeasured'`) — the same
+ *  distinction D-3213 drew in the store and the resolver, now carried one
+ *  seam further out. No PWA reader exists yet (W2 ships no PWA change); the
+ *  first one W3 adds must read this field, never re-derive the distinction
+ *  from `highestVersion` alone. No `FLEET_PROTO` bump — additive, absence
+ *  permits. */
+export interface NodeWire {
+  nodeId: string; role: NodeRole | null; label: string; os: NodeOs;
+  current: BuildInfo | null; stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
+  caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null;
+  floorRead?: TagFileRead; previousRead?: TagFileRead;
+  measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
+  channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
+  request: NodeRequestWire | null;
+  report: NodeReportWire | null;
+  update: NodeUpdateWire;
+}
+/** One intent row (§6 `update_intent`); `scope` is `FLEET_SCOPE` or a node id. */
+export interface UpdateIntentWire {
+  scope: string; channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode; notify: NotifyMode;
+  setAt: number; setBy: string;
+}
+/** The fleet-default intent scope (§6 `update_intent.scope`, the migration's
+ *  seed row). Declared HERE and nowhere else: the store (`coord/store.ts`) and
+ *  the L1 resolver (`update/resolve.ts`, which may import only `shared/`) both
+ *  import it, so the scope the store writes and the scope the resolver falls
+ *  back to cannot be two spellings. */
+export const FLEET_SCOPE = '*';
+/** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
+ *  checked since this process started — never "up to date". */
+export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
+/** `GET /api/updates` (§12). */
+export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[] }
+
+/** Every refusal word an update route answers with (§12). */
+export type UpdateRouteError =
+  | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
+  | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
+  | 'journal-unreadable' | 'journal-unwritable';
+export interface UpdateRouteRefusal {
+  ok: false; error: UpdateRouteError;
+  field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
+  verdict?: AuthVerdict;   // the 401 only — the gate-shaped verdict the PWA's login screen reads (`GET /api/pools/epoch`'s body)
+}
+export interface IntentWriteAnswer { ok: true; intent: UpdateIntentWire; epoch: number }
+export interface AckAnswer { ok: true; node: NodeWire }
+
+/** Design 2026-09-20 §6 (W2) — the TENTH refusal vocabulary
+ *  `mail-routes.test.ts`'s kebab-token scanner checks together and never
+ *  merges into a sibling, on the standing rule `SET_ACCOUNT_POOLS_REFUSE_CODES`
+ *  states (far above — this block sits at the END of the file with the rest
+ *  of the update control plane's L0, so no line README cites by number moves;
+ *  D-3188, D-3192): the update control plane's `CoordStore` writers
+ *  (`server/src/coord/store.ts`) refuse synchronously to an in-process caller
+ *  — the catalogue poller, the inventory sweep, a route — and nothing is
+ *  recorded or replayed. Store-local words: an update route that answers one
+ *  maps it onto `UpdateRouteError` (above) before any client sees it. ONE array
+ *  for the whole update store, appended to by each task that adds a writer
+ *  (W2 Tasks 4, 5 and 6 — no second store vocabulary beside it), so the
+ *  scanner admits a later member through the same guard and still rejects a typo.
+ *
+ *    bad-tag       — a tag that fails `isReleaseTag`, the one tag-shape guard.
+ *    duplicate-tag — one listing named a tag twice; the whole listing is refused.
+ *    bad-row       — a listed row the table cannot store: a channel outside
+ *                    `UpdateChannel`, a non-integer `publishedAt`, an empty
+ *                    (never `null`, D-3216) `tarballUrl`. Refused before the
+ *                    transaction opens.
+ *    empty-listing — `[]` while releases are known: a transient answer must
+ *                    not yank the catalogue.
+ *    unknown-node  — no `nodes` row carries this id.
+ *    bad-node-id   — a node id that is not the lowercase uuid `_inst_node_id`
+ *                    mints (`NODE_ID_RE`, store.ts); `rekeyNode` refuses it.
+ *    label-key-taken — `markUnreachable` found no live row for the label and
+ *                    could not write the label-keyed placeholder: a row
+ *                    already holds that key.
+ *    not-busy      — `releaseLease` on a settled row: there is no lease.
+ *    stale-report  — a report whose run began before the lease (even the
+ *                    last ms its whole-second `startedAt` covers,
+ *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
+ *                    belongs to a previous run and never moves it (design
+ *                    §8's precedence).
+ *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
+ *                    auto/notify.
+ *    bad-field     — a named patch field's value is outside its vocabulary
+ *                    (`pinnedTag` must be null or pass `isReleaseTag`).
+ *    unknown-scope — the intent scope is neither `FLEET_SCOPE` nor a live
+ *                    `nodes` row keyed by a measured node-id (`NODE_ID_RE`):
+ *                    a label-keyed row is refused, because `rekeyNode` never
+ *                    carries an intent row to the UUID.
+ *    no-channel    — the merge base's channel reads null (a token this build
+ *                    does not know) and the patch names none; the fleet
+ *                    default is never substituted — fail-open.
+ *    journal-unreadable — `UpdateIntentLog.maxEpoch()` threw; nothing written.
+ *    journal-unwritable — `UpdateIntentLog.append()` threw; the transaction
+ *                    rolled back.
+ *    single-not-one — `applyReleaseListing` under `'single'` coverage was
+ *                    handed a listing whose length is not exactly 1 (fix
+ *                    round 1, review round 2): the coverage name is a
+ *                    promise about its own argument, not just about what
+ *                    happens next.
+ *    withdrawn-not-empty — `applyReleaseListing` under `'withdrawn'` coverage
+ *                    (fix round 1, item 5, ruling A) was handed a non-empty
+ *                    listing: that coverage names ONE existing tag to yank
+ *                    through `withdrawTag`, never a row to upsert. */
+export const UPDATE_STORE_REFUSE_CODES = [
+  'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
+  'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
+  'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
+  'single-not-one', 'withdrawn-not-empty',
+] as const;
+export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
+export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
+  return typeof v === 'string' && (UPDATE_STORE_REFUSE_CODES as readonly string[]).includes(v);
+}
+
+/** C5 (final fix wave): the single declaration of "unix SECONDS stay below
+ *  this until the year 5138; a 13-digit ms value never does" — was
+ *  `server/src/update/resolve.ts`'s `MAX_UNIX_S` and
+ *  `server/src/update/inventory.ts`'s `REPORT_TIME_MAX_S`, two copies of the
+ *  same bound (the L1 resolver's own comment said it was "restated because
+ *  this L1 file may not import an L3 one" — but both are free to import this
+ *  L0 file). Both now import this one constant; neither declares its own. */
+export const UNIX_SECONDS_MAX = 99_999_999_999;
+
+/** How a floor/previous tag-file column's STORED value was arrived at (§8,
+ *  D-3213, corrected by fix round 1's own review): `measured` = the stored
+ *  tag was measured, this sweep or carried forward; `absent` = the stored
+ *  NULL was measured absent or garbled, this sweep or carried — §9's "a NULL
+ *  floor is unconstrained" governs it exactly as before, carried or not;
+ *  `unmeasured` = NOTHING has EVER been measured for this row, so the stored
+ *  value is always NULL here too. On an unreadable/too-large/deadline read
+ *  the row's own previous (value, state) PAIR carries forward unchanged, and
+ *  only a row with no prior measurement reads `unmeasured`, which resolves
+ *  NOTHING, never the `currentVersion` an absent floor would license. A
+ *  token outside the list reads `unmeasured`. */
+export const TAG_FILE_READS = ['measured', 'absent', 'unmeasured'] as const;
+export type TagFileRead = (typeof TAG_FILE_READS)[number];
+/** Use THIS, never `TAG_FILE_READS.includes(x as TagFileRead)` — `isRunState`'s rule. */
+export function isTagFileRead(v: unknown): v is TagFileRead {
+  return typeof v === 'string' && (TAG_FILE_READS as readonly string[]).includes(v);
+}

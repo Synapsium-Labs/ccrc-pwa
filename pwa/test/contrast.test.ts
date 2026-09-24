@@ -1734,12 +1734,13 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
   });
 
   it('measures the ink-tertiary VARIANTS too — half a grounded cell is a blind spot', () => {
-    // The chip has two inks, not one: `unconfirmed`/`unknown` drop to
+    // The chip has two inks, not one: `unconfirmed`/`unknown` — and a narrow
+    // spawn whose pane is measured wide again, `was narrow` — drop to
     // --ink-tertiary. An attribute variant recovers no ground from its selector
     // either, so without its own entry that half stays in the census while the
     // base half is measured — the worst of both, because the report then LOOKS
     // like the cell is covered.
-    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']";
+    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
     expect(rows).toHaveLength(2);

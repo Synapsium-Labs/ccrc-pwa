@@ -78,7 +78,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   // chip. `Sonnet 5`/`medium`, deliberately neither of the values these
   // tests pick, so a tap is a real change to read back.
   version: null, model: 'Sonnet 5', effort: 'medium', ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,

@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3200 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3300 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -111,7 +111,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `rollout`. **What is
   running where:** `ccrc version` (with its `install:` line — which also says `unsigned` when the tree was placed
   without a verified bundle), `ccrc update --check`, `/health`'s `version`, the PWA's
-  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113). A
+  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
+  The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
+  resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
+  `/api/fleet/health`'s `builds` is a view of it. A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
@@ -137,7 +140,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
   distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
   DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
-  collapse to the same value; that's a defect, not style.
+  collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
   (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
   text-scans four roots and fails the build on a 2nd copy. **The account roster is runtime DATA** since Stage 2a
@@ -224,15 +227,22 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
   whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
   /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`, `POST /api/ledger/deviations` and
-  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`,
-  call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each with
-  its own argument — are the census, not this bullet. What does need saying here are the
+  `GET /api/ledger` all call `requireMailToken` outside both. The dual-credential reads, including `GET /api/feed`
+  and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
+  update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
+  with its own argument — are the census, not this bullet. What does need saying here are the
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4) and `POST
   /api/coord/caps` (wave 6) are session-gated only — armed, they sit behind the auth gate like every other
   PWA-surface write. The first needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
-  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
+  set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231). The update
+  control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh` and `POST
+  /api/updates/ack` consult no box token. They are registered from `server/src/update/routes.ts`, a file neither
+  `SESSION_ONLY` nor the kickoff literal can see, so `box-token-census.test.ts` reads it as a lane source of its
+  own and keeps their names in a hand-kept `UPDATE_DOORS`, checked against that file in both directions (programme
+  wave 5, spec W4 part B, adds `apply` and `rollback` there with their routes).
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

@@ -2020,10 +2020,13 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     // every input that answers today: absent, a directory and `/dev/null` all
     // make grep produce nothing and the lane returns on the line below.
     seedRow();
-    const pane = 'ctx ▓▓▓▓ 80%\\n❯ ';
+    // From a FILE, so real newlines survive the `bash -c '…'` quoting below:
+    // the ctx reader takes a number only off the `👤`-led statusline row, which
+    // Claude Code draws on its own line under the prompt box.
+    fs.writeFileSync(path.join(h.home, 'pane.txt'), `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  👤 acct-a │ 🤖 Opus 5 · high │ ▓ ctx ▓▓▓▓ 80%\n`);
     const stubs = `
       tmux() { ${WIDE_PANE} case "\${1:-}" in
-                 capture-pane) printf '%s\\n' "${pane}" ;;
+                 capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };
       _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;
@@ -2037,6 +2040,10 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     expect(out, 'a FIFO status file: the lane returns, and rc 124 would mean it hung')
       .toContain('rc=0');
     expect(calls(), 'and it compacts nothing off a file it could not read').not.toContain('compact');
+    // …and it got THERE: a pane with no ctx reading returns long before the
+    // status file, which would make both lines above pass having read nothing.
+    expect(String(h.reg(ID, 'compactskip') ?? ''), 'the tick never reached the status-file read')
+      .toMatch(/ status-unreadable$/);
     fs.rmSync(sf);
   });
 
@@ -2057,10 +2064,10 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     // places. Collapse the `if/elif` to a bare `[[ -f ]] || return 0` and the
     // FIFO case below reds with no note at all.
     seedRow();
-    const pane = 'ctx ▓▓▓▓ 80%\n❯ ';
+    fs.writeFileSync(path.join(h.home, 'pane.txt'), `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  👤 acct-a │ 🤖 Opus 5 · high │ ▓ ctx ▓▓▓▓ 80%\n`);
     const stubs = `
       tmux() { ${WIDE_PANE} case "\${1:-}" in
-                 capture-pane) printf '%s\\n' "${pane}" ;;
+                 capture-pane) cat "$HOME/pane.txt" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };
       _dispatch_compact() { echo "compact $1" >> "$HOME/ccd-calls"; };`;

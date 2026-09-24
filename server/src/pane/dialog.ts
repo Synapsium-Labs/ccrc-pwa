@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
+import { promptBoxShowing } from './statusline.js';
 
 const BUSY_RE = /esc to interrupt/;
 /** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
@@ -53,6 +54,17 @@ export type PaneState = 'busy' | 'prompt' | 'menu' | 'other';
  * screen, busy marker or not (D-102).
  */
 export function hasMenu(pane: string): boolean {
+  // THE PROMPT BOX WITH THE STATUSLINE ROW UNDER IT MEANS NO MENU IS UP. Both
+  // arms below scan every line, so text ON SCREEN outside any menu tripped
+  // them: a reply quoting "Enter to select · …", an echoed `❯ 1. alpha` over a
+  // numbered reply, and a draft typed as `1. one` / `2. two` in the box itself
+  // — 12 false menus across 128 real 2.1.280 captures, each refusing sends as
+  // `dialog-open` and raising a question push, and a tap on the bogus sheet's
+  // default row pressed Enter into the box. Every real menu in the same set
+  // hid the box and the row (`promptBoxShowing`), so the arms now run only
+  // when they are gone; a pane without the ccrc statusline gets no veto, which
+  // is the old behaviour, and the failure direction stays "menu".
+  if (promptBoxShowing(pane)) return false;
   if (MENU_RE.test(pane)) return true;
   const lines = pane.split('\n');
   // Confirm dialogs (e.g. the /model and /effort switch prompts) put the ❯
