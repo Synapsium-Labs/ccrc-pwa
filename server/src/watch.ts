@@ -1032,7 +1032,7 @@ export class FleetWatcher {
       summary = versionsSummary(nodes.filter((r) => r.measuredAt !== null && r.stampRead === 'ok').map((r) => ({ role: r.role, version: r.currentVersion })));
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      if (detail !== this.lastReleasePushFailure) console.warn(`update: the release push was not decided (${detail}) — nothing was marked or sent`);
+      if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
       this.lastReleasePushFailure = detail;
       return { did: 'failed', detail };
     }
@@ -1044,7 +1044,7 @@ export class FleetWatcher {
     const tag = n.tag;
     const sending = sender.notify(payload);
     void sending.catch((e: unknown) => {
-      console.warn(`update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the banner and the settings screen still show the release`);
+      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the banner and the settings screen still show the release`);
     });
     return { did: 'pushed', tag, payload };
   }
