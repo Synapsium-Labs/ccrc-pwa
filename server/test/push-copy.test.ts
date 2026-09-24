@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,10 +14,22 @@ import { NotifyLog } from '../src/notifylog.js';
 import { Presence } from '../src/presence.js';
 import { askKey } from '../src/askkey.js';
 import type { PushPayload } from '../src/push.js';
-import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
+import { FLEET_SCOPE, PRESENCE_REFRESH_MS, PRESENCE_TTL_MS, type NodeRole, type UpdateChannel } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, type NodeMeasurement, type ReleaseListingRow, type UpdateIntentPatch } from '../src/coord/store.js';
 import { okRuns } from './coordReadHelpers.js';
+import type { CcrcConfig } from '../src/config.js';
+import type { CataloguePoller } from '../src/update/catalogue.js';
+import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
+import type { FleetState } from '../src/fleetstate.js';
+
+/** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
+ *  `update-inventory.test.ts`'s own local factory (that file's is not exported; L0/L1 boundaries keep this
+ *  file from importing across test files). */
+const fleetState = (over: Partial<FleetState> = {}): FleetState =>
+  ({ connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, ...over });
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -110,7 +122,9 @@ const oneQuestion = (options: { label: string }[]) => ({
  * can then drive a genuine busy→idle edge on the next `tick()`.
  */
 function watcher(opts: {
-  push: { notify: (p: PushPayload) => Promise<void> };
+  /** Plan W3 Task 3: optional — omitted, the watcher has NO push service,
+   *  as a box with no VAPID keys runs (`index.ts` builds `push` only then). */
+  push?: { notify: (p: PushPayload) => Promise<void> };
   presence?: Presence;
   notifyLog?: NotifyLog;
   /** Task 10: when true, a real `CoordStore` (over this fixture home's own
@@ -123,22 +137,42 @@ function watcher(opts: {
    *  mid-fixture (a row LISTED but unreadable), the same shape every other
    *  registry-ladder test in this tree uses. */
   io?: FleetIO;
-}): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore } {
-  const home = mkTmp('ccrc-');
+  /** Plan W3 Task 3: fields laid over `testDeps`' config — `{ role: 'fleet' }`
+   *  is a fleet-role process, which owns no push subscriptions. */
+  cfg?: Partial<CcrcConfig>;
+  /** Plan W3 Task 3: the catalogue lane's poller (W2 Task 10's `Deps.catalogue`). */
+  catalogue?: CataloguePoller;
+  /** Plan W3 Task 3: an EXISTING fixture home. A second watcher over the same
+   *  home opens a second connection to the same `coord.db` — a restart. */
+  home?: string;
+  /** Item 3, fix round 1 (F3/F4): a remote-mode `fleetState` double, so a test can drive the agent link
+   *  down (or later flip it up) and exercise `inventorySwept`'s gate for real, through `inventoryNow()`. */
+  fleetState?: FleetState;
+}): { tick: () => Promise<void>; markIdle: (id: string) => void; markBusy: (id: string) => void; home: string; coord?: CoordStore; w: FleetWatcher } {
+  const home = opts.home ?? mkTmp('ccrc-');
   const info = seedSessions(home, opts.sessions);
   const coord = opts.coord ? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db'))) : undefined;
+  const base = testDeps(home, runnerFor(info, opts.pane));
   const deps = {
-    ...testDeps(home, runnerFor(info, opts.pane)),
-    push: opts.push as never,
+    ...base,
+    ...(opts.cfg ? { cfg: { ...base.cfg, ...opts.cfg } } : {}),
+    ...(opts.push ? { push: opts.push as never } : {}),
     presence: opts.presence,
     notifyLog: opts.notifyLog,
     coord,
     ...(opts.io ? { io: opts.io } : {}),
+    ...(opts.catalogue ? { catalogue: opts.catalogue } : {}),
+    ...(opts.fleetState ? { fleetState: opts.fleetState } : {}),
   };
-  const w = new FleetWatcher(deps, new Bus(), 10_000);
+  // The state cache stays inside the fixture home: without the fourth
+  // argument the constructor falls back to `defaultCachePath()`, the LIVE
+  // ~/.ccrc — never read by a local-mode tick, but a fixture has no business
+  // naming it.
+  const w = new FleetWatcher(deps, new Bus(), 10_000, path.join(home, 'state-cache.json'));
   return {
     home,
     coord,
+    w,
     tick: () => w.tick(),
     markIdle: (id: string) => {
       const s = info.get(id);
@@ -1045,5 +1079,405 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(warnSpy.mock.calls.some(([line]) =>
         String(line).includes('priming the mail/run watermarks failed'))).toBe(true);
     });
+  });
+});
+
+// ── Plan W3 Task 3: the release push (design 2026-09-20 §13) ────────────────────────────────────────────────
+// A fleet-level push with no session (D-3296): decided by the pure `releaseToNotify`
+// (Task 2), marked in `releases.notifiedAt` BEFORE the send is started (D-3295), and
+// sent straight to `push.notify` — never through `pushOne`, whose presence gate and feed record are about a
+// session. Each case calls the watcher's public `pushRelease` directly unless it is about a lane's wiring.
+describe('the release push — once per tag, across restarts, sessionless (design 2026-09-20 §13)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const T = 1_790_000_000_000;
+  const listed = (tag: string, channel: UpdateChannel = 'stable'): ReleaseListingRow => ({
+    tag, channel, publishedAt: T, commitSha: null, tarballUrl: `https://example.invalid/download/${tag}/ccrc-${tag}.tar.gz`,
+    bundleListed: true, notes: null, draft: false,
+  });
+  /** A measured node row, label-keyed (a node with no node-id yet — the store admits it, W2 Task 5). */
+  const measured = (label: string, role: NodeRole, currentVersion: string | null): NodeMeasurement => ({
+    nodeId: label, role, label, currentVersion, currentSha: 'a'.repeat(40), currentRef: 'main',
+    currentBuiltAt: '2026-09-22T00:00:00Z', currentDirty: false, stampRead: 'ok', installState: 'complete',
+    provenance: 'verified', caps: ['verify', 'node-id', 'floor'], agentOps: role === 'fleet' ? [] : null,
+    highestVersion: currentVersion, previousVersion: null, floorRead: currentVersion === null ? 'absent' : 'measured', previousRead: 'absent',
+    os: 'linux', measuredAt: T, report: null,
+  });
+  const recorder = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => Promise<void> } } => {
+    const sent: PushPayload[] = [];
+    return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
+  };
+  /** The catalogue plus a remote-mode fleet's two measured nodes. */
+  const seed = (coord: CoordStore, o: { releases: ReleaseListingRow[]; server: string | null; fleet: string | null }): void => {
+    expect(coord.applyReleaseListing(o.releases, T, 'complete')).toMatchObject({ ok: true });
+    expect(coord.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', o.server)).ok).toBe(true);
+    expect(coord.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', o.fleet)).ok).toBe(true);
+  };
+  /** The fleet row's intent, through the store's one intent writer and its journal. */
+  const intent = (w: { home: string; coord?: CoordStore }, patch: UpdateIntentPatch): void => {
+    const log = new UpdateIntentLog(defaultUpdateIntentLogPath(path.join(w.home, '.ccrc')));
+    expect(w.coord!.setIntent(FLEET_SCOPE, patch, log, T)).toMatchObject({ ok: true });
+  };
+  const notifiedAt = (coord: CoordStore, tag: string): number | null | undefined =>
+    coord.releases().find((r) => r.tag === tag)?.notifiedAt;
+  const COPY_V009 = {
+    title: 'ccrc v0.0.9 is out',
+    body: 'On stable — fleet and server are on v0.0.7. Tap to see what\'s new.',
+    tag: 'release-v0.0.9',
+    url: '/settings',
+  };
+
+  it('sends the pinned copy — title, body, collapse tag and the /settings url, with no session', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9'), listed('v0.0.7')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    const outcome = w.w.pushRelease(T);
+    expect(sent).toEqual([COPY_V009]);
+    expect(Object.keys(sent[0]!).sort()).toEqual(['body', 'tag', 'title', 'url']);   // no sessionId, no actions
+    expect(sent[0]!.sessionId).toBeUndefined();
+    expect(sent[0]!.actions).toBeUndefined();
+    expect(outcome).toEqual({ did: 'pushed', tag: 'v0.0.9', payload: sent[0] });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+    expect(notifiedAt(w.coord!, 'v0.0.7')).toBeNull();   // only the newest is ever announced
+  });
+
+  it("a measured node whose stamp did not read is a MISSING side in the push body, never 'unversioned' (D-3307)", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.7')).ok).toBe(true);
+    // The fleet row WAS measured this sweep, but its stamp did not read — the
+    // same shape a local-mode box's EACCES leaves. `measured()` fixes
+    // stampRead 'ok', so this overrides it to the unread arm directly.
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+    expect(sent[0]!.body).not.toContain('unversioned');
+  });
+
+  it('names each side when the nodes disagree — On dev — fleet v0.0.7 · server v0.0.9', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.10', 'dev'), listed('v0.0.9')], server: 'v0.0.9', fleet: 'v0.0.7' });
+    intent(w, { channel: 'dev' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.10' });   // semver: v0.0.10 > v0.0.9
+    expect(sent.map((p) => [p.title, p.body, p.tag])).toEqual([
+      ['ccrc v0.0.10 is out', 'On dev — fleet v0.0.7 · server v0.0.9. Tap to see what\'s new.', 'release-v0.0.10'],
+    ]);
+  });
+
+  it('sends once per tag: a second decision after notifiedAt sends nothing and keeps the first mark', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(w.w.pushRelease(T + 120_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(sent).toHaveLength(1);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+  });
+
+  it('sends once per tag across a restart: a NEW watcher over the same coord.db sends nothing', () => {
+    const first = recorder();
+    const a = watcher({ push: first.push, coord: true, sessions: [] });
+    seed(a.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(a.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(first.sent).toHaveLength(1);
+
+    const second = recorder();
+    a.coord!.db.close();                                // the first process is gone: nothing below reads through its handle
+    const b = watcher({ push: second.push, coord: true, sessions: [], home: a.home });
+    expect(notifiedAt(b.coord!, 'v0.0.9')).toBe(T);     // a second connection, from disk, reads the committed mark
+    expect(b.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(second.sent).toEqual([]);
+  });
+
+  it("notify: 'stable' skips a newer dev tag and announces the stable one, on stable", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9', 'dev'), listed('v0.0.8')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    intent(w, { channel: 'dev', notify: 'stable' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.8' });
+    expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.8']);
+    expect(sent[0]!.body).toBe('On stable — fleet and server are on v0.0.7. Tap to see what\'s new.');
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  it("notify: 'off' sends nothing and marks nothing", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    intent(w, { notify: 'off' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  // D-3294: a tag every measured node already runs is marked, not announced.
+  it('a fleet already on the newest tag is marked with no push, and the next tag listed afterwards is pushed', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.9', fleet: 'v0.0.9' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'marked', tag: 'v0.0.9' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBe(T);
+
+    expect(w.coord!.applyReleaseListing([listed('v0.0.10'), listed('v0.0.9')], T + 1, 'complete')).toMatchObject({ ok: true });
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.10' });
+    expect(sent.map((p) => p.title)).toEqual(['ccrc v0.0.10 is out']);
+  });
+
+  // D-3295: the mark is COMMITTED — visible to another connection — before the send starts.
+  it('commits the mark before notify is called: a second connection reads notifiedAt inside the send', () => {
+    let reader: CoordStore | null = null;
+    const seen: (number | null | undefined)[] = [];
+    const push = { notify: async (_p: PushPayload) => { seen.push(reader === null ? undefined : notifiedAt(reader, 'v0.0.9')); } };
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    reader = new CoordStore(openCoordDb(path.join(w.home, '.ccrc', 'coord.db')));
+    expect(notifiedAt(reader, 'v0.0.9')).toBeNull();     // control: nothing is marked before the decision
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed' });
+    expect(seen).toEqual([T]);
+  });
+
+  it('a send that rejects is not retried — at most once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    const push = { notify: async (_p: PushPayload) => { calls += 1; throw new Error('endpoint gone'); } };
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    await vi.waitFor(() => expect(warn.mock.calls.some(([l]) =>
+      String(l).startsWith('ccrc-server: ') && String(l).includes('release push for v0.0.9 did not send'))).toBe(true));
+    expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(calls).toBe(1);
+  });
+
+  it('a mark that loses sends nothing — another writer marked the tag first', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    vi.spyOn(w.coord!, 'markReleaseNotified').mockReturnValue({ ok: false, why: 'already-notified', notifiedAt: T - 1 });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'refused', tag: 'v0.0.9', why: 'already-notified' });
+    expect(sent).toEqual([]);
+  });
+
+  it('a store that throws is a failed decision — warned once per reason, nothing sent, never thrown to the lane', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    w.coord!.db.close();                     // node:sqlite now throws synchronously on every read
+    const a = w.w.pushRelease(T);
+    const b = w.w.pushRelease(T + 60_000);
+    expect(a).toMatchObject({ did: 'failed' });
+    expect(b).toEqual(a);
+    expect(sent).toEqual([]);
+    const decisionWarns = warn.mock.calls.filter(([l]) => String(l).includes('the release push was not decided'));
+    expect(decisionWarns).toHaveLength(1);
+    expect(String(decisionWarns[0]![0])).toMatch(/^ccrc-server: /);   // item 10, F10: the prefix is pinned, not just present
+  });
+
+  it("a fleet-role process neither sends nor marks — push subscriptions are the server box's", () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { role: 'fleet' } });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'not-server-role' });
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+  });
+
+  it('no coordination database: nothing to decide', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, sessions: [] });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'no-coord' });
+    expect(sent).toEqual([]);
+  });
+
+  it('no push service (no VAPID keys) decides and marks nothing — a sender configured later still announces the tag', () => {
+    const w = watcher({ coord: true, sessions: [] });   // no `push`: the box `index.ts` builds without VAPID keys
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'no-push-service' });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();   // not used up: nothing was sent
+    const { sent, push } = recorder();
+    const b = watcher({ push, coord: true, sessions: [], home: w.home });   // the restart after VAPID keys are configured
+    expect(b.w.pushRelease(T + 60_000)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.9']);
+  });
+
+  it('a visible session does not suppress it — the release push has no session to be looking at', () => {
+    const { sent, push } = recorder();
+    const presence = new Presence();
+    presence.setVisible(Symbol('t'), 'cc-a');
+    const w = watcher({ push, presence, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(presence.isVisible('cc-a')).toBe(true);        // control: the gate WOULD suppress a pushOne about cc-a
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('leaves no feed row and no ring record — it is a push, not a NotifyEvent', async () => {
+    const { sent, push } = recorder();
+    const log = new NotifyLog(path.join(mkTmp('push-release-log-'), 'n.json'));
+    await log.load();
+    const w = watcher({ push, notifyLog: log, coord: true, sessions: [] });
+    seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed' });
+    expect(sent).toHaveLength(1);
+    expect(log.seq).toBe(0);
+    expect(w.coord!.feedEvents(10)).toEqual([]);
+  });
+
+  it('is wired through the inventory lane: inventoryNow() on a local-mode server pushes once the sweep has measured the box', async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    writeFileSync(path.join(w.home, '.ccrc', NODE_FILES.stamp),
+      `${JSON.stringify({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.7' })}\n`);
+    // D-3300: before the first sweep no node is measured, so nothing is decided.
+    expect(w.w.pushRelease(Date.now())).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    await w.w.inventoryNow();
+    expect(sent).toEqual([COPY_V009]);   // local mode: the one `both` row is both sides
+  });
+
+  /** A catalogue double whose `poll` lists `v0.0.9` into the watcher's own store, as W2's poller writes. */
+  const listingPoller = (store: () => CoordStore): CataloguePoller => ({
+    poll: async (now: number) => {
+      store().applyReleaseListing([listed('v0.0.9')], now, 'complete');
+      return { lastOkAt: now, lastError: null };
+    },
+    state: () => ({ lastOkAt: null, lastError: null }),
+    lastRequestAt: () => null,
+  });
+  const writeStamp = (home: string, version: string): void => {
+    writeFileSync(path.join(home, '.ccrc', NODE_FILES.stamp),
+      `${JSON.stringify({ sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version })}\n`);
+  };
+
+  it('is wired through the catalogue lane: once this process has swept, the poll that lists a tag announces it', async () => {
+    const { sent, push } = recorder();
+    let store: CoordStore | null = null;
+    const w = watcher({ push, coord: true, sessions: [], catalogue: listingPoller(() => store!) });
+    store = w.coord!;
+    writeStamp(w.home, 'v0.0.7');
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });   // control: nothing listed yet
+    // This process's first inventory run: it measures the box (v0.0.7) and, with nothing listed, decides nothing.
+    await w.w.inventoryNow();
+    expect(sent).toEqual([]);
+    vi.spyOn(w.w, 'inventoryNow').mockResolvedValue([]);   // the inventory lane stays out: this case is the catalogue's
+    await w.tick();
+    await vi.waitFor(() => expect(sent.map((p) => p.tag)).toEqual(['release-v0.0.9']));
+    expect(sent[0]!.body).toBe('On stable — fleet and server are on v0.0.7. Tap to see what\'s new.');
+  });
+
+  // D-3314: until this process's first inventory run rewrites them, the nodes
+  // rows are the PREVIOUS process's — after a server-box update, still at the version the update replaced.
+  it("the catalogue lane waits for this process's first inventory run — a row from before the restart is never decided on", async () => {
+    const { sent, push } = recorder();
+    let store: CoordStore | null = null;
+    const w = watcher({ push, coord: true, sessions: [], catalogue: listingPoller(() => store!) });
+    store = w.coord!;
+    // The previous process's row: this box on v0.0.7, measured before the update that placed v0.0.9 and restarted it.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    writeStamp(w.home, 'v0.0.9');                            // this process's tree, which its first run will read
+    expect(w.w.pushRelease(T)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });   // control: nothing listed yet
+    const inventory = vi.spyOn(w.w, 'inventoryNow').mockResolvedValue([]);   // the first run has not finished
+    const afterPoll = vi.spyOn(w.w, 'pushReleaseAfterPoll');
+    await w.tick();
+    await vi.waitFor(() => expect(afterPoll).toHaveBeenCalledTimes(1));
+    expect(afterPoll.mock.results[0]!.value).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+    expect(w.coord!.releases().map((r) => r.tag)).toEqual(['v0.0.9']);   // control: the poll DID list the tag
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    // The first run finishes: it measures v0.0.9 (the same label-keyed row, rewritten) and decides — marked, no push.
+    inventory.mockRestore();
+    await w.w.inventoryNow();
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F3, D-3314 amended): `inventorySwept` opens only on a sweep that actually rewrote what the
+  // push decides on. A link-down sweep only marks the fleet row unreachable — it does not remeasure it — so
+  // this must not count, either for the flag or for the DIRECT `pushRelease` call `sweepThenProject` makes at
+  // its own end (the same hazard `pushReleaseAfterPoll` guards for the catalogue lane).
+  it("a remote-mode boot with the agent link down never pushes on the previous process's rows — a later sweep that measures the link does (F3, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const state = fleetState({ connected: false, downSince: T });
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote', role: 'server' }, fleetState: state });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's fleet row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    writeStamp(w.home, 'v0.0.9');
+    await w.w.inventoryNow();   // the link is down: sweepFleet only marks it unreachable, never remeasures
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The link recovers: the next sweep measures the fleet row for real, and this process finally decides.
+    state.connected = true;
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
+  // Fix round 1 (F4, D-3314 amended): a `sweepOwn` throw (a locked/corrupt coord.db, most likely) must not
+  // open the flag either — its premise, "this sweep rewrote the rows", is not measured.
+  it("a boot whose sweepOwn throws also leaves inventorySwept closed — pushRelease is not tried on the previous process's row (F4, D-3314 amended)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement').mockImplementationOnce(() => { throw new Error('boom'); });
+    await w.w.inventoryNow();   // sweepOwn's own write throws, caught as an 'error' outcome
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — this second sweep's write succeeds for real, and a later good
+    // sweep does open the gate and decide.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+    warn.mockRestore();
+  });
+
+  // Fix round 1 (F1, D-3313 via remoteSides, moved to L0): on a REMOTE fleet, deciding sides from a
+  // pre-filtered row set is what let a `both` server row's own version stand in for a fleet nobody measured.
+  // The reviewer's exact rows: a server row recorded `both`, and a separate fleet row whose stamp did not read.
+  it('on a remote fleet, a server row recorded as both never states a fleet version nobody measured (F1)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // The narrower D-3313 case: no separate fleet row exists AT ALL, so `versionSides`' own `both`-row fallback
+  // is what would fire (a real fleet-role row's mere presence, above, already blocks the fallback regardless
+  // of which side-picker runs — this is the case that needs `remoteSides` specifically).
+  it('on a remote fleet with no fleet row at all, a lone both row never lends its version to the fleet side (D-3313)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // Fix round 1 (F14, D-3316): "unreachable is not current" binds the push body too. An unreachable fleet
+  // row carrying an old version does not state its version in the push body, and does not count as current
+  // in the decision — it is not the fact that suppresses the push.
+  it('an unreachable fleet row carrying an old version does not state its version, and is not treated as current (F14, D-3316)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
+    expect(w.coord!.markUnreachable(FLEET_LABEL, 'fleet', T + 1).ok).toBe(true);   // the connection then drops
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });   // never suppressed
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
   });
 });
