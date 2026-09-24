@@ -192,7 +192,7 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('could not be established');
   });
 
-  // Review 145 F1 (D-3351): a line's `branch` was assumed to be a string —
+  // Review 145 F7 (D-3351): a line's `branch` was assumed to be a string —
   // reachable only through a cast, never validated — so a malformed line
   // fell straight through the (empty) same-branch filters to `phaseFor`.
   it('(vii) a line with no branch key at all → unmeasured', async () => {
@@ -255,8 +255,10 @@ describe('childSpent — the live lookup', () => {
   // Fix round 2's own review (not review 145), its M3 (a): a `tip` KEY ABSENT (not merely
   // `null`) must ALSO answer unmeasured — the check is `typeof line.tip !==
   // 'string'`, not `line.tip === null`, and a mutant narrowing to the latter
-  // stayed green because every other case in this file sends `tip:null`
-  // explicitly.
+  // stayed green because the only OTHER tip-unmeasured case, (x), sends
+  // `tip:null` explicitly — no case before this one covered a tip key that is
+  // ABSENT rather than null (`fullLine` defaults `tip` to a measured 40-hex
+  // sha, which every other case here relies on).
   it('(xii) a line whose tip KEY IS ABSENT (never sent, not merely null) → unmeasured', async () => {
     const stdout = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: BRANCH, ahead: 1, checkedAt: 1 });
     const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
