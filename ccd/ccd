@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2c911582e9609e92aa277c1c503c23f5e84d0065864d121b460ef9f54e69dcb4
+# ccrc:generated 1 sha256=cdf3456b7fd96ae66c87d795def07fd7a04ccaa65e01320f358b2eb60e1acccd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23607,6 +23607,48 @@ _ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling:
      && "$1" != *//* && "$1" != */./* && "$1" != */../* ]]
 }
 
+_WS_ABSENT_WHY=''
+_ws_reclaim_absent() {   # path -> 0 when nothing stands at path and that is PROVEN; 1 when something
+  #                           stands there (a dangling link included); 2 (_WS_ABSENT_WHY) when whether
+  #                           anything does could not be looked at
+  # "GONE" IS A MEASUREMENT, NEVER A FAILED TEST (spec §5.5, "A vanished
+  # worktree is not a refusal" — of a tree that IS gone). `[[ -e ]]` answers
+  # false on EACCES exactly as on ENOENT: a tree under a directory that cannot
+  # be searched read as gone, and a reclaim reported success over two trees it
+  # left standing, orphaned (measured). So a path is absent only when the
+  # directory holding its first missing component is a directory this process
+  # can SEARCH, and `stat` of that component fails ENOENT, by its own error in
+  # the C locale. Anything else — an unsearchable or dangling parent, another
+  # error — is unmeasured, and unmeasured is not absence.
+  local p="$1" up parent err
+  _WS_ABSENT_WHY=''
+  [[ -e "$p" || -L "$p" ]] && return 1
+  up="$p"
+  while parent=$(dirname -- "$up"); [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; do
+    up="$parent"
+  done
+  [[ -d "$parent" && -x "$parent" ]] \
+    || { _WS_ABSENT_WHY="$parent cannot be searched, so whether $up exists was never asked"; return 2; }
+  err=$(LC_ALL=C stat -- "$up" 2>&1 >/dev/null) && return 1
+  [[ "$err" == *"No such file or directory"* ]] \
+    || { _WS_ABSENT_WHY="$up could not be looked at: ${err:-stat failed and said nothing}"; return 2; }
+  return 0
+}
+
+_ws_reclaim_main_branch() {   # main branch -> 0 when branch is $main's OWN line: the branch its main checkout
+  #                                is on, or the one origin/HEAD names; 1 when it is neither; 2 when either
+  #                                could not be read (`symbolic-ref --quiet` answers 1 for "not a symbolic
+  #                                ref" — detached, or no origin/HEAD — and 128 for a read that failed)
+  local main="$1" b="$2" ref rc
+  ref=$(git -C "$main" symbolic-ref --quiet HEAD 2>/dev/null); rc=$?
+  (( rc <= 1 )) || return 2
+  [[ "$ref" != "refs/heads/$b" ]] || return 0
+  ref=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null); rc=$?
+  (( rc <= 1 )) || return 2
+  [[ "$ref" != "refs/remotes/origin/$b" ]] || return 0
+  return 1
+}
+
 _WS_FOREIGN_WHY=''
 _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER repository at path is PROVEN clean
   #                                 with every commit on one of its own remotes; 1 when it is proven NOT
@@ -23714,8 +23756,12 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # and no breadcrumb exists (this function only runs where there is none), so
   # no reclaim took it: there is no tree left that could hold unseen work, and
   # a retry could never succeed. The ladder answers over what IS left, and the
-  # verb reclaims the child from its branch on.
-  if [[ ! -e "$workdir" && ! -L "$workdir" ]]; then
+  # verb reclaims the child from its branch on. "Nothing" is PROVEN
+  # (`_ws_reclaim_absent`): a workdir whose existence could not be looked at is
+  # unmeasured, never vanished.
+  _ws_reclaim_absent "$workdir"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_ABSENT_WHY — whether $id's worktree is gone could not be asked"; return 1; }
+  if (( rc == 0 )); then
     _ws_reclaim_eval_absent "$id" "$workdir" "$main" "$regbranch"
     return $?
   fi
@@ -24362,7 +24408,7 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   # root for the test harness only.
   local root="${CCD_RECLAIM_RESIDUE_ROOT:-/tmp/claude-$(id -u)}" d b
   d="$root/${1//\//-}"
-  [[ -e "$d" ]] || { echo 0; return 0; }
+  _ws_reclaim_absent "$d"; case $? in 0) echo 0; return 0 ;; 2) echo null; return 0 ;; esac
   b=$(_ws_gc_bytes "$d")
   if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo null; fi
 }
@@ -24433,6 +24479,8 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   _ws_reclaim_plain_path "$wd" \
     || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
   [[ ! -L "$wd" ]] || { _WS_OWNED_WHY="$wd is a symbolic link — ccd never follows a link to a tree it would pin or remove"; return 1; }
+  _ws_reclaim_absent "$wd"; rc=$?
+  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 1; }
   [[ ! -e "$wd" || -d "$wd" ]] || { _WS_OWNED_WHY="something that is not a directory stands at $wd"; return 1; }
   _ws_reclaim_record "$main" "$wd"; rc=$?
   (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 1; }
@@ -24456,9 +24504,10 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
   # one plain absolute spelling strictly below the root; EVERY component from
   # the root down to the leaf asked in turn — none a link, each a directory —
   # until one is simply absent (a checkout already gone, which has nothing left
-  # on disk to remove); and a checkout that stands must resolve (`pwd -P`) to
-  # exactly the recorded path.
-  local root="$1" p="$2" rest cur seg real
+  # on disk to remove) — PROVEN absent (`_ws_reclaim_absent`), never a failed
+  # `-e`, which EACCES answers too; and a checkout that stands must resolve
+  # (`pwd -P`) to exactly the recorded path.
+  local root="$1" p="$2" rest cur seg real arc
   _WS_NPROOF_GONE=0; _WS_NPROOF_WHY=''
   [[ -n "$root" ]] || { _WS_NPROOF_WHY="the child's own tree could not be resolved, so no checkout inside it can be proven to be there"; return 1; }
   { _ws_reclaim_plain_path "$p" && [[ "$p" == "$root"/?* ]]; } \
@@ -24468,7 +24517,11 @@ _ws_reclaim_nested_proven() {   # wdreal cpath -> 0 when cpath is PROVEN to lie 
     seg="${rest%%/*}"; cur="$cur/$seg"
     if [[ "$rest" == */* ]]; then rest="${rest#*/}"; else rest=""; fi
     [[ ! -L "$cur" ]] || { _WS_NPROOF_WHY="$cur is a symbolic link — ccd never follows a link to a tree it would remove"; return 1; }
-    [[ -e "$cur" ]] || { _WS_NPROOF_GONE=1; return 0; }
+    if [[ ! -e "$cur" ]]; then
+      _ws_reclaim_absent "$cur"; arc=$?
+      (( arc != 0 )) || { _WS_NPROOF_GONE=1; return 0; }
+      (( arc != 2 )) || { _WS_NPROOF_WHY="$_WS_ABSENT_WHY"; return 1; }
+    fi
     [[ -d "$cur" ]] || { _WS_NPROOF_WHY="$cur is not a directory"; return 1; }
   done
   real=$(cd -- "$p" >/dev/null 2>&1 && pwd -P) || { _WS_NPROOF_WHY="could not resolve $p"; return 1; }
@@ -24520,7 +24573,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
   local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
-  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone
+  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
@@ -24638,8 +24691,9 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # recorded as kept (`keptBranches` in the record, and the done row), never
   # kept in silence.
   # A CHILD TREE THAT HAS VANISHED SINCE THE ACT WAS INTERRUPTED (nothing at
-  # all at the workdir: `! -e` and `! -L`; anything else standing there was
-  # refused by `_ws_reclaim_owned`) took its nested checkouts with it. So,
+  # all at the workdir, PROVEN by `_ws_reclaim_absent` — EACCES is not gone;
+  # anything else standing there was refused by `_ws_reclaim_owned`) took its
+  # nested checkouts with it. So,
   # exactly as the vanished arm does for the child's own record (spec §5.5),
   # each nested line has only git's stale record of it cleared — by its path,
   # `git worktree remove` with no force flag, never `worktree prune` — and its
@@ -24657,7 +24711,13 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
     }
     treegone=0
-    [[ -e "$workdir" || -L "$workdir" ]] || treegone=1
+    _ws_reclaim_absent "$workdir"; rec=$?
+    if (( rec == 2 )); then
+      _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+        "$_WS_ABSENT_WHY — ccd cannot prove $id's own tree is gone, nor look at it, so nothing further was deleted"
+      return 1
+    fi
+    (( rec == 0 )) && treegone=1
     wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || wdreal=""
     (( treegone )) && wdreal=$(_ws_realpath "$workdir")
     while IFS= read -r -u 9 cline; do
@@ -24695,15 +24755,39 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         wtout=$(git -C "$main" worktree remove --force "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       elif (( rec == 0 )); then
+        if [[ "$_WS_NREC_BRANCH" != "$cbr" ]]; then
+          _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+            "git's record of the vanished checkout at $cpath is on '$_WS_NREC_BRANCH', not '$cbr' — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
+          return 1
+        fi
         wtout=$(git -C "$main" worktree remove "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
+      # A NESTED BRANCH IS DELETED ONLY WHEN IT IS PROVABLY THE LINE'S, AND
+      # NEVER UNPINNED. Kept, and recorded, when another checkout holds it, when
+      # it is $main's own line (`_ws_reclaim_main_branch`), or — on a line
+      # counted as gone — when git recorded no checkout at that path to say it
+      # was this one's: a wrong record line then names a head nothing ever
+      # pinned. And on a gone line the settle re-pin never ran (there was no
+      # tree), so its head is pinned HERE, under the pin phase's own namespace,
+      # before the branch goes (measured: without it a wrong line inside the
+      # tree deleted an unheld branch whose only commit became unreachable).
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr"; then
+        _ws_reclaim_main_branch "$main" "$cbr"; crc=$?
         if ! holders=$(_ws_branch_holders "$main" "$cbr"); then
           kept+=("$cbr (its holders could not be listed)")
         elif [[ -n "$holders" ]]; then
           kept+=("$cbr (checked out at ${holders//$'\n'/, })")
+        elif (( crc != 1 )); then
+          kept+=("$cbr ($( (( crc == 0 )) && printf "the main line of %s" "$main" || printf 'whether it is the main line of %s could not be read' "$main"))")
+        elif (( _WS_NPROOF_GONE && rec != 0 )); then
+          kept+=("$cbr (git records no checkout of it at $cpath)")
         else
+          if (( _WS_NPROOF_GONE )) && ! _ws_reclaim_contained _ws_reclaim_attic_extra "$main" "$id" "$chead"; then
+            _ws_reclaim_fail "$id" "$lctx" pin-failed \
+              "$chead, the head of $cbr at the vanished checkout $cpath, could not be pinned under refs/ccrc/attic/$id/ — a branch is never deleted unpinned"
+            return 1
+          fi
           git -C "$main" update-ref -d "refs/heads/$cbr" "$chead" 2>/dev/null || {
             _ws_reclaim_fail "$id" "$lctx" branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted"
             return 1
@@ -24742,6 +24826,12 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if [[ -d "$workdir" ]]; then
       wtout=$(git -C "$main" worktree remove --force "$workdir" 2>&1) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
+    elif ! _ws_reclaim_absent "$workdir"; then
+      # Not a directory, and not PROVEN gone: something else stands there, or
+      # nothing could look (EACCES reads as "not a directory" too).
+      _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+        "${_WS_ABSENT_WHY:-something that is not a directory stands at $workdir} — ccd cannot prove $id's own tree is gone, so nothing further was deleted"
+      return 1
     fi
     _reg_set "$id" reaping reclaim:branch
     phase=branch
@@ -24764,7 +24854,16 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     # A present tree's own record went with step (4), so this is a no-op there.
     # A list that could not be READ clears nothing, and the holder check below
     # reads the same list, so it stops the tail there (`branch-elsewhere`).
-    if [[ ! -e "$workdir" && ! -L "$workdir" ]]; then
+    # The directory's absence is PROVEN (`_ws_reclaim_absent`): a workdir that
+    # could not be looked at stops the tail, since clearing its record would
+    # orphan a tree that may still stand.
+    _ws_reclaim_absent "$workdir"; rec=$?
+    if (( rec == 2 )); then
+      _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+        "$_WS_ABSENT_WHY — ccd cannot prove $id's own tree is gone, so nothing further was deleted"
+      return 1
+    fi
+    if (( rec == 0 )); then
       _ws_reclaim_record "$main" "$workdir"; rec=$?
       if (( rec == 0 )); then
         wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) \

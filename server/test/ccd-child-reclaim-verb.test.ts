@@ -1171,3 +1171,248 @@ describe('a vanished child tree lets a nested line count as gone ONLY when that 
     expect(JSON.parse(r.stdout).detail).toContain('stands at');
   }, 90_000);
 });
+
+describe('a nested branch on a line counted as gone is deleted only when it is provably the line’s, and never unpinned (spec §5.5)', () => {
+  /** A commit no ref but `ws/parked` holds, made after the pin phase — so no
+   *  pin the act took before its interrupt can cover it. */
+  const parkedCommit = (c: Child, at: string, record: boolean): string => {
+    h.git(c.main, 'worktree', 'add', '-q', '-b', 'ws/parked', at);
+    fs.writeFileSync(path.join(at, 'p.txt'), 'parked\n');
+    h.git(at, 'add', 'p.txt'); h.git(at, 'commit', '-q', '-m', 'parked unique');
+    const sha = h.git(at, 'rev-parse', 'HEAD');
+    if (!record) h.git(c.main, 'worktree', 'remove', at);
+    return sha;
+  };
+  const containing = (c: Child, sha: string): string => h.git(c.main, 'for-each-ref', '--contains', sha, '--format=%(refname)');
+
+  it('S3-gone: a wrong line naming an absent path inside the vanished tree, which git records no checkout at, keeps the unheld branch it names', () => {
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const sha = parkedCommit(c, path.join(h.home, 'parkwt'), false);
+    const ghost = path.join(fs.realpathSync(c.wt), 'ghost');
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${ghost}\tws/parked\t${sha}`] })}'`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    // Reachability FIRST, so a red names the loss the probe measured (the
+    // commit reachable from nothing), not only a branch that went.
+    expect(containing(c, sha), 'its unique commit is still reachable').not.toBe('');
+    expect(h.git(c.main, 'branch', '--list', 'ws/parked'), 'the branch no record ties to that path was kept').toContain('ws/parked');
+    expect(containing(c, sha), 'and reachable from the branch itself').toContain('refs/heads/ws/parked');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect((tombOf()['keptBranches'] as string[]).join('; ')).toContain('ws/parked (git records no checkout of it at');
+  }, 90_000);
+
+  it('a line counted as gone whose branch IS git’s record there has its head pinned in the attic before the branch is deleted', () => {
+    // The same wrong-line class with git's record standing: every proof
+    // passes, and the head was never pinned — the tree's settle re-pin never
+    // ran, and the checkout appeared after the pin phase.
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const ghost = path.join(fs.realpathSync(c.wt), 'ghost');
+    const sha = parkedCommit(c, ghost, true);
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${ghost}\tws/parked\t${sha}`] })}'`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(containing(c, sha), 'the deleted branch’s commit is pinned, not lost')
+      .toContain(`refs/ccrc/attic/${CHILD_ID}/${sha}`);
+    expect(h.git(c.main, 'branch', '--list', 'ws/parked'), 'the branch went, at its pinned head').toBe('');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+  }, 90_000);
+
+  it('a gone line whose git record names ANOTHER branch deletes nothing — the branch the line names stands', () => {
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const ghost = path.join(fs.realpathSync(c.wt), 'ghost');
+    parkedCommit(c, ghost, true);
+    h.git(c.main, 'branch', 'ws/bystander', c.tip);
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${ghost}\tws/bystander\t${c.tip}`] })}'`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(h.git(c.main, 'branch', '--list', 'ws/bystander'), 'the line’s branch stands').toContain('ws/bystander');
+    expect(h.git(c.main, 'branch', '--list', 'ws/parked'), 'and the recorded one').toContain('ws/parked');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain("is on 'ws/parked', not 'ws/bystander'");
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:children');
+  }, 90_000);
+
+  it('a gone line naming $main’s own line (origin/HEAD’s branch, with the main checkout elsewhere) keeps that branch', () => {
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    h.git(c.main, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+    h.git(c.main, 'checkout', '-q', '-b', 'side');
+    const ghost = path.join(fs.realpathSync(c.wt), 'ghost');
+    h.git(c.main, 'worktree', 'add', '-q', ghost, 'main');
+    const sha = h.git(ghost, 'rev-parse', 'HEAD');
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${ghost}\tmain\t${sha}`] })}'`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(h.git(c.main, 'branch', '--list', 'main'), 'the main line stands').toContain('main');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((tombOf()['keptBranches'] as string[]).join('; ')).toContain('main (the main line of');
+  }, 90_000);
+
+  it('a gone line’s head that cannot be pinned fails the tail pin-failed — the branch stands, and nothing further is deleted', () => {
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const ghost = path.join(fs.realpathSync(c.wt), 'ghost');
+    const sha = parkedCommit(c, ghost, true);
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${ghost}\tws/parked\t${sha}`] })}'`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    // The tree is gone, so no settle runs: this is the only pin the resume takes.
+    const r = childReclaimVerb(h, tok, { pre: '_ws_reclaim_attic_extra() { return 1; };' });
+    expect(containing(c, sha), 'the unpinned head is still the branch’s').toContain('refs/heads/ws/parked');
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'nothing further: the child’s own branch stands').toContain(CHILD_BRANCH);
+    expect(h.reg(CHILD_ID, 'uuid'), 'and its registry row').not.toBeNull();
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain('a branch is never deleted unpinned');
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:children');
+    failedPairAgrees(r);
+  }, 90_000);
+});
+
+describe('"gone" is PROVEN — a path that could not be looked at is never read as absent (spec §5.5)', () => {
+  // `artifacts` too: no step (3)-(5) proof runs there, so the removal-time
+  // identity check (`_ws_reclaim_owned`) is the only rung before the row goes.
+  for (const phase of ['children', 'worktree', 'branch', 'artifacts']) {
+    it(`S1d: the child’s parent directory made unsearchable on a resume at \`${phase}\` stops the tail — both trees, both records, both branches stand`, () => {
+      const c = makeChild(h);
+      const inner = path.join(c.wt, 'inner');
+      h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+      fs.writeFileSync(path.join(inner, 'late.txt'), 'uncommitted nested work\n');
+      interrupted(c, phase);
+      const tok = resumeToken(phase);
+      const demo = path.join(h.home, 'worktrees', 'demo');
+      const nestedGit = fs.readFileSync(path.join(inner, '.git'), 'utf8');
+      let r: { code: number; stdout: string; stderr: string };
+      fs.chmodSync(demo, 0o000);
+      try { r = childReclaimVerb(h, tok); } finally { fs.chmodSync(demo, 0o755); }
+      expect(fs.readFileSync(path.join(inner, 'late.txt'), 'utf8'), 'the nested tree’s work stands').toBe('uncommitted nested work\n');
+      expect(fs.readFileSync(path.join(inner, '.git'), 'utf8'), 'still a checkout').toBe(nestedGit);
+      expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree stands').toBe(true);
+      const list = h.git(c.main, 'worktree', 'list', '--porcelain');
+      expect(list, 'the nested record stands').toContain(`branch refs/heads/ws/nested`);
+      expect(h.git(c.main, 'branch', '--list', 'ws/nested')).toContain('ws/nested');
+      expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toContain(CHILD_BRANCH);
+      expect(h.reg(CHILD_ID, 'uuid'), 'the registry row stands').not.toBeNull();
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain(`${demo} cannot be searched`);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe(`reclaim:${phase}`);
+      // Not a wedge: once the directory can be searched, the same act finishes.
+      // (Not asked at `branch` or `artifacts`: a tree still standing there is no
+      // state the tail leaves — step (4) removed it.)
+      if (phase === 'branch' || phase === 'artifacts') return;
+      const again = childReclaimVerb(h, resumeToken(phase));
+      expect(again.code, again.stdout + again.stderr).toBe(0);
+      expect(JSON.parse(again.stdout).reclaimed).toBe(CHILD_ID);
+    }, 90_000);
+  }
+
+  it('a nested checkout whose own parent turns unsearchable after the settle is never counted as gone', () => {
+    const c = makeChild(h);
+    const sub = path.join(c.wt, 'sub');
+    fs.mkdirSync(sub);
+    const inner = path.join(sub, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    fs.writeFileSync(path.join(inner, 'late.txt'), 'uncommitted nested work\n');
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const pre = `eval "$(declare -f _ws_reclaim_children_merge | sed '1s/_ws_reclaim_children_merge/_orig_cm/')";`
+      + ` _ws_reclaim_children_merge() { chmod 000 "${sub}"; _orig_cm "$@"; };`;
+    let r: { code: number; stdout: string; stderr: string };
+    try { r = childReclaimVerb(h, tok, { pre }); } finally { fs.chmodSync(sub, 0o755); }
+    expect(fs.readFileSync(path.join(inner, 'late.txt'), 'utf8'), 'the nested tree’s work stands').toBe('uncommitted nested work\n');
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'its record stands').toContain('branch refs/heads/ws/nested');
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested')).toContain('ws/nested');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain(`${fs.realpathSync(sub)} cannot be searched`);
+  }, 90_000);
+
+  it('the fresh ladder: a workdir under an unsearchable directory is unmeasured, never the vanished arm', () => {
+    makeChild(h);
+    const demo = path.join(h.home, 'worktrees', 'demo');
+    let a: { verdict: string; token: string; detail: string };
+    fs.chmodSync(demo, 0o000);
+    try { a = evalOf(h, { childOf: String(CHILD_RUN) }); } finally { fs.chmodSync(demo, 0o755); }
+    expect(a.verdict).toBe('unmeasured');
+    expect(a.detail).toContain(`${demo} cannot be searched`);
+  }, 90_000);
+
+  it('`_ws_reclaim_absent` answers 0 only for ENOENT under a directory it can search, 1 for anything standing, 2 for a look that failed', () => {
+    const d = path.join(h.home, 'absent-probe');
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'file'), 'x');
+    fs.symlinkSync(path.join(d, 'nowhere'), path.join(d, 'dangling'));
+    const locked = path.join(d, 'locked');
+    fs.mkdirSync(locked);
+    const ask = (p: string): string => h.sh(`_ws_reclaim_absent '${p}'; printf '%s' "$?"`);
+    expect(ask(path.join(d, 'missing')), 'ENOENT').toBe('0');
+    expect(ask(path.join(d, 'missing', 'deeper')), 'ENOENT of the first missing component').toBe('0');
+    expect(ask(path.join(d, 'file')), 'a file stands').toBe('1');
+    expect(ask(path.join(d, 'dangling')), 'a dangling link stands').toBe('1');
+    expect(ask(path.join(d, 'file', 'below')), 'a parent that is a file is no directory to look in').toBe('2');
+    // A searchable parent and a stat that fails for another reason than
+    // ENOENT: `[[ -e ]]` is false here exactly as it is on ENOENT.
+    expect(ask(path.join(d, 'n'.repeat(300))), 'ENAMETOOLONG is not absence').toBe('2');
+    fs.chmodSync(locked, 0o000);
+    try { expect(ask(path.join(locked, 'inner')), 'EACCES is not absence').toBe('2'); } finally { fs.chmodSync(locked, 0o755); }
+  }, 30_000);
+
+  for (const phase of ['children', 'worktree']) {
+    it(`the child’s parent turning unsearchable AFTER the removal-time identity check, on a resume at \`${phase}\`, stops the tail at that step`, () => {
+      // `_ws_reclaim_owned` asks before the settle; this makes the directory
+      // unsearchable inside the settle, so the step's own proof is the rung.
+      const c = makeChild(h);
+      const inner = path.join(c.wt, 'inner');
+      if (phase === 'children') {
+        h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+        fs.writeFileSync(path.join(inner, 'late.txt'), 'uncommitted nested work\n');
+      }
+      interrupted(c, phase);
+      const tok = resumeToken(phase);
+      const demo = path.join(h.home, 'worktrees', 'demo');
+      const pre = `eval "$(declare -f _ws_reclaim_children_merge | sed '1s/_ws_reclaim_children_merge/_orig_cm/')";`
+        + ` _ws_reclaim_children_merge() { chmod 000 "${demo}"; _orig_cm "$@"; };`;
+      let r: { code: number; stdout: string; stderr: string };
+      try { r = childReclaimVerb(h, tok, { pre }); } finally { fs.chmodSync(demo, 0o755); }
+      expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the child’s tree stands').toBe(true);
+      expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toContain(CHILD_BRANCH);
+      if (phase === 'children') {
+        expect(fs.readFileSync(path.join(inner, 'late.txt'), 'utf8'), 'the nested tree’s work stands').toBe('uncommitted nested work\n');
+        expect(h.git(c.main, 'branch', '--list', 'ws/nested')).toContain('ws/nested');
+      }
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail).toContain(`${demo} cannot be searched`);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays at the step that stopped').toBe(`reclaim:${phase}`);
+    }, 90_000);
+  }
+
+  it('a residue root that cannot be searched is unmeasured — null, never a measured 0', () => {
+    const c = makeChild(h);
+    const root = path.join(h.home, 'residue');
+    fs.mkdirSync(root);
+    const tok = evalOf(h).token;
+    let r: { code: number; stdout: string; stderr: string };
+    fs.chmodSync(root, 0o000);
+    try { r = childReclaimVerb(h, tok); } finally { fs.chmodSync(root, 0o755); }
+    expect(fs.existsSync(c.wt), 'the reclaim itself ran').toBe(false);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).residueBytes).toBeNull();
+  }, 90_000);
+});
