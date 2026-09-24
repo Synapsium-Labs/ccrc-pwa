@@ -470,9 +470,9 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
-**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with
-`--channel`, `--no-gate`, `--detach` and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against the published release (a
-fixed-shape `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
+**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with `--channel`, `--no-gate`, `--detach`
+and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against the published release (a fixed-shape
+`check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
 running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
 last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
 loudly: resolve (`SHA256SUMS`; with `--to`, the tarball it names must BE that tag), the floor
@@ -489,8 +489,8 @@ the staged tree (role-aware, atomic, seed-once files untouched, every rostered h
 mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
 floor last); the health gate (below); the supervisor sweep behind its mandatory `KillMode=process` preflight;
 then the from→to report.
-Rolling back is `ccrc rollback` (below), which, like any move below the floor,
-prints the coord.db restore commands rather than auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
+Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
+auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
 `--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
 does it in order — roles preflighted, version pinned once from SHA256SUMS, fleet box then server
 box, stop on the first failure (a box's exit 3 is relayed and the rollout goes on; its exit 4 stops it),
@@ -514,7 +514,8 @@ resolves each node's desired tag — the newest eligible release on its channel,
 writes its own projection, `~/.ccrc/update-intent` (whole, by rename; mode 0600; times in unix seconds). The
 role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from `CCRC_FLEET` and the boot log
 says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
-(once a minute) and `/api/updates/ack` are session-only — the box token never writes intent — and
+(rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
+`/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
 `/api/fleet/health`'s `builds` is now a view of the inventory rows. Not yet: no apply or rollback route, no
 release notification, no settings screen — and an `auto` other than `off` is refused (`409`) until every node
@@ -522,12 +523,14 @@ the intent covers lists `update-gate` in its `ccrc-caps` (an install of the W4 n
 
 **One update at a time, reported, gated, and undone.** An installing `ccrc update` holds `~/.ccrc/update.lock`
 (`flock`; macOS needs `brew install flock`) from just after its arguments are checked until just before the supervisor
-sweep, so a second run is refused and told the holder's pid and target. Every phase is reported to
+sweep, so a second run is refused and told the holder's pid and target (only `flock`'s own contention, rc 1, reads as a live
+holder; any other `flock` failure refuses as unmeasured, never as busy). Every phase is reported to
 `~/.ccrc/update.json` — one line of JSON (`target`, `phase`, `startedAt`, `updatedAt`, `detail`, `from`, `pid`; the
 two times in unix seconds), placed by rename; a write that fails is a WARN, never a failed update — from `queued` or
 `resolving` through `done`, or `failed`, `restoring` and `reverted`, and it is what the console reads. `--from` names
-who asked: one of `cli` (the default), `pwa`, `restore`, `rollback`, `watchdog` or `rollout`; any other word is a
-usage error. Before the staged install the run records the build it replaces in `~/.ccrc/previous` (its tag and sha,
+who asked: one of `cli` (the default), `pwa`, `restore`, `rollback`, `watchdog` or `rollout` — `restore` is the automatic
+restore's own word, spoken only as arm 2's own child and refused (exit 2) if typed by hand without its parent's lock;
+any other word is a usage error. Before the staged install the run records the build it replaces in `~/.ccrc/previous` (its tag and sha,
 `untagged` for an unversioned build) — except when `--from` is `restore`, `rollback` or `watchdog`: that run returns
 to a known build and is no new baseline. Nor is a `--force` reinstall of the running tag, or a box whose last update
 never completed: a `previous` already recorded is kept. After the install and before the sweep comes
@@ -537,8 +540,9 @@ never completed: a `previous` already recorded is kept. After the install and be
 gate that passes under a failing doctor is still exit 3. A gate that fails restores the box, and the run exits **4**:
 arm 2 re-installs `previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
 under the parent's lock, passing `--allow-unsigned` only when the replaced install was itself unsigned (a verified box
-whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); arm 3, when arm 2 cannot
-run or fails, copies the pre-update backup back and restarts the unit — a MIXED tree, whose remedy is `deploy.sh`.
+whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); the child exiting **3** (its
+own spine completed but ITS doctor FAILed) still counts as arm 2 restored, never a fall to arm 3 — arm 3 runs only when
+arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — a MIXED tree, whose remedy is `deploy.sh`.
 `update.json` ends `reverted`, naming the arm; neither `coord.db` nor `~/.ccrc/memory` is ever restored, and the
 restore does not sweep. A spine that dies before it replaces the tree changed nothing and exits 1
 (`~/.ccrc/install-step` names the step it died in; a spine older than W4 writes none, and counts as after the tree
@@ -555,18 +559,23 @@ sweep behind the same `KillMode=process` preflight. A rollback whose gate fails 
 exit 1, never restored over, and an `untagged` previous build is refused by name (`--to` names one). On a
 `server` or `both` Linux box, `ccrc-update-watchdog.timer` runs `ccrc watchdog` every minute, for the one update
 nothing else can watch — the server's own, whose updater can die with the unit it restarts. An in-flight report
-older than `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) with no live lock holder is re-measured: a box that
-answers healthy has its report closed as abandoned, with what was measured, and nothing is reverted — except
-one on another build past `backing-up`, which is left open and re-measured each tick; only a box that fails its
-health probe gets `ccrc rollback --from watchdog`. A live holder is left alone until its report is twice the
+older than `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) with no live lock holder is re-measured, the report
+re-read under the lock so a run that moved since is left for the next tick rather than acted on stale: a box
+that answers healthy and on its target has its report closed as abandoned, with what was measured, and nothing
+is reverted — one healthy but off its target past `backing-up` instead has its report LEFT open, re-measured
+each tick. Only a box that fails three probe samples (`CCRC_WATCHDOG_PROBE_GAP_S` apart, default 5 seconds),
+whose report is past `backing-up` (the tree has moved) and whose running stamp carries a version, gets
+`ccrc rollback --from watchdog`; a failing box whose tree never moved, or an unversioned one, has its report
+closed as abandoned too, never rolled back. A live holder is left alone until its report is twice the
 deadline old, and is then named wedged; a lock the watchdog cannot measure, it does not act on.
 
 **Following the control plane.** With no `--to`, `ccrc update` asks one reader for this node's projection,
 `~/.ccrc/update-intent` — nine lines ending `end`, times in unix seconds, its lease 15 minutes. On a fleet box
 `ccd-update-sync.timer` (installed with the fleet role, Linux only) pulls it every minute from
 `GET /api/updates/intent/:nodeId` with the box token and places it (mode 0600, by rename) only when the whole
-document parses and its times are seconds within a day of now; on a `server` or `both` box the server writes
-it itself. The reader answers by role, and exactly one of its answers is a fallback: a box with no control
+document parses, carries no NUL byte and no epoch wider than 18 digits, its `desired` line agrees with its
+`desired-<channel>` line, its body is under 64 KiB, and its times are seconds within a day of now; on a
+`server` or `both` box the server writes it itself. The reader answers by role, and exactly one of its answers is a fallback: a box with no control
 plane — macOS, or a fleet box (or one with no recorded role) whose puller timer is not installed, such as a
 `deploy.sh` install — follows `stable` through `latest/download` and says so. A readable, in-lease projection
 is followed (`desired`, or `desired-<ch>` with `--channel stable|dev`) and the run says that instead. Every
@@ -575,11 +584,13 @@ other answer refuses and names its remedy: an unreadable, stale or malformed pro
 a `none` target (its reason is on the console's update screen), and `--channel` off the control plane. The
 floor applies whichever way the target was chosen. `ccrc channel` prints the projection and changes nothing —
 the channel is set from the console. `update --check`'s machine line carries `caps=` (what this `ccrc` can
-do) and `floor=` ahead of `state=`, and a target below the floor reads `state=below-floor`.
+do) and `floor=` ahead of `state=`, and a target below the floor on a box not already `current` reads
+`state=below-floor` (a `current` box keeps `state=current` — it has nothing to move).
 `rollout --channel stable|dev` reads each box's own projection over ssh and pins the one tag they name (a box whose projection names none must already run that tag, or nothing moves); a box
-below its floor stops a rollout before anything moves unless `--downgrade` is passed, and a box whose floor
-file is unreadable or malformed stops it either way (`--downgrade` and `--allow-unsigned` reach each box's
-update only when typed); `--from rollout` reaches only a box whose `--check` line lists `update-json` in
+whose floor tag sits ABOVE the pinned target — whatever its `--check` state, a box rolled back below its own
+floor and reading `current` on the older tag included — stops a rollout before anything moves unless
+`--downgrade` is passed, and a box whose floor file is unreadable or malformed stops it either way
+(`--downgrade` and `--allow-unsigned` reach each box's update only when typed); `--from rollout` reaches only a box whose `--check` line lists `update-json` in
 `caps=`, so a box still on an older `ccrc` is never handed a flag it does not know.
 
 **Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
