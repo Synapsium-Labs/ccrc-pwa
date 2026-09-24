@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **one-line fix round 5** (run 128, PR #176); review run 150 at `6213231a`: F1 met the round-4 bar; plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **merging** (run 128, PR #176) after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -351,6 +351,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - **Committed before round 5's review exists:** after it, #176 MERGES, full stop. Everything it finds carries.
   - Lesson recorded in the coordinator's memory: a merge bar must carry forward every qualifier the previous bar had,
     or say that it dropped one.
+- **2026-09-24 — review run 151 (round 5's scoped review, `985e8c30`): #176 merges, as committed.**
+  - It closes review 150's F1: both new pins red at `6213231a`'s predicate, and the yank row is unchanged. The panel
+    confirmed 16 of 16 raised findings, consolidated into 7, and found no new behaviour defect at either call site.
+  - Carried to wave 5's Task 8A: F1 and F2 (coverage: the `!pending.row.draft` carve-out and the ETag-keep call site
+    are unpinned); F3–F5 (prose); F6 and F7 (BEHAVIOUR residuals, not introduced by round 5).
+  - **Ruling on F6.** In the draft-listing drop cell, the listing itself yanks K, so the drop skips only K's upsert.
+    The kept tag still moves to `/latest`'s T. The non-draft drop cells stay as W2 shipped them.
+  - **Ruling on F7.** F6's fix closes it (K stops being the kept tag), and review 150's F4 fix closes it again.
+  - **Tie-break for every carried behaviour item.** When a mirror's answers disagree and no listing names K as
+    non-draft, the outcome that leaves K yanked wins. No new column is added.
+  - **Why merging with these open is safe:** W2 is read-only. Nothing moves a node from the catalogue until wave 5's
+    dispatcher, and Task 8A lands in that same PR. A deleted release also has no tarball left to install.
 
 ## Carried constraints
 
