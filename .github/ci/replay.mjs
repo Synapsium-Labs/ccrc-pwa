@@ -17,6 +17,7 @@
 // ignored. The report opens with the set's size (`describeDataset`), so a
 // thin collection is never read as the study's window.
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { selectTests } from './select-tests.mjs';
@@ -237,6 +238,19 @@ async function main() {
     return;
   }
   const map = mapResult.map;
+
+  // The replay's whole point is to measure recall against a real, present-in-the-repo commit. A misconfigured
+  // --repo (not yet fetched, shallow, or the wrong checkout) makes `gitExistsAt` answer `false` for everything,
+  // which reads every changed path as added and over-selects (spec §11.3, F10-1) — silently, with exit 0. Refuse
+  // instead of reporting a recall measured over a repo that never had the map's commit.
+  try {
+    execFileSync('git', ['-C', repoDir, 'cat-file', '-e', `${map.sha}^{commit}`], { stdio: 'ignore' });
+  } catch {
+    console.error(`replay.mjs: map commit ${map.sha} is not in ${repoDir} — fetch it, or pass the checkout that has it`);
+    process.exitCode = 1;
+    return;
+  }
+
   const existsAt = gitExistsAt(repoDir);
 
   // The runtime-share report: --prs FILE (a JSON array of { number, files }, `files` paths or { path }, as
@@ -270,6 +284,7 @@ async function main() {
   const summary = summarizeReplay(outcomes);
 
   console.log(datasetLine(describeDataset(dataset)));
+  console.log(`map: ${map.sha}`);
   console.log(`cases: ${outcomes.length} (${summary.casesConsidered} scored, ${summary.casesExcludedInheritedSuspect} excluded as inheritedSuspect)`);
   // With no proven failure there is nothing to score: say so, never a vacuous 100% (a map too thin for the set).
   const nothing = summary.casesConsidered === 0 ? 'n/a (no proven failure — nothing to score)' : null;

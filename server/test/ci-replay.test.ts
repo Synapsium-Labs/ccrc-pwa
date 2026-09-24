@@ -6,7 +6,7 @@
 // Mutation table at the bottom.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -17,6 +17,28 @@ import type { DepRecord, TestMap, TestRecord } from '../../.github/ci/testmap.mj
 const SHA_A = 'a'.repeat(40);
 const emptyDep = (): DepRecord => ({ read: [], probed: [], listed: [], subtree: [], git: false });
 const rec = (overrides: Partial<TestRecord> = {}): TestRecord => ({ ...emptyDep(), unknown: false, ...overrides });
+
+// ─── git-backed CLI fixtures (F10-1): the replay CLI now refuses a --repo that ───
+// does not carry the map's commit, so every CLI-invoking test needs a real repo
+// whose HEAD is the sha the map names. Identity is passed via `-c user.name=`/
+// `-c user.email=` on the commit itself, not env vars — no global config touched.
+function gitInit(dir: string): void {
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+}
+function writeIn(dir: string, rel: string, content: string): void {
+  const full = path.join(dir, rel);
+  mkdirSync(path.dirname(full), { recursive: true });
+  writeFileSync(full, content);
+}
+function gitCommitAll(dir: string, msg: string): string {
+  execFileSync('git', ['add', '-A'], { cwd: dir });
+  execFileSync('git', [
+    '-c', 'user.name=ccrc fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-q', '-m', msg,
+  ], { cwd: dir });
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+}
+const replayCli = () => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'replay.mjs');
 
 describe('replayCase', () => {
   it('a genuine hit: the failing test\'s recorded read intersects a changed file', () => {
@@ -214,14 +236,48 @@ describe('the selected fraction never exceeds 100%', () => {
     expect(liveCountFor(map, [])).toBe(1);
   });
 
-  it('the CLI reports at most 100% for a case whose selection includes a test absent from the map', () => {
+  it('refuses a --repo that does not carry the map\'s commit (F10-1): exits 1, prints no report', () => {
+    // A clone that hasn't fetched the map's commit, a shallow clone, or the wrong --repo all make gitExistsAt
+    // answer false for everything, which used to read every changed path as added and over-select silently
+    // (exit 0). The CLI now measures the sha is actually present before doing any replay/share work at all.
     const dir = mkTmp('ccrc-ci-replay-cli-');
-    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(map));
+    gitInit(dir);
+    writeIn(dir, 'server/src/dep.ts', 'export const d = 1;\n');
+    gitCommitAll(dir, 'seed'); // a real repo, real HEAD — but the map below names a sha this history never had
+    const absentSha = 'f'.repeat(40);
+    const missingMap: TestMap = { ...map, sha: absentSha };
+    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(missingMap));
     writeFileSync(path.join(dir, 'dataset.json'), JSON.stringify([
       { id: 'c1', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/new.test.ts'] },
     ]));
-    const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'replay.mjs');
-    // --repo is not a git repository, so every changed path reads as added (status A) — rule 3 still fires on it.
+    const cli = replayCli();
+    let error: (Error & { status?: number | null; stdout?: string; stderr?: string }) | undefined;
+    try {
+      execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
+        '--dataset', path.join(dir, 'dataset.json')], { encoding: 'utf8', stdio: 'pipe' });
+    } catch (e) {
+      error = e as typeof error;
+    }
+    expect(error).toBeDefined();
+    expect(error?.status).toBe(1);
+    expect(error?.stdout).toBe('');
+    expect(error?.stderr).toContain(`replay.mjs: map commit ${absentSha} is not in ${dir}`);
+  });
+
+  it('the CLI reports at most 100% for a case whose selection includes a test absent from the map', () => {
+    // The scenario itself (a live, selected-but-unmapped test) is the coverage the 224-line case used to carry
+    // end to end, kept here — now against a --repo whose HEAD really is the map's sha, so it clears F10-1's
+    // preflight and reaches the report this asserts on.
+    const dir = mkTmp('ccrc-ci-replay-cli-cap-');
+    gitInit(dir);
+    writeIn(dir, 'server/src/dep.ts', 'export const d = 1;\n');
+    const sha = gitCommitAll(dir, 'seed');
+    const gitMap: TestMap = { ...map, sha };
+    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(gitMap));
+    writeFileSync(path.join(dir, 'dataset.json'), JSON.stringify([
+      { id: 'c1', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/new.test.ts'] },
+    ]));
+    const cli = replayCli();
     const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
       '--dataset', path.join(dir, 'dataset.json')], { encoding: 'utf8', stdio: 'pipe' });
     expect(out).toContain('selected fraction of live server tests — min 100.0%, median 100.0%, max 100.0%');
@@ -234,16 +290,38 @@ describe('the selected fraction never exceeds 100%', () => {
 
   it('the CLI reports the runtime share over --prs weighed by --times', () => {
     const dir = mkTmp('ccrc-ci-replay-share-');
-    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(map));
+    gitInit(dir);
+    writeIn(dir, 'server/src/dep.ts', 'export const d = 1;\n');
+    const sha = gitCommitAll(dir, 'seed');
+    const gitMap: TestMap = { ...map, sha };
+    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(gitMap));
     writeFileSync(path.join(dir, 'prs.json'), JSON.stringify([
       { number: 1, files: [{ path: 'server/src/dep.ts', additions: 1, deletions: 0 }] },
       { number: 2, files: [{ path: 'README.md', additions: 1, deletions: 0 }] },
     ]));
     writeFileSync(path.join(dir, 'times.json'), JSON.stringify({ 'server/test/dep.test.ts': 1000 }));
-    const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'replay.mjs');
+    const cli = replayCli();
     const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
       '--prs', path.join(dir, 'prs.json'), '--times', path.join(dir, 'times.json')], { encoding: 'utf8', stdio: 'pipe' });
     expect(out).toContain('selected share of server runtime over 2 PRs — min 0.0%, median 50.0%, max 100.0%, mean 50.0%');
+  });
+
+  it('prints "map: <sha>" as the report\'s second line, immediately after "dataset: …"', () => {
+    const dir = mkTmp('ccrc-ci-replay-mapline-');
+    gitInit(dir);
+    writeIn(dir, 'server/src/dep.ts', 'export const d = 1;\n');
+    const sha = gitCommitAll(dir, 'seed');
+    const gitMap: TestMap = { ...map, sha };
+    writeFileSync(path.join(dir, 'map.json'), JSON.stringify(gitMap));
+    writeFileSync(path.join(dir, 'dataset.json'), JSON.stringify([
+      { id: 'c1', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/dep.test.ts'] },
+    ]));
+    const cli = replayCli();
+    const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
+      '--dataset', path.join(dir, 'dataset.json')], { encoding: 'utf8', stdio: 'pipe' });
+    const lines = out.split('\n');
+    expect(lines[0]).toMatch(/^dataset: /);
+    expect(lines[1]).toBe(`map: ${sha}`);
   });
 });
 
@@ -270,18 +348,21 @@ describe('the acceptance datasets: the frozen study set and a fresh collection (
   });
 
   it('the CLI replays the frozen shape as-is — event and job ignored — and prints the dataset line first', () => {
+    const dir = mkTmp('ccrc-ci-replay-frozen-');
+    gitInit(dir);
+    writeIn(dir, 'server/src/dep.ts', 'export const d = 1;\n');
+    const sha = gitCommitAll(dir, 'seed');
     const map: TestMap = {
-      format: 1, sha: SHA_A, baseline: emptyDep(),
+      format: 1, sha, baseline: emptyDep(),
       tests: { 'server/test/dep.test.ts': rec({ read: ['server/src/dep.ts'] }) },
     };
-    const dir = mkTmp('ccrc-ci-replay-frozen-');
     writeFileSync(path.join(dir, 'map.json'), JSON.stringify(map));
     writeFileSync(path.join(dir, 'dataset.json'), JSON.stringify([
       { id: '101:test (server)', event: 'pull_request', job: 'test (server)', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/dep.test.ts'], inheritedSuspect: false },
       { id: '101:test-macos', event: 'pull_request', job: 'test-macos', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/dep.test.ts'], inheritedSuspect: true },
       { id: 'synthetic:dep', event: 'synthetic', job: 'test (server)', changedFiles: ['server/src/dep.ts'], failingTestFiles: ['server/test/dep.test.ts'], inheritedSuspect: false },
     ]));
-    const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'ci', 'replay.mjs');
+    const cli = replayCli();
     const out = execFileSync(process.execPath, [cli, '--repo', dir, '--map', path.join(dir, 'map.json'),
       '--dataset', path.join(dir, 'dataset.json')], { encoding: 'utf8', stdio: 'pipe' });
     expect(out.split('\n')[0]).toBe('dataset: 2 real cases from 1 runs, 1 synthetic, 1 inheritedSuspect');
@@ -305,4 +386,5 @@ describe('the acceptance datasets: the frozen study set and a fresh collection (
  * summarizeReplay: break `recallMicro`/`casesClean` accumulation        -> 'recall (micro) pools failing-test instances...'
  * liveCountFor: the map's tests only (no union with selected)          -> 'liveCountFor: the map's tests plus any selected test the map lacks'
  * CLI main: divide by the map's test count again                       -> 'the CLI reports at most 100% for a case whose selection includes...'
+ * CLI main: drop the cat-file preflight (F10-1, round 1 fix)           -> 'refuses a --repo that does not carry the map's commit...'
  */
