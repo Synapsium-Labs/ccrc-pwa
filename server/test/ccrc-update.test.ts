@@ -5641,6 +5641,40 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     }
   });
 
+  // Review fix round 1, M5, closing a coverage gap the mutation table found:
+  // `rollback` reaches ONLY `_upd_asset_listed`'s own validation calls
+  // (`cmd_rollback`'s pre-check runs before `_upd_resolve` ever does), so
+  // the pin above does not red when `_upd_resolve`'s OWN validation calls
+  // are deleted — measured on a scratch tree. `CCRC_RELEASE_SPEED_LIMIT`
+  // and `CCRC_RELEASE_SPEED_TIME` are validated ONLY inside `_upd_resolve`
+  // (SHA256SUMS's stall bound; `_upd_asset_listed` never reads them), so
+  // testing them through `update` isolates that call site.
+  it('CCRC_RELEASE_SPEED_LIMIT/_SPEED_TIME are validated in _upd_resolve, reached only by `update` (review fix round 1 M5)', () => {
+    for (const [envVar, badValue, defaultVal] of [
+      ['CCRC_RELEASE_SPEED_LIMIT', '-5', '1024'],
+      ['CCRC_RELEASE_SPEED_TIME', '99999', '30'],
+    ] as const) {
+      const home = mkTmp(`ccrc-timeout-validate-${envVar}-`);
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+      const env = {
+        ...process.env, HOME: home,
+        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        [envVar]: badValue,
+      };
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--to', 'v0.0.1'],
+        { env, encoding: 'utf8' });
+      const what = envVar === 'CCRC_RELEASE_SPEED_LIMIT'
+        ? 'a whole number of bytes/second from 1 to 100000000' : 'a whole number of seconds from 1 to 3600';
+      expect(r.stdout, `${envVar}=${badValue} stdout`).toMatch(
+        new RegExp(`^update: WARN: ${envVar}='${badValue}' is not ${what} — using ${defaultVal}$`, 'm'));
+      // A measurement: the run still went on to fetch, with the CORRECTED
+      // value in the die's own sentence.
+      expect(r.stderr, `${envVar}=${badValue} stderr`)
+        .toContain(envVar === 'CCRC_RELEASE_SPEED_LIMIT' ? 'under 1024B/s' : 'for 30s');
+    }
+  });
+
   // Review fix round 1, M5: covered by I1 — once the lock is taken BEFORE
   // the window opens, a NON-contention `_upd_lock` failure (flock missing
   // from PATH, here) happens AFTER the window is already open and DOES
