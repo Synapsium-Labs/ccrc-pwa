@@ -3475,6 +3475,44 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(detail).toMatch(/^unreadable: ~\/\.ccrc\/floor/);
     expect(detail).not.toContain(longHome);
   });
+
+  // Review fix round 1, M1: `_upd_phase` ITSELF, called directly (never
+  // through `_ccrc_die`, and with a detail this harness builds RAW — no
+  // hand-redaction at any construction site, unlike every existing gate-
+  // failure caller). Every current caller already redacts before calling
+  // `_upd_phase` (at `$why`/`$gate_fail`'s own construction), so THIS is
+  // the pin that isolates `_upd_phase`'s OWN choke point: deleting its
+  // `detail="$(_upd_redact "$detail")"` line does not red any existing
+  // integration pin (measured on a scratch tree), because every existing
+  // caller's detail already arrives clean. This one proves the choke point
+  // itself, independent of any caller's own hand-redaction.
+  it('_upd_phase redacts its OWN detail argument, independent of any caller (review fix round 1 M1)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const pick = (re: RegExp, what: string): string => {
+      const m = re.exec(src);
+      expect(m, `ccd/ccrc has no ${what}`).not.toBeNull();
+      return m![0];
+    };
+    const home = mkTmp('ccrc-update-phase-choke-');
+    const jsonPath = join(home, '.ccrc', 'update.json');
+    const harness = [
+      'set -uo pipefail',
+      pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
+      pick(/^_upd_json_str\(\) \([\s\S]*?\n\)$/m, '_upd_json_str'),
+      pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
+      `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
+      'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli',
+      // The raw detail: never wrapped in _upd_redact by this harness — if
+      // `_upd_phase` did not redact it either, the home would land as-is.
+      `_upd_phase failed "unreadable: $HOME/.ccrc/ccrc.env is not a regular file"`,
+    ].join('\n');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const r = spawnSync('bash', ['-c', harness], { env: { HOME: home }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    const rep = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
+    expect(String(rep['detail']), JSON.stringify(rep)).not.toContain(home);
+    expect(rep['detail']).toBe('unreadable: ~/.ccrc/ccrc.env is not a regular file');
+  });
 });
 
 describe('ccrc update: one update at a time (the lock)', () => {
