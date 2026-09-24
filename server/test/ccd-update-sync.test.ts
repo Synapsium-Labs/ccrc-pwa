@@ -359,6 +359,47 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
       chmodSync(join(home, '.ccrc'), 0o755);
     }
   });
+
+  // NEW, Minor (batch C re-review of fix round 1, item 0). M2's own
+  // mutation table measured only the VALIDATOR arm's redaction — reverting
+  // the RENAME arm's `2>/dev/null` suppression (restoring the pre-M2 bare
+  // `os.rename … "$tmp" "$DEST" \` line) left the full suite green, so a
+  // future "cleanup" of that redirect would silently reopen the exact leak
+  // M2 closed: a bare `os.rename`'s own OSError traceback names BOTH
+  // absolute paths (`$tmp` AND `$DEST`, both under this HOME). This pins the
+  // RENAME arm itself, the write-failure pin's own shape: a python3 stub
+  // shadows ONLY the rename invocation (matched by its own literal `-c`
+  // script — the validator call is real python3 straight through, so the
+  // good document really does get staged at `$tmp` first), makes `.ccrc`
+  // read-only AFTER that stage-write already landed, then runs the REAL
+  // `os.rename` — a genuine PermissionError, a genuine traceback, not a
+  // fabricated one.
+  it('a rename failure never prints the absolute HOME either (batch C re-review item 0)', () => {
+    const home = box('upd-sync-redact-rename-fail-');
+    answer(home, intentDoc());
+    const realPython3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+    expect(realPython3, 'no real python3 on PATH to shadow').not.toBe('');
+    writeFileSync(join(home, 'bin', 'python3'), [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = "-c" ] && [ "$2" = "import os, sys; os.rename(sys.argv[1], sys.argv[2])" ]; then',
+      '  chmod 555 "$HOME/.ccrc"',
+      `  "${realPython3}" "$@"`,
+      '  rc=$?',
+      '  chmod 755 "$HOME/.ccrc"',
+      '  exit "$rc"',
+      'fi',
+      `exec "${realPython3}" "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    try {
+      const r = sync(home);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr, r.stderr).not.toContain(home);
+      expect(r.stderr).toMatch(/could not install the projection at ~\/\.ccrc\/update-intent/);
+    } finally {
+      chmodSync(join(home, '.ccrc'), 0o755);
+    }
+  });
 });
 
 describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () => {
@@ -385,6 +426,37 @@ describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () =
     refusesAndKeeps('upd-sync-cap-', big, /at or over the 65536-byte cap/);
   });
 
+  // C4 (review 155, fix round 1 item 23): the exact boundary. Pass 0's
+  // `len(raw) >= CAP` is the ONLY guard that fires at exactly 65536 bytes —
+  // pass 1's per-line regex and pass 2's `DOC.fullmatch` do not count bytes
+  // — so a document at exactly the cap must be refused BY THAT CHECK, and
+  // one byte under must install cleanly. `desired-stable` is unbounded
+  // digits by grammar (TAG's version numbers), so padding it (with
+  // `channel dev`, so `desired` is checked against `desired-dev` instead —
+  // `desired-stable` is then free to be any length) reaches an exact byte
+  // count without breaking any OTHER check.
+  it('a grammatical document of exactly 65536 bytes is refused at the byte cap, and one of 65535 bytes installs', () => {
+    const docWithStableDigits = (n: number): string => intentDoc({
+      channel: 'dev', desired: 'v0.0.12', desiredStable: `v0.0.${'1'.repeat(n)}`,
+    });
+    const d1 = docWithStableDigits(1);
+    const d2 = docWithStableDigits(2);
+    const perDigit = Buffer.byteLength(d2) - Buffer.byteLength(d1);
+    expect(perDigit, 'one more digit must add exactly one byte').toBe(1);
+    const digitsAtCap = 1 + (65_536 - Buffer.byteLength(d1));
+    const atCap = docWithStableDigits(digitsAtCap);
+    expect(Buffer.byteLength(atCap)).toBe(65_536);
+    refusesAndKeeps('upd-sync-cap-exact-', atCap, /the document is 65536 bytes, at or over the 65536-byte cap/);
+
+    const underCap = docWithStableDigits(digitsAtCap - 1);
+    expect(Buffer.byteLength(underCap)).toBe(65_535);
+    const home = box('upd-sync-cap-under-');
+    answer(home, underCap);
+    const r = sync(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(dest(home), 'utf8')).toBe(underCap);
+  });
+
   // Pass 1 — the per-line diagnostic. These two are refused by pass 2 as
   // well; what they pin is the diagnostic, which names the line.
   it('CRLF line endings are refused, and the diagnostic names the first line', () => {
@@ -409,7 +481,68 @@ describe('ccd-update-sync: a NUL byte in the body is refused, never repaired (D-
   });
 });
 
-describe('ccd-update-sync: seconds stay seconds (the C1 lesson, server.ts:2679-2688)', () => {
+describe('ccd-update-sync: the validator reads at most the cap plus one byte (C20, fix round 1 item 14)', () => {
+  // The fixture `curl` stub (`box`, above) does not enforce `--max-filesize`
+  // at all — the same gap a curl older than 8.4.0 has for real on a chunked
+  // body (this file's own header) — so a body far over the cap reaches the
+  // validator whole on disk. What proves the READ itself is bounded, never
+  // `f.read()` on the whole file, is that the refusal names EXACTLY cap+1
+  // bytes (65537), never the document's true, much larger size: a read
+  // bounded to `CAP + 1` can report no other length once it has stopped
+  // short of EOF.
+  it('a document far over the cap is refused, and the byte count in the refusal is capped at 65537', () => {
+    const home = box('upd-sync-bounded-read-');
+    const huge = `epoch 7\n${'x'.repeat(10 * 1024 * 1024)}`;   // 10 MiB+, no `end`
+    answer(home, huge);
+    const r = sync(home);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/the document is 65537 bytes, at or over the 65536-byte cap/);
+    expect(r.stderr).not.toMatch(/10485\d{3}/);   // sanity: never the real ~10 MiB size
+    expect(residue(home)).toEqual([]);
+  });
+});
+
+describe('ccd-update-sync: the EXIT trap removes the staged file too (C19, fix round 1 item 13)', () => {
+  it('a kill between the write and the rename leaves no staged file behind', () => {
+    // Shadows the real python3 (this HOME's own `bin`, first on PATH — the
+    // same directory `box` plants its `curl` stub in, and `sync`'s own env
+    // build puts it ahead of everything else) for exactly ONE of the two
+    // python3 invocations ccd-update-sync makes: the FINAL rename
+    // (`os.rename(tmp, DEST)`, matched by its own literal `-c` script — the
+    // validator call is a real python3 straight through, so the good
+    // document really does get written to `$tmp` first). At that one call it
+    // sends its OWN PARENT (the puller's single bash process — the outer
+    // wrapper `exec`s into it, same pid throughout) a SIGTERM before any
+    // rename runs: review 155 C19's exact window, python's write already
+    // landed at `$tmp` and the rename that would move it to
+    // `~/.ccrc/update-intent` never does. Measured directly (not assumed):
+    // bash's EXIT trap DOES fire on an untrapped SIGTERM, unlike SIGKILL
+    // (`ccd-ws-reap.test.ts`'s own note) — the child sleeps rather than
+    // exiting on its own, so the parent is killed by the SIGNAL itself, not
+    // by an ordinary nonzero exit this script's own `||` fallback would also
+    // have cleaned up.
+    const home = box('upd-sync-trap-kill-');
+    answer(home, intentDoc());
+    const realPython3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+    expect(realPython3, 'no real python3 on PATH to shadow').not.toBe('');
+    writeFileSync(join(home, 'bin', 'python3'), [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = "-c" ] && [ "$2" = "import os, sys; os.rename(sys.argv[1], sys.argv[2])" ]; then',
+      '  kill -TERM "$PPID"',
+      '  sleep 2',
+      '  exit 0',
+      'fi',
+      `exec "${realPython3}" "$@"`,
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const r = sync(home);
+    expect(r.code, 'a SIGTERMed process has no ordinary exit code').not.toBe(0);
+    expect(existsSync(dest(home)), 'the rename never ran — the destination must be untouched').toBe(false);
+    expect(residue(home), 'a kill between write and rename left a staged file behind').toEqual([]);
+  });
+});
+
+describe('ccd-update-sync: seconds stay seconds (the C1 lesson — the pool-epoch route\'s own doc comment in server.ts)', () => {
   // A 13-digit value is GRAMMATICAL, and a seconds reader reads a millisecond
   // lease as ~56,700 years away: `ok`, never `stale`. The reader cannot see
   // it, so the puller must.
@@ -425,6 +558,15 @@ describe('ccd-update-sync: seconds stay seconds (the C1 lesson, server.ts:2679-2
   it('an `issued` more than a day ahead of this node\'s clock is refused — the direction that would read an ended lease as live', () => {
     const i = nowS() + 2 * DAY;
     refusesAndKeeps('upd-sync-future-', intentDoc({ issued: String(i), lease: String(i + 900) }),
+      /issued \d+ is more than a day from this node clock/);
+  });
+
+  // C5 (review 155, fix round 1 item 23): only the FUTURE half of this bound
+  // was ever pinned above. `abs(issued - now) > DAY` is symmetric in the
+  // puller — nothing reds if the past direction is removed without this.
+  it('an `issued` more than a day BEHIND this node\'s clock is refused too', () => {
+    const i = nowS() - 2 * DAY;
+    refusesAndKeeps('upd-sync-past-', intentDoc({ issued: String(i), lease: String(i + 900) }),
       /issued \d+ is more than a day from this node clock/);
   });
 

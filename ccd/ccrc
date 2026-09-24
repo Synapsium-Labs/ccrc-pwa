@@ -12878,7 +12878,7 @@ cmd_watchdog() {
   # last field would vanish silently without it. Not JSON, not an object, a
   # phase that is not a word, an `updatedAt` that is not an integer: all
   # UNREADABLE, and unreadable is never acted on. `updatedAt` is unix SECONDS
-  # (rulings R1, R14) — Task 1's `now` shape, at most W2's REPORT_TIME_MAX_S
+  # (rulings R1, R14) — Task 1's `now` shape, at most W2's UNIX_SECONDS_MAX
   # eleven digits — so a millisecond stamp is malformed here, never "fresh".
   local out=""
   out="$(jq -r '
@@ -13569,16 +13569,28 @@ _upd_unlock() {
 # read stopped short of EOF, at the 65536-byte cap or a NUL), `end` as the
 # last line (the torn-write detector), exactly nine lines in spec order,
 # each its own grammar, and `lease` against `date +%s` — SECONDS, spec §9's
-# unit (the C1 defect, `server.ts:2679-2688`) — STRICTLY, so a lease equal
-# to now is still in force. A number wider than 18 digits is malformed
+# unit (the C1 defect — `/api/pools/epoch`'s own doc comment in server.ts
+# names it "review round 1, C1 — CRITICAL, fixed") — STRICTLY, so a lease
+# equal to now is still in force. A number wider than 18 digits is malformed
 # (plan D-3265): bash arithmetic wraps past 2^63-1, and a
 # 20-digit lease wraps to a POSITIVE value decades out — a garbage document
-# read as in force. `UPD_INTENT_WHY` is built from this function's own words,
-# never from the file's bytes. Always rc 0; prints nothing.
+# read as in force. ALSO TWO VALUE CHECKS ccd/ccd-update-sync's PASS 3 makes,
+# re-made here (review 155 C23, fix round 1 item 15) because the puller is
+# NOT in front of a server/both box's own writer: `desired` must agree with
+# its own `desired-<channel>` line, and `lease` must fall in
+# `[issued, issued + DAY]` — the puller's own loose `DAY` bound, never W2's
+# real ~15-minute lease length. `UPD_INTENT_WHY` is built from this
+# function's own words, never from the file's bytes. Always rc 0; prints
+# nothing.
 _upd_intent_state() {
   local LC_ALL=C   # `-n 65536` is a BYTE cap only under C (`_acct_pool_state`'s reason)
-  local f="$BOX_INTENT_FILE" role="" body="" tail="" rest="" now="" k v i
+  local f="$BOX_INTENT_FILE" role="" body="" tail="" rest="" now="" k v i want=""
   local -a lines=() vals=() keys=(epoch issued lease channel desired desired-stable desired-dev auto)
+  # C23's own bound (review 155, fix round 1 item 15): ccd/ccd-update-sync's
+  # PASS 3 `DAY = 86400` — a loose grammar bound, kept identical here, never
+  # the real ~15-minute lease (`PROJECTION_LEASE_S`, server/src/update/resolve.ts)
+  # — so a future lease-length change on the server needs no matching edit here.
+  local DAY=86400
   UPD_INTENT_STATE="" UPD_INTENT_ROLE="" UPD_INTENT_WHY=""
   UPD_INTENT_EPOCH="" UPD_INTENT_ISSUED="" UPD_INTENT_LEASE="" UPD_INTENT_CHANNEL=""
   UPD_INTENT_DESIRED="" UPD_INTENT_DESIRED_STABLE="" UPD_INTENT_DESIRED_DEV="" UPD_INTENT_AUTO=""
@@ -13642,6 +13654,25 @@ _upd_intent_state() {
     fi
     vals[i]="$v"
   done
+  # C23 (review 155, fix round 1 item 15): the puller's own VALUE checks
+  # (ccd/ccd-update-sync's PASS 3), re-checked here too. The puller is not in
+  # front of a server/both box's own writer — the server process is that
+  # box's ONLY writer of this file (this function's own header, above) — so
+  # nothing else on the node re-verifies a document that disagrees with
+  # itself before this reader would otherwise trust it: a `desired` that
+  # disagrees with its own `desired-<channel>` line, or a `lease` outside
+  # `[issued, issued + DAY]` in EITHER direction (before its own `issued`, or
+  # further ahead than the grammar bound above tolerates).
+  if (( 10#${vals[2]} < 10#${vals[1]} || 10#${vals[2]} > 10#${vals[1]} + DAY )); then
+    UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="lease ${vals[2]} does not fall in the day after issued ${vals[1]}"
+    return 0
+  fi
+  want="${vals[5]}"
+  [ "${vals[3]}" = dev ] && want="${vals[6]}"
+  if [ "${vals[4]}" != "$want" ]; then
+    UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="desired ${vals[4]} disagrees with desired-${vals[3]} $want"
+    return 0
+  fi
   # An unmeasurable clock is not "in force": without this, `(( > ))` on an
   # empty `now` reads 0 and every lease passes.
   now="$(date +%s)"

@@ -43,19 +43,29 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 #     path, so the two writers of one file agree on it.
 #   - `LC_ALL=C` for bash's own `[[ =~ ]]` decision below: a bracket range
 #     follows the ambient collation otherwise.
-#   - THE SECONDS RULE (D-3270; C1, recorded at
-#     `server.ts:2679-2688`). A 13-digit
+#   - THE SECONDS RULE (D-3270; the C1 defect — `/api/pools/epoch`'s own
+#     doc comment in `server.ts` names it "review round 1, C1 — CRITICAL,
+#     fixed": `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds).
+#     A 13-digit
 #     `issued`/`lease` is GRAMMATICAL, and a seconds reader reads a
 #     millisecond lease as ~56,700 years away — `ok`, never `stale` — so the
 #     reader cannot catch it and this file must: `issued` and `lease` carry at
 #     most 11 digits (unix seconds until the year 5138; W2's
-#     `REPORT_TIME_MAX_S` bound), `issued` is within a day of this node's
+#     `UNIX_SECONDS_MAX` bound), `issued` is within a day of this node's
 #     clock (a node further out than that cannot judge a 15-minute lease, and
 #     in the FUTURE direction it would read an expired lease as live), and
 #     `lease` falls in the day after `issued`. `desired` must equal the
-#     `desired-<channel>` line, which spec §9 defines it to be.
+#     `desired-<channel>` line, which spec §9 defines it to be. THE ONE-DAY
+#     WINDOW IS NOT THE LEASE (review 155, your Q3, fix round 1): `lease` is
+#     `issued` plus the real 15-minute `PROJECTION_LEASE_S` — the LEASE is
+#     what bounds STALENESS (a document nobody has refreshed in 15 minutes is
+#     no longer trusted), and this day-wide window only TOLERATES CLOCK SKEW
+#     between this node and the server that minted `issued`; it is
+#     deliberately far looser than the lease itself, and it never substitutes
+#     for it.
 #   - THE EPOCH BOUND (D-3279, found reviewing this task). `_upd_intent_state`
-#     (`ccd/ccrc:12757-12758`, plan D-3265) refuses any epoch/issued/lease
+#     (its own per-line grammar over `epoch`/`issued`/`lease`, plan D-3265)
+#     refuses any epoch/issued/lease
 #     wider than 18 digits — `^(0|[1-9][0-9]{0,17})$` — because its own
 #     arithmetic is bash's, which wraps past 2^63-1. The grammar above never
 #     bounded `epoch`'s width (only `issued`/`lease` carried a digit cap, for
@@ -69,14 +79,27 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 #     stdout (measured: `ep\0och 8…` arrived at the validator as `epoch 8…`)
 #     — a malformed answer was REPAIRED and installed rather than refused.
 #     curl now writes the response straight to a bounded temp file beside the
-#     staging path (`--max-filesize 65536`, curl's own cap, refusing with its
-#     rc 63 on overflow so an oversized transfer never finishes downloading),
-#     and python reads that file as BYTES — checking for a NUL byte and the
-#     65536-byte cap BEFORE it ever decodes UTF-8 or runs pass 1 — so nothing
-#     the shell would mangle reaches the validator's text-processing passes
-#     at all. `ccd-pool-sync` shares both shapes (the `$( )` capture and the
+#     staging path (`--max-filesize 65536`, curl's own cap), and python reads
+#     that file as BYTES — checking for a NUL byte and the 65536-byte cap
+#     BEFORE it ever decodes UTF-8 or runs pass 1 — so nothing the shell
+#     would mangle reaches the validator's text-processing passes at all.
+#     `ccd-pool-sync` shares both shapes (the `$( )` capture and the
 #     unbounded read); it is out of scope for this task and named here only
 #     so it is not rediscovered as a fresh finding.
+#   - THREE SEPARATE BOUNDS, NEVER ONE (review 155 C20, fix round 1 item 14).
+#     `--max-filesize` is curl's OWN cap, and on curl >= 8.4.0 it stops an
+#     oversized transfer before it finishes downloading (rc 63, below) — but
+#     older curl (Debian 12 ships 7.88) ignores `--max-filesize` for a
+#     response with no advance Content-Length (a chunked body), so the
+#     transfer still runs to completion on disk. What THIS FILE actually
+#     guarantees, on every curl: REFUSAL is guaranteed regardless — pass 0
+#     below refuses any body at or over the cap, whatever wrote it and
+#     however large. DISK is bounded by `--max-time` (the transfer stops at
+#     the timeout, however large `$body_tmp` grew by then — never truly
+#     unbounded, but not the 65536-byte cap either). MEMORY is bounded by the
+#     validator's own read (pass 0), which never reads more than the cap plus
+#     one byte from `$body_tmp` regardless of the file's real size on disk —
+#     so an old curl's unbounded DOWNLOAD never becomes an unbounded READ.
 #
 # THE FOURTH HAND COPY of ccrc-api's URL+token dance (ccd-account-health,
 # ccrc-api, ccd-pool-sync, this file) — deliberately not a shared helper, for
@@ -179,21 +202,31 @@ tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]'
 
 # D-3280: `dir` and the two temp paths land HERE, before the request, so the
 # body can go straight to a FILE — never a bash variable — the moment curl
-# has it. `body_tmp` is cleaned up on every exit via the trap below, whatever
-# arm this script leaves through; `tmp` (the staged, VALIDATED projection)
-# keeps its own explicit `rm -f` on every failure arm, exactly as before.
+# has it. Both `body_tmp` and `tmp` (the staged, VALIDATED projection) are
+# cleaned up on every exit via the trap below (review 155 C19, fix round 1
+# item 13: a kill between python's write to `$tmp` and the rename below —
+# for example a timer stop — used to leave a 0600 copy of the projection
+# named after this run's pid behind forever; nothing else in the tree sweeps
+# `.update-intent.*`), whatever arm this script leaves through; `tmp` ALSO
+# keeps its own explicit `rm -f` on every failure arm it reaches, so an
+# ordinary refusal is reported and cleaned up promptly rather than waiting on
+# the trap, which is then a no-op over an already-absent file.
 dir="${DEST%/*}"
 mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
 body_tmp="$dir/.update-intent.$$.body.tmp"
 tmp="$dir/.update-intent.$$.tmp"
-trap 'rm -f -- "$body_tmp"' EXIT
+trap 'rm -f -- "$body_tmp" "$tmp"' EXIT
 rm -f -- "$body_tmp" "$tmp"
 
 # `-K -` reads the header from stdin: never argv, never environ. The BODY now
 # goes straight to `$body_tmp` via `-o`, never through this script's own
 # variables — D-3280. `--max-filesize 65536` is curl's own bound, matching
-# the reader's cap: an oversized transfer never finishes downloading, and
-# curl exits 63 rather than handing this script a half-sized body to judge.
+# the reader's cap: on curl >= 8.4.0 an oversized transfer never finishes
+# downloading and curl exits 63 rather than handing this script a half-sized
+# body to judge — but NOT on every curl this file runs on (C20, fix round 1
+# item 14): the validator's own bounded read below is what actually
+# guarantees refusal and a bounded MEMORY footprint whichever curl answers;
+# `--max-time` bounds DISK.
 status="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
   | curl -sS -K - -o "$body_tmp" -w '%{http_code}' --max-filesize 65536 \
     --max-time "$TIMEOUT" "$url/api/updates/intent/$nid" 2>/dev/null)"; rc=$?
@@ -267,7 +300,11 @@ def seconds(name, s):
 body_path, dest_path = sys.argv[1], sys.argv[2]
 try:
     with open(body_path, "rb") as f:
-        raw = f.read()
+        # C20 (fix round 1 item 14): never more than the cap plus one byte,
+        # independent of curl own --max-filesize (an older curl does not
+        # enforce that flag on a chunked body — see this file header above).
+        # Bounds MEMORY on every curl; DISK stays bounded by --max-time alone.
+        raw = f.read(CAP + 1)
     # PASS 0 — the raw bytes, before any decoding (D-3280).
     if b"\x00" in raw:
         raise ValueError("the document contains a NUL byte")
