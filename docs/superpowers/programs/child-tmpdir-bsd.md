@@ -16,7 +16,7 @@ and adds a pin that reds on LINUX, so the next regression cannot hide behind the
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `chmod -- 0700 "$dir"`; a BSD-order `chmod` shim that makes the rc-0 cases discriminate on Linux; a literal-absence census of `chmod`/`chown`/`chgrp` with an operand before `--` | ccd only (fleet box first) | #185 | **merged** `3fd6c816` (v0.0.27, 2026-09-24 21:14 UTC; run 162 on `brisk-river`; review 163). Rollout waits on bright-river's answer about #184, which v0.0.27 also carries |
+| 1 | `chmod -- 0700 "$dir"`; a BSD-order `chmod` shim that makes the rc-0 cases discriminate on Linux; a literal-absence census of `chmod`/`chown`/`chgrp` with an operand before `--` | ccd only (fleet box first) | #185 | **deployed** v0.0.27 (`3fd6c816`, merged 2026-09-24 20:14 UTC, rolled out by 20:23, fleet box first, rc 3 = the server box's standing agent-unit FAIL; carried #184 with bright-river's go; run 162 on `brisk-river`; review 163) — COMPLETE |
 
 **Deviation block: three numbers, the first of them 3510** (allocated at run-open, 2026-09-24; floor now 3513).
 The plan defines the first; no number of the block is spelled as a `D-` token here until a plan defines it.
