@@ -1412,6 +1412,36 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # an operator gets.
 : "${CCRC_HEALTH_TIMEOUT:=5}"
 
+# ── the release host's own time bounds (fix round 1 item 12 / review 155
+# C22, C32) ────────────────────────────────────────────────────────────
+# Every curl call this wave makes to the release host — SHA256SUMS, the
+# tarball, the provenance bundle, and `_upd_asset_listed`'s status-only probe
+# — gets a CONNECT bound: a release host that never accepts the TCP
+# connection must not hang any of them indefinitely. Overridable for the
+# reason `CCRC_HEALTH_TIMEOUT` above is: a test must not wait out a
+# production timeout.
+: "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
+
+# The SMALL probes — the provenance bundle fetch and `_upd_asset_listed` —
+# ALSO get a TOTAL bound, unlike SHA256SUMS and the tarball (a slow but LIVE
+# transfer must not be killed mid-download; those two get a STALL bound
+# instead — see `_upd_resolve`/`_upd_fetch`). `_upd_asset_listed` is the
+# release-host check `cmd_rollback --detach` runs BEFORE it detaches (review
+# 155 C32): W5 sizes its spawn deadline for that parent at
+# `UPDATE_SPAWN_TIMEOUT_MS = 20_000` (strictly below `UPDATE_OP_TIMEOUT_MS =
+# 30_000`), so this bound must sit well under 20s or a slow release host
+# surfaces as W5's own `spawn-failed` timeout rather than this verb's named
+# refusal. Named ONCE, read by every small-probe caller, so they cannot
+# drift apart.
+: "${CCRC_RELEASE_PROBE_MAX_TIME:=15}"
+
+# The STALL bound for SHA256SUMS and the tarball fetches
+# (`--speed-limit`/`--speed-time`, never `--max-time`: a slow but LIVE
+# download must be let finish). A transfer under this many bytes/second for
+# this many seconds running is presumed dead, not merely slow.
+: "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
+: "${CCRC_RELEASE_SPEED_TIME:=30}"
+
 # ── ccrc account check: how long the CHEAP health question may take ───────
 # `claude auth status` is a LOCAL read — no inference, no network to the model
 # endpoint — so this is a deadline against a hung binary, not a budget.
@@ -1472,6 +1502,7 @@ UPD_VERSION=""
 UPD_STAGED_SHA=""    # _upd_fetch: the extracted tree's OWN sha (review fix round 1 I3) — arm 3 compares it to old_sha to tell a same-tag REBUILD (mixed) from a same-tag REPEAT (not mixed)
 UPD_BACKUP_DIR=""
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
+UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
 UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
@@ -1484,17 +1515,26 @@ UPD_REPORTING=0         # 1 once cmd_update is past its refusals: from then on a
 UPD_REPORT_TARGET=""    # the tag a report names: --to at parse, UPD_VERSION once resolved
 UPD_REPORT_STARTED=""   # unix seconds (date +%s) of this process's first report
 UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
-# Review fix round 1, I2: UNSET at file scope, before any function runs, so
-# an EXPORTED environment variable of this exact name can never arrive
-# pre-set — `local UPD_FROM_CALLER_PID="$$"` in `cmd_rollback` (below) is
-# then the ONLY place that can ever give it a value, and only for the
-# lifetime of that one call. (Measured: a `local` of an already-exported
-# name INHERITS the export attribute — `export X=1; f(){ local X=2; env|
-# grep ^X=; }` prints `X=2` — so this alone would not stop a hand-typed
-# `export UPD_FROM_CALLER_PID=$$` from being READ by a directly-invoked
-# `ccrc update`; what stops it is the VALUE `cmd_rollback` sets, `$$`, being
-# this exact `ccrc update` process's own pid, unknowable to any external
-# shell before that process exists — never the unset alone.)
+# Review fix round 1, I2: UNSET at file scope, before any function runs — and
+# fix round 1 item 0(d) / batch B rereview N4 (correcting this comment's own
+# EARLIER false claim, below): the `unset` itself IS the guard, not a
+# redundant first line. `unset` strips both the VALUE and the export
+# ATTRIBUTE of this exact name — measured: `X=1; export X; unset X; f(){
+# local X=2; env|grep ^X= || echo not exported; }; f` prints `not exported`,
+# because a bare `local` of a name with no export attribute creates a plain,
+# unexported local, and there is nothing left AT THIS POINT for `local
+# UPD_FROM_CALLER_PID="$$"` in `cmd_rollback` (below) to inherit from. So an
+# EXPORTED environment variable of this exact name can never arrive
+# pre-set, and `cmd_rollback`'s own `local` assignment is the ONLY place
+# that can ever give it a value, for only the lifetime of that one call.
+# The VALUE `$$` is NOT "unknowable in advance" — this comment once said so,
+# and it was wrong: `exec` keeps the pid, so a forger who controls the
+# launch chain (`sh -c 'UPD_FROM_CALLER_PID=$$ exec bash "$0" update … --from
+# rollback'`, or the real `~/.local/bin/ccrc` launcher, which also `exec`s)
+# can compute the RIGHT pid ahead of time and export it in. What actually
+# refuses that forgery is this `unset`: an exported value arriving pre-set
+# is stripped here, before `cmd_rollback` or `cmd_update` ever runs, so the
+# forger's export never survives to be read.
 unset UPD_FROM_CALLER_PID
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
 UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
@@ -1784,6 +1824,39 @@ EOF
 }
 
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
+# `_upd_redact <text>` — what NO die sentence, report detail, WARN or
+# announcement line may carry verbatim (review 155 C17/C18, fix round 1 item
+# 11): a URL's userinfo (`scheme://user:pass@host` -> `scheme://host`) and
+# this box's own absolute home directory (-> `~`). The CHOKE POINT is
+# `_ccrc_die` alone — the ONE place a message becomes both the printed
+# refusal (stderr) and the report detail (`_upd_phase failed`), so no die
+# site anywhere in this file, present or future, has to remember to redact
+# its own sentence. A handful of ordinary (non-dying) announcement lines
+# also print an absolute path this box built for itself — `$UPD_BACKUP_DIR`
+# is the one case in this wave's code, in `_upd_backup`, arm 3's restore
+# line, the rollback coord.db hint and `cmd_update`'s exit-4 sentence — and
+# those call `_upd_redact` directly, by hand, because they are never dies
+# and never reach `update.json` through the one hook. `ccd/ccd-update-sync`
+# is a different executable and carries its own copy of the same two rules,
+# at its own choke point (`say`).
+_upd_redact() {
+  local s="${1:-}" had_extglob=0
+  shopt -q extglob && had_extglob=1
+  shopt -s extglob
+  # The userinfo strip is bounded to characters a URL authority actually
+  # allows before an '@' — never '/' or whitespace — so an UNRELATED '@'
+  # past the authority (a query string's `?email=a@example.com`) is left alone:
+  # reaching it would need crossing a '/' the pattern refuses to match.
+  s="${s//:\/\/+([^\/@[:space:]])@/:\/\/}"
+  [ "$had_extglob" -eq 1 ] || shopt -u extglob
+  # The replacement side of a bash `${..//pattern/string}` substitution
+  # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT
+  # $HOME before it is ever used as a literal, so `s="${s//"$HOME"/~}"`
+  # replaces $HOME with $HOME: a silent no-op (measured: the redaction did
+  # nothing at all). The backslash keeps `~` literal.
+  [ -n "${HOME:-}" ] && s="${s//"$HOME"/\~}"
+  printf '%s' "$s"
+}
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
 # never 2, which is reserved for a USAGE error (see `_ccrc_usage_die` below).
 # Inside a `cmd_update` past its refusals (UPD_REPORTING=1) the same die is
@@ -1791,9 +1864,12 @@ EOF
 # carries a report call of its own. `$BASHPID = $$` because a die inside a
 # command substitution ends only that subshell, not the run, and must not
 # report a failure the run never had. ONE LINE ON PURPOSE —
-# `ccrc-install.test.ts` extracts this definition by `^_ccrc_die\(\) \{.*\}$`
-# and runs it alone under `set -u` (hence `${UPD_FAIL_PREFIX:-}`).
-_ccrc_die() { echo "$PROG: $*" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$*"; exit 1; }
+# `ccrc-install.test.ts` and `ccrc-update.test.ts` extract this definition
+# by `^_ccrc_die\(\) \{.*\}$` and run it alone under `set -u` (hence
+# `${UPD_FAIL_PREFIX:-}`) — each harness that actually triggers a die also
+# picks `_upd_redact`'s definition beside it, the same way it already picks
+# `PROG=`.
+_ccrc_die() { local m; m="$(_upd_redact "$*")"; echo "$PROG: $m" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$m"; exit 1; }
 # The one place "unknown argument" is spelled, so the unknown-verb and
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
@@ -11468,41 +11544,46 @@ _inst_wrappers() {
 }
 
 # ── _inst_legacy_verified_parent — the transition arm (review fix round 1 I1;
-# tightened fix round 1 item 0 / batch A rereview N1) ──────────────────────
+# tightened fix round 1 item 0 / batch A rereview N1; NARROWED AGAIN fix
+# round 1 item 0(a) / batch B rereview N1) ──────────────────────────────
 # rc 0 iff THIS process's own parent (never assumed — measured with `ps -o
 # args=`, portable on Linux and macOS alike) is a `ccrc … update` SCRIPT
 # INVOCATION, not merely a command line that mentions the words somewhere:
 # argv[0] itself is a word ending in `ccrc`, then the word `update` next —
-# or ONE word (review fix round 1 M9: the regex's own leading group is
-# `[^[:space:]]+`, ANY single word, not narrowed to a named interpreter
-# list — the comment here once said "an interpreter word (`bash`, `/bin/
-# sh`, …)", which read narrower than the code actually matches) followed by
-# a word ending in `ccrc`, then `update`. Every released `cmd_update` before
-# this wave runs its staged spine as `env CCRC_UPDATE_VERIFIED=1 bash
-# "$UPD_TREE/ccd/ccrc" install` with no `CCRC_UPDATE_SPINE` at all (`git show
-# origin/main:ccd/ccrc | grep -n spine_env`) — so THIS is the shape its
-# child's own parent process has: argv[0]=bash, argv[1]=…/ccrc, argv[2]=update.
-# ANCHORED AT THE START of the reconstructed argv, so a `bash -c '… ccrc
-# update …'` command STRING does not match: its argv[1] is the literal `-c`,
-# never a word ending in `ccrc`, however much `ccrc update` text the quoted
-# string carries after it (N1: an operator's or an agent's `ssh box 'ccrc
-# update --to vX --force || ccrc install'` must not forge a VERIFIED record
-# for the `ccrc install` half). FAILS CLOSED: `ps` absent, or the read
-# failing for any reason (the PPID already exited, a sandboxed `ps` that
-# cannot see it), answers rc 1 — unverified is always the safe direction,
-# same as every other guard in this function. TRADE-OFF (M9): a HOME
-# containing a space no longer matches (the batch A re-review had recorded
-# that the PRE-tightening regex did) — the regex's `[^[:space:]]*ccrc`
-# requires the whole path segment up to `ccrc` to carry no space. A legacy
-# parent under such a HOME now records `unsigned` instead of `verified` —
-# the fail-closed direction, so this is a missed optimisation, not a
-# security defect.
+# or ONE interpreter word (`bash` or `sh`, basename only, an optional
+# `.../` path prefix before it) followed by a word ending in `ccrc`, then
+# `update`. N1 (batch B rereview): the FIRST tightening (review fix round 1
+# M9, batch A rereview) anchored the match but left the optional leading
+# word as `[^[:space:]]+`, ANY word — so `python3 <path>/ccrc update` or
+# `nice /opt/x/ccrc update`, a process nobody but a deliberate same-user
+# actor forges, still matched. The leading group is now `(bash|sh)` by name,
+# because every released `cmd_update` before this wave runs its staged spine
+# as `env CCRC_UPDATE_VERIFIED=1 bash "$UPD_TREE/ccd/ccrc" install` with no
+# `CCRC_UPDATE_SPINE` at all (`git show origin/main:ccd/ccrc | grep -n
+# spine_env`) — that legacy launcher's own interpreter is the ONLY shape
+# this arm exists to recognise; nothing else legitimately parents a
+# `ccrc … update` this way. ANCHORED AT THE START of the reconstructed
+# argv, so a `bash -c '… ccrc update …'` command STRING does not match:
+# its argv[1] is the literal `-c`, never a word ending in `ccrc`, however
+# much `ccrc update` text the quoted string carries after it (N1, batch A
+# rereview: an operator's or an agent's `ssh box 'ccrc update --to vX
+# --force || ccrc install'` must not forge a VERIFIED record for the `ccrc
+# install` half). FAILS CLOSED: `ps` absent, or the read failing for any
+# reason (the PPID already exited, a sandboxed `ps` that cannot see it),
+# answers rc 1 — unverified is always the safe direction, same as every
+# other guard in this function. TRADE-OFF (M9): a HOME containing a space
+# no longer matches (the batch A re-review had recorded that the
+# pre-tightening regex did) — the regex's `[^[:space:]]*ccrc` requires the
+# whole path segment up to `ccrc` to carry no space. A legacy parent under
+# such a HOME now records `unsigned` instead of `verified` — the
+# fail-closed direction, so this is a missed optimisation, not a security
+# defect.
 _inst_legacy_verified_parent() {
   command -v ps >/dev/null 2>&1 || return 1
   local args=""
   args="$(ps -o args= -p "$PPID" 2>/dev/null)" || return 1
   [ -n "$args" ] || return 1
-  [[ "$args" =~ ^([^[:space:]]+[[:space:]]+)?[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
+  [[ "$args" =~ ^(([^[:space:]]*/)?(bash|sh)[[:space:]]+)?[^[:space:]]*ccrc[[:space:]]+update([[:space:]]|$) ]]
 }
 
 # ── _inst_installed — the completed-install record, the spine's LAST write ─
@@ -12284,7 +12365,7 @@ cmd_update() {
     _upd_rollback_no_restore "$gate_fail"
     _upd_restore "$role" "$gate_fail" "$old_version" "$old_sha" "$old_completed"
     _upd_unlock
-    echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $UPD_BACKUP_DIR" >&2
+    echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $(_upd_redact "$UPD_BACKUP_DIR")" >&2
     exit 4
   fi
   # D-3240: the box moved and answers, but its spine did
@@ -12472,31 +12553,39 @@ cmd_rollback() {
   fi
 
   # Fix round 1 item 3 / review 155 C31, RESTRUCTURED per review fix round 1
-  # I1 (the first shape clobbered a LIVE run's in-flight report): a non-
-  # `cli` run that is NOT the `--detach` PARENT — the DETACHED CHILD
-  # (`_upd_detach` hands it the SAME `--to`, so this ask can still fail if
-  # the tag vanished between parent and child), or a direct `ccrc rollback
-  # --to <tag> --from pwa|rollback|watchdog` with no `--detach` — takes
-  # ~/.ccrc/update.lock FIRST, a FRESH acquisition (`_upd_lock`'s own
-  # mechanism — no marker, nothing invented), and ONLY THEN opens its
-  # reporting window. `cmd_update`, called in-process below, INHERITS this
-  # SAME lock rather than re-acquiring (`_upd_lock`'s own `[ -n
-  # "$UPD_LOCK_FD" ] && return 0` rule, already relied on before this item
-  # existed). A CONTENDED lock dies through `_upd_busy_die`, which forces
-  # `UPD_REPORTING=0` before it dies (fixed alongside this item) — so
-  # contention NEVER reports, and the holder's OWN report stands byte-
-  # identical: this run writes NOTHING to update.json. Every OTHER
-  # `_upd_lock` failure (flock missing, cannot open, an unmeasured flock
-  # rc) happens AFTER the window is already open and DOES report (review
-  # 155 M5) — there is no live holder to clobber in those arms. The
-  # `--detach` PARENT (not this branch: `$detach -eq 1`) stays completely
-  # silent here, exactly as before this item existed — it has not written
-  # `queued` yet, and its exit code is its own caller's answer. `_ccrc_die`
-  # already writes a `failed` report once `UPD_REPORTING=1` (its own hook);
-  # the 404 arm below, a bare `exit 2` rather than a die, gets the same
-  # write by hand — a `queued` phase with nothing past it is EXACTLY C31's
-  # hazard: W5 reads it as in-flight forever, and no fleet-box watchdog
-  # covers the rollback verb.
+  # I1 (the first shape clobbered a LIVE run's in-flight report), comments
+  # CORRECTED fix round 1 item 0(c) / batch B rereview N3 (the paragraph
+  # below once described the OPPOSITE order to the code — a later editor who
+  # trusted it and reordered the block would silently re-open the clobber
+  # this item exists to close): a non-`cli` run that is NOT the `--detach`
+  # PARENT — the DETACHED CHILD (`_upd_detach` hands it the SAME `--to`, so
+  # this ask can still fail if the tag vanished between parent and child),
+  # or a direct `ccrc rollback --to <tag> --from pwa|rollback|watchdog` with
+  # no `--detach` — opens its reporting window FIRST (`UPD_REPORTING=1`,
+  # target, from), and ONLY THEN takes ~/.ccrc/update.lock, a FRESH
+  # acquisition (`_upd_lock`'s own mechanism — no marker, nothing invented).
+  # `cmd_update`, called in-process below, INHERITS this SAME lock rather
+  # than re-acquiring (`_upd_lock`'s own `[ -n "$UPD_LOCK_FD" ] && return 0`
+  # rule, already relied on before this item existed).
+  #
+  # THE WINDOW OPENING FIRST is what makes `_upd_busy_die`'s forced
+  # `UPD_REPORTING=0` (its own comment, below) LOAD-BEARING, not merely
+  # defensive: a CONTENDED lock reaches `_upd_lock` with the window already
+  # open, so without that reset a busy-die there would write a `failed`
+  # report over the HOLDER's own live one. With it, contention NEVER
+  # reports, and the holder's OWN report stands byte-identical: this run
+  # writes NOTHING to update.json. Every OTHER `_upd_lock` failure (flock
+  # missing, cannot open, an unmeasured flock rc) ALSO happens after the
+  # window is already open, and DOES report (review 155 M5) — there is no
+  # live holder to clobber in those arms, so nothing there needs the same
+  # reset. The `--detach` PARENT (not this branch: `$detach -eq 1`) stays
+  # completely silent here, exactly as before this item existed — it has
+  # not written `queued` yet, and its exit code is its own caller's answer.
+  # `_ccrc_die` already writes a `failed` report once `UPD_REPORTING=1` (its
+  # own hook); the 404 arm below, a bare `exit 2` rather than a die, gets
+  # the same write by hand — a `queued` phase with nothing past it is
+  # EXACTLY C31's hazard: W5 reads it as in-flight forever, and no
+  # fleet-box watchdog covers the rollback verb.
   if [ "$detach" -eq 0 ] && [ "$from" != cli ]; then
     UPD_REPORTING=1
     UPD_REPORT_TARGET="$to"
@@ -12512,7 +12601,7 @@ cmd_rollback() {
        [ "$UPD_REPORTING" = 1 ] \
          && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
        exit 2 ;;
-    *) _ccrc_die "rollback: could not ask the release host whether $to exists (curl failed, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+    *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
   esac
   # RESET: this scope's own reporting window closes here. `cmd_update`'s own
   # argument-refusal block (D-3257, item 10, the tool preflight — all
@@ -12541,12 +12630,20 @@ cmd_rollback() {
   # Fix round 1 item 10 / review 155 C16: the process-local caller marker
   # `cmd_update`'s own argument-refusal block requires for `--from
   # rollback|watchdog` — set immediately before the in-process call it
-  # covers. Review fix round 1, I2: `local` of an already-exported name
-  # INHERITS the export attribute (measured), so this line does not by
-  # itself keep the value out of a child's environment — what closes that
-  # door is `cmd_update` never spawning a child before consuming this
-  # marker (its own read happens in THIS same process, in its
-  # argument-refusal block, before anything is exec'd or forked).
+  # covers. Fix round 1 item 0(d) / batch B rereview N4 (correcting this
+  # comment's own earlier, FALSE claim): `cmd_update` DOES spawn children
+  # while this `local` is still in scope (the staged spine, curl, `node`,
+  # …), so "no child is spawned before the marker is consumed" was never
+  # the reason none of them sees it. What actually keeps it out of their
+  # environment is the global-init `unset UPD_FROM_CALLER_PID` (above):
+  # a `local` of a name that carries NO export attribute creates a plain,
+  # unexported local (measured at that `unset`'s own comment) — this
+  # assignment never exports the name, so no child this run forks or execs
+  # ever inherits it, whenever it is spawned. `cmd_update`'s own read is a
+  # DIFFERENT mechanism again: it happens in THIS SAME PROCESS (no fork, no
+  # exec — `cmd_rollback` calls `cmd_update` in-process), so ordinary bash
+  # variable scoping hands it the value directly; export never enters into
+  # that read at all.
   local UPD_FROM_CALLER_PID="$$"
   cmd_update --to "$to" --downgrade --from "$run_from" ${extra[@]+"${extra[@]}"}
 }
@@ -13305,13 +13402,28 @@ _upd_flock_die() {
 # already owns update.json, and a contended run's own `failed` would
 # clobber a report describing a box that is, in fact, still being moved.
 # Forcing `UPD_REPORTING=0` here is a no-op for `cmd_update`'s own call
-# (its lock is taken BEFORE it ever sets `UPD_REPORTING=1`), so this is
-# pure hardening for the one caller that now opens its window earlier.
+# (its lock is taken BEFORE it ever sets `UPD_REPORTING=1`, so the window is
+# still closed when this runs) — but fix round 1 item 0(c) / batch B
+# rereview N3 corrects the word this comment once used for the OTHER
+# caller: for a non-`cli` `cmd_rollback`, whose window is already OPEN by
+# the time `_upd_lock` runs, this reset is not "pure hardening" — it is the
+# ONLY thing standing between a contended lock and a `failed` report
+# clobbering the holder's live one (measured: delete this line and the I1
+# pin goes red, the live report replaced by a stray `failed`). LOAD-BEARING
+# for that caller, a no-op for `cmd_update`'s own — both true at once,
+# because they are two different callers of the same function.
 _upd_busy_die() { UPD_REPORTING=0; _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"; }
 
 # `_upd_lock` → rc 0 holding the lock (or legitimately inheriting it), or it
-# dies (exit 1) — BEFORE `cmd_update` sets UPD_REPORTING=1, so a refused run
-# writes nothing to update.json and cannot overwrite the holder's report.
+# dies (exit 1). For `cmd_update`'s OWN call, that is always BEFORE
+# `UPD_REPORTING=1` is set, so a refused run writes nothing to update.json
+# and cannot overwrite anyone's report. THE ONE EXCEPTION (fix round 1 item
+# 0(c) / batch B rereview N3): a non-`cli` `cmd_rollback` opens its window
+# FIRST and calls this function second (item 3/I1, above), so for THAT
+# caller a refusal here after contention still reports nothing (the
+# `_upd_busy_die` reset above), but every OTHER refusal (flock missing,
+# cannot open, an unmeasured flock rc) DOES report — there is no live
+# holder to clobber in those arms (review 155 M5).
 _upd_lock() {
   # ONE ACQUISITION PER PROCESS — `_acct_marker_lock`'s rule: a second
   # `exec {fd}>>` of the same path is a STRANGER to the first, and
@@ -13672,13 +13784,19 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   local to="$1" base _sum
   base="$(_upd_release_base)"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
+  UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
-  echo "update: fetching $UPD_URL_DIR/SHA256SUMS …"
-  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
-    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release?) — nothing on this box was changed"
+  echo "update: fetching $UPD_URL_DIR_SAFE/SHA256SUMS …"
+  # Fix round 1 item 12 / review 155 C22: a CONNECT bound plus a STALL bound
+  # (never a total `--max-time`, which a slow but LIVE download would hit) —
+  # by class with the tarball fetch below.
+  curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed"
   read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
   UPD_TARNAME="${UPD_TARNAME#\*}"
@@ -13716,9 +13834,14 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
 # that fails a step puts a file outside `UPD_STAGE`.
 _upd_fetch() {
   local allow_unsigned="${1:-0}" bundle rc=0 verifier vrc=0
-  echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME …"
-  curl -fsSL -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
-    || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME — nothing on this box was changed"
+  echo "update: fetching $UPD_URL_DIR_SAFE/$UPD_TARNAME …"
+  # Fix round 1 item 12 / review 155 C22: by class with the SHA256SUMS
+  # fetch above — a CONNECT bound plus a STALL bound, never a total
+  # `--max-time` that a slow but LIVE download would hit.
+  curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
+    -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME (or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed"
   _upd_phase verifying
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
@@ -13738,8 +13861,13 @@ _upd_fetch() {
   bundle="$UPD_STAGE/$UPD_TARNAME.sigstore.json"
   UPD_PROVENANCE=""
   local bundle_code=""
-  echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME.sigstore.json …"
-  bundle_code="$(curl -fsSL -o "$bundle" -w '%{http_code}' "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" 2>/dev/null)" || rc=$?
+  echo "update: fetching $UPD_URL_DIR_SAFE/$UPD_TARNAME.sigstore.json …"
+  # Fix round 1 item 12 / review 155 C22: a SMALL probe, so unlike the two
+  # fetches above it also gets a TOTAL bound (`CCRC_RELEASE_PROBE_MAX_TIME`,
+  # named once and shared with `_upd_asset_listed`).
+  bundle_code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
+    -o "$bundle" -w '%{http_code}' "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ]; then
     verifier="$CCRC_HERE/../deploy/verify-provenance.mjs"
     vrc=0
@@ -13776,7 +13904,7 @@ _upd_fetch() {
     # `_upd_asset_listed` measures it) reaches this arm; every other status
     # or curl failure falls to the unprefixed die below.
     if [ "$allow_unsigned" -eq 1 ]; then
-      echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (the release host answered 404) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
+      echo "update: WARN: $UPD_URL_DIR_SAFE/$UPD_TARNAME.sigstore.json is absent (the release host answered 404) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
       UPD_PROVENANCE=unsigned
     else
       UPD_FAIL_PREFIX="provenance: "
@@ -13790,7 +13918,12 @@ _upd_fetch() {
     # (constraints §"printable ASCII", D-3249): the 200-char cut must trim
     # only the URL tail, never the words that say this is not a release
     # refusal.
-    _ccrc_die "a transient fetch failure (curl exit $rc${bundle_code:+, HTTP $bundle_code}, not a 404) fetching the provenance bundle — not a verdict on this release: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json; nothing on this box was changed"
+    # Fix round 1 item 12: rc 28 is curl's OWN timeout code, named here so
+    # this arm does not read as an unexplained "transient fault" when the
+    # cause was this run's own bound.
+    local bundle_why=""
+    [ "$rc" -eq 28 ] && bundle_why=" — timed out (connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / total ${CCRC_RELEASE_PROBE_MAX_TIME}s)"
+    _ccrc_die "a transient fetch failure (curl exit $rc${bundle_code:+, HTTP $bundle_code}, not a 404)$bundle_why fetching the provenance bundle — not a verdict on this release: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json; nothing on this box was changed"
   fi
 
   UPD_TREE="$UPD_STAGE/tree"
@@ -14182,11 +14315,15 @@ _upd_floor_check() {
   # condition from MALFORMED (readable but empty or not vX.Y.Z) and must not
   # collapse into it (Task 11 minor) — an `-r` test names the former by
   # itself, before `read` is ever asked to do double duty deciding both.
+  # Fix round 1 item 11 / review 155 C17: the VERDICT leads the sentence
+  # (D-3249), the path follows — a HOME long enough (or a malformed line
+  # long enough) to reach `_upd_json_str`'s 200-character cut trims only the
+  # path, never the word that says why this run refused.
   [ -r "$BOX_FLOOR_FILE" ] \
-    || _ccrc_die "$BOX_FLOOR_FILE is unreadable — fix its permissions by hand. Nothing on this box was changed"
+    || _ccrc_die "unreadable: $BOX_FLOOR_FILE — fix its permissions by hand. Nothing on this box was changed"
   IFS= read -r floor < "$BOX_FLOOR_FILE" || floor=""
   [[ "$floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-    || _ccrc_die "$BOX_FLOOR_FILE is malformed (got: '${floor:-empty}') — it records the highest version this box completed an install of; fix or remove it by hand. Nothing on this box was changed"
+    || _ccrc_die "malformed floor (got: '${floor:-empty}'): $BOX_FLOOR_FILE — it records the highest version this box completed an install of; fix or remove it by hand. Nothing on this box was changed"
   _ver_newer "$floor" "$UPD_VERSION" || return 0
   # A RESTORE, A ROLLBACK OR THE WATCHDOG'S ROLLBACK (spec §9): each returns to
   # a known-good tag, which is below the floor by construction — the floor
@@ -14266,7 +14403,7 @@ _upd_backup() {
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
-  echo "$say: $UPD_BACKUP_DIR (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+  echo "$say: $(_upd_redact "$UPD_BACKUP_DIR") (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────
@@ -14394,9 +14531,21 @@ _upd_restore_copy() {
 # a restore it could have run and `rollback` would call a real tag
 # unpublished. `-w` still writes the status when `-f` fails the transfer
 # (`000` when nothing answered at all).
+# Fix round 1 item 12 / review 155 C32: a SMALL probe, so it gets both a
+# CONNECT bound and a TOTAL bound (CCRC_RELEASE_PROBE_MAX_TIME, the same
+# constant the bundle fetch uses) -- cmd_rollback runs this BEFORE
+# --detach, and W5 sizes that parent's own spawn deadline at 20s, so a
+# release host that never answers must surface as THIS verb's own refusal,
+# not as W5's spawn-failed timeout. A curl timeout (rc 28) falls straight
+# into the "return 2" (unmeasured) arm below, same as any other unmeasured
+# failure: to either caller "could not tell" and "took too long to tell"
+# call for the same fallback (arm 2's own fetch, or rollback's own die --
+# both name the bound).
 _upd_asset_listed() {
   local rc=0 code=""
-  code="$(curl -fsSL -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
+  code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --max-time "$CCRC_RELEASE_PROBE_MAX_TIME" \
+    -o /dev/null -w '%{http_code}' "$(_upd_release_base)/download/$1/$2" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] && return 0
   [ "$rc" -eq 22 ] && [ "$code" = 404 ] && return 1
   return 2
@@ -14480,7 +14629,7 @@ _upd_restore_arm2() {
         _upd_phase reverted "arm2-refused: $UPD_PREV_TAG ships no bundle; run ccrc update --to $UPD_PREV_TAG --downgrade --allow-unsigned by hand"
         return 1 ;;
       *)
-        echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle (curl failed, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
+        echo "update: arm 2: could not ask the release host whether $UPD_PREV_TAG ships a bundle within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — the restore child's own fetch decides" ;;
     esac
   fi
   echo "update: arm 2: re-installing $UPD_PREV_TAG (the build this box ran before) — a synchronous child under this run's lock"
@@ -14554,7 +14703,7 @@ _upd_restore_arm3() {
     echo "update: arm 3: could not remove the completed-install record — this box may still read as converged on the build being backed out"
     unrec=" (the completed-install record could not be removed)"
   fi
-  echo "update: arm 3: copying this run's pre-update backup ($UPD_BACKUP_DIR) back over the install"
+  echo "update: arm 3: copying this run's pre-update backup ($(_upd_redact "$UPD_BACKUP_DIR")) back over the install"
   while IFS=$'\t' read -r class src name; do
     [ "$class" = tree ] || continue
     back="$UPD_BACKUP_DIR/$name"
@@ -14866,7 +15015,7 @@ _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
     echo "update: rollback: $old_version -> $UPD_VERSION is a DOWNGRADE. coord.db was NOT restored — migrations are forward-only, and an older server reads a newer coord.db (shipped behavior). To restore the pre-update snapshot by hand:"
     if [ -f "$UPD_BACKUP_DIR/coord.db" ]; then
       echo "update: rollback:   $([ "$CCD_OS" = darwin ] && printf 'launchctl bootout %s/%s' "$(_svc_domain)" "$(_svc_label ccrc.service)" || printf 'systemctl --user stop ccrc.service')"
-      echo "update: rollback:   cp $UPD_BACKUP_DIR/coord.db \$HOME/.ccrc/coord.db"
+      echo "update: rollback:   cp $(_upd_redact "$UPD_BACKUP_DIR")/coord.db ~/.ccrc/coord.db"
       echo "update: rollback:   $(_svc_restart_hint ccrc.service)"
     else
       echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"

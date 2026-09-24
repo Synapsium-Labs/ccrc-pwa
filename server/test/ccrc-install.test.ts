@@ -83,6 +83,13 @@ const BASH = realPath('bash');
  *  there is no version of this suite that could still be measuring the verb. */
 const RSYNC = realPath('rsync');
 
+/** The real `python3`, resolved once — NEVER the fixture's own stub (`plant`
+ *  in this file's `ccrcEnv`, which answers only `-m venv <path>` and exits 90
+ *  on anything else). Fix round 1 item 0(a) / batch B rereview N1's negative
+ *  pin spawns this directly, bypassing the fixture PATH, so its parent argv
+ *  is genuinely `python3 <path>/ccrc update`, not the fixture's poison. */
+const PYTHON3 = realPath('python3');
+
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
 /** The `ccrc` a test runs: the one INSIDE the fixture tree, so `CCRC_HERE`
@@ -3661,6 +3668,39 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
   });
 
+  // Pin (4), fix round 1 item 0(a) / batch B rereview N1: the regex's
+  // optional leading word is narrowed to a bash/sh interpreter (basename
+  // only, an optional path before it), never ANY word — a
+  // `python3 <path>/ccrc update` parent is N1's own forging shape and must
+  // NOT honour CCRC_UPDATE_VERIFIED. Spawned via `PYTHON3` directly (never
+  // the fixture's own stub, which answers only `-m venv <path>` and exits 90
+  // on anything else), against a FILE NAMED `ccrc` so its own path ends in
+  // `ccrc` — the same shape the legacy-parent fixtures above use. The
+  // python script does `subprocess.run` (never `os.exec*`), for the same
+  // reason the `bash -c` pin's trailing `exit $?` is load-bearing: python3
+  // must stay the running parent throughout, so the install child's own
+  // $PPID resolves, via `ps`, to this exact `python3 <path>/ccrc update`
+  // argv.
+  it('CCRC_UPDATE_VERIFIED stays stripped when the parent is `python3 <path>/ccrc update`, not a bash/sh interpreter (fix round 1 item 0 / batch B rereview N1)', () => {
+    const home = freshBox('ccrc-install-installed-python-parent-');
+    const sha = gitInit(treeRoot(home));
+    const ccrc = ccrcIn(treeRoot(home));
+    const pyDir = join(home, 'legacy-ccrc-fixture-py');
+    mkdirSync(pyDir, { recursive: true });
+    const pyCcrc = join(pyDir, 'ccrc');
+    writeFileSync(pyCcrc,
+      'import os, subprocess, sys\n'
+      + 'env = dict(os.environ)\n'
+      + "env['CCRC_UPDATE_VERIFIED'] = '1'\n"
+      + `r = subprocess.run(['${BASH}', ${JSON.stringify(ccrc)}, 'install'], env=env)\n`
+      + 'sys.exit(r.returncode)\n');
+    const env = ccrcEnv(home);
+    replantDoctorStubs(home);
+    const r = spawnSync(PYTHON3, [pyCcrc, 'update'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr ?? '').toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+  });
+
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {
     // Three variables in one sentence, because `CCRC_AUTH=on` alone produces a
     // console that can read and cannot act: the same unvalidated `CCRC_ORIGIN`
@@ -4671,6 +4711,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     const src = read(join(REPO, 'ccd', 'ccrc'));
     const progLine = /^PROG=.*$/m.exec(src);
     expect(progLine, 'ccd/ccrc has no PROG=').not.toBeNull();
+    // Fix round 1 item 11 / review 155 C17: `_ccrc_die` now calls
+    // `_upd_redact` — this harness DOES trigger a die (the assertion below
+    // reads its stderr), so it must pick that definition up too.
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact').not.toBeNull();
     const dieLine = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
     expect(dieLine, 'ccd/ccrc has no _ccrc_die').not.toBeNull();
     const fn = /^_inst_installed\(\) \{[\s\S]*?\n\}/m.exec(src);
@@ -4682,6 +4727,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     const harness = [
       'set -uo pipefail',
       progLine![0],
+      redactBlock![0],
       dieLine![0],
       '_box_build_fields() { BOX_BUILD=(deadbeefdeadbeefdeadbeefdeadbeefdeadbeef main 2026-01-01T00:00:00Z false ""); return 0; }',
       `BOX_INSTALLED_FILE="${join(home, '.ccrc', 'installed')}"`,

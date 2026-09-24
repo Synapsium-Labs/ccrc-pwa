@@ -93,7 +93,39 @@ TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
 NODE_ID_FILE="$HOME/.ccrc/node-id"
 DEST="$HOME/.ccrc/update-intent"
 TIMEOUT="${CCRC_UPDATE_SYNC_TIMEOUT:-20}"
-say() { printf 'ccd-update-sync: %s\n' "$1" >&2; }
+
+# `redact <text>` -- what NO line this script prints may carry verbatim
+# (review 155 C18, fix round 1 item 11): a URL's userinfo
+# (scheme://user:pass@host -> scheme://host) and this box's own absolute
+# home directory (-> ~), the same two rules ccd/ccrc's `_upd_redact`
+# applies for its language. Called from `say` alone -- the ONE place every
+# line this script prints (to stderr, which a `--user` unit's journal
+# carries) is assembled -- so no `say` call site here, present or future,
+# has to remember to redact its own sentence. Before this fix, `$AGENT_ENV`
+# (an absolute path built from $HOME, unlike the rest of this file's
+# LITERAL `~/.ccrc/...` spellings) and `$url` (which may carry
+# CCRC_SERVER_URL's own userinfo) reached the journal verbatim on three and
+# one lines respectively (review 155 C18); routing every `say` through this
+# redacts them without hand-editing each sentence, and covers any future
+# line the same way.
+redact() {
+  local s="$1" had_extglob=0
+  shopt -q extglob && had_extglob=1
+  shopt -s extglob
+  # Bounded to characters a URL authority actually allows before an '@' --
+  # never '/' or whitespace -- so an unrelated '@' past the authority is
+  # left alone (ccd/ccrc's `_upd_redact` states the same rule).
+  s="${s//:\/\/+([^\/@[:space:]])@/:\/\/}"
+  [ "$had_extglob" -eq 1 ] || shopt -u extglob
+  # The replacement side of a bash `${..//pattern/string}` substitution
+  # undergoes TILDE EXPANSION -- a bare `~` there expands to the CURRENT
+  # $HOME before it is ever used as a literal, so `s="${s//"$HOME"/~}"`
+  # replaces $HOME with $HOME: a silent no-op (measured: the redaction did
+  # nothing at all). The backslash keeps `~` literal.
+  [ -n "${HOME:-}" ] && s="${s//"$HOME"/\~}"
+  printf '%s' "$s"
+}
+say() { printf 'ccd-update-sync: %s\n' "$(redact "$1")" >&2; }
 
 command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }

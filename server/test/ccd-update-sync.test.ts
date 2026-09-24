@@ -296,6 +296,49 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
   });
 });
 
+describe('ccd-update-sync: no credential or absolute home path in a printed line (fix round 1 item 11 / review 155 C18)', () => {
+  it('a CCRC_SERVER_URL carrying userinfo never reaches stderr on a curl failure (rc 6)', () => {
+    const secret = 'hunter2';
+    const home = box('upd-sync-redact-url-', { url: `http://alice:${secret}@nonexistent.invalid` });
+    answer(home, intentDoc());
+    writeFileSync(join(home, 'fixture-curl-rc'), '6\n');
+    const r = sync(home);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).not.toContain(secret);
+    expect(r.stderr).not.toContain('alice');
+    expect(r.stderr).toMatch(/unmeasured — curl exited 6 \(could not resolve host in http:\/\/nonexistent\.invalid\)/);
+    expect(existsSync(dest(home))).toBe(false);
+  });
+
+  it('agent.env is spelled ~/.ccrc/agent.env, never the absolute HOME path, on both refusals that name it', () => {
+    // Unreadable: agent.env absent entirely.
+    const missing = mkTmp('upd-sync-redact-home-missing-');
+    mkdirSync(join(missing, 'bin'), { recursive: true });
+    writeFileSync(join(missing, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    const envMissing = ghContainedEnv(missing,
+      { ...process.env, HOME: missing, PATH: `${join(missing, 'bin')}:${process.env['PATH'] ?? ''}` },
+      { systemd: true, tmux: true });
+    const rMissing = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envMissing });
+    expect(rMissing.status).toBe(1);
+    expect(rMissing.stderr).not.toContain(missing);
+    expect(rMissing.stderr).toMatch(/cannot read ~\/\.ccrc\/agent\.env/);
+
+    // Readable, but CCRC_SERVER_URL absent from it.
+    const noUrl = mkTmp('upd-sync-redact-home-nourl-');
+    mkdirSync(join(noUrl, '.ccrc'), { recursive: true });
+    writeFileSync(join(noUrl, '.ccrc', 'agent.env'), 'CCRC_AGENT_TOKEN=agent-bearer-fixture\n');
+    mkdirSync(join(noUrl, 'bin'), { recursive: true });
+    writeFileSync(join(noUrl, 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+    const envNoUrl = ghContainedEnv(noUrl,
+      { ...process.env, HOME: noUrl, PATH: `${join(noUrl, 'bin')}:${process.env['PATH'] ?? ''}` },
+      { systemd: true, tmux: true });
+    const rNoUrl = spawnSync('bash', [SYNC], { encoding: 'utf8', env: envNoUrl });
+    expect(rNoUrl.status).toBe(1);
+    expect(rNoUrl.stderr).not.toContain(noUrl);
+    expect(rNoUrl.stderr).toMatch(/CCRC_SERVER_URL is not set in ~\/\.ccrc\/agent\.env/);
+  });
+});
+
 describe('ccd-update-sync: the projection is whole-or-nothing (spec §18)', () => {
   // Pass 2 — the whole-document `DOC.fullmatch` and the byte cap — is the
   // ONLY check that counts lines or looks for `end`. Each of the first four

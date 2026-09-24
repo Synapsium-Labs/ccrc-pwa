@@ -257,7 +257,9 @@ describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', ()
     // No plantRelease(home, ...): the release space stays empty.
     const r = run(home);
     expect(r.code, `stderr: ${r.stderr}`).toBe(2);
-    expect(r.stderr).toMatch(/is there a release\?/);
+    // Fix round 1 item 12 / review 155 C22: the die sentence now also names
+    // the connect/stall bound.
+    expect(r.stderr).toMatch(/is there a release, or did the connection stall/);
     expect(updates(home)).toEqual([]);
   });
 

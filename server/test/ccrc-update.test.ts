@@ -35,6 +35,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createServer as createNetServer, type AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
@@ -147,12 +148,18 @@ function healthyBox(home: string): void {
   // A URL ending /health that is not /api/fleet/health is the update gate's
   // probe (design §11) — see the block inside.
   stub('curl', [
+    // Fix round 1 item 12 / review 155 C22/C32: the FULL argv, captured
+    // BEFORE the flag-parsing loop below consumes `$@` (so `$*` here still
+    // names every flag this call was given), beside the existing url-only
+    // recording — every OTHER test in this suite reads `curl-argv`, so that
+    // one stays exactly as it was.
+    'printf \'%s\\n\' "$*" >> "$HOME/curl-full-argv"',
     'dest=""; url=""; wfmt=""',
     'while [ $# -gt 0 ]; do',
     '  case "$1" in',
     '    -o) dest="$2"; shift 2 ;;',
     '    -w) wfmt="$2"; shift 2 ;;',
-    '    -H|--max-time) shift 2 ;;',
+    '    -H|--max-time|--connect-timeout|--speed-limit|--speed-time) shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
     '  esac',
@@ -803,14 +810,15 @@ const UNIT_LINES =
  *  the before/after snapshot the `--check` write-nothing case compares.
  *  `<home>/tmp/**` is the staging dir TMPDIR points at (update's own
  *  mktemp -d space, cleaned by its EXIT trap but timing-dependent) and
- *  `<home>/curl-argv` is the fixture's own recording, so both are the
- *  harness writing, not the verb. */
+ *  `<home>/curl-argv` and `<home>/curl-full-argv` (fix round 1 item 12) are
+ *  the fixture's own recordings, so both are the harness writing, not the
+ *  verb. */
 function homeSnapshot(home: string): string[] {
   const out: string[] = [];
   const walk = (d: string, prefix: string): void => {
     for (const e of readdirSync(d).sort()) {
       const rel = prefix === '' ? e : `${prefix}/${e}`;
-      if (rel === 'tmp' || rel.startsWith('tmp/') || rel === 'curl-argv') continue;
+      if (rel === 'tmp' || rel.startsWith('tmp/') || rel === 'curl-argv' || rel === 'curl-full-argv') continue;
       const p = join(d, e);
       const st = lstatSync(p);
       if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); } else out.push(`${rel}\t${st.size}`);
@@ -842,6 +850,13 @@ const localUrls = (home: string): string[] => (existsSync(join(home, 'curl-argv'
     .filter((l) => l.startsWith('local://'))
   : []);
 
+/** Fix round 1 item 12: every FULL curl invocation this run made, one line
+ *  per call (the stub's own `$*`), for pinning FLAGS rather than only the
+ *  URL — `curl-argv` (above) cannot see them. */
+const curlFullArgv = (home: string): string[] => (existsSync(join(home, 'curl-full-argv'))
+  ? readFileSync(join(home, 'curl-full-argv'), 'utf8').split('\n').filter((l) => l !== '')
+  : []);
+
 /** `update --check`'s machine line, found by its prefix rather than assumed
  *  to be line 1 — the same rule rollout's parser applies (`grep -m1
  *  '^check: '`), so a sentence printed before it can never shift what a
@@ -861,11 +876,16 @@ const parseCheck = (s: string): Record<string, string> =>
 
 /** The backup directory THIS run announced — parsed from the transcript, not
  *  guessed from `ls`: the hooks installer inside a full run writes its own
- *  timestamped siblings into `~/ccrc-backups/`. */
-function announcedBackupDir(stdout: string): string {
+ *  timestamped siblings into `~/ccrc-backups/`. Fix round 1 item 11 / review
+ *  155 C17: the announcement itself now redacts the fixture's absolute HOME
+ *  to a literal `~` (`_upd_redact`, same as every die sentence), so this
+ *  expands it back to `home` — the caller's real fs calls need a real path,
+ *  never the literal tilde a shell alone would expand. */
+function announcedBackupDir(stdout: string, home: string): string {
   const m = /^update: backup: (\S+)/m.exec(stdout);
   if (m === null) throw new Error(`no "update: backup:" line in:\n${stdout}`);
-  return m[1]!;
+  const p = m[1]!;
+  return p === '~' || p.startsWith('~/') ? join(home, p.slice(1)) : p;
 }
 
 /** ONE ccrc function, run in a shell that SOURCED the checkout's ccd/ccrc (its
@@ -1091,8 +1111,43 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     // The report names both versions, from → to.
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     // The backup was taken (its completeness is the ordering test's subject).
-    const backup = announcedBackupDir(r.stdout);
+    const backup = announcedBackupDir(r.stdout, home);
     expect(existsSync(join(backup, 'coord.db'))).toBe(true);
+  });
+
+  // Fix round 1 item 12 / review 155 C22: every release-host curl call this
+  // run makes, pinned by FLAG SET through the stub's full-argv recorder
+  // (`curlFullArgv`, never the url-only `curl-argv`). By class: SHA256SUMS
+  // and the tarball get a connect timeout AND a stall bound
+  // (`--speed-limit`/`--speed-time`), NEVER a total `--max-time` (a slow but
+  // LIVE download must be let finish); the bundle — a SMALL probe — gets a
+  // connect timeout AND a total bound.
+  it('SHA256SUMS and the tarball get a connect+stall bound, never a total one; the bundle gets a connect+total bound (fix round 1 item 12 / review 155 C22)', () => {
+    const home = freshUpdateBox('ccrc-update-timeouts-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    const argvUrl = (line: string): string => line.trim().split(/\s+/).pop() ?? '';
+    const argv = curlFullArgv(home);
+    const sums = argv.find((l) => argvUrl(l).endsWith('/SHA256SUMS'));
+    const tarball = argv.find((l) => argvUrl(l).endsWith('.tar.gz'));
+    const bundle = argv.find((l) => argvUrl(l).endsWith('.sigstore.json'));
+    expect(sums, argv.join('\n')).toBeDefined();
+    expect(tarball, argv.join('\n')).toBeDefined();
+    expect(bundle, argv.join('\n')).toBeDefined();
+    for (const line of [sums!, tarball!]) {
+      expect(line).toMatch(/--connect-timeout \d+/);
+      expect(line).toMatch(/--speed-limit \d+/);
+      expect(line).toMatch(/--speed-time \d+/);
+      expect(line).not.toMatch(/--max-time/);
+    }
+    expect(bundle!).toMatch(/--connect-timeout \d+/);
+    expect(bundle!).toMatch(/--max-time \d+/);
+    expect(bundle!).not.toMatch(/--speed-limit|--speed-time/);
   });
 
   it('a spine that COMPLETED under a failing doctor exits 3, not 1: the record is written, the report prints, and the line says the box IS on the new build (D-3114)', () => {
@@ -1262,7 +1317,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const r = runUpdate(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/ccrc-backups/);
-    const backup = announcedBackupDir(r.stdout);
+    const backup = announcedBackupDir(r.stdout, home);
     // coord.db: a real snapshot (VACUUM INTO writes a database, not a copy of
     // uncertain bytes) …
     const snap = readFileSync(join(backup, 'coord.db'));
@@ -1301,10 +1356,13 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     ]);
     // The rollback report: the restore is PRINTED, never performed —
     // migrations are forward-only and an older server reads a newer coord.db.
-    const backup = announcedBackupDir(r.stdout);
+    // Fix round 1 item 11 / review 155 C17: this hint line is redacted like
+    // every other announcement now, so it reads `~/ccrc-backups/…`, never
+    // the fixture's own absolute HOME (`announcedBackupDir`'s own real path
+    // is still what the filesystem checks elsewhere in this file use).
     expect(r.stdout).toMatch(/^update: rollback: /m);
     expect(r.stdout).toContain('NOT restored');
-    expect(r.stdout).toContain(`cp ${backup}/coord.db`);
+    expect(r.stdout).toMatch(/cp ~\/ccrc-backups\/\d{8}-\d{6}\/coord\.db/);
     // The rollback lines name this platform's own stop verb.
     expect(r.stdout).toContain(process.platform === 'darwin'
       ? 'launchctl bootout' : 'systemctl --user stop ccrc.service');
@@ -2684,7 +2742,9 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/floor is malformed \(got: 'three'\)/);
+    // Fix round 1 item 11 / review 155 C17: the verdict now leads the
+    // sentence (D-3249), the path follows.
+    expect(r.stderr).toMatch(/malformed floor \(got: 'three'\)/);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
@@ -2715,7 +2775,9 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/\.ccrc\/floor is unreadable — fix its permissions by hand/);
+    // Fix round 1 item 11 / review 155 C17: the verdict now leads the
+    // sentence (D-3249), the path follows.
+    expect(r.stderr).toMatch(/unreadable: .*\.ccrc\/floor — fix its permissions by hand/);
     expect(r.stderr).not.toMatch(/malformed/);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
@@ -2734,8 +2796,10 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
       `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 projection=not-configured state=below-floor`);
     expect(r.stdout).toMatch(/^this box: v3\.0\.0 \(oldsha[0-9a-f]*\) · target: v2\.0\.0 — below this box's floor v3\.0\.0; update refuses it without --downgrade$/m);
     // A measurement: the refusal's own voice is absent, nothing fetched past
-    // SHA256SUMS, nothing backed up, the floor untouched.
-    expect(r.stderr).not.toMatch(/is below this box's floor|floor is malformed|floor is unreadable/);
+    // SHA256SUMS, nothing backed up, the floor untouched. Fix round 1 item
+    // 11 reordered the two die sentences (verdict leads); the negative
+    // check follows the new wording.
+    expect(r.stderr).not.toMatch(/is below this box's floor|malformed floor|unreadable: .*floor/);
     expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
@@ -3177,16 +3241,23 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
   it('_ccrc_die reports `failed` only once the run is reporting, only from the run\'s own shell, with the prefix in front (the one hook)', () => {
     // `ccrc-install.test.ts:4133`'s idiom: the ONE-LINE definition extracted
     // from the shipped file and run alone, `_upd_phase` shadowed by a recorder.
+    // Fix round 1 item 11 / review 155 C17: `_ccrc_die` now calls
+    // `_upd_redact` (a multi-line function, extracted by its own block regex,
+    // never a one-liner), so this harness must pick that definition up too —
+    // without it, `_ccrc_die`'s body hits "_upd_redact: command not found"
+    // rather than the sentence this test means to measure.
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const progLine = /^PROG=.*$/m.exec(src);
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
     const dieLine = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
     expect(progLine, 'ccd/ccrc has no PROG=').not.toBeNull();
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
     expect(dieLine, 'ccd/ccrc has no one-line _ccrc_die').not.toBeNull();
     const home = mkTmp('ccrc-update-die-hook-');
     const rec = join(home, 'phase-calls');
     const run = (body: string): Result => {
       const p = spawnSync(BASH, ['-c', [
-        'set -uo pipefail', progLine![0], dieLine![0],
+        'set -uo pipefail', progLine![0], redactBlock![0], dieLine![0],
         `_upd_phase() { printf '%s|%s\\n' "$1" "$2" >> '${rec}'; }`,
         'UPD_FAIL_PREFIX=""', body,
       ].join('\n')], { encoding: 'utf8' });
@@ -3202,6 +3273,133 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code).toBe(1);
     expect(r.stderr).toBe('ccrc: the release failed\n');
     expect(readFileSync(rec, 'utf8')).toBe('failed|provenance: the release failed\n');
+  });
+
+  // Fix round 1 item 11 / review 155 C17: `_upd_redact` itself, extracted
+  // and called directly — a normal URL (no userinfo) and an unrelated '@'
+  // past the authority (a query string) pass through BYTE FOR BYTE, never
+  // mangled by a redaction that is too eager; a credentialed one loses only
+  // the userinfo; the home directory becomes `~`, literally (not the
+  // process's real $HOME re-expanded through the replacement side of a
+  // bash substitution — the exact bug this fix's own first draft shipped,
+  // measured: `${s//"$HOME"/~}` is a silent no-op, because a bare `~` on
+  // the REPLACEMENT side of `${..//pattern/string}` undergoes tilde
+  // expansion to the CURRENT $HOME before it is ever used as a literal).
+  it('_upd_redact: a normal URL passes through unchanged, a credentialed one loses only the userinfo, and HOME becomes a literal ~ (fix round 1 item 11 / review 155 C17)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
+    const home = mkTmp('ccrc-update-redact-unit-');
+    const call = (text: string): string => {
+      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+        { env: { HOME: home }, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    // No userinfo: byte for byte, including a query-string '@' past the
+    // authority (the comment above `_upd_redact`'s own strip states this).
+    const plain = 'https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS';
+    expect(call(plain)).toBe(plain);
+    const withQueryAt = 'https://example.com/path?email=a@example.com&x=1';
+    expect(call(withQueryAt)).toBe(withQueryAt);
+    // Userinfo stripped, host and path untouched.
+    expect(call('http://user:s3cretTOKEN@127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS'))
+      .toBe('http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS');
+    // HOME becomes a LITERAL tilde character, not the redaction's own
+    // process $HOME re-expanded back in.
+    expect(call(`${home}/.ccrc/floor`)).toBe('~/.ccrc/floor');
+  });
+
+  // Fix round 1 item 11 / review 155 C17: a CCRC_RELEASE_BASE_URL carrying
+  // userinfo must not reach stdout, stderr or update.json — for `update`
+  // AND for `rollback` (two different die sites: `_upd_resolve`'s
+  // "download failed: …" and `_upd_asset_listed`'s pre-detach check). A
+  // poisoned `curl` (always exit 99, never a real network call, no local://
+  // stub in the way) makes every release-host fetch fail immediately and
+  // deterministically, so this measures the REAL `_ccrc_die` -> `_upd_redact`
+  // path end to end, not a fixture's own text.
+  it('a credentialed CCRC_RELEASE_BASE_URL never reaches stdout, stderr or update.json — update and rollback (fix round 1 item 11 / review 155 C17)', () => {
+    const secret = 's3cretTOKEN';
+    for (const verb of ['update', 'rollback'] as const) {
+      const home = mkTmp(`ccrc-redact-secret-${verb}-`);
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      writeFileSync(join(home, '.local', 'bin', 'curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+      const env = {
+        ...process.env, HOME: home,
+        PATH: `${join(home, '.local', 'bin')}:${process.env['PATH'] ?? ''}`,
+        CCRC_RELEASE_BASE_URL: `http://user:${secret}@127.0.0.1:1/rel`,
+      };
+      const args = verb === 'update' ? ['update', '--to', 'v0.0.1'] : ['rollback', '--to', 'v0.0.1', '--from', 'pwa'];
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), ...args], { env, encoding: 'utf8' });
+      expect(r.stdout, `${verb} stdout`).not.toContain(secret);
+      expect(r.stderr, `${verb} stderr`).not.toContain(secret);
+      const jsonPath = join(home, '.ccrc', 'update.json');
+      if (existsSync(jsonPath)) {
+        expect(readFileSync(jsonPath, 'utf8'), `${verb} update.json`).not.toContain(secret);
+      }
+      // A measurement, not just an absence: something DID fail (the point
+      // of this run), so a passing test is not vacuously green.
+      expect(r.status, `${verb} must actually have refused`).not.toBe(0);
+    }
+  });
+
+  // Fix round 1 item 11 / review 155 C17: the floor death's update.json
+  // DETAIL keeps its VERDICT (D-3249) even with a HOME long enough that the
+  // RAW path alone would have exceeded `_upd_json_str`'s 200-character cut
+  // — this is what the review originally measured broken ("<absolute
+  // fixture home>/.ccrc/floor is unreada", the verdict word cut off, only
+  // the path surviving). Harness-extracted (`_upd_redact`, `_ccrc_die`,
+  // `_ver_newer`, `_upd_floor_check`, and `_upd_json_str` itself — the
+  // function that actually performs the 200-character cut, never stubbed —
+  // so this measures the REAL cut applied to the REAL redacted detail, the
+  // same idiom the die-hook test above uses for `_ccrc_die` alone.
+  it('a floor death\'s report detail keeps its verdict at the front even with a very long HOME (fix round 1 item 11 / review 155 C17)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const pick = (re: RegExp, what: string): string => {
+      const m = re.exec(src);
+      expect(m, `ccd/ccrc has no ${what}`).not.toBeNull();
+      return m![0];
+    };
+    const detailOut = join(mkTmp('ccrc-update-floor-longhome-out-'), 'detail.json');
+    const harness = [
+      'set -uo pipefail',
+      pick(/^PROG=.*$/m, 'PROG='),
+      pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
+      pick(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
+      pick(/^_ver_newer\(\) \{[\s\S]*?\n\}$/m, '_ver_newer'),
+      pick(/^_upd_floor_check\(\) \{[\s\S]*?\n\}$/m, '_upd_floor_check'),
+      // `_upd_json_str` is `_upd_json_str() ( … )`, a subshell, not a `{…}`
+      // block — a different close character to extract by.
+      pick(/^_upd_json_str\(\) \([\s\S]*?\n\)$/m, '_upd_json_str'),
+      // The REAL `_upd_phase` writes several other fields this harness has
+      // no use for; only its DETAIL argument, run through the REAL
+      // `_upd_json_str`, is what this pin measures.
+      `_upd_phase() { _upd_json_str "\$2" > ${JSON.stringify(detailOut)}; }`,
+      'UPD_FAIL_PREFIX=""',
+      'UPD_REPORTING=1',
+      'BOX_FLOOR_FILE="$HOME/.ccrc/floor"',
+      '_upd_floor_check --to 0 cli',
+    ].join('\n');
+    // 180 'x's: "unreadable: " (12) + this path + "/.ccrc/floor" (12) would
+    // be well over 200 raw; redacted to `~/.ccrc/floor` it is nowhere close.
+    const longHome = join(mkTmp('ccrc-update-floor-longhome-'), 'x'.repeat(180));
+    mkdirSync(join(longHome, '.ccrc'), { recursive: true });
+    writeFileSync(join(longHome, '.ccrc', 'floor'), 'v9.9.9\n');
+    chmodSync(join(longHome, '.ccrc', 'floor'), 0o000);
+    let r: Result;
+    try {
+      const p = spawnSync('bash', ['-c', harness],
+        { env: { HOME: longHome, UPD_VERSION: 'v2.0.0' }, encoding: 'utf8' });
+      r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    } finally {
+      chmodSync(join(longHome, '.ccrc', 'floor'), 0o644);
+    }
+    expect(r.code, r.stderr).toBe(1);
+    const detailJson = readFileSync(detailOut, 'utf8');
+    expect(detailJson.length, detailJson).toBeLessThanOrEqual(202); // 200 chars + the two quotes
+    const detail = JSON.parse(detailJson) as string;
+    expect(detail).toMatch(/^unreadable: ~\/\.ccrc\/floor/);
+    expect(detail).not.toContain(longHome);
   });
 });
 
@@ -4363,7 +4561,8 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     plantRestoreBox(home, { onInstall: ['printf \'503\\n\' > "$HOME/fixture-release-http"'] });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
-    expect(r.stdout).toMatch(/^update: arm 2: could not ask the release host whether v1\.0\.0 ships a bundle \(curl failed, or the host answered neither 200 nor 404\) — the restore child's own fetch decides$/m);
+    // Fix round 1 item 12: the message now names the probe's own timeout bound.
+    expect(r.stdout).toMatch(/^update: arm 2: could not ask the release host whether v1\.0\.0 ships a bundle within \d+s \(curl failed, timed out, or the host answered neither 200 nor 404\) — the restore child's own fetch decides$/m);
     expect(r.stdout).not.toMatch(/arm2-refused/);
     expect(restoreChildArgv(home)).toEqual([
       join(home, 'ccrc', 'ccd', 'ccrc'), 'update', '--to', 'v1.0.0', '--no-gate', '--from', 'restore',
@@ -4484,9 +4683,12 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     const backupDir = join(home, 'ccrc-backups', '20260101-000000');
     // The child's own refusal, on ITS stderr (inherited straight through) —
-    // never a corrupted copy.
-    expect(r.stderr).toMatch(new RegExp(
-      `^ccrc: ${esc(backupDir)} already exists \\(another backup started in the same second\\) — refusing to reuse a backup directory; nothing on this box was changed by this step$`, 'm'));
+    // never a corrupted copy. Fix round 1 item 11 / review 155 C17: the
+    // absolute HOME is redacted to `~` by `_ccrc_die`'s own hook now, so
+    // this reads `~/ccrc-backups/…`, never the fixture's own tmp path (the
+    // FILESYSTEM checks below still use the real `backupDir`, unredacted).
+    expect(r.stderr).toMatch(
+      /^ccrc: ~\/ccrc-backups\/20260101-000000 already exists \(another backup started in the same second\) — refusing to reuse a backup directory; nothing on this box was changed by this step$/m);
     expect(r.stdout).toMatch(/^update: arm 2 failed \(the restore child exited 1\) — falling to arm 3$/m);
     expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
     expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
@@ -4863,7 +5065,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       '#!/bin/sh\necho "curl: (7) Failed to connect: fixture" >&2\nexit 7\n', { mode: 0o755 });
     const r = runRollback(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists \(curl failed, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
+    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists within \d+s \(curl failed, timed out, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
   });
@@ -4873,7 +5075,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     writeFileSync(join(home, 'fixture-release-http'), '503\n');   // Task 6's knob on the combined curl
     const r = runRollback(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists \(curl failed, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
+    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists within \d+s \(curl failed, timed out, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
     expect(r.stderr).not.toMatch(/is not a published release/);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
@@ -4894,6 +5096,21 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`,
       `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`,
     ]);
+    // Fix round 1 item 12 / review 155 C32: the FIRST SHA256SUMS ask is
+    // `_upd_asset_listed`'s pre-detach check (cmd_rollback's own, BEFORE
+    // update's spine) — a SMALL probe, connect+total bound. The SECOND is
+    // `_upd_resolve`'s own SHA256SUMS fetch, inside cmd_update — connect
+    // bound plus a STALL bound, never a total one (by class with the
+    // tarball fetch beside it in the same recording).
+    const sumsArgv = curlFullArgv(home).filter((l) => l.includes('/SHA256SUMS'));
+    expect(sumsArgv.length, curlFullArgv(home).join('\n')).toBe(2);
+    expect(sumsArgv[0]).toMatch(/--connect-timeout \d+/);
+    expect(sumsArgv[0]).toMatch(/--max-time \d+/);
+    expect(sumsArgv[0]).not.toMatch(/--speed-limit|--speed-time/);
+    expect(sumsArgv[1]).toMatch(/--connect-timeout \d+/);
+    expect(sumsArgv[1]).toMatch(/--speed-limit \d+/);
+    expect(sumsArgv[1]).toMatch(/--speed-time \d+/);
+    expect(sumsArgv[1]).not.toMatch(/--max-time/);
     // Below the floor on purpose, and the floor is never lowered. Fix round
     // 1 item 25 / your Q6 (first bullet): `cmd_rollback` passes BOTH
     // `--downgrade` and `--from rollback` to `cmd_update`, so the caller
@@ -5212,6 +5429,43 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(rep, `reportFrom(${raw})`).not.toBeNull();
     expect(rep!.phase).toBe('failed');
   });
+
+  // Fix round 1 item 12 / review 155 C32: the pre-detach check
+  // (`_upd_asset_listed`, via cmd_rollback's SHA256SUMS ask) against a
+  // release host that ACCEPTS the TCP connection and never answers — a real
+  // `net.createServer` that never writes, NEVER a stubbed curl, so the REAL
+  // curl's own `--max-time` bound is what is measured. `CCRC_RELEASE_PROBE_
+  // MAX_TIME` is overridden small so this pin finishes in a few seconds
+  // rather than the production default (15s, itself well under W5's 20s
+  // spawn deadline — the exact bound this item exists to keep a slow host
+  // under).
+  itLinux('a release host that accepts the connection and never answers is refused within its own bound, named in the sentence (fix round 1 item 12 / review 155 C32)', async () => {
+    const server = createNetServer((socket) => { socket.on('error', () => {}); /* accept; never write; never close */ });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const home = freshUpdateBox('ccrc-rollback-neverending-host-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const env = {
+        ...updateEnv(home),
+        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${port}/rel`,
+        CCRC_RELEASE_PROBE_MAX_TIME: '2',
+        CCRC_RELEASE_CONNECT_TIMEOUT: '2',
+      };
+      const t0 = Date.now();
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
+        { env, encoding: 'utf8', timeout: 20_000 });
+      const elapsedMs = Date.now() - t0;
+      expect(r.status, r.stderr).toBe(1);
+      // Bounded by the OVERRIDDEN probe bound (2s), not left hanging to
+      // curl's own (much longer) defaults or to this test's 20s kill.
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
+      expect(r.stderr).toMatch(
+        /could not ask the release host whether v0\.0\.9 exists within 2s \(curl failed, timed out, or the host answered neither 200 nor 404\)/);
+    } finally {
+      server.close();
+    }
+  }, 20_000);
 
   // Review fix round 1, M5: covered by I1 — once the lock is taken BEFORE
   // the window opens, a NON-contention `_upd_lock` failure (flock missing
@@ -6512,8 +6766,18 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   // Review fix round 1, M7: 150s (above) reds a 3x mutation but tolerates
   // ANY multiplier up to 2.98x. This pair binds the threshold EXACTLY at
   // 2x a 60s deadline: 119s (just under 120s) must NOT be wedged, 121s
-  // (just past) MUST be.
-  itLinux('a holder\'s report at 119s (just UNDER 2x a 60s deadline) is NOT wedged; 121s (just past) IS — the threshold binds at exactly 2x (review fix round 1 M7)', async () => {
+  // (just past) MUST be. Fix round 1 item 0(b) / batch B rereview N2: the
+  // not-wedged half once pinned the stdout age EXACTLY at "119s". The
+  // report is written with `updatedAt = nowS() - 119`, and `holdLock`
+  // (async, polling) plus this script's own start run BEFORE the watchdog
+  // reads its own `date +%s` — so if a second boundary falls in that gap,
+  // the age it measures reads 120s, not 119s: a false red on a byte-exact
+  // regex, measured 2/9 batched runs, 0/10 in isolation. Both 119 and 120
+  // are under the 120s (2x) threshold, so the VERDICT ("not acting while it
+  // lives") is what this pin needs bound, not the exact second — matching
+  // the sibling 90s pin's own `9\ds` tolerance (below). The mutation
+  // `2 * lim` -> `2 * lim + 1` still reds on the 121s half, unaffected.
+  itLinux('a holder\'s report at ~119s (just UNDER 2x a 60s deadline) is NOT wedged; 121s (just past) IS — the threshold binds at exactly 2x (review fix round 1 M7)', async () => {
     const notWedgedHome = watchBox('ccrc-watchdog-wedged-119-');
     report(notWedgedHome, { phase: 'installing', ageS: 119, pid: 4321, from: 'cli' });
     writeFileSync(join(notWedgedHome, 'fixture-unit-state'), 'failed\n');
@@ -6522,7 +6786,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
       const r = runWatchdog(notWedgedHome);
       expect(r.code, r.stderr).toBe(0);
       expect(r.stdout).toMatch(
-        /^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 119s old; not acting while it lives$/m);
+        /^watchdog: updater pid 4321 holds ~\/\.ccrc\/update\.lock — its report is 1(19|20)s old; not acting while it lives$/m);
     } finally { release(holder1); }
 
     const wedgedHome = watchBox('ccrc-watchdog-wedged-121-');
