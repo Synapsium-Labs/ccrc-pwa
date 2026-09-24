@@ -1809,6 +1809,36 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ channel: 'dev', yanked: false });
       });
 
+      // Fix round 5 (review 150, F1): a DRAFT listing row is the fresher
+      // answer (the listing is fetched after the check) and its own upsert
+      // yanks K, so it CONTRADICTS a pending demote whose check row is
+      // non-draft: applying that stale row would un-yank a drafted K.
+      it.each([
+        ['stable', {}],
+        ['prerelease', { prerelease: true }],
+      ])('F1 (round 5): a non-draft %s tags/K never un-yanks a K that this poll\'s listing names as a DRAFT', async (_label, over) => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k, t] },
+          { status: 200, etag: '"eL2"', body: [{ ...k, draft: true }, t] },
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },
+          { status: 304, etag: '"eS2"' },
+          { status: 304, etag: '"eS2"' },
+        ];
+        scriptWithdrawn = [{ status: 200, body: { ...k, ...over } }];   // stale, non-draft
+        for (const now of [1000, 2000, 3000, 4000]) await p.poll(now);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: true });
+        expect(store.newestUnyankedStable()).toBe('v0.0.1');
+      });
+
       // Task review m1: the ETag-keep decision uses the SAME predicate as the
       // apply decision. A remembered listing that already names K as dev
       // AGREES with a pending demote, so it must not suppress the ETag reset:

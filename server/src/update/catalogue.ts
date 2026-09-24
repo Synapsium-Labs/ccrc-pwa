@@ -890,10 +890,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  4 task review, I1: applying a stale "still stable" or "draft" check
    *  over a fresh listing that says non-draft dev would re-promote a
    *  demoted K, or yank a live one — the listing wins). A row absent from
-   *  the facts, or present only as a DRAFT, never vouches either way —
-   *  drafts are never evidence, so that case reads as "no verdict", exactly
-   *  like an absent row: the pending proceeds to `applyWithdrawn` as it
-   *  would with no listing at all. Used at BOTH the apply-decision site
+   *  the facts gives no verdict: the pending proceeds to `applyWithdrawn`
+   *  as it would with no listing at all. A DRAFT row never vouches for K
+   *  against a pending `'yank'` (applying it only yanks again), but it
+   *  CONTRADICTS a pending `'demote'` whose check row is non-draft (fix
+   *  round 5, review 150, F1): the listing is fetched after the check, so
+   *  it is the fresher answer, and its own upsert has just yanked K —
+   *  applying the stale non-draft row would un-yank it. Used at BOTH the apply-decision site
    *  (`pollOnce`, this poll's own fresh facts) and the ETag-keep decision
    *  (`pollOnce`, the remembered facts) — the SAME helper at both sites, so
    *  a remembered listing that would NOT contradict (would let the pending
@@ -903,8 +906,9 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   ): boolean {
     if (facts === null) return false;
     const fact = facts.get(pending.kind === 'yank' ? pending.k : pending.row.tag);
-    if (fact === undefined || fact.draft) return false;
-    if (pending.kind === 'yank') return true;
+    if (fact === undefined) return false;
+    if (pending.kind === 'yank') return !fact.draft;
+    if (fact.draft) return !pending.row.draft;
     return fact.channel === 'stable' || pending.row.draft || pending.row.channel !== 'dev';
   }
 
@@ -1073,10 +1077,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // pending 'demote' whose check found non-draft dev meeting a listing
     // that already names K as dev (the check found exactly what the listing
     // shows), or a pending
-    // 'yank' meeting a listing that does not name K at all — or the listing
-    // gives NO VERDICT (K named only as a DRAFT — a draft row never
-    // vouches, in either direction) — and `applyWithdrawn` runs exactly as
-    // it would with no listing at all, moving the kept tag to T. Before this
+    // 'yank' meeting a listing that does not name K at all or names it only
+    // as a DRAFT (applying only yanks again) — and `applyWithdrawn` runs
+    // exactly as it would with no listing at all, moving the kept tag to T.
+    // A DRAFT row against a pending 'demote' whose check is non-draft
+    // CONTRADICTS it (fix round 5, F1; see `listingContradictsPending`).
+    // Before this
     // fix a repository whose listing endpoint alone stayed live (a partial
     // mirror, spec §7's own example) could either apply a stale yank/demote
     // against a K the SAME poll's listing had just re-confirmed (the
