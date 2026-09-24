@@ -24,7 +24,7 @@ numbers; the spec wave each one implements is named beside it.
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **MERGED** `b501698a` (PR #176, run 128 done), released as v0.0.23 (dev); after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
-| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **awaiting review** (run 130, `ccrc-pwa-clear-river`): wave-done at `432e2731`, PR #184, 13/13 items, one reserve number spent (3315); review run 156 opened; its 11:24 dispatch lost the cap slot to another project's coordinator, and a re-measuring retry loop waits for the next age-out (14:09 UTC); plan `d638c602` + re-points `08cecd10`, `733d295a` |
+| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **fix round 1 of 1 full** (run 130, `ccrc-pwa-clear-river`), sent 2026-09-24 15:20 UTC on review 156 (`rulings-run130-fix1.md`); wave-done was at `432e2731`, PR #184, 13/13 items, one reserve number spent (3315); review run 156 opened; its 11:24 dispatch lost the cap slot to another project's coordinator, and a re-measuring retry loop waits for the next age-out (14:09 UTC); plan `d638c602` + re-points `08cecd10`, `733d295a` |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **fix round 1 of 1 full** (run 129, `ccrc-pwa-keen-meadow`), sent 2026-09-24 14:25 UTC on review 155 (`rulings-run129-fix1.md`); wave-done was at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
@@ -419,6 +419,26 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     four things: leaves a box unable to install or roll back its next release; reports a restore, revert or success
     that did not happen; leaks a secret; or moves a box below its floor without `--downgrade`. That is at most one
     narrow round; after its scoped review, #181 merges.
+- **2026-09-24 15:20 UTC — review run 156 (wave 3 at `432e2731`): one full fix round, bounded now.**
+  - 6 lenses, 69 agents: 16 findings survived (0 of 3 refuted each) and 5 were refuted. Important: F1 (the banner and
+    push body bypass D-3313's `remoteSides`, so they name an unmeasured fleet version) and F2 (the Notifications
+    control is 29 × 25 px, under the tap floor).
+  - Rulings:
+    - F14: "unreachable is not current" binds BuildLine, the banner, the push summary and the push decision. This
+      widens D-3309, so it takes reserve number 3316.
+    - F12: announcement silencing survives a yank, so no older tag is pushed after a newer one was announced. This
+      narrows spec §13's "newest eligible", so it takes 3317.
+    - F7: D-3307 amended in place.
+  - All four of the worker's parked follow-ups are ruled into fixes: element validation, the first-sweep flag, the
+    prefix on W2's warning, and D-3303's wrap text.
+  - Carried: F16 (wave 5's plan quotes stale README anchors into `shared/api.ts`) goes to my re-point of wave 5
+    after waves 3 and 4 merge.
+  - **The bar, committed before any result:** the next review is scoped to this round's delta. It sends back only a
+    behaviour defect that the delta introduces, reachable from a server speaking W2's wire, and that does one of
+    four things: a surface states an unmeasured version, reachability or catalogue state as fact; a push goes out
+    twice for one tag, or for a tag `notify` excludes; a move control is enabled, or `apply`/`rollback` is sent;
+    untrusted text becomes markup or off-origin navigation, or a secret leaks. That is at most one narrow round;
+    after its scoped review, #184 merges.
 
 ## Carried constraints
 
