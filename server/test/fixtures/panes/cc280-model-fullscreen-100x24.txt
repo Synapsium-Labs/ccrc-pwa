@@ -1,0 +1,16 @@
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔
+   Select model
+   Switch between Claude models. Your pick becomes the default for new sessions. For
+   other/previous model names, specify with --model.
+
+   ❯ 1. Default (recommended) ✔  Use the default model (currently Opus 5.5 (1M context)) · $4/$20
+                                 per Mtok
+     2. Opus (1M context)        Opus 5.5 with 1M context · Best for everyday, complex tasks ·
+                                 $4/$20 per Mtok
+   ↓ 3. Fable                    Fable 5.1 · Most capable for your hardest and longest-running
+                                 tasks · $10/$50 per Mtok
+      … +3 models
+
+   ◐ Medium effort (default) ←/→ to adjust
+
+   Enter to set as default · s to use this session only · Esc to cancel

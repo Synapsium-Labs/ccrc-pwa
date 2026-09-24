@@ -479,8 +479,9 @@ const prefixMatches = (a: string, b: string): boolean => {
  *  forgiveness the way ask.ts's `alignAsk` allows when merely deciding which
  *  question is on screen: here the index is about to be TYPED). I1: an
  *  unparsed `dialog` never corresponds — it has no reliable per-position
- *  labels to compare (multi-select menus always parse this way; so does a
- *  capture taken mid-redraw), so treating it as a match would answer a tap
+ *  labels to compare (a multi-select menu parses this way — by its footer on
+ *  older builds, by its row checkboxes on 2.1.280; so does a capture taken
+ *  mid-redraw), so treating it as a match would answer a tap
  *  by sending a stray arrow-key walk into a pane that isn't the numbered
  *  menu it looks like. */
 function questionCorresponds(q: HookAskQuestion, dialog: Dialog | null): boolean {
@@ -563,6 +564,16 @@ function EnvelopeSheet({
   // to tap; the user-facing copy below therefore states that, and stops short
   // of telling the operator what the terminal wants from them.
   const noOptions = !('approval' in ask) && ask.questions[0]!.options.length === 0;
+  // A multi-select question, by the envelope's own JSON. No single tap answers
+  // one: `answerDialog` walks the cursor and presses Enter, and on Claude Code
+  // 2.1.280 Enter on a multi-select row TICKS that box and submits nothing
+  // (measured on real captures); older builds submitted whatever was already
+  // ticked. This used to rest on the pane parse alone — "a multi-select pane
+  // ALWAYS comes back { parsed: false }" — and 2.1.280 broke that by dropping
+  // the footer the parse keyed on. The envelope says it directly, so the gate
+  // no longer depends on how the pane reads. `=== true` because a hook
+  // payload that omitted the field must not read as multi-select either way.
+  const multiSelect = !('approval' in ask) && ask.questions[0]!.multiSelect === true;
   // C1: a real correspondence check, not a null check — see fix round 3 in
   // the file header and `questionCorresponds` above. Approval and questions
   // use different rules because they answer differently: Allow always types
@@ -585,7 +596,7 @@ function EnvelopeSheet({
   const canAnswer =
     'approval' in ask
       ? dialog !== null && dialog.parsed && /^yes/i.test(dialog.options[0]?.label ?? '')
-      : !noOptions && questionCorresponds(ask.questions[0]!, dialog);
+      : !noOptions && !multiSelect && questionCorresponds(ask.questions[0]!, dialog);
 
   const close = (): void => {
     if (busy) return;
@@ -726,23 +737,21 @@ function EnvelopeSheet({
           <p className="dlg-copy">
             {noOptions
               ? 'This envelope carries no options, so there is nothing to tap here — answer it on the terminal pane.'
-              : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
+              : multiSelect
+                ? 'This question takes more than one answer, and a tap here can only send one — pick them on the terminal pane.'
+                : "This can't be matched to what's on the terminal pane yet — answer it there, or wait for it to catch up."}
           </p>
         )}
-        {/* v1: a multiSelect question renders the exact same plain rows as a
-            single-select one — the send path is one digit either way
-            (answerDialog walks to a single option index and confirms; there
-            is no wire capacity to submit more than one). I1 (fix round 3):
-            this comment used to say the scraped path "falls to the raw-pane
-            view instead, so there is none to match" — true, but incomplete.
-            A multi-select pane ALWAYS comes back { parsed: false } (see
-            MULTISELECT_RE in server/src/pane/dialog.ts), and `dialog.parsed`
-            is now part of `canAnswer` (via `questionCorresponds`), so these
-            rows render but can never actually become tappable: the
-            correspondence gate keeps them behind the terminal CTA every
-            time, same as any other unparsed pane. Not a special case for
-            multiSelect — it falls out of the same gate everything else
-            unparsed does. */}
+        {/* v1: a multiSelect question renders the same plain rows as a
+            single-select one, and they are never tappable: answerDialog walks
+            to ONE option index and presses Enter, and there is no wire
+            capacity to submit more than one. Two gates keep it that way, and
+            either alone does: `multiSelect` in `canAnswer` (the envelope's
+            own flag), and the pane parse — `parseDialog` answers
+            { parsed: false } for a multi-select, by its footer on older
+            builds and by the checkboxes on its rows on 2.1.280, and an
+            unparsed dialog never corresponds. The second was the ONLY gate
+            until 2.1.280 dropped the footer it keyed on. */}
         <div className="opts">
           {first.options.map((o, oi) => {
             const idx = oi + 1;

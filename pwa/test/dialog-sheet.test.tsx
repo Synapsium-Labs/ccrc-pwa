@@ -720,7 +720,12 @@ describe('DialogSheet (hook envelope)', () => {
     expect(copy.textContent).toMatch(/wait\s+for it to catch up/i);
   });
 
-  it('renders a multiSelect question\'s options as plain rows too — v1 has no multi-select UI, the send path is one digit either way', () => {
+  it("renders a multiSelect question's options as rows but never lets a tap answer it", () => {
+    // Even against a pane that PARSED and lines up option for option — which
+    // is what 2.1.280 delivered before the server read its checkboxes: its
+    // multi-select footer no longer says "Space to select". A tap walks the
+    // cursor and presses Enter, and Enter on a 2.1.280 multi-select row ticks
+    // that box and submits nothing (measured), so no tap is an answer.
     const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
     renderWithAsk(
       {
@@ -741,6 +746,22 @@ describe('DialogSheet (hook envelope)', () => {
       }),
     );
 
+    const go = screen.getByRole('button', { name: 'Go' });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(spy).not.toHaveBeenCalled();
+    const copy = document.querySelector('.ask-envelope .dlg-copy')!;
+    expect(copy.textContent).toMatch(/more than one answer/i);
+    expect(copy.textContent).toMatch(/terminal pane/i);
+    expect(copy.textContent).not.toMatch(/catch up/i);
+  });
+
+  it.each([false, undefined])('control: the same question with multiSelect %s is tappable against that pane', (multiSelect) => {
+    const spy = vi.spyOn(api, 'answerDialog').mockReturnValue(new Promise(() => {}));
+    renderWithAsk(
+      { questions: [{ question: 'Pick languages', ...(multiSelect === undefined ? {} : { multiSelect }), options: [{ label: 'TS' }, { label: 'Go' }] }] },
+      parsedDialog({ title: 'Pick languages', options: [{ index: 1, label: 'TS' }, { index: 2, label: 'Go' }] }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Go' }));
     expect(spy).toHaveBeenCalledWith(SESSION_ID, 'd-abc', 2);
   });
