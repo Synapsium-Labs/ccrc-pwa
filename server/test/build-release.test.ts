@@ -597,6 +597,7 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(g).toMatch(/^      found: \$\{\{ steps\.look\.outputs\.found \}\}$/m);
     expect(g).toContain('SHA: ${{ github.sha }}');
     expect(g).toContain('REPO: ${{ github.repository }}');
+    expect(g).toContain('GH_TOKEN: ${{ github.token }}');
     // ONE matcher, two copies that must agree: the daily run skips itself on
     // it, and the gate promotes on it. `/ full-suite` is how a job inside a
     // called workflow is named (`<caller job> / <called job>`).
@@ -611,6 +612,72 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(mine).toContain('.name | endswith("/ full-suite")');
     expect(mine).toContain('.app.slug == "github-actions"');
     expect(jq(readFileSync(join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8'))).toBe(mine);
+  });
+
+  // Pinned by EXECUTION, not by regex (round-1 fix, F12-1): a text pin of a
+  // shell `if`/`echo` branch binds its spelling, not its effect — the
+  // reviewer measured `if [ -n "$ids" ]` swapped for `if [ -z "$ids" ]`, and
+  // `found=true` written on both arms, each keeping the regex pins above
+  // green. So the `look` step's own script is extracted, run for real under
+  // GitHub's default `run:` shell (`bash --noprofile --norc -e {0}` on
+  // ubuntu — NOT `-o pipefail`; there is no pipe here, only a command
+  // substitution, and `-e` alone already aborts on its failure, measured),
+  // against a fake `gh` on PATH that logs its argv and answers per case.
+  it('the look step DECIDES found by running it: a green check -> true, none -> false, a failed gh call -> the step fails and found is never written', () => {
+    const script = ((): string => {
+      const src = stableJob('gate');
+      const lines = src.split('\n');
+      const at = lines.findIndex((l) => /^\s*run: \|$/.test(l));
+      expect(at, 'gate has no `run: |` step').toBeGreaterThan(-1);
+      const base = lines[at].match(/^ */)![0].length + 2;
+      const body: string[] = [];
+      for (const l of lines.slice(at + 1)) {
+        if (l !== '' && !l.startsWith(' '.repeat(base))) break;
+        body.push(l.slice(base));
+      }
+      return body.join('\n').trimEnd() + '\n';
+    })();
+
+    const SHA = 'a'.repeat(40);
+    /** Runs the extracted `look` script for real, with a fake `gh` on PATH
+     *  that logs its argv to `gh.log` and then runs `ghBehavior`. */
+    const run = (ghBehavior: string): { status: number | null, output: string, ghLog: string } => {
+      const dir = mkTmp('release-stable-gate-');
+      const scriptFile = join(dir, 'look.sh');
+      writeFileSync(scriptFile, script);
+      const out = join(dir, 'out');
+      writeFileSync(out, '');
+      const binDir = join(dir, 'bin');
+      mkdirSync(binDir);
+      const ghLog = join(dir, 'gh.log');
+      writeFileSync(ghLog, '');
+      writeFileSync(join(binDir, 'gh'), `#!/bin/sh\necho "$*" >> "${ghLog}"\n${ghBehavior}\n`);
+      chmodSync(join(binDir, 'gh'), 0o755);
+      const r = spawnSync('bash', ['--noprofile', '--norc', '-e', scriptFile], {
+        env: { PATH: `${binDir}:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: out, REPO: 'o/r', SHA },
+        encoding: 'utf8',
+      });
+      return { status: r.status, output: readFileSync(out, 'utf8'), ghLog: readFileSync(ghLog, 'utf8') };
+    };
+
+    // (1) gh finds a check run -> found=true, and it asked the right question.
+    const found = run('echo 123');
+    expect(found.status).toBe(0);
+    expect(found.output).toBe('found=true\n');
+    expect(found.ghLog).toContain(`repos/o/r/commits/${SHA}/check-runs?per_page=100`);
+    expect(found.ghLog).toContain('--paginate');
+
+    // (2) gh answers, but finds nothing -> found=false.
+    const none = run('exit 0');
+    expect(none.status).toBe(0);
+    expect(none.output).toBe('found=false\n');
+
+    // (3) the API call itself fails -> the step fails, and promotes nothing:
+    // a failed gate must never assert found=false (that would run `full`
+    // needlessly) or found=true (that would promote unproven).
+    const failed = run('exit 1');
+    expect(failed.status).not.toBe(0);
+    expect(failed.output).not.toMatch(/found=/);
   });
 
   it('full runs only when the gate found nothing, and runs ci.yml itself in full mode', () => {
