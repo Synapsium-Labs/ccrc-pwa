@@ -1538,11 +1538,6 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       '{ IFS= read -r m1; IFS= read -r m2; } < "$BOX_INSTALLED_FILE" || :',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
-      // _upd_write_previous (D-3283, final review B1): a record naming the
-      // running stamp's OWN sha means the running build completed
-      // installing — a real baseline, not a reinstall-in-progress — so the
-      // same-tag keep (below) does NOT fire for it.
-      '{ [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r installed_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || installed_rec=""',
       // W4 Task 4 (D-3254): `_upd_write_previous`
       // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
       // with no record is not a completed baseline.

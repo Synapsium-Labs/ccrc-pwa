@@ -11484,8 +11484,27 @@ _inst_installed() {
   # the write and the transcript (D-3136 m3): `CCRC_UPDATE_VERIFIED` being
   # any non-empty value other than `1` must not read as verified in one and
   # not the other.
+  #
+  # HONOURED ONLY FROM `cmd_update`'s OWN STAGED SPINE (fix round 1 item 20 /
+  # review 155 C35): `install.sh` unsets `CCRC_UPDATE_VERIFIED` before every
+  # `exec ... ccrc install` it runs (M6, its own two copies), but the `ccrc
+  # install` VERB itself did not — so a checkout `bash ccd/ccrc install`, or
+  # a wrapper `ccrc install`, run from a shell that happens to export
+  # CCRC_UPDATE_VERIFIED=1 (a stale export, a copy-pasted line) recorded an
+  # unattested tree as VERIFIED, exactly the false claim D-3117 exists to
+  # prevent. `CCRC_UPDATE_SPINE`, set alongside `CCRC_UPDATE_VERIFIED=1` in
+  # the SAME `env` assignment `cmd_update`'s staged-spine call makes (never
+  # separately), names that call's own `$$` — so only a `ccrc install` whose
+  # `$PPID` matches it (a DIRECT child of that exact `cmd_update` process)
+  # honours the variable at all; every other caller, including a bare `ccrc
+  # install` with the variable hand-exported, has it stripped. Attribution,
+  # not authentication (the same caveat `CCRC_UPDATE_LOCK_HELD`'s own D-3257
+  # text carries): it proves this run's PARENT set it, not that `cmd_update`
+  # did, but that is the standing model this codebase accepts elsewhere.
   local verified=""
-  [ "${CCRC_UPDATE_VERIFIED:-}" = 1 ] && verified=1
+  if [ "${CCRC_UPDATE_VERIFIED:-}" = 1 ] && [ "${CCRC_UPDATE_SPINE:-}" = "$PPID" ]; then
+    verified=1
+  fi
   { if [ -n "$verified" ]; then
       printf '%s\n' "${BOX_BUILD[0]}"
     else
@@ -11729,6 +11748,15 @@ cmd_update() {
     # whose sentence waits until the machine line is out (rollout reads the
     # first `check: ` line; this file's own --check tests read line 1).
     _upd_target "$to" "$channel" check >/dev/null
+    # Fix round 1 item 22 / review 155 (your Q8): the projection's own
+    # freshness is reported independent of how the target itself resolved —
+    # `--to` short-circuits `_upd_target` before it ever calls
+    # `_upd_intent_state` (rollout's own preflight always passes `--to`), so
+    # read it here, once, when that happened; when `--to` was empty,
+    # `_upd_target` already read it internally and `UPD_INTENT_STATE` still
+    # names it.
+    [ -n "$to" ] && _upd_intent_state
+    local chk_projection="$UPD_INTENT_STATE"
     case "$UPD_TARGET_VIA" in
       --to\ *)              label="target" ;;
       "the control plane"*) label="channel $UPD_TARGET_CHANNEL" ;;
@@ -11744,14 +11772,21 @@ cmd_update() {
     # `none` is what a CONVERGED managed node reads (W2 names only a tag
     # strictly newer than the floor): nothing newer, so compare the box
     # against ITS OWN tag and fetch nothing — the state below then reads
-    # `current` on a completed install (plan D-3266).
+    # `current` on a completed install (plan D-3266). An UNREADABLE, STALE or
+    # MALFORMED projection (`UPD_TARGET_PROJECTION`, item 22 / your Q8) gets
+    # the identical treatment: there is no target to fetch toward either way,
+    # and --check must still answer rather than die.
     # A box with no stamped tag has nothing to compare against.
     local again="update will reinstall"
-    if [ -n "$UPD_TARGET_NONE" ]; then
+    if [ -n "$UPD_TARGET_NONE" ] || [ -n "$UPD_TARGET_PROJECTION" ]; then
       [ "$box" != unversioned ] \
         || _ccrc_die "$UPD_TARGET_LINE; this box records no release version to compare against — name one with --to <tag>"
       UPD_VERSION="$box"
-      again="'ccrc update --to $box' will reinstall (with no --to, update refuses: the control plane names no target)"
+      if [ -n "$UPD_TARGET_PROJECTION" ]; then
+        again="'ccrc update --to $box' will reinstall (with no --to, update refuses: its control plane projection is $UPD_TARGET_PROJECTION)"
+      else
+        again="'ccrc update --to $box' will reinstall (with no --to, update refuses: the control plane names no target)"
+      fi
     else
       _upd_resolve "$UPD_TARGET" >/dev/null
     fi
@@ -11775,11 +11810,15 @@ cmd_update() {
     fi
     while IFS= read -r w; do chk_caps="$chk_caps${chk_caps:+,}$w"; done < <(_ccrc_cap_words)
     # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
-    # caps= and floor= sit BEFORE state= (plan D-3232):
-    # rollout reads state as everything after the LAST `state=`, so a field
-    # appended after it would be swallowed into the state word on every newer
-    # box. An older rollout ignores both; this one tolerates their absence.
-    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor state=$state"
+    # caps=, floor= AND projection= (item 22 / your Q8, fix round 1) sit
+    # BEFORE state= (plan D-3232): rollout reads state as everything after
+    # the LAST `state=`, so a field appended after it would be swallowed into
+    # the state word on every newer box. An older rollout ignores all three;
+    # this one tolerates their absence. `projection=` names the raw
+    # `_upd_intent_state` word (ok|none|not-configured|unreadable|stale|
+    # malformed) — read via `_rollout_field "$line" projection`, the same
+    # grammar `caps=`/`floor=` already use.
+    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor projection=$chk_projection state=$state"
     case "$chk_floor" in
       unreadable|malformed) echo "this box's floor (~/.ccrc/floor) is $chk_floor — 'ccrc update' refuses until it is fixed by hand" ;;
     esac
@@ -11870,20 +11909,30 @@ cmd_update() {
   UPD_REPORT_TARGET="$UPD_TARGET"
   _upd_resolve "$UPD_TARGET"
   UPD_REPORT_TARGET="$UPD_VERSION"
-  # The floor is checked against the RESOLVED version whichever way it was
-  # chosen, and its sentence names that way.
-  _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
   _upd_phase fetching
   _upd_fetch "$allow_unsigned"
   # THE GATE (design §5): the no-op path costs one verified download and no
   # write — no backup, no restart, no sweep. Two operators told to ship the
   # same release no longer restart the fleet twice.
+  #
+  # THE CONVERGED CHECK PRECEDES THE FLOOR CHECK (fix round 1 item 17 /
+  # review 155 C28, your Q2): a converged no-op MOVES NOTHING, so there is
+  # nothing for the floor to guard. Reordered here, not moved earlier than
+  # the fetch — the no-op path still costs one verified download, unchanged
+  # (the comment above). Whether the floor is right to be raised before the
+  # gate runs AT ALL is a design question carried to wave 6, untouched here.
   if [ "$force" -eq 0 ] && _upd_converged; then
     echo "update: this box already runs $UPD_VERSION (${BOX_BUILD[0]}) and that install completed — nothing to do (pass --force to reinstall)"
     _upd_phase done "already converged at $UPD_VERSION"
     _upd_unlock
     return 0
   fi
+  # The floor is checked against the RESOLVED version whichever way it was
+  # chosen, and its sentence names that way. A converged no-op above never
+  # reaches here, so a box sitting below a floor a completed install already
+  # raised (an automatic arm-2 restore, say) still reads `ccrc update` as a
+  # no-op rather than a `failed` report it never earned.
+  _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
   _upd_phase backing-up
   _upd_backup
   # THE BASELINE (design §10): written after the backup and BEFORE the staged
@@ -11940,9 +11989,14 @@ cmd_update() {
   # `unsigned` unless CCRC_UPDATE_VERIFIED=1 is in its environment, and only
   # a bundle that verify-provenance.mjs accepted puts it there. `env -u`
   # on the other arm, so an ambient export can never claim a verification
-  # that did not happen.
-  local -a spine_env=(env -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_LOCK_HELD)
-  [ "$UPD_PROVENANCE" = verified ] && spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1)
+  # that did not happen. `CCRC_UPDATE_SPINE=$$` rides beside
+  # CCRC_UPDATE_VERIFIED=1 (fix round 1 item 20 / review 155 C35): the ONE
+  # place this run asserts verification, so `_inst_installed` can tell ITS
+  # caller (this exact `cmd_update` process, by $PPID) from a bare `ccrc
+  # install` a shell happened to export the variable into.
+  local -a spine_env=(env -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_SPINE)
+  [ "$UPD_PROVENANCE" = verified ] \
+    && spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1 CCRC_UPDATE_SPINE=$$)
   local -a spine=(bash "$UPD_TREE/ccd/ccrc" install)
   if [ -n "$role" ]; then spine+=(--role "$role"); fi
   local inst_rc=0
@@ -12054,7 +12108,7 @@ cmd_update() {
     # moved half-way and why the box was not trusted. `_upd_restore` writes
     # `restoring` and then `reverted`; nothing here writes `failed`.
     _upd_rollback_no_restore "$gate_fail"
-    _upd_restore "$role" "$gate_fail"
+    _upd_restore "$role" "$gate_fail" "$old_version"
     _upd_unlock
     echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $UPD_BACKUP_DIR" >&2
     exit 4
@@ -12085,12 +12139,25 @@ cmd_update() {
     _upd_unlock
     _upd_sweep
   fi
-  _upd_report "$old_desc" "$old_version"
-  if [ "$doctor_failed" -eq 1 ]; then
-    _upd_phase done "$done_detail"
-    exit 3
+  # Fix round 1 item 5 / review 155 C2 (your Q5): everything from here is a
+  # WRITE after the lock was released above (or, on the `--from restore`
+  # branch, never taken from this run at all) — a second `ccrc update` may
+  # already hold ~/.ccrc/update.json for its own in-flight report. Skip
+  # rather than clobber it; the exit code this run reports to ITS OWN caller
+  # is unaffected either way.
+  if _upd_report_is_mine; then
+    _upd_report "$old_desc" "$old_version"
+    if [ "$doctor_failed" -eq 1 ]; then
+      _upd_phase done "$done_detail"
+      exit 3
+    fi
+    _upd_phase done
+  else
+    echo "update: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep, and this run's final report would have overwritten its in-flight one"
+    if [ "$doctor_failed" -eq 1 ]; then
+      exit 3
+    fi
   fi
-  _upd_phase done
 }
 
 # ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
@@ -13040,17 +13107,23 @@ _upd_intent_say() {
 #                    channel locally;
 #   anything else  → refused with `_upd_intent_say`'s sentence.
 # Every refusal is `_ccrc_die` — exit 1, nothing fetched. Sets UPD_TARGET,
-# UPD_TARGET_VIA, UPD_TARGET_CHANNEL, UPD_TARGET_LINE and UPD_TARGET_NONE,
-# and prints UPD_TARGET_LINE: --check silences it here and prints it AFTER
-# its machine line. `none` is also the STEADY STATE of a converged managed
-# node — W2 names a tag only when one is strictly newer than the floor — so
-# with a third argument `check` it does not die: UPD_TARGET_NONE names the
-# key and --check compares the box against itself (plan
-# D-3266). The install path keeps spec §9's
-# refusal, and its sentence names the ordinary reason first.
+# UPD_TARGET_VIA, UPD_TARGET_CHANNEL, UPD_TARGET_LINE, UPD_TARGET_NONE and
+# UPD_TARGET_PROJECTION, and prints UPD_TARGET_LINE: --check silences it
+# here and prints it AFTER its machine line. `none` is also the STEADY
+# STATE of a converged managed node — W2 names a tag only when one is
+# strictly newer than the floor — so with a third argument `check` it does
+# not die: UPD_TARGET_NONE names the key and --check compares the box
+# against itself (plan D-3266). An UNREADABLE, STALE or MALFORMED projection
+# gets the same check-mode exemption (fix round 1 item 22 / review 155, your
+# Q8): `--check` always prints its line, an absent or stale projection is a
+# REPORTED state, never a death, so UPD_TARGET_PROJECTION names the raw
+# state and --check compares the box against itself exactly as `none` does
+# — there is no target to fetch toward either way. The install path keeps
+# spec §9's refusal in both cases, and its sentence names the ordinary
+# reason first.
 _upd_target() {
   local to="$1" ch="$2" mode="${3-}" key="desired" v="" none_why=""
-  UPD_TARGET="" UPD_TARGET_VIA="" UPD_TARGET_CHANNEL="" UPD_TARGET_LINE="" UPD_TARGET_NONE=""
+  UPD_TARGET="" UPD_TARGET_VIA="" UPD_TARGET_CHANNEL="" UPD_TARGET_LINE="" UPD_TARGET_NONE="" UPD_TARGET_PROJECTION=""
   if [ -n "$to" ]; then
     UPD_TARGET="$to"; UPD_TARGET_VIA="--to $to"
     return 0
@@ -13083,7 +13156,13 @@ _upd_target() {
       else
         UPD_TARGET_LINE="update: no control plane on this box — following stable"
       fi ;;
-    *) _ccrc_die "update: $(_upd_intent_say)" ;;
+    *)
+      if [ "$mode" = check ]; then
+        UPD_TARGET_PROJECTION="$UPD_INTENT_STATE"
+        UPD_TARGET_LINE="update: $(_upd_intent_say); --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses"
+      else
+        _ccrc_die "update: $(_upd_intent_say)"
+      fi ;;
   esac
   printf '%s\n' "$UPD_TARGET_LINE"
 }
@@ -13353,18 +13432,34 @@ _upd_converged() {
 # the rerun its own sentence prescribes (`ccrc update --to <v> --force`)
 # would then record `previous: <v>` — the release that just failed — and
 # lose the tag that last completed. (a) the stamp already reads the tag this
-# run installs AND the completed-install record is absent or names a sha
-# OTHER than the running stamp's own: a reinstall is not a new baseline.
-# D-3283: when the record names the RUNNING stamp's own sha, the running
-# build completed installing — it IS a baseline, and is written as
-# `previous` like any other completed build (an `update --to <running tag>
-# --force` whose gate then fails must not leave arm 2 restoring a release
-# BELOW the one that box actually ran). (b) the record is ABSENT (read here,
-# before `cmd_update` removes it for this run): an earlier update's spine
-# never finished. Absent only, not a record that disagrees — a `deploy.sh`
-# push leaves the old record beside its own stamp, and that tree IS what
-# ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2); with none, the
-# stamp is written as before — a keep never invents an absence.
+# run installs: `previous` NAMES THE LAST DIFFERENT RELEASE THAT RAN BEFORE
+# THE CURRENT ONE (fix round 1, review 155 C1, amending D-3283 in place — see
+# below), so a same-tag run is never a new baseline, whether or not THIS
+# box's own install of that tag ever completed. (b) the record is ABSENT
+# (read here, before `cmd_update` removes it for this run): an earlier
+# update's spine never finished. Absent only, not a record that disagrees —
+# a `deploy.sh` push leaves the old record beside its own stamp, and that
+# tree IS what ran. Both keep only a WELL-FORMED `previous` (rc 0 or 2); with
+# none, the stamp is written as before — a keep never invents an absence.
+#
+# D-3283 (amended, fix round 1 item 2 / review 155 C1): this arm used to keep
+# (a) ONLY when the completed-install record was absent or named a sha OTHER
+# than the running stamp's own, and otherwise WROTE `previous` from the
+# running build — reasoning that a record naming the running stamp's own sha
+# means the running build completed installing, so it is a real baseline.
+# That reasoning was wrong: `previous` is the ROLLBACK target, and a same-tag
+# reinstall (`update --to <running tag> --force`, and every `rollout --force`
+# on a converged box) is not a MOVE at all, so it must leave `previous`
+# untouched regardless of whether the running tag's own install completed —
+# writing it there would make a later bare `ccrc rollback` roll the box
+# FORWARD onto the release whose reinstall just failed, and would lose the
+# tag that last completed as a rollback target. The restore-target half of
+# the old D-3283 argument (arm 2 restoring "a release one BELOW the one the
+# box actually ran") is answered structurally instead: `_upd_restore_arm2`
+# now SKIPS itself outright whenever this run's target is the tag that was
+# already running — re-installing that tag is what just failed its gate, so
+# there is nothing for arm 2 to restore TO — and falls straight to arm 3,
+# the pre-update backup, which for a same-tag run IS that same release.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -13374,14 +13469,13 @@ _upd_write_previous() {
       why="a --from $UPD_FROM run returns to a known tag; it is not a new baseline" ;;
     *)
       if [ "$line1" != untagged ] && [ "$line1" = "$UPD_VERSION" ]; then
-        local installed_rec=""
-        { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r installed_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || installed_rec=""
-        # D-3283: a record naming THIS stamp's own sha means the running
-        # build completed installing — it is a baseline, not a reinstall-in-
-        # progress, so this arm does NOT keep (falls through and writes it).
-        if [ -z "$installed_rec" ] || [ "$installed_rec" != "$line2" ]; then
-          why="this box's stamp already reads $UPD_VERSION, the tag this run installs; a reinstall is not a new baseline"
-        fi
+        # D-3283 (amended): a same-tag run is never a move, so it is ALWAYS
+        # kept — whether or not the completed-install record names this
+        # stamp's own sha. `previous` is the last DIFFERENT release; writing
+        # the running tag over it here (as the pre-amendment arm did once
+        # the record agreed) would make a later bare `ccrc rollback` roll
+        # this box FORWARD onto the tag whose reinstall just failed.
+        why="this box's stamp already reads $UPD_VERSION, the tag this run installs; a reinstall is not a new baseline"
       elif [ ! -e "$BOX_INSTALLED_FILE" ]; then
         why="this box's stamp has no completed-install record, so an earlier update's spine never finished and the stamp is not a new baseline"
       fi
@@ -13631,18 +13725,27 @@ _upd_floor_check() {
   [[ "$floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
     || _ccrc_die "$BOX_FLOOR_FILE is malformed (got: '${floor:-empty}') — it records the highest version this box completed an install of; fix or remove it by hand. Nothing on this box was changed"
   _ver_newer "$floor" "$UPD_VERSION" || return 0
-  if [ "$downgrade" -eq 1 ]; then
-    echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
-    return 0
-  fi
   # A RESTORE, A ROLLBACK OR THE WATCHDOG'S ROLLBACK (spec §9): each returns to
   # a known-good tag, which is below the floor by construction — the floor
   # the failed update just raised. The floor file itself is never lowered.
+  #
+  # CHECKED BEFORE `--downgrade` (fix round 1 item 25 / your Q6, first
+  # bullet): `cmd_rollback` calls `cmd_update --to <tag> --downgrade --from
+  # rollback|watchdog` — BOTH flags at once — so when the downgrade check ran
+  # first it won unconditionally, and a plain `ccrc rollback` printed
+  # "proceeding because --downgrade was typed" for a flag the OPERATOR never
+  # typed. The caller word is the truer attribution whenever one applies;
+  # `--downgrade` typed by hand (cli, no caller word) is the one case left
+  # below.
   case "$from" in
     restore|rollback|watchdog)
       echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because this run is --from $from; the floor stays $floor"
       return 0 ;;
   esac
+  if [ "$downgrade" -eq 1 ]; then
+    echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
+    return 0
+  fi
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
@@ -13681,7 +13784,19 @@ _upd_backup() {
   local ts
   ts="$(date +%Y%m%d-%H%M%S)"
   UPD_BACKUP_DIR="$BOX_BACKUP_ROOT/$ts"
-  mkdir -p "$UPD_BACKUP_DIR" || _ccrc_die "cannot create $UPD_BACKUP_DIR — refusing to install with no backup taken"
+  # Fix round 1 item 16 / review 155 C25: `mkdir -p` on the LEAF directory
+  # accepts one that already exists — one-second resolution on `$ts` means a
+  # second backup starting in the same second (arm 2's child, running under
+  # THIS run's lock, backing up again before its own install) would `cp -a`
+  # its files INTO the parent backup's directory, overwriting `ccd` and
+  # nesting dists inside dists; arm 3 would then restore that corrupted mix.
+  # So: `-p` only for the PARENT (`$BOX_BACKUP_ROOT` itself is meant to be
+  # shared across every backup this box ever takes), and a plain `mkdir` for
+  # the leaf, which fails on anything already there — refusing rather than
+  # reusing a backup directory.
+  mkdir -p "$BOX_BACKUP_ROOT" || _ccrc_die "cannot create $BOX_BACKUP_ROOT — refusing to install with no backup taken"
+  mkdir "$UPD_BACKUP_DIR" \
+    || _ccrc_die "$UPD_BACKUP_DIR already exists (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
   if [ -f "$HOME/.ccrc/coord.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
@@ -13824,7 +13939,7 @@ _upd_asset_listed() {
   return 2
 }
 
-# ── _upd_restore <role> <reason> — a failed gate returns the box ───────────
+# ── _upd_restore <role> <reason> <old_version> — a failed gate returns the box ─
 # (design 2026-09-20 §11). Arm 1 (a kept version directory) is wave 6's; this
 # wave has arm 2 — re-install the release that was running, as a synchronous
 # child under THIS run's lock — falling to arm 3 — copy this run's backup back.
@@ -13832,11 +13947,15 @@ _upd_asset_listed() {
 # `_upd_sweep` ever fired, so the supervisors never left the build a restore
 # returns to. Called from the main shell only: arm 2's child proves its lock
 # exemption with $PPID, which inside `$(…)` or a pipeline is a subshell's.
+# `old_version` (fix round 1 item 2 / review 155 C1) is the tag that was
+# RUNNING before this run's staged install — `cmd_update`'s own `old_version`,
+# read before anything changed — passed through so arm 2 can tell a same-tag
+# run (this run's target IS the release that was running) from a real move.
 _upd_restore() {
-  local role="$1" reason="$2"
+  local role="$1" reason="$2" old_version="$3"
   _upd_phase restoring "$reason"
   echo "update: RESTORING — $reason; returning this box to the build it ran before this update (no supervisor sweep: they never moved in this run)"
-  _upd_restore_arm2 "$reason" && return 0
+  _upd_restore_arm2 "$reason" "$old_version" && return 0
   _upd_restore_arm3 "$role" "$reason"
   return 0
 }
@@ -13847,8 +13966,20 @@ _upd_restore() {
 # new ccrc itself is broken the child fails and arm 3 runs; that is the
 # design, and a fixture pins it.
 _upd_restore_arm2() {
-  local reason="$1" prc=0 lrc=0 crc=0
+  local reason="$1" old_version="$2" prc=0 lrc=0 crc=0
   local -a extra=()
+  # Fix round 1 item 2 / review 155 C1: arm 2 NEVER "restores" to the tag
+  # whose install just failed its gate. When this run's target is the
+  # release that was already running, re-installing it is exactly what this
+  # run just did and failed — there is nothing for arm 2 to restore TO, and
+  # a same-tag child would meet `cmd_update`'s own converged no-op (having
+  # installed nothing) and falsely report `REVERTED (arm 2)`. Fall straight
+  # to arm 3, the pre-update backup, which for a same-tag run IS that same
+  # release, so arm 3 is not mixing trees.
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ]; then
+    echo "update: arm 2: this run's target is $UPD_VERSION, the release that was already running — re-installing it is what just failed its gate; arm 3"
+    return 1
+  fi
   _upd_read_previous || prc=$?
   case "$prc" in
     0) ;;
@@ -14184,6 +14315,30 @@ _upd_sweep() {
     fi
   done
   echo "update: sweep: every live claude-session@ supervisor now runs the ccd this update installed (KillMode=process verified per unit before any restart; panes untouched)"
+}
+
+# ── _upd_report_is_mine — guards the writes cmd_update makes AFTER _upd_unlock ─
+# (fix round 1 item 5 / review 155 C2, your Q5). `cmd_update` releases the
+# lock BEFORE `_upd_sweep` (§10 requires it), then still has its own final
+# writes left — `_upd_report`'s stdout lines and the closing `_upd_phase
+# done` — with nobody holding the lock. A second `ccrc update` can take the
+# freed lock during the sweep and write its own in-flight report
+# (`resolving`/`installing`/…); this run's final writes must not clobber
+# THAT newer run's report. rc 1 (skip) ONLY when the report is READABLE and
+# POSITIVELY names a DIFFERENT pid — the one fact this run can confirm is
+# not its own. Absent, unreadable, malformed, or a directory squatting on
+# the name (the sibling hazard `_upd_phase` itself already tolerates, one
+# WARN per phase) is UNCONFIRMED, not "foreign": this guard's job is
+# catching a real second run's report, never inventing a new failure mode
+# for a box that already cannot write update.json at all — that box's
+# writes proceed exactly as before, each one its own WARN if it fails.
+_upd_report_is_mine() {
+  [ -f "$BOX_UPDATE_JSON" ] || return 0
+  local pid=""
+  pid="$(jq -r 'if type == "object" and (.pid | type == "number") then (.pid | tostring) else empty end' \
+    -- "$BOX_UPDATE_JSON" 2>/dev/null)" || pid=""
+  [ -z "$pid" ] && return 0
+  [ "$pid" = "${UPD_REPORT_PID:-$$}" ]
 }
 
 # The from → to report, off MEASUREMENTS: the "from" was read before anything

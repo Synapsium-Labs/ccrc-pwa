@@ -3557,11 +3557,16 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
     // Line 2 (design §5, D-3117): `unsigned` unless the
     // updater asserted it verified the bundle — a plain `ccrc install` from
-    // a checkout verified nothing.
+    // a checkout verified nothing. Fix round 1 item 20 / review 155 C35:
+    // CCRC_UPDATE_VERIFIED is honoured ONLY from `cmd_update`'s own staged
+    // spine (its `CCRC_UPDATE_SPINE=$$` marker, checked by $PPID) — this
+    // verb is invoked directly, with no such marker, so a hand-exported
+    // CCRC_UPDATE_VERIFIED=1 must be stripped exactly like install.sh
+    // already strips it, and the record still reads unsigned.
     const verified = freshBox('ccrc-install-installed-verified-');
     const vsha = gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
-    expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\n`);
+    expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\nunsigned\n`);
     expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
     // Ordering: the line is printed AFTER the wrappers step's own line.
     const lines = ok.stdout.split('\n');
@@ -4446,10 +4451,16 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     const r = runInstall(home, ['version']);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
+    // Fix round 1 item 20 / review 155 C35: a direct `ccrc install` carries
+    // no CCRC_UPDATE_SPINE marker (only `cmd_update`'s own staged-spine call
+    // sets one), so CCRC_UPDATE_VERIFIED=1 hand-exported here is stripped —
+    // `ccrc version` still reads unsigned, exactly as the unverified case
+    // above. The genuine verified case (a real provenance bundle, verified
+    // through `cmd_update`'s own spine) is ccrc-update.test.ts's happy path.
     const verified = freshBox('ccrc-install-version-verified-');
     gitInit(treeRoot(verified));
     expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
-    expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete$/m);
+    expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
   });
 
   it('ccrc version: the incomplete arm carries no provenance suffix — the record names a different, stale install (D-3136 minor 5)', () => {

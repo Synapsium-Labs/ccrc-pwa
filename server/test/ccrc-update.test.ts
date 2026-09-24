@@ -302,6 +302,16 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     // pins the lock"): a restart that leaves a process behind, holding
     // whatever descriptor it was handed.
     '    if [ -f "$HOME/fixture-sweep-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/sweep-linger-pid"; fi',
+    // Fix round 1 item 5 / review 155 C2 (your Q5): the interleaving probe —
+    // a SECOND `ccrc update` takes the freed lock during this sweep and
+    // writes its own in-flight report, foreign pid and all. `mv -f` goes
+    // through this file's own recording `mv` stub (destination named
+    // exactly as `_upd_phase` writes it), so the write shows up in
+    // `update-json-writes` exactly as a real interleaved run\'s would.
+    '    if [ -f "$HOME/fixture-sweep-foreign-report" ]; then',
+    '      printf \'{"target":"v9.9.9","phase":"resolving","startedAt":1,"updatedAt":1,"detail":null,"from":"cli","pid":999999}\' > "$HOME/.ccrc/update.json.tmp.foreign"',
+    '      mv -f "$HOME/.ccrc/update.json.tmp.foreign" "$HOME/.ccrc/update.json"',
+    '    fi',
     '    exit 0 ;;',
     // The gate's unit probe (design §11): `fixture-unit-state` is the one
     // answer for every unit (default active). systemd exits 3 for anything
@@ -1245,18 +1255,29 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
-    let r = runUpdate(home);
+    const r = runUpdate(home);
     expect(r.code, r.stderr).toBe(0);
-    let argv = readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    const argv = readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
     expect(argv[0]).toMatch(/\/ccd\/ccrc$/);
     expect(argv.slice(1)).toEqual(['install', '--role', 'fleet']);
     // Without a recorded role the staged install is invoked bare — its own
-    // default (both) decides, exactly as a fresh `ccrc install` would.
-    writeFileSync(join(home, '.ccrc', 'ccrc.env'), '# no role recorded\n');
-    r = runUpdate(home);
-    expect(r.code, r.stderr).toBe(0);
-    argv = readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
-    expect(argv.slice(1)).toEqual(['install']);
+    // default (both) decides, exactly as a fresh `ccrc install` would. A
+    // SEPARATE box (fix round 1 item 16 / review 155 C25): the stub install
+    // never places a completed-install record, so a second run on the SAME
+    // box would be a genuine (non-converged) reinstall reaching its own
+    // `_upd_backup` — and a real-clock second shared with the first run's
+    // backup is exactly the collision item 16 now refuses; a fresh box
+    // avoids the race rather than freezing the clock for a case that was
+    // never about backups at all.
+    const bare = freshUpdateBox('ccrc-update-role-bare-');
+    plantOldBox(bare, { version: 'v1.0.0' });
+    mkdirSync(join(bare, '.ccrc'), { recursive: true });
+    writeFileSync(join(bare, '.ccrc', 'ccrc.env'), '# no role recorded\n');
+    packRelease(bare, stubTree(bare, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r2 = runUpdate(bare);
+    expect(r2.code, r2.stderr).toBe(0);
+    const argv2 = readFileSync(join(bare, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
+    expect(argv2.slice(1)).toEqual(['install']);
   });
 });
 
@@ -1315,33 +1336,34 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     expect(r.stdout).toMatch(new RegExp(`^update: previous: kept \\(v0\\.9\\.0\\) — a --from ${from} run returns to a known tag; it is not a new baseline$`, 'm'));
   });
 
-  // D-3254 then D-3283 (final review, B1): the rerun D-3240 prescribes
-  // (`ccrc update --to <v> --force`) runs on a box whose stamp already
-  // reads <v> — left there by the spine that died after `_inst_stamp`, with
-  // NO completed-install record (or one naming a DIFFERENT sha) — because
-  // that spine never reached `_inst_installed`. Written from that stamp,
-  // `previous` would name the release that just failed, and a failing
-  // rerun's arm 2 would re-install it. But when the record names the
-  // RUNNING stamp's OWN sha, the running build DID complete — it is a real
-  // baseline, not a reinstall-in-progress, and D-3283 fixes the arm that
-  // used to keep the old `previous` even then (a failed `--force` reinstall
-  // of a box's own running tag must not leave arm 2 restoring a release
-  // BELOW the one the box actually ran).
-  it('a --force reinstall of a COMPLETED baseline writes previous from the running build, not kept (D-3283, was D-3254 (a))', () => {
+  // D-3254, amended in place by fix round 1 item 2 / review 155 C1 (D-3283's
+  // OWN pre-amendment text, which this test used to pin, argued the
+  // opposite — see the ruling quoted in ccd/ccrc's own D-3283 comment).
+  // `previous` names the LAST DIFFERENT release that ran before the current
+  // one: a same-tag `--force` reinstall (`ccrc update --to <running tag>
+  // --force`, and every `rollout --force` on a converged box) is not a MOVE,
+  // so it leaves `previous` UNTOUCHED — whether or not THIS box's own
+  // install of that tag ever completed. Writing the running build there (as
+  // this test used to require) would make a later bare `ccrc rollback` roll
+  // the box FORWARD onto the tag whose reinstall just failed. The restore
+  // target this argument used to worry about is answered structurally
+  // instead: `_upd_restore_arm2` now skips itself outright on a same-tag
+  // run (its own test, in the "automatic restore" describe).
+  it('a --force reinstall of the tag the box already runs, even a COMPLETED baseline, keeps previous — a same-tag run is not a move (fix round 1 item 2 / review 155 C1, amends D-3283)', () => {
     const home = freshUpdateBox('ccrc-update-prev-reinstall-');
     plantOldBox(home, { version: 'v2.0.0' });
     // The record names the RUNNING stamp's OWN sha: this box completed
-    // installing v2.0.0 before this rerun. Per D-3283 that is a baseline,
-    // so it must be WRITTEN as `previous`, not kept.
+    // installing v2.0.0 before this rerun. That no longer matters — a
+    // same-tag reinstall keeps `previous` regardless.
     writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
     writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     const r = runUpdate(home, ['--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the reinstall never ran — the write below would be vacuous').toBe(true);
-    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe(`v2.0.0\n${OLD_SHA}\n`);
-    expect(previous(home)).toBe(`v2.0.0\n${OLD_SHA}\n`);
-    expect(r.stdout).toMatch(new RegExp(`^update: previous: v2\\.0\\.0 \\(${OLD_SHA}\\) — the tag a restore or a bare 'ccrc rollback' returns to$`, 'm'));
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the reinstall never ran — the keep below would be vacuous').toBe(true);
+    expect(readFileSync(join(home, 'staged-saw-previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+    expect(previous(home)).toBe('v1.0.0\nbaselinesha\n');
+    expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\) — this box's stamp already reads v2\.0\.0, the tag this run installs; a reinstall is not a new baseline$/m);
   });
 
   // The keep D-3254 (a) actually protects: the record is present but names a
@@ -1888,6 +1910,39 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toMatch(/DEGRADED/);
   });
 
+  // Fix round 1 item 5 / review 155 C2 (your Q5): the lock is released
+  // BEFORE the sweep (§10 requires it), so a SECOND `ccrc update` can take
+  // it mid-sweep and write its own in-flight report. This run's final
+  // writes — `_upd_report`'s announcement and the closing `_upd_phase done`
+  // — must not clobber that newer run's report: they run only while
+  // update.json still names THIS run's own pid, and skip with one line
+  // otherwise. The reviewer's own probe shape: the systemctl stub's
+  // try-restart arm writes a foreign report (a different pid) mid-sweep.
+  itLinux('a foreign report written mid-sweep survives this run\'s own final writes, which skip with one line (fix round 1 item 5 / review 155 C2, your Q5)', () => {
+    const home = freshUpdateBox('ccrc-update-sweep-foreign-report-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-foreign-report'), 'yes\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    // The run's OWN exit code is unaffected by the skip — it still reports
+    // success to ITS OWN caller; only the JSON write is skipped.
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(
+      /^update: report: skipped — ~\/\.ccrc\/update\.json no longer names this run's pid \(\d+\); a newer update took the lock this run released before the sweep, and this run's final report would have overwritten its in-flight one$/m);
+    // The foreign report SURVIVES — this run never overwrote it with its own
+    // `build: … -> …` announcement or a closing `done`.
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep).toEqual({
+      target: 'v9.9.9', phase: 'resolving', startedAt: 1, updatedAt: 1, detail: null, from: 'cli', pid: 999999,
+    });
+    expect(r.stdout).not.toMatch(/^update: build: /m);
+    // The sweep itself still ran — the skip is only the trailing writes.
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+  });
+
   itLinux('with the drop-in ABSENT the sweep is REFUSED — loud, naming the drop-in — and the update still exits 0 with a degraded line', () => {
     const home = freshUpdateBox('ccrc-update-sweep-refused-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -2073,7 +2128,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     const before = treeDigest(join(home, 'ccrc'));
     const r = runUpdate(home, ['--check']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', caps: CAPS_NOW, floor: 'none', state: 'behind' });
+    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', caps: CAPS_NOW, floor: 'none', projection: 'not-configured', state: 'behind' });
     expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(oldsha[0-9a-f]*\) · latest: v2\.0\.0 — behind$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
@@ -2160,7 +2215,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
     const r = runUpdate(home, ['--check', '--to', 'v1.0.0']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', caps: CAPS_NOW, floor: 'none', state: 'unversioned' });
+    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', caps: CAPS_NOW, floor: 'none', projection: 'not-configured', state: 'unversioned' });
     expect(r.stdout).toMatch(/^this box: unversioned \(deploysha[0-9a-f]*\) · target: v1\.0\.0 — a release install would be the first on this box$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
   });
@@ -2174,17 +2229,19 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     expect(parse(r.stdout)).toMatchObject({ box: 'unversioned', sha: 'none', state: 'unversioned' });
   });
 
-  // W4 Task 12 (plan D-3232): the two fields
-  // rollout reads sit BEFORE state=, because rollout takes state as
-  // everything after the LAST `state=`.
-  it('the machine line is box, sha, target, caps, floor, state — in that order, state last', () => {
+  // W4 Task 12 (plan D-3232), plus `projection=` (fix round 1 item 22 /
+  // review 155, your Q8): every field rollout reads sits BEFORE state=,
+  // because rollout takes state as everything after the LAST `state=`.
+  it('the machine line is box, sha, target, caps, floor, projection, state — in that order, state last', () => {
     const home = freshUpdateBox('ccrc-update-check-fields-');
     plantOldBox(home, { version: 'v1.0.0' });
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
     const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
     expect(r.code, r.stderr).toBe(1);
+    // No role/timer/intent planted: this box's projection reads
+    // not-configured, same word `ccrc channel` would print for it.
     expect(checkLine(r.stdout)).toBe(
-      `check: box=v1.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=none state=behind`);
+      `check: box=v1.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=none projection=not-configured state=behind`);
   });
 
   // Plan D-3248: `--check` is answered by the
@@ -2427,7 +2484,17 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by latest\/download\) is below this box's floor v3\.0\.0/);
     expect(r.stderr).toMatch(/ccrc update --to v2\.0\.0 --downgrade/);
-    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    // Fix round 1 item 17 / review 155 C28: the converged no-op now precedes
+    // the floor check, and the ONLY converged proof (`_upd_converged`) needs
+    // the STAGED tree's own sha — so the full fetch (tarball, then the
+    // bundle) runs before the floor can die, not only the resolve-time
+    // SHA256SUMS read. Never installed: the floor still refuses before any
+    // backup or the staged spine.
+    expect(localUrls(home)).toEqual([
+      `local://${home}/releases/latest/download/SHA256SUMS`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz.sigstore.json`,
+    ]);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
   });
@@ -2443,10 +2510,14 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
-  // W1 minor M7: the floor precedes `--force`'s converged-skip in the call
-  // order, so nothing can bypass it today — and nothing pinned that. `--force`
-  // reinstalls a converged box; it is never a way below the floor
-  // (§18 "the floor is checked on every path").
+  // W1 minor M7: `--force` is never a way below the floor
+  // (§18 "the floor is checked on every path"). Fix round 1 item 17 /
+  // review 155 C28 REORDERED the converged no-op ahead of the floor check
+  // (a converged no-op moves nothing, so the floor has nothing to guard) —
+  // but `--force` disables the converged no-op itself (`[ "$force" -eq 0 ]
+  // && _upd_converged`), so a forced install always reaches the floor check
+  // regardless of the reorder, and still refuses before any backup or
+  // staged spine.
   it('--force cannot take a box below its floor, by --to or by latest/download: W1\'s refusal, no backup, nothing staged (M7)', () => {
     const home = freshUpdateBox('ccrc-update-floor-force-');
     plantOldBox(home, { version: 'v3.0.0' });
@@ -2556,7 +2627,7 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
     expect(r.code).toBe(1);
     expect(checkLine(r.stdout)).toBe(
-      `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 state=below-floor`);
+      `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 projection=not-configured state=below-floor`);
     expect(r.stdout).toMatch(/^this box: v3\.0\.0 \(oldsha[0-9a-f]*\) · target: v2\.0\.0 — below this box's floor v3\.0\.0; update refuses it without --downgrade$/m);
     // A measurement: the refusal's own voice is absent, nothing fetched past
     // SHA256SUMS, nothing backed up, the floor untouched.
@@ -2587,6 +2658,41 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     const r = runUpdate(current, ['--check', '--to', 'v2.0.0']);
     expect(r.code, r.stderr).toBe(0);
     expect(parseCheck(r.stdout)).toMatchObject({ floor: 'v3.0.0', state: 'current' });
+  });
+
+  // Fix round 1 item 17 / review 155 C28 (your Q2): a converged no-op moves
+  // nothing, so the floor has nothing to guard — `cmd_update`'s converged
+  // no-op check now precedes its floor check. The review's own fixture: a
+  // box on v1.0.0 with a completed record (an automatic arm-2 restore's
+  // aftermath, say — the failed v2.0.0 install had already raised the floor
+  // before it was backed out), floor v2.0.0, target resolving to v1.0.0. A
+  // plain `ccrc update` must read this as "nothing to do", not `failed`; the
+  // floor itself is never lowered by a no-op (D-3136's own principle: the
+  // floor only rises).
+  it('a converged box below its own raised floor is still a no-op, exit 0, never `failed` (fix round 1 item 17 / review 155 C28, your Q2)', () => {
+    const home = freshUpdateBox('ccrc-update-floor-converged-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    plantFloor(home, 'v2.0.0');
+    // selfConvergedTree: the staged tree's OWN sha is made to match the
+    // box's running stamp — `_upd_converged`'s real (three-way) comparison,
+    // which this run must actually satisfy now that it runs BEFORE the
+    // floor, not a shortcut that skips the fetch.
+    packRelease(home, selfConvergedTree(home, 'v1.0.0', OLD_SHA), { tag: 'v1.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: this box already runs v1\.0\.0 \(\S+\) and that install completed — nothing to do \(pass --force to reinstall\)$/m);
+    expect(r.stdout).not.toMatch(/is below this box's floor/);
+    expect(r.stderr).toBe('');
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep['phase']).toBe('done');
+    expect(rep['detail']).toBe('already converged at v1.0.0');
+    // The floor is never lowered by a no-op — D-3136's own principle,
+    // restated by this task's ruling ("do not change when the floor is
+    // raised").
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
   });
 });
 
@@ -3909,6 +4015,40 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(String(lastReport(home)['detail'])).toMatch(/^arm3: /);
   });
 
+  // Fix round 1 item 2 / review 155 C1: arm 2 never "restores" to the tag
+  // whose install just failed its gate. A same-tag `--force` reinstall
+  // (this run's target IS the release that was already running) skips arm
+  // 2 outright — re-installing that tag is exactly what just failed — and
+  // falls straight to arm 3, the pre-update backup (which for a same-tag
+  // run IS that same release). The reviewer's own probe: `update --to
+  // v2.0.0 --force` on a v2.0.0 box whose gate fails ends with arm 3, NEVER
+  // `REVERTED (arm 2)`, and `previous` still names v1.0.0.
+  it('a same-tag --force reinstall whose gate fails skips arm 2 and falls straight to arm 3; previous still names the release before this run (fix round 1 item 2 / review 155 C1)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-sametag-');
+    // NOT `plantRestoreBox({ oldVersion: 'v2.0.0' })`: that fixture's own
+    // "old" and (unconditional) "target" packRelease calls both build a
+    // `payload-v2.0.0` tree, and a same-tag run needs only ONE — a second
+    // `stubTree` over the same path leaves a stale MANIFEST entry for
+    // MANIFEST's own (about-to-be-overwritten) content, which then fails
+    // its own digest check. Built directly instead, same tag, once.
+    plantOldBox(home, { version: 'v2.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // The gate fails regardless of version match — /health simply never
+    // answers — so the same-tag skip is exercised on its own, not masked by
+    // a version-mismatch gate failure that a same-tag run could never hit.
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm 2: this run's target is v2\.0\.0, the release that was already running — re-installing it is what just failed its gate; arm 3$/m);
+    expect(restoreChildArgv(home)).toBeNull();
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm3: /);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+  });
+
   it('a `previous` that went missing or unreadable after it was written falls to arm 3 by name — never a guessed tag', () => {
     const cases: Array<[string, string, RegExp]> = [
       ['absent', 'rm -f "$HOME/.ccrc/previous"', /^update: arm 2: no ~\/\.ccrc\/previous — the build this box ran before is not recorded — arm 3$/m],
@@ -4057,6 +4197,52 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(String(last['detail'])).toMatch(/^arm2: restored v1\.0\.0; gate: /);
     expect(r.stdout).not.toMatch(/REVERTED \(arm 3\)/);
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('v1.0.0');
+  });
+
+  // Fix round 1 item 16 / review 155 C25: the backup directory has ONE-
+  // SECOND resolution and `mkdir -p` used to accept one that already
+  // exists — so arm 2's child, starting its own backup in the SAME SECOND
+  // as the parent's (both real `ccrc update` runs, `date` frozen here so
+  // the review's probe is deterministic rather than a real-clock race),
+  // would `cp -a` its files INTO the parent's own backup directory,
+  // corrupting it (overwriting `ccd`, nesting dists inside dists). Now the
+  // child's OWN `_upd_backup` refuses outright — arm 2 falls to arm 3
+  // reporting "arm 2 failed", and arm 3 restores the PARENT's backup,
+  // which the child's refused mkdir never touched.
+  it('the same-second parent and child: the child\'s backup refuses rather than corrupting the parent\'s, and arm 3 restores the UNCORRUPTED one (fix round 1 item 16 / review 155 C25)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-samesecond-backup-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');
+    // ONE frozen backup timestamp for every `date +%Y%m%d-%H%M%S` this run's
+    // processes make — the parent's own backup AND arm 2's child's, so the
+    // collision is deterministic rather than a real-clock race. Everything
+    // else (`+%s`, doctor's own date reads) passes through to the real
+    // binary, untouched.
+    writeFileSync(join(home, 'doctor-stubs', 'date'),
+      '#!/bin/sh\n'
+      + 'if [ "$#" -eq 1 ] && [ "$1" = "+%Y%m%d-%H%M%S" ]; then echo "20260101-000000"; exit 0; fi\n'
+      + `exec ${REAL_DATE} "$@"\n`, { mode: 0o755 });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    const backupDir = join(home, 'ccrc-backups', '20260101-000000');
+    // The child's own refusal, on ITS stderr (inherited straight through) —
+    // never a corrupted copy.
+    expect(r.stderr).toMatch(new RegExp(
+      `^ccrc: ${esc(backupDir)} already exists \\(another backup started in the same second\\) — refusing to reuse a backup directory; nothing on this box was changed by this step$`, 'm'));
+    expect(r.stdout).toMatch(/^update: arm 2 failed \(the restore child exited 1\) — falling to arm 3$/m);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    // The PARENT's own backup — the only one that ever wrote a single file —
+    // still holds the OLD (v1.0.0) tree it snapshotted before installing
+    // v2.0.0, never overwritten by the child's refused attempt.
+    expect(existsSync(join(backupDir, 'ccd'))).toBe(true);
+    expect(readFileSync(join(backupDir, 'ccd'), 'utf8')).toContain('the OLD ccd');
+    const last = lastReport(home);
+    expect(last['phase']).toBe('reverted');
+    expect(String(last['detail'])).toMatch(/^arm3: /);
   });
 });
 
@@ -4453,8 +4639,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`,
       `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`,
     ]);
-    // Below the floor on purpose, and the floor is never lowered.
-    expect(r.stdout).toMatch(/^update: WARN: v1\.0\.0 is below this box's floor v2\.0\.0 \(resolved by --to v1\.0\.0\) — proceeding because .*; the floor stays v2\.0\.0$/m);
+    // Below the floor on purpose, and the floor is never lowered. Fix round
+    // 1 item 25 / your Q6 (first bullet): `cmd_rollback` passes BOTH
+    // `--downgrade` and `--from rollback` to `cmd_update`, so the caller
+    // word must win — a bare `ccrc rollback` never typed `--downgrade`, and
+    // the WARN must not claim it did.
+    expect(r.stdout).toMatch(/^update: WARN: v1\.0\.0 is below this box's floor v2\.0\.0 \(resolved by --to v1\.0\.0\) — proceeding because this run is --from rollback; the floor stays v2\.0\.0$/m);
     expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
     // A rollback is a return to a known tag, not a new baseline (Task 4).
     expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\)/m);
@@ -4867,6 +5057,28 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     }
   });
 
+  // Fix round 1 item 22 / review 155 (your Q8): the same absent projection,
+  // on the same server/both box, but `--check` — the state Q8 names by
+  // example ("an absent or stale projection"). It must not die either:
+  // `check:` prints, `projection=unreadable` says why, and the box is
+  // compared against itself with nothing fetched.
+  itLinux('server or both + projection absent, on --check: `check:` still prints, `projection=unreadable`, never a death (fix round 1 item 22 / review 155, your Q8)', () => {
+    for (const role of ['server', 'both'] as const) {
+      const home = freshUpdateBox(`ccrc-update-intent-absent-check-${role}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantRole(home, role);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+      const r = runUpdate(home, ['--check']);
+      expect(r.code, `${role}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, role).toBe('');
+      expect(checkLine(r.stdout), role).toBe(
+        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=unreadable state=incomplete`);
+      expect(r.stdout, role).toMatch(new RegExp(
+        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+      expect(localUrls(home), role).toEqual([]);
+    }
+  });
+
   itLinux('an in-force projection names the target: download/<desired>, said on stdout, never latest/download', () => {
     const home = managedFleetBox('ccrc-update-intent-ok-');
     plantIntent(home, intentDoc());
@@ -4910,7 +5122,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     }
   });
 
-  itLinux('a lease in the past is stale: refused naming its age and the role\'s remedy, on --check too', () => {
+  itLinux('a lease in the past is stale: a bare update is refused naming its age and the role\'s remedy', () => {
     const cases = [['fleet', PULLER_REMEDY], ['both', SERVER_REMEDY]] as const;
     for (const [role, remedy] of cases) {
       const home = freshUpdateBox(`ccrc-update-intent-stale-${role}-`);
@@ -4920,13 +5132,44 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       plantClock(home);
       plantIntent(home, intentDoc({ issued: String(INTENT_NOW - 1200), lease: String(INTENT_NOW - 300) }));
       packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
-      for (const args of [[], ['--check']]) {
-        const r = runUpdate(home, args);
-        expect(r.code, `${role} ${args.join(' ')}`).toBe(1);
-        expect(r.stderr).toMatch(new RegExp(
-          `^ccrc: update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}$`, 'm'));
-        expect(localUrls(home)).toEqual([]);
-      }
+      const r = runUpdate(home);
+      expect(r.code, `${role}: ${r.stderr}`).toBe(1);
+      expect(r.stderr).toMatch(new RegExp(
+        `^ccrc: update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}$`, 'm'));
+      expect(localUrls(home)).toEqual([]);
+    }
+  });
+
+  // Fix round 1 item 22 / review 155 (your Q8): `--check` on the SAME stale
+  // projection must not die — it always prints its `check:` line, with the
+  // projection's own state reported in `projection=`, and compares the box
+  // against itself (no target to fetch toward) exactly as a `none`
+  // projection does. This is the SPLIT of the case above: the bare-update
+  // arm above still refuses; only `--check` changes.
+  itLinux('a lease in the past is stale: --check reports it in `projection=`, prints its check line and never dies (fix round 1 item 22 / review 155, your Q8)', () => {
+    const cases = [['fleet', PULLER_REMEDY], ['both', SERVER_REMEDY]] as const;
+    for (const [role, remedy] of cases) {
+      const home = freshUpdateBox(`ccrc-update-intent-stale-check-${role}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      plantRole(home, role);
+      if (role === 'fleet') plantSyncTimer(home);
+      plantClock(home);
+      plantIntent(home, intentDoc({ issued: String(INTENT_NOW - 1200), lease: String(INTENT_NOW - 300) }));
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      const r = runUpdate(home, ['--check']);
+      // No completed-install record planted: same version, install never
+      // completed — `incomplete`, exit 1 — but the check line still printed.
+      expect(r.code, `${role}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, role).toBe('');
+      expect(checkLine(r.stdout), role).toBe(
+        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=stale state=incomplete`);
+      expect(r.stdout, role).toMatch(new RegExp(
+        `^update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}; --check reports this box's own version instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+      expect(r.stdout, role).toMatch(
+        /^this box: v1\.0\.0 \(\S+\) · latest: v1\.0\.0 — same version, but the install never completed \(ccrc version explains\); 'ccrc update --to v1\.0\.0' will reinstall \(with no --to, update refuses: its control plane projection is stale\)$/m);
+      // Nothing fetched: the self-compare skips `_upd_resolve` entirely,
+      // exactly as a `none` projection's self-compare does.
+      expect(localUrls(home), role).toEqual([]);
     }
   });
 
@@ -5047,7 +5290,15 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     const r = runUpdate(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by the control plane \(channel stable\)\) is below this box's floor v3\.0\.0/);
-    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
+    // Fix round 1 item 17 / review 155 C28: the converged no-op (which needs
+    // the staged tree's own sha) now precedes the floor check, so the full
+    // fetch runs before the floor can die — see the sibling `latest/download`
+    // case's own comment.
+    expect(localUrls(home)).toEqual([
+      `local://${home}/releases/download/v2.0.0/SHA256SUMS`,
+      `local://${home}/releases/download/v2.0.0/ccrc-v2.0.0.tar.gz`,
+      `local://${home}/releases/download/v2.0.0/ccrc-v2.0.0.tar.gz.sigstore.json`,
+    ]);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
   });
