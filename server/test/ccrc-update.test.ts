@@ -6136,6 +6136,40 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
     expect(localUrls(home)).toEqual([]);
   });
 
+  // m4: the AHEAD direction of the lease window had no `--check` pin either
+  // (only the desired mismatch and the BELOW direction did).
+  itLinux('a lease more than a day after its own issued is refused by `update --check` too (fix round 1 review m4)', () => {
+    const home = managedFleetBox('ccrc-update-intent-lease-ahead-');
+    const issued = INTENT_NOW - 60;
+    const lease = issued + 86_400 + 1;
+    plantIntent(home, intentDoc({ issued: String(issued), lease: String(lease) }));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toBe('');
+    expect(checkLine(r.stdout)).toMatch(/ projection=malformed state=\S+$/);
+    expect(r.stdout).toMatch(new RegExp(
+      `^update: ~/\\.ccrc/update-intent is malformed \\(lease ${lease} does not fall in the day after issued ${issued}\\) — refusing to follow a projection this reader does not recognise; ${esc(PULLER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+    expect(localUrls(home)).toEqual([]);
+  });
+
+  // I2 (review 155 fix round 1 review): "pin both through ccrc channel, and
+  // one through update --check" — the issued-ahead-of-clock direction,
+  // through --check.
+  itLinux('an issued more than a day ahead of this node\'s clock is refused by `update --check` too (I2, fix round 1 review)', () => {
+    const home = managedFleetBox('ccrc-update-intent-issued-ahead-');
+    const issued = INTENT_NOW + 315_360_000;
+    plantIntent(home, intentDoc({ issued: String(issued), lease: String(issued + 900) }));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toBe('');
+    expect(checkLine(r.stdout)).toMatch(/ projection=malformed state=\S+$/);
+    expect(r.stdout).toMatch(new RegExp(
+      `^update: ~/\\.ccrc/update-intent is malformed \\(issued ${issued} is more than a day ahead of this node clock \\(${INTENT_NOW}\\)\\) — refusing to follow a projection this reader does not recognise; ${esc(PULLER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+    expect(localUrls(home)).toEqual([]);
+  });
+
   itLinux('`desired none` refuses and says where the reason is; --channel takes the other line when it names a tag', () => {
     const home = managedFleetBox('ccrc-update-intent-none-');
     plantIntent(home, intentDoc({ desired: 'none', desiredStable: 'none', desiredDev: 'v2.1.0' }));
@@ -6354,7 +6388,7 @@ describe('ccrc channel (design 2026-09-20 §14 — read-only)', () => {
   // Every row must answer `malformed` — except the two the grammar admits.
   itLinux('the grammar: every torn, reordered, widened or foreign document is malformed; a missing final newline is not', () => {
     const doc = intentDoc();
-    const malformed: Array<[string, string | Buffer]> = [
+    const malformed: Array<[string, string | Buffer] | [string, string | Buffer, RegExp]> = [
       ['empty', ''],
       ['torn before end', doc.replace('end\n', '')],
       ['torn mid-line', doc.slice(0, doc.indexOf('desired-dev') + 9)],
@@ -6373,33 +6407,59 @@ describe('ccrc channel (design 2026-09-20 §14 — read-only)', () => {
       ['an unknown auto', intentDoc({ auto: 'on' })],
       ['a NUL byte', Buffer.concat([Buffer.from('epoch 7\0'), Buffer.from(doc.slice('epoch 7'.length))])],
       ['over the 65536-byte cap', doc.replace('epoch 7', `epoch 7${'0'.repeat(70_000)}`)],
-      // C23 (review 155, fix round 1 item 15): the puller's own value checks
-      // (ccd/ccd-update-sync's PASS 3), re-checked here by the READER too —
-      // the puller is not in front of a server/both box's own writer, so
-      // nothing else re-verifies these on the node before this reader would
-      // otherwise trust them.
-      ['desired disagrees with its own channel\'s resolution', intentDoc({ desired: 'v2.1.0' })],
-      ['a lease before its own issued', intentDoc({ issued: String(INTENT_NOW - 60), lease: String(INTENT_NOW - 61) })],
+      // C23 (review 155, fix round 1 item 15) and I2 (review 155 fix round 1
+      // review): the puller's own value checks (ccd/ccd-update-sync's PASS
+      // 3), re-checked here by the READER too — the puller is not in front
+      // of a server/both box's own writer, so nothing else re-verifies
+      // these on the node before this reader would otherwise trust them.
+      // `why` (fix round 1 review m4) pins WHICH check fired, not merely
+      // that some check did.
+      ['desired disagrees with its own channel\'s resolution', intentDoc({ desired: 'v2.1.0' }),
+        /desired v2\.1\.0 disagrees with desired-stable v2\.0\.0/],
+      ['a lease before its own issued', intentDoc({ issued: String(INTENT_NOW - 60), lease: String(INTENT_NOW - 61) }),
+        /lease \d+ does not fall in the day after issued \d+/],
       ['a lease more than a day after its own issued',
-        intentDoc({ issued: String(INTENT_NOW - 60), lease: String(INTENT_NOW - 60 + 86_400 + 1) })],
-      // C23's lease-window check (above) also catches this GRAMMATICALLY —
-      // moved out of the "stays ok" list below (fix round 1 item 15): this
-      // reader still has no SECONDS-vs-MILLISECONDS check of its own (that
-      // stays the puller's job, per this file's header comment), but a
-      // millisecond `lease` is, incidentally, always astronomically further
-      // ahead of `issued` than the day-wide window allows, so it is now
-      // refused by the WINDOW check rather than read as `ok`.
-      ['a 13-digit (ms-shaped) lease is grammatical, but now outside the lease window', intentDoc({ lease: '2000000000000' })],
+        intentDoc({ issued: String(INTENT_NOW - 60), lease: String(INTENT_NOW - 60 + 86_400 + 1) }),
+        /lease \d+ does not fall in the day after issued \d+/],
+      // I2: the reader also refuses an `issued` more than a day AHEAD of
+      // this node's clock (the FUTURE half only — a past `issued` stays
+      // `stale` via the lease, never `malformed`), and a timestamp wider
+      // than the puller's own width bound (`SECONDS_DIGITS=11`,
+      // ccd/ccd-update-sync's own PASS 3 `seconds()`).
+      ['an issued more than a day ahead of this node\'s clock',
+        intentDoc({ issued: String(INTENT_NOW + 315_360_000), lease: String(INTENT_NOW + 315_360_000 + 900) }),
+        /issued \d+ is more than a day ahead of this node clock/],
+      ['an issued wider than 11 digits', intentDoc({ issued: '2000000000000', lease: '2000000000900' }),
+        /issued 2000000000000 carries 13 digits: unix seconds carry at most 11/],
+      // Corrected (fix round 1 review m1): the earlier comment here claimed
+      // this reader "still has no SECONDS-vs-MILLISECONDS check of its
+      // own" — false as of I2, above. The WIDTH check now runs first and is
+      // the one that actually fires on this document; the lease-window
+      // check (which also happened to catch it, incidentally, before I2)
+      // never gets a chance to.
+      ['a 13-digit (ms-shaped) lease is grammatical, but is refused on its width', intentDoc({ lease: '2000000000000' }),
+        /lease 2000000000000 carries 13 digits: unix seconds carry at most 11/],
     ];
-    for (const [name, text] of malformed) {
+    for (const [name, text, why] of malformed) {
       const home = managedFleetBox('ccrc-channel-grammar-');
       plantIntent(home, text);
       const r = runChannel(home);
       expect(r.stdout.split('\n')[0], name).toMatch(/^channel: state=malformed channel=- /);
       expect(r.stdout, name).toMatch(/is malformed \(.+\) — refusing to follow a projection this reader does not recognise; systemctl --user start ccd-update-sync\.service$/m);
+      if (why) expect(r.stdout, name).toMatch(why);
       expect(r.code, name).toBe(1);
     }
-    for (const [name, text] of [['no final newline', doc.slice(0, -1)]] as const) {
+    for (const [name, text] of [
+      ['no final newline', doc.slice(0, -1)],
+      // m3: the lease window's own edges are pinned, not just its interior —
+      // both are INCLUSIVE (`_upd_intent_state` uses strict `<`/`>`, never
+      // `<=`/`>=`), matching the puller's own `issued <= lease <= issued +
+      // DAY`. `issued` is INTENT_NOW itself (not the usual `-60`) so `now`
+      // never runs strictly past `lease` and flips these into `stale`.
+      ['lease == issued (m3, the inclusive lower edge)', intentDoc({ issued: String(INTENT_NOW), lease: String(INTENT_NOW) })],
+      ['lease == issued + 86400 (m3, the inclusive upper edge)',
+        intentDoc({ issued: String(INTENT_NOW), lease: String(INTENT_NOW + 86_400) })],
+    ] as const) {
       const home = managedFleetBox('ccrc-channel-grammar-ok-');
       plantIntent(home, text);
       const r = runChannel(home);

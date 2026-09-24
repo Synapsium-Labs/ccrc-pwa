@@ -211,6 +211,15 @@ tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]'
 # keeps its own explicit `rm -f` on every failure arm it reaches, so an
 # ordinary refusal is reported and cleaned up promptly rather than waiting on
 # the trap, which is then a no-op over an already-absent file.
+# ONE WINDOW REMAINS (fix round 1 review, m6, answer 3): bash runs its EXIT
+# trap as soon as a SIGTERM arrives, WITHOUT waiting for its foreground
+# child to finish (measured) — so a SIGTERM sent to this script's own bash
+# alone, while the python validator below is still mid-write to `$tmp`,
+# lets that write land AFTER the trap has already run and removed it,
+# leaving the just-written copy behind after all. This is unreachable from
+# an ordinary timer stop: the unit sets no `KillMode`, so systemd's default
+# control-group kill signals the python child too, and it dies with this
+# script rather than outliving it. A comment is the fix, per that answer.
 dir="${DEST%/*}"
 mkdir -p -- "$dir" || { say "could not create ~/.ccrc — nothing was synced"; exit 1; }
 body_tmp="$dir/.update-intent.$$.body.tmp"
@@ -282,8 +291,8 @@ LINES = [
 GRAMMAR = [(key, re.compile(pat)) for key, pat in LINES]
 DOC = re.compile("".join(pat + "\n" for _, pat in LINES))
 CAP = 65536
-DAY = 86400
-SECONDS_DIGITS = 11
+DAY = 86400          # mirrored in ccd/ccrc _upd_intent_state as its own "local DAY=86400" (fix round 1 review, m3) -- keep both literals identical
+SECONDS_DIGITS = 11  # mirrored in ccd/ccrc _upd_intent_state as its own "local SECONDS_DIGITS=11" (fix round 1 review, I2) -- keep both literals identical
 EPOCH_DIGITS_MAX = 18  # D-3265: `_upd_intent_state` refuses epoch/issued/lease wider than 18 digits
 
 def trunc(v, cap=200):
@@ -308,8 +317,17 @@ try:
     # PASS 0 — the raw bytes, before any decoding (D-3280).
     if b"\x00" in raw:
         raise ValueError("the document contains a NUL byte")
-    if len(raw) >= CAP:
-        raise ValueError("the document is %d bytes, at or over the 65536-byte cap" % len(raw))
+    # Review 155 fix round 1 review, m2: len(raw) can only be a TRUE size up
+    # to CAP (the bounded read above never returns more than CAP + 1 bytes),
+    # so a message naming the read own ceiling (65537) as though it were the
+    # document real size is false -- the real size could be far larger.
+    # "== CAP" still names the real, exact size (the read was not truncated
+    # short of it); "> CAP" (only ever CAP + 1 under this bound) says only
+    # "more", never a specific count it cannot back up.
+    if len(raw) > CAP:
+        raise ValueError("the document is more than %d bytes, at or over the %d-byte cap" % (CAP, CAP))
+    if len(raw) == CAP:
+        raise ValueError("the document is %d bytes, at or over the %d-byte cap" % (CAP, CAP))
     text = raw.decode("utf-8")
     # PASS 1 — per line, for the diagnostic.
     v = {}

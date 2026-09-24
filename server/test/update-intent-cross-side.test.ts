@@ -329,8 +329,10 @@ describeLinux('the real route → the real ccd-update-sync → the real _upd_int
     // by pass 1's off-grammar check, and would not reach either.
     const cases: ReadonlyArray<readonly [string, string, RegExp]> = [
       ['torn — no `end` line', body.replace(/end\n$/, ''), /the document is not exactly nine lines/],
+      // fix round 1 review, m2: the over-cap message says "more than", never
+      // a specific byte count the bounded read cannot back up.
       ['over the cap', body.replace(/^epoch \d+$/m, `epoch 1${'0'.repeat(70_000)}`),
-        /the document is \d+ bytes, at or over the 65536-byte cap/],
+        /the document is more than 65536 bytes, at or over the 65536-byte cap/],
       ['milliseconds in issued and lease', times1000(body), /issued carries 13 digits/],
       ['desired disagrees with desired-stable', body.replace('\ndesired v0.0.11\n', '\ndesired v0.0.12\n'),
         /desired v0\.0\.12 disagrees with desired-stable v0\.0\.11/],

@@ -1552,7 +1552,7 @@ UPD_HEALTH_ADDR=""     # _upd_health_version: the host:port it asked
 # UPD_TARGET*, and `--check`, the floor and `ccrc channel` read those.
 UPD_INTENT_STATE=""           # ok|none|not-configured|unreadable|stale|malformed
 UPD_INTENT_ROLE=""            # the recorded CCRC_ROLE (fleet|server|both), or "" — absent or unrecognised
-UPD_INTENT_WHY=""             # the state's reason; spliced into its sentence, never a byte of the file
+UPD_INTENT_WHY=""             # the state's reason; spliced into its sentence — this function's own words, or a GRAMMAR-VALIDATED document value (review 155 fix round 1 review, m1), never a raw byte of the file
 UPD_INTENT_EPOCH=""           # the eight document fields — set on ok|none ONLY
 UPD_INTENT_ISSUED=""
 UPD_INTENT_LEASE=""
@@ -13594,9 +13594,15 @@ _upd_unlock() {
 # NOT in front of a server/both box's own writer: `desired` must agree with
 # its own `desired-<channel>` line, and `lease` must fall in
 # `[issued, issued + DAY]` — the puller's own loose `DAY` bound, never W2's
-# real ~15-minute lease length. `UPD_INTENT_WHY` is built from this
-# function's own words, never from the file's bytes. Always rc 0; prints
-# nothing.
+# real ~15-minute lease length. TWO MORE (review 155 fix round 1 review, I2):
+# `issued`/`lease` wider than 11 digits (`ccd/ccd-update-sync`'s own
+# `SECONDS_DIGITS = 11`, its PASS 3 `seconds()`), and an `issued` more than a
+# day AHEAD of this node's clock — the FUTURE direction only; the PAST
+# direction is never re-checked here, or an old `issued` would read
+# `malformed` instead of spec §9's own `stale`. `UPD_INTENT_WHY` is built
+# from this function's own words, or a GRAMMAR-VALIDATED document value (the
+# checks below splice in `issued`/`lease`/`desired`, already grammar-checked
+# above) — never a raw byte of the file. Always rc 0; prints nothing.
 _upd_intent_state() {
   local LC_ALL=C   # `-n 65536` is a BYTE cap only under C (`_acct_pool_state`'s reason)
   local f="$BOX_INTENT_FILE" role="" body="" tail="" rest="" now="" k v i want=""
@@ -13669,30 +13675,65 @@ _upd_intent_state() {
     fi
     vals[i]="$v"
   done
-  # C23 (review 155, fix round 1 item 15): the puller's own VALUE checks
-  # (ccd/ccd-update-sync's PASS 3), re-checked here too. The puller is not in
-  # front of a server/both box's own writer — the server process is that
-  # box's ONLY writer of this file (this function's own header, above) — so
-  # nothing else on the node re-verifies a document that disagrees with
-  # itself before this reader would otherwise trust it: a `desired` that
-  # disagrees with its own `desired-<channel>` line, or a `lease` outside
-  # `[issued, issued + DAY]` in EITHER direction (before its own `issued`, or
-  # further ahead than the grammar bound above tolerates).
+  # An unmeasurable clock is not "in force": without this, `(( > ))` on an
+  # empty `now` reads 0 and every lease passes. Read once, ahead of every
+  # value check below that needs it (review 155 fix round 1 review, I2).
+  now="$(date +%s)"
+  if [[ ! "$now" =~ ^[1-9][0-9]{0,17}$ ]]; then
+    UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY="the clock did not answer: date +%s"
+    return 0
+  fi
+  # C23 (review 155, fix round 1 items 15 and I2): the puller's own VALUE
+  # checks (ccd/ccd-update-sync's PASS 3), re-checked here too. The puller is
+  # not in front of a server/both box's own writer — the server process is
+  # that box's ONLY writer of this file (this function's own header, above)
+  # — so nothing else on the node re-verifies a document that disagrees with
+  # itself, or with this node's own clock, before this reader would
+  # otherwise trust it.
+  #
+  # THE WIDTH BOUND (I2). `SECONDS_DIGITS` mirrors ccd/ccd-update-sync's own
+  # `SECONDS_DIGITS = 11` (its PASS 3 `seconds()` function) — kept identical,
+  # the puller's digit-WIDTH bound on `issued`/`lease`, distinct from the
+  # 18-digit GRAMMAR bound above (D-3265, bash's own 2^63-1 wrap point): a
+  # 13-digit millisecond value is grammatical but is refused here on its
+  # width, checked issued-then-lease exactly as the puller's own two
+  # `seconds()` calls are ordered.
+  local SECONDS_DIGITS=11
+  if (( ${#vals[1]} > SECONDS_DIGITS )); then
+    UPD_INTENT_STATE=malformed
+    UPD_INTENT_WHY="issued ${vals[1]} carries ${#vals[1]} digits: unix seconds carry at most $SECONDS_DIGITS until the year 5138, a millisecond value carries 13"
+    return 0
+  fi
+  if (( ${#vals[2]} > SECONDS_DIGITS )); then
+    UPD_INTENT_STATE=malformed
+    UPD_INTENT_WHY="lease ${vals[2]} carries ${#vals[2]} digits: unix seconds carry at most $SECONDS_DIGITS until the year 5138, a millisecond value carries 13"
+    return 0
+  fi
+  # THE FUTURE HALF ONLY (I2). An `issued` further ahead of this node's clock
+  # than `DAY` allows cannot be judged and is refused — the direction that
+  # would otherwise read an EXPIRED lease as live. The PAST half is
+  # deliberately NEVER re-checked here: spec §9 ("`lease` in the past ->
+  # `stale`") already answers an old `issued` through the staleness check
+  # below, and folding `abs()` in here would turn that `stale` into
+  # `malformed`, which no ruling asks for.
+  if (( 10#${vals[1]} > now + DAY )); then
+    UPD_INTENT_STATE=malformed
+    UPD_INTENT_WHY="issued ${vals[1]} is more than a day ahead of this node clock ($now)"
+    return 0
+  fi
+  # THE LEASE WINDOW (item 15). `lease` outside `[issued, issued + DAY]` in
+  # EITHER direction (before its own `issued`, or further ahead than the
+  # bound above tolerates).
   if (( 10#${vals[2]} < 10#${vals[1]} || 10#${vals[2]} > 10#${vals[1]} + DAY )); then
     UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="lease ${vals[2]} does not fall in the day after issued ${vals[1]}"
     return 0
   fi
+  # THE CHANNEL AGREEMENT (item 15). `desired` must agree with its own
+  # `desired-<channel>` line.
   want="${vals[5]}"
   [ "${vals[3]}" = dev ] && want="${vals[6]}"
   if [ "${vals[4]}" != "$want" ]; then
     UPD_INTENT_STATE=malformed; UPD_INTENT_WHY="desired ${vals[4]} disagrees with desired-${vals[3]} $want"
-    return 0
-  fi
-  # An unmeasurable clock is not "in force": without this, `(( > ))` on an
-  # empty `now` reads 0 and every lease passes.
-  now="$(date +%s)"
-  if [[ ! "$now" =~ ^[1-9][0-9]{0,17}$ ]]; then
-    UPD_INTENT_STATE=unreadable; UPD_INTENT_WHY="the clock did not answer: date +%s"
     return 0
   fi
   if (( now > 10#${vals[2]} )); then

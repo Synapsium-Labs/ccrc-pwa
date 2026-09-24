@@ -486,18 +486,20 @@ describe('ccd-update-sync: the validator reads at most the cap plus one byte (C2
   // at all — the same gap a curl older than 8.4.0 has for real on a chunked
   // body (this file's own header) — so a body far over the cap reaches the
   // validator whole on disk. What proves the READ itself is bounded, never
-  // `f.read()` on the whole file, is that the refusal names EXACTLY cap+1
-  // bytes (65537), never the document's true, much larger size: a read
-  // bounded to `CAP + 1` can report no other length once it has stopped
-  // short of EOF.
-  it('a document far over the cap is refused, and the byte count in the refusal is capped at 65537', () => {
+  // `f.read()` on the whole file, is that the refusal never names a SIZE
+  // past the cap: a read bounded to `CAP + 1` cannot know the document's
+  // true, much larger size, and (fix round 1 review, m2) saying so once
+  // would be a false measurement, not a true one — so it says "more than",
+  // never a specific count it cannot back up.
+  it('a document far over the cap is refused by "more than" — never a specific size past the cap (fix round 1 review m2)', () => {
     const home = box('upd-sync-bounded-read-');
     const huge = `epoch 7\n${'x'.repeat(10 * 1024 * 1024)}`;   // 10 MiB+, no `end`
     answer(home, huge);
     const r = sync(home);
     expect(r.code, r.stderr).toBe(1);
-    expect(r.stderr).toMatch(/the document is 65537 bytes, at or over the 65536-byte cap/);
-    expect(r.stderr).not.toMatch(/10485\d{3}/);   // sanity: never the real ~10 MiB size
+    expect(r.stderr).toMatch(/the document is more than 65536 bytes, at or over the 65536-byte cap/);
+    expect(r.stderr).not.toMatch(/65537/);         // the read's own ceiling, not a real size
+    expect(r.stderr).not.toMatch(/10485\d{3}/);    // sanity: never the real ~10 MiB size
     expect(residue(home)).toEqual([]);
   });
 });
