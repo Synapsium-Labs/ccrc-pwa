@@ -1100,3 +1100,74 @@ describe('the windows the proofs are asked in — each rung stands for the one a
     expect(unsupervised(), 'unsupervise still ran first').toHaveLength(1);
   }, 90_000);
 });
+
+describe('a vanished child tree lets a nested line count as gone ONLY when that is proven — inside the tree, and nothing standing (spec §5.5)', () => {
+  it('G1: a symlinked ANCESTOR re-pointed since the interrupt — the child’s tree and its nested checkout still stand at the resolved path, and nothing is removed', () => {
+    // The literal workdir is absent (so the vanished-tree arm is taken), but
+    // the nested lines name RESOLVED paths, under the old target, where the
+    // tree still stands. Not inside the workdir's resolved root: refused.
+    const real = path.join(h.home, 'wtreal');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, path.join(h.home, 'worktrees'));
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    fs.unlinkSync(path.join(h.home, 'worktrees'));
+    fs.mkdirSync(path.join(h.home, 'worktrees'));
+    const realInner = path.join(real, 'demo', 'quiet-basin', 'inner');
+    const before = treeOf(realInner);
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(realInner), 'the standing nested checkout was not removed').toEqual(before);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'its branch survives').toContain('ws/nested');
+    expect(fs.existsSync(path.join(real, 'demo', 'quiet-basin', 'f1.txt')), 'the child’s tree stands').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain('strictly inside');
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:children');
+  }, 90_000);
+
+  it('G2u: a record line naming a sibling worktree, the child’s tree gone — the sibling, its branch and its unique commit survive', () => {
+    // The same line with the tree PRESENT is the "NOT inside the child’s tree"
+    // case above (G2c); both are refused by the one proof.
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    const sib = path.join(h.home, 'worktrees', 'demo', 'sibling');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/sibling', sib);
+    fs.writeFileSync(path.join(sib, 'uniq.txt'), 'unique committed work\n');
+    h.git(sib, 'add', 'uniq.txt'); h.git(sib, 'commit', '-m', 'uniq');
+    const sha = h.git(sib, 'rev-parse', 'HEAD');
+    h.sh(`_ws_tombstone_patch ${CHILD_ID} '${JSON.stringify({ children: [`${fs.realpathSync(sib)}\tws/sibling\t${sha}`] })}'`);
+    const before = treeOf(sib);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(sib), 'the sibling worktree survives').toEqual(before);
+    expect(h.git(c.main, 'branch', '--list', 'ws/sibling')).toContain('ws/sibling');
+    expect(h.git(c.main, 'for-each-ref', '--contains', sha, '--format=%(refname)'), 'its unique commit is still reachable')
+      .toContain('refs/heads/ws/sibling');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('strictly inside');
+  }, 90_000);
+
+  it('a checkout that REAPPEARS at a nested path while the tree is gone is refused, never removed as a stale record', () => {
+    // Reached with the suite's function-override device: the proof's own call
+    // is the moment a writer creates the path.
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const tok = resumeToken('children');
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const pre = `eval "$(declare -f _ws_reclaim_nested_proven | sed '1s/_ws_reclaim_nested_proven/_orig_np/')";`
+      + ` _ws_reclaim_nested_proven() { mkdir -p "${inner}"; echo late > "${inner}/keep.txt"; _orig_np "$@"; };`;
+    const r = childReclaimVerb(h, tok, { pre });
+    expect(fs.existsSync(path.join(inner, 'keep.txt')), 'what stands at the path survives').toBe(true);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).detail).toContain('stands at');
+  }, 90_000);
+});

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fad5c6e260c34cbe4ce4b9821aa81467762911c31a6e4ef26afc98a974a4c2ca
+# ccrc:generated 1 sha256=2c911582e9609e92aa277c1c503c23f5e84d0065864d121b460ef9f54e69dcb4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24639,12 +24639,19 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # kept in silence.
   # A CHILD TREE THAT HAS VANISHED SINCE THE ACT WAS INTERRUPTED (nothing at
   # all at the workdir: `! -e` and `! -L`; anything else standing there was
-  # refused by `_ws_reclaim_owned`) took its nested checkouts with it: there is
-  # no tree left to prove a path inside, and none to remove. So, exactly as the
-  # vanished arm does for the child's own record (spec §5.5), each nested line
-  # has only git's stale record of it cleared — by its path, `git worktree
-  # remove` with no force flag, never `worktree prune` — and its branch dealt
-  # with as below. Without this a resume here would fail every retry, for ever.
+  # refused by `_ws_reclaim_owned`) took its nested checkouts with it. So,
+  # exactly as the vanished arm does for the child's own record (spec §5.5),
+  # each nested line has only git's stale record of it cleared — by its path,
+  # `git worktree remove` with no force flag, never `worktree prune` — and its
+  # branch dealt with as below; without this a resume here would fail every
+  # retry, for ever. BUT A LINE IS "GONE" ONLY WHEN THAT IS PROVEN, never
+  # assumed from the workdir: the root is the workdir's `_ws_realpath` (its
+  # existing prefix resolved, the missing rest appended), the same proof runs,
+  # and it must end with nothing standing at the path. A symlinked ancestor
+  # re-pointed since the pin leaves the child's tree STANDING at the resolved
+  # path the lines name, and a record line can name a path outside the tree
+  # altogether — `git worktree remove` without a force flag on a clean tree
+  # that stands removes the TREE, not only its record (measured, both).
   if [[ "$phase" == children ]]; then
     childlines=$(_ws_tomb_children "$tomb") || {
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
@@ -24652,15 +24659,19 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     treegone=0
     [[ -e "$workdir" || -L "$workdir" ]] || treegone=1
     wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || wdreal=""
+    (( treegone )) && wdreal=$(_ws_realpath "$workdir")
     while IFS= read -r -u 9 cline; do
       [[ -n "$cline" ]] || continue
       cpath="${cline%%$'\t'*}"; crest="${cline#*$'\t'}"
       cbr="${crest%%$'\t'*}"; chead="${crest#*$'\t'}"; chead="${chead%%$'\t'*}"
-      if (( treegone )); then
-        _WS_NPROOF_GONE=1
-      elif ! _ws_reclaim_nested_proven "$wdreal" "$cpath"; then
+      if ! _ws_reclaim_nested_proven "$wdreal" "$cpath"; then
         _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
           "$_WS_NPROOF_WHY — ccd cannot prove the checkout at $cpath is inside $id's own tree, so nothing further was deleted"
+        return 1
+      fi
+      if (( treegone && ! _WS_NPROOF_GONE )); then
+        _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+          "$id's own tree is gone, yet a checkout stands at $cpath — ccd cannot prove it went with the tree, so nothing further was deleted"
         return 1
       fi
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
@@ -24718,8 +24729,10 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # LEAF IS RE-JUDGED HERE, AT REMOVAL TIME (spec §5.5). `_ws_reclaim_owned`
   # asked it before the settle, and the settle and the nested steps have run
   # since — a window a writer can use (a case swaps the workdir for a link
-  # from INSIDE the settle, and without this test the reclaim removed the
-  # other worktree and reported success). This is the rung for that window.
+  # from INSIDE the settle: without this test, and with git's record of the
+  # workdir also pruned, the reclaim removed the other worktree and reported
+  # success; with the record standing, git's own validation refused). This is
+  # the rung for that window.
   if [[ "$phase" == worktree ]]; then
     if [[ -L "$workdir" ]]; then
       _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
