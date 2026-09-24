@@ -282,6 +282,25 @@ describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
     'settings',                // relative to the worker's own path, not a root path
     '',
     42,
+    // Fix round 1: a single sentinel base is itself a fixed host a payload can
+    // name as its OWN authority, and a resolve against that one base then
+    // reports origin === base — wrongly same-origin. Each form below names a
+    // sentinel host (the retired single base, then each of the current two)
+    // as its authority: protocol-relative, backslash, tab, and with userinfo
+    // ahead of the host (origin ignores userinfo, so this passes a same-host
+    // check too). None of these carry a real app path.
+    '//sw.invalid/x',
+    '/\\sw.invalid/x',
+    '/\t/sw.invalid',
+    '//user@sw.invalid/x',
+    '//sw-a.invalid/x',
+    '/\\sw-a.invalid/x',
+    '/\t/sw-a.invalid',
+    '//user@sw-a.invalid/x',
+    '//sw-b.invalid/x',
+    '/\\sw-b.invalid/x',
+    '/\t/sw-b.invalid',
+    '//user@sw-b.invalid/x',
   ];
 
   it('stashes the url into the notification data, beside the session', async () => {

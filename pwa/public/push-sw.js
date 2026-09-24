@@ -60,20 +60,31 @@ self.addEventListener('push', (event) => {
   );
 });
 
-/** The base `sameOriginPath` resolves against. Only its SCHEME matters: https
- *  is a special scheme exactly as the app's own origin is (http on a dev box is
- *  special too), so a string resolves against it the way navigate() and
- *  openWindow() will resolve it against ours. `.invalid` is reserved (RFC 2606),
- *  so no origin the app is served from can ever equal it. */
-const PATH_BASE = 'https://sw.invalid';
+/** The TWO bases `sameOriginPath` resolves against. Only their SCHEME matters:
+ *  https is a special scheme exactly as the app's own origin is (http on a dev
+ *  box is special too), so a string resolves against them the way navigate()
+ *  and openWindow() will resolve it against ours. `.invalid` is reserved (RFC
+ *  2606), so no origin the app is served from can ever equal either.
+ *
+ *  TWO distinct bases, not one: a candidate that carries its OWN authority
+ *  (protocol-relative `//host`, a backslash or tab the parser folds into `//`,
+ *  or an embedded `user@host`) resolves to that ONE fixed host regardless of
+ *  which base it is given — so a string naming the single base's own host as
+ *  its authority would wrongly pass a one-base check. That string cannot name
+ *  BOTH hosts at once, while a real relative path (no authority of its own)
+ *  resolves onto whichever base it is given and so satisfies both. Requiring
+ *  agreement with both closes the hole without knowing the app's real origin. */
+const PATH_BASE_A = 'https://sw-a.invalid';
+const PATH_BASE_B = 'https://sw-b.invalid';
 
 /** A path this origin serves, or null: a string that starts with '/' and that the
- *  URL parser itself keeps on the base's origin. The parser decides, not a prefix
- *  check, because the parser strips tabs and newlines and reads '\\' as '/', so
- *  '/\t/evil.example' and '/\\evil.example' are both '//evil.example' — another
- *  host — while their second character is neither '/' nor '\\'. Anything else
- *  (absolute, cross-origin, protocol-relative, not a string, empty) is null and
- *  the tap falls back to /s/<sid> or '/'.
+ *  URL parser itself keeps on BOTH sentinel bases' own origin (see PATH_BASE_A/B
+ *  above for why two). The parser decides, not a prefix check, because the parser
+ *  strips tabs and newlines and reads '\\' as '/', so '/\t/evil.example' and
+ *  '/\\evil.example' are both '//evil.example' — another host — while their
+ *  second character is neither '/' nor '\\'. Anything else (absolute,
+ *  cross-origin, protocol-relative, an embedded userinfo, not a string, empty)
+ *  is null and the tap falls back to /s/<sid> or '/'.
  *
  *  It answers the string AS WRITTEN, never the parser's normalised pathname:
  *  '/.//evil.example' is a same-origin page whose pathname is '//evil.example',
@@ -81,7 +92,9 @@ const PATH_BASE = 'https://sw.invalid';
 function sameOriginPath(u) {
   if (typeof u !== 'string' || !u.startsWith('/')) return null;
   try {
-    return new URL(u, PATH_BASE).origin === PATH_BASE ? u : null;
+    return new URL(u, PATH_BASE_A).origin === PATH_BASE_A
+      && new URL(u, PATH_BASE_B).origin === PATH_BASE_B
+      ? u : null;
   } catch {
     return null;
   }
