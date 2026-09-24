@@ -4,6 +4,20 @@
 # (server/test/release-stable.test.ts). No build step, no node — nothing
 # here can produce bytes. The branch's ruleset (no force push, no deletion;
 # D-3130) keeps it fast-forward; the script refuses an untagged merge HEAD.
+#
+# GATED ON THE FULL SUITE (design 2026-09-23 §8). Pull requests run only the
+# server tests their change can affect, so a promotion is where a selector
+# miss must be caught. `gate` asks whether the pushed commit already carries
+# a successful `full-suite` check run — from the daily full run, a manual
+# full run, or an earlier gate; if not, `full` runs ci.yml in full mode, and
+# `promote` runs only on one of those two answers. The gate is here and not
+# in the branch's ruleset because a ruleset's required check refuses the
+# daily run's evidence (GitHub counts only a few events toward one, and the
+# daily and manual runs are not among them). The cost, accepted: the branch
+# moves before the gate answers, so a red gate leaves `stable` pointing past
+# the newest promoted release with no flag flipped — `ccrc rollout` follows
+# the flags, not the branch, so it moves nothing, and the next promotion
+# fast-forwards past it.
 name: release-stable
 
 on:
@@ -15,7 +29,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Reads check runs; nothing else.
+    permissions:
+      checks: read
+    outputs:
+      found: ${{ steps.look.outputs.found }}
+    steps:
+      # The same matcher as ci.yml's daily skip (server/test/build-release.test.ts
+      # holds the two copies equal). A job inside a called workflow is named
+      # `<caller job> / <called job>`, hence the suffix form. A failed API call
+      # fails this job, and a failed gate promotes nothing.
+      - name: Look for a green full-suite check on this commit
+        id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          ids=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+            --jq '.check_runs[] | select(.conclusion == "success" and .app.slug == "github-actions" and (.name == "full-suite" or (.name | endswith("/ full-suite")))) | .id')
+          if [ -n "$ids" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "full-suite is already green on $SHA — promoting without a second run"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "no green full-suite on $SHA — running the full suite first"
+          fi
+
+  # A job that calls another workflow cannot declare timeout-minutes; the
+  # called ci.yml's own jobs carry their deadlines. Its permissions are the
+  # ceiling for every job in the called run, so they are what ci.yml's
+  # select job asks for — read access to Actions included, which select needs to
+  # find the newest trusted map and durations (main-artifact.mjs); a called
+  # job asking for more than this grants fails the run before it starts.
+  full:
+    needs: gate
+    if: needs.gate.outputs.found == 'false'
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      mode: full
+
   promote:
+    needs: [gate, full]
+    # `always()` because `full` is skipped whenever the gate found a green
+    # check, and a skipped need would otherwise skip this job too. The result
+    # checks are then the whole gate: the called run's `verdict` output is
+    # read, not only its result, because a called run in which `full-suite`
+    # never ran is a successful run that proved nothing.
+    if: always() && needs.gate.result == 'success' && (needs.gate.outputs.found == 'true' || (needs.full.result == 'success' && needs.full.outputs.verdict == 'green'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The script's own `gh` call edits the release's flags; nothing else.

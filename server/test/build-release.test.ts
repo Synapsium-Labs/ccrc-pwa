@@ -525,6 +525,12 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
 describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4)', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release-stable.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
+  /** One job's block: its two-space header through the line before the next. */
+  const stableJob = (id: string): string => {
+    const m = new RegExp(`^  ${id}:\\n((?:(?!  [A-Za-z][\\w-]*:\\n).*\\n?)*)`, 'm').exec(wf().split(/^jobs:$/m)[1] ?? '');
+    expect(m, `release-stable.yml has no job \`${id}\``).not.toBeNull();
+    return m![1];
+  };
 
   it('triggers on stable pushes and on NOTHING else', () => {
     const src = wf();
@@ -542,14 +548,23 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(wf()).toMatch(/^concurrency:\n  group: release-stable\n  cancel-in-progress: false$/m);
   });
 
-  it('asks for contents: write and nothing else — it flips flags, it signs nothing', () => {
+  it('promote asks for contents: write and nothing else — it flips flags, it signs nothing; the gate reads checks only', () => {
     const src = wf();
     // The lookahead (as `expectAttestingWorkflow` above uses) forbids ANY
     // further permission line, not just the five named below — a
     // `deployments: write` added here would stay green against a bare
     // substring pin.
-    expect(src).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
-    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests|actions):/);
+    expect(stableJob('promote')).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
+    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests):/);
+    // design 2026-09-23 §8: the gate READS check runs and nothing else, and
+    // the called ci.yml gets what its select job asks for — a called
+    // workflow's jobs can never hold more than the calling job grants, and
+    // select reads the trusted main artifacts (`actions: read`, ruling T4).
+    // `actions:` appears in `full` and nowhere else in this file.
+    expect(stableJob('gate')).toMatch(/^    permissions:\n      checks: read(?!\n      [a-z-]+:)$/m);
+    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      checks: read\n      actions: read(?!\n      [a-z-]+:)$/m);
+    expect(src.replace(stableJob('full'), ''), 'actions: outside full').not.toMatch(/actions:/);
+    expect(src.match(/: write$/gm), 'one write grant in the whole file — promote\'s').toHaveLength(1);
   });
 
   it('checks out at full depth and invokes release-stable.sh — no build command, no gh release create', () => {
@@ -562,7 +577,62 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(src).toMatch(/^        run: bash deploy\/release-stable\.sh$/m);
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
     expect(src).not.toMatch(/npm ci|npm run|build-release\.sh|release-main\.sh|gh release|setup-node|attest/);
-    expect(src).toMatch(/^    timeout-minutes: 10$/m);
+    expect(stableJob('promote')).toMatch(/^    timeout-minutes: 10$/m);
+  });
+
+  // ── the stable gate (design 2026-09-23 §8) ────────────────────────────────
+  // A push to `stable` promotes only a commit the FULL suite passed on: either
+  // a green `full-suite` check run already on it (the daily run, a manual full
+  // run, an earlier gate), or a full run this workflow starts by calling
+  // ci.yml. The gate cannot live in a ruleset — checks from scheduled and
+  // manually dispatched runs do not satisfy one.
+  it('has exactly three jobs, in order: gate, full, promote', () => {
+    const ids = [...(wf().split(/^jobs:$/m)[1] ?? '').matchAll(/^  ([A-Za-z][\w-]*):$/gm)].map((m) => m[1]);
+    expect(ids).toEqual(['gate', 'full', 'promote']);
+  });
+
+  it('gate looks for a successful full-suite check run on the pushed commit, exactly as ci.yml\'s daily skip does', () => {
+    const g = stableJob('gate');
+    expect(g).toMatch(/^    timeout-minutes: 5$/m);
+    expect(g).toMatch(/^      found: \$\{\{ steps\.look\.outputs\.found \}\}$/m);
+    expect(g).toContain('SHA: ${{ github.sha }}');
+    expect(g).toContain('REPO: ${{ github.repository }}');
+    // ONE matcher, two copies that must agree: the daily run skips itself on
+    // it, and the gate promotes on it. `/ full-suite` is how a job inside a
+    // called workflow is named (`<caller job> / <called job>`).
+    const jq = (src: string): string => {
+      const m = /--jq '(\.check_runs\[\] \| select\(.*\) \| \.id)'/.exec(src);
+      expect(m, 'no check-run matcher found').not.toBeNull();
+      return m![1];
+    };
+    const mine = jq(g);
+    expect(mine).toContain('.conclusion == "success"');
+    expect(mine).toContain('.name == "full-suite"');
+    expect(mine).toContain('.name | endswith("/ full-suite")');
+    expect(mine).toContain('.app.slug == "github-actions"');
+    expect(jq(readFileSync(join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8'))).toBe(mine);
+  });
+
+  it('full runs only when the gate found nothing, and runs ci.yml itself in full mode', () => {
+    const f = stableJob('full');
+    expect(f).toMatch(/^    needs: gate$/m);
+    expect(f).toMatch(/^    if: needs\.gate\.outputs\.found == 'false'$/m);
+    expect(f).toMatch(/^    uses: \.\/\.github\/workflows\/ci\.yml\n    with:\n      mode: full$/m);
+    // The callee's side of the contract: ci.yml is callable, and says green.
+    const ci = readFileSync(join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8');
+    expect(ci).toMatch(/^  workflow_call:$/m);
+    expect(ci).toMatch(/^ {6}verdict:\n(?: {8}.*\n)*? {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
+  });
+
+  it('promote cannot run unless the gate found a green full-suite or the called full run said green', () => {
+    const p = stableJob('promote');
+    expect(p).toMatch(/^    needs: \[gate, full\]$/m);
+    // `always()` because `full` is SKIPPED on the found path, and a skipped
+    // need skips its dependants — then the result checks are what gate it.
+    // `verdict == 'green'`, not just `result == 'success'`: a called run in
+    // which full-suite never ran (select answered anything but `full`) is a
+    // SUCCESSFUL run that proved nothing.
+    expect(p).toMatch(/^    if: always\(\) && needs\.gate\.result == 'success' && \(needs\.gate\.outputs\.found == 'true' \|\| \(needs\.full\.result == 'success' && needs\.full\.outputs\.verdict == 'green'\)\)$/m);
   });
 });
 
