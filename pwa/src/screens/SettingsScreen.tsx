@@ -309,7 +309,7 @@ export function requestLine(n: NodeWire, now: number): string | null {
   const q: unknown = n.request;
   if (typeof q !== 'object' || q === null) return null;
   const { tag, kind, at } = q as { tag?: unknown; kind?: unknown; at?: unknown };
-  if (typeof tag !== 'string' || typeof kind !== 'string' || typeof at !== 'number') return null;
+  if (typeof tag !== 'string' || typeof kind !== 'string' || typeof at !== 'number' || !isPlaceableInstant(at)) return null;
   return `${kind} ${tag} requested ${elapsedWords(now - at)} ago`;
 }
 
@@ -324,7 +324,7 @@ export function nodeStateLine(n: NodeWire): string {
 
 export function reachabilityLine(n: NodeWire, now: number): string | null {
   if (n.reachable !== false) return null;
-  return typeof n.unreachableSince === 'number'
+  return typeof n.unreachableSince === 'number' && isPlaceableInstant(n.unreachableSince)
     ? `unreachable since ${elapsedWords(now - n.unreachableSince)} ago`
     : 'unreachable';
 }

@@ -801,6 +801,9 @@ describe('SettingsScreen — the node inventory: helpers', () => {
     expect(requestLine(t9Node({ request: { tag: 'v0.0.8', kind: 'rollback', at: T9_T0 } }), T9_T0))
       .toBe('rollback v0.0.8 requested moments ago');
     expect(requestLine(t9Node({ request: { tag: 'v0.0.8' } as unknown as NodeWire['request'] }), T9_T0)).toBeNull();
+    // fix round 1: a magnitude this build's Date cannot place is not an age (isPlaceableInstant, review finding).
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: -1e20 } }), T9_T0), 'at -1e20').toBeNull();
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: 1e20 } }), T9_T0), 'at 1e20').toBeNull();
   });
 
   it("nodeStateLine: the lease state, then the report's phase, then its detail when it has one", () => {
@@ -823,6 +826,8 @@ describe('SettingsScreen — the node inventory: helpers', () => {
       .toBe('unreachable since 5m ago');
     expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: null }), T9_T0)).toBe('unreachable');
     expect(reachabilityLine({ ...t9Node(), reachable: undefined } as unknown as NodeWire, T9_T0)).toBeNull();
+    // fix round 1: a magnitude this build's Date cannot place reads as no "since" (isPlaceableInstant, review finding).
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: 1e16 }), T9_T0), 'unreachableSince 1e16').toBe('unreachable');
   });
 
   it("spells spec §13's Darwin sentence", () => {
