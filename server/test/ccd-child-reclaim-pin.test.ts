@@ -427,8 +427,14 @@ describe('the WIP commit never holds a secret-shaped path whose content differs 
     fs.mkdirSync(path.join(c.wt, 'secrets')); fs.writeFileSync(path.join(c.wt, 'secrets', 'token.txt'), 't');
     fs.writeFileSync(path.join(c.wt, 'staged-plain.txt'), 'kept');
     h.git(c.wt, 'add', '.env', 'secrets/token.txt', 'staged-plain.txt');
-    const p = pinOf(c);
+    const idxPath = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    // README.md is TOUCHED after the hash, its bytes unchanged: its stat no
+    // longer matches the index, so any read that refreshes the index has a
+    // reason to rewrite it — the phase's reads must not.
+    const p = pinOf(c, { between: `sha256sum "${idxPath}" > "$HOME/idx-before"; sleep 1; touch "${c.wt}/README.md"` });
     expect(p.rc, p.why).toBe('0');
+    expect(h.sh(`sha256sum "${idxPath}"`), 'the user’s index file is byte-identical')
+      .toBe(fs.readFileSync(path.join(h.home, 'idx-before'), 'utf8').trim());
     const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
     expect(tree, 'a staged NEW non-secret file is committed').toContain('staged-plain.txt');
     for (const never of ['.env', 'secrets/token.txt']) {
@@ -596,5 +602,90 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
     expect(atticShas(c)).toContain(lost);
+  }, 60_000);
+});
+
+describe('the WIP commit starts from a COPY of the user’s own index', () => {
+  it('commits staged work under an IGNORED path (`add -f`), and withholds and lists a force-added secret', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, '.gitignore'), 'build/\n.env\n');
+    h.git(c.wt, 'add', '.gitignore'); h.git(c.wt, 'commit', '-m', 'ignore');
+    fs.mkdirSync(path.join(c.wt, 'build')); fs.writeFileSync(path.join(c.wt, 'build', 'handwritten.json'), '{}');
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=live');
+    h.git(c.wt, 'add', '-f', 'build/handwritten.json', '.env');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
+    expect(tree, 'staged work under an ignored path was dropped').toContain('build/handwritten.json');
+    expect(tree).not.toContain('.env');
+    expect(p.secrets).toContain('.env');
+  }, 60_000);
+
+  it('keeps HEAD’s blob for a skip-worktree edit and an assume-unchanged edit — a hidden local edit is never committed', () => {
+    const c = makeChild(h);
+    for (const f of ['db.yml', 'au.yml']) fs.writeFileSync(path.join(c.wt, f), 'password: template\n');
+    h.git(c.wt, 'add', 'db.yml', 'au.yml'); h.git(c.wt, 'commit', '-m', 'configs');
+    const head = { db: h.git(c.wt, 'rev-parse', 'HEAD:db.yml'), au: h.git(c.wt, 'rev-parse', 'HEAD:au.yml') };
+    h.git(c.wt, 'update-index', '--skip-worktree', 'db.yml');
+    h.git(c.wt, 'update-index', '--assume-unchanged', 'au.yml');
+    for (const f of ['db.yml', 'au.yml']) fs.writeFileSync(path.join(c.wt, f), 'password: hunter2-live\n');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
+    expect(h.git(c.main, 'rev-parse', `${p.wip}:db.yml`), 'the skip-worktree edit was committed').toBe(head.db);
+    expect(h.git(c.main, 'rev-parse', `${p.wip}:au.yml`), 'the assume-unchanged edit was committed').toBe(head.au);
+  }, 60_000);
+
+  it('pins a SPARSE-checkout child, and records no deletion for the paths outside the cone', () => {
+    const c = makeChild(h);
+    for (const d of ['keep', 'drop']) { fs.mkdirSync(path.join(c.wt, d)); fs.writeFileSync(path.join(c.wt, d, 'x'), d); }
+    h.git(c.wt, 'add', 'keep', 'drop'); h.git(c.wt, 'commit', '-m', 'two dirs');
+    h.git(c.wt, 'sparse-checkout', 'set', 'keep');
+    expect(fs.existsSync(path.join(c.wt, 'drop')), 'the CONTROL: drop/ is outside the cone').toBe(false);
+    fs.appendFileSync(path.join(c.wt, 'keep', 'x'), ' edited');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
+    expect(tree, 'an out-of-cone path was recorded as deleted').toContain('drop/x');
+    expect(h.git(c.main, 'show', `${p.wip}:keep/x`)).toBe('keep edited');
+  }, 60_000);
+
+  it('FAILS — commits nothing — when the user’s index is LOCKED', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const idx = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const p = pinOf(c, { between: `: > "${idx}.lock"` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('is locked');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
+  }, 60_000);
+
+  it('FAILS — commits nothing — when the tree has NO index', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const idx = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const p = pinOf(c, { between: `rm -f "${idx}"` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('has no index');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
+  }, 60_000);
+
+  it('concludes a CONFLICTED merge with the working-tree version of each unmerged path, and pins the merged-in side', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'switch', '-q', '-c', 'side', 'HEAD~1');
+    fs.writeFileSync(path.join(c.wt, 'f1.txt'), 'side version\n');
+    h.git(c.wt, 'commit', '-q', '-am', 'side');
+    const side = h.git(c.wt, 'rev-parse', 'HEAD');
+    h.git(c.wt, 'switch', '-q', CHILD_BRANCH);
+    fs.writeFileSync(path.join(c.wt, 'f1.txt'), 'child version\n');
+    h.git(c.wt, 'commit', '-q', '-am', 'child');
+    try { h.git(c.wt, 'merge', '-q', 'side'); } catch { /* conflicts on f1.txt, and exits non-zero */ }
+    expect(h.git(c.wt, 'ls-files', '-u'), 'the CONTROL: an unmerged path').not.toBe('');
+    const p = pinOf(c, { defer: 1 });
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'log', '-1', '--format=%P', p.wip).split(' '), 'the WIP commit concluded the merge').toContain(side);
+    expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('<<<<<<<');
+    expect(atticShas(c)).toContain(side);
   }, 60_000);
 });

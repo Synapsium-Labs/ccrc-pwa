@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7c5e42fc01d48f1db64df07979036e53a41f19a2dee5ff5a93150bc5f20c8140
+# ccrc:generated 1 sha256=0b6ddc24621970bb9c68d4ffb3ad3915885302704f44639d5f50042231d70aef
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23969,6 +23969,9 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   local -x GIT_CONFIG_COUNT=$(( n + 2 )) \
     "GIT_CONFIG_KEY_$n=core.hooksPath" "GIT_CONFIG_VALUE_$n=/dev/null" \
     "GIT_CONFIG_KEY_$(( n + 1 ))=core.fsmonitor" "GIT_CONFIG_VALUE_$(( n + 1 ))=false"
+  # And no READ writes the user's index: `status` refreshes and rewrites it
+  # opportunistically, and the pin phase promises that file stays byte-identical.
+  local -x GIT_OPTIONAL_LOCKS=0
   "$@"
 }
 
@@ -23990,26 +23993,49 @@ _ws_reclaim_opheads() {   # dir -> the commit of every in-progress operation hea
   return 0
 }
 
+_WS_INDEX_SRC=''; _WS_INDEX_WHY=''
+_ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index file; rc 1 (_WS_INDEX_WHY)
+  #                            when it cannot be located, is missing, or is LOCKED
+  # A lock is a git operation in progress in that tree: what it is about to
+  # write is not in the file yet, so a copy taken now would pin a state the
+  # tree is leaving. A missing index is a tree git has no staging record for.
+  # Either fails the pin; neither is guessed around.
+  local d="$1" f
+  _WS_INDEX_SRC=''; _WS_INDEX_WHY=''
+  f=$(git -C "$d" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$f" ]] \
+    || { _WS_INDEX_WHY="could not locate the index of $d"; return 1; }
+  [[ ! -e "$f.lock" ]] \
+    || { _WS_INDEX_WHY="the index of $d is locked ($f.lock) — a git operation is in progress there"; return 1; }
+  [[ -f "$f" ]] || { _WS_INDEX_WHY="$d has no index at $f"; return 1; }
+  _WS_INDEX_SRC="$f"
+}
+
 _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new commit ('' when nothing
   #                     was uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY `git commit` IN ccd, and its
   #                     one call site is `_ws_reclaim_pin` — which is reason enough for it to be one
   #                     function (spec §5.5, pin phase step 2).
-  # THE COMMIT IS BUILT IN A SCRATCH INDEX SEEDED FROM HEAD, never in the
-  # user's own. The user's index may already STAGE a secret — a pre-commit
-  # scanner that refused a commit leaves exactly that — and committing the
-  # user's index would pin it for good. So the candidates are read against
-  # HEAD itself: `status` over the scratch index lists every path whose
-  # working-tree content differs from HEAD's — tracked modifications,
-  # deletions and type changes (` M`, ` D`, ` T`), and every path HEAD does not
-  # have (`??`), staged-new ones included. Each goes through
-  # `_ws_reclaim_secret_path`: a secret-shaped path is NOT added, so the commit
-  # keeps HEAD's blob for a tracked one and has none for a new one, and the
-  # path goes to RECLAIM_SECRETS (the tombstone's `secretsDropped`) as
-  # "$prefix<path>". Everything else is added NUL-separated with literal
-  # pathspecs, so no path is ever read as a glob. A nested checkout's root
-  # (`?? dir/` holding a `.git`) is never added: it is pinned on its own, or
-  # proven clean and pushed. An ignored file is never listed by `status`.
-  # The user's own index is not written, so what they staged stays staged.
+  # THE COMMIT IS BUILT IN A SCRATCH COPY OF THE USER'S OWN INDEX, and the
+  # user's index file is never written. A copy, not HEAD: the index is the
+  # user's record of what they meant — a force-added file under an ignored
+  # path is staged work, a skip-worktree or assume-unchanged entry is a local
+  # edit they hid from git on purpose (a config file holding a live key), and
+  # a sparse checkout's out-of-cone entries are not deletions. A copy keeps
+  # every one of those as the user left it. Then, in the copy only:
+  #   1. EVERY SECRET-SHAPED PATH WHOSE INDEX ENTRY DIFFERS FROM HEAD's is reset
+  #      to HEAD's entry (removed when HEAD has none) and listed — the user's
+  #      index may already STAGE a secret, which is exactly what a pre-commit
+  #      scanner that refused a commit leaves behind.
+  #   2. The working tree's changes against that index (`status`: ` M`, ` D`,
+  #      ` T`, an unmerged path's working-tree version, and `??`) are added,
+  #      except a secret-shaped path, which is listed instead, and a nested
+  #      checkout's root (`?? dir/` holding a `.git`), which is pinned on its
+  #      own or proven clean and pushed. An entry git is told not to look at
+  #      (skip-worktree, assume-unchanged) is not reported, so it keeps what
+  #      the copy holds. Paths go NUL-separated with literal pathspecs, so none
+  #      is ever read as a glob; an ignored file is never listed.
+  # A secret-shaped path therefore never reaches the commit with content that
+  # differs from HEAD's, and every such path is in RECLAIM_SECRETS (the
+  # tombstone's `secretsDropped`) as "$prefix<path>".
   #
   # THE IDENTITY IS FIXED, in both channels. `-c user.*` names it to git's
   # config; the GIT_* environment is what outranks config, so a caller
@@ -24019,26 +24045,42 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new
   #
   # On a DETACHED HEAD (a rebase stopped, or a checkout of a sha) the commit
   # lands on HEAD and not on the branch; the caller pins it by sha.
-  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p skip rc err
-  local cand=()
+  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy skip rc err
+  local cand=() back=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
+  _ws_reclaim_index_src "$dir" || { RECLAIM_WIP_WHY="$_WS_INDEX_WHY"; return 1; }
   sd=$(_plat_mktemp_d) || { RECLAIM_WIP_WHY='could not make a scratch directory'; return 1; }
   idx="$sd/index"
-  GIT_INDEX_FILE="$idx" git -C "$dir" read-tree HEAD 2>"$sd/err" \
-    || { RECLAIM_WIP_WHY="could not seed a scratch index from HEAD at $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  cp -- "$_WS_INDEX_SRC" "$idx" 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="could not copy the index of $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  # (1) The copy's staged secrets, back to HEAD.
+  GIT_INDEX_FILE="$idx" git -C "$dir" diff --cached --name-only -z --no-renames HEAD >"$sd/cached" 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="could not read what $dir's index stages: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  while IFS= read -r -d '' p; do
+    [[ -n "$p" ]] || continue
+    if _ws_reclaim_secret_path "$p"; then _ws_reclaim_secret_note "$prefix$p"; back+=("$p"); fi
+  done <"$sd/cached"
+  if (( ${#back[@]} )); then
+    printf '%s\0' "${back[@]}" >"$sd/back"
+    GIT_INDEX_FILE="$idx" GIT_LITERAL_PATHSPECS=1 git -C "$dir" reset -q HEAD --pathspec-from-file="$sd/back" --pathspec-file-nul 2>"$sd/err" \
+      || { RECLAIM_WIP_WHY="could not return the staged secret-shaped paths at $dir to HEAD: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  fi
+  # (2) The working tree's changes against the copy.
   GIT_INDEX_FILE="$idx" git -C "$dir" -c core.quotePath=false \
     status --porcelain=v1 -z --untracked-files=all >"$sd/status" 2>"$sd/err"; rc=$?
   err=$(cat "$sd/err" 2>/dev/null)
   if (( rc != 0 )) || [[ -n "$err" ]]; then
-    RECLAIM_WIP_WHY="git status against HEAD at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; rm -rf "$sd"; return 1
+    RECLAIM_WIP_WHY="git status at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; rm -rf "$sd"; return 1
   fi
   while IFS= read -r -d '' entry; do
-    case "$entry" in
-      '?? '*) p="${entry#?? }"
-              if [[ "$p" == */ && -e "$dir/${p%/}/.git" ]]; then continue; fi ;;
-      ' '[MDT]' '*) p="${entry:3}" ;;
-      [RC]*)  IFS= read -r -d '' skip || :; continue ;;   # never against an index equal to HEAD
-      *)      continue ;;
+    xy="${entry:0:2}"; p="${entry:3}"
+    case "$xy" in
+      '??') if [[ "$p" == */ && -e "$dir/${p%/}/.git" ]]; then continue; fi ;;
+      DD|AU|UD|UA|DU|AA|UU) : ;;                                # unmerged: its working-tree version
+      R?|C?) IFS= read -r -d '' skip || :                       # a rename's second field is its source
+             [[ "${xy:1:1}" == [MDT] ]] || continue ;;
+      ?[MDT]) : ;;
+      *) continue ;;
     esac
     [[ -n "$p" ]] || continue
     if _ws_reclaim_secret_path "$p"; then _ws_reclaim_secret_note "$prefix$p"; else cand+=("$p"); fi
