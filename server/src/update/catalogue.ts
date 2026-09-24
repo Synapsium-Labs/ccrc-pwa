@@ -879,11 +879,17 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  ONLY condition under which the listing overrules the moved-away tag
    *  check. A pending `'yank'` is contradicted by ANY non-draft row named K
    *  (the listing just showed K is still there, in either channel); a
-   *  pending `'demote'` is contradicted ONLY by a non-draft STABLE row (a
-   *  non-draft DEV row is exactly what the demote's own check found — the
-   *  listing AGREES, so the demote applies, moving the kept tag to T; the
-   *  listing's own upsert having already written that same channel is
-   *  harmless, never a reason to also drop the pending). A row absent from
+   *  pending `'demote'` carries whatever `tags/K` answered — a dev row, but
+   *  also a still-STABLE or a DRAFT row (`measureWithdrawn` returns
+   *  `'demote'` for every 200) — so it AGREES with a non-draft listing row
+   *  only when BOTH say non-draft dev: then the demote applies, moving the
+   *  kept tag to T (the listing's own upsert having already written that
+   *  same channel is harmless, never a reason to also drop the pending).
+   *  Every other non-draft listing row DISAGREES and drops it: a STABLE
+   *  listing row, or a check row that is still stable or a draft (fix round
+   *  4 task review, I1: applying a stale "still stable" or "draft" check
+   *  over a fresh listing that says non-draft dev would re-promote a
+   *  demoted K, or yank a live one — the listing wins). A row absent from
    *  the facts, or present only as a DRAFT, never vouches either way —
    *  drafts are never evidence, so that case reads as "no verdict", exactly
    *  like an absent row: the pending proceeds to `applyWithdrawn` as it
@@ -893,12 +899,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  a remembered listing that would NOT contradict (would let the pending
    *  apply) never suppresses the ETag reset that gets it a fresh answer. */
   function listingContradictsPending(
-    kind: PendingWithdrawal['kind'], k: string, facts: ReadonlyMap<string, ListingFact> | null,
+    pending: PendingWithdrawal, facts: ReadonlyMap<string, ListingFact> | null,
   ): boolean {
     if (facts === null) return false;
-    const fact = facts.get(k);
+    const fact = facts.get(pending.kind === 'yank' ? pending.k : pending.row.tag);
     if (fact === undefined || fact.draft) return false;
-    return kind === 'yank' ? true : fact.channel === 'stable';
+    if (pending.kind === 'yank') return true;
+    return fact.channel === 'stable' || pending.row.draft || pending.row.channel !== 'dev';
   }
 
   /**
@@ -1014,8 +1021,9 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // would drop it if it were fresh evidence. In that case a later poll's
     // pending withdrawal on the SAME K needs no forced fresh re-answer
     // purely on its own account: the remembered content already tells us
-    // the outcome (a drop), so a cheap 304 that carries no fresh evidence
-    // either way costs nothing to accept — the check is simply DEFERRED,
+    // the outcome (a drop), so a 304 that carries no fresh evidence either
+    // way saves only the listing's body (the request itself still counts,
+    // F7 below) — the check is simply DEFERRED,
     // exactly as any check with no listing evidence at all would be, never
     // dropped by a remembered listing (F6: only THIS poll's OWN fresh
     // listing can drop a pending — see below). When the remembered listing
@@ -1027,7 +1035,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // `lastAcceptedListingFacts` is that remembered content, updated only
     // where `etag` itself is (see `pollListing`).
     const pendingAlreadyVouchedFor = pendingWithdrawal !== null
-      && listingContradictsPending(pendingWithdrawal.kind, pendingK!, lastAcceptedListingFacts);
+      && listingContradictsPending(pendingWithdrawal, lastAcceptedListingFacts);
     if (lastLatestTag !== prevLatestTag || (pendingWithdrawal !== null && !pendingAlreadyVouchedFor)) {
       // The stable identity CHANGED this poll (a fresh confirmation, or a
       // 404-with-no-kept-tag clearing it) — unchanged trigger — OR a
@@ -1059,9 +1067,12 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // names K as any non-draft release DISAGREES (the listing just showed K
     // is still there) — dropped. A pending 'demote' meeting a listing that
     // names K as a non-draft STABLE release DISAGREES (the check's own
-    // "still stable" verdict is stale next to it) — dropped. Otherwise they
-    // AGREE — a pending 'demote' meeting a listing that already names K as
-    // dev (the check found exactly what the listing shows), or a pending
+    // "still stable" verdict is stale next to it) — dropped; so does one
+    // whose OWN check row is still stable or a draft while the listing
+    // names K as non-draft dev (task review I1). Otherwise they AGREE — a
+    // pending 'demote' whose check found non-draft dev meeting a listing
+    // that already names K as dev (the check found exactly what the listing
+    // shows), or a pending
     // 'yank' meeting a listing that does not name K at all — or the listing
     // gives NO VERDICT (K named only as a DRAFT — a draft row never
     // vouches, in either direction) — and `applyWithdrawn` runs exactly as
@@ -1075,7 +1086,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // pinned to the demoted K forever, and an off-page stable the listing
     // never lists stayed resolvable after real deletion.
     if (pendingWithdrawal !== null && listing.freshOk) {
-      if (listingContradictsPending(pendingWithdrawal.kind, pendingK!, listing.facts)) {
+      if (listingContradictsPending(pendingWithdrawal, listing.facts)) {
         warnListingWins(pendingK!);
       } else {
         applyWithdrawn(now, pendingWithdrawal);

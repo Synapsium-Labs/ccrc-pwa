@@ -1756,12 +1756,87 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         expect(seenLatest[2]!.headers['if-none-match']).toBeUndefined();
       });
 
+      // Fix round 4 task review, I1: a pending 'demote' carries whatever
+      // `tags/K` answered. When that answer is a STALE "still stable" (or a
+      // draft) while THIS poll's fresh listing names K as non-draft dev, the
+      // two DISAGREE, so the listing wins: the demote is dropped and never
+      // re-promotes K over the listing's own upsert.
+      it('I1: a stale tags/K that still says STABLE never re-promotes K over a fresh listing that names it dev', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k, t] },
+          { status: 200, etag: '"eL2"', body: [{ ...k, prerelease: true }, t] },
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },
+          { status: 304, etag: '"eS2"' },
+          { status: 304, etag: '"eS2"' },
+        ];
+        scriptWithdrawn = [{ status: 200, body: k }];   // stale: K still stable
+        for (const now of [1000, 2000, 3000, 4000]) await p.poll(now);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ channel: 'dev', yanked: false });
+        expect(store.newestUnyankedStable()).toBe('v0.0.1');
+      });
+
+      it.each([
+        ['a DRAFT', { draft: true }],
+        ['a DRAFT prerelease', { draft: true, prerelease: true }],
+      ])('I1: a tags/K that answers %s never yanks K while a fresh listing names it as a live dev release', async (_label, over) => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k, t] },
+          { status: 200, etag: '"eL2"', body: [{ ...k, prerelease: true }, t] },
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },
+          { status: 304, etag: '"eS2"' },
+          { status: 304, etag: '"eS2"' },
+        ];
+        scriptWithdrawn = [{ status: 200, body: { ...k, ...over } }];   // a mirror's draft answer
+        for (const now of [1000, 2000, 3000, 4000]) await p.poll(now);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ channel: 'dev', yanked: false });
+      });
+
+      // Task review m1: the ETag-keep decision uses the SAME predicate as the
+      // apply decision. A remembered listing that already names K as dev
+      // AGREES with a pending demote, so it must not suppress the ETag reset:
+      // the pending poll's listing request goes out with no If-None-Match.
+      it('m1: a remembered listing that AGREES with a pending demote never suppresses the listing ETag reset', async () => {
+        const { port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [{ ...k, prerelease: true }, t] },
+          { status: 200, etag: '"eL1"', body: [{ ...k, prerelease: true }, t] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },   // /latest lags the listing by one poll
+          { status: 200, etag: '"eS2"', body: t },
+        ];
+        scriptWithdrawn = [{ status: 200, body: { ...k, prerelease: true } }];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(seenWithdrawn).toHaveLength(1);
+        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+      });
+
       // Mutation, measured red under the round-3 UNIFORM-drop shape
       // (`listingContradictsPending` reverted to "the listing names K at
-      // all" — draft or not, any channel, for either kind): reproduces the
-      // reviewer's alternation (the two-stable case above ends a stable
-      // yanked), the stable-stays-stable demote case (`seenWithdrawn` never
-      // reaches a second call), the demote-APPLIES case just above (K never
+      // all" — draft or not, any channel, for either kind): the
+      // demote-APPLIES case above (K never
       // advances past `channel: 'dev'` to a moved kept tag — `seenWithdrawn`
       // grows past 1 and `/latest`'s ETag never becomes T's), the
       // deleted-T case (T is never even challenged, so it never ends
@@ -1769,7 +1844,16 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       // tag), and the draft-row case (a mutant that also lets a DRAFT row
       // vouch: `if (fact === undefined) return false;` alone, dropping the
       // `|| fact.draft` half) — the yank is dropped, so poll 3's /latest
-      // request keeps carrying K's own `"eS1"` instead of `undefined`.
+      // request keeps carrying K's own `"eS1"` instead of `undefined`. The
+      // two-stable alternation and the stable-stays-stable demote case do
+      // NOT red under uniform drop (it is the shape they were written for);
+      // they red under apply-always (the helper returning `false`). Task
+      // review I1/m1, measured red: the round-4 predicate
+      // `fact.channel === 'stable'` alone reds both I1 cases; dropping only
+      // `pending.row.channel !== 'dev'` reds the stale-stable case; dropping
+      // only `pending.row.draft` reds the draft-prerelease variant; the
+      // ETag-keep site alone reverted to "the remembered listing names K"
+      // reds the m1 case (`expected '"eL1"' to be undefined`).
     });
 
     // Fix round 1, item 5 (ruling A): N1 above still left a residual —
