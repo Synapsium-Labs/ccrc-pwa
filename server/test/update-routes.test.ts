@@ -753,10 +753,13 @@ describe('POST /api/updates/refresh', () => {
   });
 
   // B2 sibling (fix round 3): the SAME three-request shape, but the listing
-  // OMITS v0.0.10 this time — nothing vouches for K, so the confirmed
-  // withdrawal actually applies, proving the mechanism the pre-fix C2 case
-  // used to pin still works when the listing genuinely does not see K.
-  it('C2b: when the listing OMITS the withdrawn tag, the confirmed withdrawal actually applies', async () => {
+  // OMITS v0.0.10 this time — nothing vouches for K, so v0.0.10 ends yanked
+  // through the real route. What this does NOT prove: that `applyWithdrawn`
+  // did it. This listing is shorter than a page (coverage 'complete') and
+  // keeps no tag, so its own absence judgment yanks v0.0.10 too; never
+  // calling `applyWithdrawn` leaves this case green (review of fix round 3,
+  // m3). `update-catalogue.test.ts`'s ruling-A cases pin that path.
+  it('C2b: when the listing OMITS the withdrawn tag, v0.0.10 ends yanked through the real route', async () => {
     const seenUrls: string[] = [];
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = req.url ?? '';
