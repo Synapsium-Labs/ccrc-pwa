@@ -18,8 +18,8 @@ removed on 2026-09-10 was not.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **tight fix round** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178; reviews 144, 145 (145: R28/R29 as ruled; a null-tip fail-open found) |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | **dispatched** 2026-09-24 as run 148 (Opus·high, Sonnet subagents, workflows off, compact 40) |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -39,7 +39,7 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
@@ -352,9 +352,8 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 3.** Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave3-ws-reclaim-and-close.md`, Tasks 1–11
-plus the new 7b and 10b. Its appended **Pre-dispatch amendments** bind every task. Dispatch fresh, AGENT-FIRST, and
-only after wave 2 (#178) is merged and rolled out, because wave 3 builds on wave 2's shipped shapes. Re-measure the
-pre-flight's A1/A2 citations if review 145 changed `childSpent` or `childBind`. It is the only destructive wave,
-so its review panel keeps the plan's mandatory xhigh safety lens. Claims: R-3 (proceed; tell run 128's and 129's
-coordinator).
+**Wave 3 is dispatched (run 148).** Brief: the plan with its binding Pre-dispatch amendments; contract §9 R24–R31; the
+three A1 settlements and review 147's text corrections above. Its review panel keeps the plan's mandatory xhigh
+safety lens. After it merges: roll out AGENT-FIRST (fleet box first), then write wave 4's plan amendments
+(R25's orphan roots, `is_ours` three-valued, the `ws-reap` symlink guard, lost close triggers, the slug residue)
+before wave 4 dispatches.
