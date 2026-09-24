@@ -24,7 +24,7 @@ numbers; the spec wave each one implements is named beside it.
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
 | 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **MERGED** `b501698a` (PR #176, run 128 done), released as v0.0.23 (dev); after round 5's scoped review, run 151 at `985e8c30`: no new behaviour defect; 7 findings carried to wave 5's Task 8A; plan `1288beec` |
-| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **executing** (run 130, `ccrc-pwa-clear-river`, `ws/clear-river` at `b501698a`), dispatched 2026-09-24 05:25 UTC; plan `d638c602` + re-points `08cecd10`, `733d295a`; the first try at W2's merge was refused `cap-daily` (24/24 in a rolling 24 h window) |
+| 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **awaiting review** (run 130, `ccrc-pwa-clear-river`): wave-done at `432e2731`, PR #184, 13/13 items, one reserve number spent (3315); review run 156 opened, its dispatch timed to the daily cap; plan `d638c602` + re-points `08cecd10`, `733d295a` |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **awaiting review** (run 129, `ccrc-pwa-keen-meadow`): wave-done at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan `079f1881`; dispatches when wave 4 has merged |
@@ -382,6 +382,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - Review run 155 carries three wave-specific lenses beyond the panel: security and untrusted input; safety hardware
     plus self-update (can this tree install its successor?); interface fidelity against W2 on `main` and the W5/W6
     plans.
+- **2026-09-24 10:20 UTC — wave 3 wave-done (`432e2731`, PR #184).**
+  - Re-measured: tip = handoff = PR head; merge-base = `b501698a`; 25 commits, all by the noreply identity; clean tree.
+    Items 13/13 settled after the `awaiting-review` advance. CI's Linux legs are green.
+  - `suite: red`, with three known reds, none of them this wave's: `session-hook`'s load flake, `session-hook`'s
+    scratch-slug case under a `~/.cc-tmp` TMPDIR (child-reclamation's run 148 fixes that pattern), and `tmp-sweep`'s
+    FAILS CLOSED case.
+  - `main` moved to `28271ace` (#182). Measured with `git merge-tree`: #184 and #181 each merge with `main` cleanly.
+    They conflict with EACH OTHER in `README.md` only. Whichever merges second merges `main` and resolves it; the
+    worker's stated resolution keeps W4's Not-yet sentence, and places W3's paragraph after W4's trust-roots paragraph.
+  - The worker's parked follow-ups and plan-text rulings are held until review 156 returns, out of the held-out brief.
 
 ## Carried constraints
 
