@@ -650,7 +650,25 @@ describe('POST /api/updates/refresh', () => {
   // GitHub — never `vi.stubGlobal('fetch')`, the `update-catalogue.test.ts`
   // convention — behind the real route, and reads the outcome back off the
   // SAME `CoordStore` the route itself writes through.
-  it('C2: a REAL three-request poll (latest moved away -> tag fetch -> listing) reaches the door, its own store, and the route', async () => {
+  // B2 (fix round 3, coordinator's ruling, review 146) amends this case's OWN
+  // outcome. Before that ruling, R2's evidence gate applied a confirmed
+  // withdrawal on any fresh listing, even one that itself still named K as a
+  // live stable release — this case's listing echoes BOTH known releases
+  // back, v0.0.10 included, so under the OLD shape the confirmed withdrawal
+  // was applied straight over the listing's own contradicting evidence.
+  // Ruled: the listing wins — v0.0.10 stays `yanked: false`. The sibling
+  // case below keeps the ORIGINAL "withdrawal really applies" shape by
+  // having the listing omit v0.0.10.
+  const listingBody = (rows: readonly ReleaseListingRow[]): string => JSON.stringify(rows.map((r) => ({
+    tag_name: r.tag, name: r.tag, draft: false, prerelease: r.channel === 'dev',
+    published_at: new Date(r.publishedAt).toISOString(), target_commitish: null, body: null,
+    assets: [
+      { name: `ccrc-${r.tag}.tar.gz`, browser_download_url: r.tarballUrl },
+      { name: `ccrc-${r.tag}.tar.gz.sigstore.json`, browser_download_url: `${r.tarballUrl}.sigstore` },
+    ],
+  })));
+
+  it('C2: a REAL three-request poll (latest moved away -> tag fetch -> listing) reaches the door, its own store, and the route — B2: the listing names K, so the pending withdrawal is DROPPED', async () => {
     const seenUrls: string[] = [];
     let latestHits = 0;
     let tagHits = 0;
@@ -671,20 +689,14 @@ describe('POST /api/updates/refresh', () => {
         tagHits += 1;
         res.writeHead(404); res.end('{}'); return;
       }
-      // The listing: answers fresh so R2's evidence gate lets the confirmed
-      // withdrawal apply this SAME poll. Echoes both known releases back —
-      // the withdrawal is applied by `applyWithdrawn`'s OWN 'withdrawn'
-      // coverage call, straight after, never by this listing's own upsert.
+      // The listing: answers fresh — R2's evidence gate would let the
+      // confirmed withdrawal apply, but B2's OWN gate reads this SAME
+      // listing's content: it echoes BOTH known releases back, v0.0.10
+      // (stable, K) included, so the listing itself is the stronger,
+      // contradicting evidence, and the pending yank is DROPPED.
       listingHits += 1;
       res.writeHead(200);
-      res.end(JSON.stringify(LISTING.map((r) => ({
-        tag_name: r.tag, name: r.tag, draft: false, prerelease: r.channel === 'dev',
-        published_at: new Date(r.publishedAt).toISOString(), target_commitish: null, body: null,
-        assets: [
-          { name: `ccrc-${r.tag}.tar.gz`, browser_download_url: r.tarballUrl },
-          { name: `ccrc-${r.tag}.tar.gz.sigstore.json`, browser_download_url: `${r.tarballUrl}.sigstore` },
-        ],
-      }))));
+      res.end(listingBody(LISTING));
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     try {
@@ -699,15 +711,18 @@ describe('POST /api/updates/refresh', () => {
 
       const a = await post(f.app, '/api/updates/refresh', {});
       expect(a.statusCode, a.body).toBe(200);
-      // All THREE requests fired, in the documented order, in ONE poll.
+      // All THREE requests fired, in the documented order, in ONE poll — the
+      // confirming tag check still runs (it is the check's own answer B2
+      // arbitrates against, not something it skips).
       expect(seenUrls).toEqual([
         '/repos/fixture-owner/fixture-repo/releases/latest',
         '/repos/fixture-owner/fixture-repo/releases/tags/v0.0.10',
         '/repos/fixture-owner/fixture-repo/releases?per_page=30',
       ]);
       expect({ latestHits, tagHits, listingHits }).toEqual({ latestHits: 1, tagHits: 1, listingHits: 1 });
-      // The confirmed withdrawal reached the SAME store the route reads.
-      expect(f.coord.releases().find((r) => r.tag === 'v0.0.10')).toMatchObject({ tag: 'v0.0.10', yanked: true });
+      // B2: the listing named v0.0.10 this SAME poll, so the confirmed
+      // withdrawal is dropped — the SAME store the route reads never yanks it.
+      expect(f.coord.releases().find((r) => r.tag === 'v0.0.10')).toMatchObject({ tag: 'v0.0.10', yanked: false });
 
       // The door's `lastRequestAt()` was stamped by the REAL poll (not a
       // scripted stub), so an immediate second refresh is still refused.
@@ -720,11 +735,50 @@ describe('POST /api/updates/refresh', () => {
     }
   });
 
+  // B2 sibling (fix round 3): the SAME three-request shape, but the listing
+  // OMITS v0.0.10 this time — nothing vouches for K, so the confirmed
+  // withdrawal actually applies, proving the mechanism the pre-fix C2 case
+  // used to pin still works when the listing genuinely does not see K.
+  it('C2b: when the listing OMITS the withdrawn tag, the confirmed withdrawal actually applies', async () => {
+    const seenUrls: string[] = [];
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const url = req.url ?? '';
+      seenUrls.push(url);
+      res.setHeader('content-type', 'application/json');
+      if (url.endsWith('/releases/latest')) { res.writeHead(404); res.end('{}'); return; }
+      if (/\/releases\/tags\//.test(url)) { res.writeHead(404); res.end('{}'); return; }
+      // The listing omits v0.0.10 this time — only the dev release remains.
+      res.writeHead(200);
+      res.end(listingBody(LISTING.filter((r) => r.tag !== 'v0.0.10')));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const source: ReleaseSourceRead = { ok: true, owner: 'fixture-owner', repo: 'fixture-repo', from: 'env' };
+      const f = await open({
+        catalogueFactory: (coord) => {
+          catalogue(coord);
+          return createCataloguePoller({ source, apiUrl: base, store: coord });
+        },
+      });
+      const a = await post(f.app, '/api/updates/refresh', {});
+      expect(a.statusCode, a.body).toBe(200);
+      expect(f.coord.releases().find((r) => r.tag === 'v0.0.10')).toMatchObject({ tag: 'v0.0.10', yanked: true });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => { server.close(() => r()); });
+    }
+  });
+
   // Mutations (measured by hand, on a scratch copy): hand-typing
-  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds the case above at both the
-  // exact-value assertion and the door-behaviour assertions (the second
-  // refresh, one minute in, would be admitted, and `p.polls()` would read 2
-  // where the case expects 1).
+  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds the derivation case above at
+  // both the exact-value assertion and the door-behaviour assertions (the
+  // second refresh, one minute in, would be admitted, and `p.polls()` would
+  // read 2 where the case expects 1). Dropping B2's own
+  // `listing.tags!.has(pendingK!)` check in `catalogue.ts` (applying every
+  // pending withdrawal unconditionally on a fresh listing, the fix round 2
+  // shape) reds C2 above — v0.0.10 would end `yanked: true` against a
+  // listing that just named it stable.
 });
 
 describe('POST /api/updates/ack', () => {

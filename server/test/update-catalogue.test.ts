@@ -1322,9 +1322,15 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         await p.poll(2000);
         expect(seenWithdrawn).toHaveLength(1);
         expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.2');
-        // The listing's ETag was dropped because the kept tag changed —
-        // verify the SECOND listing request carried no If-None-Match at all.
-        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+        // B2 (fix round 3, coordinator's ruling, review 146): `lastLatestTag`
+        // has NOT changed yet at this point (the pending yank is still only
+        // MEASURED — `applyWithdrawn` is what would move it, and it has not
+        // run), so the ETag drop is not forced by that trigger here. But poll
+        // 1's own listing already named v0.0.2 (S2), so the pending's K is
+        // already VOUCHED FOR in `lastAcceptedListingTags` — the ETag is kept,
+        // not dropped, on the pending's account alone (the other trigger is
+        // untouched; see the N1-vs-B2 mutation note below).
+        expect(seen[1]!.headers['if-none-match']).toBe('"eL1"');
         expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: true });
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
 
@@ -1388,10 +1394,13 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: false });
         await p.poll(2000);
         expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.1');
-        // The listing's ETag was dropped because the confirmed withdrawal
-        // cleared the kept tag — verify no If-None-Match was sent on the
-        // second listing request.
-        expect(seen[1]!.headers['if-none-match']).toBeUndefined();
+        // B2 (fix round 3, coordinator's ruling, review 146): `lastLatestTag`
+        // has not cleared yet at this point — only `applyWithdrawn` (below,
+        // once the listing itself answers fresh) moves it — so the ETag drop
+        // is not forced by that trigger here. Poll 1's own listing already
+        // named v0.0.1 (S1), so the pending's K is already VOUCHED FOR: the
+        // ETag is kept, not dropped, on the pending's account alone.
+        expect(seen[1]!.headers['if-none-match']).toBe('"eL1"');
         expect(store.releases().find((r) => r.tag === 'v0.0.1')).toMatchObject({ yanked: true });
         // m6 (fix round 1 review, re-measured under ruling A): the CONFIRMED
         // withdrawal also cleared latestEtag — the third /latest request
@@ -1441,12 +1450,20 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       //     not by case (a).
       // (2) removing `lastLatestTag = null` from the 404 arm reds (c) — S1
       //     stays kept (and un-yanked) forever.
-      // (3) removing the `etag = null` reset when the kept tag changes reds
-      //     (a) (the listing answers a stale 304 keyed to the old ETag and
-      //     writes nothing, so S2 is never re-judged) and would equally red
-      //     (b) if the fixture's own scripted answers depended on the sent
-      //     ETag — they do not here, so the header assertion in (a)/(c) is
-      //     what actually catches it in this fixture shape.
+      // (3) CORRECTED (fix round 3, B2): removing the ENTIRE `etag = null`
+      //     conditional (both disjuncts) still reds 'ruling A (c)' below ('a
+      //     NEWER /latest answer leaves K untouched, with no tag-fetch
+      //     request sent at all') — the one case in this file that isolates
+      //     the `lastLatestTag !== prevLatestTag` trigger from B2's own
+      //     vouching mechanism (its kept tag genuinely changes, k1 -> k2,
+      //     with no pending withdrawal ever measured). (a) and (c) ABOVE no
+      //     longer prove the `lastLatestTag !== prevLatestTag` disjunct on
+      //     their own: since B2 (fix round 3, coordinator's ruling), their
+      //     SECOND listing request's ETag is kept for a DIFFERENT reason —
+      //     poll 1's own listing already vouches for the pending's K — so
+      //     removing ONLY that disjunct is invisible here now; their header
+      //     assertions instead pin `pendingAlreadyVouchedFor` (see the B2
+      //     describe block's own mutation note).
     });
 
     // R2 (fix round 2, review 143): "never yank on the evidence of a
@@ -1503,6 +1520,137 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       // reds the case above — v0.0.3 is yanked after poll 1, v0.0.2 after
       // poll 2, v0.0.1 after poll 3, and `seenWithdrawn`'s three URLs are
       // three DIFFERENT tags rather than the same one three times.
+    });
+
+    // B2 (fix round 3, coordinator's ruling, review 146): "the listing wins."
+    // R2's evidence gate above (`pendingWithdrawal !== null && listing.freshOk`)
+    // read nothing of the listing's CONTENT — a fresh 200 was enough to apply
+    // a pending yank or demote even when that SAME listing named K as a live
+    // release, so a source whose listing endpoint alone stays live (a
+    // partial mirror, spec §7's own example) could flip the resolved stable
+    // tag every poll. Fixed: a pending withdrawal is dropped whenever this
+    // poll's own fresh listing names K at all.
+    describe('B2 — the listing wins: a pending withdrawal is dropped when this poll\'s own fresh listing names K', () => {
+      it('two-stable alternation: a listing-only source (every other endpoint 404s) never yanks either stable, and settles on a 304 once vouched for', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const s3 = rel('v0.0.3', '2026-08-03T00:00:00Z');
+        const s2 = rel('v0.0.2', '2026-08-02T00:00:00Z');
+        // /releases/latest 404s every poll (unscripted default) — no stable
+        // is ever CONFIRMED, so every poll re-derives K straight from the
+        // store, which is exactly what the reviewer's measured harm needs:
+        // a source whose listing endpoint alone stays live.
+        //
+        // Poll 2's listing answers a SECOND fresh 200 (never 304) — the
+        // load-bearing half of this pin: once poll 1 has already vouched for
+        // both stables, a poll whose listing answers a cheap 304 can never
+        // exercise the APPLY decision at all (a 304 carries no body, so
+        // `listing.freshOk` is false and the pending withdrawal is simply
+        // deferred either way) — that shape only proves the ETag-drop half
+        // below. A poll whose listing answers fresh AGAIN is what actually
+        // proves "the listing wins": with the drop check removed, this fresh
+        // 200 would let poll 2's pending yank apply for real. Polls 3-4 then
+        // settle on a 304, proving the OTHER half once vouched for.
+        script = [
+          { status: 200, etag: '"eL1"', body: [s3, s2] },
+          { status: 200, etag: '"eL2"', body: [s3, s2] },
+          { status: 304, etag: '"eL2"' },
+          { status: 304, etag: '"eL2"' },
+        ];
+        // /releases/tags/{k} 404s every time it is asked (poll 1 never asks —
+        // there is no K yet; polls 2-4 each measure a pending yank against
+        // whatever the store's own newestUnyankedStable() names).
+        scriptWithdrawn = [{ status: 404 }, { status: 404 }, { status: 404 }];
+        for (let i = 1; i <= 4; i += 1) {
+          const state = await p.poll(i * 1000);
+          expect(state.lastError, `poll ${i}`).toBeNull();
+        }
+        expect(store.releases().filter((r) => r.yanked)).toHaveLength(0);
+        // From the poll after the first vouching listing on, the listing
+        // request carries If-None-Match — never dropped purely on the
+        // pending's account — and from poll 3 on it is answered 304: the
+        // pending withdrawal each poll measures is simply DEFERRED (never
+        // applied against a stale non-answer, and never dropped by a forced
+        // fresh re-answer it does not need): the poll settles.
+        expect(seen.map((s) => s.headers['if-none-match'])).toEqual([undefined, '"eL1"', '"eL2"', '"eL2"']);
+      });
+
+      // Mutation (measured by hand): reverting the `pendingAlreadyVouchedFor`
+      // check (forcing `etag = null` unconditionally whenever
+      // `pendingWithdrawal !== null`, the fix round 2 shape) reds the case
+      // above's `if-none-match` assertion from poll 2 on — every listing
+      // request would carry no ETag at all, never `'"eL1"'`.
+
+      it('a pending demote is dropped when this poll\'s own listing still names K as stable — nothing changes, and the next poll retries against the SAME K', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        // K sits ON the listing's own window here — the load-bearing half of
+        // this pin: it is the listing's own re-confirmation of K, never an
+        // absence judgment, that must block the pending demote.
+        script = [
+          { status: 200, etag: '"eL1"', body: [k] },
+          { status: 200, etag: '"eL2"', body: [k] },   // still names K as stable
+          { status: 200, etag: '"eL3"', body: [k] },
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },   // /latest moves to the older T
+          { status: 200, etag: '"eS2"', body: t },   // retried against the SAME K next poll
+        ];
+        scriptWithdrawn = [
+          { status: 200, etag: '"eK1"', body: k },   // K's own page: still stable
+          { status: 200, etag: '"eK2"', body: k },
+        ];
+        await p.poll(1000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
+        await p.poll(2000);
+        expect(seenWithdrawn, 'the check DID run and measured a pending demote').toHaveLength(1);
+        // Dropped: nothing changed — the listing named K stable this SAME poll.
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'stable' });
+        await p.poll(3000);
+        // lastLatestTag never moved to T: the check is retried against the
+        // SAME K, never T — a second targeted request for v0.0.2.
+        expect(seenWithdrawn).toHaveLength(2);
+        expect(seenWithdrawn[1]!.url).toBe(seenWithdrawn[0]!.url);
+        expect(seenWithdrawn[0]!.url).toBe('/repos/fixture-owner/fixture-repo/releases/tags/v0.0.2');
+      });
+
+      // The prerelease variant, cheaply: when the listing itself already
+      // names K as dev, the pending demote is dropped too — the listing's
+      // own upsert already wrote that same fact.
+      it('a pending demote to prerelease is also dropped when the listing itself already names K as dev', async () => {
+        const { store, port } = fixture();
+        const p = poller(port);
+        const k = rel('v0.0.2', '2026-08-15T00:00:00Z');
+        const t = rel('v0.0.1', '2026-08-01T00:00:00Z');
+        script = [
+          { status: 200, etag: '"eL1"', body: [k] },
+          { status: 200, etag: '"eL2"', body: [{ ...k, prerelease: true }] },   // the listing already demoted K
+        ];
+        scriptLatest = [
+          { status: 200, etag: '"eS1"', body: k },
+          { status: 200, etag: '"eS2"', body: t },
+        ];
+        scriptWithdrawn = [{ status: 200, etag: '"eK"', body: { ...k, prerelease: true } }];
+        await p.poll(1000);
+        await p.poll(2000);
+        expect(store.releases().find((r) => r.tag === 'v0.0.2')).toMatchObject({ yanked: false, channel: 'dev' });
+      });
+
+      // Mutation, measured red: dropping the `listing.tags!.has(pendingK!)`
+      // check inside `pollOnce` (applying every pending withdrawal
+      // unconditionally on a fresh listing, the fix round 2 shape) reds the
+      // two-stable alternation case (poll 2's SECOND fresh 200 lets the
+      // pending yank apply for real, ending v0.0.3 yanked) and the
+      // stable-stays-stable demote case (`seenWithdrawn` never reaches a
+      // second call because the FIRST pending demote already applied and
+      // moved `lastLatestTag` to T, so poll 3 checks T instead of retrying
+      // K). It does NOT red the prerelease-demote case just above: the
+      // listing's OWN upsert already writes K as `channel: 'dev'` in that
+      // case, so applying the pending demote too is observably identical —
+      // this is the harmless-either-way shape the ruling itself names.
     });
 
     // Fix round 1, item 5 (ruling A): N1 above still left a residual —

@@ -488,6 +488,14 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  let an unrelated request success re-arm it or a store failure silence
    *  an unrelated request failure. */
   let lastWarnedCurrentKError: string | null = null;
+  /** B2 (fix round 3, coordinator's ruling, review 146): the tags a fresh,
+   *  ACCEPTED listing last named — process memory, like the ETags (D-3182).
+   *  `null` until the first accepted listing; set only where `etag` itself
+   *  is (see `pollListing`). Read only to decide whether a pending
+   *  withdrawal's own K already has a remembered answer on record, so a
+   *  later poll need not force the listing's ETag away purely on the
+   *  pending's account (see `pollOnce`). */
+  let lastAcceptedListingTags: ReadonlySet<string> | null = null;
 
   /** Fix round 2 (S1, review 143): ruling 1's "every catalogue REQUEST stamps
    *  the budget clock" — the ONE place `requestedAt` moves, called at every
@@ -573,14 +581,15 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  specific release is gone. */
   async function pollListing(
     now: number, source: { owner: string; repo: string },
-  ): Promise<{ state: CatalogueState; freshOk: boolean }> {
+  ): Promise<{ state: CatalogueState; freshOk: boolean; tags: ReadonlySet<string> | null }> {
     // B2: built from `validatedBase` — the SAME trimmed/normalised base the
     // gate accepted — never `deps.apiUrl` raw.
     const url = `${validatedBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
       + `/releases?per_page=${RELEASES_PER_PAGE}`;
     const sentEtag = etag;
     stampRequest(now);
-    const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean } => ({ state, freshOk: false });
+    const notFresh = (state: CatalogueState): { state: CatalogueState; freshOk: boolean; tags: ReadonlySet<string> | null } =>
+      ({ state, freshOk: false, tags: null });
     const answer = await fetchOne(url, sentEtag, timeoutMs);
     if (answer === null) return notFresh(failed(now, 'no-egress'));
     if (answer === 'over-cap') return notFresh(failed(now, 'malformed'));   // D-3209
@@ -627,7 +636,13 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     }
     if (!applied.ok) return notFresh(failed(now, 'malformed'));
     etag = answer.etag;
-    return { state: answered(now), freshOk: true };
+    // B2 (fix round 3, coordinator's ruling, review 146): remembered ONLY
+    // where `etag` itself is — a fresh, ACCEPTED listing's own content, kept
+    // so a LATER poll's pending withdrawal on a tag THIS listing already
+    // named needs no forced fresh re-answer purely on the pending's account
+    // (see `pollOnce`).
+    lastAcceptedListingTags = new Set(parsed.rows.map((r) => r.tag));
+    return { state: answered(now), freshOk: true, tags: lastAcceptedListingTags };
   }
 
   /**
@@ -769,8 +784,10 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    * Fix round 2 (R2, review 143): this function only MEASURES — it never
    * writes. It returns the `PendingWithdrawal` a confirmed withdrawal (404)
    * or a confirmed demotion (200) would apply, for `pollOnce` to hand to
-   * `applyWithdrawn` only once this same poll's listing has answered fresh.
-   * Any failure of the check (no-egress, over-cap, a redirect, a non-2xx
+   * `applyWithdrawn` only once this same poll's listing has answered fresh —
+   * fix round 3 (B2, coordinator's ruling, review 146) adds a SECOND
+   * condition: AND that same fresh listing does not itself name K. Any
+   * failure of the check (no-egress, over-cap, a redirect, a non-2xx
    * status, a malformed body) or R8's identity check failing warns and
    * returns `null` — nothing pending, so `lastLatestTag`/`latestEtag` stay
    * exactly where they were and the check is retried, against the SAME K,
@@ -854,15 +871,28 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // always has, and `keepTags` below still protects K for this poll.
     const prevLatestTag = lastLatestTag;
     const pendingWithdrawal = await pollLatest(now, source);
-    if (lastLatestTag !== prevLatestTag || pendingWithdrawal !== null) {
+    const pendingK = pendingWithdrawal === null
+      ? null
+      : (pendingWithdrawal.kind === 'yank' ? pendingWithdrawal.k : pendingWithdrawal.row.tag);
+    // B2 (fix round 3, coordinator's ruling, review 146): "do not drop the
+    // listing's ETag for it" — once a fresh, ACCEPTED listing has already
+    // vouched for K (named it, whatever its channel), a LATER poll's pending
+    // withdrawal on that SAME K needs no forced fresh re-answer purely on
+    // its own account: the remembered content already settles it below, and
+    // this poll's listing may answer a cheap 304 that carries no fresh
+    // evidence either way — the poll simply settles, exactly as a deferred
+    // check always has. `lastAcceptedListingTags` is that remembered
+    // content, updated only where `etag` itself is (see `pollListing`).
+    const pendingAlreadyVouchedFor = pendingK !== null
+      && lastAcceptedListingTags !== null && lastAcceptedListingTags.has(pendingK);
+    if (lastLatestTag !== prevLatestTag || (pendingWithdrawal !== null && !pendingAlreadyVouchedFor)) {
       // The stable identity CHANGED this poll (a fresh confirmation, or a
-      // 404-with-no-kept-tag clearing it), OR a moved-away transition was
-      // just CONFIRMED and is waiting on this poll's own listing (R2) — either
-      // way a stale 304 here must not stand in for a real answer: a 304
-      // writes nothing, and R2's evidence gate only ever fires on a fresh
-      // 200, so a 304'd listing would needlessly defer a confirmed
-      // withdrawal to the NEXT poll even though this one could have applied
-      // it. Dropping the ETag forces a full re-answer.
+      // 404-with-no-kept-tag clearing it) — unchanged trigger — OR a
+      // moved-away transition was just CONFIRMED and is waiting on this
+      // poll's own listing (R2), and no remembered listing has vouched for
+      // its K yet: either way a stale 304 here must not stand in for a real
+      // answer that was never actually given. Dropping the ETag forces a
+      // full re-answer.
       etag = null;
     }
     const listing = await pollListing(now, source);
@@ -873,8 +903,28 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // changes, and the very next poll retries the same check against the
     // same K (`measureWithdrawn` re-fetches; nothing here remembers the
     // discarded `pendingWithdrawal`).
+    //
+    // B2 (fix round 3, coordinator's ruling, review 146): THE LISTING WINS.
+    // When this SAME poll's fresh listing itself names K at all — stable or
+    // prerelease, whatever the confirming tag check answered — that is
+    // stronger, more current evidence than the check's own verdict, so the
+    // pending withdrawal is DROPPED, never applied: a pending 'yank' is
+    // dropped because the listing just showed K is still there; a pending
+    // 'demote' is dropped uniformly too (when the listing names K stable,
+    // the check's own "still stable"/"demoted" verdict is stale next to it;
+    // when the listing names it dev, the listing's OWN upsert just wrote
+    // that same fact, so applying the pending demote as well would be
+    // harmless but redundant — dropping it either way is simpler and costs
+    // nothing). Before this fix a repository whose listing endpoint alone
+    // stayed live (a partial mirror, spec §7's own example) could apply a
+    // stale yank or demote against a K the SAME poll's listing had just
+    // re-confirmed, flipping the resolved stable tag every poll.
     if (pendingWithdrawal !== null && listing.freshOk) {
-      applyWithdrawn(now, pendingWithdrawal);
+      if (listing.tags!.has(pendingK!)) {
+        warnWithdrawn('listing-names-k');
+      } else {
+        applyWithdrawn(now, pendingWithdrawal);
+      }
     }
     // Fix round 1, review round 2 (I2): resolved only after BOTH requests
     // have fully settled, with the state AS IT STANDS THEN — never a
