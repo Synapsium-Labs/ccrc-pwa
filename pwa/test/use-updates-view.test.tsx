@@ -90,6 +90,47 @@ describe('asUpdatesView — a malformed answer is a failure, never an empty flee
   });
 });
 
+describe('asUpdatesView — a non-conforming ELEMENT is dropped, never the whole answer (fix round 1, F11/item 6)', () => {
+  it('drops a null node and a node whose current has no string sha, keeps the rest, and warns exactly once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [null, { ...node(), current: { ...good.current, sha: undefined } }, good],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a release with no string tag and an intent row with no string scope or setAt — element-level, not whole-answer', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const goodRelease = {
+      tag: 'v0.0.9', version: 'v0.0.9', channel: 'stable', publishedAt: 1, commitSha: null,
+      bundleListed: false, yanked: false, refused: [], notes: null,
+    };
+    const goodIntent = {
+      scope: '*', channel: null, pinnedTag: null, auto: 'off', notify: 'channel', setAt: 1, setBy: 'x',
+    };
+    const got = asUpdatesView({
+      ...view(),
+      releases: [{ ...goodRelease, tag: 42 }, goodRelease],
+      intent: [{ ...goodIntent, setAt: '1' }, null, goodIntent],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.releases).toEqual([goodRelease]);
+    expect(got!.intent).toEqual([goodIntent]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('is byte-identical (same reference) when every element conforms — no needless allocation on the ordinary poll', () => {
+    const v = view();
+    expect(asUpdatesView(v)).toBe(v);
+  });
+});
+
 describe('nodeVersion and pendingTag — the one arrow predicate', () => {
   it('nodeVersion is the stamp\'s tag, or null when there is none to compare', () => {
     expect(nodeVersion(node())).toBe('v0.0.9');

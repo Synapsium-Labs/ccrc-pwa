@@ -74,6 +74,15 @@ describe('SettingsScreen — tap targets and the header door', () => {
     expect(declValue(ruleIn(fleetCss, '.settings-door'), 'min-height')).toBe('var(--tap-min)');
   });
 
+  it('.settings-bell-row .bell is at least one tap square, off the shared token — the CONTROL, not just the row (F2)', () => {
+    // The row's own min-height (:74 above) added the button no tap area: the
+    // caption span beside it is not a <label> for it, so the row's height and
+    // the control's own hit area were two different things. Pinned on the
+    // control itself, per test/cssRule.ts.
+    expect(declValue(ruleIn(fleetCss, '.settings-bell-row .bell'), 'min-width')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(fleetCss, '.settings-bell-row .bell'), 'min-height')).toBe('var(--tap-min)');
+  });
+
   it("wraps the fleet head's right group rather than overflowing it, by specificity", () => {
     // D-3303: the group's four steady-state items
     // leave ~38px at 390px (fleet.css's Chromium-measured width note above
@@ -392,6 +401,27 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     fireEvent.click(within(region).getByRole('radio', { name: AUTO_LABELS.channel }));
     expect(await within(region).findByText(`${T7_GATE_NOTE}server, gone-node-id`)).toHaveClass('settings-note');
     expect(document.querySelector('.toast--error')).toBeNull();
+  });
+
+  it("a 409's stale node list does not outlive the poll that answers it — a LATER poll showing the node now carries the word clears the note (F5)", async () => {
+    // Before: the fleet node lacks the gate word (the CHANNEL fieldset is not
+    // gated on it, so the radio stays clickable). After: a genuinely later,
+    // distinct poll answer — the write's own reload — shows it now carries
+    // the word. The 409's list must not outlive that: the note is gone, even
+    // though nothing else about the fleet changed.
+    const before = t7View({ nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: T7_GATED })] });
+    const after = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: T7_GATED })] });
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    // The write's own reload fetches `after` — a fresh, distinct poll where
+    // the fleet node now carries update-gate — and supersedes the stale 409
+    // list rather than outliving it.
+    await waitFor(() => expect(within(region).queryByText(/not yet on:/)).toBeNull());
   });
 
   it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
@@ -1357,5 +1387,28 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
     const urls = f.mock.calls.map(([u]) => String(u));
     expect(urls.filter((u) => u === '/api/auth/status')).toHaveLength(1);
     expect(urls.some((u) => u.startsWith('/health'))).toBe(false);
+  });
+});
+
+// ── fix round 1 (F11, item 6): a malformed /api/updates ELEMENT is dropped,
+// never a reason to blank the whole screen ────────────────────────────────
+
+describe('SettingsScreen — a malformed /api/updates element does not blank the screen (F11)', () => {
+  it('renders the node inventory over the well-formed rows, dropping a null node and one with no string sha', async () => {
+    const badSha = {
+      ...t7Node(), nodeId: '22222222-2222-2222-2222-222222222222', current: { ...t7Node().current, sha: undefined },
+    };
+    const raw = {
+      catalogue: { lastOkAt: Date.now() - (4 * 60_000 + 5_000), lastError: null },
+      releases: [],
+      nodes: [null, badSha, t7Node(), t7Server()],
+      intent: [t7Intent()],
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const region = await t7Mount(raw as unknown as UpdatesView);
+    expect(within(region).getByText('fleet')).toBeInTheDocument();
+    expect(within(region).getByText('server')).toBeInTheDocument();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

@@ -599,7 +599,7 @@ export function FleetScreen({
       </header>
 
       <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
-      <UpdateBanner updates={updates.view} />
+      <UpdateBanner updates={updates.view} health={fleetHealth} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can

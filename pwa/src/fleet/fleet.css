@@ -3171,7 +3171,15 @@ button.proj-card-pool::before {
    the auditor measures it with no INHERITED_GROUNDS registration, and it is
    not sticky: it heads a screen, it does not float over a list.
    .settings-bell-row is layout only (it sets no colour): the reused
-   NotificationBell button beside its one-line caption, at the tap floor. */
+   NotificationBell button beside its one-line caption. The ROW is at the tap
+   floor (`min-height` below); the BUTTON itself was not, until fix round 1
+   (F2): `.bell` (this file, above) is a bare 4px-padding glyph — 29.2 × 25 px
+   in real Chromium at 390px, well under `--tap-min` — and the caption span
+   beside it is not a `<label>` for the button, so the row's own height added
+   the control no tap area. `.settings-bell-row .bell` below is the
+   settings-scoped fix, on the CONTROL rather than the row; the header bell's
+   own size (fleet header, unscoped `.bell`) is not this wave's (F2's own
+   scope note). */
 .settings-unarmed {
   margin: 0 0 var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
@@ -3186,6 +3194,12 @@ button.proj-card-pool::before {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+  min-height: var(--tap-min);
+}
+/* F2: the settings section's primary mobile control gets a real hit area —
+   layout only, no colour, so it needs no INHERITED_GROUNDS registration. */
+.settings-bell-row .bell {
+  min-width: var(--tap-min);
   min-height: var(--tap-min);
 }
 

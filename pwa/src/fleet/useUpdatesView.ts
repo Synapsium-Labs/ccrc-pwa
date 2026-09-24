@@ -16,6 +16,19 @@ import { isReleaseTag, isUpdateChannel, type NodeWire, type UpdatesView } from '
 import { isNewerTag } from '../../../shared/semver';
 import { ApiError, api } from '../lib/api';
 
+/** THE ONE invalid-Date predicate (fix round 1, F13/item 8): a `lastOkAt`/
+ *  `lastError.at`/`publishedAt`/`unreachableSince`/a request's `at` magnitude
+ *  this build's `Date` cannot place — a caller's own `typeof x === 'number'`
+ *  guard only rules out a non-number; 1e20 is finite but `new Date(1e20)` is
+ *  Invalid Date. Moved here (from SettingsScreen.tsx, which had it
+ *  module-private) so the banner's `bannerRelease` can share it: the two
+ *  surfaces disagreeing about what "the catalogue was reached" means was
+ *  itself a defect (F13) — the settings screen routed `catalogue.lastOkAt`
+ *  through this, the banner did not, and `lastOkAt: 1e20` had one saying
+ *  "checked" while the other stayed silent. One predicate, one import, both
+ *  surfaces read the same answer. */
+export const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
+
 /** The read's cadence. The spec names none for the PWA; 60 s is the server's
  *  own fastest cadence over these rows — the inventory sweep
  *  (`UPDATE_INVENTORY_MS`, `server/src/watch.ts`, design §9's "every inventory
@@ -42,6 +55,37 @@ export interface UpdatesPoll {
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** A node element the renderers can read without throwing (fix round 1, F11/
+ *  item 6): `versionSides` dereferences `.role` (`shared/update-summary.ts`),
+ *  `pendingTag`/`nodeVersion` (below) dereference `.measuredAt` and
+ *  `.current`, and `BuildLine`/`FleetHostBanner` read `.current.sha` off a
+ *  `BuildInfo` that arrives whatever shape the wire hands them. None of those
+ *  reads needs its VALUE to be the exact wire type (`role` is only ever
+ *  compared with `===`), only that dereferencing it cannot throw — so this
+ *  checks structure (object; a nullable field is that type or null; `current`,
+ *  where present, is an object whose `sha` is a string), the same discipline
+ *  `asUpdatesView`'s catalogue check already applies one level up. */
+const isNodeElement = (v: unknown): v is NodeWire => {
+  if (!isObject(v)) return false;
+  if (typeof v.role !== 'string' && v.role !== null) return false;
+  if (typeof v.measuredAt !== 'number' && v.measuredAt !== null) return false;
+  if (v.current !== null) {
+    if (!isObject(v.current) || typeof (v.current as { sha?: unknown }).sha !== 'string') return false;
+  }
+  return true;
+};
+
+/** A release element the renderers can read: `ReleaseItem`/`sortReleases` key
+ *  and compare on `.tag`. */
+const isReleaseElement = (v: unknown): v is UpdatesView['releases'][number] =>
+  isObject(v) && typeof (v as { tag?: unknown }).tag === 'string';
+
+/** An intent element the renderers can read: `NotificationsSection` and
+ *  `UpdatesBody` find a row by `.scope` and compare `.setAt` (a number). */
+const isIntentElement = (v: unknown): v is UpdatesView['intent'][number] =>
+  isObject(v) && typeof (v as { scope?: unknown }).scope === 'string'
+  && typeof (v as { setAt?: unknown }).setAt === 'number';
+
 /**
  * The wire guard: null unless the answer has the `UpdatesView` SHAPE — a
  * catalogue line whose two fields are what they claim, and three arrays. A
@@ -53,8 +97,17 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
  * every surface decides "checked" on `lastOkAt !== null` and `undefined !==
  * null` is true: `{catalogue: {}}` passing here would render a "checked" line
  * for a catalogue nobody reached (spec §18 "unreachable is not current").
- * Elements are passed through as the wire types — the server is their one
- * writer — and each reader below still tolerates an absent field.
+ *
+ * Fix round 1 (F11, item 6): each ELEMENT of the three arrays is also
+ * checked, for the fields the renderers actually dereference — a `null` node
+ * or one whose `current` has no string `sha` used to reach FleetScreen and
+ * throw with no error boundary (`pwa/src` has none), blanking the whole
+ * screen for one bad row a non-conforming server or a rewriting intermediary
+ * sent. A non-conforming element is DROPPED, not a reason to refuse the whole
+ * answer — the other, well-formed rows are real fleet state and stay
+ * rendered — with exactly ONE `console.warn` for the answer, however many
+ * elements it drops, so a chatty malformed poll cannot flood the console once
+ * per row every 60 s.
  */
 export function asUpdatesView(raw: unknown): UpdatesView | null {
   if (!isObject(raw)) return null;
@@ -67,7 +120,21 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
     return null;
   }
   if (!Array.isArray(releases) || !Array.isArray(nodes) || !Array.isArray(intent)) return null;
-  return raw as unknown as UpdatesView;
+  const okNodes = nodes.filter(isNodeElement);
+  const okReleases = releases.filter(isReleaseElement);
+  const okIntent = intent.filter(isIntentElement);
+  const dropped = (nodes.length - okNodes.length) + (releases.length - okReleases.length)
+    + (intent.length - okIntent.length);
+  // Every element conformed: hand back the SAME object the caller passed in,
+  // unchanged (`.filter` always allocates, even keeping everything) — a well-
+  // formed answer's identity is a pin (`asUpdatesView(v)).toBe(v)`), and
+  // rebuilding it here for no reason would be a needless allocation on every
+  // one of the ordinary 60s polls that never sees a bad row.
+  if (dropped === 0) return raw as unknown as UpdatesView;
+  console.warn(`ccrc: /api/updates dropped ${dropped} malformed element(s) it could not read — the rest still rendered.`);
+  return {
+    catalogue: catalogue as unknown as UpdatesView['catalogue'], releases: okReleases, nodes: okNodes, intent: okIntent,
+  };
 }
 
 /** The node's running tag, or null when there is none to compare: no stamp, an

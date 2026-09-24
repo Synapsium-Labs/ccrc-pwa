@@ -27,12 +27,12 @@
 // disabled in W3"). "See what's new" opens /settings, where the release list is.
 import { useId } from 'react';
 import type { ReactNode } from 'react';
-import type { UpdateChannel, UpdatesView } from '../../../shared/api';
+import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
-import { versionsSummary } from '../../../shared/update-summary';
+import { remoteSides, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { MOVE_DISABLED_TEXT } from '../lib/api';
 import { navigate } from '../lib/router';
-import { UPDATES_POLL_MS, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
+import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
 import './fleet.css';
 
 /** The release the banner announces: the NEWEST `pendingTag` across the
@@ -41,7 +41,12 @@ import './fleet.css';
  *  `null` when the catalogue has never been reached since the server started,
  *  or when no node has an arrow. */
 export function bannerRelease(view: UpdatesView): { tag: string; channel: UpdateChannel } | null {
-  if (typeof view.catalogue.lastOkAt !== 'number') return null;
+  // fix round 1 (F13, item 8): `typeof … === 'number'` alone let a magnitude
+  // this build's `Date` cannot place (`1e20`) read as "reached", the settings
+  // catalogue line's own `isPlaceableInstant` guard already refused — the same
+  // predicate, imported rather than re-derived, so the two surfaces cannot
+  // answer differently about the same `lastOkAt`.
+  if (typeof view.catalogue.lastOkAt !== 'number' || !isPlaceableInstant(view.catalogue.lastOkAt)) return null;
   if (!Array.isArray(view.nodes)) return null;
   let best: { tag: string; channel: UpdateChannel } | null = null;
   for (const n of view.nodes) {
@@ -58,31 +63,43 @@ export function bannerRelease(view: UpdatesView): { tag: string; channel: Update
   return best;
 }
 
-/** `${tag} is out on ${channel} — ${summary}.` over the MEASURED nodes only: a
- *  row nobody has measured has no version to report, and reading it as
- *  "unversioned" would state a measurement nobody made — versionsSummary says
- *  the side is missing instead. */
-export function updateBannerText(view: UpdatesView): string | null {
+/** `${tag} is out on ${channel} — ${summary}.`, routed through the SAME L0
+ *  rule the push body uses (fix round 1, F1/F14, D-3313/D-3316; group A's
+ *  `server/src/watch.ts:pushRelease` is the server-side twin of this exact
+ *  computation) — sides are picked from EVERY live row, never a pre-filtered
+ *  subset: filtering first is what let a `both` server row's own version
+ *  stand in for a fleet nobody measured (the reviewer's exact rows, F1).
+ *  `stated` carries the per-row "does this reading vouch for its version"
+ *  fact — measured this poll, its stamp read, and (D-3316) reachable — so an
+ *  occupying row that fails it renders as a dash, never its stale value, but
+ *  still blocks another row from falling back into its side. `health` is how
+ *  this screen already knows remote from local (BuildLine's own render
+ *  condition, `health.mode !== 'remote'`): on a remote fleet (D-3313) a
+ *  `both` row is THIS box, never the fleet box; local mode's one `both` row
+ *  genuinely is both (D-3301) — and while `health` has not loaded yet
+ *  (`null`, the default), this reads as local, exactly as it did before this
+ *  field existed. */
+export function updateBannerText(view: UpdatesView, health?: FleetHealth | null): string | null {
   const release = bannerRelease(view);
   if (release === null) return null;
-  // `SummaryRow.stated` is now required (fix round 2, item 7) — every row here already passed the
-  // measured-and-read filter above, so it is unconditionally `true`. This banner still decides sides via
-  // `versionsSummary`/`versionSides` (pre-filtered, D-3313's `remoteSides` unrouted) rather than the D-3316
-  // rule item 1 gave the push body — group B re-routes it; this is behaviour-identical to before this field
-  // became required.
-  const measured = view.nodes
-    .filter((n) => typeof n.measuredAt === 'number' && n.stampRead === 'ok')
-    .map((n) => ({ role: n.role, version: nodeVersion(n), stated: true }));
-  return `${release.tag} is out on ${release.channel} — ${versionsSummary(measured)}.`;
+  const rows = view.nodes.map((n) => ({
+    role: n.role, version: nodeVersion(n),
+    stated: typeof n.measuredAt === 'number' && n.stampRead === 'ok' && n.reachable,
+  }));
+  const remote = health != null && health.mode === 'remote';
+  const sides = remote ? remoteSides(rows) : versionSides(rows);
+  return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 
-export function UpdateBanner({ updates: injected }: { updates?: UpdatesView | null } = {}): ReactNode {
+export function UpdateBanner(
+  { updates: injected, health = null }: { updates?: UpdatesView | null; health?: FleetHealth | null } = {},
+): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for the whole
   // screen; the standalone shape (tests, any other mount) still self-polls.
   const polled = useUpdatesView(injected === undefined ? UPDATES_POLL_MS : 0);
   const view = injected === undefined ? polled.view : injected;
   const noteId = useId();
-  const text = view ? updateBannerText(view) : null;
+  const text = view ? updateBannerText(view, health) : null;
   if (text === null) return null;
   return (
     <div className="update-banner" role="status">

@@ -18,7 +18,12 @@ function side(label: string, b: BuildInfo | null, next: string | null): ReactNod
   // black — the line saying one thing and its colour saying the other, over
   // exactly the field this line exists to report.
   const versioned = typeof b.version === 'string';
-  const name = versioned ? b.version : `unversioned (${b.sha.slice(0, 8)})`;
+  // Fix round 1 (F11, item 6): `asUpdatesView` now drops a `current` with no
+  // string `sha` before this ever renders, but this guard stays anyway,
+  // beside `dirty`'s — the same "arrives unchecked" reason BuildLine.tsx
+  // already gives that one, and belt-and-suspenders costs nothing here.
+  const shaOk = typeof b.sha === 'string';
+  const name = versioned ? b.version : shaOk ? `unversioned (${b.sha.slice(0, 8)})` : 'unversioned';
   // A wire boolean, read once and `=== true`: `current` reaches here through
   // asUpdatesView, which passes the rows through unchecked.
   const dirty = b.dirty === true;
@@ -41,11 +46,23 @@ export function BuildLine({ health, nodes }: { health: FleetHealth | null; nodes
   // both sides a dash. Hiding it would take "what each box runs" away exactly
   // when the update plane is unreadable; a dash claims no version (§18).
   const { fleet, server } = Array.isArray(nodes) ? remoteSides(nodes) : { fleet: null, server: null };
+  // Fix round 1 (F14, D-3316): a side occupied by an unreachable row still
+  // occupies it (so the OTHER side never falls back into it — `remoteSides`'s
+  // own point), but its cached `current`/version is not a fact this line
+  // speaks for — `markUnreachable` keeps the last measurement, and rendering
+  // it calmly here is the exact class F1/F3 fix: a surface stating a stale
+  // reading as present-tense fact. The arrow (`pendingTag`) is unaffected —
+  // D-3316 widens only "what a side states about its version", not the
+  // arrow predicate — and the settings inventory alone keeps "unreachable
+  // since …" with the last measured values; this line states nothing, it
+  // does not know history.
+  const fleetCurrent = fleet && fleet.reachable ? fleet.current : null;
+  const serverCurrent = server && server.reachable ? server.current : null;
   return (
     <div className="build-line" role="status">
-      {side('fleet', fleet?.current ?? null, fleet ? pendingTag(fleet) : null)}
+      {side('fleet', fleetCurrent, fleet ? pendingTag(fleet) : null)}
       <span className="build-line-sep"> · </span>
-      {side('server', server?.current ?? null, server ? pendingTag(server) : null)}
+      {side('server', serverCurrent, server ? pendingTag(server) : null)}
     </div>
   );
 }

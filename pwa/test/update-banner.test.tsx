@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { NodeWire, UpdatesView } from '../../shared/api';
+import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api, MOVE_DISABLED_TEXT } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -193,6 +193,56 @@ describe('UpdateBanner — when it stays silent (unreachable is not current, spe
 
   it('is silent with no answer at all (updates={null})', () => {
     const { container } = render(<UpdateBanner updates={null} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1)', () => {
+  const remoteHealth: FleetHealth = { mode: 'remote', connected: true, downSince: null };
+
+  it('states nothing for a fleet side nobody measured — a both row never lends it its version (F1)', () => {
+    // The reviewer's exact rows: a server row recorded `both`, and an actual
+    // fleet-role row whose stamp did not read. `updateBannerText` no longer
+    // pre-filters the nodes before picking sides, so the unreadable fleet
+    // row still occupies its role (rather than vanishing from the array,
+    // which is exactly what let the `both` row's own version stand in for a
+    // fleet nobody measured before this fix).
+    render(<UpdateBanner health={remoteHealth} updates={view({
+      nodes: [serverNode({ role: 'both' }), fleetNode({ current: null, stampRead: 'unreadable' })],
+    })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
+  it('on a remote fleet, a lone both row never lends its version to the fleet side (D-3313)', () => {
+    // Narrower than the case above: no fleet-role row exists at all, so only
+    // routing through remoteSides on a remote fleet (never versionSides'
+    // both-fallback) tells the two pickers apart.
+    render(<UpdateBanner health={remoteHealth} updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
+  it('renders in local mode (no health, or health not remote): the one both row still reads as both sides', () => {
+    // The exact D-3301 fallback the case above must NOT apply while local —
+    // health omitted (the default) and health explicitly local both read as
+    // local, so a fleet that has not loaded its health yet renders exactly
+    // as it always has.
+    render(<UpdateBanner updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    cleanup();
+    render(<UpdateBanner health={{ mode: 'local', connected: true, downSince: null }}
+      updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+  });
+
+  it('an unreachable fleet row carrying an old version does not state it, and is not read as current (F14, D-3316)', () => {
+    render(<UpdateBanner updates={view({
+      nodes: [fleetNode({ reachable: false, unreachableSince: NOW - 60_000 }), serverNode()],
+    })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
+  it("is silent when lastOkAt is a magnitude this build's Date cannot place — the settings catalogue line's own predicate (F13)", () => {
+    const { container } = render(<UpdateBanner updates={view({ catalogue: { lastOkAt: 1e20, lastError: null } })} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

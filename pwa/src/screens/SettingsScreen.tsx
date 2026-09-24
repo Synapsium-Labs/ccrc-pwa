@@ -19,7 +19,7 @@ import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../lib/api';
 import { readAuthStatus } from '../lib/auth';
 import { elapsedWords } from '../lib/elapsed';
@@ -95,12 +95,13 @@ function gateRefusalOf(err: unknown): string[] | null {
   return ids.length > 0 ? ids : null;
 }
 
-/** THE ONE invalid-Date predicate (fix round 1): a `lastOkAt`/`lastError.at`/`publishedAt` magnitude this
- *  build's `Date` cannot place — `asUpdatesView` only guards `Number.isFinite`, and 1e20 is finite but
- *  `new Date(1e20)` is Invalid Date (review R-b). Used by `catalogueLine`'s classification of `lastOkAt`
- *  AND by every renderer that prints a clock or a date off a wire instant — `clockTime`, `dayClock`,
- *  `releaseDate` — so there is exactly one place that decides "this build's Date cannot place it". */
-const isPlaceableInstant = (ms: number): boolean => !Number.isNaN(new Date(ms).getTime());
+// THE ONE invalid-Date predicate (fix round 1) now lives in `fleet/useUpdatesView.ts` (imported above),
+// moved there in fix round 1's second pass (F13, item 8) so `UpdateBanner`'s `bannerRelease` can share it —
+// the banner used to decide "the catalogue was reached" with a bare `typeof … === 'number'`, which this
+// screen's own `isPlaceableInstant` already refused (review F13). Used here by `catalogueLine`'s
+// classification of `lastOkAt` AND by every renderer that prints a clock or a date off a wire instant —
+// `clockTime`, `dayClock`, `releaseDate` — so there is exactly one place, shared by both surfaces, that
+// decides "this build's Date cannot place it".
 
 export function clockTime(ms: number): string {
   if (!isPlaceableInstant(ms)) return '—';
@@ -592,14 +593,32 @@ function UpdatesBody({ view, stale, now, reload }: {
 }): ReactNode {
   const gateNoteId = useId();
   const [busy, setBusy] = useState(false);
-  const [gateRefusal, setGateRefusal] = useState<string[] | null>(null);
+  // Fix round 1 (F5, item 5): the refusal carries the VIEW that was current
+  // when the route named these ids, alongside the ids themselves — not just
+  // the ids — so a LATER poll can be told from the one already in hand at
+  // 409-time by identity, never by content (every real poll answer is a
+  // fresh object even when nothing about the fleet changed, so content
+  // would supersede the route's just-given answer on its own immediate
+  // reload, which is not what a later poll means here).
+  const [gateRefusal, setGateRefusal] = useState<{ ids: string[]; view: UpdatesView } | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
   const fleet = view.intent.find((i) => i.scope === FLEET_SCOPE) ?? null;
   const missing = autoGateMissing(view.nodes);
   const labelOf = (id: string): string => view.nodes.find((n) => n.nodeId === id)?.label ?? id;
-  // The route's answer, when it gave one, is the authority over the poll's.
-  const gateLabels = gateRefusal !== null ? gateRefusal.map(labelOf) : missing.map((n) => n.label);
+  // The route's answer, when it gave one, is the authority over the poll's —
+  // but only until a LATER poll has landed (F5): while `gateRefusal.view` is
+  // still the exact view active when the route named these ids, its list
+  // stands unfiltered (the route may know something this same poll's own
+  // measured caps do not yet). Once a poll strictly after that one lands,
+  // the note never names a node THAT poll shows carrying the word — filtered
+  // against its `missing`, not dropped outright, so a node still missing it
+  // still reads. A 409's stale list must not outlive the poll that answers it.
+  const gateLabels = gateRefusal === null
+    ? missing.map((n) => n.label)
+    : gateRefusal.view === view
+      ? gateRefusal.ids.map(labelOf)
+      : gateRefusal.ids.filter((id) => missing.some((n) => n.nodeId === id)).map(labelOf);
   const gateNote = gateLabels.length > 0 ? `${AUTO_GATE_NOTE}${gateLabels.join(', ')}` : null;
   const line = catalogueLine(view.catalogue, now);
 
@@ -611,7 +630,7 @@ function UpdatesBody({ view, stale, now, reload }: {
         (answer) => { if (answer === 'unreadable') toast(UNCONFIRMED_TEXT); },
         (err: unknown) => {
           const refused = gateRefusalOf(err);
-          if (refused !== null) setGateRefusal(refused);
+          if (refused !== null) setGateRefusal({ ids: refused, view });
           else toast(updateErrorText(err), 'error');
         },
       )

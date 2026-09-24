@@ -126,6 +126,31 @@ describe('BuildLine', () => {
     expect(document.querySelector('.build-line-next')).toBeNull();
   });
 
+  it('an unreachable side does not state its cached version — the arrow is unaffected (F14, D-3316)', () => {
+    // markUnreachable keeps the row's last measuredAt/current unchanged, so a
+    // side that DROPPED must not keep reading calm and present-tense (the
+    // class F1/F3 fix too): the fleet side here renders a dash even though
+    // its cached current is v0.0.7, while its arrow — a DIFFERENT question,
+    // D-3316 does not touch it — still points up, same as the reachable
+    // server side beside it.
+    render(<BuildLine health={remote({ build: 'agreed' })} nodes={[
+      node('fleet', stamp(SHA_A, 'v0.0.7'), { reachable: false, unreachableSince: 1_000, desiredTag: 'v0.0.9' }),
+      node('server', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9' }),
+    ]} />);
+    expect(line()!.textContent).toBe('fleet — → v0.0.9 · server v0.0.7 → v0.0.9');
+    expect(screen.getByText('fleet —')).toHaveClass('build-line-side--warn');
+  });
+
+  it('renders "unversioned" without throwing when current has no string sha — belt-and-suspenders beside the dirty guard (F11)', () => {
+    // asUpdatesView now drops an element shaped like this before it ever
+    // reaches here (useUpdatesView.ts), but this guard stays anyway, for the
+    // same "arrives unchecked" reason the dirty guard above it does.
+    const noSha = { ...stamp(SHA_A), sha: undefined as unknown as string };
+    expect(() => render(<BuildLine health={remote()} nodes={[node('fleet', noSha), node('server', stamp(SHA_A, 'v0.0.7'))]} />))
+      .not.toThrow();
+    expect(screen.getByText('fleet unversioned')).toHaveClass('build-line-side--warn');
+  });
+
   it('draws no arrow on a macOS node — not centrally managed, as its /settings row says (decision 17)', () => {
     // D-3309: pendingTag answers null for os 'darwin', so
     // this line, the update banner and the inventory row agree about the node.

@@ -2722,3 +2722,42 @@ describe('BuildLine and the skew banner read the screen\'s one /api/updates poll
     expect(updates).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── fix round 1 (F11, item 6): a malformed /api/updates ELEMENT is dropped,
+// never a reason to blank the whole screen (pwa/src has no error boundary) ──
+
+describe('a malformed /api/updates element does not blank the fleet screen (F11)', () => {
+  const stampOf = (version: string) => ({
+    sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf('v0.0.7'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: 'v0.0.7', previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+
+  it('renders BuildLine and the update banner over the well-formed rows, dropping a null node and one with no string sha', async () => {
+    const goodFleet = nodeOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet');
+    const goodServer = nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server');
+    const badSha = { ...goodFleet, nodeId: '11111111-1111-1111-1111-111111111111', current: { ...goodFleet.current, sha: undefined } };
+    const raw = {
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [null, badSha, goodFleet, goodServer],
+      intent: [],
+    };
+    vi.spyOn(api, 'updates').mockResolvedValue(raw as unknown as UpdatesView);
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('.build-line')?.textContent).toContain('fleet v0.0.7'));
+    expect(document.querySelector('.build-line')?.textContent).toContain('server v0.0.7');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+});
