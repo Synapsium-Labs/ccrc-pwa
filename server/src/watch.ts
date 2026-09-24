@@ -96,6 +96,12 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+/** How long the FIRST fleet assembly after boot waits for the first HEAD
+ *  sweep (`headBranches`) before shipping without it. Bounded because that
+ *  sweep is serial agent round trips per project and a dropped one need not
+ *  answer; only the first tick waits, and the first tick's busy->idle pushes
+ *  are already suppressed, so what this delays is one frame at boot. */
+export const HEADS_BOOT_WAIT_MS = 2_500;
 
 /** The journal mirror's lane, and it is fast for the one reason the census's is
  *  slow: a sweep is ONE `readdir` plus one `readFileFrom` per live generation,
@@ -500,6 +506,11 @@ export class FleetWatcher {
    *  census's per-sweep map: that retention must never reach the census,
    *  which a failed read may only ever suppress, never feed. */
   private headBranches = new Map<string, { project: string; branch: string | null }>();
+  /** Settles the first time `headBranches` is written; the first assembly
+   *  after boot waits on it, bounded (`HEADS_BOOT_WAIT_MS`). */
+  private headsSettled!: Promise<void>;
+  private settleHeads: () => void = () => {};
+  private headsBootWaited = false;
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
   /** Last swept task progress per session id, and when the sweep ran. */
@@ -794,6 +805,7 @@ export class FleetWatcher {
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
+    this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
   }
 
   start(): void {
@@ -1337,6 +1349,22 @@ export class FleetWatcher {
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
       // than computed a second, independent way off `records` — see that
       // derivation's own comment (blocking review finding 4).
+      // THE FIRST ASSEMBLY AFTER BOOT WAITS, BOUNDED, FOR THE FIRST HEAD SWEEP
+      // just fired above. Without it the map is always empty here on tick 1 —
+      // the argument below is read before the sweep's first await can resolve
+      // — so the first frame, and the state-cache it writes, shipped the
+      // registry's `.branch` for every row whose pane gave none: the name a
+      // manual checkout leaves stale. Once only, so a sweep that never lands
+      // costs one frame's latency, not every tick's.
+      if (!this.headsBootWaited) {
+        this.headsBootWaited = true;
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          this.headsSettled,
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, HEADS_BOOT_WAIT_MS); }),
+        ]);
+        clearTimeout(timer);
+      }
       const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches());
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
@@ -2426,6 +2454,7 @@ export class FleetWatcher {
       if (transientlyUnread.has(h.project) && !fleetHeads.has(id)) fleetHeads.set(id, h);
     }
     this.headBranches = fleetHeads;
+    this.settleHeads();
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
     // rather than the one `tick()` already took (D-283's "one listing,
@@ -4011,10 +4040,14 @@ export class FleetWatcher {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, retained: true } : sl);
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, retained: true } : sl);
         } else {
+          // `boxCols` rides with ctxPct, never with identity: it is THIS
+          // tick's width or nothing. A kept width would read an overlay tick
+          // on a pane just narrowed by an attach as still wide — the one
+          // direction the fleet's `narrow` chip must not err in.
           const prev = this.statuslines.get(r.id);
-          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, retained: true });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the

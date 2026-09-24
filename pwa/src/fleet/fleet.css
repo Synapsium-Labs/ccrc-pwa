@@ -1420,7 +1420,9 @@
    word rather than folded into it. Two inks, both already minted, so no new
    contrast pair: --status-dead-text for the verdicts that mean "this will not
    fix itself" (blocked / login / vanished / narrow / unstarted) and --ink-tertiary for
-   the two that mean "we do not know" (unconfirmed / unknown). `flex: none`
+   the two that mean "we do not know" (unconfirmed / unknown) and for a narrow
+   spawn whose pane has since been measured wide (`was narrow`, spawnWords.ts's
+   `narrowSinceWidened`): it is history, not a fault. `flex: none`
    is load-bearing: .sess-held is the only shrinkable cell in .sess-meta and
    §2.4 lengthens what it holds. */
 .sess-spawn {
@@ -1429,7 +1431,8 @@
   color: var(--status-dead-text);
 }
 .sess-spawn[data-spawn='expired'],
-.sess-spawn[data-spawn='unrecognised'] {
+.sess-spawn[data-spawn='unrecognised'],
+.sess-spawn[data-spawn='narrow-widened'] {
   color: var(--ink-tertiary);
 }
 

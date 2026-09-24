@@ -89,7 +89,8 @@ const sessionJsonNoStamp = (status: string): void => {
 };
 
 /** tmux, RECORDING. `capture-pane` answers `$PANE_TEXT` (both the plain and the
- *  `-e` capture) and exits `$CAPTURE_RC` — its own status is now load-bearing,
+ *  `-e` capture) — through `%b`, so the `\n` JSON.stringify leaves in it is a
+ *  real row break, as in a real capture, and not one long line — and exits `$CAPTURE_RC` — its own status is now load-bearing,
  *  because "tmux could not be asked" and "tmux answered blank" are two
  *  conditions. `list-panes` answers `$PANE_PID_OUT` so a case can make tmux
  *  name no pane pid. `send-keys` is logged and never sent; `_pane_box_draft` is
@@ -97,7 +98,7 @@ const sessionJsonNoStamp = (status: string): void => {
 const STUBS = `
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in
-      capture-pane) printf '%s\\n' "\${PANE_TEXT:-}"; return \${CAPTURE_RC:-0} ;;
+      capture-pane) printf '%b\\n' "\${PANE_TEXT:-}"; return \${CAPTURE_RC:-0} ;;
       list-panes)   echo "\${PANE_PID_OUT-${PANE_PID}}" ;;
     esac; return 0; };
   _pane_box_draft() { :; };
@@ -109,12 +110,21 @@ const tick = (pane: string, n = 1, extra = ''): string =>
   h.sh(`${STUBS} ${extra} PANE_TEXT=${JSON.stringify(pane)}
     for ((i=0;i<${n};i++)); do _auto_compact_check ${ID}; done`);
 
-const AT_PROMPT = '▓ ctx ████████░░ 88%\n❯ ';
-const MODEST = '▓ ctx ███░░░░░░░ 55%\n❯ ';
+/** The statusline ROW as statusline-command.sh draws it, `👤` first — the
+ *  only line `_pane_ctx_pct` reads ctx from. Real Claude Code layout: the row
+ *  sits BELOW the prompt box, so every pane below puts it after the `❯` row. */
+const SL = (bar: string, pct: number): string => `  👤 acct-a │ 🤖 Opus 5 · high │ ⎇ ws/quiet-mesa │ ▓ ctx ${bar} ${pct}%`;
+/** The prompt box as Claude Code draws it, row under it: top rule, `❯`, bottom
+ *  rule, statusline. The bottom rule is load-bearing — without it the draft
+ *  guard reads the statusline row as text typed into the box. */
+const RULE = '─'.repeat(40);
+const BOX = (row: string): string => `${RULE}\n❯ \n${RULE}\n${row}`;
+const AT_PROMPT = BOX(SL('████████░░', 88));
+const MODEST = BOX(SL('███░░░░░░░', 55));
 /** Below COMPACT_THRESHOLD (50) and above the worker's own 40 — the one
  *  reading that tells a per-session threshold from the default. */
-const BELOW_DEFAULT = '▓ ctx ██░░░░░░░░ 45%\n❯ ';
-const LEAN = '▓ ctx █░░░░░░░░░ 12%\n❯ ';
+const BELOW_DEFAULT = BOX(SL('██░░░░░░░░', 45));
+const LEAN = BOX(SL('█░░░░░░░░░', 12));
 const NO_CTX = '? for shortcuts\n❯ ';
 /** Older than COMPACT_COOLDOWN and than SWAP_COOLDOWN's post-swap window, so a
  *  planted `lastcompact` opens the cooldown gate instead of closing it. */
@@ -170,7 +180,7 @@ describe('D-2013: the pane read has THREE conditions and three recorded reasons'
 describe('D-2013: a session measured OVER threshold and then refused says so', () => {
   it('mid-turn records a reason and fires no send-keys', () => {
     seed(); sessionJson('idle', 600);
-    tick(`▓ ctx █████████░ 91%\n  ⏵ esc to interrupt\n❯ `);
+    tick(`  ⏵ esc to interrupt\n${BOX(SL('█████████░', 91))}`);
     expect(reason()).toBe('mid-turn');
     expect(skipLines().join('\n')).toContain(`compact-skip ${ID}: mid-turn (ctx 91%)`);
     expect(sendKeys()).toEqual([]);
@@ -181,10 +191,24 @@ describe('D-2013: a session measured OVER threshold and then refused says so', (
     // exercised: over threshold, not mid-turn, and not at a `❯` either — a
     // dialog, a pager, a `/`-menu. Mutation that must put this back to red:
     // the bare `echo "$pane" | grep -q "❯" || return 0` this replaced.
+    //
+    // SYNTHETIC LAYOUT, deliberately: a real 2.1.280 menu HIDES the statusline
+    // row (every one of 74 menu captures), so the row-scoped ctx reader stops
+    // a real menu at `no-ctx-segment` first — the case below. This keeps the
+    // row under the menu only so the tick reaches the `no-prompt` arm itself.
     seed(); sessionJson('idle', 600);
-    tick('▓ ctx ████████░░ 88%\n  Do you want to proceed?\n  1. Yes\n');
+    tick(`  Do you want to proceed?\n  1. Yes\n${SL('████████░░', 88)}\n`);
     expect(reason()).toBe('no-prompt');
     expect(skipLines().join('\n')).toContain(`compact-skip ${ID}: no-prompt (ctx 88%)`);
+    expect(sendKeys()).toEqual([]);
+  });
+
+  it('a REAL menu — which hides the statusline row — records `no-ctx-segment`, and types nothing', () => {
+    // The permission prompt as captured: no prompt box, no `👤` row, footer last.
+    seed(); sessionJson('idle', 600);
+    tick('  ⎿  $ touch rigfile.txt\n' + '─'.repeat(40) + '\n Bash command\n   touch rigfile.txt\n'
+      + ' Do you want to proceed?\n ❯ 1. Yes\n   2. No\n Esc to cancel · Tab to amend\n');
+    expect(reason()).toBe('no-ctx-segment');
     expect(sendKeys()).toEqual([]);
   });
 
@@ -255,7 +279,7 @@ describe('D-2013: a session measured OVER threshold and then refused says so', (
     // `mid-turn` read as current is the same class of lie D-2012 names on the
     // server side.
     seed(); sessionJson('idle', 600);
-    tick(`▓ ctx █████████░ 91%\n  ⏵ esc to interrupt\n❯ `);
+    tick(`  ⏵ esc to interrupt\n${BOX(SL('█████████░', 91))}`);
     expect(h.reg(ID, 'compactskip')).not.toBeNull();
     tick(LEAN);
     expect(h.reg(ID, 'compactskip')).toBeNull();
@@ -360,7 +384,7 @@ describe('D-2014: the lastswap gate MEASURES the session instead of asserting th
     // `[[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && return 0`.
     seed(); sessionJson('idle', 600);
     h.sh(`_reg_set ${ID} lastswap "$(date +%s)"`);
-    tick('▓ ctx █████████░ 95%\n❯ ');
+    tick(BOX(SL('█████████░', 95)));
     expect(sendKeys().join('\n')).toContain('/compact');
     expect(h.reg(ID, 'lastcompact')).toMatch(/^\d{10}$/);
     expect(swapLog()).toContain(`auto-compact ${ID}: ctx 95%`);
@@ -390,7 +414,7 @@ describe('D-2014: the lastswap gate MEASURES the session instead of asserting th
   it('the lastcompact cooldown is untouched — this wave widened one gate, not two', () => {
     seed(); sessionJson('idle', 600);
     h.sh(`_reg_set ${ID} lastcompact "$(date +%s)"`);
-    tick('▓ ctx █████████░ 95%\n❯ ');
+    tick(BOX(SL('█████████░', 95)));
     expect(sendKeys()).toEqual([]);
   });
 });
@@ -418,10 +442,12 @@ describe('D-2014: the lastswap gate MEASURES the session instead of asserting th
 // The pane below is the reviewer's measured shape: 12 content rows then 4 blank
 // rows. Last-8-ROWS sees rows 9-16 (four content lines); last-8-CONTENT-lines
 // sees rows 5-12 — and the stale banner sits at row 5, inside one window and
-// outside the other. PANE_TEXT cannot express this (`JSON.stringify`'s `\n`
-// stays a literal backslash-n inside bash double quotes, which is invisible to
-// every other case here because they only ever substring-match), so this stub
-// cats a real file.
+// outside the other. PANE_TEXT could not express this when it was written
+// (`JSON.stringify`'s `\n` stayed a literal backslash-n inside bash double
+// quotes, invisible while every case only substring-matched — the STUBS above
+// now print it through `%b`, since the row-scoped ctx reader needs real rows),
+// and trailing BLANK rows are still easier to state as a file, so this stub
+// cats one.
 describe('the capture window is the last 8 pane ROWS, not 8 lines of content', () => {
   const PANE_FILE = (): string => path.join(h.home, 'pane-rows.txt');
 
@@ -437,15 +463,15 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
     sleep() { :; };
   `;
 
-  /** 16 rows: a stale `esc to interrupt` at row 5, the statusline at row 11,
-   *  the prompt at row 12, then four blank rows. */
+  /** 16 rows: a stale `esc to interrupt` at row 5, the prompt box at rows
+   *  9-11, the statusline row under it at row 12, then four blank rows. */
   const writePane = (): void => {
     const rows = [
       'row1', 'row2', 'row3', 'row4',
       '  esc to interrupt',
-      'row6', 'row7', 'row8', 'row9', 'row10',
-      '▓ ctx ████████░░ 88%',
-      '❯ ',
+      'row6', 'row7', 'row8',
+      RULE, '❯ ', RULE,
+      SL('████████░░', 88),
       '', '', '', '',
     ];
     fs.writeFileSync(PANE_FILE(), rows.join('\n'));
@@ -463,15 +489,16 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
   });
 
   it('still sees a banner that is genuinely inside the window', () => {
-    // The other direction: the same gate must keep working. A banner at row 12
+    // The other direction: the same gate must keep working. A banner at row 9
     // is inside the last 8 rows under either shape, so this pins that the case
     // above passes by WINDOW POSITION and not because the gate stopped firing.
     seed(); sessionJson('idle', 600);
     fs.writeFileSync(PANE_FILE(), [
-      'row1', 'row2', 'row3', 'row4', 'row5', 'row6', 'row7', 'row8', 'row9', 'row10',
-      '▓ ctx ████████░░ 88%',
+      'row1', 'row2', 'row3', 'row4', 'row5', 'row6', 'row7', 'row8',
       '  esc to interrupt',
-      '', '', '', '',
+      RULE, '❯ ', RULE,
+      SL('████████░░', 88),
+      '', '', '',
     ].join('\n'));
     h.sh(`${FILE_STUBS} _auto_compact_check ${ID}`);
     expect(reason()).toBe('mid-turn');
@@ -481,9 +508,8 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
 
 describe('an armed auto-continue is never cancelled by /compact (D-2229)', () => {
   const ARMED = [
-    '  ▓ ctx ████████░░ 61%',
     'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel',
-    '❯ ',
+    BOX(SL('████████░░', 61)),
   ].join('\n');
   it('a pane waiting out a limit gets no keystroke, and the note says why', () => {
     seed(); sessionJson('idle', 120);
@@ -609,7 +635,7 @@ describe('routing slice 6: `compact` is this session’s threshold, absent means
     // (10–100) must actually hold the compactor off, or the field is decorative.
     seed(); sessionJson('idle', 600);
     h.sh(`_reg_set ${ID} compact 100`);
-    tick('▓ ctx █████████░ 91%\n❯ ');
+    tick(BOX(SL('█████████░', 91)));
     expect(sendKeys()).toEqual([]);
     expect(h.reg(ID, 'lastcompact')).toBeNull();
   });

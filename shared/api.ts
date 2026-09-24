@@ -90,6 +90,16 @@ export interface FleetSession {
    *  per-lane window table this project's account-name enumeration ban
    *  forbids. */
   ctxPct: number | null;
+  /** The pane's width in columns, as far as THIS tick could see it: the
+   *  length of the prompt box's bottom border (`Statusline.boxCols`), which
+   *  Claude Code draws exactly as wide as the pane. A reading never
+   *  OVERSTATES the width — no captured row is wider than its pane — so
+   *  `paneCols >= READER_MIN_COLS` proves ccd's readers can see this pane.
+   *  `null` when this tick saw no prompt box (a startup gate, a menu or an
+   *  overlay is up, the pane is dead) or the server predates the field: both
+   *  are "unmeasured", and neither may be read as wide. Additive, no
+   *  `FLEET_PROTO` bump; read it through `paneWidth` below. */
+  paneCols: number | null;
   tasks: TaskProgress | null;                // plan progress; null = this session has no task list
   /** This workspace's pull request, or null for a main checkout — which is the
    *  ONLY thing that suppresses the header control. */
@@ -673,6 +683,13 @@ export function sessionAsk(
  */
 export function ctxPressure(s: { ctxPct?: number | null }): number | null {
   return tolerantCount(s.ctxPct);
+}
+
+/** Tolerant read of `FleetSession.paneCols` off a cast live frame — the same
+ *  ladder as `ctxPressure`: absent (an older server), null, or unusable all
+ *  read as `null`, "unmeasured", which no caller may treat as wide. */
+export function paneWidth(s: { paneCols?: number | null }): number | null {
+  return tolerantCount(s.paneCols);
 }
 
 /** The task list Claude Code keeps for a session, as the TUI's widget shows it:
@@ -1322,6 +1339,9 @@ export interface WsTombstone {
  *   - a NULLABLE field, absent            → null  (an older build lacked it)
  *   - a token from a newer build, where the type has a designated "we do not
  *     know" member                        → that member ('unchecked', null)
+ *     — ONE caller-chosen exception: `spawnState` in the PWA's offline
+ *     snapshot keeps the word itself (`UnnamedSpawnWord`), because the live
+ *     frame it copies is cast and renders the word as itself
  *   - a NON-NULLABLE field absent, or ANY field of the wrong type
  *                                         → the whole snapshot is rejected
  *
@@ -2829,8 +2849,20 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
   };
 }
 
+/** What a revival does with a `spawnState` STRING this build cannot name.
+ *  `unrecognised` is the uniform rule's designated-ignorance member, and the
+ *  SERVER's choice: its state-cache is read back by whatever build is running,
+ *  and after a rollback that older build's own `spawnVerdict` computes
+ *  `unrecognised` for the same rc live. `keep` is the PWA's: its offline
+ *  snapshot holds what a live frame carried, and `spawnWords.ts` renders a
+ *  word the bundle cannot name AS ITSELF (`? <word>`, loud) — rewriting it
+ *  would make the offline chip quiet where the live one is loud, borrowing a
+ *  member that means "the server could not name ccd's rc". Either way the
+ *  rest of the snapshot survives, and a non-string still rejects. */
+export type UnnamedSpawnWord = 'unrecognised' | 'keep';
+
 /** One persisted session in today's shape, or null if it cannot be one. */
-export function reviveFleetSession(raw: unknown): FleetSession | null {
+export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnWord = 'unrecognised'): FleetSession | null {
   try {
     const o = asObj(raw, 'session');
 
@@ -2889,15 +2921,33 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       throw new MalformedSnapshot('lifecycle');
     }
 
-    // Absent → null ("not recorded"). An unrecognised STRING rejects the whole
-    // session rather than being laundered — the same rule `lifecycle` above
-    // follows. Note the asymmetry with L0: an unrecognised RC becomes
-    // `'unrecognised'` inside `spawnVerdict`, because an rc is ccd's own output
-    // and a word off a cache is not.
-    const spawnRaw = optStr(o, 'spawnState');
-    if (spawnRaw !== null && !isSpawnVerdict(spawnRaw)) {
-      throw new MalformedSnapshot('spawnState');
-    }
+    // `paneCols` is TYPE-checked here — `optNum` throws on a non-number, so a
+    // malformed field rejects the snapshot like any other — and then revived
+    // as null regardless (at the field, below).
+    optNum(o, 'paneCols');
+
+    // Absent → null ("not recorded"). A STRING this build cannot name revives
+    // — by DEFAULT, the server's state-cache — as `unrecognised`: this file's
+    // own uniform rule above ("a token from a newer build, where the type has a
+    // designated 'we do not know' member → that member") and the fleet-robustness spec's (§ spawn verdict: "a rc
+    // this build has never heard of must revive as `unrecognised`, not as a
+    // throw"). It used to reject the WHOLE snapshot instead, and #174 is what
+    // made that cost real: its `narrow` (rc 6) is a word every older build
+    // lacks, so a rollback past it met one narrow row and discarded the
+    // server's state-cache and the PWA's offline fleet whole. `unrecognised`
+    // is also exactly what that older build's own `spawnVerdict(6)` computes
+    // live, so the snapshot and the next live frame agree. The PWA passes
+    // `keep` instead: its snapshot copies live frames, which carry the word
+    // itself (`UnnamedSpawnWord`). Nothing decides on the field: the actions
+    // sheet is advisory, and dispatch reads its own registry fact. A
+    // non-string is still the wrong TYPE, and still rejects either way.
+    const spawnWord = optStr(o, 'spawnState');
+    const spawnRaw: SpawnVerdict | null =
+      spawnWord === null ? null
+        : isSpawnVerdict(spawnWord) ? spawnWord
+        // The same cast the live frame gets (`stores/fleet.ts`'s `asFleetMsg`).
+        : unnamedSpawnWord === 'keep' ? spawnWord as SpawnVerdict
+        : 'unrecognised';
 
     // Everything except `bucket`/`bucketSince`, so the ladder can read the
     // fields it needs off the SAME literal that ships — never off a second
@@ -2925,6 +2975,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // against). Present-but-not-a-finite-number throws inside `optNum`,
       // which this function's catch turns into "reject the whole session".
       ctxPct: optNum(o, 'ctxPct'),
+      // ALWAYS null — "unmeasured" — whatever the snapshot holds (its TYPE is
+      // still checked, above): the field is THIS tick's
+      // width, and a revived row is by definition not this tick. A persisted 220 would quiet a `narrow` chip
+      // over a pane nobody can see (a fleet-box outage, an offline PWA), the
+      // one direction that chip must not err in.
+      paneCols: null,
       tasks,
       pr,
       archivedAt: optNum(o, 'archivedAt'),
@@ -3035,11 +3091,11 @@ export function repoLabel(repo: ProjectRepoWire | undefined): string | null {
 
 /** A persisted `sessions` array in today's shape, or null — one unrevivable
  *  session rejects the file, which both readers already handle as "no data". */
-export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
+export function reviveFleetSessions(raw: unknown, unnamedSpawnWord: UnnamedSpawnWord = 'unrecognised'): FleetSession[] | null {
   if (!Array.isArray(raw)) return null;
   const out: FleetSession[] = [];
   for (const item of raw as unknown[]) {
-    const session = reviveFleetSession(item);
+    const session = reviveFleetSession(item, unnamedSpawnWord);
     if (session === null) return null;
     out.push(session);
   }

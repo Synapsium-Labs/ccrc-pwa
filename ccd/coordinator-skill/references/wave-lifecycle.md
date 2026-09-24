@@ -167,8 +167,8 @@ arrives within the wave's ordinary window, read the session's own screen before 
   narrow. The server's mail lane is not width-aware: it still types into this pane, and cannot see
   an armed auto-continue whose line has wrapped. Waiting does not fix it. Ask the operator to widen
   it (opening and closing its terminal drawer re-pins it) and to check its screen for an unanswered
-  startup prompt before you re-dispatch — and to close any narrow terminal first, because one
-  attached to any session makes the next spawn narrow too.
+  startup prompt before you re-dispatch. A current ccd pins every spawn 220x50, so the usual cause is
+  a terminal attached to that session itself (a marker from an older ccd may mean one on any session).
 - `skillState: 'absent'` — the worker will read your brief without its standing protocol, because
   the skill installer has not run on that account's home. The dispatch still happened and the brief
   still works, degraded: it carries the branch-discipline sentence in its own text for exactly this

@@ -667,6 +667,10 @@ export async function assembleFleet(
       // statusline (dead pane, pre-first-capture, or a build with no ▓
       // segment at all), and a measured 0 must ride through unchanged.
       ctxPct: sl?.ctxPct ?? null,
+      // THIS tick's prompt-box width or nothing — FleetWatcher never keeps it
+      // across a tick that could not see the box (watch.ts), so a null here
+      // is always "unmeasured", never "narrow".
+      paneCols: sl?.boxCols ?? null,
       usage: usageReadings?.get(r.id) ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),

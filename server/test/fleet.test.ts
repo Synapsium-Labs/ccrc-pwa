@@ -318,6 +318,21 @@ describe('branch precedence', () => {
   // A pane branch the watcher KEPT across a tick that measured nothing (an
   // overlay, or a row cut inside its 🤖 segment) is not a live reading: it
   // loses to the HEAD measured since, and still beats the registry.
+  it('ships THIS tick\'s prompt-box width as paneCols, and null when the tick saw no box', async () => {
+    const { home, run } = setup();
+    const sl = (boxCols: number | undefined) => new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false, boxCols }],
+    ]);
+    const assemble = (m?: Map<string, Statusline>) =>
+      assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, m);
+    const row = async (m?: Map<string, Statusline>) => (await assemble(m)).find((s) => s.id === 'demo-quiet-mesa')!;
+    expect((await row(sl(150))).paneCols).toBe(150);
+    expect((await row(sl(60))).paneCols).toBe(60);
+    // Unmeasured is null — never a guessed width, never 0.
+    expect((await row(sl(undefined))).paneCols).toBeNull();
+    expect((await row(undefined)).paneCols).toBeNull();
+  });
+
   it('ranks a RETAINED pane branch below the measured HEAD, and above the registry', async () => {
     const { home, run } = setup();
     const kept = new Map<string, Statusline>([
@@ -397,6 +412,40 @@ describe('ctxPct on the wire (D-2011)', () => {
     expect(withUsage.find((s) => s.id === 'demo-quiet-mesa')?.usage).toEqual(reading);
     const without = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
     expect(without.find((s) => s.id === 'demo-quiet-mesa')?.usage).toBeNull();
+  });
+});
+
+// fleet.ts: a running Workflow leaves the orchestrator's pid.json `idle` while
+// it waits on subagents, so the pane's Workflow row is what keeps the card
+// `busy`. Nothing pinned that line: deleting it left every suite green.
+describe('a running Workflow reads busy over an idle pid.json', () => {
+  const assemble = async (workflowActive: boolean) => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.claude-a', 'sessions', '40613.json'),
+      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle' }),
+    );
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const sl = new Map<string, Statusline>([
+      ['claude-a-MekWarLive', { model: 'Opus 5.5', ultracode: false, workflowActive }],
+    ]);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), undefined, undefined, sl);
+    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!.status;
+  };
+
+  it('an idle session with a Workflow row on screen is busy', async () => {
+    expect(await assemble(true)).toBe('busy');
+  });
+
+  it('control: the same session without one is idle', async () => {
+    expect(await assemble(false)).toBe('idle');
   });
 });
 
