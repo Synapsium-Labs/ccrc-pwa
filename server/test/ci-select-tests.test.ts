@@ -260,6 +260,18 @@ describe('selectTests rule 5 (LISTED, added/deleted only)', () => {
     expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/lister.test.ts', rule: 5, path: 'server/src/listed-dir/newsub/x.ts' }] });
   });
 
+  it('fires when a file is DELETED directly inside a listed directory, which itself stays (final review FR-7)', () => {
+    const map: TestMap = {
+      format: 1, sha: SHA_A, baseline: emptyDep(),
+      tests: { 'server/test/lister.test.ts': rec({ listed: ['server/src/listed-dir'] }) },
+    };
+    const sel = selectTests({
+      map, changes: [{ status: 'D', path: 'server/src/listed-dir/gone.ts', symlink: false }],
+      liveTests: ['server/test/lister.test.ts'], existsAt: () => true, // the dir is still there -> Pa = [path], E = the dir
+    });
+    expect(sel).toEqual({ mode: 'selected', tests: [{ file: 'server/test/lister.test.ts', rule: 5, path: 'server/src/listed-dir/gone.ts' }] });
+  });
+
   it('does NOT fire for a modified path', () => {
     const map: TestMap = {
       format: 1, sha: SHA_A, baseline: emptyDep(),
@@ -535,6 +547,23 @@ describe('readChanges (git-backed)', () => {
     expect(byPath['server/src/added.ts'].status).toBe('A');
     expect(byPath['server/src/gone.ts'].status).toBe('D');
     expect(changes.every((c) => c.symlink === false)).toBe(true);
+  });
+
+  it('a rename (git mv) arrives as D old + A new, never one R record (--no-renames; final review FR-7)', () => {
+    const dir = mkTmp('ccrc-ci-select-rename-');
+    initRepo(dir);
+    const body = Array.from({ length: 20 }, (_, i) => `export const line${i} = ${i};\n`).join('');
+    writeIn(dir, 'server/src/old-name.ts', body);
+    writeIn(dir, 'server/src/keep.ts', 'export const keep = 1;\n');
+    const base = commitAll(dir, 'base');
+    git(dir, ['mv', 'server/src/old-name.ts', 'server/src/new-name.ts']);
+    const head = commitAll(dir, 'rename, content unchanged');
+    // Control: git itself sees this as a rename when asked to look for one.
+    expect(git(dir, ['diff', '--name-status', '-M', base, head])).toMatch(/^R100\tserver\/src\/old-name\.ts\tserver\/src\/new-name\.ts$/m);
+    expect(readChanges(dir, base, head)).toEqual([
+      { status: 'A', path: 'server/src/new-name.ts', symlink: false },
+      { status: 'D', path: 'server/src/old-name.ts', symlink: false },
+    ]);
   });
 
   it('parses a path containing a space, via -z (Review Focus d)', () => {

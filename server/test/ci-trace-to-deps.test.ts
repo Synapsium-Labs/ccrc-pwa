@@ -1,21 +1,28 @@
 // `.github/ci/trace-to-deps.mjs` (spec §5.1-5.2, contract Task 3): parses `strace -f -ff -ttt -y -qq` output — one
-// file per pid, as produced by `traceArgv` (Task 7) — into a repo-relative `DepRecord`.
+// file per THREAD (`-ff` names each `t.<tid>`), as produced by `traceArgv` (Task 7) — into a repo-relative
+// `DepRecord`.
 //
-// Every fixture below is modelled on REAL `strace 6.8 -ff -y` output, captured by hand against this repo's own
-// test files under exactly the invocation `trace-run.mjs` uses (`CCRC_TEST_LIST=<one file> vitest run --config
-// vitest.select.config.ts --maxWorkers=1`, wrapped in `strace -f -ff -y -qq -e trace=openat,openat2,open,
-// newfstatat,statx,access,faccessat2,readlinkat,getdents64,execve,execveat -o <dir>/t`):
+// Every fixture below is modelled on REAL `strace 6.8` output, captured by hand against this repo's own test files
+// under the invocation `trace-run.mjs` uses (`CCRC_TEST_LIST=<one file> vitest run --config vitest.select.config.ts
+// --maxWorkers=1`). The trace list is now `trace=openat,openat2,open,newfstatat,statx,access,faccessat2,readlink,
+// readlinkat,getdents64,execve,execveat,symlink,symlinkat,chdir,fchdir,clone,clone3` with `-f -ff -ttt -y -qq`;
+// the first captures were taken with the shorter list `openat,openat2,open,newfstatat,statx,access,faccessat2,
+// readlinkat,getdents64,execve,execveat` and without `-ttt`, which is why most fixtures carry no timestamp (the
+// parser orders a line without one by file order):
 //   - `test/bus.test.ts`, `test/oss-metadata.test.ts`, `test/ccd-rc-flag.test.ts`, `test/worker-skill.test.ts`,
 //     `test/ci-baseline.test.ts` each traced individually.
 // The `readlink` shapes (a later addition to the trace list) are from a real `strace 6.8 -f -y -e trace=readlink`
-// capture of `fs.realpathSync.native` on a missing path, a symlink and a regular file.
+// capture of `fs.realpathSync.native` on a missing path, a symlink and a regular file. The `statx`, `faccessat2`,
+// `openat2`, `readlinkat` and `execveat` shapes (final review FR-7) are from real `strace 6.8 -f -ff -ttt -y -qq`
+// captures on this box: coreutils `stat` (statx), `test -x` (faccessat2 with AT_EACCESS), and Python's
+// `os.readlink(…, dir_fd=…)` and raw `syscall(2)` calls for openat2 and execveat, which nothing in the suite
+// happened to make.
 // The exact syscall shapes below (argument order, the `-y` dirfd/fd annotations, the ENOENT error text, the
 // absence of a `<resolved>` annotation on non-fd-returning success) are copied from those real captures, with
 // only the path PREFIXES substituted for a synthetic `/repo` fixture root so the numbers stay small and the
-// intent stays legible. A few shapes real fixtures never happened to exercise in the sampled files
-// (execveat, openat2, AT_FDCWD-relative ENOENT probe, a numbered-fd relative resolution landing inside the
-// repo) are constructed in strace's documented syntax for the same syscalls, following the exact grammar the
-// real captures established for their siblings (openat/execve).
+// intent stays legible. A few shapes real fixtures never happened to exercise (an AT_FDCWD-relative ENOENT
+// probe, a numbered-fd relative resolution landing inside the repo) are constructed in strace's documented
+// syntax, following the exact grammar the real captures established for their siblings.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -247,6 +254,72 @@ describe('parseTraceDir', () => {
     });
     const rec = parseTraceDir(dir, REPO);
     expect(rec.read).toEqual(['server/test/bus.test.ts', 'server/test/oss-metadata.test.ts']);
+  });
+});
+
+describe('parseTraceDir: every dirfd syscall of the trace list, in its real shape (final review FR-7)', () => {
+  // One case per syscall DIRFD_PATH_RE names beyond openat/newfstatat, so dropping any one of them from that
+  // regex turns its case red: the line then matches nothing at all, and records nothing. Real strace 6.8 captures
+  // (see the header), prefixes substituted.
+  it('statx: a successful stat is read, an ENOENT probe is probed (AT_FDCWD-relative)', () => {
+    const dir = traceDirWith({
+      't.17001': [
+        `1790239040.100001 statx(AT_FDCWD<${REPO}>, "ccd/tool", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW|AT_NO_AUTOMOUNT, STATX_ALL, {stx_mask=STATX_ALL|STATX_MNT_ID, stx_attributes=0, stx_mode=S_IFREG|0775, stx_size=18, ...}) = 0`,
+        `1790239040.100002 statx(AT_FDCWD<${REPO}>, "ccd/missing", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW|AT_NO_AUTOMOUNT, STATX_ALL, 0x7ffc14627230) = -1 ENOENT (No such file or directory)`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/tool']);
+    expect(rec.probed).toEqual(['ccd/missing']);
+  });
+
+  it('faccessat2: an X_OK check that passes is read, one that meets ENOENT is probed', () => {
+    const dir = traceDirWith({
+      't.17101': [
+        `1790239041.200001 faccessat2(AT_FDCWD<${REPO}>, "ccd/tool", X_OK, AT_EACCESS) = 0`,
+        `1790239041.200002 faccessat2(AT_FDCWD<${REPO}>, "ccd/missing", X_OK, AT_EACCESS) = -1 ENOENT (No such file or directory)`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/tool']);
+    expect(rec.probed).toEqual(['ccd/missing']);
+  });
+
+  it('openat2: an absolute open is read (and its fd\'s resolved path), a dirfd-relative ENOENT is probed', () => {
+    const dir = traceDirWith({
+      't.17201': [
+        `1790239052.783075 openat2(AT_FDCWD<${REPO}>, "${REPO}/ccd/tool", {flags=O_RDONLY|O_CLOEXEC, resolve=0}, 24) = 4<${REPO}/ccd/tool>`,
+        `1790239052.783160 openat2(3<${REPO}/ccd>, "missing", {flags=O_RDONLY|O_CLOEXEC, resolve=0}, 24) = -1 ENOENT (No such file or directory)`,
+        `1790239052.783214 openat2(3<${REPO}/ccd>, "other", {flags=O_RDONLY|O_CLOEXEC, resolve=0}, 24) = 5<${REPO}/ccd/other>`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/other', 'ccd/tool']);
+    expect(rec.probed).toEqual(['ccd/missing']);
+  });
+
+  it('readlinkat: a link read through a dirfd is read, a missing one probed', () => {
+    const dir = traceDirWith({
+      't.17301': [
+        `1790239052.782672 readlinkat(3<${REPO}/ccd>, "link", "tool", 4096) = 4`,
+        `1790239052.782861 readlinkat(3<${REPO}/ccd>, "missing", 0x7ffea3779150, 4096) = -1 ENOENT (No such file or directory)`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/link']);
+    expect(rec.probed).toEqual(['ccd/missing']);
+  });
+
+  it('execveat: a script run through a dirfd is read, a missing one probed', () => {
+    const dir = traceDirWith({
+      't.17401': [
+        `1790239052.784676 execveat(3<${REPO}/ccd>, "missing", ["tool"], 0x7ee4be3816a0 /* 0 vars */, 0) = -1 ENOENT (No such file or directory)`,
+        `1790239061.125620 execveat(3<${REPO}/ccd>, "tool", ["tool"], 0x740249b61620 /* 0 vars */, 0) = 0`,
+      ].join('\n') + '\n',
+    });
+    const rec = parseTraceDir(dir, REPO);
+    expect(rec.read).toEqual(['ccd/tool']);
+    expect(rec.probed).toEqual(['ccd/missing']);
   });
 });
 
