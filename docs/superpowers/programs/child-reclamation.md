@@ -43,6 +43,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-24 — scoped review 147 (`95703aa7`): accepted; wave 2 merges.**
+  - **The panel.** 36 agents; 8 findings survived 3–0 and merge into 5 minors; 3 were refuted. All 12 mutations
+    behaved as claimed; the named suites passed 1141/1141 and the ledger/topology suites 87/87.
+  - **Ruling.** The round's advance commitment was that only a shipped-behaviour defect the round introduced
+    earns another send-back. None did: every finding is a stale count, a comment or a commit message. Accepted,
+    and the text corrections ride wave 3 as one declared item (Carried constraints).
+  - **Three settlements on wave 3's A1**, because the round changed `childSpent` after the pre-flight read it
+    (recorded under Carried constraints and in wave 3's brief).
+- **2026-09-23 — wave 2 fix round done (`95703aa7`); scoped review 147.** The round fixed the null-tip fail-open
+  and the malformed-head lines as one departure (3351) and review 144's ruled minors as another (3350).
 - **2026-09-23 — scoped review 145 (`76594fec`): R28/R29 as ruled; one shipped fail-open; one tight round.**
   - **The panel.** 28 agents; 7 findings survived 3–0 and 1 was refuted. 11/11 mutations red, suites green, the
     remerge-diff empty.
@@ -289,6 +299,33 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - the reclaim never follows a symlinked workdir, nor acts on a workdir another registry row names;
   - the scratch-slug guards, as a new Task 10b;
   - claims proceed as in wave 2.
+- **Wave 3 settlements on A1** (2026-09-24, after wave 2's last round moved `childSpent`):
+  1. The live rung's order at `95703aa7`:
+     - a non-string `branch` → unmeasured;
+     - any same-repo same-branch row → spent, naming the highest number;
+     - a non-fork row with a non-string head → unmeasured;
+     - an unestablished repository → unmeasured;
+     - a non-string `tip` → unmeasured;
+     - then `phaseFor`.
+
+     A1's placement goes inside the same-repo same-branch step.
+  2. "Only `inherited` rows are dropped" means dropped from every later step, `phaseFor`'s `boundRow` included.
+     The tip-rung comment's "boundRow can only return null here" stays true, and an inherited-only line answers
+     unspent even when the old row would bind the tip (the merge-commit shape). That case is added.
+  3. R-2's row placement is `this | inherited | unplaced`. A birth that cannot be placed is the birth's own arm.
+     The round's local `unplaceable` (a non-fork row whose head cannot be read) is neither. No two meanings share
+     one word.
+- **Review 147's text corrections ride wave 3 as one declared item** (docs and comments only; D-3350 and D-3351
+  are edited in place, with no new numbers):
+  - F1: the wave-2 plan's rows 2 and 7, and D-3350, name the commit their counts were measured at (90c51032, 62
+    cases), or are re-measured at `95703aa7` (65/65; 61/65).
+  - F2: `child-reclaim-spent.test.ts` (xii)'s comment gets the true reason: no case covered an ABSENT `tip` key.
+  - F3: `child-reclaim-refusals.test.ts`'s sha-tip comment is narrowed to `noPrLine`.
+  - F4: `childSpent.ts`'s tip-rung comment attributes the null half to its sources and claims the absent half as
+    3351's own.
+  - R1: case (vii)'s label reads F7, and D-3351's "for either" gains "for every row with a string head".
+  - `wave-lifecycle.md`: a repeated `spent-unmeasured` usually means the child's branch no longer resolves (a hand
+    rename), and the next run opens on a fresh child instead of retrying (review 147's dissenting refuter).
 - **Wave 4 inherits, from wave 3's pre-flight:**
   - `is_ours` three-valued;
   - a `ws-reap` guard mirroring R31's symlinked-workdir refusal (`ws-reap` is human-gated but follows the link the
