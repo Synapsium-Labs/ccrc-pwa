@@ -55,10 +55,37 @@ self.addEventListener('push', (event) => {
       // The actions are mirrored into `data` because `notification.actions` is
       // not readable on every platform, and the click handler needs the tapped
       // action's LABEL to say what it just answered.
-      data: { sessionId: data.sessionId || null, actions },
+      data: { sessionId: data.sessionId || null, url: sameOriginPath(data.url), actions },
     }),
   );
 });
+
+/** The base `sameOriginPath` resolves against. Only its SCHEME matters: https
+ *  is a special scheme exactly as the app's own origin is (http on a dev box is
+ *  special too), so a string resolves against it the way navigate() and
+ *  openWindow() will resolve it against ours. `.invalid` is reserved (RFC 2606),
+ *  so no origin the app is served from can ever equal it. */
+const PATH_BASE = 'https://sw.invalid';
+
+/** A path this origin serves, or null: a string that starts with '/' and that the
+ *  URL parser itself keeps on the base's origin. The parser decides, not a prefix
+ *  check, because the parser strips tabs and newlines and reads '\\' as '/', so
+ *  '/\t/evil.example' and '/\\evil.example' are both '//evil.example' — another
+ *  host — while their second character is neither '/' nor '\\'. Anything else
+ *  (absolute, cross-origin, protocol-relative, not a string, empty) is null and
+ *  the tap falls back to /s/<sid> or '/'.
+ *
+ *  It answers the string AS WRITTEN, never the parser's normalised pathname:
+ *  '/.//evil.example' is a same-origin page whose pathname is '//evil.example',
+ *  and that pathname handed back to navigate() would be protocol-relative. */
+function sameOriginPath(u) {
+  if (typeof u !== 'string' || !u.startsWith('/')) return null;
+  try {
+    return new URL(u, PATH_BASE).origin === PATH_BASE ? u : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Open (or focus) the app at `url`. The original tap behaviour, unchanged. */
 async function openApp(url) {
@@ -101,7 +128,13 @@ self.addEventListener('notificationclick', (event) => {
   const action = event.action || '';
   const notification = event.notification;
   const sid = (notification.data && notification.data.sessionId) || null;
-  const url = sid ? `/s/${encodeURIComponent(sid)}` : '/';
+  // A payload url (a release push's '/settings', design 2026-09-20 §13) wins
+  // over the session deep-link. The push listener filtered it already; it is
+  // filtered again here because the data is whatever this notification carries —
+  // one shown by an older copy of this worker, or by replace(), has no url, and
+  // nothing but this line decides where a tap goes.
+  const url = sameOriginPath(notification.data && notification.data.url)
+    ?? (sid ? `/s/${encodeURIComponent(sid)}` : '/');
 
   // "ask:<key>:<index>". The key is minted server-side and carried verbatim;
   // this worker never derives an index from a label, because a relabelled or

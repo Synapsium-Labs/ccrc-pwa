@@ -264,3 +264,107 @@ describe('push-sw: the plain tap is unchanged', () => {
     expect(opened).toEqual(['/s/cc%20a%2Fb']);
   });
 });
+
+// Design 2026-09-20 §13: a release push carries no session, so its tap has
+// nowhere to deep-link; the payload's `url` ('/settings') is the target instead.
+// The url is a SAME-USER-WRITABLE string once it is in a payload, and a tap
+// that navigated wherever it pointed would make every push an open redirect —
+// so only a path this origin serves is honoured, decided by the URL parser
+// itself (a hand-rolled prefix check misses the tab the parser strips), and
+// anything else falls back to exactly the target the tap had before.
+describe('push-sw: a payload url (design 2026-09-20 §13)', () => {
+  const HOSTILE: unknown[] = [
+    'https://evil.example/x',  // absolute, another origin
+    '//evil.example/x',        // protocol-relative
+    '/\\evil.example',         // the parser reads a backslash as a slash: '//evil.example'
+    '/\t/evil.example',        // the parser strips the tab: '//evil.example' again
+    'javascript:alert(1)',     // not a path at all
+    'settings',                // relative to the worker's own path, not a root path
+    '',
+    42,
+  ];
+
+  it('stashes the url into the notification data, beside the session', async () => {
+    const self = load();
+    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings' });
+    expect(shown[0]!.opts.data).toEqual({ sessionId: null, url: '/settings', actions: [] });
+  });
+
+  it('stashes null when the payload carries no url — an older server, a session push', async () => {
+    const self = load();
+    await push(self, { title: '✓ Finished', body: 'back to idle', sessionId: 'cc-a' });
+    expect(shown[0]!.opts.data).toEqual({ sessionId: 'cc-a', url: null, actions: [] });
+  });
+
+  it('stashes null for a url that is not a path this origin serves', async () => {
+    for (const url of HOSTILE) {
+      shown = [];
+      const self = load();
+      await push(self, { title: 't', body: 'b', url });
+      expect((shown[0]!.opts.data as { url: unknown }).url, `stashed ${JSON.stringify(url)}`).toBeNull();
+    }
+  });
+
+  it('a plain tap opens the url and posts nothing', async () => {
+    const self = load();
+    await click(self, '', { sessionId: null, url: '/settings', actions: [] });
+    expect(opened).toEqual(['/settings']);
+    expect(posted).toEqual([]);
+  });
+
+  it('the push it showed is the tap that lands on /settings — the round trip', async () => {
+    const self = load();
+    await push(self, { title: 'ccrc v0.0.9 is out', body: 'b', tag: 'release-v0.0.9', url: '/settings' });
+    await click(self, '', shown[0]!.opts.data);
+    expect(opened).toEqual(['/settings']);
+  });
+
+  it('a url wins over the session deep-link when no answer was tapped', async () => {
+    const self = load();
+    await click(self, '', { sessionId: 'cc-a', url: '/settings' });
+    expect(opened).toEqual(['/settings']);
+    opened = [];
+    await click(self, 'something-else', { sessionId: 'cc-a', url: '/settings' });
+    expect(opened).toEqual(['/settings']);
+    expect(posted).toEqual([]);
+  });
+
+  it('an absent or null url keeps today\'s targets — /s/<sid>, else /', async () => {
+    const self = load();
+    await click(self, '', {});
+    await click(self, '', { url: null });
+    await click(self, '', { sessionId: 'cc-a', url: null });
+    await click(self, '', { sessionId: 'cc-a' });
+    expect(opened).toEqual(['/', '/', '/s/cc-a', '/s/cc-a']);
+  });
+
+  it('a url that is not a path this origin serves is ignored — the tap falls back', async () => {
+    for (const url of HOSTILE) {
+      opened = [];
+      const self = load();
+      await click(self, '', { url });
+      await click(self, '', { sessionId: 'cc-a', url });
+      expect(opened, `tapped ${JSON.stringify(url)}`).toEqual(['/', '/s/cc-a']);
+    }
+  });
+
+  it('keeps the path as written — never normalised into a protocol-relative one', async () => {
+    // '/.//evil.example' resolves, against any origin, to a same-origin page whose
+    // PATHNAME is '//evil.example'. Handing that normalised pathname to
+    // navigate()/openWindow() would make it protocol-relative — another host.
+    const self = load();
+    await push(self, { title: 't', body: 'b', url: '/.//evil.example' });
+    expect((shown[0]!.opts.data as { url: unknown }).url).toBe('/.//evil.example');
+    await click(self, '', { url: '/.//evil.example' });
+    expect(opened).toEqual(['/.//evil.example']);
+  });
+
+  it('never diverts an answer: an ask action with a session still POSTs it', async () => {
+    const self = load();
+    await click(self, 'ask:k:0', { sessionId: 'cc-a', url: '/settings' },
+      { actions: [{ action: 'ask:k:0', title: 'Red' }] });
+    expect(posted).toEqual([{ url: '/api/sessions/cc-a/ask', body: { askKey: 'k', optionIndexes: [0] } }]);
+    expect(opened).toEqual([]);
+    expect(shown.at(-1)!.title).toBe('Answered');
+  });
+});
