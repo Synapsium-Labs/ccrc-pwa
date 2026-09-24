@@ -6,7 +6,8 @@
 // other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetHealth } from '../../shared/api';
+import type { FleetHealth, NodeWire } from '../../shared/api';
+import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
 
@@ -24,6 +25,27 @@ const health = (over: Partial<FleetHealth> = {}): FleetHealth => ({
 
 const POOLS_UNAVAILABLE_COPY =
   "The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.";
+
+/** The skew arm's version clause reads the node inventory (centralised-update
+ *  §14). A measured stable node; `current` null = a stamp that did not read. */
+const inventoryNode = (role: 'fleet' | 'server' | 'both', current: BuildInfo | null): NodeWire => ({
+  nodeId: role === 'fleet' ? '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10' : '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93',
+  role, label: role === 'fleet' ? 'fleet' : 'server', os: 'linux',
+  current, stampRead: current === null ? 'absent' : 'ok', installState: 'complete', provenance: 'verified',
+  caps: [], agentOps: role === 'fleet' ? [] : null, highestVersion: current?.version ?? null, previousVersion: null,
+  measuredAt: Date.now() - 60_000, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: current?.version ?? null, resolveDetail: null,
+  request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+});
+const FLEET_V7: BuildInfo = { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' };
+const SERVER_V9: BuildInfo = { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' };
+/** A stamp pair on the HEALTH answer that disagrees with every inventory row:
+ *  whatever renders from it is the old reader, not the new one. */
+const DECOY_BUILDS = {
+  fleet: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
+  own: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
+};
 
 describe('FleetHostBanner', () => {
   it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
@@ -177,38 +199,65 @@ describe('FleetHostBanner', () => {
     expect(reboot).toHaveBeenCalledTimes(1);
   });
 
-  it('warns when the boxes run DIFFERENT builds, naming both versions and the verb (spec §6)', async () => {
-    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({
-      connected: true, downSince: null, roster: 'agreed', build: 'skewed',
-      builds: {
-        fleet: { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' },
-        own: { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' },
-      },
-    }));
-    render(<FleetHostBanner />);
-    expect(await screen.findByText(/run different builds/i)).toBeInTheDocument();
+  it('warns when the boxes run DIFFERENT builds, naming both nodes\' versions from the inventory and the verb (spec §6, §14)', () => {
+    render(<FleetHostBanner
+      health={health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed', builds: DECOY_BUILDS })}
+      nodes={[inventoryNode('fleet', FLEET_V7), inventoryNode('server', SERVER_V9)]} />);
+    expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
     expect(screen.getByText(/fleet v0\.0\.7 \(bd2bf57a\)/)).toBeInTheDocument();
     expect(screen.getByText(/server v0\.0\.9 \(2985b9d1\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
     expect(screen.getByText(/ccrc rollout/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('a skewed side with no version reads as unversioned (a deploy.sh stamp)', async () => {
-    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({
-      connected: true, downSince: null, build: 'skewed',
-      builds: {
-        fleet: { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'HEAD', builtAt: '2026-09-17T17:16:09Z', dirty: false },
-        own: { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' },
-      },
-    }));
-    render(<FleetHostBanner />);
-    expect(await screen.findByText(/fleet unversioned \(bd2bf57a\)/)).toBeInTheDocument();
+  it('an unreachable skewed side does not name its cached version either — routed through statedOf (fix round 2, item 6)', () => {
+    // Fix round 1 (D-3316) taught BuildLine this; the skew arm had its own,
+    // separate `name()` reader that never learned it. Both now call the same
+    // `statedOf` (shared/update-summary.ts) rather than each deciding for
+    // itself.
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, build: 'skewed' })}
+      nodes={[{ ...inventoryNode('fleet', FLEET_V7), reachable: false, unreachableSince: 1_000 }, inventoryNode('server', SERVER_V9)]} />);
+    expect(screen.getByText(/fleet — · server v0\.0\.9 \(2985b9d1\)\./)).toBeInTheDocument();
+    expect(screen.queryByText(/v0\.0\.7/)).not.toBeInTheDocument();
   });
 
-  it('skewed from an OLDER server (no builds field) still warns, without versions', async () => {
-    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ connected: true, downSince: null, build: 'skewed' }));
-    render(<FleetHostBanner />);
-    expect(await screen.findByText(/run different builds/i)).toBeInTheDocument();
+  it('a skewed side with no version reads as unversioned (a deploy.sh stamp)', () => {
+    const { version: _v, ...unversioned } = FLEET_V7;
+    void _v;
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, build: 'skewed' })}
+      nodes={[inventoryNode('fleet', unversioned), inventoryNode('server', SERVER_V9)]} />);
+    expect(screen.getByText(/fleet unversioned \(bd2bf57a\)/)).toBeInTheDocument();
+  });
+
+  it('skewed with no inventory answer still warns, without versions — never from the health route\'s pair', () => {
+    // `nodes` absent (the standalone shape) and `nodes: null` (FleetScreen
+    // before /api/updates answers) both omit the clause; the decoy pair on the
+    // health answer is NOT a fallback — reading it would be the old reader.
+    const skewed = health({ connected: true, downSince: null, build: 'skewed', builds: DECOY_BUILDS });
+    const { rerender } = render(<FleetHostBanner health={skewed} />);
+    expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
+    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/fleet —/)).not.toBeInTheDocument();
+    rerender(<FleetHostBanner health={skewed} nodes={null} />);
+    expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
+    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
+  });
+
+  it('the trigger is still the server\'s agreement word — disagreeing rows under an agreed health are silent', () => {
+    // D-3312: the arm fires on `health.build`
+    // (buildAgreement over sha + dirty, server-side). The PWA does not
+    // recompute it from the rows — a second copy of the agreement rule.
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, build: 'agreed' })}
+      nodes={[inventoryNode('fleet', FLEET_V7), inventoryNode('server', SERVER_V9)]} />);
+    expect(screen.queryByText(/run different builds/i)).not.toBeInTheDocument();
+  });
+
+  it('names no fleet version off a server row recorded as both — on a remote fleet that row is this box', () => {
+    // D-3313 — the same helper BuildLine reads.
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, build: 'skewed' })}
+      nodes={[inventoryNode('both', SERVER_V9)]} />);
+    expect(screen.getByText(/fleet — · server v0\.0\.9 \(2985b9d1\)\./)).toBeInTheDocument();
   });
 
   it('takes an injected health and does not poll — FleetScreen polls once for two readers', async () => {

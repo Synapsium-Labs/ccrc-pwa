@@ -1842,3 +1842,84 @@ describe('the resume door is measured, not left in the blind spot', () => {
     }
   });
 });
+
+// ── centralised update management W3, Task 6: the /settings shell and its door ──
+// D-2689 froze the uncovered census, so every colour rule this task adds is
+// REGISTERED (design/audit.mjs) rather than left to join it. The shell's three
+// sit on .shell-detail, which paints nothing: one ground, --bg-page. The door
+// has two — the page on a phone, .shell-nav's --bg-surface in the desktop
+// sidebar — and a registration is one layer stack, so it is registered on the
+// page (the .pool-epoch-lag entry's ground, same header) and the SECOND ground
+// is measured here off the rule's own declared ink, so a retint re-measures
+// both. `.accounts-door` beside it stays in the census as pre-existing debt,
+// pinned above; this is not a licence to move it and not a copy of its choice.
+describe('the /settings shell and its door are measured, not left in the blind spot', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .settings-back'],
+    ['fleet.css .settings-back:active'],
+    ['fleet.css .settings-title'],
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s is registered on the page and measured in both themes', (key) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
+    expect(report.uncovered).not.toContain(key);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each([
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s also clears AA on the desktop sidebar it sits on', (key) => {
+    // Measured at d759c914 with this task's rules: --ink-secondary 8.67 dark /
+    // 7.41 light, --ink-primary 15.68 / 16.58 on --bg-surface.
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-surface)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── fix round 1 (F15) / fix round 2 (review of d5aefc4a, item 8) ────────────
+// `.build-line`/`.build-line-side--warn`/`.build-line-next` are registered
+// against --bg-surface — the ground .shell-nav (styles/shell.css:131-155)
+// actually paints on desktop, corrected from the false "--bg-page, no
+// ancestor paints a background" claim (F15). Mirrors D-3304's
+// `.settings-door` precedent above, the OTHER direction: at the mobile
+// breakpoint .shell-nav sets no background of its own and falls through to
+// the app shell's --bg-page instead, so this checks THAT ground clears AA
+// too, off the rule's own declared ink (a retint re-measures both).
+describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on the mobile ground they fall through to', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .build-line'],
+    ['fleet.css .build-line-side--warn'],
+    ['fleet.css .build-line-next'],
+  ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
+    // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
+    // --status-attention-text 10.89 dark / 5.45 light (the other two).
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-page)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

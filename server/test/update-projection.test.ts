@@ -380,7 +380,8 @@ describe('the projection warning dedupes on a stable key, never the message (fix
         await w.inventoryNow();
         await w.inventoryNow();
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0])).toMatch(/unwritable: .*EACCES/);
+        // Item 10 (F10): the `ccrc-server: ` prefix is pinned, not merely present.
+        expect(String(warn.mock.calls[0]?.[0])).toMatch(/^ccrc-server: .*unwritable: .*EACCES/);
 
         chmodSync(unwritable, 0o700);
         warn.mockClear();
@@ -424,7 +425,8 @@ describe('the projection warning dedupes on a stable key, never the message (fix
       expect(outcomes.length).toBeGreaterThan(0);
       expect(outcomes.every((o) => o.label === SERVER_LABEL)).toBe(true);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the resolve run threw: planted: resolve step boom/);
+      // Item 10 (F10): the `ccrc-server: ` prefix is pinned, not merely present.
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/^ccrc-server: .*the resolve run threw: planted: resolve step boom/);
     } finally {
       (coord as unknown as { nodes: () => unknown }).nodes = originalNodes;
       warn.mockRestore();

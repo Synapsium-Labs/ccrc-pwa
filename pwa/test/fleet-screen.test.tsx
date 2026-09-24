@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SPAWN_STALL_MS, type FleetSession, type ProjectPoolsWire, type ProjectRow, type RunSummary } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -21,6 +21,12 @@ beforeEach(() => {
   window.localStorage.clear();
   resetAcks();
   FleetSocket.instances = [];
+  // The screen's one /api/updates poll (UpdateBanner, centralised-update §13)
+  // answers NOTHING by default, so no case here issues a real fetch for it and
+  // no banner appears in a case that is not about one — a second status region
+  // would make the mark-seen case's bare getByRole('status') (`:2246`) ambiguous. A case
+  // about the banner re-spies with its own answer.
+  vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
 });
 
 afterEach(() => {
@@ -2372,8 +2378,10 @@ describe('the programme tree on the fleet screen', () => {
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
    *  recorded array: that tree is single-interval, and this one is not.
    *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
-   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000) and
-   *  `HotFilesStrip` (30_000) all start polling from this screen's mount, and
+   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
+   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, handed to
+   *  UpdateBanner) and `HotFilesStrip` (30_000) all start polling from this
+   *  screen's mount, and
    *  none of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
    *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
@@ -2602,5 +2610,182 @@ describe('the programme tree on the fleet screen', () => {
     });
     expect(document.querySelector('.proj-abroad')).toBeNull();
     expect(document.querySelector('.proj-crossing')).toBeNull();
+  });
+});
+
+// ── centralised update management W3, Task 6: the door to /settings ─────────
+//
+// The `.accounts-door` pin's twin (auth-door.test.tsx:174-187): the door is
+// only ever useful where it is mounted, so it is found INSIDE the screen that
+// hosts it, in the header's control cluster, with a visible word beside the
+// glyph — an icon-only gear would be as undiscoverable as the strip D-161
+// replaced. The file-level afterEach does not reset the route, so this
+// describe does, like `archived footer row` above.
+describe('the door to /settings (centralised update management §13)', () => {
+  afterEach(() => navigate('/'));
+
+  it('sits in the fleet header, says what it is, and routes to /settings', () => {
+    render(<FleetScreen store={makeStore()} />);
+    const door = screen.getByRole('button', { name: 'Settings — updates and notifications' });
+    expect(door.closest('.fleet-head-right')).not.toBeNull();
+    expect(door).toHaveClass('settings-door');
+    expect(door.textContent).toMatch(/settings/i);
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/settings');
+  });
+});
+
+// ── centralised-update W3: the screen's one /api/updates poll ───────────────
+//
+// UpdateBanner is FleetHostBanner's idiom: the screen polls once and injects
+// the answer. The count is the pin — a banner that self-polled beside the
+// screen's own poll would be a second request per minute, and a second
+// opinion about the inventory on one screen.
+
+describe('the update banner on the fleet screen', () => {
+  const stampOf = (version: string) => ({
+    sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf('v0.0.7'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: 'v0.0.7', previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+  const updatesNewer = (): UpdatesView => ({
+    catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+    releases: [],
+    nodes: [
+      nodeOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet'),
+      nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server'),
+    ],
+    intent: [],
+  });
+
+  it('polls /api/updates ONCE for the whole screen and hands the answer to UpdateBanner', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(updatesNewer());
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no update banner while /api/updates has not answered', () => {
+    render(<FleetScreen store={makeStore()} />);
+    expect(document.querySelector('.update-banner')).toBeNull();
+  });
+
+  it("threads the screen's own fleetHealth into UpdateBanner — a genuinely local box states its lone both row's version (fix round 2, item 3)", async () => {
+    // The coordinator's own wording asked for a REMOTE health answer here,
+    // naming an unreachable/unread fleet row beside a both server row. That
+    // exact shape cannot discriminate the wiring under this fix: item 3
+    // ALSO rules that an UNKNOWN health (the prop's default, when omitted)
+    // reads as remote — so `health={fleetHealth}` present-and-remote and
+    // absent-and-defaulting-to-null-treated-as-remote compute the identical
+    // `remoteSides`, and an EXPLICIT separate fleet-role row (even a
+    // degraded one) is found by `versionSides` and `remoteSides` alike,
+    // discriminating neither picker (both already-established facts, this
+    // wave and the one before it). The one case that CAN observe whether
+    // `health={fleetHealth}` is really wired through is a genuinely LOCAL
+    // fleet with a LONE both row: wired, the banner correctly states its
+    // version (D-3301's local fallback); unwired, it would default to
+    // "unknown" and read as remote (item 3's own safe default), wrongly
+    // showing a dash for a real, single-box install. Reported to the
+    // coordinator as a substitution in the fix report.
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'local', connected: true, downSince: null });
+    vi.spyOn(api, 'updates').mockResolvedValue({
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server')].map((n) => ({ ...n, role: 'both' })),
+      intent: [],
+    });
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+  });
+});
+
+// ── centralised-update W3 Task 12: both skew readers on the screen's one poll ─
+//
+// BuildLine and FleetHostBanner's skew arm moved together from the health
+// route's stamp pair onto NodeWire[] (spec §14). The pin is the SCREEN: both
+// read the one /api/updates answer Task 11 threads down, and the health
+// answer's decoy pair (v9.9.9) is never what either renders.
+
+describe('BuildLine and the skew banner read the screen\'s one /api/updates poll', () => {
+  const stampOf = (sha: string, version: string) => ({
+    sha, ref: 'release', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const rowOf = (nodeId: string, role: 'fleet' | 'server', sha: string, version: string, desiredTag: string): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf(sha, version), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: version, previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag, resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+
+  it('both readers name the inventory\'s versions, never the health route\'s pair', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({
+      mode: 'remote', connected: true, downSince: null, roster: 'agreed', build: 'skewed',
+      builds: { fleet: stampOf('9'.repeat(40), 'v9.9.9'), own: stampOf('9'.repeat(40), 'v9.9.9') },
+    });
+    const view: UpdatesView = {
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [
+        rowOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet', 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', 'v0.0.7', 'v0.0.9'),
+        rowOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server', '2985b9d1000000000000000000000000000000000', 'v0.0.9', 'v0.0.9'),
+      ],
+      intent: [],
+    };
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view);
+    render(<FleetScreen store={makeStore()} />);
+    await waitFor(() =>
+      expect(document.querySelector('.build-line')?.textContent).toBe('fleet v0.0.7 → v0.0.9 · server v0.0.9'));
+    expect(screen.getByText(/run different builds/i)).toHaveTextContent('fleet v0.0.7 (bd2bf57a) · server v0.0.9 (2985b9d1).');
+    expect(document.body.textContent).not.toContain('v9.9.9');
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── fix round 1 (F11, item 6): a malformed /api/updates ELEMENT is dropped,
+// never a reason to blank the whole screen (pwa/src has no error boundary) ──
+
+describe('a malformed /api/updates element does not blank the fleet screen (F11)', () => {
+  const stampOf = (version: string) => ({
+    sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf('v0.0.7'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: 'v0.0.7', previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+
+  it('renders BuildLine and the update banner over the well-formed rows, dropping a null node and one with no string sha', async () => {
+    const goodFleet = nodeOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet');
+    const goodServer = nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server');
+    const badSha = { ...goodFleet, nodeId: '11111111-1111-1111-1111-111111111111', current: { ...goodFleet.current, sha: undefined } };
+    const raw = {
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [null, badSha, goodFleet, goodServer],
+      intent: [],
+    };
+    vi.spyOn(api, 'updates').mockResolvedValue(raw as unknown as UpdatesView);
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'remote', connected: true, downSince: null });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('.build-line')?.textContent).toContain('fleet v0.0.7'));
+    expect(document.querySelector('.build-line')?.textContent).toContain('server v0.0.7');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

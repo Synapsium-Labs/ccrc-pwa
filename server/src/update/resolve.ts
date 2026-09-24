@@ -11,12 +11,14 @@
 // fails `isReleaseTag` is never ordered: it is not a floor, not a
 // catalogue entry and not a pin that can resolve.
 import {
-  FLEET_SCOPE, UNIX_SECONDS_MAX, isReleaseTag, type AutoMode, type TagFileRead, type UpdateChannel,
+  FLEET_SCOPE, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, isReleaseTag, type AutoMode, type TagFileRead, type UpdateChannel,
 } from '../../../shared/api.js';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver.js';
 
-/** The ccrc-caps word a node needs before `auto ≠ off` may reach it (§9; written by W4's spine). */
-export const UPDATE_GATE_CAP = 'update-gate';
+/** The ccrc-caps word a node needs before `auto ≠ off` may reach it (§9; written by W4's spine). Declared in
+ *  shared/api.ts since W3 (D-3305), because the settings screen disables its auto-install
+ *  control on the same word; re-exported here, so every importer of this module keeps its import path. */
+export { UPDATE_GATE_CAP };
 /** pool_epoch's lease, in SECONDS: the projection is re-rendered every sweep, so a live server keeps it fresh. */
 export const PROJECTION_LEASE_S = 15 * 60;
 

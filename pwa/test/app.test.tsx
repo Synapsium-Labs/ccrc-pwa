@@ -122,6 +122,20 @@ describe('App /runs route', () => {
   });
 });
 
+describe('App /settings route', () => {
+  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', () => {
+    // Spec §13 names this pin, and this file's /archive warning is why it has
+    // two halves: a route left out of the data-view chain still renders on a
+    // desktop (.shell-detail is always shown there) and is HIDDEN behind the
+    // fleet sidebar on a phone. The heading catches a missing ternary rung;
+    // the attribute catches a missing `|| settings`.
+    navigate('/settings');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
 // T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
 // `epoch`/`observedEpoch` props were fully tested but had no real producer —
 // app.tsx is the ONLY place `<FleetScreen>` is rendered, and it passed

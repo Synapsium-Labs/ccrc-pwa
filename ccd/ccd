@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9d78115c98a573b07509e9fcce6ab4af8b36a1161b4de90b861ca4a4af4a95b6
+# ccrc:generated 1 sha256=1116476a32a510a3ac4996dbc5c3522f5f53ddf5fe02b34a4228d192fec2dd75
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19749,7 +19749,7 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
   _child_runid_valid "$(_reg_get "$id" child)" || return 1
   dir="$root/$id"
   if [[ -L "$dir" ]] || ! mkdir -p -m 0700 -- "$root" "$dir" 2>/dev/null \
-     || [[ ! -d "$dir" ]] || ! chmod 0700 -- "$dir" 2>/dev/null; then
+     || [[ ! -d "$dir" ]] || ! chmod -- 0700 "$dir" 2>/dev/null; then
     echo "ccd: warn: $id is a child but $dir could not be made a private directory — spawning with the box's own TMPDIR, so this session's scratch is not contained" >&2
     return 2
   fi
