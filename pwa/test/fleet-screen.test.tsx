@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SPAWN_STALL_MS, type FleetSession, type ProjectPoolsWire, type ProjectRow, type RunSummary } from '../../shared/api';
+import { SPAWN_STALL_MS, type FleetSession, type NodeWire, type ProjectPoolsWire, type ProjectRow, type RunSummary, type UpdatesView } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
 import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
@@ -21,6 +21,12 @@ beforeEach(() => {
   window.localStorage.clear();
   resetAcks();
   FleetSocket.instances = [];
+  // The screen's one /api/updates poll (UpdateBanner, centralised-update §13)
+  // answers NOTHING by default, so no case here issues a real fetch for it and
+  // no banner appears in a case that is not about one — a second status region
+  // would make the mark-seen case's bare getByRole('status') (`:2246`) ambiguous. A case
+  // about the banner re-spies with its own answer.
+  vi.spyOn(api, 'updates').mockReturnValue(new Promise<UpdatesView>(() => {}));
 });
 
 afterEach(() => {
@@ -2372,8 +2378,10 @@ describe('the programme tree on the fleet screen', () => {
    *  THE ADAPTATION against the runs-screen twin, which asserts on the whole
    *  recorded array: that tree is single-interval, and this one is not.
    *  `useProjectedHome` (20_000), `AccountsStrip` (20_000 for its poll and
-   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000) and
-   *  `HotFilesStrip` (30_000) all start polling from this screen's mount, and
+   *  30_000 for its own `useNow`), `FleetHostBanner` (15_000 + 30_000),
+   *  `useUpdatesView` (60_000 — the screen's one /api/updates poll, handed to
+   *  UpdateBanner) and `HotFilesStrip` (30_000) all start polling from this
+   *  screen's mount, and
    *  none of them is what this gate decides — so the instrument is the
    *  PRESENCE of `1_000` among the recorded intervals, not their sequence.
    *  Measured across `pwa/src`: no other timer in this tree has a 1_000 ms
@@ -2624,5 +2632,48 @@ describe('the door to /settings (centralised update management §13)', () => {
     expect(door.textContent).toMatch(/settings/i);
     fireEvent.click(door);
     expect(location.pathname).toBe('/settings');
+  });
+});
+
+// ── centralised-update W3: the screen's one /api/updates poll ───────────────
+//
+// UpdateBanner is FleetHostBanner's idiom: the screen polls once and injects
+// the answer. The count is the pin — a banner that self-polled beside the
+// screen's own poll would be a second request per minute, and a second
+// opinion about the inventory on one screen.
+
+describe('the update banner on the fleet screen', () => {
+  const stampOf = (version: string) => ({
+    sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version,
+  });
+  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: stampOf('v0.0.7'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['update-gate'], agentOps: role === 'server' ? null : [], highestVersion: 'v0.0.7', previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+  const updatesNewer = (): UpdatesView => ({
+    catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+    releases: [],
+    nodes: [
+      nodeOf('0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10', 'fleet'),
+      nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server'),
+    ],
+    intent: [],
+  });
+
+  it('polls /api/updates ONCE for the whole screen and hands the answer to UpdateBanner', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(updatesNewer());
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(updates).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no update banner while /api/updates has not answered', () => {
+    render(<FleetScreen store={makeStore()} />);
+    expect(document.querySelector('.update-banner')).toBeNull();
   });
 });

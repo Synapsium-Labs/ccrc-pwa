@@ -3185,3 +3185,49 @@ button.proj-card-pool::before {
   gap: var(--sp-3);
   min-height: var(--tap-min);
 }
+
+/* ── UpdateBanner (centralised-update design 2026-09-20 §13) ─────────────
+   "vX is out on <channel>": news, not a fault, so it is neither the dead red
+   nor the attention amber the fleet-host banner above uses for its three warn
+   arms. Self-grounded on the preselected-row pair — --ink-primary on
+   --accent-tint, 13.43:1 dark / 14.19:1 light (tokens.css) — so
+   design/contrast-check.mjs measures it as a rule of its own and the children
+   below set no colour of their own. No margin: it is a child of the .fleet
+   column, whose padding is the gutter and whose gap is the spacing. Not
+   sticky: the fleet-host banner owns the sticky slot, and two sticky banners
+   would stack over the list. */
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--accent-tint);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.update-banner-msg {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The shared buttons are full-width sheet buttons (primitives.css); in a
+   banner row they size to their label and keep their --tap-min height. */
+.update-banner-actions .btn-primary,
+.update-banner-actions .btn-ghost {
+  flex: none;
+  width: auto;
+  padding: 0 var(--sp-3);
+}
+.update-banner-note {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+}
