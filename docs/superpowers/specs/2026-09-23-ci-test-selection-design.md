@@ -310,6 +310,7 @@ It holds only as far as its assumptions do. The known limits, each with what cat
 | Reads outside the repository — system tools, the runner image — are not tracked | the lockfile rule covers `node_modules`; the daily run catches runner-image drift |
 | A test whose reads vary between runs (time, randomness, load) can be under-recorded | each daily rebuild re-traces everything; a miss surfaces at the daily run |
 | A syscall family the trace list omits (e.g. `io_uring` file ops) would hide reads | the plan's spike checks the list against a full trace; the history replay (§11.3) is the recall measurement |
+| A test that touches a repository path only by mutating it (`unlink`, `mkdir`, `rmdir`, `rename`, `link`, `chmod`, `utimensat`) or by `statfs` — never opening, stating or listing it — is not recorded: those families are outside the trace list | tests write only under fixture HOMEs: traced with exactly those families, `ccd-ws-audit` (the spike's census file) made 43,089 such calls and none named a repository path; the daily full run and the stable gate |
 | `strict: false` lets `main` move under a PR, so a PR's green covers its merge ref at the time it ran | the per-merge refresh runs the affected tests on the real merged tree; the daily run covers the rest |
 
 ## 10. Constraints the change must honour
@@ -468,3 +469,10 @@ The bounded second review round (closure of the 43, plus a fresh pass over the n
 14. **The acceptance dataset is frozen.** The replay runs over the study's frozen set (§11.3) and over a fresh collection
     of newer failures, and reports each set's size, because a fresh collection from live job logs finds only about a
     third of the study's window.
+15. **The hosted-runner spike (2026-09-24, run 35956714840).** strace 6.8 on the runner's kernel 6.17 prints every
+    shape the parser needs, and the thread-group split holds (25 `CLONE_THREAD` clones; `server/test` listed on a
+    root thread). Tracing cost 3.8–5.75× on the four heaviest files; the heaviest, `ccd-ws-audit`, traced in
+    1,020 s, so the per-file trace deadline is 1,560 s and the trace profile's scale is 6 — superseding item 12's
+    estimate. `session-hook` fails under trace in its own nested-strace case and stays `unknown`. The syscall
+    families outside the trace list are mutations, fd-only calls and libuv's epoll-ctl ring, and none named a
+    repository path (§9's new row).

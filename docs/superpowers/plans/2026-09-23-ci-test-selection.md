@@ -422,14 +422,21 @@ gh run view "$RUN" --json jobs --jq '.jobs[] | select(.name | startswith("collid
 
   | Question | What the log says | Consequence |
   |---|---|---|
-  | Q1 strace runs, prints `-ttt` stamps, `-y` paths, a failed probe, a listing, a chdir, a symlinkat | | |
-  | Q2 file-shaped syscalls outside the trace list | | |
-  | Q2b async fs / `realpathSync.native` visible, io_uring submission count | | |
-  | Q3 baseline footprint (repo paths read, dirs listed) | | |
-  | Q3b `SPIKE-SPLIT`: root pid, `CLONE_THREAD` clone lines, which pid file lists `server/test` | | |
-  | Q4 untraced ms / traced ms / ratio / rc, per file | | |
-  | Q5 check-run name of the called job | | |
-  | Q6 `github.workflow` inside the callee; `collide` outcome | | |
+  | Q1 strace runs, prints `-ttt` stamps, `-y` paths, a failed probe, a listing, a chdir, a symlinkat | strace -- version 6.8; 4 pid files; every line stamped `<seconds>.<micros>`; `openat(AT_FDCWD</…/sub>, "../a.txt", O_RDONLY) = 3</…/a.txt>`; `newfstatat(AT_FDCWD</…/sub>, "nope", …) = -1 ENOENT`; `getdents64(3</…/sub>, … /* 2 entries */, 32768) = 48`; `chdir("…/sub") = 0`; `symlinkat("../a.txt", AT_FDCWD</…/sub>, "lnk") = 0` | none — STOP rule 1 does not fire |
+  | Q2 file-shaped syscalls outside the trace list | outside the list, from the unfiltered census of `ccd-ws-audit`: fd-only `fstat`, `fstatfs`, `ftruncate`, `fchmod`, `fchown`; path-less `getcwd`, `io_uring_setup`; `io_uring_enter`; the mutations `unlink`, `unlinkat`, `mkdir`, `rmdir`, `rename`, `renameat`, `renameat2`, `link`, `chmod`, `utimensat`; and `statfs` | no trace-list change — traced on the fleet box with exactly those families (under `UV_USE_IO_URING=0`), `ccd-ws-audit` made 43,089 such calls and none named a repository path (every dirfd-relative one resolved under a `/tmp` fixture; `statfs` probed selinux mount points and fixture dirs); one row added to spec §9's limits table |
+  | Q2b async fs / `realpathSync.native` visible, io_uring submission count | kernel 6.17.0-1022-azure, libuv 1.51.0; unfiltered and WITHOUT `UV_USE_IO_URING=0`: `openat(…, "b.txt", …) = 20</…/b.txt>`, `statx(…, "nope2", …) = -1 ENOENT`, `readlink("…/nope3", …) = -1 ENOENT`; 3 `io_uring_enter` submissions; the step's grep prints no `getdents64` line because its pattern names only the three probe paths | none — async fs is visible; `readdir` under the real trace config is shown by Q3's listing of `server/test`; on the fleet box under `UV_USE_IO_URING=0` every `io_uring_setup` was libuv's 256-entry epoll-ctl ring, never a file-I/O ring |
+  | Q3 baseline footprint (repo paths read, dirs listed) | repository paths read: `deno.json`, `deno.jsonc`, `lerna.json`, `package.json`, `pnpm-workspace.yaml` at the root and in `server/`; `server/.env`, `.env.local`, `.env.test`, `.env.test.local`; `server/.postcssrc*` and `server/postcss.config.*`; `server/public`; the test file with vite's extension probes; directory listed: `server/test` | as measured locally — Task 2's baseline reproduces it |
+  | Q3b `SPIKE-SPLIT`: root pid, `CLONE_THREAD` clone lines, which pid file lists `server/test` | `SPIKE-SPLIT root_pid=100814 clone_thread_lines=25`; 27 pid files; `server/test` listed by ONE pid file, a root thread — not the root pid's own file | none — STOP rule 4 does not fire; the thread-group split is needed, and works |
+  | Q4 untraced ms / traced ms / ratio / rc, per file | `ccd-ws-audit` 228213 / 1020449 / 4.47 / 0,0; `ccrc-doctor` 213434 / 806849 / 3.78 / 0,0; `ccd-ws-reap` 191335 / 840433 / 4.39 / 0,0; `session-hook` 68055 / 391278 / 5.75 / 0,1 — its traced failure is its own `straceRun` case (strace cannot attach under an outer strace: `PTRACE_TRACEME: Operation not permitted`) | Task 6's `PROFILES.trace.scale` 4 → 6 (5.75 rounded up); Task 11's trace-run `--timeout 900` → `--timeout 1560` (1.5 × 1,020,449 ms, rounded up to 26 min, under the trace-shard job's 60); `session-hook` stays `unknown` under trace, as Tasks 4 and 11 already expect |
+  | Q5 check-run name of the called job | `full / full-suite` (success) | as expected — the matcher in Tasks 11 and 12 is unchanged |
+  | Q6 `github.workflow` inside the callee; `collide` outcome | `SPIKE-CALLEE workflow=ci-spike event=push … group=ci-ci-spike-probe` — the callee sees the CALLER's name; `collide`: no job was ever created, and the run concluded `failure` with no annotation naming it | no change — ci.yml's group, called from release-stable, evaluates to `ci-release-stable-…`, distinct from `release-stable` |
+
+  **Recorded 2026-09-24 (run 35956714840): GO.** STOP rule 3 fires literally on session-hook (untraced rc=0, traced
+  rc=1), but its cause is a nested strace in the test's own `straceRun` case — the class Task 7 handles with
+  `CCRC_TRACING` for its own file — and Tasks 4 and 11 already carry session-hook as a test that always fails under
+  trace (`unknown`, so rule 2 selects it for every change); spec §12 stops only if strace cannot run, and it runs.
+  Rules 1, 2 and 4 do not fire. Carried into the later tasks: Task 6 `scale: 6`; Task 11 `--timeout 1560`; spec §9's
+  new limits row.
 
   **STOP** — do not start Task 2; report the table to the operator (spec §12: "If `strace` cannot run there, the
   design stops") — if ANY of:
@@ -4359,7 +4366,7 @@ describe('PROFILES', () => {
       linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
       macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
       macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
-      trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 4 },
+      trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
     });
   });
 });
@@ -4676,7 +4683,7 @@ export const PROFILES = {
   linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
   macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
   macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
-  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 4 },
+  trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
 };
 
 function clamp(n, lo, hi) {
@@ -7935,7 +7942,7 @@ real in Task 14.
   EVENT` and `node .github/ci/verdict.mjs full` with env `RESULTS` (Task 8); `toMatrix` rows
   `{ shard, total, files /*space-joined SERVER-relative*/, vitest_shard }` (Task 6);
   `node .github/ci/shards.mjs times --out FILE <report.json>...` (Task 6, run from the repo root);
-  `node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE --jobs 2 --timeout 900` (Task 7);
+  `node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE --jobs 2 --timeout 1560` (Task 7);
   `node .github/ci/testmap.mjs build --sha S [--old FILE] --records DIR --out FILE` and `… refresh --sha S --old
   FILE --records DIR --live FILE --traced FILE --out FILE` (Task 4: the map written first, then exit 0, 3 for a
   traced test that newly fails under trace, 4 for a floor violator); `server/vitest.select.config.ts` +
@@ -8603,7 +8610,7 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
   it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
     const t = runScript(step(job('trace-shard'), 'Trace'));
     expect(t).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
-      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 900\n');
+      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560\n');
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
@@ -9686,7 +9693,7 @@ jobs:
           FILES: ${{ matrix.files }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/trace.txt"
-          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 900
+          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560
       - name: Keep the records
         if: always()
         uses: actions/upload-artifact@v4
