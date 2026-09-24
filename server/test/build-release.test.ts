@@ -686,6 +686,12 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     const silent = run('exit 0');
     expect(silent.status).not.toBe(0);
     expect(silent.output).not.toMatch(/found=/);
+
+    // (5) an answer followed by a failure is a failure: the CLI's exit code
+    // is read, not only its output (an `|| true` on that line stays green
+    // on every case above, measured).
+    const late = run('echo found=true; exit 1');
+    expect(late.status).not.toBe(0);
   });
 
   it('full runs only when the gate found nothing, and runs ci.yml itself in full mode', () => {
