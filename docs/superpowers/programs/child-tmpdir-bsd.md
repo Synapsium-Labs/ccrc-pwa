@@ -50,8 +50,9 @@ single macOS worker on every main run since it landed. It is a separate red that
     wrong). 3512 is `bsd-cases-plus-resume` (a fifth case reds because the blocks are parameterised whole).
     Both are to be defined in the plan before the review opens.
   - **Recorded, not numbered:** the brief predicted a 409 on `ccd/ccd` against wave 3's claim 749. The server
-    GRANTED claim 775, so a same-path claim from a second run of the same coordinator does not conflict. It is a
-    fact about the claims server, not a departure from the plan.
+    granted claim 775 because 749 was no longer live. Claims carry an 8-hour hard cap: 749 and 750 were taken at
+    00:37 and lapsed at 08:37:44 (`endedBy: hard-cap`), and wave 3 never re-took them. The brief's premise was stale,
+    not the plan. Wave 3's worker is told to re-claim.
   - **macOS evidence pending.** CI run 36051524877 had not started either macOS leg at wave-done.
 
 ## Carried constraints
