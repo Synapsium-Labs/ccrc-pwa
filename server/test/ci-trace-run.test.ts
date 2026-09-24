@@ -29,6 +29,7 @@ import {
   SKIPS_UNDER_TRACE, SKIPS_UNDER_TRACE_WHY, markSkipsUnderTrace,
 } from '../../.github/ci/trace-run.mjs';
 import { FAILED_UNDER_TRACE, buildMap, traceVerdict, RECORDS_FORMAT } from '../../.github/ci/testmap.mjs';
+import type { DepRecord, Records } from '../../.github/ci/testmap.mjs';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -145,8 +146,8 @@ describe('trace-run.mjs: the traced command and how a finished run is read', () 
 
   it('the why is not a failure: testmap.mjs neither counts it as news nor warns on it, and the map always selects it', () => {
     expect(FAILED_UNDER_TRACE.test(SKIPS_UNDER_TRACE_WHY)).toBe(false);
-    const empty = { read: [], probed: [], listed: [], subtree: [], git: false };
-    const records = {
+    const empty: DepRecord = { read: [], probed: [], listed: [], subtree: [], git: false };
+    const records: Records = {
       format: RECORDS_FORMAT,
       baseline: { root: empty, rest: empty },
       tests: { 'server/test/ci-trace-run.test.ts': { root: empty, rest: { ...empty, read: ['ccd/x'] }, unknown: true, why: SKIPS_UNDER_TRACE_WHY } },
