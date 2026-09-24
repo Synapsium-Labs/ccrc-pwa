@@ -9066,7 +9066,10 @@ Programme wave 2 (PR #176) merged with a residue of coverage and prose items, by
     - Wrong result: `lastLatestTag` stays pinned to a yanked K. Every poll then pays for the tag check, and T never joins `keepTags`.
     - Pin that exact input red-first.
   - **m2.** The B1 case must also assert that poll 2's `/latest` request carries NO `If-None-Match`. Mutation: advance `latestEtag` on a throw without advancing `lastLatestTag`. It must red; it was measured green.
-  - **m4 (nit).** The budget clock's `Math.max(0, …)` floor, which guards a non-monotonic injected time source, is unpinned. Pin it with an injected source that steps backwards.
+  - **m4 (nit) and F4 (W2's review run 149).** The budget clock's `Math.max(0, …)` floor, which guards a non-monotonic injected time source, is unpinned. Pin it with an injected source that steps backwards.
+    - Its docstring (`catalogue.ts`, and D-3218's B3 amendment) justifies it backwards: a floor at 0 bounds the stamp from below (stamp ≥ `now`). It cannot stop a stamp landing ahead of a later caller's `Date.now()`. Correct both texts.
+  - **F5 (W2's review run 149).** `update-routes.test.ts`'s C2 preamble says the sibling case keeps the original "withdrawal really applies" shape. C2b's own comment now says the opposite: the listing's `'complete'` coverage yanks v0.0.10 without `applyWithdrawn`. Correct the preamble.
+  - m1 was settled by W2's fix round 4 (its ruling: draft rows never vouch), so it is expected closed on arrival.
 
 **Steps:**
 
