@@ -34,15 +34,19 @@ const COUNTS: Array<'0' | '3' | ''> = ['0', '3', ''];
 const EVENTS = ['pull_request', 'push'];
 
 /** Independent oracle, transcribed from the contract's own prose (not from
- *  verdict.mjs), plus the operator's ruling that a pull request always runs
- *  server tests. Returns only the boolean the table asserts. */
+ *  verdict.mjs), plus the operator's rulings that a pull request always runs
+ *  server tests (T2), that an unrecognised `tests` value is red, and that
+ *  `count === '0'` reads as an empty selection only when `tests ===
+ *  'selected'` — a `full` run always has tests (F8-1). Returns only the
+ *  boolean the table asserts. */
 function expectedOk({ select, typecheck, shards, tests, count, event }: {
   select: string; typecheck: string; shards: string; tests: string; count: string; event: string;
 }): boolean {
   if (select !== 'success') return false;
   if (tests === 'none') return event !== 'pull_request';
+  if (tests !== 'selected' && tests !== 'full') return false;
   if (typecheck !== 'success') return false;
-  if (count === '0') return shards === 'skipped';
+  if (count === '0') return tests === 'selected' && shards === 'skipped';
   if (count === '3') return shards === 'success'; // "count > 0"
   return false; // anything else (count === '') -> fail
 }
@@ -115,7 +119,7 @@ describe('serverVerdict — the named scenarios from the plan brief', () => {
 
   it('the ordinary empty-selection green path: count 0, shards skipped', () => {
     const v = serverVerdict({
-      select: 'success', typecheck: 'success', shards: 'skipped', tests: 'full', count: '0',
+      select: 'success', typecheck: 'success', shards: 'skipped', tests: 'selected', count: '0',
     });
     expect(v.ok).toBe(true);
   });
@@ -125,6 +129,20 @@ describe('serverVerdict — the named scenarios from the plan brief', () => {
       select: 'success', typecheck: 'success', shards: 'success', tests: 'selected', count: '0',
     });
     expect(v.ok).toBe(false);
+  });
+
+  it('tests: full with count 0 -> red: a full run always has tests (ruling F8-1)', () => {
+    const v = serverVerdict({
+      select: 'success', typecheck: 'success', shards: 'skipped', tests: 'full', count: '0',
+    });
+    expect(v).toEqual({ ok: false, reason: expect.stringContaining('full') });
+  });
+
+  it('unrecognised tests value with count 0 -> red (ruling F8-1)', () => {
+    const v = serverVerdict({
+      select: 'success', typecheck: 'success', shards: 'skipped', tests: '', count: '0',
+    });
+    expect(v).toEqual({ ok: false, reason: expect.stringContaining('unrecognised tests') });
   });
 });
 

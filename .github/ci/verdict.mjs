@@ -38,16 +38,23 @@ process.exitCode = 1;
  *   1. `select` did not succeed -> fail.
  *   2. `tests === 'none'` -> ok (nothing was supposed to run) — except on a
  *      `pull_request`, which fails.
- *   3. `typecheck` did not succeed -> fail.
- *   4. `count === '0'` -> ok iff `shards` is `skipped` (nothing was
- *      supposed to run there either — anything else, including `success`,
- *      is a discrepancy between what `select` promised and what ran).
- *   5. any other `count` (an actual file count, e.g. `'3'`) -> ok iff
+ *   3. `tests` is anything other than `selected` or `full` -> fail, reason
+ *      `unrecognised tests: <JSON of the value>` (an unrecognised selection
+ *      mode never earned a verdict — ruling F8-1).
+ *   4. `typecheck` did not succeed -> fail.
+ *   5. `count === '0'` -> ok iff `tests === 'selected'` AND `shards` is
+ *      `skipped` (nothing was supposed to run there either). A `full` run
+ *      always has tests, so `tests: 'full'` with `count: '0'` is itself a
+ *      discrepancy, not an empty selection, and fails with reason
+ *      `tests: full but count: 0 — a full run always has tests` (ruling
+ *      F8-1); any other `tests === 'selected'` mismatch (shards not
+ *      `skipped`) fails with the generic count/shards reason below.
+ *   6. any other `count` (an actual file count, e.g. `'3'`) -> ok iff
  *      `shards` is `success`. This is the "silent-green trap" spec §4.2
  *      names: a `skipped` shard run with a non-zero count must NOT read
  *      as ok, or a crashed/never-scheduled `server-shard` job would pass
  *      silently.
- *   6. anything else (an unrecognised `count`, e.g. `''`) -> fail.
+ *   7. anything else (an unrecognised `count`, e.g. `''`) -> fail.
  *
  * @param {{ select: JobResult, typecheck: JobResult, shards: JobResult, tests: TestsMode, count: string, event?: string }} inputs
  * @returns {{ ok: boolean, reason: string }}
@@ -61,13 +68,20 @@ export function serverVerdict({ select, typecheck, shards, tests, count, event }
       ? { ok: false, reason: 'tests: none on a pull_request — a pull request always runs server tests' }
       : { ok: true, reason: 'tests: none — nothing was selected to run' };
   }
+  if (tests !== 'selected' && tests !== 'full') {
+    return { ok: false, reason: `unrecognised tests: ${JSON.stringify(tests)}` };
+  }
   if (typecheck !== 'success') {
     return { ok: false, reason: `typecheck: ${typecheck || '(did not run)'}` };
   }
   if (count === '0') {
-    return shards === 'skipped'
-      ? { ok: true, reason: 'count: 0, shards: skipped — nothing selected' }
-      : { ok: false, reason: `count: 0 but shards: ${shards || '(did not run)'} (expected skipped)` };
+    if (tests === 'selected' && shards === 'skipped') {
+      return { ok: true, reason: 'count: 0, shards: skipped — nothing selected' };
+    }
+    if (tests !== 'selected') {
+      return { ok: false, reason: 'tests: full but count: 0 — a full run always has tests' };
+    }
+    return { ok: false, reason: `count: 0 but shards: ${shards || '(did not run)'} (expected skipped)` };
   }
   const n = Number(count);
   if (count !== '' && Number.isInteger(n) && n > 0) {
