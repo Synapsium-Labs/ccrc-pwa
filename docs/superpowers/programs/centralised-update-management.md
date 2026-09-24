@@ -23,7 +23,7 @@ numbers; the spec wave each one implements is named beside it.
 | # | spec wave | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | 1 | W1 | release side + provenance: prerelease per merge, `stable` promotion, Sigstore verify, tag binding, floor | both | #161 (`d41335b3`), #162 (`f0cb8743`), #164 | **merged; rolled out 2026-09-21** (v0.0.11, verified). Ran before this ledger existed, outside the run machinery |
-| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **narrow fix round 4, the last send-back** (run 128, PR #176); review run 149 at `24e3379c`: 1 important behaviour (F1); plan `1288beec` |
+| 2 | W2 | control plane, read-only: `MIGRATIONS[13]`, catalogue poller, node inventory, resolver, projection route + server-role writer, `GET /api/updates`, intent/refresh/ack, derived `builds` | agent-first (read allowlist), then server | — | **scoped review of round 4** (run 128, PR #176 at `6213231a`); review run 150 dispatched 2026-09-24 03:1x UTC; plan `1288beec` |
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **run 130 open, planned**; plan `d638c602` + re-point `08cecd10`; dispatches when wave 2 merges |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **paused for wave 2's merge** (run 129, `ccrc-pwa-keen-meadow`): Tasks 1–14 at `2fe02e2d` (2026-09-23 16:4x UTC); plan `4b361c00`; tasks 15–16 follow wave 2's merge |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **run 132 open, planned**; plan `6acbff6d` + re-point `287caa07`; dispatches when waves 2, 3 and 4 have merged |
@@ -322,6 +322,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - F4 and F5 go to Task 8A. F6 and F7 are the same sentences F1's amendment rewrites.
   - **Round 4 is the last send-back of any kind.** After its scoped review, #176 merges, unless round 4's delta yanks a
     release it should not, keeps a withdrawn release resolvable, or leaks a secret.
+
+- **Wave 2's narrow fix round 4 (the last) is done (2026-09-24), at `6213231a`.**
+  - F1: the reshaped ruling. The listing wins only on disagreement; on agreement `applyWithdrawn` runs; draft rows
+    never vouch.
+  - F3: a `kNeedsReread` flag. A throwing 200 arm keeps T and re-reads K next poll.
+  - F6 and F7: prose.
+  - **The worker extended the ruling once.** Its own Opus task review found that a stale "still stable" `tags/K`
+    beside a fresh dev listing counted as agreement and re-promoted a demoted K. So a demote now applies only when both
+    the check and the listing say non-draft dev: the ruling's headline, applied. That extension is the worker's call,
+    and an Opus re-review approved it.
+  - Carried to Task 8A: the worker's m2 and m4.
+  - **Merge-bar scope, recorded before review run 150 reports:** its three reopening conditions apply to states a
+    HEALTHY `coord.db` can reach. A store that throws on every read is a corrupt database, a different failure class,
+    and is carried. This settles the worker's m2 (an always-throwing store plus a later `/latest` 404 keeps a deleted T
+    protected) in advance.
 
 ## Carried constraints
 
