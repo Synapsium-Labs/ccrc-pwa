@@ -3623,6 +3623,14 @@ describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', (
     const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes('fleet and server are on ')).map(rel);
     expect(holders).toEqual(['shared/update-summary.ts']);
   });
+
+  // Fix round 2 (review of def82cd4): `remoteSides` moved here from
+  // `pwa/src/fleet/BuildLine.tsx` (D-3313) in fix round 1, but no case here ever pinned it as a single
+  // holder — `update-summary.test.ts`'s own comment claimed this suite already did, falsely.
+  it('remoteSides is declared once, in shared/update-summary.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export function remoteSides\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
 });
 
 // Design 2026-09-20 §9/§13 (programme wave 3, Task 7; D-3305):

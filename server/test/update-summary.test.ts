@@ -6,7 +6,9 @@ import {
   type SummaryRow,
 } from '../../shared/update-summary.js';
 
-const row = (role: string | null, version: string | null): SummaryRow => ({ role, version });
+// `stated` is REQUIRED (fix round 2, item 7) — every existing case here means a row that vouches for its
+// version, so `stated: true` is fixed, never a parameter of this helper.
+const row = (role: string | null, version: string | null): SummaryRow => ({ role, version, stated: true });
 
 describe('versionsSummary — the clause the push body and the banner share', () => {
   it('one clause when both sides run the same tag', () => {
@@ -66,7 +68,8 @@ describe('versionSides and sideVersion', () => {
 });
 
 // Fix round 1 (item 1, D-3313): `remoteSides` moved here from `pwa/src/fleet/BuildLine.tsx` so the server
-// can call it too. `single-definition.test.ts` sees only this one holder now.
+// can call it too. `single-definition.test.ts`'s "remoteSides is declared once, in shared/update-summary.ts"
+// (fix round 2) is the one-holder pin; this describe covers the function's own behaviour.
 describe('remoteSides — versionSides for a remote fleet, moved to L0 (D-3313)', () => {
   it('a both-role row is this box, never the fleet box — the fleet side comes back null', () => {
     const b = row('both', 'v0.0.7');

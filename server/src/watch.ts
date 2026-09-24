@@ -59,7 +59,7 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
-import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, summaryFromSides, versionSides } from '../../shared/update-summary.js';
@@ -958,15 +958,19 @@ export class FleetWatcher {
   }
 
   /** Fix round 1 (F3/F4, D-3314 amended): true only when THIS sweep's outcomes are a real write — the row
-   *  was upserted, not merely marked unreachable, refused, or lost to a throw. `sweepInventory`'s outcome
-   *  order is fixed: `outcomes[0]` is always the server's own row (`sweepOwn`); `outcomes[1]`, present only
-   *  when `inv.fleet !== null` (remote mode), is the one fleet connection (`sweepFleet`). Local mode has no
-   *  fleet row to demand — the server row alone opens the gate. */
+   *  was upserted, not merely marked unreachable, refused, or lost to a throw. Fix round 2: looked up by
+   *  `label` (`SERVER_LABEL`/`FLEET_LABEL`, every `SweepOutcome`'s own field), never by array position —
+   *  `sweepInventory` has always ordered `[own, fleet?]`, but a lookup by label reads the same regardless of
+   *  that ordering, matching how every OTHER outcome reader in this file (`warnInventoryIssues`,
+   *  `unreachable()`'s own callers) already keys on `label`. Local mode has no fleet row to demand — the
+   *  server row alone opens the gate. */
   private sweptEnoughToDecide(inv: InventoryDeps, outcomes: readonly SweepOutcome[]): boolean {
-    const wasMeasured = (o: SweepOutcome | undefined): boolean =>
-      o !== undefined && (o.result === 'measured' || o.result === 'node-id-collision');
-    if (!wasMeasured(outcomes[0])) return false;
-    return inv.fleet === null || wasMeasured(outcomes[1]);
+    const wasMeasured = (label: string): boolean => {
+      const o = outcomes.find((x) => x.label === label);
+      return o !== undefined && (o.result === 'measured' || o.result === 'node-id-collision');
+    };
+    if (!wasMeasured(SERVER_LABEL)) return false;
+    return inv.fleet === null || wasMeasured(FLEET_LABEL);
   }
 
   /** One inventory run (design 2026-09-20 §9): the sweep, then the resolver over every live row and the

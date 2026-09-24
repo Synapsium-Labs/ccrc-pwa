@@ -65,9 +65,14 @@ export function bannerRelease(view: UpdatesView): { tag: string; channel: Update
 export function updateBannerText(view: UpdatesView): string | null {
   const release = bannerRelease(view);
   if (release === null) return null;
+  // `SummaryRow.stated` is now required (fix round 2, item 7) — every row here already passed the
+  // measured-and-read filter above, so it is unconditionally `true`. This banner still decides sides via
+  // `versionsSummary`/`versionSides` (pre-filtered, D-3313's `remoteSides` unrouted) rather than the D-3316
+  // rule item 1 gave the push body — group B re-routes it; this is behaviour-identical to before this field
+  // became required.
   const measured = view.nodes
     .filter((n) => typeof n.measuredAt === 'number' && n.stampRead === 'ok')
-    .map((n) => ({ role: n.role, version: nodeVersion(n) }));
+    .map((n) => ({ role: n.role, version: nodeVersion(n), stated: true }));
   return `${release.tag} is out on ${release.channel} — ${versionsSummary(measured)}.`;
 }
 

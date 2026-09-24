@@ -11,13 +11,16 @@
 
 /** One node, as the summary reads it: `version` is a release tag, or `null` = unversioned (no stamp, an
  *  unreadable one, or a stamp that carries no tag). `role` is `NodeRole`'s word, or `null` = unknown.
- *  `stated` — fix round 1 (F1/F14, D-3316) — is false when this reading does not VOUCH for `version` at all:
- *  a row that is unmeasured this run, whose stamp did not read, or that is `reachable: false` (§18 "unreachable
- *  is not current", widened by D-3316 from the settings inventory to every summary reader). Such a row still
- *  OCCUPIES its `role` (so no other row falls back to standing in for it — the point of picking sides from every
- *  live row FIRST, below), but the clause states nothing about it: it renders exactly as if there were no row at
- *  all. Omitted (`undefined`), a row is `stated` — the default every existing caller and test relies on. */
-export interface SummaryRow { role: string | null; version: string | null; stated?: boolean }
+ *  `stated` — fix round 1 (F1/F14, D-3316); REQUIRED, fix round 2 — is false when this reading does not
+ *  VOUCH for `version` at all: a row that is unmeasured this run, whose stamp did not read, or that is
+ *  `reachable: false` (the global constraint "unreachable is not current", widened by D-3316 from settings/
+ *  banner/BuildLine to the push summary and the decision too). Such a row still OCCUPIES its `role` (so no
+ *  other row falls back to standing in for it — the point of picking sides from every live row FIRST, below),
+ *  but the clause states nothing about it: it renders exactly as if there were no row at all. REQUIRED
+ *  rather than optional so every caller decides explicitly at the call site — an omitted field used to read
+ *  as `true` silently, which is exactly the kind of silent default this file exists to refuse elsewhere
+ *  (`MISSING_SIDE` vs `UNVERSIONED_WORD` is the same discipline, one level up). */
+export interface SummaryRow { role: string | null; version: string | null; stated: boolean }
 
 /** How a node with no tag reads — the word `BuildLine` and `FleetHostBanner` already show. */
 export const UNVERSIONED_WORD = 'unversioned';
@@ -54,9 +57,9 @@ export function remoteSides<T extends { role: string | null }>(rows: readonly T[
 }
 
 /** One side as text: its tag, `UNVERSIONED_WORD` when it has none, `MISSING_SIDE` when there is no row OR the
- *  row occupying the side does not vouch for its version (`stated === false`, D-3316). */
+ *  row occupying the side does not vouch for its version (`stated: false`, D-3316). */
 export function sideVersion(row: SummaryRow | null): string {
-  if (row === null || row.stated === false) return MISSING_SIDE;
+  if (row === null || !row.stated) return MISSING_SIDE;
   return typeof row.version === 'string' ? row.version : UNVERSIONED_WORD;
 }
 
@@ -68,7 +71,7 @@ export function sideVersion(row: SummaryRow | null): string {
 export function summaryFromSides(sides: { fleet: SummaryRow | null; server: SummaryRow | null }): string {
   const { fleet, server } = sides;
   if (
-    fleet !== null && server !== null && fleet.stated !== false && server.stated !== false &&
+    fleet !== null && server !== null && fleet.stated && server.stated &&
     typeof fleet.version === 'string' && fleet.version === server.version
   ) {
     return `fleet and server are on ${fleet.version}`;

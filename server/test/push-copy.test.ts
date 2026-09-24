@@ -1434,6 +1434,11 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     expect(sent).toEqual([]);
     expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
     expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — this second sweep's write succeeds for real, and a later good
+    // sweep does open the gate and decide.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
     warn.mockRestore();
   });
 
