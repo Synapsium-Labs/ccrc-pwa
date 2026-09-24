@@ -1258,7 +1258,7 @@ const lineFor = (out: string, name: string): string | undefined =>
 const anyVerdictFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
 
-/** How many checks a HEALTHY fixture skips. TWO on Linux, THREE on macOS —
+/** How many checks a HEALTHY fixture skips. THREE on Linux, FOUR on macOS —
  *  `models` SKIPs on every platform (`healthy()` plants only the upstream
  *  Anthropic account, which never has a model registry by design, so the
  *  population is empty everywhere), macOS adds a second, `scopes`: cgroup
@@ -1278,8 +1278,14 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  `(N skipped)` summary pin, both `expect(skipped).toBe(HEALTHY_SKIPS)`
  *  assertions and `expect(verdicts).toBe(total - HEALTHY_SKIPS)` — the run's
  *  rc stays 0 and no line says a check failed, because SKIP prints no
- *  verdict at all; only the counts move. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 2;
+ *  verdict at all; only the counts move.
+ *
+ *  RAISED BY ONE AGAIN (fix round 1 item 6 / review 155 C3): `update-sync`
+ *  SKIPs the same way, for the same reason — `healthy()` never installs
+ *  `ccd-update-sync.timer` either (only `--role fleet` places it), so this
+ *  "healthy" box has no puller by configuration too. Measured the identical
+ *  way: deleting this `+ 1` reds every summary/count pin above again. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 3;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -2417,6 +2423,130 @@ describe('ccrc doctor: pool-sync', () => {
     plantPoolEpoch(home, {});
     const line = lineFor(runDoctor(home).stdout, 'pool-sync') ?? '';
     expect(line).toMatch(/^PASS pool-sync: /);
+    expect(line).toContain('within its lease');
+    expect(runDoctor(home).code).toBe(0);
+  });
+});
+
+/** `~/.ccrc/update-intent`, in `_upd_intent_state`'s own nine-line grammar
+ *  (`updateIntentFixtures.ts`'s `readIntent` reads the same shape back;
+ *  `update-intent-cross-side.test.ts` plants an identical document by hand
+ *  for the same reason: a fixture writer belongs beside the check it feeds,
+ *  not behind an import that would register a second file's tests here). */
+function plantUpdateIntent(home: string, overrides: Partial<{
+  epoch: number; issued: number; lease: number; channel: string;
+  desired: string; desiredStable: string; desiredDev: string; auto: string;
+}> = {}): void {
+  const now = Math.floor(Date.now() / 1000);
+  const o = {
+    epoch: 1, issued: now, lease: now + 900, channel: 'stable',
+    desired: 'v0.0.11', desiredStable: 'v0.0.11', desiredDev: 'v0.0.12', auto: 'off',
+    ...overrides,
+  };
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'update-intent'), [
+    `epoch ${o.epoch}`, `issued ${o.issued}`, `lease ${o.lease}`, `channel ${o.channel}`,
+    `desired ${o.desired}`, `desired-stable ${o.desiredStable}`, `desired-dev ${o.desiredDev}`,
+    `auto ${o.auto}`, 'end', '',
+  ].join('\n'), { mode: 0o600 });
+}
+
+// ── update-sync: the EFFECT check, fix round 1 item 6 / review 155 C3 ─────
+// `services` (above) measures the TIMER's own activation state, which stays
+// `active` while its oneshot fails every run — this describe block is the
+// ARTIFACT check that catches that, the identical shape `pool-sync` (above)
+// is for its own sibling timer: `_upd_intent_state`'s own verdict on
+// `~/.ccrc/update-intent`, never the timer's reported state. `healthy()`
+// installs no `ccd-update-sync.timer` at all (see `HEALTHY_SKIPS`'s own
+// docstring), so every test below plants the unit itself where the scenario
+// needs a FLEET box, and the "no puller by configuration" SKIP is the one
+// `healthy()` already proves on its own.
+describe('ccrc doctor: update-sync', () => {
+  it('SKIPs — no puller by configuration — on a box with no ccd-update-sync.timer installed at all', () => {
+    const home = healthy('ccrc-doctor-update-sync-no-unit-');
+    const line = lineFor(runDoctor(home).stdout, 'update-sync');
+    expect(line).toBeUndefined();   // lineFor is PASS/WARN/FAIL only
+    const any = anyVerdictFor(runDoctor(home).stdout, 'update-sync') ?? '';
+    expect(any).toMatch(/^SKIP update-sync: /);
+    expect(any).toContain('no puller here');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('WARNs — not yet synced — when the timer was installed within its grace window and ~/.ccrc/update-intent has not been written yet', () => {
+    const home = healthy('ccrc-doctor-update-sync-not-yet-synced-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-not-yet-synced');
+    expect(lines[i]).toContain('has not been written yet');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('FAILs — never synced — when the timer was installed past its grace window and ~/.ccrc/update-intent has never been written', () => {
+    const home = healthy('ccrc-doctor-update-sync-never-synced-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    // Past the check's 120s grace window (two of the timer's own 60s
+    // periods) — the "had its chance and still never synced" case, not the
+    // fresh-install case above.
+    const past = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(join(unitDirOf(home), unitFileOf('ccd-update-sync.timer')), past, past);
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-unreadable');
+    expect(lines[i]).toContain('never synced');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('FAILs — stale — when the projection is past its lease, even though services still reports the timer active', () => {
+    const home = healthy('ccrc-doctor-update-sync-stale-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    plantUpdateIntent(home, { issued: 1, lease: 1 });   // 1970 — long past its lease
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-stale');
+    // `_upd_intent_state`'s own words (item 6's own instruction to reuse
+    // them), not pool-sync's "past its lease" phrasing — this check never
+    // re-derives its own verdict text.
+    expect(lines[i]).toContain('its lease ended');
+    // `services` still says the timer is fine — the exact false-PASS gap
+    // this check exists to close, on the SAME box, in the SAME run.
+    expect(lineFor(r.stdout, 'services')).toMatch(/^PASS services: /);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('FAILs — malformed — when the timer is installed but the projection does not parse (never a WARN: this is the "every update refuses" class, not pool-sync\'s self-healing one)', () => {
+    const home = healthy('ccrc-doctor-update-sync-malformed-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'update-intent'), 'not a projection at all\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL update-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('update-sync-malformed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('PASSes when the timer is installed and the projection is fresh', () => {
+    const home = healthy('ccrc-doctor-update-sync-fresh-');
+    writeUnitFile(home, 'ccd-update-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-update-sync.timer'), 'active\n');
+    plantUpdateIntent(home);
+    const line = lineFor(runDoctor(home).stdout, 'update-sync') ?? '';
+    expect(line).toMatch(/^PASS update-sync: /);
     expect(line).toContain('within its lease');
     expect(runDoctor(home).code).toBe(0);
   });
@@ -6965,6 +7095,25 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     noRunnerBugLine(off.stdout, 'update-exposure');
   });
 
+  // Fix round 1 item 7 / review 155 C13 — the reviewer's own probe,
+  // reproduced verbatim: ccrc.env says CCRC_AUTH=on, exposure.env has a BARE
+  // `CCRC_AUTH=` line (present, empty — never what `ccrc expose` itself
+  // writes, only a hand edit), and the bind is reachable. Before the fix
+  // `_box_env_value` collapsed "the exposure file names the key, empty" into
+  // the same "" as "the exposure file never mentions it", so `[ -n "$v" ]`
+  // left ccrc.env's `on` standing and this PASSED while the server's own
+  // EnvironmentFile stacking runs with the gate OFF.
+  it('a PRESENT but EMPTY CCRC_AUTH= in exposure.env wins over ccrc.env=on, exactly as the second EnvironmentFile does — FAIL, not the false PASS C13 found', () => {
+    const home = unexposed('ccrc-doctor-upx-bare-auth-',
+      'CCRC_FLEET=local\nCCRC_HOST=ccrc-fixture.invalid\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
+    writeExposureEnv(home, { omit: ['CCRC_AUTH'] });
+    appendFileSync(join(home, '.ccrc', 'exposure.env'), 'CCRC_AUTH=\n');
+    const r = runDoctor(home);
+    expect(line(r.stdout), r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
+    noRunnerBugLine(r.stdout, 'update-exposure');
+    expect(r.code).toBe(1);
+  });
+
   it('quadrant 2: ccrc.env armed + loopback → PASS', () => {
     const home = unexposed('ccrc-doctor-upx-armed-env-',
       'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_AUTH=on\n');
@@ -6973,14 +7122,18 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     noRunnerBugLine(r.stdout, 'update-exposure');
   });
 
-  it('quadrant 3: unarmed + CCRC_HOST=0.0.0.0 → FAIL naming the bind and POST /api/updates/apply', () => {
+  it('quadrant 3: unarmed + CCRC_HOST=0.0.0.0 → FAIL naming the bind and "the update routes"', () => {
     const home = unexposed('ccrc-doctor-upx-wildcard-',
       'CCRC_FLEET=local\nCCRC_HOST=0.0.0.0\nCCRC_PORT=7788\n');
     const r = runDoctor(home);
     const l = line(r.stdout);
     expect(l, r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
     expect(l).toContain(`CCRC_HOST=0.0.0.0 in ${join(home, '.ccrc', 'ccrc.env')}`);
-    expect(l).toContain('POST /api/updates/apply');
+    // Fix round 1 item 25 / review 155 Q7: `/api/updates/apply` does not exist
+    // until wave 5 — this box's own ccrc must not send an operator to worry
+    // about a route it cannot even reach.
+    expect(l).toContain('the update routes');
+    expect(l).not.toContain('/api/updates/apply');
     expect(remedyFor(r.stdout, 'update-exposure')).toMatch(/^ {2}remedy: arm the gate: ccrc expose /);
     noRunnerBugLine(r.stdout, 'update-exposure');
     expect(r.code).toBe(1);
@@ -6997,7 +7150,8 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     expect(l, r.stdout).toMatch(/^FAIL update-exposure: this box is reachable \(/);
     expect(l).toContain(`${join(home, '.ccrc', 'Caddyfile')} exists`);
     expect(l).not.toContain('CCRC_HOST=');
-    expect(l).toContain('POST /api/updates/apply');
+    expect(l).toContain('the update routes');
+    expect(l).not.toContain('/api/updates/apply');
     noRunnerBugLine(r.stdout, 'update-exposure');
     expect(r.code).toBe(1);
   });
@@ -7062,7 +7216,8 @@ describe('ccrc doctor: update-exposure (design §12 — armed and reachable, eac
     const home = unexposed('ccrc-doctor-upx-exp-dir-');
     mkdirSync(join(home, '.ccrc', 'exposure.env'));
     const r = runDoctor(home);
-    expect(line(r.stdout)).toMatch(/^WARN update-exposure: .*exposure\.env is there and cannot be read, so whether CCRC_AUTH is on — and so whether POST \/api\/updates\/apply is gated — was not measured$/);
+    expect(line(r.stdout)).toMatch(/^WARN update-exposure: .*exposure\.env is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured$/);
+    expect(line(r.stdout)).not.toContain('/api/updates/apply');
     noRunnerBugLine(r.stdout, 'update-exposure');
   });
 

@@ -2223,8 +2223,22 @@ _box_server_addr() {
 #     an address this box is NOT configured with — the one direction the
 #     paragraph above says this reader must never fail in.
 # The LAST assignment wins, as it does in systemd and in a shell.
+#
+# RETURN CODE (fix round 1 item 7 / review 155 C13): 0 when the key's line
+# was seen at all — even a BARE `KEY=` line, value empty — 1 when the file
+# never named it. No caller before this fix read this code (every one is
+# `v="$(_box_env_value …)"`, never followed by `$?` — grepped, none do), so
+# adding it is not a second contract on top of the stdout one; it answers a
+# question stdout alone cannot: `_check_update-exposure` (this file's own
+# header, "ARMED") needs to tell "the exposure file sets this key empty" from
+# "the exposure file never mentions it" APART — the first must win over
+# ccrc.env, exactly as systemd's second `EnvironmentFile=` makes an empty
+# assignment win over an earlier non-empty one; the second must fall through
+# to it. Collapsing both to "" (this function's stdout, still) is exactly
+# right for every OTHER caller, which only ever wants a default when unset —
+# this is the one caller that needs told apart.
 _box_env_value() {
-  local file="$1" key="$2" line v=""
+  local file="$1" key="$2" line v="" found=0
   # Space, tab, CR — systemd's set, minus the newline `read` has consumed. A
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
@@ -2236,7 +2250,7 @@ _box_env_value() {
     # is why the pattern is unquoted here.
     line="${line#"${line%%[!$ws]*}"}"
     case "$line" in
-      "$key="*) v="${line#"$key="}" ;;
+      "$key="*) v="${line#"$key="}"; found=1 ;;
       *) continue ;;
     esac
   done < "$file"
@@ -2247,6 +2261,7 @@ _box_env_value() {
     \'*\') v="${v#\'}"; v="${v%\'}" ;;
   esac
   printf '%s' "$v"
+  [ "$found" -eq 1 ]
 }
 
 # ── _box_auth_path — WHICH FILE IS THIS BOX'S PASSPHRASE SECRET (D-143) ───
@@ -15211,6 +15226,25 @@ _rollout_role_why() {
   return 0
 }
 
+# ── _rollout_exit3_detail <ssh-target> — the box's OWN measured cause of an
+# exit-3 `ccrc update` (fix round 1 item 4 / review 155 C34). `update`'s exit
+# 3 carries two different deaths under one code (D-3114): the staged spine
+# completed and its trailing doctor failed, OR the spine completed but died
+# inside `_inst_installed` writing ~/.ccrc/floor, before doctor ever ran (W1
+# minor M1). Rollout used to assume every exit 3 was the first shape and told
+# the operator to read doctor FAIL lines that, in the second shape, were
+# never printed. One extra READ-ONLY ssh, run only on this rare path, reads
+# the box's own `~/.ccrc/update.json` `detail` (`_upd_phase`'s report) rather
+# than assuming. Prints nothing itself and never dies: a pre-W4 box (no
+# update.json yet), an unreadable file or a transport hiccup all answer "",
+# which the caller's fallback (the doctor sentence) treats as the pre-W4
+# truth — that spine never had a floor step to die in.
+_rollout_exit3_detail() {
+  local box="$1" out=""
+  out="$("${ROLLOUT_SSH[@]}" "$box" 'cat ~/.ccrc/update.json 2>/dev/null' 2>/dev/null)" || out=""
+  printf '%s' "$out" | jq -r '.detail // empty' 2>/dev/null || printf ''
+}
+
 # ── _rollout_field <line> <key> — one ` key=value` field off a box's line ─
 # The value runs up to the next space; NOTHING at all when the line has no
 # ` <key>=` — an older box's check line has no caps=/floor= (D-3106's lesson:
@@ -15438,6 +15472,12 @@ cmd_rollout() {
     floor="$(_rollout_field "$line" floor)"
     echo "rollout: ${labels[$i]}: $box (${sha:0:8}) → $ROLLOUT_VERSION [$state]"
     [ -n "$caps" ] || echo "rollout: ${labels[$i]}: its check line lists no capabilities (a ccrc older than W4 prints no caps=) — it gets no --from rollout"
+    # C36 (fix round 1 item 21): a pre-W4 box's check line names no floor=
+    # either, though W1 already gave it a floor file — a missing field reads
+    # as "no floor said" (`_rollout_field`), never as an empty one. This is a
+    # NOTE, not a refusal: a refusal here would block the very first rollout
+    # onto this wave, at the box that most needs it.
+    [ -n "$floor" ] || echo "rollout: ${labels[$i]}: its check line lists no floor= (a ccrc older than W4 prints none) — its floor is checked at its own install"
     states+=("$state"); capss+=("$caps"); floors+=("$floor")
     [ "$state" = current ] || allcurrent=0
   done
@@ -15529,7 +15569,19 @@ cmd_rollout() {
     # else non-zero is a box that did not move, and the rollout stops there.
     if [ "$rc" -eq 3 ]; then
       unhealthy=1
-      echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+      local exit3_detail=""
+      exit3_detail="$(_rollout_exit3_detail "${boxes[$i]}")"
+      case "$exit3_detail" in
+        *"floor was not raised"*)
+          # M1 one layer up (fix round 1 item 4 / review 155 C34): this box's
+          # own report names the floor-write death, not doctor — doctor never
+          # ran, so there are no FAIL lines to point at.
+          echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its floor write died before ccrc doctor ever ran — its floor was not raised, not its health; its own report: $exit3_detail"
+          ;;
+        *)
+          echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+          ;;
+      esac
     elif [ "$rc" -eq 4 ]; then
       untouched=""
       [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."

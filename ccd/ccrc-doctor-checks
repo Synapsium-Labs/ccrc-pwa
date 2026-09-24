@@ -194,6 +194,7 @@ CCRC_DOCTOR_CHECKS=(
   credentials
   pools
   pool-sync
+  update-sync
   graphify
   graphify-path
   build
@@ -1699,26 +1700,36 @@ _check_exposure() {
 # (design 2026-09-20 §12, "the unarmed-exposure doctor check"). With CCRC_AUTH
 # off every route is open to whoever reaches the port — auth/gate.ts says so in
 # its own words ("there is no credential to forge with") — and the update
-# routes are routes like any other. The sentences below name
-# `POST /api/updates/apply`, the route that moves this box, because it is the
-# one this check exists for (design §12); programme wave 5 registers it, and
-# until then the update writes W2 registers (`POST /api/updates/intent`,
-# `/refresh`, `/ack`) are what an unarmed gate leaves open.
+# routes are routes like any other. The sentences below say "the update
+# routes" rather than naming one (fix round 1 item 25 / review 155 Q7): this
+# check's ORIGINAL text named `POST /api/updates/apply`, wave 5's route to
+# move this box, before that wave landed — no such route exists on this repo
+# yet (`server/src/update/routes.ts` registers only `GET /api/updates`,
+# `POST /api/updates/intent`, `/refresh` and `/ack`, none of which "moves"
+# anything), so a box read with THIS wave's ccrc would have been told to
+# worry about a route that could not be reached because it did not exist. The
+# generic phrase stays true across every wave that adds a write route here,
+# which naming one by name cannot.
 # So this check is two measurements, and the obvious reading of each is wrong:
 #
 #   ARMED — CCRC_AUTH=on, read with the SERVER UNIT's precedence: ccrc.service
 #     carries two EnvironmentFile lines, ccrc.env then $CCRC_EXPOSURE_FILE, and
-#     for a key in both the LATER file wins. `ccrc expose` writes CCRC_AUTH=on
-#     into the exposure file and never into ccrc.env (`_exp_env_write`, D-162),
-#     so `_check_auth`'s ccrc.env-only read — deliberate THERE, where the
+#     for a key in both the LATER file wins, EVEN WHEN its value is empty —
+#     that is what a second `EnvironmentFile=` does, not merely what a
+#     non-empty override does. `ccrc expose` writes CCRC_AUTH=on into the
+#     exposure file and never into ccrc.env (`_exp_env_write`, D-162), so
+#     `_check_auth`'s ccrc.env-only read — deliberate THERE, where the
 #     question is the passphrase — would call every correctly exposed box
 #     unarmed. `_check_exposure`'s CCRC_HOST read above is the precedent this
-#     copies: the exposure file's NON-EMPTY value wins. Its one blind spot,
-#     named rather than implied: `_box_env_value` answers "" for an absent key
-#     AND for a bare `CCRC_AUTH=` line, so a hand-written bare line in the
-#     exposure file reads here as "not set" while systemd sets the variable
-#     empty (OFF) — a false PASS for ccrc.env=on beside it. `ccrc expose`
-#     never writes that line.
+#     copies, and BOTH arms below are told apart the same way (fix round 1
+#     item 7 / review 155 C13): PRESENCE, not a non-empty value, wins —
+#     `_box_env_value`'s own return code says whether the exposure file named
+#     the key AT ALL, told apart from the key printing empty because the file
+#     never mentioned it. A hand-written bare `CCRC_AUTH=` line now reads here
+#     exactly as systemd reads it: OFF, overriding ccrc.env=on, not "not set,
+#     fall back". `ccrc expose` itself never writes that bare line — this is
+#     the hand-edited case, and a doctor that folded it into "unset" was a
+#     false PASS over a gate that is actually off.
 #   REACHABLE — not the bind alone: a correctly exposed box keeps CCRC_HOST at
 #     its loopback default (config.ts) because Caddy on 443 proxies
 #     127.0.0.1. So reachable is a non-loopback CCRC_HOST (same precedence) OR
@@ -1768,14 +1779,19 @@ _check_update-exposure() {
   fi
 
   # ── ARMED ────────────────────────────────────────────────────────────────
-  local auth="" authsrc="" v=""
+  local auth="" authsrc="" v="" vrc=0
   if [ "$envok" -eq 1 ]; then
     auth="$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)"
     [ -z "$auth" ] || authsrc="$BOX_ENV_FILE"
   fi
   if [ "$expok" -eq 1 ]; then
-    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"
-    if [ -n "$v" ]; then auth="$v"; authsrc="$CCRC_EXPOSURE_FILE"; fi
+    # PRESENCE wins, not a non-empty value (fix round 1 item 7 / review 155
+    # C13): `_box_env_value`'s return code, 0 iff the exposure file named
+    # CCRC_AUTH at all — a bare `CCRC_AUTH=` line answers rc 0 with v="",
+    # which must still override ccrc.env's CCRC_AUTH=on, exactly as
+    # systemd's second EnvironmentFile does at runtime.
+    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"; vrc=$?
+    if [ "$vrc" -eq 0 ]; then auth="$v"; authsrc="$CCRC_EXPOSURE_FILE"; fi
   fi
 
   # ── REACHABLE ────────────────────────────────────────────────────────────
@@ -1785,8 +1801,12 @@ _check_update-exposure() {
     [ -z "$bindhost" ] || bindsrc="$BOX_ENV_FILE"
   fi
   if [ "$expok" -eq 1 ]; then
-    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_HOST)"
-    if [ -n "$v" ]; then bindhost="$v"; bindsrc="$CCRC_EXPOSURE_FILE"; fi
+    # The identical sibling defect, same fix (fix round 1 item 7): a bare
+    # `CCRC_HOST=` in the exposure file is systemd's own way of reasserting
+    # the loopback default over whatever ccrc.env named, not "no opinion,
+    # keep reading ccrc.env's bind".
+    v="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_HOST)"; vrc=$?
+    if [ "$vrc" -eq 0 ]; then bindhost="$v"; bindsrc="$CCRC_EXPOSURE_FILE"; fi
   fi
   local -a reach=()
   case "$bindhost" in
@@ -1814,7 +1834,7 @@ _check_update-exposure() {
   done
 
   if [ "$expunread" -eq 1 ]; then
-    _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether POST /api/updates/apply is gated — was not measured" \
+    _dr_warn update-exposure "$CCRC_EXPOSURE_FILE is there and cannot be read, so whether CCRC_AUTH is on — and so whether the update routes are gated — was not measured" \
       "look at what is really there (ls -ld $CCRC_EXPOSURE_FILE; the exposure check above says what it found), then re-run ccrc expose — it rewrites the file 0600"
     return 2
   fi
@@ -1823,7 +1843,7 @@ _check_update-exposure() {
     return 0
   fi
   if [ "${#reach[@]}" -gt 0 ]; then
-    _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — POST /api/updates/apply, and every other write route, answers anyone who can reach it" \
+    _dr_fail update-exposure "this box is reachable ($(_dr_join "${reach[@]}")) and CCRC_AUTH is not on in $BOX_ENV_FILE or $CCRC_EXPOSURE_FILE — the update routes, and every other write route, answer anyone who can reach it" \
       "arm the gate: ccrc expose (writes CCRC_AUTH=on with CCRC_RP_ID and CCRC_ORIGIN into $CCRC_EXPOSURE_FILE), or set all three in $BOX_ENV_FILE, then restart: $(_dr_restart_hint ccrc.service)"
     return 1
   fi
@@ -3753,6 +3773,75 @@ _check_pool-sync() {
   fi
 
   _dr_pass pool-sync "this box's account-pool projection ($f) is present and within its lease — the control plane is reaching it"
+}
+
+# ── update-sync: the EFFECT the puller's own ACTIVE state cannot prove ────
+# Fix round 1 item 6 / review 155 C3, same class as `_check_pool-sync` right
+# above (and the same gap `_inst_units`' own comment at ccd/ccrc:10696-10698
+# names for this exact sibling): `_check_services`' `known` array (:840)
+# measures `ccd-update-sync.timer`'s ACTIVATION state, which stays `active`
+# while its oneshot fails every run — a missing or rotated
+# `~/.cc-secrets/ccrc-mail.token` and a non-200 from the control plane both
+# print PASS there. Nothing else here reported `~/.ccrc/update-intent` at
+# all, so a fleet node whose puller has never once succeeded stayed green
+# while every `ccrc update` without --to refuses `unreadable (never
+# synced)`.
+#
+# Unlike pool-sync, this does NOT re-read the file and re-derive its own
+# verdict: `_upd_intent_state` (ccd/ccrc) is the ONE reader of this exact
+# grammar, already role-aware and already carrying the puller's own
+# re-checked value bounds (C23, fix round 1 item 15). A second parser here
+# would be the drift this file's own header warns against, for a document a
+# node's own `ccrc update`/`ccrc channel` already parse authoritatively.
+# This check calls it and reports its words, never its own.
+#
+# INSTALLED, not merely present, gates whether ABSENCE is even a finding —
+# same test `_check_pool-sync` uses (`CCRC_UNIT_DIR`/`_dr_unit_file`). A box
+# with no `ccd-update-sync.timer` file has no puller BY CONFIGURATION: only
+# a `--role fleet` install ever places this pair (`_inst_units`,
+# ccd/ccrc:10702-10717) — a server/both box's own process writes
+# `~/.ccrc/update-intent` itself, and macOS ships neither unit (timers are
+# systemd-only). `_upd_intent_state`'s own server/both and macOS arms are
+# consequently unreachable from here: this check only ever measures past the
+# SKIP on a box that HAS the puller.
+_check_update-sync() {
+  local unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-update-sync.timer)"
+  if [ ! -f "$unit_path" ]; then
+    _dr_skip update-sync "ccd-update-sync.timer is not installed on this box — no puller here (only a --role fleet install places it; a server/both box's own process writes ~/.ccrc/update-intent itself, and macOS ships no systemd timer)"
+    return 3
+  fi
+
+  _upd_intent_state
+  case "$UPD_INTENT_STATE" in
+    ok|none)
+      _dr_pass update-sync "this box's update-intent projection is present and within its lease — the control plane is reaching it"
+      return 0 ;;
+  esac
+
+  # GRACE, mirroring pool-sync's own (same constant, same reasoning: one
+  # tick for OnBootSec=45s/AccuracySec=10s slack plus one more so a doctor
+  # run landing mid-cycle is not itself the reason this goes red) — but ONLY
+  # for the "never synced" shape (`_upd_intent_state`'s own WHY for a fresh
+  # box: the timer file exists, the document does not). A file that exists
+  # and fails to parse, or has gone stale, had its chance; the grace is for
+  # a box that has not had one tick yet, never for a fixture the puller
+  # itself already wrote and got wrong.
+  if [ "$UPD_INTENT_WHY" = "never synced" ]; then
+    local update_sync_grace=$((2 * 60)) unit_mtime unit_age
+    unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
+    if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+      unit_age=$(($(date +%s) - unit_mtime))
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$update_sync_grace" ]; then
+        _dr_warn update-sync "update-sync-not-yet-synced: ccd-update-sync.timer was installed ${unit_age}s ago and ~/.ccrc/update-intent has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service))"
+        return 2
+      fi
+    fi
+  fi
+
+  _dr_fail update-sync "update-sync-${UPD_INTENT_STATE}: ~/.ccrc/update-intent is ${UPD_INTENT_STATE} (${UPD_INTENT_WHY}) — every 'ccrc update' without --to on this box refuses" \
+    "read the oneshot's own log ($(_dr_log_hint ccd-update-sync.service)) — a missing or rotated \$HOME/.cc-secrets/ccrc-mail.token and a non-200 from the control plane are the two measured causes; \`systemctl --user start ccd-update-sync.service\` forces an immediate retry once fixed"
+  return 1
 }
 
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and

@@ -30,6 +30,12 @@ interface Result { code: number; stdout: string; stderr: string }
 function plantHost(home: string, host: string, o: {
   role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean;
   caps?: string; floor?: string; checkState?: string; oldCheck?: boolean; channelLine?: string;
+  /** Fix round 1 item 4 / review 155 C34: the RAW bytes `cat
+   *  ~/.ccrc/update.json` answers on this host, read by rollout's own extra
+   *  read-only ssh ONLY after an exit-3 update. Undefined (the default) is a
+   *  pre-W4 box: no file, `cat` prints nothing, exactly `_rollout_exit3_detail`
+   *  must tolerate. */
+  updateJson?: string;
 } = {}): void {
   const d = join(home, 'hosts', host);
   mkdirSync(d, { recursive: true });
@@ -53,6 +59,12 @@ function plantHost(home: string, host: string, o: {
   optional('check-state', o.checkState);
   optional('old-check', o.oldCheck === true ? 'yes' : undefined);
   optional('channel-line', o.channelLine);
+  // No trailing newline forced — a real update.json ends in one `mv -f`'d
+  // JSON line, and a test that wants to probe a malformed byte stream plants
+  // it directly rather than through this helper.
+  const ujf = join(d, 'update-json');
+  if (o.updateJson !== undefined) writeFileSync(ujf, o.updateJson);
+  else if (existsSync(ujf)) rmSync(ujf);
 }
 
 function plantBox(home: string): void {
@@ -120,6 +132,13 @@ function plantBox(home: string): void {
     '  "ccrc channel")',
     '    [ -f "$d/channel-line" ] || { echo "ccrc: unknown argument: channel" >&2; exit 2; }',
     '    cat "$d/channel-line"; exit 0 ;;',
+    // Fix round 1 item 4 / review 155 C34: `_rollout_exit3_detail`'s own
+    // extra read-only ssh, sent ONLY after an exit-3 update. Absent file
+    // (the default) means a pre-W4 box: `cat` prints nothing, exit 0 —
+    // `_rollout_exit3_detail` must tolerate that, not die on it.
+    '  "cat ~/.ccrc/update.json 2>/dev/null")',
+    '    [ -f "$d/update-json" ] && cat "$d/update-json"',
+    '    exit 0 ;;',
     '  "ccrc version") echo "ccrc $sha (release, built 2026-09-18T00:00:00Z)"; [ -n "$ver" ] && echo "version $ver"; exit 0 ;;',
     '  *"/health"*)',
     '    hv="$ver"; [ -f "$d/health-version" ] && IFS= read -r hv < "$d/health-version"',
@@ -381,6 +400,44 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(updates(home2)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
   });
 
+  // Fix round 1 item 4 / review 155 C34, beside the doctor case right above:
+  // exit 3 carries TWO different deaths under one code (D-3114), and only
+  // the first has doctor FAIL lines to read. This box's own measured detail
+  // (read over rollout's extra read-only ssh) says the second.
+  it('a box that MOVED but whose FLOOR WRITE died (update exit 3, no doctor FAIL lines at all) gets its own sentence, never "read the … FAIL lines above" — the real cause, measured from the box (C34)', () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-died-');
+    plantHost(home, FLEET, {
+      role: 'fleet', version: 'v1.0.0', updateExit: 3,
+      updateJson: JSON.stringify({
+        target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2,
+        detail: 'the floor write died inside _inst_installed - the box moved; its floor was not raised',
+        from: 'rollout', pid: 12345,
+      }),
+    });
+    const r = run(home);
+    expect(r.code, r.stderr).toBe(3);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0, but its floor write died before ccrc doctor ever ran — its floor was not raised, not its health; its own report: .*floor was not raised$/m);
+    expect(r.stdout).not.toContain('read the fleet: FAIL lines above');
+    expect(r.stdout).toMatch(/^rollout: fleet v2\.0\.0 \(newsha00\) · server v2\.0\.0 \(newsha00\)/m);   // step 6 still ran
+    expect(r.stderr).not.toMatch(/stopped here/);
+    // The extra read-only ssh reached exactly the box that exited 3, exactly
+    // once — never the server box, which moved clean (exit 0).
+    const catCalls = sshCalls(home).filter((l) => l.includes('cat ~/.ccrc/update.json'));
+    expect(catCalls).toEqual([`${FLEET} cat ~/.ccrc/update.json 2>/dev/null`]);
+  });
+
+  // The tolerate-a-pre-W4-box half of the same item: no update.json at all
+  // (plantHost's default) still ends in the EXISTING doctor sentence, never
+  // a crash or a hang on the extra ssh's empty answer.
+  it('a pre-W4 box (no ~/.ccrc/update.json at all) on exit 3 falls back to the doctor sentence — tolerated, not a death', () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-prew4-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });   // no updateJson
+    const r = run(home);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0, but its doctor failed — read the fleet: FAIL lines above; that is the box's health, not the rollout's$/m);
+  });
+
   it('a box whose update failed its health gate (update exit 4) stops the rollout with its own sentence — the other box is never touched (design §11)', () => {
     // Exit 4 is "the gate failed and the box restored itself": NOT on the
     // target, so the rollout stops like any other non-zero — but the remedy
@@ -513,6 +570,13 @@ describe('ccrc rollout: the W4 check line, a box one wave older, the floor and t
     expect(r.stdout).toMatch(/^rollout: server: v1\.0\.0 \(oldsha00\) → v2\.0\.0 \[behind\]$/m);
     expect(r.stdout).toMatch(/^rollout: fleet: its check line lists no capabilities \(a ccrc older than W4 prints no caps=\) — it gets no --from rollout$/m);
     expect(r.stdout).not.toMatch(/^rollout: server: its check line lists no capabilities/m);
+    // Fix round 1 item 21 / review 155 C36: the SAME pre-W4 box's missing
+    // floor= gets a NOTE too, same shape as the missing caps= note right
+    // above — never a refusal (a refusal here would block the very first
+    // rollout onto this wave). The server box's check line names floor=none
+    // (a real, non-empty field), so it gets no such note.
+    expect(r.stdout).toMatch(/^rollout: fleet: its check line lists no floor= \(a ccrc older than W4 prints none\) — its floor is checked at its own install$/m);
+    expect(r.stdout).not.toMatch(/^rollout: server: its check line lists no floor=/m);
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0 --from rollout`]);
   });
 
