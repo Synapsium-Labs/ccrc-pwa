@@ -296,8 +296,10 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     // whose trace went missing is written unknown, never carried stale.
     expect(build).toContain('--traced "$RUNNER_TEMP/select-inputs/traced.txt"');
     // --map always names the fetch path, so select.mjs can say "no map restored at <path>" when none was fetched.
-    expect(job('select')).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map .ci-cache/testmap.json --trace-list .ci-cache/traced.txt)');
-    expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\.ci-cache\/testmap\.json\n {12}\.ci-cache\/traced\.txt\n {12}\.ci-cache\/testmap\.artifact$/m);
+    // Outside the checkout (final review FR-4): a pull request can commit `.ci-cache/testmap.json` into the tree.
+    expect(runScript(step(job('select'), 'Select'))).toContain('args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")\n');
+    expect(runScript(step(job('select'), 'Select'))).toContain('if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi\n');
+    expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {10}path: \|\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.json\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/traced\.txt\n {12}\$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.artifact$/m);
     // Handed over whenever anything is traced: a build needs the fetched map too, to tell news from old failures.
     expect(step(job('select'), 'Hand the map to map-build')).toMatch(/^ {8}if: steps\.select\.outputs\.trace != 'none'$/m);
   });
@@ -317,13 +319,13 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
-    expect(step(job('map-build'), 'Keep the map as an artifact')).toMatch(/^ {10}name: testmap\n {10}path: \.ci-cache\/testmap\.json\n/m);
+    expect(step(job('map-build'), 'Keep the map as an artifact')).toMatch(/^ {10}name: testmap\n {10}path: \$\{\{ runner\.temp \}\}\/ci-cache\/testmap\.json\n/m);
   });
 
   it('times-build merges the durations from the workspace root — the times CLI makes keys relative to its cwd', () => {
     const st = step(job('times-build'), 'Merge the durations');
     expect(st, 'a working-directory would make every key server-relative').not.toMatch(/working-directory:/);
-    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out .ci-cache/testtimes.json "$RUNNER_TEMP"/times/*/times.json');
+    expect(runScript(st)).toContain('node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json');
   });
 });
 
@@ -355,34 +357,52 @@ describe('ci.yml: maps and durations come ONLY from trusted main artifacts (ruli
     expect(read(CI)).not.toMatch(/actions\/cache/);
   });
 
+  it('no cache path inside the checkout — a pull request can commit `.ci-cache/testmap.json` (final review FR-4)', () => {
+    // gh's download extracts with O_EXCL: over a committed file it fails, the step goes on "without it", and select
+    // would read the PLANTED map — one that, at enforce, selects nothing. Every cache path lives under the runner's
+    // own temp directory, which no checkout writes.
+    expect(read(CI)).not.toContain('.ci-cache');
+    const fetch = runScript(step(job('select'), 'Fetch the newest trusted map and durations'));
+    expect(fetch).toContain('mkdir -p "$RUNNER_TEMP/ci-cache"\n');
+    expect(fetch).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache"; then\n');
+    expect(fetch).toContain('echo "$artifact_id" > "$RUNNER_TEMP/ci-cache/$name.artifact"\n');
+  });
+
   it('select fetches the newest trusted testmap and testtimes (main-artifact.mjs) and downloads them', () => {
     const st = step(job('select'), 'Fetch the newest trusted map and durations');
     const s = runScript(st);
     expect(s).toContain('for name in testmap testtimes; do');
     expect(s).toContain('node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name"');
-    expect(s).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D .ci-cache');
+    expect(s).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache"');
     // Run it with fakes: node answers run 77 / artifact 5 for testmap and nothing for testtimes; gh "downloads".
+    // The workspace carries a PLANTED `.ci-cache/testmap.json`, as a pull request could commit: nothing reads it.
     const ws = mkTmp('ccrc-ci-fetch-');
+    const rt = mkTmp('ccrc-ci-fetch-rt-');
+    mkdirSync(join(ws, '.ci-cache'));
+    writeFileSync(join(ws, '.ci-cache', 'testmap.json'), '{"planted":true}');
     const bin = fakeBin({
       node: 'case "$*" in *"--name testmap"*) printf "testmap: artifact 5\\nartifact_id=5\\nrun_id=77\\nhead_sha=%s\\n" "$(printf a%.0s $(seq 40))";; *) printf "testtimes: none\\nartifact_id=\\nrun_id=\\nhead_sha=\\n";; esac',
       gh: 'echo "gh $*" >> "$GH_LOG"; for d; do :; done; echo "{}" > "$d/testmap.json"',
     });
-    const r = runStep(st, ws, { PATH: `${bin}:${process.env.PATH}`, REPO: 'o/r', REPO_ID: '1', GH_LOG: join(ws, 'gh.log') });
+    const r = runStep(st, ws, { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: rt, REPO: 'o/r', REPO_ID: '1', GH_LOG: join(ws, 'gh.log') });
     expect(r.status).toBe(0);
-    expect(readFileSync(join(ws, '.ci-cache', 'testmap.artifact'), 'utf8')).toBe('5\n');
-    expect(existsSync(join(ws, '.ci-cache', 'testtimes.artifact'))).toBe(false);
-    expect(readFileSync(join(ws, 'gh.log'), 'utf8')).toBe('gh run download 77 --repo o/r -n testmap -D .ci-cache\n');
+    expect(readFileSync(join(rt, 'ci-cache', 'testmap.artifact'), 'utf8')).toBe('5\n');
+    expect(readFileSync(join(rt, 'ci-cache', 'testmap.json'), 'utf8')).toBe('{}\n');
+    expect(existsSync(join(rt, 'ci-cache', 'testtimes.artifact'))).toBe(false);
+    expect(readFileSync(join(ws, 'gh.log'), 'utf8')).toBe(`gh run download 77 --repo o/r -n testmap -D ${join(rt, 'ci-cache')}\n`);
+    expect(readFileSync(join(ws, '.ci-cache', 'testmap.json'), 'utf8'), 'the planted file is untouched and unread').toBe('{"planted":true}');
     // A failed download is no map (a full run), never a failed select — and records no artifact id.
     const ws2 = mkTmp('ccrc-ci-fetch-');
+    const rt2 = mkTmp('ccrc-ci-fetch-rt-');
     const failing = fakeBin({
       node: 'printf "artifact_id=5\\nrun_id=77\\nhead_sha=x\\n"',
       gh: 'echo "HTTP 410: artifact expired" >&2; exit 1',
     });
-    const r2 = runStep(st, ws2, { PATH: `${failing}:${process.env.PATH}`, REPO: 'o/r', REPO_ID: '1' });
+    const r2 = runStep(st, ws2, { PATH: `${failing}:${process.env.PATH}`, RUNNER_TEMP: rt2, REPO: 'o/r', REPO_ID: '1' });
     expect(r2.status).toBe(0);
     expect(r2.stdout).toContain('::warning::could not download testmap from run 77');
-    expect(existsSync(join(ws2, '.ci-cache', 'testmap.artifact'))).toBe(false);
-    expect(existsSync(join(ws2, '.ci-cache', 'testmap.json'))).toBe(false);
+    expect(existsSync(join(rt2, 'ci-cache', 'testmap.artifact'))).toBe(false);
+    expect(existsSync(join(rt2, 'ci-cache', 'testmap.json'))).toBe(false);
   });
 
   function casStep(): string { return step(job('map-build'), 'Is the map this refresh was built on still the newest?'); }
@@ -411,7 +431,7 @@ describe('ci.yml: maps and durations come ONLY from trusted main artifacts (ruli
     expect(jobKey(b, 'if')).not.toBeNull();
     expect(casStep()).toMatch(/^ {8}if: needs\.select\.outputs\.trace == 'refresh' && needs\.select\.outputs\.map_sha != ''$/m);
     expect(step(b, 'Keep the map as an artifact')).toMatch(/^ {8}if: steps\.cas\.outputs\.publish != 'false'$/m);
-    expect(step(job('times-build'), 'Keep the durations as an artifact')).toMatch(/^ {10}name: testtimes\n {10}path: \.ci-cache\/testtimes\.json\n/m);
+    expect(step(job('times-build'), 'Keep the durations as an artifact')).toMatch(/^ {10}name: testtimes\n {10}path: \$\{\{ runner\.temp \}\}\/ci-cache\/testtimes\.json\n/m);
   });
 });
 
@@ -479,7 +499,7 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
   });
 
   it('a build is handed the map select fetched as --old, when there was one; a refresh always is', () => {
-    expect(build(0).log).toMatch(/^\.github\/ci\/testmap\.mjs build --sha f{40} --records \S+ --out \.ci-cache\/testmap\.json$/m);
+    expect(build(0).log).toMatch(/^\.github\/ci\/testmap\.mjs build --sha f{40} --records \S+ --out \S+\/rt\/ci-cache\/testmap\.json$/m);
     expect(build(0, { handedMap: true }).log).toMatch(/^\.github\/ci\/testmap\.mjs build --sha f{40} --old \S+\/select-inputs\/testmap\.json --records /m);
     expect(build(0, { trace: 'refresh', mapSha: 'a'.repeat(40), handedMap: true }).log).toMatch(/^\.github\/ci\/testmap\.mjs refresh --sha f{40} --old \S+\/select-inputs\/testmap\.json /m);
   });

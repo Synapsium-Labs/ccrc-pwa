@@ -155,6 +155,10 @@ jobs:
       # scope a pull request can write. Nothing found, or a failed download,
       # means no map: a full run. The artifact id is kept for map-build's
       # check, just before it publishes, that this map is still the newest.
+      # Every cache path is under the runner's temp directory, never the
+      # checkout (final review FR-4): a pull request can commit a
+      # `testmap.json` into the tree, gh's download refuses to overwrite an
+      # existing file, and select would then read the planted map.
       - name: Fetch the newest trusted map and durations
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -162,15 +166,15 @@ jobs:
           REPO: ${{ github.repository }}
           REPO_ID: ${{ github.repository_id }}
         run: |
-          mkdir -p .ci-cache
+          mkdir -p "$RUNNER_TEMP/ci-cache"
           for name in testmap testtimes; do
             out=$(GITHUB_OUTPUT='' node .github/ci/main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name")
             printf '%s\n' "$out"
             run_id=$(printf '%s\n' "$out" | sed -n 's/^run_id=//p')
             artifact_id=$(printf '%s\n' "$out" | sed -n 's/^artifact_id=//p')
             if [ -n "$run_id" ]; then
-              if gh run download "$run_id" --repo "$REPO" -n "$name" -D .ci-cache; then
-                echo "$artifact_id" > ".ci-cache/$name.artifact"
+              if gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache"; then
+                echo "$artifact_id" > "$RUNNER_TEMP/ci-cache/$name.artifact"
               else
                 echo "::warning::could not download $name from run $run_id; going without it"
               fi
@@ -207,9 +211,9 @@ jobs:
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
         run: |
-          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map .ci-cache/testmap.json --trace-list .ci-cache/traced.txt)
+          args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ]; then args+=(--input-mode full); fi
-          if [ -f .ci-cache/testtimes.json ]; then args+=(--times .ci-cache/testtimes.json); fi
+          if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
           node .github/ci/select.mjs "${args[@]}"
       # map-build refreshes against EXACTLY the map this job diffed from, not
       # whatever is newest by the time it runs, and is told which tests this
@@ -219,17 +223,15 @@ jobs:
       # refresh that had no map) gets the fetched map too, if there was one:
       # only to tell a test that NEWLY fails under trace from one that already
       # did. traced.txt is always there, so the upload never finds nothing.
-      # Hidden directory, so upload-artifact must be told to include it.
       - name: Hand the map to map-build
         if: steps.select.outputs.trace != 'none'
         uses: actions/upload-artifact@v4
         with:
           name: select-inputs
           path: |
-            .ci-cache/testmap.json
-            .ci-cache/traced.txt
-            .ci-cache/testmap.artifact
-          include-hidden-files: true
+            ${{ runner.temp }}/ci-cache/testmap.json
+            ${{ runner.temp }}/ci-cache/traced.txt
+            ${{ runner.temp }}/ci-cache/testmap.artifact
           if-no-files-found: error
           retention-days: 3
 
@@ -747,7 +749,7 @@ jobs:
           TRACE_MATRIX: ${{ needs.select.outputs.trace_matrix }}
         run: |
           want=$(node -e 'console.log(JSON.parse(process.env.TRACE_MATRIX).include.length)')
-          mkdir -p "$RUNNER_TEMP/flat" .ci-cache
+          mkdir -p "$RUNNER_TEMP/flat" "$RUNNER_TEMP/ci-cache"
           got=0
           for d in "$RUNNER_TEMP"/records/records-*; do
             if [ -f "$d/records.json" ]; then cp "$d/records.json" "$RUNNER_TEMP/flat/$(basename "$d").json"; got=$((got + 1)); fi
@@ -765,9 +767,9 @@ jobs:
           if [ "$TRACE" = refresh ] && [ -n "$MAP_SHA" ]; then
             node .github/ci/testmap.mjs refresh --sha "$GITHUB_SHA" --old "$RUNNER_TEMP/select-inputs/testmap.json" \
               --records "$RUNNER_TEMP/flat" --live "$RUNNER_TEMP/live.txt" --traced "$RUNNER_TEMP/select-inputs/traced.txt" \
-              --out .ci-cache/testmap.json || rc=$?
+              --out "$RUNNER_TEMP/ci-cache/testmap.json" || rc=$?
           else
-            node .github/ci/testmap.mjs build --sha "$GITHUB_SHA" "${old[@]}" --records "$RUNNER_TEMP/flat" --out .ci-cache/testmap.json || rc=$?
+            node .github/ci/testmap.mjs build --sha "$GITHUB_SHA" "${old[@]}" --records "$RUNNER_TEMP/flat" --out "$RUNNER_TEMP/ci-cache/testmap.json" || rc=$?
           fi
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           # 3 and 4 come after the map is written: publish it, go red at the end.
@@ -802,8 +804,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: testmap
-          path: .ci-cache/testmap.json
-          include-hidden-files: true
+          path: ${{ runner.temp }}/ci-cache/testmap.json
           if-no-files-found: error
           retention-days: 14
       # Last, so the map above is published first: the Build step's
@@ -836,14 +837,13 @@ jobs:
           path: ${{ runner.temp }}/times
       - name: Merge the durations
         run: |
-          mkdir -p .ci-cache
-          node .github/ci/shards.mjs times --out .ci-cache/testtimes.json "$RUNNER_TEMP"/times/*/times.json
+          mkdir -p "$RUNNER_TEMP/ci-cache"
+          node .github/ci/shards.mjs times --out "$RUNNER_TEMP/ci-cache/testtimes.json" "$RUNNER_TEMP"/times/*/times.json
       - name: Keep the durations as an artifact
         uses: actions/upload-artifact@v4
         with:
           name: testtimes
-          path: .ci-cache/testtimes.json
-          include-hidden-files: true
+          path: ${{ runner.temp }}/ci-cache/testtimes.json
           if-no-files-found: error
           retention-days: 14
 
