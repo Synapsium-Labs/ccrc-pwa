@@ -11674,7 +11674,8 @@ Found while executing (2026-09-24, subagent-driven; each a controller ruling on 
 - **D-3501 — Task 8: `serverVerdict` reds `count: '0'` unless `tests: 'selected'`, and any unrecognised `tests`.**
   The plan's code greened `tests: full, count: 0, shards: skipped`: a required check green with zero server tests
   run. That is the shape Task 9's refusal note describes, closed there only on the select side. Commit `be77a58a`.
-  Mutation rows C, D, L and M were measured red.
+  The table's rows C and D were re-measured red. So were two new mutations measured in that fix round, outside the
+  table: the count-0 branch no longer requiring `tests: 'selected'`, and the unrecognised-`tests` check deleted.
 - **D-3502 — Task 10: `replay.mjs` refuses a `--repo` that does not carry the map's commit.** It exits 1, and a
   report prints `map: <sha>` after its `dataset:` line. The plan's CLI folded "absent at the map's commit" and "could
   not ask git" into one `false`, so a missing commit read every change as an add and raised recall silently. The
