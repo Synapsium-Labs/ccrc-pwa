@@ -347,6 +347,12 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - R1: case (vii)'s label reads F7, and D-3351's "for either" gains "for every row with a string head".
   - `wave-lifecycle.md`: a repeated `spent-unmeasured` usually means the child's branch no longer resolves (a hand
     rename), and the next run opens on a fresh child instead of retrying (review 147's dissenting refuter).
+- **Wave 4 also carries review 163's three test-text minors** from `child-tmpdir-bsd` (#185), in
+  `server/test/ccd-child-tmpdir.test.ts`:
+  - the census comment should name line continuation among its blind spots, or join `\`-continued lines first;
+  - "the decision lives in _spawn_start" should move out of the `describe.each(CHMODS)` block, or its plan
+    entry should be narrowed;
+  - the shim comment's "on macOS the real chmod is already BSD" should say it was measured on the CI runner.
 - **Wave 4 inherits, from wave 3's pre-flight:**
   - `is_ours` three-valued;
   - a `ws-reap` guard mirroring R31's symlinked-workdir refusal (`ws-reap` is human-gated but follows the link the

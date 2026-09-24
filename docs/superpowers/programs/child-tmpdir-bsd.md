@@ -16,7 +16,7 @@ and adds a pin that reds on LINUX, so the next regression cannot hide behind the
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `chmod -- 0700 "$dir"`; a BSD-order `chmod` shim that makes the rc-0 cases discriminate on Linux; a literal-absence census of `chmod`/`chown`/`chgrp` with an operand before `--` | ccd only (fleet box first) | #185 | wave-done 2026-09-24 (run 162 on `brisk-river`); numbers being defined, then review |
+| 1 | `chmod -- 0700 "$dir"`; a BSD-order `chmod` shim that makes the rc-0 cases discriminate on Linux; a literal-absence census of `chmod`/`chown`/`chgrp` with an operand before `--` | ccd only (fleet box first) | #185 | **merged** `3fd6c816` (v0.0.27, 2026-09-24 21:14 UTC; run 162 on `brisk-river`; review 163). Rollout waits on bright-river's answer about #184, which v0.0.27 also carries |
 
 **Deviation block: three numbers, the first of them 3510** (allocated at run-open, 2026-09-24; floor now 3513).
 The plan defines the first; no number of the block is spelled as a `D-` token here until a plan defines it.
@@ -54,6 +54,19 @@ single macOS worker on every main run since it landed. It is a separate red that
     00:37 and lapsed at 08:37:44 (`endedBy: hard-cap`), and wave 3 never re-took them. The brief's premise was stale,
     not the plan. Wave 3's worker is told to re-claim.
   - **macOS evidence pending.** CI run 36051524877 had not started either macOS leg at wave-done.
+
+- **2026-09-24 — review 163 (`3bde09d6`): accepted; merged as `3fd6c816` (#185).**
+  - **The panel.** 19 agents and four lenses; 5 findings survived (1 important, 4 minor), none refuted. The
+    reviewer reproduced mutation rows 1–3 itself (6 red; the control turns the 5 behaviour cases green; 1 red).
+  - **Measured on macOS at the tip.** test-macos 2/2, job 107809367324: `ccd-child-tmpdir.test.ts` 39/39, with
+    all 19 BSD-order cases, and `ccd-ws-add-child.test.ts` 19 + 1 skip, including the case #184's leg failed.
+  - **Ruling.** Nothing is a behaviour defect, so there is no fix round.
+    - F1 (the PR body lacks the macOS job id): the evidence is carried in the squash commit body and here.
+    - F2 (the census comment omits the line-continuation blind spot), F3 (one non-chmod case duplicated under
+      `describe.each`, against 3512's wording) and F5 (a runner-specific macOS sentence) ride child-reclamation
+      wave 4 as test-text items.
+    - F4 (unticked checkboxes): nothing to do.
+  - **Run 162 closed final.**
 
 ## Carried constraints
 
