@@ -22,14 +22,20 @@
 name: ci
 
 # Least privilege, stated rather than inherited (2026-08-23). The default for
-# this repo already computes to read-only, and no job here needs more — CI only
-# reads the tree and runs suites. Declaring it means a later job that DOES want
-# write has to ask in the diff, where a reviewer sees it, instead of silently
-# receiving whatever the org default happens to be that week. Especially worth
-# fixing before the repo is public: `pull_request` (not `pull_request_target`)
-# already gives a fork's run a read-only token and no secrets, and this keeps
-# that true if the org default is ever loosened. The one job that asks for
-# more is `select`, and what it asks for is `checks: read` — in the diff.
+# this repo already computes to read-only, and no job here needs to write —
+# CI only reads the tree and the Actions API, and runs suites. Declaring it
+# means a later job that DOES want write has to ask in the diff, where a
+# reviewer sees it, instead of silently receiving whatever the org default
+# happens to be that week. Especially worth fixing before the repo is public:
+# `pull_request` (not `pull_request_target`) already gives a fork's run a
+# read-only token and no secrets, and this keeps that true if the org default
+# is ever loosened. Two jobs ask for more than this, each in its own
+# `permissions:` block, and each for exactly `contents: read` plus
+# `actions: read`: `select` (it lists and downloads the trusted main runs'
+# map and durations, and on the daily run lists the workflow runs and jobs
+# of main's head to find a green full-suite), and `map-build` (its check,
+# just before a refresh publishes, that the map it was built on is still the
+# newest trusted one). No job reads check runs, and none asks for any write.
 permissions:
   contents: read
 
@@ -94,13 +100,12 @@ jobs:
     name: select tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # checks: read — the daily run asks whether main's head already carries a
-    # green `full-suite` check before it spends an hour proving it again.
     # actions: read — the map and the durations are artifacts of trusted
-    # main runs, listed and downloaded here.
+    # main runs, listed and downloaded here; and the daily run lists the
+    # workflow runs and jobs of main's head to ask whether it already
+    # carries a green `full-suite` before it spends an hour proving it again.
     permissions:
       contents: read
-      checks: read
       actions: read
     outputs:
       tests: ${{ steps.select.outputs.tests }}
@@ -171,23 +176,29 @@ jobs:
               fi
             fi
           done
-      # Any failure to read the checks answers "not green", which runs the
-      # suite — the safe direction.
+      # The stable gate's question (release-stable.yml), asked by the same
+      # module: a run spec §8 names — this workflow's daily or manual full
+      # run on main, or an earlier gate — of THIS commit, with a green
+      # full-suite job. Never a pull request's run: its checks sit on the
+      # head sha, but it tested the merge ref (final review FR-1). Only
+      # `found=true` skips the day; `found=false`, and ANY failure of the
+      # CLI, answer "not green", which runs the suite — the safe direction.
       - name: Does this commit already carry a green full-suite?
         id: green
         if: github.event_name == 'schedule'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
           SHA: ${{ github.sha }}
         run: |
-          if ids=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-              --jq '.check_runs[] | select(.conclusion == "success" and .app.slug == "github-actions" and (.name == "full-suite" or (.name | endswith("/ full-suite")))) | .id'); then
-            if [ -n "$ids" ]; then echo "full_green=true" >> "$GITHUB_OUTPUT"; else echo "full_green=false" >> "$GITHUB_OUTPUT"; fi
+          full_green=false
+          if answer=$(node .github/ci/main-artifact.mjs green-full-suite --repo "$REPO" --repo-id "$REPO_ID" --sha "$SHA"); then
+            if [ "$answer" = found=true ]; then full_green=true; fi
           else
-            echo "::warning::could not read this commit's check runs; running the full suite rather than skipping it"
-            echo "full_green=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not read this commit's workflow runs; running the full suite rather than skipping it"
           fi
+          echo "full_green=$full_green" >> "$GITHUB_OUTPUT"
       - name: Select
         id: select
         env:
@@ -837,9 +848,11 @@ jobs:
   # THE STABLE GATE'S EVIDENCE (design 2026-09-23 §8). Exists only in `full`
   # mode, and is green iff every leg is — the Linux shards through their
   # summary, the typecheck, agent, pwa, the build, and the macOS shards.
-  # release-stable.yml looks for a successful check run with this name on the
-  # commit it promotes (`<caller job> / full-suite` when this file was called),
-  # and reads the `verdict` output when it called this file itself.
+  # release-stable.yml looks for a successful job with this name in a trusted
+  # run of the commit it promotes — this file's daily or manual full run on
+  # main, or its own earlier call (`<caller job> / full-suite`), never a pull
+  # request's run (main-artifact.mjs green-full-suite) — and reads the
+  # `verdict` output when it called this file itself.
   full-suite:
     needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos]
     if: always() && needs.select.outputs.tests == 'full'

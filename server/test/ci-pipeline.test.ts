@@ -233,9 +233,26 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(job('select')).toContain('--selection "$CCRC_SELECTION"');
   });
 
-  it('select asks for contents: read, checks: read and actions: read, and nothing else', () => {
-    // actions: read — to list and download the trusted main artifacts the map and durations come from.
-    expect(job('select')).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}checks: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+  it('select asks for contents: read and actions: read, and nothing else', () => {
+    // actions: read — to list and download the trusted main artifacts the map and durations come from, and to
+    // list the workflow runs and jobs that say whether main's head already carries a green full-suite (FR-1).
+    expect(job('select')).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+    // Nothing reads check runs any more: the evidence is a trusted RUN, not a check's name.
+    expect(read(CI)).not.toMatch(/checks:|check-runs|--jq/);
+  });
+
+  it('the least-privilege comment names every job that asks for more than contents: read (FR-6)', () => {
+    // Derived, not listed: every job with a `permissions:` block of its own, against the top comment's census.
+    const own = [...jobs(read(CI))].filter(([, b]) => /^ {4}permissions:$/m.test(b)).map(([id]) => id).sort();
+    expect(own).toEqual(['map-build', 'select']);
+    const comment = /^# Least privilege, stated rather than inherited[\s\S]*?(?=^permissions:)/m.exec(read(CI))?.[0] ?? '';
+    expect(comment, 'the least-privilege comment is gone').not.toBe('');
+    for (const id of own) {
+      expect(comment, `the comment does not name ${id}`).toContain(`\`${id}\``);
+      expect(job(id), `${id} asks for more than contents: read + actions: read`)
+        .toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+    }
+    expect(comment).toContain('Two jobs ask for more than this');
   });
 
   it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
@@ -509,34 +526,49 @@ describe('ci.yml: a pull request that changes the pipeline runs everything, deci
   });
 });
 
-describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 2026-09-23 §3)', () => {
-  // Run the step's own script, with a fake `gh` on PATH, under the runner's
-  // default shell (`bash --noprofile --norc -eo pipefail`). A gh that fails —
-  // rate limit, network — must answer `full_green=false`, which runs the full
-  // suite; anything else would turn an API hiccup into a skipped daily run.
-  function ask(gh: string): { status: number | null, output: string } {
+describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 2026-09-23 §3, final review FR-1)', () => {
+  // The same question the stable gate asks — main-artifact.mjs green-full-suite, which counts only a run spec §8
+  // names (unit-tested in ci-main-artifact.test.ts). Run the step's own script, with a fake `node` on PATH, under
+  // the runner's default shell (`bash --noprofile --norc -e`). Only `found=true` skips the day; `found=false` and
+  // ANY failure of the CLI — rate limit, network, a malformed answer — must answer `full_green=false`, which runs
+  // the full suite: anything else would turn an API hiccup into a skipped daily run.
+  function ask(node: string): { status: number | null, output: string, log: string } {
     const dir = mkTmp('ccrc-ci-green-');
     mkdirSync(join(dir, 'bin'));
-    writeFileSync(join(dir, 'bin', 'gh'), `#!/bin/sh\n${gh}\n`);
+    writeFileSync(join(dir, 'bin', 'node'), `#!/bin/sh\necho "$*" >> "${join(dir, 'node.log')}"\n${node}\n`);
+    chmodSync(join(dir, 'bin', 'node'), 0o755);
+    // A poison, so a regression back to `gh` can never reach the host's own (token-carrying) gh.
+    writeFileSync(join(dir, 'bin', 'gh'), '#!/bin/sh\necho "gh must not run here" >&2\nexit 97\n');
     chmodSync(join(dir, 'bin', 'gh'), 0o755);
+    writeFileSync(join(dir, 'node.log'), '');
     const script = join(dir, 'step.sh');
     writeFileSync(script, runScript(step(job('select'), 'Does this commit already carry a green full-suite?')));
     const out = join(dir, 'out');
     writeFileSync(out, '');
-    const r = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', script], {
-      env: { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, GITHUB_OUTPUT: out, GH_TOKEN: 'x', REPO: 'o/r', SHA: 'f'.repeat(40) },
+    const r = spawnSync('bash', ['--noprofile', '--norc', '-e', script], {
+      env: { PATH: `${join(dir, 'bin')}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_TOKEN: 'x', REPO: 'o/r', REPO_ID: '1001', SHA: 'f'.repeat(40) },
       encoding: 'utf8',
     });
-    return { status: r.status, output: readFileSync(out, 'utf8') };
+    return { status: r.status, output: readFileSync(out, 'utf8'), log: readFileSync(join(dir, 'node.log'), 'utf8') };
   }
 
-  it('gh fails -> full_green=false, and the step itself succeeds', () => {
-    expect(ask('echo "API rate limit exceeded" >&2; exit 1')).toEqual({ status: 0, output: 'full_green=false\n' });
+  it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
+    const st = step(job('select'), 'Does this commit already carry a green full-suite?');
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule'$/m);
+    expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
+    expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
 
-  it('gh finds a green full-suite -> full_green=true; finds none -> false', () => {
-    expect(ask('echo 123')).toEqual({ status: 0, output: 'full_green=true\n' });
-    expect(ask('exit 0')).toEqual({ status: 0, output: 'full_green=false\n' });
+  it('found=true -> full_green=true; found=false -> false', () => {
+    expect(ask('echo found=true')).toMatchObject({ status: 0, output: 'full_green=true\n' });
+    expect(ask('echo found=false')).toMatchObject({ status: 0, output: 'full_green=false\n' });
+  });
+
+  it('the CLI fails -> full_green=false, and the step itself succeeds; so does an answer that is not found=true', () => {
+    expect(ask('echo "HTTP 403: API rate limit exceeded" >&2; exit 1')).toMatchObject({ status: 0, output: 'full_green=false\n' });
+    expect(ask('echo found=true; exit 1')).toMatchObject({ status: 0, output: 'full_green=false\n' });
+    expect(ask('exit 0')).toMatchObject({ status: 0, output: 'full_green=false\n' });
+    expect(ask('echo found=truest')).toMatchObject({ status: 0, output: 'full_green=false\n' });
   });
 });
 

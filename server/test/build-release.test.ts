@@ -548,7 +548,7 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(wf()).toMatch(/^concurrency:\n  group: release-stable\n  cancel-in-progress: false$/m);
   });
 
-  it('promote asks for contents: write and nothing else — it flips flags, it signs nothing; the gate reads checks only', () => {
+  it('promote asks for contents: write and nothing else — it flips flags, it signs nothing; the gate reads runs only', () => {
     const src = wf();
     // The lookahead (as `expectAttestingWorkflow` above uses) forbids ANY
     // further permission line, not just the five named below — a
@@ -556,14 +556,19 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     // substring pin.
     expect(stableJob('promote')).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
     expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests):/);
-    // design 2026-09-23 §8: the gate READS check runs and nothing else, and
-    // the called ci.yml gets what its select job asks for — a called
+    // design 2026-09-23 §8 (final review FR-1): the gate checks out the
+    // module that judges the evidence (`contents: read`) and READS the
+    // commit's workflow runs and their jobs (`actions: read`) — nothing
+    // else. The called ci.yml gets what its jobs ask for — a called
     // workflow's jobs can never hold more than the calling job grants, and
-    // select reads the trusted main artifacts (`actions: read`, ruling T4).
-    // `actions:` appears in `full` and nowhere else in this file.
-    expect(stableJob('gate')).toMatch(/^    permissions:\n      checks: read(?!\n      [a-z-]+:)$/m);
-    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      checks: read\n      actions: read(?!\n      [a-z-]+:)$/m);
-    expect(src.replace(stableJob('full'), ''), 'actions: outside full').not.toMatch(/actions:/);
+    // select reads the trusted main artifacts and the same runs listing
+    // (`actions: read`, ruling T4). `actions:` appears in `gate` and `full`
+    // and nowhere else in this file; `checks:` nowhere — nothing reads
+    // check runs any more.
+    expect(stableJob('gate')).toMatch(/^    permissions:\n      contents: read\n      actions: read(?!\n      [a-z-]+:)$/m);
+    expect(stableJob('full')).toMatch(/^    permissions:\n      contents: read\n      actions: read(?!\n      [a-z-]+:)$/m);
+    expect(src.replace(stableJob('full'), '').replace(stableJob('gate'), ''), 'actions: outside gate and full').not.toMatch(/actions:/);
+    expect(src, 'nothing reads check runs any more').not.toMatch(/checks:/);
     expect(src.match(/: write$/gm), 'one write grant in the whole file — promote\'s').toHaveLength(1);
   });
 
@@ -591,39 +596,32 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     expect(ids).toEqual(['gate', 'full', 'promote']);
   });
 
-  it('gate looks for a successful full-suite check run on the pushed commit, exactly as ci.yml\'s daily skip does', () => {
+  // The evidence is a RUN spec §8 names, judged by main-artifact.mjs (final
+  // review FR-1) — not a check run's name, which a pull_request run's checks
+  // on the same head sha also carry while that run tested the merge ref.
+  // Which runs count is unit-tested in ci-main-artifact.test.ts; here, that
+  // the gate asks that module, and what it does with the answer.
+  it('gate checks out the tree and asks main-artifact.mjs green-full-suite about the pushed commit', () => {
     const g = stableJob('gate');
     expect(g).toMatch(/^    timeout-minutes: 5$/m);
     expect(g).toMatch(/^      found: \$\{\{ steps\.look\.outputs\.found \}\}$/m);
-    expect(g).toContain('SHA: ${{ github.sha }}');
-    expect(g).toContain('REPO: ${{ github.repository }}');
-    expect(g).toContain('GH_TOKEN: ${{ github.token }}');
-    // ONE matcher, two copies that must agree: the daily run skips itself on
-    // it, and the gate promotes on it. `/ full-suite` is how a job inside a
-    // called workflow is named (`<caller job> / <called job>`).
-    const jq = (src: string): string => {
-      const m = /--jq '(\.check_runs\[\] \| select\(.*\) \| \.id)'/.exec(src);
-      expect(m, 'no check-run matcher found').not.toBeNull();
-      return m![1];
-    };
-    const mine = jq(g);
-    expect(mine).toContain('.conclusion == "success"');
-    expect(mine).toContain('.name == "full-suite"');
-    expect(mine).toContain('.name | endswith("/ full-suite")');
-    expect(mine).toContain('.app.slug == "github-actions"');
-    expect(jq(readFileSync(join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8'))).toBe(mine);
+    const gateSteps = g.split(/^(?= {6}- )/m).filter((p) => /^ {6}- /.test(p));
+    expect(gateSteps.map((st) => /^ {6}- (?:name: (.*)|uses: (.*))$/m.exec(st)?.slice(1).find(Boolean))).toEqual([
+      'actions/checkout@v4', 'Look for a green full-suite on this commit',
+    ]);
+    const look = gateSteps[1];
+    expect(look).toMatch(/^ {8}id: look$/m);
+    expect(look).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
+    expect(look, 'no shell override: the runner default is `bash -e`, which fails the step on a failed CLI').not.toMatch(/shell:|continue-on-error/);
+    expect(wf(), 'the check-run matcher is gone').not.toMatch(/--jq|check-runs/);
   });
 
   // Pinned by EXECUTION, not by regex (round-1 fix, F12-1): a text pin of a
-  // shell `if`/`echo` branch binds its spelling, not its effect — the
-  // reviewer measured `if [ -n "$ids" ]` swapped for `if [ -z "$ids" ]`, and
-  // `found=true` written on both arms, each keeping the regex pins above
-  // green. So the `look` step's own script is extracted, run for real under
-  // GitHub's default `run:` shell (`bash --noprofile --norc -e {0}` on
-  // ubuntu — NOT `-o pipefail`; there is no pipe here, only a command
-  // substitution, and `-e` alone already aborts on its failure, measured),
-  // against a fake `gh` on PATH that logs its argv and answers per case.
-  it('the look step DECIDES found by running it: a green check -> true, none -> false, a failed gh call -> the step fails and found is never written', () => {
+  // shell branch binds its spelling, not its effect. So the `look` step's own
+  // script is extracted and run for real under GitHub's default `run:` shell
+  // (`bash --noprofile --norc -e {0}` on ubuntu — NOT `-o pipefail`), with a
+  // fake `node` on PATH that logs its argv and answers per case.
+  it('the look step DECIDES found by running it: found=true -> true, found=false -> false, a failed or silent CLI -> the step fails and found is never written', () => {
     const script = ((): string => {
       const src = stableJob('gate');
       const lines = src.split('\n');
@@ -639,9 +637,9 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
     })();
 
     const SHA = 'a'.repeat(40);
-    /** Runs the extracted `look` script for real, with a fake `gh` on PATH
-     *  that logs its argv to `gh.log` and then runs `ghBehavior`. */
-    const run = (ghBehavior: string): { status: number | null, output: string, ghLog: string } => {
+    /** Runs the extracted `look` script for real, with a fake `node` on PATH
+     *  that logs its argv to `node.log` and then runs `nodeBehavior`. */
+    const run = (nodeBehavior: string): { status: number | null, output: string, nodeLog: string } => {
       const dir = mkTmp('release-stable-gate-');
       const scriptFile = join(dir, 'look.sh');
       writeFileSync(scriptFile, script);
@@ -649,35 +647,45 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
       writeFileSync(out, '');
       const binDir = join(dir, 'bin');
       mkdirSync(binDir);
-      const ghLog = join(dir, 'gh.log');
-      writeFileSync(ghLog, '');
-      writeFileSync(join(binDir, 'gh'), `#!/bin/sh\necho "$*" >> "${ghLog}"\n${ghBehavior}\n`);
+      const nodeLog = join(dir, 'node.log');
+      writeFileSync(nodeLog, '');
+      writeFileSync(join(binDir, 'node'), `#!/bin/sh\necho "$*" >> "${nodeLog}"\n${nodeBehavior}\n`);
+      chmodSync(join(binDir, 'node'), 0o755);
+      // A poison, so a regression back to `gh` can never reach the host's own (token-carrying) gh.
+      writeFileSync(join(binDir, 'gh'), '#!/bin/sh\necho "gh must not run here" >&2\nexit 97\n');
       chmodSync(join(binDir, 'gh'), 0o755);
-      const r = spawnSync('bash', ['--noprofile', '--norc', '-e', scriptFile], {
-        env: { PATH: `${binDir}:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: out, REPO: 'o/r', SHA },
+      const r = spawnSync(BASH, ['--noprofile', '--norc', '-e', scriptFile], {
+        env: { PATH: `${binDir}:${process.env.PATH ?? ''}`, GITHUB_OUTPUT: out, REPO: 'o/r', REPO_ID: '1001', SHA },
         encoding: 'utf8',
       });
-      return { status: r.status, output: readFileSync(out, 'utf8'), ghLog: readFileSync(ghLog, 'utf8') };
+      return { status: r.status, output: readFileSync(out, 'utf8'), nodeLog: readFileSync(nodeLog, 'utf8') };
     };
 
-    // (1) gh finds a check run -> found=true, and it asked the right question.
-    const found = run('echo 123');
+    // (1) the module finds a green full-suite -> found=true, and it asked the right question.
+    const found = run('echo found=true');
     expect(found.status).toBe(0);
     expect(found.output).toBe('found=true\n');
-    expect(found.ghLog).toContain(`repos/o/r/commits/${SHA}/check-runs?per_page=100`);
-    expect(found.ghLog).toContain('--paginate');
+    expect(found.nodeLog).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${SHA}\n`);
 
-    // (2) gh answers, but finds nothing -> found=false.
-    const none = run('exit 0');
+    // (2) it answers, and finds nothing -> found=false.
+    const none = run('echo found=false');
     expect(none.status).toBe(0);
     expect(none.output).toBe('found=false\n');
 
-    // (3) the API call itself fails -> the step fails, and promotes nothing:
-    // a failed gate must never assert found=false (that would run `full`
-    // needlessly) or found=true (that would promote unproven).
-    const failed = run('exit 1');
+    // (3) the module fails (an API error, a malformed answer) -> the step
+    // fails, and promotes nothing: a failed gate must never assert
+    // found=false (that would run `full` needlessly) or found=true (that
+    // would promote unproven).
+    const failed = run('echo "HTTP 502" >&2; exit 1');
     expect(failed.status).not.toBe(0);
     expect(failed.output).not.toMatch(/found=/);
+
+    // (4) it exits 0 but answers nothing -> the step fails too, loudly,
+    // instead of leaving `found` empty (which would skip both `full` and
+    // `promote` with a green gate).
+    const silent = run('exit 0');
+    expect(silent.status).not.toBe(0);
+    expect(silent.output).not.toMatch(/found=/);
   });
 
   it('full runs only when the gate found nothing, and runs ci.yml itself in full mode', () => {
