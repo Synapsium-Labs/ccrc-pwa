@@ -180,11 +180,10 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
   }
   // D-3351: a null `tip` already means "not measured" on both sides —
   // `ccd/ccd`'s branch-drift comment and `CcdPrLine`'s own docstring in
-  // prstate.ts both say so, for the branch the registry named not resolving
-  // for ccd, most often a hand rename or delete. Treating an ABSENT tip key
-  // the same way is this round's own extension, not something either source
-  // states: a line that never looked at this branch's history should read "I
-  // did not look" as "there is nothing to find", not fall through to `phaseFor`.
+  // prstate.ts both say so, for a branch not resolving for ccd, most often
+  // a hand rename or delete. An ABSENT tip key is D-3351's own extension:
+  // falling through to `phaseFor` on a line that never looked would read
+  // "I did not look" as "there is nothing to find".
   if (typeof line.tip !== 'string') {
     return { kind: 'unmeasured',
       detail: "pr-state could not resolve this session's branch (tip unmeasured)" };

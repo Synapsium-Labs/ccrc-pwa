@@ -258,7 +258,7 @@ describe('childSpent — the live lookup', () => {
   // stayed green because the only OTHER tip-unmeasured case, (x), sends
   // `tip:null` explicitly — no case before this one covered a tip key that is
   // ABSENT rather than null (`fullLine` defaults `tip` to a measured 40-hex
-  // sha, which every other case here relies on).
+  // sha, which the `fullLine` cases rely on).
   it('(xii) a line whose tip KEY IS ABSENT (never sent, not merely null) → unmeasured', async () => {
     const stdout = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: BRANCH, ahead: 1, checkedAt: 1 });
     const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
