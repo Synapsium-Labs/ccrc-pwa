@@ -297,3 +297,37 @@ describe('useUpdatesView — the one poll of /api/updates', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 });
+
+// Task 9 (D-3307): a stamp the sweep could not READ is
+// an unmeasured current, not an unversioned one — W2's toNodeWire sets
+// `current` to null for it, and nodeVersion alone cannot tell the two apart.
+describe('pendingTag — a stamp that was not READ draws no arrow', () => {
+  it('reads unreadable, malformed, absent and a missing stampRead as "no arrow", never as unversioned', () => {
+    for (const stampRead of ['unreadable', 'malformed', 'absent'] as const) {
+      expect(pendingTag(node({ stampRead, current: null, desiredTag: 'v0.0.10' })), stampRead).toBeNull();
+    }
+    const missing = { ...node({ current: null, desiredTag: 'v0.0.10' }), stampRead: undefined } as unknown as NodeWire;
+    expect(pendingTag(missing), 'stampRead absent from the element').toBeNull();
+  });
+
+  it('the control: an unversioned stamp that WAS read still points at its desired tag', () => {
+    const { version: _v, ...untagged } = node().current!;
+    void _v;
+    expect(pendingTag(node({ current: untagged, desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+  });
+});
+
+// Task 9 (D-3309): a macOS node is not centrally managed
+// (decision 17), and W2's resolver resolves it like any other, so its desired
+// tag can be set. The rule lives HERE, in the one arrow predicate, so the
+// inventory row, the update banner and BuildLine cannot disagree about it.
+describe('pendingTag — a macOS node draws no arrow (not centrally managed, decision 17)', () => {
+  it('answers null for os darwin with a newer desired tag, a resolved channel and a read stamp', () => {
+    expect(pendingTag(node({ os: 'darwin', desiredTag: 'v0.0.10' }))).toBeNull();
+  });
+
+  it('the control: the same node on linux, and on an os the caps file did not name, still points up', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+    expect(pendingTag(node({ os: 'unknown', desiredTag: 'v0.0.10' }))).toBe('v0.0.10');
+  });
+});

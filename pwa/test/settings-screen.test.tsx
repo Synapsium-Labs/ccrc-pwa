@@ -18,12 +18,13 @@ import type { BuildInfo } from '../../shared/buildinfo';
 import type { CatalogueState, NodeWire, ReleaseWire, UpdateIntentWire, UpdatesView } from '../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, UPDATE_GATE_CAP } from '../../shared/api';
 import {
-  AUTO_LABELS, CHANNEL_SENTENCES, SettingsScreen, autoGateMissing, catalogueLine, catalogueReasonText, clockTime,
-  dayClock, refusedLine, releaseDate, releaseDirection, sortReleases, verifiedAt,
+  ACK_UNREADABLE_TEXT, AUTO_LABELS, CHANNEL_SENTENCES, MACOS_UNMANAGED_TEXT, SettingsScreen, autoGateMissing,
+  canAck, catalogueLine, catalogueReasonText, clockTime, currentIsAmber, currentText, dayClock, nodeStateLine,
+  reachabilityLine, refusedLine, releaseDate, releaseDirection, requestLine, sortReleases, verifiedAt,
 } from '../src/screens/SettingsScreen';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
-import { ApiError, MOVE_DISABLED_TEXT, api } from '../src/lib/api';
+import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
 import { declValue, ruleIn } from './cssRule';
 
@@ -702,5 +703,324 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     const rule = ruleIn(css, '.settings-release-notes');
     expect(declValue(rule, 'white-space')).toBe('pre-wrap');
     expect(declValue(rule, 'overflow-wrap')).toBe('anywhere');
+  });
+});
+
+// ── Task 9: the node inventory (design 2026-09-20 §13, §18) ──────────────────
+// Local fixtures on purpose, as Task 8's are: a shared module-level `node()`
+// would couple four tasks' cases to one shape nobody owns.
+const T9_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
+const T9_NODE_A = '33333333-3333-4333-8333-333333333333';
+const T9_NODE_B = '44444444-4444-4444-8444-444444444444';
+const T9_MIN = 60_000;
+/** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
+const t9Stamp = (version: string | undefined): BuildInfo => ({
+  sha: 'b'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
+  ...(version === undefined ? {} : { version }),
+});
+/** A full NodeWire, every field W2 Task 1 declares: measured, reachable, verified, settled, and current. */
+const t9Node = (over: Partial<NodeWire> = {}): NodeWire => ({
+  nodeId: T9_NODE_A, role: 'fleet', label: 'fleet', os: 'linux',
+  current: t9Stamp('v0.0.9'), stampRead: 'ok', installState: 'complete', provenance: 'verified',
+  caps: ['verify', 'node-id', 'floor', 'update-gate'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+  floorRead: 'measured', previousRead: 'absent',
+  measuredAt: T9_T0, reachable: true, unreachableSince: null,
+  channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+  request: null, report: null,
+  update: { state: 'idle', target: null, startedAt: null, detail: null },
+  ...over,
+});
+const t9Server = (over: Partial<NodeWire> = {}): NodeWire =>
+  t9Node({ nodeId: T9_NODE_B, role: 'server', label: 'server', agentOps: null, ...over });
+const t9Release = (tag: string, over: Partial<ReleaseWire> = {}): ReleaseWire => ({
+  tag, version: tag, channel: 'stable', publishedAt: T9_T0, commitSha: 'd'.repeat(40),
+  bundleListed: true, yanked: false, refused: [], notes: null, ...over,
+});
+/** A label placeholder exactly as W2's markUnreachable writes one: keyed by its LABEL (no node-id file was ever
+ *  read), never measured, stamp unreadable, unknowns, caps empty, agentOps null for a non-fleet role. */
+const t9Placeholder = (over: Partial<NodeWire> = {}): NodeWire => t9Server({
+  nodeId: 'server', measuredAt: null, current: null, stampRead: 'unreadable', installState: 'unknown', provenance: 'unknown',
+  os: 'unknown', caps: [], highestVersion: null, floorRead: 'unmeasured', previousRead: 'unmeasured', reachable: false, unreachableSince: T9_T0,
+  // floorRead 'unmeasured' (D-3213): W2's resolver stores no desired for a placeholder, only this sentence
+  desiredTag: null, resolveDetail: "this node's floor has not been measured — nothing resolves until it is", ...over,
+});
+
+describe('SettingsScreen — the node inventory: helpers', () => {
+  it('currentText keeps "not measured", "stamp <word>" and "unversioned" apart (§18 "stampRead keeps EACCES from unversioned")', () => {
+    expect(currentText(t9Node())).toBe('v0.0.9');
+    expect(currentText(t9Node({ current: t9Stamp(undefined) })), 'read, no tag').toBe('unversioned');
+    expect(currentText(t9Node({ stampRead: 'unreadable', current: null })), 'EACCES').toBe('stamp unreadable');
+    expect(currentText(t9Node({ stampRead: 'malformed', current: null }))).toBe('stamp malformed');
+    expect(currentText(t9Node({ stampRead: 'absent', current: null }))).toBe('stamp absent');
+    expect(currentText(t9Node({ stampRead: 'later' as unknown as NodeWire['stampRead'], current: null })), 'an unnamed word')
+      .toBe('stamp unreadable');
+    expect(currentText(t9Placeholder()), 'a placeholder is not an unversioned node').toBe('not measured');
+  });
+
+  it('currentIsAmber: each condition alone turns the cell amber; a measured, verified, complete, tagged stamp does not', () => {
+    expect(currentIsAmber(t9Node())).toBe(false);
+    expect(currentIsAmber(t9Node({ current: t9Stamp(undefined) })), 'unversioned').toBe(true);
+    expect(currentIsAmber(t9Node({ provenance: 'unverified' })), 'unverified').toBe(true);
+    expect(currentIsAmber(t9Node({ provenance: 'unknown' })), 'provenance unknown').toBe(true);
+    expect(currentIsAmber(t9Node({ installState: 'incomplete' })), 'incomplete').toBe(true);
+    expect(currentIsAmber(t9Node({ stampRead: 'unreadable' })), 'stamp not read, tag still present').toBe(true);
+    expect(currentIsAmber(t9Node({ measuredAt: null })), 'never measured').toBe(true);
+  });
+
+  it('canAck: on a settled lease only — then a halted state, an outstanding request or a refusal naming THIS node', () => {
+    const settled = (state: NodeWire['update']['state']): NodeWire =>
+      t9Node({ update: { state, target: null, startedAt: null, detail: null } });
+    expect(canAck(settled('failed'), [])).toBe(true);
+    expect(canAck(settled('reverted'), [])).toBe(true);
+    for (const state of ['idle', 'pending', 'applying', 'unknown'] as const) {
+      expect(canAck(settled(state), []), state).toBe(false);
+    }
+    const REQ = { tag: 'v0.0.10', kind: 'update', at: T9_T0 } as const;
+    expect(canAck(t9Node({ request: REQ }), []), 'a request on an idle row').toBe(true);
+    const refusedHere = t9Release('v0.0.10', { refused: [{ by: T9_NODE_A, at: T9_T0 }] });
+    const refusedThere = t9Release('v0.0.10', { refused: [{ by: T9_NODE_B, at: T9_T0 }] });
+    // A busy lease is never offered, whatever else the row carries: W2's ackNode answers `busy` there (D-3183).
+    for (const state of ['pending', 'applying', 'unknown'] as const) {
+      const busy = { state, target: 'v0.0.10', startedAt: T9_T0, detail: null };
+      expect(canAck(t9Node({ update: busy, request: REQ }), []), `${state} with a request`).toBe(false);
+      expect(canAck(t9Node({ update: busy }), [refusedHere]), `${state} with a refusal`).toBe(false);
+    }
+    const unnamed = { state: 'later', target: null, startedAt: null, detail: null } as unknown as NodeWire['update'];
+    expect(canAck(t9Node({ update: unnamed, request: REQ }), []), 'an unnamed state').toBe(false);
+    expect(canAck({ ...t9Node({ request: REQ }), update: undefined } as unknown as NodeWire, []), 'update absent').toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.9'), refusedHere]), 'refused by this node').toBe(true);
+    expect(canAck(t9Node(), [refusedThere]), 'refused by ANOTHER node').toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.10', { refused: {} as unknown as ReleaseWire['refused'] })])).toBe(false);
+    expect(canAck(t9Node(), [t9Release('v0.0.10', { refused: [null] as unknown as ReleaseWire['refused'] })])).toBe(false);
+  });
+
+  it('requestLine: kind, tag and age of an outstanding request; null with none or a malformed one', () => {
+    expect(requestLine(t9Node(), T9_T0)).toBeNull();
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 - 5 * T9_MIN } }), T9_T0))
+      .toBe('update v0.0.10 requested 5m ago');
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.8', kind: 'rollback', at: T9_T0 } }), T9_T0))
+      .toBe('rollback v0.0.8 requested moments ago');
+    expect(requestLine(t9Node({ request: { tag: 'v0.0.8' } as unknown as NodeWire['request'] }), T9_T0)).toBeNull();
+  });
+
+  it("nodeStateLine: the lease state, then the report's phase, then its detail when it has one", () => {
+    expect(nodeStateLine(t9Node())).toBe('idle');
+    const report = { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: null } as const;
+    expect(nodeStateLine(t9Node({
+      update: { state: 'applying', target: 'v0.0.10', startedAt: T9_T0, detail: null }, report,
+    }))).toBe('applying — fetching');
+    expect(nodeStateLine(t9Node({
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { ...report, phase: 'failed', detail: 'health check did not pass' },
+    }))).toBe('failed — failed: health check did not pass');
+    expect(nodeStateLine(t9Node({ report: { ...report, detail: '' } })), 'an empty detail adds nothing').toBe('idle — fetching');
+    expect(nodeStateLine({ ...t9Node(), update: undefined } as unknown as NodeWire), 'update absent').toBe('unknown');
+  });
+
+  it('reachabilityLine: only reachable === false speaks; an absent field claims nothing', () => {
+    expect(reachabilityLine(t9Node(), T9_T0)).toBeNull();
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: T9_T0 - 5 * T9_MIN }), T9_T0))
+      .toBe('unreachable since 5m ago');
+    expect(reachabilityLine(t9Node({ reachable: false, unreachableSince: null }), T9_T0)).toBe('unreachable');
+    expect(reachabilityLine({ ...t9Node(), reachable: undefined } as unknown as NodeWire, T9_T0)).toBeNull();
+  });
+
+  it("spells spec §13's Darwin sentence", () => {
+    expect(MACOS_UNMANAGED_TEXT).toBe('macOS: not centrally managed');
+  });
+});
+
+describe('SettingsScreen — the node inventory: rendering (design 2026-09-20 §13)', () => {
+  const view = (nodes: NodeWire[], releases: ReleaseWire[] = [t9Release('v0.0.9')]): UpdatesView => ({
+    catalogue: { lastOkAt: T9_T0, lastError: null },
+    releases,
+    nodes,
+    intent: [{ scope: FLEET_SCOPE, channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: T9_T0, setBy: 'test' }],
+  });
+  /** Render the screen (with the one toast subscriber) over one answer and return the inventory list — every case
+   *  reads INSIDE it, because the release list (Task 8) renders the same tags on the same screen. */
+  const renderNodes = async (nodes: NodeWire[], releases?: ReleaseWire[]) => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(nodes, releases));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const list = await screen.findByRole('list', { name: 'Nodes' });
+    return { list, updates };
+  };
+  const rowOf = (list: HTMLElement, nodeId: string): HTMLElement => {
+    const row = list.querySelector<HTMLElement>(`li[data-node-id="${nodeId}"]`);
+    if (row === null) throw new Error(`no inventory row for ${nodeId}`);
+    return row;
+  };
+
+  it('renders label, role, os and a calm current, with no arrow and no "up to date" for a node on its desired tag', async () => {
+    const { list } = await renderNodes([t9Node(), t9Server({ role: null })]);
+    expect(within(list).getAllByRole('listitem').map((li) => li.getAttribute('data-node-id'))).toEqual([T9_NODE_A, T9_NODE_B]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('fleet')).toHaveClass('settings-node-label');
+    expect(within(row).getByText('fleet · linux')).toHaveClass('settings-node-detail');
+    const current = within(row).getByText('v0.0.9');
+    expect(current).toHaveClass('settings-node-current');
+    expect(current).not.toHaveClass('settings-node-current--amber');
+    expect(row.textContent).not.toContain('→');
+    expect(row.textContent).not.toMatch(/up to date/i);
+    expect(within(row).getByText('idle')).toBeInTheDocument();
+    expect(within(rowOf(list, T9_NODE_B)).getByText('unknown role · linux')).toBeInTheDocument();
+  });
+
+  it('draws the arrow for a newer desired tag, with the channel badge', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('→ v0.0.10')).toHaveClass('settings-node-desired');
+    expect(within(row).getByText('stable')).toHaveClass('settings-badge', 'settings-badge--stable');
+  });
+
+  it('an unreadable stamp renders amber and no arrow, even with a newer desired tag (§13 Pins)', async () => {
+    const { list } = await renderNodes([
+      t9Node({ stampRead: 'unreadable', current: null, provenance: 'unknown', desiredTag: 'v0.0.10' }),
+    ]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('stamp unreadable')).toHaveClass('settings-node-current--amber');
+    expect(within(row).queryByText('unversioned')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+    expect(row.querySelector('.settings-badge')).toBeNull();
+  });
+
+  it('a node with no resolved channel renders resolveDetail and no badge, no arrow (§13 Pins)', async () => {
+    const WHY = 'a stored channel is one this build cannot read — nothing resolves';
+    const { list } = await renderNodes([t9Node({ channel: null, desiredTag: null, resolveDetail: WHY })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(WHY)).toHaveClass('settings-node-detail');
+    expect(row.querySelector('.settings-badge')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+  });
+
+  it('a node never measured reads "not measured" in amber, says it is unreachable, and draws no arrow (§18 "unreachable is not current")', async () => {
+    const { list } = await renderNodes([
+      t9Node(),
+      t9Placeholder({ unreachableSince: Date.now() - 5 * T9_MIN, channel: 'stable', desiredTag: 'v0.0.10', resolveDetail: null }),
+    ]);
+    const row = rowOf(list, 'server');   // the placeholder's id is its label (W2 markUnreachable)
+    expect(within(row).getByText('not measured')).toHaveClass('settings-node-current--amber');
+    expect(within(row).getByText('unreachable since 5m ago')).toHaveClass('settings-node-detail');
+    expect(within(row).queryByText('unversioned')).toBeNull();
+    expect(row.textContent).not.toContain('→');
+  });
+
+  it('a Darwin row reads the macOS sentence in place of its desired, and offers no move', async () => {
+    const { list } = await renderNodes([t9Node({ os: 'darwin', desiredTag: 'v0.0.10' })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(MACOS_UNMANAGED_TEXT)).toBeInTheDocument();
+    expect(row.textContent).not.toContain('→');
+    expect(within(row).queryByRole('button', { name: 'Update' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Roll back' })).toBeNull();
+    expect(within(row).queryByText(MOVE_DISABLED_TEXT)).toBeNull();
+    expect(within(row).getByRole('button', { name: 'Ack' })).toBeDisabled();   // idle, nothing to acknowledge
+  });
+
+  it('renders Update and Roll back DISABLED on every managed row, described by the one W3 sentence (§18 "the move controls are disabled in W3")', async () => {
+    const { list } = await renderNodes([t9Node({ desiredTag: 'v0.0.10' }), t9Server()]);
+    for (const id of [T9_NODE_A, T9_NODE_B]) {
+      const row = rowOf(list, id);
+      for (const name of ['Update', 'Roll back']) {
+        const b = within(row).getByRole('button', { name });
+        expect(b, `${id} ${name}`).toBeDisabled();
+        expect(b).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
+      }
+      expect(within(row).getAllByText(MOVE_DISABLED_TEXT)).toHaveLength(1);
+    }
+  });
+
+  it('an idle node with no request and no refusal has Ack disabled', async () => {
+    const { list } = await renderNodes([t9Node()]);
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' })).toBeDisabled();
+  });
+
+  it("a failed node's Ack is enabled, sends its nodeId and re-polls the view", async () => {
+    const failed = t9Node({ update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null } });
+    const ack = vi.spyOn(api, 'ackUpdateNode').mockResolvedValue({ ok: true, node: t9Node() });
+    const { list, updates } = await renderNodes([failed]);
+    const before = updates.mock.calls.length;
+    const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(ack).toHaveBeenCalledWith(T9_NODE_A);
+    await waitFor(() => expect(updates.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  it('a node named in refused[] has Ack enabled; a refusal naming another node does not enable it', async () => {
+    const { list } = await renderNodes(
+      [t9Node(), t9Server()],
+      [t9Release('v0.0.10', { refused: [{ by: T9_NODE_B, at: T9_T0 }] })],
+    );
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Ack' })).toBeEnabled();
+    expect(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' })).toBeDisabled();
+  });
+
+  it('an outstanding request renders its line and the state with the report phase; Ack is offered only once the lease is settled', async () => {
+    const request = { tag: 'v0.0.10', kind: 'update', at: Date.now() - 5 * T9_MIN } as const;
+    const { list } = await renderNodes([
+      t9Node({
+        desiredTag: 'v0.0.10', request,
+        update: { state: 'pending', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+        report: { phase: 'fetching', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: null },
+      }),
+      t9Server({ request }),   // the same request on an idle row
+    ]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText('update v0.0.10 requested 5m ago')).toHaveClass('settings-node-detail');
+    expect(within(row).getByText('pending — fetching')).toHaveClass('settings-node-detail');
+    // pending is busy: W2's ackNode would answer `busy`, so the control is not offered (D-3183)
+    expect(within(row).getByRole('button', { name: 'Ack' })).toBeDisabled();
+    expect(within(rowOf(list, T9_NODE_B)).getByRole('button', { name: 'Ack' })).toBeEnabled();
+  });
+
+  it("a refused ack is the route's sentence in an error toast — the route stays the authority", async () => {
+    // A race: the poll read the row idle with its request, and by the tap the route found it busy.
+    const busy = new ApiError(409, { ok: false, error: 'busy', detail: 'applying' });
+    vi.spyOn(api, 'ackUpdateNode').mockRejectedValue(busy);
+    const { list } = await renderNodes([t9Node({ request: { tag: 'v0.0.10', kind: 'update', at: T9_T0 } })]);
+    const button = within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    const t = await screen.findByText(updateErrorText(busy), { selector: '.toast' });
+    expect(t).toHaveClass('toast--error');
+  });
+
+  it('an ack whose answer could not be read says so, and does not claim failure', async () => {
+    vi.spyOn(api, 'ackUpdateNode').mockResolvedValue('unreadable');
+    const { list } = await renderNodes([t9Node({ update: { state: 'reverted', target: null, startedAt: null, detail: null } })]);
+    fireEvent.click(within(rowOf(list, T9_NODE_A)).getByRole('button', { name: 'Ack' }));
+    const t = await screen.findByText(ACK_UNREADABLE_TEXT, { selector: '.toast' });
+    expect(t).not.toHaveClass('toast--error');
+  });
+
+  it('renders a label and a report.detail carrying markup as literal text', async () => {
+    const LABEL = '<img src=x onerror=alert(1)>box';
+    const DETAIL = '<b>health</b> check failed — see https://example.com/x';
+    const { list } = await renderNodes([t9Node({
+      label: LABEL,
+      update: { state: 'failed', target: 'v0.0.10', startedAt: T9_T0, detail: null },
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T9_T0, updatedAt: T9_T0, detail: DETAIL },
+    })]);
+    const row = rowOf(list, T9_NODE_A);
+    expect(within(row).getByText(LABEL)).toHaveClass('settings-node-label');
+    expect(within(row).getByText(`failed — failed: ${DETAIL}`)).toBeInTheDocument();
+    expect(row.querySelector('img, b, a, script')).toBeNull();
+    expect(within(row).queryByRole('link')).toBeNull();
+  });
+
+  it('renders no inventory list for an empty nodes array', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view([]));
+    render(<SettingsScreen />);
+    await screen.findByText(/^checked /);   // Task 7's catalogue line: the view has landed
+    expect(screen.queryByRole('list', { name: 'Nodes' })).toBeNull();
+  });
+
+  it('keeps the amber ink and lets a long label wrap (css:false — read off fleet.css)', () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    expect(declValue(ruleIn(css, '.settings-node-current--amber'), 'color')).toBe('var(--status-attention-text)');
+    expect(declValue(ruleIn(css, '.settings-node-label'), 'overflow-wrap')).toBe('anywhere');
+    // The row's three buttons carry Task 8's pair; its compound rule is what keeps them inline.
+    expect(declValue(ruleIn(css, '.btn-ghost.settings-move'), 'width')).toBe('auto');
   });
 });

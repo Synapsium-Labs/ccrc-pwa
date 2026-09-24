@@ -89,11 +89,20 @@ export function nodeVersion(n: NodeWire): string | null {
  * running one — a desired tag below it is a rollback's direction, which is not
  * an update arrow. Newer is `isNewerTag` (semver: `v0.0.10` > `v0.0.9`), after
  * `isReleaseTag` on both sides, because it throws on a non-tag. A node running
- * nothing comparable (unversioned) points at its desired tag.
+ * nothing comparable (unversioned) points at its desired tag — but only when its
+ * stamp was READ: `stampRead` other than `ok` (EACCES, malformed, absent) is an
+ * unmeasured current, which W2 also reports as a null `current`, and draws no
+ * arrow (spec §13 Pins; §18 "`stampRead` keeps EACCES from unversioned";
+ * D-3307). No arrow for a macOS node either: this
+ * programme does not manage one (decision 17), and its row says so in place of
+ * a desired — the rule is here, not in that row, so the banner and BuildLine
+ * say the same (`os: 'unknown'` is not Darwin; D-3309).
  */
 export function pendingTag(n: NodeWire): string | null {
   if (typeof n.measuredAt !== 'number') return null;
   if (!isUpdateChannel(n.channel)) return null;
+  if (n.stampRead !== 'ok') return null;
+  if (n.os === 'darwin') return null;
   const want = n.desiredTag;
   if (!isReleaseTag(want)) return null;
   const have = nodeVersion(n);

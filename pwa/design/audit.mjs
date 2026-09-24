@@ -794,6 +794,15 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the 'lands with the next release (W4)' note beside a disabled Install/Roll back button, in the same unfilled release row (and in any other unfilled row of this screen that reuses it). Same ground as .settings-release-date; the NOTE is live text and is measured, unlike the disabled button beside it (primitives.css .btn-ghost:disabled, WCAG 1.4.3)",
   },
+  // ── centralised update management W3, Task 9: the node inventory ───────
+  'fleet.css .settings-node-current--amber': {
+    under: ['var(--bg-page)'],
+    why: "the amber current-version cell of a SettingsScreen inventory row (unversioned, unverified, incomplete, stamp not read, never measured). .settings-node draws a hairline and no fill, .settings-section/.settings-screen and .shell-detail paint no background, so body's --bg-page (styles/base.css:111) is behind it — the .settings-release-date reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-node-detail': {
+    under: ['var(--bg-page)'],
+    why: "the muted role/os, desired-resolution, request, reachability and state lines of the same unfilled inventory row, in --ink-tertiary. Same ground and same reason as .settings-node-current--amber; registered separately because it sets its own colour",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

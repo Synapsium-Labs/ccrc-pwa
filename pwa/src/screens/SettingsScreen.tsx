@@ -13,11 +13,11 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
-import { AUTO_MODES, FLEET_SCOPE, UPDATE_CHANNELS, UPDATE_GATE_CAP, isReleaseTag, isUpdateChannel } from '../../../shared/api';
+import { AUTO_MODES, FLEET_SCOPE, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
-import { nodeVersion, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
+import { nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, MOVE_DISABLED_TEXT, api, updateErrorText } from '../lib/api';
 import { elapsedWords } from '../lib/elapsed';
 import { navigate } from '../lib/router';
@@ -248,6 +248,169 @@ function ReleaseList({ releases, nodes }: { releases: readonly ReleaseWire[]; no
   );
 }
 
+// ── The node inventory (spec §13; programme wave 3 Task 9) ───────────────────
+// One row per LIVE node (W2 excludes superseded rows), in the server's order.
+// The rules this block keeps, each pinned in settings-screen.test.tsx:
+//   * THE ARROW IS pendingTag's. A desired tag renders as `→ vX` only when
+//     pendingTag (fleet/useUpdatesView.ts) returns it — measured, on a resolved
+//     channel, with a stamp that was READ, not macOS, and newer by semver. This
+//     row adds no clause of its own, so it cannot disagree with the banner or
+//     BuildLine, which read the same predicate. When the node
+//     has no desired tag or no channel, the resolver's own sentence
+//     (resolveDetail) stands in: no badge, no arrow (§13). Nothing here says
+//     "up to date": a node on its desired tag simply shows no desired.
+//   * CURRENT SAYS WHAT WAS MEASURED. A node never measured reads `not
+//     measured`, a stamp the sweep could not read reads `stamp <word>`, and
+//     only a stamp that was read and carries no tag reads `unversioned` —
+//     §18 "`stampRead` keeps EACCES from unversioned", on the screen. Anything
+//     the row cannot vouch for is amber, and an unreachable node says so,
+//     because W2 keeps its last measurement.
+//   * TEXT IS TEXT. label, resolveDetail and report.detail are same-user-
+//     writable; each reaches the DOM as a React text child and nothing else.
+//   * macOS IS NOT MANAGED (decision 17). A Darwin row says so in place of its
+//     desired and offers no move (D-3308); its arrow is
+//     already null in pendingTag (D-3309).
+// Update and Roll back are rendered DISABLED beside MOVE_DISABLED_TEXT (their
+// routes are programme wave 5's). Ack is live — its route is W2's — and is
+// offered only on a SETTLED lease, because W2's ackNode acks from nothing
+// else (D-3183; D-3310). The route stays the
+// authority: a row that went busy between the poll and the tap comes back as
+// a 409 `busy`, rendered as updateErrorText's sentence, and the view is
+// re-polled either way.
+
+export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
+export const ACK_UNREADABLE_TEXT = "Acknowledged — the server's answer could not be read; the screen will re-check.";
+
+export function currentText(n: NodeWire): string {
+  if (typeof n.measuredAt !== 'number') return 'not measured';
+  if (n.stampRead !== 'ok') return `stamp ${isStampRead(n.stampRead) ? n.stampRead : 'unreadable'}`;
+  return nodeVersion(n) ?? 'unversioned';
+}
+
+export function currentIsAmber(n: NodeWire): boolean {
+  return typeof n.measuredAt !== 'number'
+    || n.stampRead !== 'ok'
+    || nodeVersion(n) === null
+    || n.provenance !== 'verified'
+    || n.installState !== 'complete';
+}
+
+export function canAck(n: NodeWire, releases: readonly ReleaseWire[]): boolean {
+  const state = n.update?.state;
+  // A busy lease (pending, applying, unknown), an absent state or a word this build cannot name: ackNode answers busy.
+  if (typeof state !== 'string' || !(SETTLED_UPDATE_STATES as readonly string[]).includes(state)) return false;
+  if (state === 'failed' || state === 'reverted') return true;
+  if (typeof n.request === 'object' && n.request !== null) return true;
+  return releases.some((r) => Array.isArray(r.refused) && r.refused.some((x: unknown) =>
+    typeof x === 'object' && x !== null && (x as { by?: unknown }).by === n.nodeId));
+}
+
+export function requestLine(n: NodeWire, now: number): string | null {
+  const q: unknown = n.request;
+  if (typeof q !== 'object' || q === null) return null;
+  const { tag, kind, at } = q as { tag?: unknown; kind?: unknown; at?: unknown };
+  if (typeof tag !== 'string' || typeof kind !== 'string' || typeof at !== 'number') return null;
+  return `${kind} ${tag} requested ${elapsedWords(now - at)} ago`;
+}
+
+export function nodeStateLine(n: NodeWire): string {
+  const state = typeof n.update?.state === 'string' ? n.update.state : 'unknown';
+  const r: unknown = n.report;
+  if (typeof r !== 'object' || r === null) return state;
+  const { phase, detail } = r as { phase?: unknown; detail?: unknown };
+  if (typeof phase !== 'string') return state;
+  return typeof detail === 'string' && detail !== '' ? `${state} — ${phase}: ${detail}` : `${state} — ${phase}`;
+}
+
+export function reachabilityLine(n: NodeWire, now: number): string | null {
+  if (n.reachable !== false) return null;
+  return typeof n.unreachableSince === 'number'
+    ? `unreachable since ${elapsedWords(now - n.unreachableSince)} ago`
+    : 'unreachable';
+}
+
+function NodeItem({ node: n, releases, now, onAcked }: {
+  node: NodeWire; releases: readonly ReleaseWire[]; now: number; onAcked: () => void;
+}): ReactNode {
+  const noteId = useId();
+  const [acking, setAcking] = useState(false);
+  const darwin = n.os === 'darwin';
+  const next = pendingTag(n);   // null for a Darwin node too — the predicate's own guard
+  const reach = reachabilityLine(n, now);
+  const request = requestLine(n, now);
+  const ackable = canAck(n, releases);
+
+  const ack = (): void => {
+    setAcking(true);
+    void api.ackUpdateNode(n.nodeId).then(
+      (answer) => { if (answer === 'unreadable') toast(ACK_UNREADABLE_TEXT); },
+      (err: unknown) => { toast(updateErrorText(err), 'error'); },
+    ).finally(() => {
+      setAcking(false);
+      onAcked();
+    });
+  };
+
+  let desired: ReactNode = null;
+  if (darwin) {
+    desired = <span className="settings-node-detail">{MACOS_UNMANAGED_TEXT}</span>;
+  } else if (next !== null) {
+    // pendingTag returns a tag only for a node whose channel passed
+    // isUpdateChannel; restating that test here would be a SECOND arrow
+    // predicate, so the type is asserted, not re-derived (Task 11's argument).
+    const channel = n.channel as UpdateChannel;
+    desired = (
+      <span className="settings-node-desired">
+        {`→ ${next}`}
+        <span className={`settings-badge settings-badge--${channel}`}>{channel}</span>
+      </span>
+    );
+  } else if (!isReleaseTag(n.desiredTag) || !isUpdateChannel(n.channel)) {
+    desired = typeof n.resolveDetail === 'string' && n.resolveDetail !== ''
+      ? <span className="settings-node-detail">{n.resolveDetail}</span>
+      : null;
+  }
+
+  return (
+    <li className="settings-node" data-node-id={n.nodeId}>
+      <div className="settings-node-head">
+        <span className="settings-node-label">{n.label}</span>
+        <span className="settings-node-detail">{`${n.role ?? 'unknown role'} · ${typeof n.os === 'string' ? n.os : 'unknown'}`}</span>
+      </div>
+      <p className="settings-node-versions">
+        <span className={currentIsAmber(n) ? 'settings-node-current settings-node-current--amber' : 'settings-node-current'}>
+          {currentText(n)}
+        </span>
+        {desired}
+      </p>
+      {reach !== null && <p className="settings-node-detail">{reach}</p>}
+      {request !== null && <p className="settings-node-detail">{request}</p>}
+      <p className="settings-node-detail">{nodeStateLine(n)}</p>
+      <div className="settings-node-actions">
+        {!darwin && (
+          <>
+            <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>Update</button>
+            <button type="button" className="btn-ghost settings-move" disabled aria-describedby={noteId}>Roll back</button>
+            <span id={noteId} className="settings-move-note">{MOVE_DISABLED_TEXT}</span>
+          </>
+        )}
+        <button type="button" className="btn-ghost settings-move" disabled={!ackable || acking} onClick={ack}>Ack</button>
+      </div>
+    </li>
+  );
+}
+
+function NodeList({ nodes, releases, now, onAcked }: {
+  nodes: readonly NodeWire[]; releases: readonly ReleaseWire[]; now: number; onAcked: () => void;
+}): ReactNode {
+  if (nodes.length === 0) return null;
+  return (
+    <ul className="settings-nodes" aria-label="Nodes">
+      {nodes.map((n) => <NodeItem key={n.nodeId} node={n} releases={releases} now={now} onAcked={onAcked} />)}
+    </ul>
+  );
+}
+
 export function SettingsScreen(): ReactNode {
   // ONE poll and ONE clock for the whole screen: every section reads the same
   // answer (Tasks 7–10), so two sections can never disagree about the fleet.
@@ -390,6 +553,7 @@ function UpdatesBody({ view, stale, now, reload }: {
         {line.text}
       </p>
       {view !== null && <ReleaseList releases={view.releases} nodes={view.nodes} />}
+      {view !== null && <NodeList nodes={view.nodes} releases={view.releases} now={now} onAcked={reload} />}
     </>
   );
 }

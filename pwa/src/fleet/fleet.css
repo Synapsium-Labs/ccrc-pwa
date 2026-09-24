@@ -3118,3 +3118,44 @@ button.proj-card-pool::before {
    node rows' Update / Roll back too) can carry the same pair of classes. */
 .btn-ghost.settings-move { width: auto; padding: 0 var(--sp-3); }
 .settings-move-note { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+
+/* — centralised update management W3, Task 9: the node inventory —
+   One row per live node, in the server's order (label, then nodeId). Same
+   unfilled row as the release list above it — a hairline, no fill — so the
+   two rules that set `color` without a `background` (the amber current and
+   the muted detail lines) are registered in design/audit.mjs's
+   INHERITED_GROUNDS against --bg-page, the .settings-release-date argument.
+   The desired cell reuses the release list's self-grounded channel badges
+   and the move row reuses its .settings-move-note, both already measured. */
+.settings-nodes { list-style: none; margin: 0; padding: 0; display: grid; }
+.settings-node {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+/* A label is same-user-writable text: it may be long and unbroken. */
+.settings-node-label { font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui); overflow-wrap: anywhere; }
+.settings-node-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-mono);
+}
+.settings-node-current { font-variant-numeric: tabular-nums; }
+/* Amber for a current the row cannot vouch for — unversioned, unverified,
+   incomplete, a stamp that could not be read, or a node never measured. The
+   same ink .build-line-side--warn uses for the same meaning. */
+.settings-node-current--amber { color: var(--status-attention-text); }
+.settings-node-desired { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.settings-node-detail { margin: 0; font-size: var(--text-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+/* The three node buttons carry the `btn-ghost settings-move` pair: .btn-ghost
+   (primitives.css) supplies the tap floor, the border and the disabled ink,
+   and Task 8's compound .btn-ghost.settings-move already stops it filling the
+   row — so no second override is written here. */
+.settings-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
