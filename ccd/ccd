@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=258434f69675e8141889dc92c040d3ec68f076a245865ccaf4551479d1fe7511
+# ccrc:generated 1 sha256=7c5e42fc01d48f1db64df07979036e53a41f19a2dee5ff5a93150bc5f20c8140
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23606,6 +23606,30 @@ _ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling:
      && "$1" != *//* && "$1" != */./* && "$1" != */../* ]]
 }
 
+_WS_FOREIGN_WHY=''
+_ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER repository at path is PROVEN clean
+  #                                 with every commit on one of its own remotes; 1 when it is proven NOT
+  #                                 (_WS_FOREIGN_WHY says how); 2 when a read could not run (_WS_FOREIGN_WHY)
+  # RUNG 9'S PREDICATE, ONE DEFINITION (spec §5.5): the ladder asks it once,
+  # and the pin phase asks it again on every call — such a checkout goes with
+  # the tree and nothing of it can be pinned, so its proof must be current.
+  # A read that failed measured nothing (rung 8's rule): 2, never 1.
+  local p="$1" errf err rc dirt ahead
+  _WS_FOREIGN_WHY=''
+  errf=$(_plat_mktemp) || { _WS_FOREIGN_WHY="could not make a scratch file to read the checkout at $p"; return 2; }
+  dirt=$(git -C "$p" status --porcelain 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  { (( rc == 0 )) && [[ -z "$err" ]]; } \
+    || { _WS_FOREIGN_WHY="could not read the checkout of another repository at $p"; return 2; }
+  [[ -z "$dirt" ]] \
+    || { _WS_FOREIGN_WHY="the checkout of another repository at $p has $(printf '%s\n' "$dirt" | grep -c .) uncommitted file(s)"; return 1; }
+  ahead=$(git -C "$p" rev-list --count --all --not --remotes 2>/dev/null) \
+    || { _WS_FOREIGN_WHY="could not count the commits in $p that are on none of its own remotes"; return 2; }
+  (( ahead == 0 )) \
+    || { _WS_FOREIGN_WHY="$ahead commit(s) in the checkout of another repository at $p are on none of its remotes"; return 1; }
+  return 0
+}
+
 _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when the reclaim ladder
   #                       passes (REAP_TOKEN set, REAP_VERDICT=reclaimable), else REAP_VERDICT names it
   # THE LADDER, in spec §5.5's order. A refusal writes NOTHING — with one named
@@ -23617,7 +23641,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_reset
   local id="$1" defer="$2" childof="$3"
   local ws mark project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop errf err rc pdirt pahead h hs clipsjson
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson
   RECLAIM_DEFER="$defer"
   # 1 — registry identity
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -23801,17 +23825,9 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       RECLAIM_NESTED+="$p"$'\n'
       continue
     fi
-    errf=$(_plat_mktemp) || { _ws_reclaim_unmeasured "could not make a scratch file to read the checkout at $p"; return 1; }
-    pdirt=$(git -C "$p" status --porcelain 2>"$errf"); rc=$?
-    err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-    { (( rc == 0 )) && [[ -z "$err" ]]; } \
-      || { _ws_reclaim_unmeasured "could not read the checkout of another repository at $p"; return 1; }
-    [[ -z "$pdirt" ]] \
-      || { _reap_refuse containment-unproven "the checkout of another repository at $p has $(printf '%s\n' "$pdirt" | grep -c .) uncommitted file(s)"; return 1; }
-    pahead=$(git -C "$p" rev-list --count --all --not --remotes 2>/dev/null) \
-      || { _ws_reclaim_unmeasured "could not count the commits in $p that are on none of its own remotes"; return 1; }
-    (( pahead == 0 )) \
-      || { _reap_refuse containment-unproven "$pahead commit(s) in the checkout of another repository at $p are on none of its remotes"; return 1; }
+    _ws_reclaim_foreign_clean "$p"; rc=$?
+    (( rc == 2 )) && { _ws_reclaim_unmeasured "$_WS_FOREIGN_WHY"; return 1; }
+    (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_FOREIGN_WHY"; return 1; }
     RECLAIM_FOREIGN+="$p"$'\n'
   done <<< "$nested"$'\n'
   # The facts the pin phase will act on, each a fingerprint input.
@@ -23935,47 +23951,113 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   return 0
 }
 
-_ws_wip_commit() {   # dir id childof -> 0 with RECLAIM_WIP_SHA = the new commit ('' when nothing was
-  #                     uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY `git commit` IN ccd, and its
+_ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free and
+  #                              fsmonitor-free; answers cmd's status
+  # NO REPOSITORY-CONFIGURED PROGRAM RUNS INSIDE THE PIN PHASE (spec §5.5). A
+  # hook is not only a commit's: `git add` and `git status` fire
+  # post-index-change, and every `update-ref` fires reference-transaction; a
+  # repository's `core.fsmonitor` names a program `git status` and `git add`
+  # EXECUTE. So the containment is the environment's, not a flag on one call:
+  # git reads GIT_CONFIG_COUNT/KEY/VALUE at command-line precedence, above any
+  # repository config, and every git that runs beneath cmd inherits it —
+  # including the helpers the pin calls (`_ws_reclaim_classify`,
+  # `_ws_collect_ignored`, `_ws_reclaim_stash_shas`, `_ws_attic_pin`). `local
+  # -x` scopes the export to this call, and entries a caller already exported
+  # are kept: ours are APPENDED, and a later entry wins.
+  local n="${GIT_CONFIG_COUNT:-0}"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  local -x GIT_CONFIG_COUNT=$(( n + 2 )) \
+    "GIT_CONFIG_KEY_$n=core.hooksPath" "GIT_CONFIG_VALUE_$n=/dev/null" \
+    "GIT_CONFIG_KEY_$(( n + 1 ))=core.fsmonitor" "GIT_CONFIG_VALUE_$(( n + 1 ))=false"
+  "$@"
+}
+
+_ws_reclaim_secret_note() {   # path -> appends path to RECLAIM_SECRETS unless it is already there
+  local s
+  for s in ${RECLAIM_SECRETS[@]+"${RECLAIM_SECRETS[@]}"}; do [[ "$s" == "$1" ]] && return 0; done
+  RECLAIM_SECRETS+=("$1")
+}
+
+_ws_reclaim_opheads() {   # dir -> the commit of every in-progress operation head present, one per line
+  # `rev-parse` reads a head's FIRST line: an octopus merge's MERGE_HEAD lists
+  # several commits, and the rest are not read here. They are not lost: a WIP
+  # commit made while the merge is in progress concludes it and takes EVERY
+  # line of MERGE_HEAD as a parent, so the pinned WIP commit reaches them all.
+  local d="$1" h s
+  for h in REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD ORIG_HEAD; do
+    s=$(git -C "$d" rev-parse --verify --quiet "$h^{commit}" 2>/dev/null) && printf '%s\n' "$s"
+  done
+  return 0
+}
+
+_ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new commit ('' when nothing
+  #                     was uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY `git commit` IN ccd, and its
   #                     one call site is `_ws_reclaim_pin` — which is reason enough for it to be one
   #                     function (spec §5.5, pin phase step 2).
-  # What it commits: tracked modifications and deletions (`add --update`) and
-  # the non-secret untracked paths `_ws_reclaim_classify` just put in
-  # RECLAIM_STAGE, handed over NUL-separated with literal pathspecs so no path
-  # is ever read as a glob. What it never commits: a secret-shaped path
-  # (RECLAIM_SECRETS), an ignored file, a nested checkout.
+  # THE COMMIT IS BUILT IN A SCRATCH INDEX SEEDED FROM HEAD, never in the
+  # user's own. The user's index may already STAGE a secret — a pre-commit
+  # scanner that refused a commit leaves exactly that — and committing the
+  # user's index would pin it for good. So the candidates are read against
+  # HEAD itself: `status` over the scratch index lists every path whose
+  # working-tree content differs from HEAD's — tracked modifications,
+  # deletions and type changes (` M`, ` D`, ` T`), and every path HEAD does not
+  # have (`??`), staged-new ones included. Each goes through
+  # `_ws_reclaim_secret_path`: a secret-shaped path is NOT added, so the commit
+  # keeps HEAD's blob for a tracked one and has none for a new one, and the
+  # path goes to RECLAIM_SECRETS (the tombstone's `secretsDropped`) as
+  # "$prefix<path>". Everything else is added NUL-separated with literal
+  # pathspecs, so no path is ever read as a glob. A nested checkout's root
+  # (`?? dir/` holding a `.git`) is never added: it is pinned on its own, or
+  # proven clean and pushed. An ignored file is never listed by `status`.
+  # The user's own index is not written, so what they staged stays staged.
   #
   # THE IDENTITY IS FIXED, in both channels. `-c user.*` names it to git's
   # config; the GIT_* environment is what outranks config, so a caller
   # that happened to export GIT_AUTHOR_NAME cannot put its own name on a commit
-  # it did not write. `core.hooksPath=/dev/null` with `--no-verify`: `--no-verify`
-  # alone still runs prepare-commit-msg and post-commit — a repository's own
-  # hooks must not run inside the fleet's destructive verb (measured, git 2.43:
-  # with all three hooks installed, none ran).
+  # it did not write. No hook runs: the caller runs this under
+  # `_ws_reclaim_contained`, and the commit line says so again itself.
   #
   # On a DETACHED HEAD (a rebase stopped, or a checkout of a sha) the commit
   # lands on HEAD and not on the branch; the caller pins it by sha.
-  local dir="$1" id="$2" childof="$3" errf listf
+  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p skip rc err
+  local cand=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
-  errf=$(_plat_mktemp) || { RECLAIM_WIP_WHY='could not make a scratch file'; return 1; }
-  git -C "$dir" add --update -- . 2>"$errf" \
-    || { RECLAIM_WIP_WHY="git add --update at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf"; return 1; }
-  if (( ${#RECLAIM_STAGE[@]} )); then
-    listf=$(_plat_mktemp) || { rm -f "$errf"; RECLAIM_WIP_WHY='could not make a scratch file'; return 1; }
-    printf '%s\0' "${RECLAIM_STAGE[@]}" >"$listf"
-    GIT_LITERAL_PATHSPECS=1 git -C "$dir" add --pathspec-from-file="$listf" --pathspec-file-nul 2>"$errf" \
-      || { RECLAIM_WIP_WHY="git add of the untracked files at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf" "$listf"; return 1; }
-    rm -f "$listf"
+  sd=$(_plat_mktemp_d) || { RECLAIM_WIP_WHY='could not make a scratch directory'; return 1; }
+  idx="$sd/index"
+  GIT_INDEX_FILE="$idx" git -C "$dir" read-tree HEAD 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="could not seed a scratch index from HEAD at $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  GIT_INDEX_FILE="$idx" git -C "$dir" -c core.quotePath=false \
+    status --porcelain=v1 -z --untracked-files=all >"$sd/status" 2>"$sd/err"; rc=$?
+  err=$(cat "$sd/err" 2>/dev/null)
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    RECLAIM_WIP_WHY="git status against HEAD at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; rm -rf "$sd"; return 1
+  fi
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      '?? '*) p="${entry#?? }"
+              if [[ "$p" == */ && -e "$dir/${p%/}/.git" ]]; then continue; fi ;;
+      ' '[MDT]' '*) p="${entry:3}" ;;
+      [RC]*)  IFS= read -r -d '' skip || :; continue ;;   # never against an index equal to HEAD
+      *)      continue ;;
+    esac
+    [[ -n "$p" ]] || continue
+    if _ws_reclaim_secret_path "$p"; then _ws_reclaim_secret_note "$prefix$p"; else cand+=("$p"); fi
+  done <"$sd/status"
+  if (( ${#cand[@]} )); then
+    printf '%s\0' "${cand[@]}" >"$sd/list"
+    GIT_INDEX_FILE="$idx" GIT_LITERAL_PATHSPECS=1 git -C "$dir" add --pathspec-from-file="$sd/list" --pathspec-file-nul 2>"$sd/err" \
+      || { RECLAIM_WIP_WHY="git add at $dir failed: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
   fi
   # Nothing staged is the ordinary case for a finished child: no commit.
-  if git -C "$dir" diff --cached --quiet 2>/dev/null; then rm -f "$errf"; return 0; fi
+  if GIT_INDEX_FILE="$idx" git -C "$dir" diff --cached --quiet 2>/dev/null; then rm -rf "$sd"; return 0; fi
+  GIT_INDEX_FILE="$idx" \
   GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
   GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
     git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' \
-      -c commit.gpgsign=false -c core.hooksPath=/dev/null \
-      commit --no-verify --quiet -m "ccrc: WIP pinned at reclaim of $id (run $childof)" 2>"$errf" \
-    || { RECLAIM_WIP_WHY="git commit at $dir failed: $(head -1 "$errf" 2>/dev/null)"; rm -f "$errf"; return 1; }
-  rm -f "$errf"
+      -c commit.gpgsign=false -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+      commit --no-verify --quiet -m "ccrc: WIP pinned at reclaim of $id (run $childof)" 2>"$sd/err" \
+    || { RECLAIM_WIP_WHY="git commit at $dir failed: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  rm -rf "$sd"
   RECLAIM_WIP_SHA=$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null) \
     || { RECLAIM_WIP_WHY="the WIP commit at $dir landed but HEAD does not resolve"; return 1; }
   return 0
@@ -24002,9 +24084,15 @@ _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything reco
   # THE PIN PHASE (spec §5.5), runnable more than once: the fresh arm runs it
   # before anything is destroyed, and the tail runs it again as the SETTLE, once
   # the pane is dead, to catch anything the session wrote between the two. Every
-  # pin is idempotent (`update-ref` of a ref to the sha it already names).
+  # pin is idempotent (`update-ref` of a ref to the sha it already names). The
+  # whole phase runs under `_ws_reclaim_contained`: no hook, no fsmonitor.
+  _ws_reclaim_contained _ws_reclaim_pin_contained "$@"
+}
+
+_ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" workdir="$2" main="$3" branch="$4" childof="$5"
-  local h hs nested cpath cpcommon cbr chead mainreal wdreal extras=() sha stashes
+  local oph headsha headref rc nested cpath cpcommon cbr chead mainreal wdreal sha stashes
+  local extras=() same=()
   RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""
   # THE LEAF IS NEVER FOLLOWED, here as at the ladder (spec §5.5): the settle
   # re-pin runs with no ladder in front of it, so this guard stands alone. A
@@ -24018,51 +24106,95 @@ _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything reco
   [[ ! -L "$workdir" ]] \
     || { RECLAIM_PIN_WHY="$workdir is a symbolic link — ccd never follows a link to a tree it would pin"; return 1; }
   [[ -d "$workdir" ]] || { RECLAIM_PIN_WHY="$workdir is gone — there is nothing to pin"; return 1; }
+  # THE WIP COMMIT LANDS ON THE CHILD'S OWN BRANCH OR A DETACHED HEAD, nothing
+  # else (spec §5.5, step 2). The ladder read the tree once; the session is
+  # alive until the tail kills it, and the settle runs after an arbitrary gap,
+  # so HEAD is read again HERE, before anything is committed. `symbolic-ref`
+  # answers 1 for a detached HEAD; any other failure is a read that did not run.
+  headref=$(git -C "$workdir" symbolic-ref -q HEAD 2>/dev/null); rc=$?
+  if (( rc == 0 )); then
+    [[ "$headref" == "refs/heads/$branch" ]] \
+      || { RECLAIM_PIN_WHY="$workdir has $headref checked out, not refs/heads/$branch — the WIP commit lands only on $id's own branch or a detached HEAD"; return 1; }
+  elif (( rc != 1 )); then
+    RECLAIM_PIN_WHY="could not read which branch $workdir has checked out"; return 1
+  fi
   # (0) The in-progress operation heads, FIRST: a commit concludes a merge or a
   # cherry-pick and deletes MERGE_HEAD / CHERRY_PICK_HEAD (measured, git 2.43).
-  for h in REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD ORIG_HEAD; do
-    hs=$(git -C "$workdir" rev-parse --verify --quiet "$h^{commit}" 2>/dev/null) && extras+=("$hs")
-  done
+  oph=$(_ws_reclaim_opheads "$workdir")
+  while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$oph"
   mainreal=$(_ws_common_dir "$main") || { RECLAIM_PIN_WHY="could not resolve the repository of $main"; return 1; }
-  # (1) Same-repository nested checkouts, innermost first: classify, commit,
-  # remember the head. A different repository's checkout was proven clean and
-  # pushed by rung 9 and goes with the tree; nothing of it can be pinned here.
-  # A checkout whose repository will not RESOLVE is neither: skipping it would
-  # leave its uncommitted work out of the pin AND out of REAP_CHILDLINES, and
-  # the tree removal would take it — so it fails the pin (spec §5.5, rung 8's
-  # rule: a read that failed measured nothing).
   wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || { RECLAIM_PIN_WHY="could not resolve $workdir"; return 1; }
   nested=$(_ws_nested_checkouts "$workdir") \
     || { RECLAIM_PIN_WHY="could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
-  # fd 9, not stdin: nothing git runs inside this loop may read the list.
-  while IFS= read -r -u 9 cpath; do
+  # (1a) EVERY nested checkout is PROVEN before anything is committed. A
+  # checkout of ANOTHER repository cannot be pinned into this attic, and it goes
+  # with the tree — so it is re-proven clean and pushed on EVERY call, with
+  # rung 9's own predicate (`_ws_reclaim_foreign_clean`): the ladder's proof is
+  # stale by the settle, and on the resumed arm there was none. A checkout
+  # whose repository will not RESOLVE is neither kind: skipping it would leave
+  # its work out of the pin and out of REAP_CHILDLINES, and the tree removal
+  # would take it (spec §5.5, rung 8's rule: a read that failed measured
+  # nothing). A same-repository checkout must have a commit at HEAD — an
+  # orphan with none has no head the tail could remove it at.
+  while IFS= read -r cpath; do
     [[ -n "$cpath" ]] || continue
     cpcommon=$(_ws_common_dir "$cpath") \
       || { RECLAIM_PIN_WHY="could not resolve the repository of the checkout at $cpath"; return 1; }
-    [[ "$cpcommon" == "$mainreal" ]] || continue
+    if [[ "$cpcommon" != "$mainreal" ]]; then
+      _ws_reclaim_foreign_clean "$cpath" \
+        || { RECLAIM_PIN_WHY="$_WS_FOREIGN_WHY — it would be removed with the tree, and nothing of it can be pinned here"; return 1; }
+      continue
+    fi
+    git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
+      || { RECLAIM_PIN_WHY="the checkout at $cpath has no commit at HEAD — there is nothing the tail could remove it at"; return 1; }
+    same+=("$cpath")
+  done <<< "$nested"
+  # (1b) Same-repository nested checkouts, innermost first: their operation
+  # heads and their HEAD first, exactly as for the child's own tree below,
+  # then classify, commit, remember the head. Their HEAD REFLOGS need no walk
+  # of their own: `reflog show --all` lists every worktree's HEAD reflog
+  # (`worktrees/<name>/HEAD`) from any one of them — measured, git 2.43 — so
+  # step (4)'s `_ws_attic_pin` over the child's tree already reads them.
+  while IFS= read -r -u 9 cpath; do
+    [[ -n "$cpath" ]] || continue
+    oph=$(_ws_reclaim_opheads "$cpath")
+    while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$oph"
+    chead=$(git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
+      || { RECLAIM_PIN_WHY="the HEAD of the checkout at $cpath does not resolve"; return 1; }
+    extras+=("$chead")
     _ws_reclaim_classify "$cpath" "${cpath#"$wdreal"/}/" \
       || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
-    _ws_wip_commit "$cpath" "$id" "$childof" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+    _ws_wip_commit "$cpath" "$id" "$childof" "${cpath#"$wdreal"/}/" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
     [[ -n "$RECLAIM_WIP_SHA" ]] && extras+=("$RECLAIM_WIP_SHA")
-    chead=$(git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || chead=""
-    [[ -n "$chead" ]] && extras+=("$chead")
+    chead=$(git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
+      || { RECLAIM_PIN_WHY="the HEAD of the checkout at $cpath does not resolve after its WIP commit"; return 1; }
+    extras+=("$chead")
     cbr=$(git -C "$cpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || cbr=""
     REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\n'
-  done 9< <(printf '%s\n' "$nested" | awk '{ print length($0) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
+  done 9< <(printf '%s\n' ${same[@]+"${same[@]}"} | awk 'NF { print length($0) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
   # (2) The child's own tree, LAST, so REAP_IGNORED describes it for the tombstone.
   _ws_reclaim_classify "$workdir" "" || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
-  _ws_wip_commit "$workdir" "$id" "$childof" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
+  _ws_wip_commit "$workdir" "$id" "$childof" "" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
   RECLAIM_WIP="$RECLAIM_WIP_SHA"
   [[ -n "$RECLAIM_WIP" ]] && extras+=("$RECLAIM_WIP")
-  hs=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) && extras+=("$hs")
-  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
+  headsha=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
+    || { RECLAIM_PIN_WHY="the HEAD of $workdir does not resolve"; return 1; }
+  extras+=("$headsha")
+  # THE BRANCH TIP IS A REQUIRED PIN (spec §5.5, step 3: "the branch tip
+  # including that WIP commit"): it is the commit the tail deletes the branch
+  # at, and on a DETACHED child it is not HEAD, so nothing else pins it. A
+  # branch that does not resolve leaves the tail no tip to delete it at.
+  REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) \
+    || { REAP_TIP=""; RECLAIM_PIN_WHY="refs/heads/$branch does not resolve in $main — there is no branch tip to pin"; return 1; }
+  extras+=("$REAP_TIP")
   # (3) Every stash attributed to the branch.
   stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { RECLAIM_PIN_WHY="could not read the stash list of $main"; return 1; }
   while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$stashes"
   # (4) The pins: the reflog and the tip through the EXISTING pin (its 200 + tip
-  # cap, unchanged), then everything above, which is never optional.
-  _ws_attic_pin "$main" "$id" "$workdir" "${REAP_TIP:-$hs}" >/dev/null
+  # cap, unchanged; best-effort, as its own header says), then everything above,
+  # which is never optional — the branch tip among it.
+  _ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP" >/dev/null
   _ws_reclaim_attic_extra "$main" "$id" ${extras[@]+"${extras[@]}"} \
     || { RECLAIM_PIN_WHY="a commit this reclaim must keep could not be pinned under refs/ccrc/attic/$id/"; return 1; }
   return 0

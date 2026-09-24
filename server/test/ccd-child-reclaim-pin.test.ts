@@ -5,6 +5,7 @@
 // tree rather than the tombstone; the WIP commit and the attic pins are
 // asserted by reading git refs").
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
@@ -22,9 +23,12 @@ interface Pinned { rc: string; wip: string; tip: string; why: string; secrets: s
 /** The ladder (for REAP_BRANCH and the nested/foreign lists), then the pin, in
  *  one shell — exactly the order `_ws_reclaim_locked` runs them. `defer` is
  *  the ladder's own flag: a case with an operation in progress needs it to get
- *  past rung 6, which is precisely the case the pin phase's heads exist for. */
-function pinOf(c: Child, opts: { pre?: string; env?: NodeJS.ProcessEnv; defer?: 0 | 1 } = {}): Pinned {
+ *  past rung 6, which is precisely the case the pin phase's heads exist for.
+ *  `between` runs after the ladder and before the pin: the window the settle
+ *  re-pin runs in, with no ladder in front of it. */
+function pinOf(c: Child, opts: { pre?: string; env?: NodeJS.ProcessEnv; defer?: 0 | 1; between?: string } = {}): Pinned {
   const out = h.sh(`${CHILD_STUBS} ${opts.pre ?? ''} _ws_reclaim_eval ${CHILD_ID} ${opts.defer ?? 0} ${CHILD_RUN} >/dev/null`
+    + `${opts.between ? ` && { ${opts.between}; }` : ''}`
     + ` && _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" "$REAP_BRANCH" ${CHILD_RUN}; rc=$?;`
     + ` printf '%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s' "$rc" "$RECLAIM_WIP" "$REAP_TIP" "$RECLAIM_PIN_WHY"`
     + ` "$(printf '%s\\n' "\${RECLAIM_SECRETS[@]}")" "$REAP_CHILDLINES"`, opts.env ?? {});
@@ -86,18 +90,33 @@ describe('the WIP commit', () => {
       + `|ccrc: WIP pinned at reclaim of ${CHILD_ID} (run ${CHILD_RUN})`);
   }, 60_000);
 
-  it('runs NO hook of the repository — not even the two --no-verify leaves running', () => {
+  it('runs NO hook of the repository and no fsmonitor — in ANY git call of the phase, not only the commit', () => {
+    // `git add`/`status` fire post-index-change, every `update-ref` fires
+    // reference-transaction, and a repository `core.fsmonitor` is a program
+    // `status` and `add` execute. Each records a run only once the PIN has
+    // started (`$HOME/pin-started`, touched between the ladder and the pin):
+    // the ladder is not the pin phase, and its own reads are not asserted here.
     const c = makeChild(h);
     const hooks = path.join(c.main, '.git', 'hooks');
     fs.mkdirSync(hooks, { recursive: true });
-    for (const hook of ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit']) {
-      fs.writeFileSync(path.join(hooks, hook), `#!/bin/sh\ntouch "$HOME/hook-${hook}"\n`, { mode: 0o755 });
+    const HOOKS = ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit', 'post-index-change', 'reference-transaction'];
+    for (const hook of HOOKS) {
+      fs.writeFileSync(path.join(hooks, hook),
+        `#!/bin/sh\n[ -e "$HOME/pin-started" ] && echo ${hook} >> "$HOME/hook-runs"\nexit 0\n`, { mode: 0o755 });
     }
+    const fsm = path.join(h.home, 'fsmonitor.sh');
+    fs.writeFileSync(fsm, '#!/bin/sh\n[ -e "$HOME/pin-started" ] && echo fsmonitor >> "$HOME/hook-runs"\nexit 1\n', { mode: 0o755 });
+    h.git(c.main, 'config', 'core.fsmonitor', fsm);
     fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
-    expect(pinOf(c).rc).toBe('0');
-    for (const hook of ['pre-commit', 'prepare-commit-msg', 'commit-msg', 'post-commit']) {
-      expect(fs.existsSync(path.join(h.home, `hook-${hook}`)), `${hook} ran`).toBe(false);
-    }
+    fs.writeFileSync(path.join(c.wt, 'new.txt'), 'n');
+    // The CONTROL: the same hooks DO fire for a git call made outside the phase.
+    const control = h.sh(`touch "$HOME/pin-started"; git -C "${c.wt}" status --porcelain >/dev/null; cat "$HOME/hook-runs" 2>/dev/null; rm -f "$HOME/hook-runs" "$HOME/pin-started"`);
+    expect(control, 'the CONTROL: an uncontained status runs the fsmonitor').toContain('fsmonitor');
+    const p = pinOf(c, { between: 'touch "$HOME/pin-started"' });
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
+    const runs = fs.existsSync(path.join(h.home, 'hook-runs')) ? fs.readFileSync(path.join(h.home, 'hook-runs'), 'utf8') : '';
+    expect(runs, 'a repository-configured program ran inside the pin phase').toBe('');
   }, 60_000);
 
   it('makes no commit when there is nothing uncommitted — the ordinary finished child', () => {
@@ -119,6 +138,7 @@ describe('the WIP commit', () => {
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch did not move').toBe(c.tip);
     expect(p.tip).toBe(c.tip);
     expect(atticShas(c)).toContain(p.wip);
+    expect(atticShas(c), 'the branch tip — what the tail deletes the branch at — is pinned').toContain(c.tip);
   }, 60_000);
 });
 
@@ -316,6 +336,33 @@ describe('the workdir leaf is never followed — the settle re-pin runs without 
     expect(atticShas(c), 'the guard stands before every pin').toEqual([]);
   }, 60_000);
 
+  it('FAILS on a link to a DETACHED worktree — where the branch check alone would let the commit through', () => {
+    // `other` detached answers the pin's HEAD check (a detached HEAD is a
+    // legal place for the WIP commit), so here the LEAF test is the only
+    // guard between the pin and `other`'s work.
+    const c = makeChild(h);
+    const other = makeOther(c);
+    h.git(other, 'checkout', '-q', '--detach');
+    const before = snapshot(c, other);
+    const p = pinThroughLink(c, other, c.wt);
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('symbolic link');
+    expect(snapshot(c, other), '`other` is byte-unchanged').toEqual(before);
+    expect(atticShas(c)).toEqual([]);
+  }, 60_000);
+
+  it('FAILS on the same link spelled `<wt>/`, `other` detached — a trailing slash cannot walk past the leaf test', () => {
+    const c = makeChild(h);
+    const other = makeOther(c);
+    h.git(other, 'checkout', '-q', '--detach');
+    const before = snapshot(c, other);
+    const p = pinThroughLink(c, other, `${c.wt}/`);
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('not one plain absolute path');
+    expect(snapshot(c, other), '`other` is byte-unchanged').toEqual(before);
+    expect(atticShas(c)).toEqual([]);
+  }, 60_000);
+
   it('FAILS on the same link spelled `<wt>/` — a trailing slash cannot walk past the leaf test', () => {
     // `lstat("<link>/")` follows the link, so `-L "<wt>/"` is false: without
     // the plain-path test the pin would commit `other`'s work.
@@ -358,7 +405,196 @@ describe('a nested checkout whose repository cannot be resolved', () => {
       + ` && _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" "$REAP_BRANCH" ${CHILD_RUN}; printf '%s|%s' "$?" "$RECLAIM_PIN_WHY"`);
     const [rc, why] = out.split('|');
     expect(rc, why).toBe('1');
-    expect(why).toContain(inner);
+    expect(why, 'the unresolved checkout was folded into another kind').toContain(`could not resolve the repository of the checkout at ${inner}`);
     expect(h.git(c.main, 'rev-parse', 'refs/heads/ws/nested'), 'nothing was committed in the checkout').toBe(nestedTip);
+  }, 60_000);
+});
+
+describe('the WIP commit never holds a secret-shaped path whose content differs from HEAD’s (spec §5.5, steps 1–2)', () => {
+  /** A TRACKED secret-shaped file: a template committed on the branch. */
+  const trackedSecret = (c: Child): string => {
+    fs.mkdirSync(path.join(c.wt, 'config'));
+    fs.writeFileSync(path.join(c.wt, 'config', '.env'), 'KEY=\n');
+    h.git(c.wt, 'add', 'config/.env'); h.git(c.wt, 'commit', '-m', 'the template');
+    return h.git(c.wt, 'rev-parse', 'HEAD:config/.env');
+  };
+
+  it('(a) a secret STAGED but never committed is not committed, is listed, and stays staged in the user’s own index', () => {
+    // The shape a pre-commit secret scanner leaves: it refused the commit, and
+    // the file is still in the index.
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=live');
+    fs.mkdirSync(path.join(c.wt, 'secrets')); fs.writeFileSync(path.join(c.wt, 'secrets', 'token.txt'), 't');
+    fs.writeFileSync(path.join(c.wt, 'staged-plain.txt'), 'kept');
+    h.git(c.wt, 'add', '.env', 'secrets/token.txt', 'staged-plain.txt');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
+    expect(tree, 'a staged NEW non-secret file is committed').toContain('staged-plain.txt');
+    for (const never of ['.env', 'secrets/token.txt']) {
+      expect(tree, `${never} was committed from the index`).not.toContain(never);
+    }
+    expect([...p.secrets].sort()).toEqual(['.env', 'secrets/token.txt']);
+    expect(h.git(c.wt, 'ls-files', '--stage', '--', '.env', 'secrets/token.txt').split('\n'),
+      'the user’s own index was rewritten').toHaveLength(2);
+  }, 60_000);
+
+  it('(b) a STAGED modification of a tracked secret-shaped file keeps HEAD’s blob, and is listed', () => {
+    const c = makeChild(h);
+    const template = trackedSecret(c);
+    fs.writeFileSync(path.join(c.wt, 'config', '.env'), 'KEY=live\n');
+    h.git(c.wt, 'add', 'config/.env');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'rev-parse', `${p.wip}:config/.env`), 'the live key was committed').toBe(template);
+    expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('edited');
+    expect(p.secrets).toEqual(['config/.env']);
+  }, 60_000);
+
+  it('(c) an UNSTAGED modification of a tracked secret-shaped file keeps HEAD’s blob, and is listed', () => {
+    const c = makeChild(h);
+    const template = trackedSecret(c);
+    fs.writeFileSync(path.join(c.wt, 'config', '.env'), 'KEY=live\n');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    fs.rmSync(path.join(c.wt, 'f2.txt'));
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'rev-parse', `${p.wip}:config/.env`), 'the live key was committed').toBe(template);
+    const tree = h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n');
+    expect(tree, 'a tracked DELETION is committed').not.toContain('f2.txt');
+    expect(p.secrets).toEqual(['config/.env']);
+  }, 60_000);
+
+  it('the tombstone’s secretsDropped carries the staged and the tracked secret', () => {
+    const c = makeChild(h);
+    trackedSecret(c);
+    fs.writeFileSync(path.join(c.wt, 'config', '.env'), 'KEY=live\n');
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=live');
+    h.git(c.wt, 'add', '.env');
+    h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 ${CHILD_RUN} >/dev/null`
+      + ` && _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" "$REAP_BRANCH" ${CHILD_RUN}`
+      + ` && _ws_tombstone ${CHILD_ID} '[]' "$(_ws_reclaim_tomb_fields ${CHILD_RUN})" >/dev/null`);
+    const tomb = JSON.parse(fs.readFileSync(path.join(h.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`), 'utf8')) as Record<string, unknown>;
+    expect([...(tomb['secretsDropped'] as string[])].sort()).toEqual(['.env', 'config/.env']);
+  }, 60_000);
+});
+
+describe('the WIP commit lands only on the child’s own branch or a detached HEAD', () => {
+  it('FAILS when the tree has switched to another branch after the ladder — that branch does not move', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c, { between: `git -C "${c.wt}" switch -q -c shared-feature` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('refs/heads/shared-feature');
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/shared-feature'), 'the WIP commit landed on another branch').toBe(c.tip);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
+    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+  }, 60_000);
+});
+
+describe('the branch tip is a REQUIRED pin', () => {
+  it('FAILS on a detached child whose branch tip cannot be pinned — the tip is not HEAD, so nothing else pins it', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '--detach');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'detached work\n');
+    // A ref BELOW the tip's attic name makes that one name unwritable (a
+    // directory/file conflict) while every other sha still pins.
+    h.git(c.main, 'update-ref', `refs/ccrc/attic/${CHILD_ID}/${c.tip}/blocker`, c.tip);
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain(`could not be pinned under refs/ccrc/attic/${CHILD_ID}/`);
+  }, 60_000);
+
+  it('FAILS when the branch no longer resolves — there is no tip the tail could delete it at', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '--detach');
+    const p = pinOf(c, { between: `git -C "${c.main}" update-ref -d refs/heads/${CHILD_BRANCH}` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain(`refs/heads/${CHILD_BRANCH} does not resolve`);
+  }, 60_000);
+});
+
+describe('nested checkouts, re-proven and pinned on every call', () => {
+  /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other`. */
+  const foreignClone = (wt: string): string => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
+    h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    return clone;
+  };
+
+  it('the CONTROL: a clean, pushed checkout of another repository passes, and is not committed into the child', () => {
+    const c = makeChild(h);
+    foreignClone(c.wt);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'ls-tree', '-r', '--name-only', p.wip).split('\n').filter((f) => f.startsWith('vendor'))).toEqual([]);
+  }, 60_000);
+
+  it('FAILS when a checkout of another repository was DIRTIED after the ladder — its proof is taken again', () => {
+    const c = makeChild(h);
+    const clone = foreignClone(c.wt);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c, { between: `echo late > "${clone}/late.txt"` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('uncommitted file(s)');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'nothing was committed before the proof').toBe(c.tip);
+  }, 60_000);
+
+  it('FAILS when a checkout of another repository gained a commit on none of its remotes after the ladder', () => {
+    const c = makeChild(h);
+    const clone = foreignClone(c.wt);
+    const p = pinOf(c, { between: `git -C "${clone}" -c user.name=x -c user.email=x@x commit -q --allow-empty -m local` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('on none of its remotes');
+  }, 60_000);
+
+  it('FAILS on a same-repository checkout with NO commit at HEAD (an orphan) — nothing is committed', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '--orphan', '-b', 'ws/orphan', inner);
+    fs.writeFileSync(path.join(inner, '.env'), 'KEY=live');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('has no commit at HEAD');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'nothing was committed').toBe(c.tip);
+  }, 60_000);
+
+  it('pins a nested checkout’s operation heads BEFORE its WIP commit concludes them', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    const tree = h.git(inner, 'rev-parse', 'HEAD^{tree}');
+    const mergeSide = h.git(inner, 'commit-tree', tree, '-p', 'HEAD', '-m', 'nested merge side, in no reflog');
+    expect(h.git(c.wt, 'reflog', 'show', '--all', '--format=%H'), 'the CONTROL: in no reflog').not.toContain(mergeSide);
+    fs.writeFileSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'), `${mergeSide}\n`);
+    fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(fs.existsSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')),
+      'the CONTROL: the nested WIP commit concluded the merge').toBe(false);
+    expect(atticShas(c), 'the nested MERGE_HEAD is not pinned').toContain(mergeSide);
+  }, 60_000);
+
+  it('pins a commit that only a nested checkout’s own HEAD reflog names', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    h.git(inner, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(inner, 'x.txt'), 'x'); h.git(inner, 'add', 'x.txt'); h.git(inner, 'commit', '-q', '-m', 'detached, then left');
+    const lost = h.git(inner, 'rev-parse', 'HEAD');
+    h.git(inner, 'checkout', '-q', 'ws/nested');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(atticShas(c)).toContain(lost);
   }, 60_000);
 });
