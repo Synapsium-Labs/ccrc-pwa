@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -293,6 +293,88 @@ const KICKOFF_ERROR_TEXT: Record<string, string> = {
 
 export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
 
+/**
+ * The one sentence every move control carries while it is DISABLED (design
+ * 2026-09-20 §13, §15 row W3): Install and Roll back on a release row, Update
+ * and Roll back on a node row, and the fleet banner's Update all. One literal,
+ * so five controls cannot disagree about when they arrive, and the wave that
+ * enables them retires one line. This client has no method for either move
+ * route, on purpose — `api.test.ts` pins the census of the update routes it
+ * spells, so nothing here can be wired to a disabled control early.
+ */
+export const MOVE_DISABLED_TEXT = 'lands with the next release (W4)';
+
+/**
+ * The body of `POST /api/updates/intent` — W2's `INTENT_BODY_KEYS`, and nothing
+ * else (its parser refuses an unknown key). A PARTIAL over one scope: an omitted
+ * field keeps its stored value, so moving one setting cannot clobber another
+ * with a stale reading. `pinnedTag: null` clears a pin; leaving it out keeps it.
+ * `scope` is `FLEET_SCOPE` for the fleet default, else a node id.
+ */
+export interface UpdateIntentRequest {
+  scope: string;
+  channel?: UpdateChannel;
+  pinnedTag?: string | null;
+  auto?: AutoMode;
+  notify?: NotifyMode;
+}
+
+/**
+ * The update routes' refusals (W2 Task 13's route table), the sixth code table
+ * in this file (after SEND, SUBMIT, UPLOAD, API and KICKOFF) — and the first
+ * that is read CODE-FIRST rather than composed after `apiErrorText`
+ * (D-3302).
+ *
+ * WHY NOT `updateText(apiErrorText(err))`, the way `kickoffErrorText` composes.
+ * Two of these words already have owners: `not-configured` is `API_ERROR_TEXT`'s
+ * kickoff sentence ("does not run coordination — there is no mail store to
+ * queue a kickoff into"), which is false on this surface, and `bad-request` is
+ * the upload and kickoff tables'. Composed after `apiErrorText`, the update
+ * screen would show the kickoff sentence; composed into it, every other surface
+ * would show the update one. Read first, against its own keys, each surface
+ * says its own thing — and `apiErrorText` is the floor only for a code this
+ * table does not own. It consumes no translator's output and no translator
+ * consumes its output, so the shadowing the mutual-exclusion suite guards
+ * cannot arise here; `api.test.ts` pins the other direction, that the five
+ * existing tables pass every update-only word through unchanged.
+ *
+ * Keyed by W2's union: a word W2 adds to `UpdateRouteError` is a compile error
+ * here until it has a sentence. `unauthenticated` is excluded, because a 401
+ * raises the login screen through `request()` before any sentence matters.
+ * `rate-limited` claims a REQUEST, never a landed answer: the route answers it
+ * inside the route's derived `REFRESH_MIN_INTERVAL_MS` of the poller's last
+ * request (`lastRequestAt()`, D-3203), which a failed request and the
+ * scheduled poll both set, so `lastOkAt` may still be null — and nothing says
+ * "checked" while it is (spec §18).
+ */
+const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'>, string> = {
+  'not-configured': 'This box has no update control plane — it runs without a coordination database.',
+  'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',
+  'bad-request': 'The server refused the shape of that request — reload the screen and try again.',
+  'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
+  'unknown-node': 'That node is no longer in the inventory.',
+  superseded: 'That node was reinstalled under a new identity — reload to see it.',
+  busy: 'That node is mid-update — wait for it to settle, then acknowledge.',
+  'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
+  'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
+  'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
+  'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
+  'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+};
+
+/** Operator-facing text for a failed update-route call: the code in
+ *  `UPDATE_ERROR_TEXT` (OWN keys only — `Object.hasOwn`, so a body naming
+ *  `toString` is not a code this table owns), else `apiErrorText`'s answer. */
+export function updateErrorText(err: unknown): string {
+  if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
+    const code = (err.body as { error?: unknown }).error;
+    if (typeof code === 'string' && Object.hasOwn(UPDATE_ERROR_TEXT, code)) {
+      return UPDATE_ERROR_TEXT[code as keyof typeof UPDATE_ERROR_TEXT];
+    }
+  }
+  return apiErrorText(err);
+}
+
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
   const request = async (path: string, init?: RequestInit): Promise<Response> => {
@@ -476,6 +558,37 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
     rebootFleet: () => post('/api/fleet/reboot'),
+
+    /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,
+     *  releases, live nodes, intent rows. `501 not-configured` on a box with no
+     *  coordination database. Read through `useUpdatesView`, whose
+     *  `asUpdatesView` treats a malformed answer as a failure — the generic
+     *  here is the contract, not a proof. */
+    updates: () => getJson<UpdatesView>('/api/updates'),
+    /** `POST /api/updates/intent` — a PARTIAL over one scope (`UpdateIntentRequest`).
+     *
+     *  `postJsonOr`, not `postJson` (D-1150), for `setCoordCaps`'s reason: after
+     *  an intent WRITE, "the answer could not be read" and "the request never
+     *  happened" are different states — the first may well have stored the
+     *  channel — so the screen says "unconfirmed" and re-polls rather than
+     *  reporting a failure that may not have happened. A refusal still rejects
+     *  with its `ApiError`, whose body (`nodes`, `field`, `detail`) the screen
+     *  reads. */
+    setUpdateIntent: (body: UpdateIntentRequest) =>
+      postJsonOr<IntentWriteAnswer | 'unreadable'>('/api/updates/intent', 'unreadable', body),
+    /** `POST /api/updates/refresh` — *Check now*. `postJson`: it stores no
+     *  operator choice to be unconfirmed about — the answer IS the catalogue
+     *  line the screen shows, and an unreadable one is a failed check, which
+     *  the next 60 s poll heals. `429 rate-limited {retryAfterS}` inside the
+     *  route's derived `REFRESH_MIN_INTERVAL_MS` of the last catalogue request
+     *  (scheduled or tapped). */
+    refreshUpdates: () => postJson<CatalogueState>('/api/updates/refresh'),
+    /** `POST /api/updates/ack` — clears a node's failed/reverted state or an
+     *  outstanding request. `postJsonOr`, the `setUpdateIntent` argument: an
+     *  ack that answered unreadably may already have cleared the row. */
+    ackUpdateNode: (nodeId: string) =>
+      postJsonOr<AckAnswer | 'unreadable'>('/api/updates/ack', 'unreadable', { nodeId }),
+
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster
     // field added in Stage 2a is exactly the kind of addition that lands in two
