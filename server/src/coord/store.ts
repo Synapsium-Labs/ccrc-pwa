@@ -1908,6 +1908,47 @@ export class CoordStore {
   }
 
   /**
+   * THE ONE UNBIND (child-reclamation wave 2, spec §5.4): `runs.sessionId`
+   * back to NULL on a `planned` run, with `workspace`/`branch` beside it, and
+   * the act attributed on the run's own trail — ONE transaction, so a run is
+   * never unbound without its `session-unbound` event, nor the reverse.
+   *
+   * Its one caller is dispatch's resume arm, AFTER the fleet act (D-48's
+   * order): the spent child's claim is released, or handed to a surviving
+   * sibling, first, and only a fleet act that succeeded unbinds the row. The
+   * run stays `planned` — where a run awaiting dispatch already sits — so no
+   * backwards transition is invented, and the next dispatch takes the
+   * fresh-spawn arm and mints a new child.
+   *
+   * NOT A RE-BIND, which is why it is not `bindSession` and why
+   * `coord-store.test.ts`'s one-writer scan names it separately: it binds no
+   * value to the column, so it can hand the run to nobody. What it does NOT
+   * do, stated rather than hidden: worker mail this run's worker was sent on
+   * the spent child stays addressed to the spent child — the next
+   * `bindSession` sees a NULL predecessor and re-issues nothing. On the one
+   * path that calls this (a `planned` run whose dispatch never queued its
+   * brief) that set is empty unless a coordinator mailed the run's worker
+   * before dispatching it.
+   *
+   * `pr` rides in for the event's words only: the store holds no PR for a run
+   * that has not closed. `cleared: false` — and nothing written — when no
+   * `planned` row with a binding matched: an unknown id, a run that has left
+   * `planned`, or one already unbound.
+   */
+  clearSession(runId: number, pr: number): { ok: true; cleared: boolean } {
+    return tx(this.db, () => {
+      const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
+        .get(runId) as { sessionId: string | null } | undefined;
+      if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
+      this.db.prepare(
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ? AND state = 'planned'",
+      ).run(runId);
+      this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
+      return { ok: true as const, cleared: true };
+    });
+  }
+
+  /**
    * `runs.clearedAt` — the proof D-1's post-resume `/clear` actually
    * committed (`RunSummary.clearedAt`'s own docstring; the column landed in
    * Task 2's v1 DDL, unwritten, per D-1's own amendment). Mirrors
@@ -4857,7 +4898,7 @@ export class CoordStore {
    *  Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is L0's own
    *  pair (`shared/api.ts`) and does NOT call `'unknown'` terminal either, so
    *  the divergence this paragraph used to warn about is gone: this query now
-   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `close.ts`'s
+   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `rundefs.ts`'s
    *  `survivorOf` (built on `openRunsForSession`) on which run of a session is
    *  open, including on an `'unknown'` row.
    *
@@ -4865,7 +4906,7 @@ export class CoordStore {
    *  forbids two open runs naming one sessionId, and the coordinator protocol
    *  DELIBERATELY creates that state by opening wave N+1 before closing wave
    *  N. The newest run's claimant is the right answer there, and
-   *  `close.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
+   *  `rundefs.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
    *  caveat. Pinned by a two-wave/two-claimant test, verified red under
    *  ASC (fix round 1, finding 2). */
   parentOfSession(childId: string): string | null {

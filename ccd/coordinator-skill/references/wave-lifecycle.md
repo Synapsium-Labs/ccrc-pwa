@@ -25,6 +25,8 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
+| `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
+| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. Nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
 | `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
@@ -64,6 +66,12 @@ a `400 bad-request` whose `detail` names `homeProject`.
    project. Naming a session whose workspace belongs to another project is
    refused `project-mismatch`, `by:` that project, before any run row exists.
 
+   **And it is PR-FREE.** A workspace carrying the `$REG/<id>.child` marker —
+   ordinarily one the server minted for a run — is a CHILD, and a MARKED child
+   carries at most one PR: once its branch has had one, naming it here is
+   refused `workspace-spent` (table above), whatever the project. An UNMARKED
+   producer is never refused this way. See §5, "One PR per child".
+
    **Every open carries the home**, on every wave of the programme:
    `"homeProject":"<the home project>"` in the same body. The response answers
    `ledgerRepo` (the home project) and `ledgerAbsPath` (the home repo's
@@ -102,6 +110,8 @@ with the run now `dispatched`, or a refusal:
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
 | `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
+| `workspace-spent` | wave ≥ 2's session is a CHILD whose branch has had a PR since this run was opened — usually the previous wave's worker opened it after you opened this wave on its workspace; `pr` names it. The body also carries `unbound`, and `detail` whenever `unbound` is `false` | `unbound:true`: the server has already released the workspace (or handed its claim to the other run still open on it), cleared this run's `sessionId` and left the run `planned` — dispatch it again, unchanged, and a fresh child is minted, branching from the project's default branch and carrying none of the spent producer's unmerged commits; if this wave depends on that producer's code, wait until its PR is proven merged, exactly as §5's "One PR per child" requires, before dispatching again. `unbound:false`: that release (or hand-over) did not happen, or it happened but the run was no longer `planned` and bound by the time it completed — `detail` says which; a `detail` naming a PERMANENT cause — this box's ccd "does not support" the verb, the surviving run's claim "cannot be written", or the other runs naming the workspace "could not be read" — means stop and report, and any other `detail` (including "`<verb> failed`") means retry the same dispatch once, and if it repeats, stop and report. Either way nothing was resumed and no `/clear` was sent |
+| `spent-unmeasured` | wave ≥ 2's session may be a spent child and the evidence could not be read; `detail` says which read failed. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY session, marked or not — where a resume used to answer `error: 'registry-unmeasurable'` — because without the listing the server cannot tell a child from any other workspace; but dispatch lists the registry for its own pause check FIRST, so a registry that is ALREADY unlistable there answers `paused` instead (the table's first row) and never reaches here — this code's unlistable case is a listing that fails only at the resume arm's own re-read, after that pause check's listing already succeeded. `unbound` is always `false` | retry the same dispatch: the binding is kept, nothing was resumed and no `/clear` was sent. It is not `workspace-spent`. If it repeats, stop and report |
 
 **Caps count ACTIVE runs, not holds and not merely non-terminal ones.**
 Concurrency counts dispatched runs whose state is ACTIVE — `dispatched`,
@@ -214,10 +224,26 @@ unlike the two `route-omitted` events. The same event also records a
 dispatch the server could not measure: it held no capability list for the
 box — the local-mode boot window, a failed local caps probe unmeasured
 until the server restarts, or a remote ready frame with no usable list.
-`ccd caps` on the box tells the two apart: a list naming `child-argv-v1`
-puts the remedy on the server (reconnect the agent, or restart it), not on
-a ccd deploy. It is not an error and asks nothing
-of you: that workspace is simply not a child, exactly like every workspace
+Each cause has its own remedy. The local-mode boot window clears on its
+own, within seconds, once the box's one bounded boot-time probe resolves;
+a remote ready frame with no usable list clears the same way with no
+action from you, inside about a minute, on the watcher's own 60 s caps
+lane, which re-asks regardless of what the last frame said. A failed
+local caps probe does not retry itself — only a server restart re-probes
+it. An agent whose caps stay list-less past that 60 s lane needs its ccd
+or the agent process itself looked at. `ccd caps` run on the box tells
+the old-ccd cause apart from all of these: a list already naming
+`child-argv-v1` means the box's ccd is fine and the fix is one of the
+remedies just given, never a ccd deploy. A `ccd caps` that fails outright
+is NOT evidence of an old ccd — the same top-level check that kills every
+other invocation on a broken box (a missing or unreadable
+`~/.ccrc/accounts.sh`, `ccd/ccd`'s own `die`) kills `ccd caps` before it
+ever reaches its capability list, so a failing `ccd caps` gets the "look
+at its ccd" remedy above, plus a server restart afterward on a local box
+to re-probe it. Only a list that omits `child-argv-v1` outright names the
+old-ccd cause, and a ccd deploy is its fix. The event itself is not an
+error and asks nothing of you: that workspace is simply not a child,
+exactly like every workspace
 minted before the token existed, and nothing will ever reclaim it as one. A
 resumed workspace mints nothing and never carries the row.
 
@@ -688,6 +714,44 @@ whole time, which is the only prevention this ordering rule buys.
    program now has two open runs (this wave's, still `working`/
    `awaiting-review`/`merging`, and the new `planned` one), so it can never
    read as zero between waves.
+
+   **One PR per child — the PR decides `sessionId`, not the project.** A
+   CHILD is a workspace carrying the `$REG/<id>.child` marker — ordinarily
+   one the server minted for a run, on a box whose `ccd` records it — and a
+   MARKED child carries at most one PR. A fresh
+   child always branches from the project's default branch — `ccd ws-add`
+   sets `base` from `git symbolic-ref refs/remotes/origin/HEAD` — so it
+   carries NONE of a spent producer's unmerged commits. If this producer's
+   MARKED workspace opened a PR — the ordinary case for a wave that shipped
+   code — it is SPENT: open wave N+1 WITHOUT its `sessionId`, even in the
+   same project, and close the producer exactly as the cross-project arm
+   below closes it: `final:true`, then require `released:true`, then require
+   its own closed row's `state` to be `done` (`"$API" runs list --closed 1`)
+   — and, if wave N+1 depends on an interface from this producer,
+   independently prove that producer's PR merged at the exact SHA before
+   dispatching wave N+1, because the closed row proves fingerprint and
+   terminal state, never merge. Here, with no cross-project `producerSha` to
+   read, the exact SHA is the producer run's own verified `handoffCommit`:
+   prove the merge with `gh pr view <pr> --json state,headRefOid`, answering
+   MERGED with `headRefOid` equal to it — the coordinator merges with
+   `gh pr merge <pr> --squash --match-head-commit <handoffCommit>` (plus
+   `--admin` where the repository's ruleset requires it) for exactly this
+   reason. An UNMARKED producer — every workspace minted without a marker,
+   before wave 1's deploy, or by a dispatch that journaled `child-omitted`
+   (§2) — is never refused this way; dropping its `sessionId` anyway is
+   still safe and follows the same one-PR rule. The same-project arm is for
+   a producer whose workspace
+   opened no PR — a research or measurement wave —
+   and only for that. Naming a spent workspace is refused `workspace-spent`,
+   with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means
+   the server could not read the evidence either way — retry the same open,
+   and do not drop `sessionId` on its account. If the PR lands after you
+   opened wave N+1 on the workspace, the DISPATCH refuses `workspace-spent`
+   instead (§2); with `unbound:true` it has already released the workspace
+   and unbound the run — dispatch it again and a fresh child is minted, again
+   from the default branch and carrying none of the spent producer's code, so
+   if wave N+1 depends on that code, wait for the same merge proof before
+   redispatching.
 
    **Same project:** open wave N+1 first with this producer's `sessionId`, then
    close the producer with `final:false`; the hold transfers to the already-open
