@@ -8566,12 +8566,18 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    withdrawn-not-empty — `applyReleaseListing` under `'withdrawn'` coverage
  *                    (fix round 1, item 5, ruling A) was handed a non-empty
  *                    listing: that coverage names ONE existing tag to yank
- *                    through `withdrawTag`, never a row to upsert. */
+ *                    through `withdrawTag`, never a row to upsert.
+ *    unknown-release — `markReleaseNotified` (W3): no catalogue row carries
+ *                    the tag; nothing is written.
+ *    already-notified — `markReleaseNotified` (W3): the tag's `notifiedAt` is
+ *                    already set. The first mark stands, and the caller
+ *                    sends nothing (design §13: one push per tag). */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
+  'unknown-release', 'already-notified',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
