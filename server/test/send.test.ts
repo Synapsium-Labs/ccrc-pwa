@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KeyedQueue } from '../src/inject/queue.js';
-import { sendPrompt, draftOf, isMailResidue } from '../src/inject/send.js';
+import { sendPrompt, submitEnter, draftOf, draftOfMeasured, isMailResidue } from '../src/inject/send.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
 
@@ -1779,5 +1779,196 @@ describe('the clobber guard sees the whole box', () => {
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine',
     )).toEqual({ ok: true });
     expect(cuPresses(calls)).toBe(0);
+  });
+});
+
+/**
+ * A box TALLER THAN THE CAPTURE WINDOW, taken from the live fleet.
+ *
+ * Measured 2026-09-18 on session `claude-ccrc-pwa` (220x50): the operator had
+ * pasted a long document into the input box, and Claude Code renders a draft
+ * taller than the pane by scrolling the BOX's own interior. The visible 50 rows
+ * were therefore all box content — two-space-indented continuation rows, then
+ * the closing rule, then chrome — and the marker row carrying `❯` had scrolled
+ * ~277 rows above the window, into tmux history that `capture-pane -p -e`
+ * (no `-S`, `exec.ts`) does not read. `grep -c '❯'` on that capture answered 0
+ * while two healthy peers answered 2 and 4.
+ *
+ * That made both halves of the clobber guard fail OPEN at once — `draftOf`
+ * returned '' and `continuationRows` returned [] off the same absent marker —
+ * so five sends in a row typed onto a box holding 2.8 KB, none could echo-verify,
+ * each left its text by the refuse-never-destroy ruling, and every retry made
+ * the box taller. The state was absorbing: no send could ever land again.
+ *
+ * Rows are the real shape with the Russian sentence truncated for width; the
+ * ANSI on the rule row is the capture's own (`\e[38;5;246m`), because the rule
+ * is what `isRuleRow`/`continuationRows` key on.
+ */
+const BOX_TALLER_THAN_THE_WINDOW = [
+  '  ## Resume',
+  '  [Pasted text #4]если мы будем делать небольшие фиксы то надо будет создать ветку',
+  '  и через пр это делать так что думаю нужна будет еще ветка дев обязательно',
+  '  которые будут слиты в дев и пушится для пул рекеста на меинуу',
+  '\x1b[38;5;246m' + '─'.repeat(60),
+  '  👤 claude │ 🤖 Opus 5 (1M context) · xhigh │ ⎇ main │ 🎯 ccrc-pwa',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · 2 feedback drafts',
+].join('\n') + '\n';
+
+describe('a box that has scrolled out of the capture window is UNMEASURED, not empty', () => {
+  it('draftOfMeasured tells the two apart; draftOf keeps its documented collapse', () => {
+    expect(draftOfMeasured('scrollback\n❯ \n')).toEqual({ box: 'present', draft: '' });
+    expect(draftOfMeasured('scrollback\n❯ half typed\n')).toEqual({ box: 'present', draft: 'half typed' });
+    expect(draftOfMeasured(BOX_TALLER_THAN_THE_WINDOW)).toEqual({ box: 'absent' });
+    // The convenience read is unchanged for every caller that had it: absent
+    // still reads as '' THERE, which is why the measured sibling exists.
+    expect(draftOf(BOX_TALLER_THAN_THE_WINDOW)).toBe('');
+  });
+
+  it('sendPrompt refuses box-unreadable and types NOTHING — the guard that ends the accretion', async () => {
+    const { tmux, calls } = fakeTmux([BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'а вот ещё одна попытка');
+    expect(res.ok).toBe(false);
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    // Not one keystroke: no literal onto the operator's draft, no C-u into a box
+    // we cannot read, no Enter. This assertion IS the guard — delete the
+    // `box.box === 'absent'` refusal in sendPrompt and it goes red with the
+    // literal that starts the concatenation.
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+
+  it('names an echo it could not take box-unreadable, not verify-failed', async () => {
+    // The box is readable when the guard looks (so the send proceeds) and gone
+    // from the window by the time the echo polls — the live sequence, since our
+    // own typing is what pushes the marker row out.
+    const { tmux, calls } = fakeTmux(['scrollback\n❯ \n', BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world');
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    // Typed once, then stopped: no Enter into an unreadable box, and no clear.
+    expect(sendKeysCalls(calls)).toEqual([
+      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'hello world'],
+    ]);
+  });
+
+  it('does not read an absent box as proof the text left — the false SUCCESS', async () => {
+    // draftOf's '' made `!''.startsWith(needle)` true, i.e. "our text is gone",
+    // and sendPrompt returned ok:true for a message still sitting in the box.
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',             // guard: empty box
+      'scrollback\n❯ hello world\n',  // echo: our text landed
+      BOX_TALLER_THAN_THE_WINDOW,     // every post-Enter capture: no box at all
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world');
+    expect(res).not.toEqual({ ok: true });
+    expect(res.ok === false && res.error).toBe('enter-ignored');
+    // And no rescue claim: `submittable`/`draft` would both be built from a
+    // reading of nothing.
+    expect(res.ok === false && 'submittable' in res).toBe(false);
+    expect(res.ok === false && 'draft' in res).toBe(false);
+    expect(sendKeysCalls(calls).filter((c) => c[c.length - 1] === 'Enter')).toHaveLength(2);
+  });
+
+  it('stops a replace-clear the moment the box leaves the capture, instead of hammering C-u blind', async () => {
+    const { tmux, calls } = fakeTmux(['scrollback\n❯ the operator’s own draft\n', BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'mine', { replaceDraft: true },
+    );
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    // One blind press, then the look round read no box and stopped. The old
+    // terminator read '' off the same capture and would have answered `cleared`,
+    // then typed onto whatever is really in there.
+    expect(cuPresses(calls)).toBe(1);
+    expect(sendKeysCalls(calls).some((c) => c.includes('-l'))).toBe(false);
+  });
+
+  it('submitEnter refuses rather than pressing Enter on a box it cannot read', async () => {
+    const { tmux, calls } = fakeTmux([BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await submitEnter({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'whatever it was');
+    expect(res).toEqual({ ok: false, error: 'box-unreadable' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+});
+
+/**
+ * The lanes the first cut of this fix left unpinned, and the sequence it got
+ * wrong (both found by review, both measured before they were fixed).
+ *
+ * THE SEQUENCE: the box is readable when the guard looks — it has to be, or the
+ * send would have been refused there — and gone by the time the echo polls run,
+ * because OUR OWN TYPING is what makes it too tall. A first poll that still sees
+ * the box is not an exception, it is what this loop polls for (its own comment:
+ * a single shot "raced the TUI's re-render"). An ever-saw-a-box flag is disarmed
+ * by that poll; the LAST measurement is the one that describes the box now.
+ */
+const CLIP = '/home/you/.cc-clips/2026-09-19-x.png';
+
+describe('every lane that can reach an unreadable box refuses on the LAST measurement', () => {
+  it('ordinary arm: a box present on the first poll and gone by the last is still box-unreadable', async () => {
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',            // guard: readable, empty
+      'scrollback\n❯ \n',            // echo poll 1: box present, our text not rendered yet
+      BOX_TALLER_THAN_THE_WINDOW,    // every later poll: the box has outgrown the window
+    ]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world');
+    // Measured before the fix: `verify-failed` with `draft: ''` — the PWA's
+    // "never echoed it back", which is false and carries no remedy.
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    expect(cuPresses(calls)).toBe(0);
+  });
+
+  it('attachment arm: refuses instead of firing the blind floor into a box it cannot read', async () => {
+    const { tmux, calls } = fakeTmux(['scrollback\n❯ \n', BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [CLIP] },
+    );
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    // THE HALF THAT MATTERS: the floor is `2 * visualRows - 1` presses fired
+    // BLIND, sized off what we typed and not off what the box holds. Into an
+    // unreadable box that is the operator's own draft, shredded.
+    expect(cuPresses(calls)).toBe(0);
+  });
+
+  it('attachment arm: the same first-poll-present sequence, same answer', async () => {
+    const { tmux, calls } = fakeTmux(['scrollback\n❯ \n', 'scrollback\n❯ \n', BOX_TALLER_THAN_THE_WINDOW]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [CLIP] },
+    );
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    expect(cuPresses(calls)).toBe(0);
+  });
+
+  it('the mail lane’s own clear stops on an unreadable box too, not just replaceDraft’s', async () => {
+    const { tmux, calls } = fakeTmux([
+      '❯ [Pasted text #1 +54 lines]\n',   // recognized machine residue → the clear is opened
+      BOX_TALLER_THAN_THE_WINDOW,         // and the box leaves the window mid-clear
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'ccrc-mail: you have new mail',
+      { clearMailResidue: true },
+    );
+    expect(res).toEqual({ ok: false, error: 'box-unreadable' });
+    expect(cuPresses(calls)).toBe(1);                                   // the blind press, then it stopped
+    expect(sendKeysCalls(calls).some((c) => c.includes('-l'))).toBe(false);
+  });
+});
+
+describe('the attachment lane’s clear does not narrow an unreadable box back into verify-failed', () => {
+  it('reports box-unreadable when the box leaves the window during the blind clear', async () => {
+    // Reachable without any race on our part: the echo polls all read a box
+    // (somebody else's row, so `needle` never matches), the arm proceeds to the
+    // clear, and the floor's own presses are fired blind into a box that goes
+    // over-tall while they land. `verify-failed` would then be a claim about a
+    // box nothing can read — and would drop the remedy.
+    const { tmux, calls } = fakeTmux([
+      'scrollback\n❯ \n',                                   // guard: readable, empty
+      ...Array.from({ length: 13 }, () => 'scrollback\n❯ somebody else’s row\n'),
+      BOX_TALLER_THAN_THE_WINDOW,                           // the clear's look round: no box
+    ]);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'caption', { attachments: [CLIP] },
+    );
+    expect(res.ok === false && res.error).toBe('box-unreadable');
+    // The blind floor did fire — that is what put us here — but nothing claims
+    // the box was cleared, and no `draft` is invented from a reading of nothing.
+    expect(res.ok === false && 'draft' in res).toBe(false);
   });
 });
