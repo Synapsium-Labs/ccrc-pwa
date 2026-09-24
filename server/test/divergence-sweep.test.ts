@@ -18,6 +18,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { ACTOR_CLASSES, corroboration, LC_ACT_UNKNOWN, LIFECYCLE_ACTS } from '../../shared/api.js';
 import type { Divergence } from '../../shared/api.js';
+import { WebSocket } from 'ws';
+import { buildServer, type Deps as ServerDeps } from '../src/server.js';
+import { HEADS_BOOT_WAIT_MS } from '../src/watch.js';
 import { okRuns } from './coordReadHelpers.js';
 
 /** The repo root, for the one source-text assertion below. */
@@ -37,6 +40,10 @@ interface FixtureCfg {
    *  reason. Its own failure mode is the opposite of the one above: a registry
    *  that will not list is not "nothing claims anything". */
   unreadableRegistry?: boolean;
+  /** Make every read of git's worktree admin directory NEVER answer — a
+   *  dropped agent round trip that neither resolves nor rejects — so the
+   *  first HEAD sweep never lands. */
+  hangAdminReaddir?: boolean;
 }
 
 /** A watcher over a tmp `projectsRoot`, plus the two things this suite plants:
@@ -81,6 +88,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
         hooks.onAdminReaddir = null;
         fire();
       }
+      if (cfg.hangAdminReaddir === true && p.includes(adminOf(''))) return new Promise<never>(() => {});
       if (cfg.unreadableProject !== undefined && p.includes(adminOf(cfg.unreadableProject))) return null;
       if (cfg.unreadableRegistry === true && p === cfgObj.registryDir) return null;
       return localIO.readdir(p);
@@ -95,7 +103,7 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
   const watcher = new FleetWatcher(deps as never, bus, 10_000);
 
   return {
-    home, bus, watcher, coord, projectsRoot, hooks, cfgObj,
+    home, bus, watcher, coord, projectsRoot, hooks, cfgObj, deps: deps as never as ServerDeps,
     ccdCalls: () => calls,
     /** The `readdir` paths this sweep took, in order. */
     reads: () => [...readdirs],
@@ -875,6 +883,93 @@ describe('sweepDivergences keeps each worktree\'s measured HEAD for the fleet', 
     jump(2);
     await sweep(h);
     expect(h.watcher.currentHeadBranches().has('demo-quiet-basin')).toBe(false);
+  });
+
+  // THE FIRST FRAME AFTER A RESTART. `tick()` fires the sweep without awaiting
+  // it and then assembles at once, so the first assembly always met an EMPTY
+  // head map and shipped the registry's name — stale after a manual checkout —
+  // until the sweep landed and the next tick ran.
+  it('the FIRST tick after boot waits for the first HEAD sweep, so its frame already carries the HEAD', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    const fleets: { id: string; branch: string | null }[][] = [];
+    h.bus.on('fleet', (s) => fleets.push(s as { id: string; branch: string | null }[]));
+    const t0 = Date.now();
+    await h.watcher.tick(); // no sweep beforehand: this tick fires the first one
+    expect(fleets.at(0)?.find((s) => s.id === 'demo-quiet-basin')?.branch).toBe('docs/checked-out-by-hand');
+    // …and it was RELEASED by the sweep landing, not by the budget running out:
+    // a lost `settleHeads()` still ships the right branch, 2.5 s late. The bound
+    // times the whole tick (~100 ms here), so a badly loaded box can red it too.
+    expect(Date.now() - t0, 'the first tick took the whole wait budget — settleHeads() never released it, or this box is badly loaded')
+      .toBeLessThan(HEADS_BOOT_WAIT_MS);
+  });
+
+  it('a first HEAD sweep that never answers holds the first frame no longer than its budget', async () => {
+    const h = await watcherFixture({ hangAdminReaddir: true });
+    h.plantRecord('demo-quiet-basin');
+    const fleets: { id: string; branch: string | null }[][] = [];
+    h.bus.on('fleet', (s) => fleets.push(s as { id: string; branch: string | null }[]));
+    const t0 = Date.now();
+    await h.watcher.tick();
+    const took = Date.now() - t0;
+    // The frame still ships, on the registry's name — the fallback it has.
+    expect(fleets.at(0)?.find((s) => s.id === 'demo-quiet-basin')?.branch).toBe('ws/demo-quiet-basin');
+    expect(took).toBeGreaterThanOrEqual(HEADS_BOOT_WAIT_MS - 50);
+    expect(took).toBeLessThan(HEADS_BOOT_WAIT_MS + 3000);
+    // …and ONLY the first tick waits: a sweep that never lands does not tax
+    // every tick after it.
+    const t1 = Date.now();
+    await h.watcher.tick();
+    expect(Date.now() - t1).toBeLessThan(HEADS_BOOT_WAIT_MS);
+  }, HEADS_BOOT_WAIT_MS * 3 + 5000);
+
+  // The two server.ts call sites that hand the map to `assembleFleet` outside
+  // the tick — the REST fleet and the /ws/fleet cold-start frame. Deleting the
+  // argument from either left every suite green (pr-sweep.test.ts records the
+  // same shape for currentPrStates); these make each one red.
+  it('GET /api/fleet carries the measured HEAD, not the registry\'s branch', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    const app = await buildServer(h.deps, h.bus, h.watcher);
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+      const body = res.json() as { sessions: { id: string; branch: string | null }[] };
+      expect(body.sessions.find((s) => s.id === 'demo-quiet-basin')?.branch).toBe('docs/checked-out-by-hand');
+    } finally {
+      h.watcher.stop();
+      await app.close();
+    }
+  });
+
+  it('a NEW /ws/fleet client\'s cold-start frame carries the measured HEAD', async () => {
+    const h = await watcherFixture();
+    h.plantRecord('demo-quiet-basin');
+    h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
+    await sweep(h);
+    const app = await buildServer(h.deps, h.bus, h.watcher);
+    try {
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      type Frame = { type: string; sessions?: { id: string; branch: string | null }[] };
+      // Found by TYPE, not index: the coord store adds cold-start frames of its own.
+      const fleet = await new Promise<Frame>((resolve, reject) => {
+        ws.on('message', (d) => {
+          const f = JSON.parse(String(d)) as Frame;
+          if (f.type === 'fleet') resolve(f);
+        });
+        ws.on('error', reject);
+      });
+      ws.close();
+      expect(fleet.sessions?.find((s) => s.id === 'demo-quiet-basin')?.branch).toBe('docs/checked-out-by-hand');
+    } finally {
+      h.watcher.stop();
+      await app.close();
+    }
   });
 
   it('tick() publishes the measured HEAD as the branch of a row whose pane gave none', async () => {

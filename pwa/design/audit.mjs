@@ -683,9 +683,9 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the "Passkeys" eyebrow inside the same .auth-block card, one ink step down (--ink-tertiary). Grounding only the title would leave HALF the card measured, which is worse than neither: the report then LOOKS like the block is covered (the trap spelled out on the .sess-spawn variant entry below)',
   },
-  "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']": {
+  "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']": {
     under: ['var(--bg-surface)'],
-    why: 'the two "we do not know" verdicts drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
+    why: 'the two "we do not know" verdicts, and a narrow spawn whose pane is measured wide again (`was narrow`), drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
   },
   'fleet.css .proj-crossing': {
     under: ['var(--bg-surface)'],

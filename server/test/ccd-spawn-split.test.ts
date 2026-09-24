@@ -545,6 +545,57 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
 });
 
 // ---------------------------------------------------------------------------
+// A fresh pane is born at the size of whatever client tmux last saw, NOT at
+// `new-session -x 220 -y 50` — and that is what turned 13 overnight spawns
+// into spawn rc 6 ("narrow").
+// ---------------------------------------------------------------------------
+
+describe('_spawn_start pins the new window to 220x50 before handing it to `latest`', () => {
+  // Measured 2026-09-23 on a private tmux 3.4 server (-L, -f /dev/null), with
+  // a 60x20 client attached to a DIFFERENT session:
+  //   new-session -d -x 220 -y 50                          -> 60x19
+  //   … then set-option window-size latest                 -> 60x19, and it
+  //     stays 60x19 after that client detaches
+  //   … resize-window -x 220 -y 50, then window-size latest -> 220x50 and
+  //     `latest`; still 220x50 after the stray client typed, opened a window,
+  //     another session spawned, and the client left. It re-sizes only when a
+  //     client attaches to THIS session, which is what `latest` is for.
+  //   … window-size latest, then resize-window             -> 220x50 but
+  //     latched `manual`: a phone's `ccd attach` would no longer fit.
+  // A stubbed tmux cannot show a window's size, so what is pinned here is
+  // the argv and its ORDER — the two things the measurement says decide it.
+  const calls = (): string[] => h.calls().filter((c) => c.startsWith('tmux '));
+  const pinAt = (cs: string[]): number => cs.indexOf('tmux resize-window -t =cc-myid: -x 220 -y 50');
+  const latestAt = (cs: string[]): number => cs.findIndex((c) => /^tmux set-option -t \S*cc-myid\S* window-size latest$/.test(c));
+  const lastNewAt = (cs: string[]): number => cs.map((c) => c.startsWith('tmux new-session')).lastIndexOf(true);
+
+  it('resizes the window AFTER creating it and BEFORE setting `latest`', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    const cs = calls();
+    expect(pinAt(cs), 'no 220x50 pin: a narrow client anywhere on the server narrows this pane').toBeGreaterThan(-1);
+    expect(pinAt(cs)).toBeGreaterThan(lastNewAt(cs));
+    expect(latestAt(cs), '`latest` is kept, so a human attach still fits the window').toBeGreaterThan(-1);
+    expect(pinAt(cs), 'a pin AFTER `latest` latches `manual` for good').toBeLessThan(latestAt(cs));
+  });
+
+  it('targets the window EXACTLY — `=name:`, the only form that cannot fnmatch a neighbour (D-2780)', () => {
+    seed('myid');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start myid new`);
+    expect(calls().filter((c) => c.startsWith('tmux resize-window'))).toEqual(['tmux resize-window -t =cc-myid: -x 220 -y 50']);
+  });
+
+  it('pins after the --resume fallback too — the retry is the pane that lives', () => {
+    seed('myid');
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+    const cs = calls();
+    expect(newSessions()).toHaveLength(2);
+    expect(pinAt(cs)).toBeGreaterThan(lastNewAt(cs));
+    expect(pinAt(cs)).toBeLessThan(latestAt(cs));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §1.4 — TWO CONCURRENT ws-adds FOR ONE PROJECT.
 // ---------------------------------------------------------------------------
 

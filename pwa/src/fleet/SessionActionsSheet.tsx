@@ -40,6 +40,7 @@ const holdErrorText = (err: unknown): string => {
 };
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
+import { narrowSinceWidened } from './spawnWords';
 import { SwapSheet } from './SwapSheet';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from './ArchiveConflictSheet';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -369,14 +370,19 @@ export function SessionActionsSheet({
               the remedy is widening it. Once it has died, Restart session IS the
               respawn — the second arm. The width is the constant ccd stands
               down at. */}
-          {session.spawnState === 'narrow' && session.status !== 'dead' && (
+          {session.spawnState === 'narrow' && session.status !== 'dead' && !narrowSinceWidened(session) && (
             <p className="sess-sheet-note">
-              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. This marker stays until the session next spawns, and a narrow terminal attached to any session makes that spawn narrow too — close it first.`}
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. A current ccd pins every spawn 220x50, so the usual cause is a terminal attached straight to this session; it can also be a failed pin or a width ccd could not read, and a marker left by an older ccd may come from a narrow terminal on any session.`}
+            </p>
+          )}
+          {narrowSinceWidened(session) && session.status !== 'dead' && (
+            <p className="sess-sheet-note">
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts and skipped its /effort and its re-drive of any interrupted turn. The pane has since been widened and its prompt is up, so auto-swap and auto-compact are back on — if this session was mid-turn when it respawned, it may still be waiting for a nudge. This marker stays until the session next spawns.`}
             </p>
           )}
           {session.spawnState === 'narrow' && session.status === 'dead' && (
             <p className="sess-sheet-note">
-              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one — close any narrow terminal attached to any session first, or the new pane is born narrow too.`}
+              {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one, which a current ccd pins 220x50.`}
             </p>
           )}
 

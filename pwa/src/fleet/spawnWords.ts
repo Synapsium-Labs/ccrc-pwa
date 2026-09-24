@@ -22,7 +22,7 @@
 // arm: the `unstarted` fallback for a shape that records no verdict at all.
 // Each function's docstring argues its own scope; the run board's half was
 // decided in Task 5's review round and is measured in both suites.
-import type { FleetSession, SpawnVerdict } from '../../../shared/api';
+import { paneWidth, READER_MIN_COLS, type FleetSession, type SpawnVerdict } from '../../../shared/api';
 
 /** The verdict's DISPLAYED word, or `null` for a verdict with nothing to say.
  *
@@ -37,7 +37,8 @@ import type { FleetSession, SpawnVerdict } from '../../../shared/api';
  *  `narrow` keeps the LOUD ink (fleet.css gives it no variant): unlike
  *  `expired`, it does not settle on its own — the window stays narrow after
  *  whatever narrowed it leaves, and the startup gates ccd skipped are never
- *  revisited. */
+ *  revisited. What CAN change is the pane: see `narrowSinceWidened`, which
+ *  quiets it once the pane is measured wide again. */
 const SPAWN_WORD: Record<SpawnVerdict, string | null> = {
   ready: null,
   login: 'login',
@@ -71,7 +72,10 @@ function unnameableVerdict(v: unknown): string {
  *  it. Both, because they are different things — `data` is what actually
  *  arrived off the socket and drives the CSS hook and the tooltip, so an
  *  unknown token simply matches no rule and takes the loud default ink, which
- *  is the correct degrade direction. */
+ *  is the correct degrade direction. ONE token is minted here rather than
+ *  received: `narrow-widened`, for a `narrow` spawn whose pane this tick
+ *  measures wide (`narrowSinceWidened`) — no ccd rc and no wire word has that
+ *  name, and the tooltip reads `last spawn: narrow-widened`. */
 export interface SpawnChip { word: string; data: string }
 
 /** A DEAD row is silent about its last spawn, on every surface. Nothing is
@@ -86,10 +90,28 @@ function silentAboutSpawn(session: FleetSession): boolean {
   return session.status === 'dead';
 }
 
+/** A `narrow` spawn whose pane THIS TICK measures at least `READER_MIN_COLS`
+ *  wide, with its prompt up — `paneCols` is read off the prompt box's own
+ *  border, so a reading means the main TUI is on screen and no startup gate is
+ *  (the gates are full-screen dialogs that hide the box and the statusline).
+ *  ccd's own readers re-measure the width every tick, so auto-swap and
+ *  auto-compact are back on; what stays true is what the spawn SKIPPED — its
+ *  /effort and its re-drive of a carried turn — which is why the chip quiets
+ *  to `was narrow` rather than vanishing. Unmeasured (`null`: an older
+ *  server, an overlay, a dead pane) is never wide: the loud `narrow` stays,
+ *  which is the direction to err in. */
+export function narrowSinceWidened(session: FleetSession): boolean {
+  if ((session.spawnState ?? null) !== 'narrow') return false;
+  const cols = paneWidth(session);
+  return cols !== null && cols >= READER_MIN_COLS;
+}
+
 /**
  * THE RECORDED VERDICT's chip — what `$REG/<id>.spawn` last said, in this
  * build's words — or `null` when the session has recorded nothing worth
- * saying. This is the narrower of the two questions, and the one the RUN BOARD
+ * saying. One live reading qualifies it: a `narrow` verdict whose pane this
+ * tick measures wide reads `was narrow` (`narrowSinceWidened`), because the
+ * spawn fact outlives the condition it was loud about. This is the narrower of the two questions, and the one the RUN BOARD
  * asks: a run row wants to know how its worker's last spawn ENDED.
  *
  * `spawnState` reads DEFENSIVELY (`?? null`): the live `fleet` frame is CAST,
@@ -113,6 +135,7 @@ export function spawnVerdictChip(session: FleetSession): SpawnChip | null {
   if (silentAboutSpawn(session)) return null;
   const spawnState = session.spawnState ?? null;
   if (spawnState === null) return null;
+  if (narrowSinceWidened(session)) return { word: 'was narrow', data: 'narrow-widened' };
   const word: string | null =
     // The cast is the honest one: TS believes this lookup is total, and the
     // whole point is that at runtime it is not.
