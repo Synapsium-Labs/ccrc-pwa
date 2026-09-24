@@ -211,6 +211,17 @@ describe('FleetHostBanner', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
+  it('an unreachable skewed side does not name its cached version either — routed through statedOf (fix round 2, item 6)', () => {
+    // Fix round 1 (D-3316) taught BuildLine this; the skew arm had its own,
+    // separate `name()` reader that never learned it. Both now call the same
+    // `statedOf` (shared/update-summary.ts) rather than each deciding for
+    // itself.
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, build: 'skewed' })}
+      nodes={[{ ...inventoryNode('fleet', FLEET_V7), reachable: false, unreachableSince: 1_000 }, inventoryNode('server', SERVER_V9)]} />);
+    expect(screen.getByText(/fleet — · server v0\.0\.9 \(2985b9d1\)\./)).toBeInTheDocument();
+    expect(screen.queryByText(/v0\.0\.7/)).not.toBeInTheDocument();
+  });
+
   it('a skewed side with no version reads as unversioned (a deploy.sh stamp)', () => {
     const { version: _v, ...unversioned } = FLEET_V7;
     void _v;

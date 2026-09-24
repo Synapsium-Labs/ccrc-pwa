@@ -56,19 +56,28 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** A node element the renderers can read without throwing (fix round 1, F11/
- *  item 6): `versionSides` dereferences `.role` (`shared/update-summary.ts`),
- *  `pendingTag`/`nodeVersion` (below) dereference `.measuredAt` and
- *  `.current`, and `BuildLine`/`FleetHostBanner` read `.current.sha` off a
- *  `BuildInfo` that arrives whatever shape the wire hands them. None of those
- *  reads needs its VALUE to be the exact wire type (`role` is only ever
- *  compared with `===`), only that dereferencing it cannot throw — so this
- *  checks structure (object; a nullable field is that type or null; `current`,
- *  where present, is an object whose `sha` is a string), the same discipline
+ *  item 6; widened fix round 2 review, items 2/5): `versionSides` dereferences
+ *  `.role` (`shared/update-summary.ts`), `pendingTag`/`nodeVersion` (below)
+ *  dereference `.measuredAt` and `.current`, `BuildLine`/`FleetHostBanner` read
+ *  `.current.sha` off a `BuildInfo` that arrives whatever shape the wire hands
+ *  them, and `SettingsScreen`'s `NodeItem` renders `{n.label}` as a React CHILD
+ *  — an object there does not throw, it blanks the row with React's own "Objects
+ *  are not valid as a React child" error, screen-wide with no error boundary.
+ *  None of those reads needs its VALUE to be the exact wire type (`role` is
+ *  only ever compared with `===`), only that dereferencing it cannot throw and
+ *  that a rendered field is a primitive — so this checks structure (object; a
+ *  nullable field is that type or null; `label` a string; `current`, where
+ *  present, is an object whose `sha` is a string; `reachable`, where PRESENT,
+ *  is a boolean — absent tolerated, wire discipline, but a malformed non-
+ *  boolean is not, since `statedOf`/`pendingTag` read it `=== true` and a
+ *  stray truthy non-boolean must not silently vouch), the same discipline
  *  `asUpdatesView`'s catalogue check already applies one level up. */
 const isNodeElement = (v: unknown): v is NodeWire => {
   if (!isObject(v)) return false;
   if (typeof v.role !== 'string' && v.role !== null) return false;
+  if (typeof v.label !== 'string') return false;
   if (typeof v.measuredAt !== 'number' && v.measuredAt !== null) return false;
+  if (v.reachable !== undefined && typeof v.reachable !== 'boolean') return false;
   if (v.current !== null) {
     if (!isObject(v.current) || typeof (v.current as { sha?: unknown }).sha !== 'string') return false;
   }
@@ -164,11 +173,22 @@ export function nodeVersion(n: NodeWire): string | null {
  * programme does not manage one (decision 17), and its row says so in place of
  * a desired — the rule is here, not in that row, so the banner and BuildLine
  * say the same (`os: 'unknown'` is not Darwin; D-3309).
+ *
+ * Fix round 2 (review of d5aefc4a, item 4): no arrow either while the node is
+ * UNREACHABLE (`reachable !== true`) — D-3316's own text, ruled to widen from
+ * "no side states a version" to the arrow too: an unreachable node is treated
+ * exactly like one whose stamp did not read (D-3307, the clause right above),
+ * so BuildLine's affix, the settings inventory's `→ vX` and the banner's own
+ * "is this node behind" question all agree — an unreachable node offers
+ * nothing to move up to, on any of the three surfaces this one predicate
+ * feeds. The settings row still says "unreachable since …" (`reachabilityLine`,
+ * unaffected); only the ARROW is gone.
  */
 export function pendingTag(n: NodeWire): string | null {
   if (typeof n.measuredAt !== 'number') return null;
   if (!isUpdateChannel(n.channel)) return null;
   if (n.stampRead !== 'ok') return null;
+  if (n.reachable !== true) return null;
   if (n.os === 'darwin') return null;
   const want = n.desiredTag;
   if (!isReleaseTag(want)) return null;

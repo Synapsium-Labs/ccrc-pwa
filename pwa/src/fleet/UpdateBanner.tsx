@@ -9,11 +9,13 @@
 // started (`catalogue.lastOkAt` is a number) AND some node's ONE arrow
 // predicate (`pendingTag`, useUpdatesView.ts) names a tag. UNREACHABLE IS NOT
 // CURRENT (§7, §18): a server that has never reached GitHub cannot know that
-// nothing is newer, and a node that was never measured, or whose channel this
-// build cannot name, has no arrow (nor does a macOS node, which this programme
-// does not manage — decision 17) — so in each case the banner says nothing,
-// never a calm "up to date" nobody measured. The settings screen is where the
-// unknown is spelled out.
+// nothing is newer, and a node that was never measured, whose channel this
+// build cannot name, or that is UNREACHABLE (`reachable !== true`, fix round
+// 2, D-3316), has no arrow (nor does a macOS node, which this programme does
+// not manage — decision 17) — so in each case the banner says nothing on
+// that node's account, never a calm "up to date" nobody measured, and never
+// an arrow off a stale reading. The settings screen is where the unknown is
+// spelled out.
 //
 // THE FLEETHOSTBANNER IDIOM (FleetHostBanner.tsx): an injected prop (FleetScreen
 // polls once and hands the view down), null when silent, a self-polling
@@ -29,7 +31,7 @@ import { useId } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
-import { remoteSides, summaryFromSides, versionSides } from '../../../shared/update-summary';
+import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
 import { MOVE_DISABLED_TEXT } from '../lib/api';
 import { navigate } from '../lib/router';
 import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
@@ -69,25 +71,27 @@ export function bannerRelease(view: UpdatesView): { tag: string; channel: Update
  *  computation) — sides are picked from EVERY live row, never a pre-filtered
  *  subset: filtering first is what let a `both` server row's own version
  *  stand in for a fleet nobody measured (the reviewer's exact rows, F1).
- *  `stated` carries the per-row "does this reading vouch for its version"
- *  fact — measured this poll, its stamp read, and (D-3316) reachable — so an
- *  occupying row that fails it renders as a dash, never its stale value, but
- *  still blocks another row from falling back into its side. `health` is how
- *  this screen already knows remote from local (BuildLine's own render
- *  condition, `health.mode !== 'remote'`): on a remote fleet (D-3313) a
- *  `both` row is THIS box, never the fleet box; local mode's one `both` row
- *  genuinely is both (D-3301) — and while `health` has not loaded yet
- *  (`null`, the default), this reads as local, exactly as it did before this
- *  field existed. */
+ *  `stated` (`statedOf`, `shared/update-summary.ts`, fix round 2 item 5) is
+ *  the per-row "does this reading vouch for its version" fact — measured this
+ *  poll, its stamp read, and (D-3316) reachable — so an occupying row that
+ *  fails it renders as a dash, never its stale value, but still blocks
+ *  another row from falling back into its side.
+ *
+ *  Fix round 2 (review of d5aefc4a, item 3): while `health` is UNKNOWN
+ *  (`null`, the default — the mode has not loaded yet, or was never handed
+ *  down) this now reads as REMOTE, not local. A dash claims nothing; the
+ *  local fallback (`versionSides`' `both`-row-is-both-sides rule) would state
+ *  a fleet version nobody has actually measured yet, off a box that might
+ *  turn out to be remote — the exact class of defect D-3313 exists to
+ *  refuse. `versionSides` (the permissive, local-mode form) is used ONLY when
+ *  `health` EXPLICITLY says `'local'`; both `'remote'` and unknown route
+ *  through `remoteSides`. */
 export function updateBannerText(view: UpdatesView, health?: FleetHealth | null): string | null {
   const release = bannerRelease(view);
   if (release === null) return null;
-  const rows = view.nodes.map((n) => ({
-    role: n.role, version: nodeVersion(n),
-    stated: typeof n.measuredAt === 'number' && n.stampRead === 'ok' && n.reachable,
-  }));
-  const remote = health != null && health.mode === 'remote';
-  const sides = remote ? remoteSides(rows) : versionSides(rows);
+  const rows = view.nodes.map((n) => ({ role: n.role, version: nodeVersion(n), stated: statedOf(n) }));
+  const knownLocal = health != null && health.mode === 'local';
+  const sides = knownLocal ? versionSides(rows) : remoteSides(rows);
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 

@@ -2676,6 +2676,34 @@ describe('the update banner on the fleet screen', () => {
     render(<FleetScreen store={makeStore()} />);
     expect(document.querySelector('.update-banner')).toBeNull();
   });
+
+  it("threads the screen's own fleetHealth into UpdateBanner — a genuinely local box states its lone both row's version (fix round 2, item 3)", async () => {
+    // The coordinator's own wording asked for a REMOTE health answer here,
+    // naming an unreachable/unread fleet row beside a both server row. That
+    // exact shape cannot discriminate the wiring under this fix: item 3
+    // ALSO rules that an UNKNOWN health (the prop's default, when omitted)
+    // reads as remote — so `health={fleetHealth}` present-and-remote and
+    // absent-and-defaulting-to-null-treated-as-remote compute the identical
+    // `remoteSides`, and an EXPLICIT separate fleet-role row (even a
+    // degraded one) is found by `versionSides` and `remoteSides` alike,
+    // discriminating neither picker (both already-established facts, this
+    // wave and the one before it). The one case that CAN observe whether
+    // `health={fleetHealth}` is really wired through is a genuinely LOCAL
+    // fleet with a LONE both row: wired, the banner correctly states its
+    // version (D-3301's local fallback); unwired, it would default to
+    // "unknown" and read as remote (item 3's own safe default), wrongly
+    // showing a dash for a real, single-box install. Reported to the
+    // coordinator as a substitution in the fix report.
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue({ mode: 'local', connected: true, downSince: null });
+    vi.spyOn(api, 'updates').mockResolvedValue({
+      catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+      releases: [],
+      nodes: [nodeOf('5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93', 'server')].map((n) => ({ ...n, role: 'both' })),
+      intent: [],
+    });
+    render(<FleetScreen store={makeStore()} />);
+    expect(await screen.findByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+  });
 });
 
 // ── centralised-update W3 Task 12: both skew readers on the screen's one poll ─

@@ -2,8 +2,8 @@
 // the update banner both say what the nodes run through `versionsSummary`, so both forms are pinned here once.
 import { describe, it, expect } from 'vitest';
 import {
-  MISSING_SIDE, UNVERSIONED_WORD, remoteSides, sideVersion, summaryFromSides, versionSides, versionsSummary,
-  type SummaryRow,
+  MISSING_SIDE, UNVERSIONED_WORD, remoteSides, sideVersion, statedOf, summaryFromSides, versionSides,
+  versionsSummary, type SummaryRow,
 } from '../../shared/update-summary.js';
 
 // `stated` is REQUIRED (fix round 2, item 7) — every existing case here means a row that vouches for its
@@ -113,5 +113,24 @@ describe('stated — an occupied side that does not vouch for its version (D-331
     const server = statedRow('server', 'v0.0.7', true);
     expect(summaryFromSides({ fleet: statedRow('fleet', 'v0.0.7', true), server })).toBe('fleet and server are on v0.0.7');
     expect(summaryFromSides({ fleet: statedRow('fleet', 'v0.0.7', false), server })).toBe('fleet — · server v0.0.7');
+  });
+});
+
+// Fix round 2 (review of d5aefc4a, item 5): `statedOf` — the ONE predicate `pushRelease`, the banner,
+// BuildLine and FleetHostBanner's skew arm all call now, rather than each computing the same three-clause
+// fact inline (`single-definition.test.ts`'s one-holder pin covers that this file is the only definition).
+describe('statedOf — the one "does this reading vouch for its version" predicate (fix round 2, item 5)', () => {
+  const measured = { measuredAt: 1_000, stampRead: 'ok', reachable: true };
+
+  it('true only when measured this run, stamp read, and reachable — all three, each exactly', () => {
+    expect(statedOf(measured)).toBe(true);
+    expect(statedOf({ ...measured, measuredAt: null })).toBe(false);
+    expect(statedOf({ ...measured, stampRead: 'unreadable' })).toBe(false);
+    expect(statedOf({ ...measured, reachable: false })).toBe(false);
+  });
+
+  it('reachable is checked === true, never merely truthy — a stray non-boolean never vouches', () => {
+    expect(statedOf({ ...measured, reachable: 1 as unknown as boolean })).toBe(false);
+    expect(statedOf({ ...measured, reachable: 'true' as unknown as boolean })).toBe(false);
   });
 });

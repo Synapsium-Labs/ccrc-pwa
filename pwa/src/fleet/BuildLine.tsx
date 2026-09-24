@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import type { BuildInfo } from '../../../shared/buildinfo';
-import { remoteSides } from '../../../shared/update-summary';
+import { remoteSides, statedOf } from '../../../shared/update-summary';
 import { pendingTag } from './useUpdatesView';
 import './fleet.css';
 
@@ -46,18 +46,22 @@ export function BuildLine({ health, nodes }: { health: FleetHealth | null; nodes
   // both sides a dash. Hiding it would take "what each box runs" away exactly
   // when the update plane is unreadable; a dash claims no version (§18).
   const { fleet, server } = Array.isArray(nodes) ? remoteSides(nodes) : { fleet: null, server: null };
-  // Fix round 1 (F14, D-3316): a side occupied by an unreachable row still
-  // occupies it (so the OTHER side never falls back into it — `remoteSides`'s
-  // own point), but its cached `current`/version is not a fact this line
-  // speaks for — `markUnreachable` keeps the last measurement, and rendering
-  // it calmly here is the exact class F1/F3 fix: a surface stating a stale
-  // reading as present-tense fact. The arrow (`pendingTag`) is unaffected —
-  // D-3316 widens only "what a side states about its version", not the
-  // arrow predicate — and the settings inventory alone keeps "unreachable
-  // since …" with the last measured values; this line states nothing, it
-  // does not know history.
-  const fleetCurrent = fleet && fleet.reachable ? fleet.current : null;
-  const serverCurrent = server && server.reachable ? server.current : null;
+  // Fix round 1 (F14, D-3316), widened fix round 2 (item 5): a side occupied
+  // by a row that fails `statedOf` (unmeasured this run, its stamp unread, or
+  // — D-3316 — `reachable !== true`) still occupies it (so the OTHER side
+  // never falls back into it — `remoteSides`'s own point), but its cached
+  // `current`/version is not a fact this line speaks for — `markUnreachable`
+  // keeps the last measurement, and rendering it calmly here is the exact
+  // class F1/F3 fix: a surface stating a stale reading as present-tense fact.
+  // `statedOf` (`shared/update-summary.ts`), not a narrower reachable-only
+  // check — this file's own inline form was exactly that narrower drift
+  // before this fix. The arrow (`pendingTag`) now ALSO refuses an unreachable
+  // node (fix round 2, item 4 — D-3316's own text widened again), so the two
+  // guards agree without this file re-deriving either; the settings inventory
+  // alone keeps "unreachable since …" with the last measured values, because
+  // that is where the history belongs — this line states nothing.
+  const fleetCurrent = fleet && statedOf(fleet) ? fleet.current : null;
+  const serverCurrent = server && statedOf(server) ? server.current : null;
   return (
     <div className="build-line" role="status">
       {side('fleet', fleetCurrent, fleet ? pendingTag(fleet) : null)}

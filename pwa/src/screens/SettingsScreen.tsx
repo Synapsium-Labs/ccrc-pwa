@@ -331,7 +331,18 @@ export function nodeStateLine(n: NodeWire): string {
 }
 
 export function reachabilityLine(n: NodeWire, now: number): string | null {
-  if (n.reachable !== false) return null;
+  // Fix round 2 (review of d5aefc4a, item 5): spelled as the direct question
+  // — "is this node reachable (or not yet known)? then say nothing" — rather
+  // than `!== false`'s double negative, matching `statedOf`/`pendingTag`'s
+  // `=== true` convention. NOT a bare `=== true`, deliberately: `reachable`
+  // is tolerated ABSENT by wire discipline (`asUpdatesView` drops it only
+  // when PRESENT but not a boolean, fix round 2 item 2), and an absent field
+  // must keep claiming NOTHING — the same "absence is unknown, never a
+  // specific claim" rule this codebase holds everywhere else. Only a
+  // CONFIRMED `false` may proceed to say "unreachable"; `true` and `undefined`
+  // both read as "not confirmed unreachable" and stay silent, exactly as
+  // `!== false` always computed for the three values that can reach here.
+  if (n.reachable === true || n.reachable === undefined) return null;
   return typeof n.unreachableSince === 'number' && isPlaceableInstant(n.unreachableSince)
     ? `unreachable since ${elapsedWords(now - n.unreachableSince)} ago`
     : 'unreachable';
@@ -610,15 +621,21 @@ function UpdatesBody({ view, stale, now, reload }: {
   // but only until a LATER poll has landed (F5): while `gateRefusal.view` is
   // still the exact view active when the route named these ids, its list
   // stands unfiltered (the route may know something this same poll's own
-  // measured caps do not yet). Once a poll strictly after that one lands,
-  // the note never names a node THAT poll shows carrying the word — filtered
-  // against its `missing`, not dropped outright, so a node still missing it
-  // still reads. A 409's stale list must not outlive the poll that answers it.
-  const gateLabels = gateRefusal === null
-    ? missing.map((n) => n.label)
-    : gateRefusal.view === view
-      ? gateRefusal.ids.map(labelOf)
-      : gateRefusal.ids.filter((id) => missing.some((n) => n.nodeId === id)).map(labelOf);
+  // measured caps do not yet). Once a poll strictly after that one lands, the
+  // route's list is SUPERSEDED, not intersected with it: the note becomes
+  // that poll's own `missing` in full, never `gateRefusal.ids ∩ missing`.
+  // Fix round 2 (review of d5aefc4a, item 1): intersecting was itself a bug —
+  // a 409 naming only node A while B is ALSO missing (the route reports one
+  // culprit; the poll's own measured caps can show more) would, once A
+  // cleared, filter the note down to the empty set and lose B entirely, even
+  // though B's radios stay disabled (`missing.length > 0`, unaffected by this
+  // note) with no reason given on screen. A 409's stale list must not outlive
+  // the poll that answers it — and once it is superseded, the poll's full,
+  // current `missing` is the one true answer, not a subset of the route's
+  // now-stale one.
+  const gateLabels = (gateRefusal !== null && gateRefusal.view === view)
+    ? gateRefusal.ids.map(labelOf)
+    : missing.map((n) => n.label);
   const gateNote = gateLabels.length > 0 ? `${AUTO_GATE_NOTE}${gateLabels.join(', ')}` : null;
   const line = catalogueLine(view.catalogue, now);
 

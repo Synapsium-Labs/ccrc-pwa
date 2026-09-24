@@ -35,7 +35,7 @@ import { QuickConfirm } from '../components/QuickConfirm';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
 import { useFleetHealth } from './useFleetHealth';
-import { remoteSides } from '../../../shared/update-summary';
+import { remoteSides, statedOf } from '../../../shared/update-summary';
 import './fleet.css';
 
 const POLL_MS = 15_000;
@@ -82,8 +82,13 @@ export function FleetHostBanner(
   // (a feature absent from the host is a smaller worry than two boxes
   // running different code).
   if (health && health.mode === 'remote' && health.connected && health.build === 'skewed') {
+    // Fix round 2 (review of d5aefc4a, item 6): a row that fails `statedOf`
+    // (unmeasured, unread stamp, or D-3316 unreachable) does not lend this
+    // arm its cached `current` either — the same rule BuildLine's `side()`
+    // applies, so a skewed-build warning never names a version off a stale
+    // reading nobody just measured.
     const name = (row: NodeWire | null): string => {
-      const b = row?.current ?? null;
+      const b = row && statedOf(row) ? row.current : null;
       return b ? `${b.version ?? 'unversioned'} (${b.sha.slice(0, 8)})` : '—';
     };
     const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;

@@ -104,6 +104,39 @@ describe('asUpdatesView — a non-conforming ELEMENT is dropped, never the whole
     warn.mockRestore();
   });
 
+  it('drops a node whose label is not a string — SettingsScreen renders {n.label} as a React child (fix round 2, item 2)', () => {
+    // An object label reaching NodeItem's `{n.label}` blanks /settings with
+    // React's own "Objects are not valid as a React child" — the SAME class
+    // F11 exists to refuse, just discovered on a different dereference.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({ ...view(), nodes: [{ ...node(), label: { bad: true } }, good] });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a node whose reachable arrived as a non-boolean — tolerates it ABSENT, refuses it malformed (fix round 2, item 5)', () => {
+    // `statedOf`/`pendingTag` read `reachable === true`; a stray truthy
+    // non-boolean (e.g. the string "true") must not silently vouch for a
+    // version or an arrow it never measured.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const { reachable: _r, ...noReachableKey } = good;
+    void _r;
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [{ ...node(), reachable: 'true' }, noReachableKey as NodeWire, good],
+    });
+    expect(got).not.toBeNull();
+    // The malformed one is dropped; the one with the key simply ABSENT is
+    // tolerated (wire discipline) and kept, alongside the fully-formed one.
+    expect(got!.nodes).toEqual([noReachableKey, good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it('drops a release with no string tag and an intent row with no string scope or setAt — element-level, not whole-answer', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const goodRelease = {
@@ -156,6 +189,14 @@ describe('nodeVersion and pendingTag — the one arrow predicate', () => {
     expect(pendingTag(node({ desiredTag: 'v0.0.10', channel: null }))).toBeNull();
     const absent = { ...node({ desiredTag: 'v0.0.10' }), channel: undefined } as unknown as NodeWire;
     expect(pendingTag(absent), 'channel absent').toBeNull();
+  });
+
+  it('draws no arrow while the node is UNREACHABLE (fix round 2, item 4; D-3316: treated like an unread stamp)', () => {
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', reachable: false }))).toBeNull();
+    const absent = { ...node({ desiredTag: 'v0.0.10' }), reachable: undefined } as unknown as NodeWire;
+    expect(pendingTag(absent), 'reachable absent is not measured-reachable').toBeNull();
+    // The control: reachable true (unchanged from every other case here).
+    expect(pendingTag(node({ desiredTag: 'v0.0.10', reachable: true }))).toBe('v0.0.10');
   });
 
   it('draws no arrow for a missing, non-tag, equal or older desired tag', () => {

@@ -424,6 +424,57 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     await waitFor(() => expect(within(region).queryByText(/not yet on:/)).toBeNull());
   });
 
+  it('supersedes fully, not by intersection — a 409 naming only [A] still leaves B named once a later poll clears A but not B (fix round 2, item 1)', async () => {
+    // The coordinator's failing case: A clears, B (never named by the 409,
+    // but ALSO missing per the poll) does not. Intersecting gateRefusal.ids
+    // with the fresh missing set would filter to the empty set (A is no
+    // longer missing; B was never in gateRefusal.ids to begin with) and the
+    // note would vanish — while B's radios stay disabled with no reason
+    // given on screen. Superseding fully names B.
+    const before = t7View({
+      nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: ['verify', 'node-id', 'floor'] })],
+    });
+    const after = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] });
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockResolvedValue(after);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}fleet`)).toBeNull();
+  });
+
+  it("the 409's list stands until a genuinely LATER poll lands, even when every real poll answer is a FRESH object (fix round 2, item 1)", async () => {
+    // t7Mount's mockResolvedValue(view) returns the SAME object on every
+    // call, so the other 409 cases here pass only through that object's
+    // stable identity. This one controls the reload's own fetch with a
+    // deferred promise, proving two things: (1) the route's list stands,
+    // unfiltered, for as long as the poll active at 409-time has not yet
+    // been superseded by a distinct answer — even though a real reload is
+    // already in flight; (2) once a genuinely fresh, distinct object lands,
+    // it supersedes fully, matching the coordinator's failing case exactly.
+    const before = t7View({
+      nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: ['verify', 'node-id', 'floor'] })],
+    });
+    const afterDeferred = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockResolvedValueOnce(before).mockReturnValueOnce(afterDeferred.promise);
+    vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet, server`);
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));
+    // The 409 landed; its own reload is in flight but has not resolved yet —
+    // the route's list stands, unfiltered (fleet only, not "fleet, server").
+    await within(region).findByText(`${T7_GATE_NOTE}fleet`);
+    // A genuinely fresh, distinct poll object lands: fleet now carries the
+    // word, server still does not.
+    afterDeferred.resolve(t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
+  });
+
   it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
@@ -1394,14 +1445,20 @@ describe('SettingsScreen — notifications: the unarmed-exposure banner (design 
 // never a reason to blank the whole screen ────────────────────────────────
 
 describe('SettingsScreen — a malformed /api/updates element does not blank the screen (F11)', () => {
-  it('renders the node inventory over the well-formed rows, dropping a null node and one with no string sha', async () => {
+  it('renders the node inventory over the well-formed rows, dropping a null node, one with no string sha, and one with a non-string label', async () => {
     const badSha = {
       ...t7Node(), nodeId: '22222222-2222-2222-2222-222222222222', current: { ...t7Node().current, sha: undefined },
     };
+    // Fix round 2 (review of d5aefc4a, item 2): NodeItem renders {n.label} as
+    // a React child — an object label blanks the whole screen with React's
+    // own "Objects are not valid as a React child", not a thrown TypeError,
+    // so it needs its own dropped element here, beside the null node and the
+    // bad-sha one.
+    const badLabel = { ...t7Node(), nodeId: '33333333-3333-3333-3333-333333333333', label: { bad: true } };
     const raw = {
       catalogue: { lastOkAt: Date.now() - (4 * 60_000 + 5_000), lastError: null },
       releases: [],
-      nodes: [null, badSha, t7Node(), t7Server()],
+      nodes: [null, badSha, badLabel, t7Node(), t7Server()],
       intent: [t7Intent()],
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -3631,6 +3631,15 @@ describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', (
     const holders = ALL.filter((f) => /^\s*export function remoteSides\b/m.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/update-summary.ts']);
   });
+
+  // Fix round 2 (review of d5aefc4a, item 5): `statedOf` — the one predicate for "does this reading vouch
+  // for its version" (measuredAt/stampRead/reachable) — is called from `pushRelease` (server), the banner,
+  // BuildLine and FleetHostBanner's skew arm (PWA); none of them may re-derive the same three-clause fact
+  // inline, the exact drift BuildLine's own narrower `reachable`-only form was before this fix.
+  it('statedOf is declared once, in shared/update-summary.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export function statedOf\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
 });
 
 // Design 2026-09-20 §9/§13 (programme wave 3, Task 7; D-3305):

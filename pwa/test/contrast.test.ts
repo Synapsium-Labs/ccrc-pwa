@@ -1891,3 +1891,35 @@ describe('the /settings shell and its door are measured, not left in the blind s
     }
   });
 });
+
+// ── fix round 1 (F15) / fix round 2 (review of d5aefc4a, item 8) ────────────
+// `.build-line`/`.build-line-side--warn`/`.build-line-next` are registered
+// against --bg-surface — the ground .shell-nav (styles/shell.css:131-155)
+// actually paints on desktop, corrected from the false "--bg-page, no
+// ancestor paints a background" claim (F15). Mirrors D-3304's
+// `.settings-door` precedent above, the OTHER direction: at the mobile
+// breakpoint .shell-nav sets no background of its own and falls through to
+// the app shell's --bg-page instead, so this checks THAT ground clears AA
+// too, off the rule's own declared ink (a retint re-measures both).
+describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on the mobile ground they fall through to', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .build-line'],
+    ['fleet.css .build-line-side--warn'],
+    ['fleet.css .build-line-next'],
+  ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
+    // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
+    // --status-attention-text 10.89 dark / 5.45 light (the other two).
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-page)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});

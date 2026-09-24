@@ -113,8 +113,13 @@ describe('UpdateBanner — when it speaks', () => {
     expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
-  it('renders in local mode: the one node that is both reads as both sides', () => {
-    render(<UpdateBanner updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
+  it('reads a lone both row as both sides ONLY in explicit local mode — unknown/no health states no fleet version (fix round 2, item 3)', () => {
+    // Inverted, review of d5aefc4a: the local both-row fallback nobody
+    // measured must not fire while the fleet mode is UNKNOWN (health null,
+    // the default before it has loaded) — only an EXPLICIT local health
+    // earns it.
+    render(<UpdateBanner health={{ mode: 'local', connected: true, downSince: null }}
+      updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
     expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
   });
 
@@ -181,6 +186,19 @@ describe('UpdateBanner — when it stays silent (unreachable is not current, spe
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('is silent when the only node behind is UNREACHABLE — no arrow, so the banner does not speak on its account (fix round 2, item 4, D-3316)', () => {
+    // pendingTag now refuses an unreachable node exactly like an unread
+    // stamp (D-3307's own class, widened) — so this node offers nothing to
+    // move up to, and the banner has no OTHER node to speak from.
+    const { container } = render(<UpdateBanner updates={view({
+      nodes: [
+        fleetNode({ reachable: false, unreachableSince: NOW - 60_000 }),
+        serverNode({ current: stamp('v0.0.9') }),
+      ],
+    })} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it('is silent when the only node behind has a channel this build cannot name (channel: null)', () => {
     const { container } = render(<UpdateBanner updates={view({
       nodes: [
@@ -197,7 +215,7 @@ describe('UpdateBanner — when it stays silent (unreachable is not current, spe
   });
 });
 
-describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1)', () => {
+describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1, widened fix round 2)', () => {
   const remoteHealth: FleetHealth = { mode: 'remote', connected: true, downSince: null };
 
   it('states nothing for a fleet side nobody measured — a both row never lends it its version (F1)', () => {
@@ -221,17 +239,20 @@ describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1)', () => {
     expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
-  it('renders in local mode (no health, or health not remote): the one both row still reads as both sides', () => {
-    // The exact D-3301 fallback the case above must NOT apply while local —
-    // health omitted (the default) and health explicitly local both read as
-    // local, so a fleet that has not loaded its health yet renders exactly
-    // as it always has.
+  it('with NO health yet (mode unknown), a lone both row states NO fleet version — inverted, review of d5aefc4a item 3', () => {
+    // This pin previously read the opposite way (health omitted defaulted to
+    // the LOCAL both-fallback). The ruling: while the fleet mode is unknown,
+    // a dash claims nothing, but the local fallback would state a fleet
+    // version off a box that might turn out to be remote — the exact D-3313
+    // hazard, just with "unknown" standing in for "remote". Only an EXPLICIT
+    // local health earns the both-fallback (the case right above this one).
     render(<UpdateBanner updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
     cleanup();
-    render(<UpdateBanner health={{ mode: 'local', connected: true, downSince: null }}
+    // An explicit remote health reads the same way — remoteSides either way.
+    render(<UpdateBanner health={{ mode: 'remote', connected: true, downSince: null }}
       updates={view({ nodes: [serverNode({ role: 'both' })] })} />);
-    expect(screen.getByText('v0.0.9 is out on stable — fleet and server are on v0.0.7.')).toBeInTheDocument();
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
   it('an unreachable fleet row carrying an old version does not state it, and is not read as current (F14, D-3316)', () => {

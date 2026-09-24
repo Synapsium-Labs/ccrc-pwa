@@ -118,27 +118,57 @@ describe('BuildLine', () => {
   });
 
   it('draws no arrow while a node is unmeasured or has no resolved channel — unreachable is not current (§18)', () => {
+    // Fix round 2 (review of d5aefc4a, item 5): the fleet side's own version
+    // now reads a dash too, not just its arrow — `statedOf` gates BuildLine's
+    // version display, and it has ALWAYS required `measuredAt` a number, the
+    // same as `pushRelease`'s and the banner's `stated`. This row's `current`
+    // is a STALE cached stamp from before `measuredAt` went null (exactly the
+    // shape `markUnreachable` leaves behind), so it must not read calm. The
+    // server side is unaffected: `channel: null` blocks only its ARROW
+    // (pendingTag), never `statedOf`, which does not read `channel` at all.
     render(<BuildLine health={remote({ build: 'agreed' })} nodes={[
       node('fleet', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9', measuredAt: null }),
       node('server', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9', channel: null }),
     ]} />);
-    expect(line()!.textContent).toBe('fleet v0.0.7 · server v0.0.7');
+    expect(line()!.textContent).toBe('fleet — · server v0.0.7');
     expect(document.querySelector('.build-line-next')).toBeNull();
   });
 
-  it('an unreachable side does not state its cached version — the arrow is unaffected (F14, D-3316)', () => {
+  it('an unreachable side does not state its cached version, AND draws no arrow — inverted, review of d5aefc4a item 4 (D-3316)', () => {
     // markUnreachable keeps the row's last measuredAt/current unchanged, so a
     // side that DROPPED must not keep reading calm and present-tense (the
     // class F1/F3 fix too): the fleet side here renders a dash even though
-    // its cached current is v0.0.7, while its arrow — a DIFFERENT question,
-    // D-3316 does not touch it — still points up, same as the reachable
-    // server side beside it.
+    // its cached current is v0.0.7. This pin previously asserted the arrow
+    // stayed — the coordinator's ruling reverses that: D-3316's own text
+    // treats an unreachable node exactly like one whose stamp did not read
+    // (D-3307), which already draws no arrow, so `pendingTag` now refuses an
+    // unreachable node too. Only the reachable server side beside it keeps
+    // its arrow.
     render(<BuildLine health={remote({ build: 'agreed' })} nodes={[
       node('fleet', stamp(SHA_A, 'v0.0.7'), { reachable: false, unreachableSince: 1_000, desiredTag: 'v0.0.9' }),
       node('server', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9' }),
     ]} />);
-    expect(line()!.textContent).toBe('fleet — → v0.0.9 · server v0.0.7 → v0.0.9');
+    expect(line()!.textContent).toBe('fleet — · server v0.0.7 → v0.0.9');
     expect(screen.getByText('fleet —')).toHaveClass('build-line-side--warn');
+    expect(document.querySelectorAll('.build-line-next')).toHaveLength(1);
+  });
+
+  it('an unreachable OR unread-stamp SERVER side gives the server side a dash too, and no arrow (item 7)', () => {
+    // The fleet-side pin above, mirrored on server — BuildLine's serverCurrent
+    // guard is its own line, worth its own pin rather than inferred from the
+    // fleet side's.
+    const { rerender } = render(<BuildLine health={remote({ build: 'agreed' })} nodes={[
+      node('fleet', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9' }),
+      node('server', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9', reachable: false, unreachableSince: 1_000 }),
+    ]} />);
+    expect(line()!.textContent).toBe('fleet v0.0.7 → v0.0.9 · server —');
+    expect(screen.getByText('server —')).toHaveClass('build-line-side--warn');
+    expect(document.querySelectorAll('.build-line-next')).toHaveLength(1);
+    rerender(<BuildLine health={remote({ build: 'agreed' })} nodes={[
+      node('fleet', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9' }),
+      node('server', stamp(SHA_A, 'v0.0.7'), { desiredTag: 'v0.0.9', stampRead: 'unreadable' }),
+    ]} />);
+    expect(line()!.textContent).toBe('fleet v0.0.7 → v0.0.9 · server —');
   });
 
   it('renders "unversioned" without throwing when current has no string sha — belt-and-suspenders beside the dirty guard (F11)', () => {

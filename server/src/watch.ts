@@ -62,7 +62,7 @@ import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
-import { remoteSides, summaryFromSides, versionSides } from '../../shared/update-summary.js';
+import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -1069,10 +1069,7 @@ export class FleetWatcher {
       // never its stale value, but still blocks another row from falling back into its side. On a remote
       // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
       // is both (D-3301).
-      const summaryRows = nodes.map((r) => ({
-        role: r.role, version: r.currentVersion,
-        stated: r.measuredAt !== null && r.stampRead === 'ok' && r.reachable,
-      }));
+      const summaryRows = nodes.map((r) => ({ role: r.role, version: r.currentVersion, stated: statedOf(r) }));
       const sides = this.deps.cfg.fleetMode === 'remote' ? remoteSides(summaryRows) : versionSides(summaryRows);
       summary = summaryFromSides(sides);
     } catch (e) {
