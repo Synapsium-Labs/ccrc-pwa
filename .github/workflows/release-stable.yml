@@ -87,7 +87,8 @@ jobs:
   promote:
     needs: [gate, full]
     # `always()` because `full` is skipped whenever the gate found a green
-    # check, and a skipped need would otherwise skip this job too. The result
+    # full-suite job in a trusted run, and a skipped need would otherwise skip
+    # this job too. The result
     # checks are then the whole gate: the called run's `verdict` output is
     # read, not only its result, because a called run in which `full-suite`
     # never ran is a successful run that proved nothing.

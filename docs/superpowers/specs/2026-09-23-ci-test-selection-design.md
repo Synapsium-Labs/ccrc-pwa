@@ -348,7 +348,7 @@ directory listing, a `.git` read, a relative path after `chdir`, an `execve`, an
 
 New assertions over `ci.yml`: the four required names are always produced; `test (server)` carries `if: always()` and
 checks each `needs` result as §4.2 states; the concurrency groups of §4.3; no `paths:` filter; every job keeps its
-deadline. A pin that `release-stable.yml`'s `promote` cannot run unless `gate` found a `full-suite` check or the called
+deadline. A pin that `release-stable.yml`'s `promote` cannot run unless `gate` found a green `full-suite` job in a trusted run (§15.16) or the called
 full run succeeded.
 
 ### 11.3 The history replay — the acceptance measurement

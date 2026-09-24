@@ -587,8 +587,9 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
 
   // ── the stable gate (design 2026-09-23 §8) ────────────────────────────────
   // A push to `stable` promotes only a commit the FULL suite passed on: either
-  // a green `full-suite` check run already on it (the daily run, a manual full
-  // run, an earlier gate), or a full run this workflow starts by calling
+  // a green `full-suite` job on it from a trusted run (the daily run, a manual
+  // full run, an earlier gate — main-artifact.mjs's green-full-suite), or a
+  // full run this workflow starts by calling
   // ci.yml. The gate cannot live in a ruleset — checks from scheduled and
   // manually dispatched runs do not satisfy one.
   it('has exactly three jobs, in order: gate, full, promote', () => {

@@ -11656,3 +11656,60 @@ that does not trust the selector, fail-closed verdicts, symlink, directory-link 
 floors that mark rather than refuse, the frozen acceptance dataset, and the rest — are written into the spec itself as
 §15, so this plan implements the spec as amended. A departure found while EXECUTING a task is recorded here under a
 number minted by the ledger API (`POST /api/ledger/deviations`), allocated and defined in the same act.
+
+Found while executing (2026-09-24, subagent-driven; each a controller ruling on a task or final review):
+
+- **D-3499 — Task 1 said GO although STOP rule 3 fired literally.** On the hosted runner `session-hook.test.ts` ran
+  untraced rc 0 and traced rc 1. Its failure is its own `straceRun` case: strace cannot attach under an outer strace
+  (`PTRACE_TRACEME: Operation not permitted`), the nested-strace class Task 7 handles for its own file. Tasks 4 and 11
+  already carry session-hook as always `unknown` (rule 2 selects it for every change), and spec §12 stops only if
+  strace cannot run there. It runs. A `CCRC_TRACING` skip on that one case would make session-hook traceable, but it
+  would then have to go on D-3508's list. It is offered to the operator as a follow-up, not done here.
+- **D-3500 — Task 1's Q2 families went into spec §9 on the controller's ruling, not "with the operator".** The census
+  named mutations (`unlink`, `unlinkat`, `mkdir`, `rmdir`, `rename*`, `link`, `chmod`, `utimensat`), fd-only calls,
+  path-less calls and `statfs` outside the trace list. Before ruling, `ccd-ws-audit` was traced with exactly those
+  families (fleet box, `UV_USE_IO_URING=0`). It made 43,089 such calls and none named a repository path. Every
+  `io_uring_setup` was libuv's 256-entry epoll-ctl ring. The §9 row records the limit, and the execution report puts
+  the ruling to the operator.
+- **D-3501 — Task 8: `serverVerdict` reds `count: '0'` unless `tests: 'selected'`, and any unrecognised `tests`.**
+  The plan's code greened `tests: full, count: 0, shards: skipped`: a required check green with zero server tests
+  run. That is the shape Task 9's refusal note describes, closed there only on the select side. Commit `be77a58a`.
+  Mutation rows C, D, L and M were measured red.
+- **D-3502 — Task 10: `replay.mjs` refuses a `--repo` that does not carry the map's commit.** It exits 1, and a
+  report prints `map: <sha>` after its `dataset:` line. The plan's CLI folded "absent at the map's commit" and "could
+  not ask git" into one `false`, so a missing commit read every change as an add and raised recall silently. The
+  reviewer measured one case at 0.0% against 100.0%. The CLI tests now run on a git-initialised fixture repo.
+  Commit `6f116883`.
+- **D-3503 — Task 12: the gate's decision is pinned by executing its script, not by regex.** The script runs under
+  `bash -e` with a fake `gh` in three cases: found, not found, and a failing `gh` that leaves no answer. Commit
+  `54381e5b`. D-3504 replaced the step, and the executed-pin method carried over.
+- **D-3504 — the stable gate and the daily skip trust a green `full-suite` JOB in a trusted run, not a check's
+  name.** A trusted run is `ci.yml` on `main` by `schedule` or `workflow_dispatch`, or `release-stable.yml` pushed to
+  `stable`, on the exact sha, from this repository. The plan's jq matcher took any green `full-suite` or
+  `… / full-suite` check on the sha. That included a pull_request run's check, which attaches to the PR head while
+  the run tested the merge ref. The matcher's grouping was also unpinned. One predicate and a `green-full-suite` CLI
+  in `main-artifact.mjs` serve both call sites. The gate checks out the repository and holds `contents: read` plus
+  `actions: read`. No job asks for `checks: read` any more, and `ci.yml`'s least-privilege comment names every job
+  that asks for more. It is tested by fixtures, by a stub API and by the executed step scripts. Commits `2589be55`
+  and `b7d18ad5` (final review FR-1, FR-6).
+- **D-3505 — the live test list is NUL-delimited, and unsafe names are refused.** `liveTestFiles` runs
+  `git ls-tree -r -z`, and map-build's live list comes from the same listing (`select-tests.mjs live-tests`). A test
+  path with whitespace, a control character, `"` or `\` is refused by name. The plan's unquoted listing C-quoted
+  such a name and dropped it from every mode, the full suite and the stable gate included. Commit `b1823a47` (FR-2).
+- **D-3506 — both shards' Test scripts are pinned exactly.** Neither step may carry `continue-on-error`, a shell
+  override or a defaults block. The plan's substring pin let `|| true` or a commented-out command stay green.
+  Commit `926a615b` (FR-3).
+- **D-3507 — every cache path lives under `$RUNNER_TEMP/ci-cache`, never the workspace.** That includes
+  map-build's and times-build's outputs, and `ci.yml` contains no `.ci-cache`, pinned. With the plan's `.ci-cache/`
+  inside the checkout, a pull request could commit its own map: gh's download fails on an existing file, and select
+  then read the planted one. Commit `f78c23e3` (FR-4).
+- **D-3508 — `SKIPS_UNDER_TRACE` in `trace-run.mjs`.** It writes each listed test `unknown`, with why
+  `skips cases under trace`, and that why is not counted as a failure. A scan keeps the list equal to the test files
+  that read `CCRC_TRACING`. `ci-trace-run.test.ts` is its one entry: the plan's skip gave that file a known but
+  partial record. Spec §5.2 names the class. Commits `9ba848d7` and `1b3dd53a` (FR-5).
+- **D-3509 — pins before the enforce flip, a limits row, and the gate's evidence named correctly.** New pins:
+  real-shape fixtures for `statx`, `openat2`, `faccessat2`, `readlinkat` and `execveat`, rule 5 on a deleted file,
+  and a rename read as D + A (`--no-renames`). Spec §9 gains a row for failed checks other than ENOENT, and §15
+  gains item 16. The prose that called the gate's evidence a green `full-suite` check now names a green `full-suite`
+  job in a trusted run: `CLAUDE.md`, spec §11.2, `release-stable.yml`'s `promote` comment and `build-release.test.ts`.
+  Commits `c131b7c4`, `1a82a9ac` and `6529cce4`, plus the commit that defines this list (FR-7, FR-8, FR-10).

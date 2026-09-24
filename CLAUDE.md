@@ -97,8 +97,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
   runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
-  head already carries a green `full-suite` check. **A promotion to `stable`** needs a green `full-suite` on the
-  commit: `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
+  head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
+  gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
+  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
   selection, not the whole suite; the daily run and the stable gate are where a miss is caught.
 - **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
