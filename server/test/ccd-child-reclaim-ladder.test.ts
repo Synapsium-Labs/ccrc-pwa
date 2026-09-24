@@ -604,6 +604,41 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     expect(r.token).toBe('');
   }, 60_000);
 
+  it('refuses not-a-workspace when the row names the project directory and that directory is a LINKED worktree', () => {
+    // Not the first stanza of `worktree list`, so git's record alone does not
+    // say "main checkout"; the resolved path against `$main`'s does.
+    const { main } = makeChild(h);
+    const demo2 = path.join(h.home, 'projects', 'demo2');
+    h.git(main, 'worktree', 'add', '-b', 'proj2-main', demo2);
+    fs.writeFileSync(path.join(demo2, 'untracked.txt'), 'x');
+    fs.writeFileSync(reg('project'), 'demo2');
+    fs.writeFileSync(reg('workdir'), demo2);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('not-a-workspace');
+    expect(r.detail).toContain('project directory');
+    expect(r.token).toBe('');
+    // The same directory spelled through a symlinked ANCESTOR (canonical, so
+    // the spelling guard passes it): the comparison is of RESOLVED paths.
+    fs.symlinkSync(path.join(h.home, 'projects'), path.join(h.home, 'plink'));
+    fs.writeFileSync(reg('workdir'), path.join(h.home, 'plink', 'demo2'));
+    const spelled = evalOf(h);
+    expect(spelled.verdict, spelled.detail).toBe('not-a-workspace');
+    expect(spelled.detail).toContain('project directory');
+  }, 60_000);
+
+  it('and the FIRST-stanza check still holds on its own: a row whose project is a linked worktree, naming the repository’s real main checkout', () => {
+    // The resolved path differs from `$main` here, so only git's record says
+    // this is the main worktree.
+    const { main } = makeChild(h);
+    const demo2 = path.join(h.home, 'projects', 'demo2');
+    h.git(main, 'worktree', 'add', '-b', 'proj2-main', demo2);
+    fs.writeFileSync(reg('project'), 'demo2');
+    fs.writeFileSync(reg('workdir'), main);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('not-a-workspace');
+    expect(r.detail).toContain('main checkout');
+  }, 60_000);
+
   itLinux('an UNLISTABLE registry answers unmeasured — never a token, never a new word', () => {
     // Search permission without read: every `$REG/<id>.<field>` the rungs above
     // read by name still opens, and only the LISTING fails.

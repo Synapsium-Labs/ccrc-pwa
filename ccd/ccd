@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=521f50babc47807248c5f9e1f45a577a3298f40ee290f1e5550f330e7636b77a
+# ccrc:generated 1 sha256=04ac3d9dc6816f9f9f3b66de24e43af84c0111a1fbda0397db4d3c7d272836e4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23723,9 +23723,14 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # would pin a WIP commit onto the project's own branch and hand the tail
   # that branch's name; no child is ever the main worktree. The vanished arm
   # cannot reach this: `$main` was just resolved, so it exists, and a canonical
-  # path that does not exist resolves to no path that does.
+  # path that does not exist resolves to no path that does. Asked TWICE: git's
+  # first stanza, and the resolved (`pwd -P`) path against `$main`'s — a project
+  # directory that is itself a LINKED worktree is not the first stanza, and a
+  # row naming it is still the project's own checkout, never a child.
   (( ! RECLAIM_REC_MAIN )) \
     || { _reap_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
+  [[ "$(_ws_realpath "$workdir")" != "$(_ws_realpath "$main")" ]] \
+    || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, not a workspace of $id"; return 1; }
   wthead="$RECLAIM_REC_BRANCH"
   # 6 — no in-progress git operation in the child's OWN tree.
   if (( ! defer )); then
