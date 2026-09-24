@@ -1021,8 +1021,31 @@ function pathWithoutJq(home: string): string {
 function pathWithoutFlock(home: string): string {
   const d = join(home, 'no-flock-bin');
   mkdirSync(d, { recursive: true });
-  for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat']) symlinkSync(realPath(b), join(d, b));
+  // `mv`/`chmod` join (review fix round 1 M5): `cmd_rollback`'s own
+  // reporting window (fix round 1 item 3, restructured by review fix round
+  // 1 I1) now OPENS before `_upd_lock` runs for a non-`cli` rollback, so a
+  // flock-missing die there — unlike `ccrc update --detach`'s own, which
+  // dies before any window opens — DOES write a `failed` report, and
+  // `_upd_phase`'s own write needs both to place it.
+  for (const b of ['jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'mv', 'chmod'])
+    symlinkSync(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
+}
+
+/** Review fix round 1, M4: `cmd_rollback`'s own tool preflight ("curl is
+ *  required by 'ccrc rollback'") — the twin of `pathWithoutJq`/
+ *  `pathWithoutFlock`, everything real EXCEPT `curl`. No `.local/bin`
+ *  prefix: this must NOT include the fixture curl stub (which would answer
+ *  every non-local:// URL with a fake 200), so `cmd_rollback`'s real tool
+ *  preflight is what refuses. `mv`/`chmod` join for the same reason
+ *  `pathWithoutFlock` above needs them: the reporting window is already
+ *  open by the time this die fires, so `_upd_phase` actually writes. */
+function pathWithoutCurl(home: string): string {
+  const d = join(home, 'no-curl-bin');
+  mkdirSync(d, { recursive: true });
+  for (const b of ['flock', 'jq', 'tar', 'gzip', 'awk', 'mkdir', 'date', 'stat', 'bash', 'sh', 'mv', 'chmod'])
+    symlinkSync(realPath(b), join(d, b));
+  return d;
 }
 
 describe('ccrc update: preflight (D-3140 — jq joins the tool list)', () => {
@@ -3128,6 +3151,29 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     }
   });
 
+  // Review fix round 1, I2: the value `1` alone is not the real attack —
+  // `exec` KEEPS THE PID, so a forger who controls the exec chain can
+  // compute the RIGHT value (their own `$$`, which becomes the eventual
+  // `ccrc update` process's own `$$` too) and export it in ahead of time.
+  // The measured repro: `sh -c 'UPD_FROM_CALLER_PID=$$ exec bash "$0"
+  // update … --from rollback' <ccrc>`. The file-scope `unset
+  // UPD_FROM_CALLER_PID` (I2's fix, in the globals block) must still
+  // refuse it — nothing on this box changed.
+  it('the exec-preserved-pid forgery is still refused: `sh -c \'UPD_FROM_CALLER_PID=$$ exec bash "$0" update … --from rollback\'` (review fix round 1 I2)', () => {
+    const home = freshUpdateBox('ccrc-update-json-floor-exec-forge-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const env = updateEnv(home);
+    replantDoctorStubs(home);
+    const ccrc = join(REPO, 'ccd', 'ccrc');
+    const script = 'UPD_FROM_CALLER_PID=$$ exec bash "$0" update --to v2.0.0 --from rollback';
+    const r = spawnSync(BASH, ['-c', script, ccrc], { env, encoding: 'utf8' });
+    expect(r.status, `stderr: ${r.stderr}`).toBe(2);
+    expect(r.stderr).toMatch(/--from rollback is ccrc rollback's own word/);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+  });
+
   it('_ccrc_die reports `failed` only once the run is reporting, only from the run\'s own shell, with the prefix in front (the one hook)', () => {
     // `ccrc-install.test.ts:4133`'s idiom: the ONE-LINE definition extracted
     // from the shipped file and run alone, `_upd_phase` shadowed by a recorder.
@@ -5078,6 +5124,115 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     expect(IN_FLIGHT_UPDATE_PHASES as readonly string[]).not.toContain(rep!.phase);
   });
 
+  /** A REAL, live holder of ~/.ccrc/update.lock — `flock <file> sleep 30` in
+   *  its own process group, returned once a fresh probe confirms contention.
+   *  Review fix round 1 I1's own pins: the reporting window must never open
+   *  before the lock, so a CONTENDED run must leave a live foreign report
+   *  untouched. */
+  const holdRollbackLock = (home: string): ChildProcess => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const h = spawn('flock', [join(home, '.ccrc', 'update.lock'), 'sleep', '30'], { stdio: 'ignore', detached: true });
+    const until = Date.now() + 5000;
+    while (Date.now() < until) {
+      if (spawnSync('flock', ['-n', join(home, '.ccrc', 'update.lock'), 'true']).status !== 0) return h;
+      spawnSync('sleep', ['0.02']);
+    }
+    try { process.kill(-h.pid!, 'SIGKILL'); } catch { /* already gone */ }
+    throw new Error('the fixture holder never took ~/.ccrc/update.lock');
+  };
+  const releaseRollbackLock = (h: ChildProcess): void => {
+    try { process.kill(-h.pid!, 'SIGKILL'); } catch { /* already gone */ }
+  };
+
+  // Review fix round 1, I1: the ORIGINAL item 3 shape opened its reporting
+  // window BEFORE taking the lock, so a non-`cli` rollback whose
+  // release-host check failed CLOBBERED a live run's own in-flight report.
+  // Fixed by taking `~/.ccrc/update.lock` FIRST (this exact scope, a fresh
+  // acquisition — `cmd_update`, called in-process later, inherits it rather
+  // than re-acquiring). On CONTENTION, `_upd_busy_die` now forces
+  // `UPD_REPORTING=0` before it dies, so this run writes NOTHING and the
+  // live holder's own report survives byte-identical.
+  itLinux('a LIVE foreign in-flight report, with the lock genuinely held, survives a --from pwa rollback child untouched (review fix round 1 I1)', () => {
+    const home = freshUpdateBox('ccrc-rollback-i1-live-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const nowSecs = Math.floor(Date.now() / 1000);
+    const foreign = `${JSON.stringify({ target: 'v9.9.9', phase: 'installing', startedAt: nowSecs - 10,
+      updatedAt: nowSecs - 5, detail: null, from: 'cli', pid: 424242 })}\n`;
+    writeFileSync(join(home, '.ccrc', 'update.json'), foreign);
+    const holder = holdRollbackLock(home);
+    try {
+      // A release host that would answer 404 if ever reached — it must
+      // not be: the lock refusal happens first, before any network call.
+      const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
+        { env, encoding: 'utf8' });
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/another update holds ~\/\.ccrc\/update\.lock \(pid 424242, target v9\.9\.9\)/);
+      expect(existsSync(join(home, 'curl-argv')), 'a fetch ran under someone else\'s lock').toBe(false);
+      expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(foreign);
+    } finally { releaseRollbackLock(holder); }
+  });
+
+  // Review fix round 1, M4: item 3's own pin ran `cmd_rollback` inside a `( )`
+  // subshell, where `$BASHPID != $$` disables `_ccrc_die`'s reporting hook —
+  // so it covered the 404 arm (an EXPLICIT `_upd_phase` write) but not the
+  // curl-failure or curl-absent arms, which route through `_ccrc_die`. These
+  // two run the REAL script as a REAL top-level process. No
+  // `replantDoctorStubs`: the fixture curl stub answers every non-local://
+  // URL with a fake 200, so it must not be on PATH for a genuine curl
+  // failure to occur.
+  itLinux('M4: a real curl failure (refused port) writes a terminal `failed` report, read by W2\'s real reportFrom (review fix round 1 M4)', () => {
+    const home = freshUpdateBox('ccrc-rollback-m4-curlfail-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
+    expect(q.code, `stderr: ${q.stderr}`).toBe(0);
+    const env = { ...updateEnv(home), CCRC_RELEASE_BASE_URL: 'http://127.0.0.1:9' };
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
+      { env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/could not ask the release host whether v0\.0\.9 exists/);
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const rep = reportFrom({ ok: true, content: raw });
+    expect(rep, `reportFrom(${raw})`).not.toBeNull();
+    expect(rep!.phase).toBe('failed');
+  });
+
+  itLinux('M4: curl ABSENT from PATH also writes a terminal `failed` report, read by W2\'s real reportFrom (review fix round 1 M4)', () => {
+    const home = freshUpdateBox('ccrc-rollback-m4-curlabsent-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
+    expect(q.code, `stderr: ${q.stderr}`).toBe(0);
+    const env = { ...updateEnv(home), PATH: pathWithoutCurl(home) };
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
+      { env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/curl is required by 'ccrc rollback' but is not on PATH/);
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const rep = reportFrom({ ok: true, content: raw });
+    expect(rep, `reportFrom(${raw})`).not.toBeNull();
+    expect(rep!.phase).toBe('failed');
+  });
+
+  // Review fix round 1, M5: covered by I1 — once the lock is taken BEFORE
+  // the window opens, a NON-contention `_upd_lock` failure (flock missing
+  // from PATH, here) happens AFTER the window is already open and DOES
+  // report — there is no live holder to clobber in that arm.
+  itLinux('M5: flock missing from PATH, for a --from pwa rollback (no --detach), is a terminal `failed` report too (review fix round 1 M5)', () => {
+    const home = freshUpdateBox('ccrc-rollback-m5-noflock-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const q = sourcedCcrc(home, 'UPD_REPORT_TARGET=v0.0.9\nUPD_FROM=pwa\n_upd_phase queued');
+    expect(q.code, `stderr: ${q.stderr}`).toBe(0);
+    const env = { ...updateEnv(home), PATH: pathWithoutFlock(home) };
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', '--to', 'v0.0.9', '--from', 'pwa'],
+      { env, encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/flock \(util-linux\) is required by 'ccrc update'/);
+    const raw = readFileSync(join(home, '.ccrc', 'update.json'), 'utf8');
+    const rep = reportFrom({ ok: true, content: raw });
+    expect(rep, `reportFrom(${raw})`).not.toBeNull();
+    expect(rep!.phase).toBe('failed');
+  });
+
   itDarwin('--detach refuses on macOS by name before anything runs (decision 17)', () => {
     const home = rollbackBox('ccrc-rollback-detach-darwin-', { previous: PREV });
     const r = runRollback(home, ['--detach']);
@@ -5359,8 +5514,12 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(r.stderr, role).toBe('');
       expect(checkLine(r.stdout), role).toBe(
         `check: box=unversioned sha=none target=none caps=${CAPS_NOW} floor=none projection=unreadable state=unversioned`);
+      // Review fix round 1, M10: the GENERIC broken-projection sentence
+      // ("--check compares this box against itself") is untrue here — an
+      // unversioned box has nothing to compare — overridden with the SAME
+      // words the UPD_TARGET_NONE die uses, which also names --to.
       expect(r.stdout, role).toMatch(new RegExp(
-        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
+        `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; this box records no release version to compare against — name one with --to <tag>$`, 'm'));
       expect(r.stdout, role).toMatch(/^this box: unversioned \(none\) · latest: none — a release install would be the first on this box$/m);
       expect(localUrls(home), role).toEqual([]);
     }
@@ -5797,6 +5956,11 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     '  flock "$HOME/.ccrc/update.lock" sleep 3 &',
     '  until ! flock -n "$HOME/.ccrc/update.lock" true 2>/dev/null; do sleep 0.02; done',
     'fi',
+    // Review fix round 1, M1's own pin: swap update.json for a FIFO right
+    // before this launcher exits, so the watchdog's re-lock-and-re-read
+    // (the THIRD read, guarded by M1) meets a FIFO, never the report this
+    // launcher was handed.
+    '[ -f "$HOME/fixture-rollback-fifo-swap" ] && { rm -f "$HOME/.ccrc/update.json"; mkfifo "$HOME/.ccrc/update.json"; }',
     'code=0',
     '[ -f "$HOME/fixture-rollback-exit" ] && IFS= read -r code < "$HOME/fixture-rollback-exit"',
     'exit "$code"',
@@ -5969,25 +6133,32 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     }
   });
 
-  // Fix round 1 item 23-C6 / review 155 C6: the closed `from` vocabulary
-  // (`known_from`) ships with no test that goes red when it is deleted.
-  // `from` is read straight off update.json — a file every session on the
-  // box can write (spec §8) — and `_upd_phase` prints it UNESCAPED into
-  // `"from":"%s"`. A quote-bearing `from` is the one shape that could
-  // corrupt the REWRITTEN report's own JSON; the guard's fallback to the
-  // literal `watchdog` is what stops that.
-  itLinux('a stale report whose `from` carries a quote is rewritten with `from: watchdog`, and the rewrite still parses as JSON (fix round 1 item 23-C6 / review 155 C6)', () => {
+  // Fix round 1 item 23-C6 / review 155 C6, RE-PINNED per review fix round
+  // 1 I4: an unknown/corrupted `from` is NOT item 18's retry signal (that
+  // keys on the RAW word being literally `watchdog`, captured before this
+  // coercion) — it is C6's own fallback, for JSON-injection safety on a
+  // REWRITE only. So a genuinely stale report whose `from` is merely
+  // unknown, on an UNHEALTHY box, is reverted exactly as any other stale
+  // report would be — ONE revert attempt — and when that attempt is
+  // refused, `cmd_watchdog`'s own rewrite (`_upd_phase`, using the COERCED
+  // `UPD_FROM`) must still parse as JSON with `from: watchdog`.
+  itLinux('an unknown/corrupted `from` on an unhealthy box is reverted as any other stale report — ONE revert attempt, and the rewrite is still valid JSON with from=watchdog (review fix round 1 I4 / fix round 1 item 23-C6 / review 155 C6)', () => {
     const home = watchBox('ccrc-watchdog-from-quote-');
     const doc = { target: 'v2.0.0', phase: 'installing', startedAt: nowS() - 135, updatedAt: nowS() - 90,
       detail: null, from: 'a"b', pid: 4242 };
     writeFileSync(jsonPath(home), `${JSON.stringify(doc)}\n`);
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    writeFileSync(join(home, 'fixture-rollback-exit'), '1\n');
     const r = runWatchdog(home);
-    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toMatch(/— rolling back$/m);
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
     const raw = readFileSync(jsonPath(home), 'utf8');
     let parsed: Record<string, unknown> = {};
     expect(() => { parsed = JSON.parse(raw) as Record<string, unknown>; }, `not valid JSON:\n${raw}`).not.toThrow();
     expect(parsed.from, raw).toBe('watchdog');
     expect(parsed.phase, raw).toBe('failed');
+    expect(String(parsed.detail)).toMatch(/^watchdog: rollback refused \(exit 1\); box unhealthy: /);
   });
 
   itLinux('stale, no holder, and the box measures CONVERGED at the target: rewritten failed: abandoned…converged, the updater\'s attribution kept, NO rollback (§18 "the watchdog re-measures before it reverts")', () => {
@@ -6156,6 +6327,30 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(readFileSync(jsonPath(home), 'utf8')).toBe(before);
   });
 
+  // Review fix round 1, M6 considered and NOT applied as literally worded
+  // (see `ccd/ccrc`'s own comment at item 8's check, and the report's
+  // Concerns): widening to "target is the running tag" ALONE, dropping the
+  // completed-record requirement, was measured to make item 8 wrongly
+  // intercept a box whose tree is mid-spine-kill (the record cleared by the
+  // dying run itself, stamp not yet moved) — exactly the shape this file's
+  // own REAL-kill test (design §16, Review Focus 5) needs reverted, not
+  // abandoned. This is the CONTROL for that decision: `previous` names the
+  // running tag, but the completed-install record is ABSENT (an incomplete
+  // install, indistinguishable here from "a run just like the real-kill
+  // test died leaving this exact shape") — item 8 must NOT intercept, and
+  // a real revert attempt must still run.
+  itLinux('previous names the running tag with an INCOMPLETE record: NOT "nothing to revert to" — a real revert attempt still runs (review fix round 1 M6, considered and not applied)', () => {
+    const home = watchBox('ccrc-watchdog-revert-incomplete-');
+    rmSync(join(home, '.ccrc', 'installed'), { force: true });
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v2.0.0\noldsha0000000000000000000000000000000000\n');
+    report(home, { phase: 'checking', ageS: 90 });
+    writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+    const r = runWatchdog(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/— rolling back$/m);
+    expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
+  });
+
   itLinux('a refused rollback is relayed; when it wrote nothing it is recorded, verdict first — when it wrote its own report, that report stands', () => {
     const home = watchBox('ccrc-watchdog-refused-');
     const was = report(home, { phase: 'installing', ageS: 90 });
@@ -6180,6 +6375,31 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(r.code).toBe(1);
     expect(readFileSync(jsonPath(home2), 'utf8')).toBe(own);
   });
+
+  // Review fix round 1, M1: the THIRD read (the refused-rollback re-lock's
+  // own `after="$(jq …)"`) had no guard — a FIFO there would block this
+  // tick for the unit's whole TimeoutStartSec. The launcher swaps
+  // update.json for a FIFO right before it exits refused, so the watchdog's
+  // re-lock-and-re-read meets it. Bounded (`runBounded`, GNU `timeout -k`):
+  // a regression here is a hang, not an assertion failure.
+  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+    'M1: a FIFO at update.json during the refused-rollback re-lock (the THIRD read) is refused too, never blocking the tick (review fix round 1 M1)', () => {
+      const home = watchBox('ccrc-watchdog-m1-third-read-fifo-');
+      report(home, { phase: 'installing', ageS: 90 });
+      writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+      writeFileSync(join(home, 'fixture-rollback-exit'), '1\n');
+      writeFileSync(join(home, 'fixture-rollback-fifo-swap'), '');
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const env: NodeJS.ProcessEnv = {
+        ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_UPDATE_DEADLINE_MS: DEADLINE_MS,
+        CCRC_WATCHDOG_PROBE_GAP_S: '0',
+      };
+      replantDoctorStubs(home);
+      const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'watchdog'], env, 5000);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^watchdog: ccrc rollback --from watchdog exited 1$/m);
+      // A FIFO now sits at the path — no readable regular report to assert.
+    }, 15000);
 
   // Fix round 1 item 18 / review 155 C29: a killed watchdog rollback must
   // not be retried with no bound. Two ticks, one launcher that RECORDS ITS
@@ -6216,15 +6436,18 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     r = runWatchdog(home);
     expect(r.code, `tick 1 — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).not.toMatch(/rolling back/);
-    // The age is real elapsed wall-clock time since the "died" fixture's
-    // fixed `updatedAt` (nowS() - 90), so a wildcard, not an exact 90s,
-    // tolerates however long tick 0 itself took to run.
-    expect(r.stdout).toMatch(/^watchdog: stale report \(installing, \d+s\), from watchdog — a PRIOR watchdog rollback died mid-flight; not retrying, recorded as failed\n$/);
+    // Review fix round 1 I4: this check now runs AFTER the re-measurement,
+    // so the stdout line names the probe's own failure too. The age is
+    // real elapsed wall-clock time since the "died" fixture's fixed
+    // `updatedAt` (nowS() - 90), so a wildcard, not an exact 90s, tolerates
+    // however long tick 0 itself took to run.
+    expect(r.stdout).toMatch(
+      /^watchdog: stale report \(installing, \d+s\), from watchdog, fails its health probe \(.+\) — a PRIOR watchdog rollback died mid-flight; not retrying, recorded as failed\n$/);
     // NOT invoked a second time.
     expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
     const rep = readReport(home);
     expect(rep.phase).toBe('failed');
-    expect(rep.detail).toBe("the watchdog's own rollback died in installing; not retrying - box unhealthy: needs the operator");
+    expect(String(rep.detail)).toMatch(/^the watchdog's own rollback died; not retrying; box unhealthy: .+$/);
   });
 
   itLinux('a LIVE holder of ~/.ccrc/update.lock is never acted on — exit 0 and the sentence, nothing probed, the report byte-identical (§18 "the watchdog reverts a dead updater": the lock check)', async () => {
@@ -6447,6 +6670,41 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(probed(home)).toBe(false);
     expect(lockFree(home)).toBe(true);
   });
+
+  // Review fix round 1, M2: the guard before D-3277's own re-read
+  // (`_upd_report_readable || rrc2=$?`) shipped with no pin that reds when
+  // it is deleted (measured: 27/27 green with it gone). Reusing THIS file's
+  // own idiom immediately above — a `flock` shim ahead of the real one on
+  // PATH, which mutates update.json then defers to the real binary, so the
+  // watchdog's own lock-take still succeeds (lrc=0) and reaches the SECOND
+  // read — except this shim swaps in a FIFO instead of a moved report.
+  // Bounded (`runBounded`): a regression here is a hang, not merely a wrong
+  // verdict.
+  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+    'M2: a FIFO swapped in between the first read and D-3277\'s own second read is refused too, never blocking the tick (review fix round 1 M2)', () => {
+      const home = watchBox('ccrc-watchdog-m2-second-read-fifo-');
+      report(home, { phase: 'installing', ageS: 90 });
+      writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+      writeFileSync(join(home, '.local', 'bin', 'flock'),
+        `#!/bin/sh\nrm -f "$HOME/.ccrc/update.json"\nmkfifo "$HOME/.ccrc/update.json"\nexec ${FLOCK} "$@"\n`,
+        { mode: 0o755 });
+      mkdirSync(join(home, 'tmp'), { recursive: true });
+      const env: NodeJS.ProcessEnv = {
+        ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_UPDATE_DEADLINE_MS: DEADLINE_MS,
+        CCRC_WATCHDOG_PROBE_GAP_S: '0',
+      };
+      replantDoctorStubs(home);
+      // `replantDoctorStubs` copies from `doctor-stubs/`, which plants no
+      // `flock` — the shim written above survives it. Re-planted here
+      // anyway, AFTER, so this test never depends on that ordering fact
+      // staying true.
+      writeFileSync(join(home, '.local', 'bin', 'flock'),
+        `#!/bin/sh\nrm -f "$HOME/.ccrc/update.json"\nmkfifo "$HOME/.ccrc/update.json"\nexec ${FLOCK} "$@"\n`,
+        { mode: 0o755 });
+      const r = runBounded([BASH, join(REPO, 'ccd', 'ccrc'), 'watchdog'], env, 5000);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toBe('watchdog: the report moved while measuring — next tick\n');
+    }, 15000);
 
   itLinux('D-3278: the failing verdict needs three failing probe samples — one passing sample is a pass; all three failing rolls back with exactly 3 probes', () => {
     const healthCount = (home: string): number =>
