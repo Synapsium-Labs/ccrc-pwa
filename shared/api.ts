@@ -6848,6 +6848,12 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'reclaim'       // ws-reclaim (spec 2026-09-22 §5.9): a CHILD's pin-then-teardown,
+                    // server-composed. DISTINCT FROM `reap`: a reap is a human's
+                    // confirmed removal of an archived workspace; a reclaim is the
+                    // automated end of a workspace dispatch minted for one run. One
+                    // act per verb, so the journal never has to be read with a verb
+                    // filter to tell the two apart.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -6893,7 +6899,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };

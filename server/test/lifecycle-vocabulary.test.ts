@@ -146,7 +146,7 @@ describe('ccd <-> shared: the journal vocabulary', () => {
     // the length assertion measures the mutant TODAY.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
     // Two independent claims about `want` itself — expect.soft.
-    expect.soft(want.length, 'guards the guard: an empty want passes everything (24 = 23 + unarchive, the archive stamp a spawn clears)').toBe(24);
+    expect.soft(want.length, 'guards the guard: an empty want passes everything (25 = 23 + unarchive, the archive stamp a spawn clears, + reclaim, a child’s pin-then-teardown)').toBe(25);
     expect.soft(want, 'the filter must exclude the degrade, not merely run').not.toContain(LC_ACT_UNKNOWN);
     const acts = ccdArray('_LC_ACTS');
     if (acts === null) {

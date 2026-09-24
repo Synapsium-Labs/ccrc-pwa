@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c8de8611b5f7fc3450434da600cc3e45a3861c9a0056e24ce022c7b59e693b5
+# ccrc:generated 1 sha256=abaea6a505dc85c1679a450700564503f34a35db923464256567c741498e6d6f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4117,7 +4117,7 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
-          hold purge reap rehome release rename restore route spawn start stop
+          hold purge reap reclaim rehome release rename restore route spawn start stop
           supervise swap unarchive unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
