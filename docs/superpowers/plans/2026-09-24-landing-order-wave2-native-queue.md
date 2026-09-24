@@ -289,7 +289,7 @@ Expected: exactly one changed line (`62c62`). Its `--write` still rewrites only 
 
 1. Re-stamp `ccd/ccd` if it was edited.
 2. `SCRATCH=<abs path>; python3 "$SCRATCH/repoint-readme.py"` — expected: README byte-identical (`git diff --quiet -- README.md && echo readme-untouched`).
-3. `SCRATCH=<abs path>; python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD` (Task 2) or `…/cite-remeasure-hook.py …` (Task 4) — read-only. **If any `base` differs from its `stated`, the tree was red before your edit: stop and report it.** Expected at `905360dc`: `147 / 195 / 53 / 35` on all four lines, `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty.
+3. `SCRATCH=<abs path>; python3 "$SCRATCH/cite-remeasure.py" "$SCRATCH" HEAD` (Task 2) or `…/cite-remeasure-hook.py …` (Task 4) — read-only. **If any `base` differs from its `stated`, the tree was red before your edit: stop and report it.** Expected at `905360dc`: `147 / 195 / 53 / 35` on all four lines, `other byFile keys moved: none`, every `ENTERED`/`LEFT` empty. Re-measured 2026-09-24 at `08701c22` (`main` `b501698a` merged, no task applied) with `cite-remeasure-hook.py … HEAD`: the same four numbers, stated == base == tree, `other byFile keys moved: none`; the re-pointer printed `ccd/ccd:21202` and `ccd/ccd:19989-19991` and left README byte-identical.
 4. The citation cases green: `cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus'` → `7 passed | 326 skipped`.
 5. **Both corpus documents byte-identical to `origin/main`**:
 
@@ -1461,7 +1461,7 @@ describe('the dequeue lane latches only what it told', () => {
 cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
 ```
 
-Expected (measured at `af64d9d2`): `10 failed | 1 passed (11)` — `TypeError: queueFor is not a function` on the three reader cases and `expected [] to have a length of 1 but got +0` (or its `of 2` form, or `the thrown notice was never retried`) on the seven lane cases; "says nothing for…" passes (nothing announces yet) and must stay passing.
+Expected (measured at `af64d9d2`; re-measured 2026-09-24 at `08701c22`, `main` `b501698a` merged, identical): `10 failed | 1 passed (11)` — `TypeError: queueFor is not a function` on the three reader cases and `expected [] to have a length of 1 but got +0` (or its `of 2` form, or `the thrown notice was never retried`) on the seven lane cases; "says nothing for…" passes (nothing announces yet) and must stay passing.
 
 - [ ] **Step 3: The one reader, in `server/src/prstate.ts`.** In `CcdPrLine`, directly after `  checksUnmeasured?: boolean;`, insert:
 
@@ -1781,7 +1781,7 @@ Directly after `feedEvents`'s closing brace (the method that begins `  feedEvent
   }
 ```
 
-Both are reads: neither names `mail_deliveries`, so `mail-hardening.test.ts`'s delivery-writer census and `single-definition.test.ts`'s state-set scans do not see them (measured: 18 and 160 passed with both in). `mail` has no pruning writer anywhere in `server/src/coord/`; `feed_events` prunes to `FEED_RETENTION`, which the second docstring says.
+Both are reads: neither names `mail_deliveries`, so `mail-hardening.test.ts`'s delivery-writer census and `single-definition.test.ts`'s state-set scans do not see them (measured: 18 and 160 passed with both in; re-measured 2026-09-24 at `08701c22` — `main` `b501698a` merged, whose three commits since `a3a93b41` took `single-definition` from 160 to 214 cases — as 18 and 214, by `./node_modules/.bin/vitest run test/mail-hardening.test.ts` and `… test/single-definition.test.ts test/coord-store.test.ts` = 383 = 214 + 169, with Task 3's server edits applied). `mail` has no pruning writer anywhere in `server/src/coord/`; `feed_events` prunes to `FEED_RETENTION`, which the second docstring says.
 
 - [ ] **Step 7: Say who raises it, in `server/src/coord/rundefs.ts`.** Replace
 
@@ -1830,7 +1830,7 @@ cd server && ./node_modules/.bin/vitest run test/pr-queue-lane.test.ts
 cd ../pwa && ./node_modules/.bin/vitest run test/mail-screen.test.tsx test/feed.test.ts test/notifymark.test.ts
 ```
 
-Expected (measured on the prototype at `af64d9d2`): `11 passed (11)`; `95 passed (95)`; `329 passed (329)`; `18 passed (18)`; `tsc-ok`; `7 passed | 326 skipped` (the two in-place `shared/api.ts` lines moved no citation); `52 passed (52)` and `Type Errors  no errors` (26 mail-screen cases, the new one among them).
+Expected (measured on the prototype at `af64d9d2`; the server half re-measured 2026-09-24 at `08701c22`, `main` `b501698a` merged, with Task 3's server edits applied from this plan's own blocks): `11 passed (11)`; `95 passed (95)`; `383 passed (383)` (was `329` at `af64d9d2`; `main`'s three commits since `a3a93b41` took `single-definition` from 160 to 214 cases); `18 passed (18)`; `tsc-ok`; `7 passed | 326 skipped` (the two in-place `shared/api.ts` lines moved no citation); `52 passed (52)` and `Type Errors  no errors` (26 mail-screen cases, the new one among them).
 
 - [ ] **Step 9: Mutation check, then commit**
 
