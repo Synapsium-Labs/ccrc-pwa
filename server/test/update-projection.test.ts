@@ -297,6 +297,11 @@ describe('the inventory run resolves and projects (§9: "at every resolution AND
     expect(coord.nodeByLabel(SERVER_LABEL)).toMatchObject({ channel: 'stable', desiredTag: 'v0.0.10' });
     const text = readFileSync(projectionPath(base.cfg.ccrcDir), 'utf8');
     expect(text).toContain('channel stable\ndesired v0.0.10\n');
+    // lease = issued + 900 s — the deleted python validator's own check,
+    // without pinning inventoryNow()'s own clock instant.
+    const leaseMatch = /^issued (\d+)\nlease (\d+)$/m.exec(text);
+    expect(leaseMatch, text).not.toBeNull();
+    expect(Number(leaseMatch![2]) - Number(leaseMatch![1])).toBe(900);
     // The node reading its own server's file — the real reader, as above.
     expect(path.basename(base.cfg.ccrcDir)).toBe('.ccrc');
     const nodeHome = path.dirname(base.cfg.ccrcDir);

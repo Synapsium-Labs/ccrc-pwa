@@ -25,7 +25,7 @@
 // service managers are poisons (ghContainedEnv) and `curl` is a stub.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -45,6 +45,7 @@ import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES, type UpdateChannel } from '../.
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { describeLinux } from './platformFixtures.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 import { CCRC, nodeEnv, plantNode, readIntent } from './updateIntentFixtures.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -59,9 +60,9 @@ const listed = (tag: string, channel: UpdateChannel, now: number): ReleaseListin
   tag, channel, publishedAt: now, commitSha: null, tarballUrl: `https://releases.example/ccrc-${tag}.tar.gz`,
   bundleListed: true, notes: null, draft: false,
 });
-// W4a Task 15 / w2-repoint.md (unit line 246): NodeMeasurement now requires
-// floorRead/previousRead (W2 D-3213); W2's own update-projection.test.ts
-// fixture carries them (`floorRead: 'measured', previousRead: 'absent'`).
+// W4a Task 15: NodeMeasurement now requires floorRead/previousRead (W2
+// D-3213); W2's own update-projection.test.ts fixture carries them
+// (`floorRead: 'measured', previousRead: 'absent'`).
 const fleetRow = (now: number): NodeMeasurement => ({
   nodeId: FLEET_ID, label: FLEET_LABEL, role: 'fleet',
   currentVersion: 'v0.0.10', currentSha: 'a'.repeat(40), currentRef: 'main', currentBuiltAt: '2026-09-22T00:00:00Z',
@@ -172,6 +173,78 @@ function pull(home: string, body: string): { code: number; stderr: string } {
 
 const intentFile = (home: string): string => path.join(home, '.ccrc', 'update-intent');
 
+/** This box's real resolution of `name`, or null — for `envWithoutJq` below,
+ *  which must remove exactly ONE tool from PATH without losing the others. */
+function realTool(name: string): string | null {
+  const r = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' });
+  const p = r.stdout.trim();
+  return p === '' ? null : p;
+}
+
+/** A minimal PATH carrying every tool `_upd_lock` and `cmd_update`'s
+ *  preflight loop need, EXCEPT `jq` — the ONE place `cmd_update` can die
+ *  BEFORE its first explicit `_upd_phase` call (fix round 1, F1a): the lock
+ *  is taken, `UPD_REPORTING=1` is set, then the loop (`curl tar gzip node
+ *  awk jq`, in that order) runs and dies on the last one — all BEFORE
+ *  `_upd_phase resolving`, the first explicit write. */
+function envWithoutJq(home: string): NodeJS.ProcessEnv {
+  const bin = path.join(home, 'toolbin');
+  mkdirSync(bin, { recursive: true });
+  for (const t of ['curl', 'tar', 'gzip', 'node', 'awk', 'bash', 'sha256sum',
+    'flock', 'date', 'mktemp', 'cat', 'printf', 'chmod', 'mv', 'rm', 'mkdir', 'cp', 'cmp']) {
+    const p = realTool(t);
+    if (p !== null) symlinkSync(p, path.join(bin, t));
+  }
+  const tmp = path.join(home, 'tmp');
+  mkdirSync(tmp, { recursive: true });
+  return ghContainedEnv(home, { HOME: home, TMPDIR: tmp, PATH: bin }, { systemd: true });
+}
+
+/** A real `local://` release layout under `root`/`dir`: SHA256SUMS (its REAL
+ *  sha256, so `_plat_sha256_check` passes for real) + a real tar.gz, with NO
+ *  `.sigstore.json` — the "release ships no provenance bundle" die (curl
+ *  exit 22, D-3239) fires for real once `_upd_fetch` asks for it. `dir` is
+ *  either `download/<tag>` (a resolved pin) or `latest/download` (the
+ *  not-configured fallback) — both URL spaces `_upd_resolve` walks
+ *  (`_upd_release_base`, ccd/ccrc). */
+function releaseLayout(root: string, dir: string, tag: string): void {
+  const relDir = path.join(root, dir);
+  mkdirSync(relDir, { recursive: true });
+  const tarballSrc = mkTmp('ccrc-cross-tarball-src-');
+  writeFileSync(path.join(tarballSrc, 'somefile'), 'dummy content\n');
+  const tarName = `ccrc-${tag}.tar.gz`;
+  const t = spawnSync('tar', ['-czf', path.join(relDir, tarName), '-C', tarballSrc, '.'], { encoding: 'utf8' });
+  if (t.status !== 0) throw new Error(`fixture tar failed: ${t.stderr}`);
+  const sum = spawnSync('sha256sum', [tarName], { cwd: relDir, encoding: 'utf8' });
+  if (sum.status !== 0) throw new Error(`fixture sha256sum failed: ${sum.stderr}`);
+  writeFileSync(path.join(relDir, 'SHA256SUMS'), sum.stdout);
+}
+
+/** A `local://` curl stub matching `_upd_resolve`/`_upd_fetch`'s PLAIN
+ *  `curl -fsSL -o dest url` invocation (no `-K`/`-w`, unlike the intent
+ *  route's) — the same shape `fleetNode`'s own `local://` case and
+ *  `ccrc-update.test.ts`'s combined stub use whenever `-o` is present. */
+function plainLocalCurl(home: string): void {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'curl'), [
+    '#!/bin/sh',
+    'dest=""; url=""',
+    'while [ $# -gt 0 ]; do',
+    '  case "$1" in',
+    '    -o) dest="$2"; shift 2 ;;',
+    '    -*) shift ;;',
+    '    *) url="$1"; shift ;;',
+    '  esac',
+    'done',
+    'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
+    'src="${url#local://}"',
+    '[ -f "$src" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }',
+    'cp "$src" "$dest"',
+    '',
+  ].join('\n'), { mode: 0o755 });
+}
+
 describeLinux('the real route → the real ccd-update-sync → the real _upd_intent_state (§9)', () => {
   it('fresh: the node reads what the server resolved, byte for byte, and in SECONDS', async () => {
     app = await openServer();
@@ -234,9 +307,15 @@ describeLinux('the real route → the real ccd-update-sync → the real _upd_int
     // One control per python refusal update-projection.test.ts deleted, each
     // refused by the layer that owns it and asserted by THAT layer's own
     // diagnostic (ccd/ccd-update-sync's validator, Task 10): pass 2 for the
-    // two shape faults, pass 3 for the two value faults. The over-cap document
-    // stays GRAMMATICAL — a 70 000-digit epoch — so it reaches the cap check;
-    // padding with an `x` line is refused by pass 1 first and measures no cap.
+    // torn-write shape fault, pass 3 for the two value faults. The cap check
+    // itself is PASS 0 since D-3280 (ahead of decoding, not pass 2). With the
+    // REAL curl this fixture's stub stands in for, `--max-filesize 65536`
+    // refuses an over-cap transfer before python ever sees the bytes; this
+    // stub does not enforce that flag, so the over-cap case (a 70 000-digit
+    // epoch, kept GRAMMATICAL so it clears pass 1/2 and actually reaches
+    // PASS 0's own check) exercises the validator's BACKSTOP, not curl's
+    // primary defense — a padding `x` line would be refused earlier still,
+    // by pass 1's off-grammar check, and would not reach either.
     const cases: ReadonlyArray<readonly [string, string, RegExp]> = [
       ['torn — no `end` line', body.replace(/end\n$/, ''), /the document is not exactly nine lines/],
       ['over the cap', body.replace(/^epoch \d+$/m, `epoch 1${'0'.repeat(70_000)}`),
@@ -308,6 +387,11 @@ describe('the other direction: a real _upd_phase report through W2\'s real repor
     // reads identically — W2 Task 11's "an extra key is ignored", from this side.
     const { pid: _pid, ...withoutPid } = rawA;
     expect(reportFrom({ ok: true, content: `${JSON.stringify(withoutPid)}\n` })).toEqual(a);
+    // THE SAME REAL WRITE, WITH ITS OWN startedAt SHIFTED TO MS: the server
+    // refuses the ms shape of what a genuine `_upd_phase` wrote, not a
+    // synthetic fixture — `reportFrom` nulls it (UNIX_SECONDS_MAX).
+    const msShifted = { ...rawA, startedAt: (rawA['startedAt'] as number) * 1000 };
+    expect(reportFrom({ ok: true, content: `${JSON.stringify(msShifted)}\n` })!.startedAt).toBeNull();
     // THE UNIT IS SETTLED — unix SECONDS (rulings R1, R14): the file carries
     // 10-digit seconds, and W2's value is EXACTLY that instant ×1000, inside
     // this test's own clock. A writer that drifted to ms reds on the digits
@@ -327,6 +411,95 @@ describe('the other direction: a real _upd_phase report through W2\'s real repor
     }
     expect(b!.startedAt, 'one process, one start').toBe(a!.startedAt);
     expect(b!.updatedAt!).toBeGreaterThanOrEqual(a!.updatedAt!);
+  });
+
+  // FIX ROUND 1, F1a (controller-mandated pin, committed — a throwaway
+  // measurement is not a pin). `reportFrom` nulls a `startedAt` that is
+  // absent/0/non-integer/over UNIX_SECONDS_MAX (W2 D-3214's report
+  // precedence), and such a report can never move a lease. `_ccrc_die`'s
+  // report hook is the one place a `failed` report can be the FIRST write
+  // this run ever makes — before `_upd_phase resolving`, the run's first
+  // EXPLICIT phase — so this pins that even that write carries a real,
+  // non-null `startedAt`.
+  it('(a) a die BEFORE any explicit _upd_phase (UPD_REPORTING=1, the jq preflight) still carries a real, non-null startedAt', () => {
+    const home = mkTmp('ccrc-cross-die-preflight-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const t0 = Date.now();
+    const r = spawnSync('bash', [CCRC, 'update'], { env: envWithoutJq(home), encoding: 'utf8' });
+    const t1 = Date.now();
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
+    const content = readFileSync(path.join(home, '.ccrc', 'update.json'), 'utf8');
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    expect(raw['phase']).toBe('failed');
+    expect(String(raw['startedAt']), 'update.json is not unix seconds').toMatch(/^\d{10}$/);
+    const rep = reportFrom({ ok: true, content });
+    expect(rep, 'W2\'s reportFrom could not read the real writer\'s own output').not.toBeNull();
+    expect(rep!.startedAt, 'W2\'s reportFrom nulled a startedAt _upd_phase actually wrote').not.toBeNull();
+    expect(rep!.startedAt).toBe((raw['startedAt'] as number) * 1000);
+    expect(rep!.startedAt!).toBeGreaterThanOrEqual(Math.floor(t0 / 1000) * 1000);
+    expect(rep!.startedAt!).toBeLessThanOrEqual(t1);
+  });
+});
+
+// FIX ROUND 1, F1b (controller-mandated pin, committed). W2 refuses a
+// release on a `failed` report whose detail starts `provenance: ` ONLY when
+// `target` is a release tag (W2 D-3239's own gate, `inventory.ts:420`
+// `isReleaseTag(r.target)`) — so a die that writes an empty/non-tag target
+// on a provenance failure would refuse NOTHING on the server. `ccd/ccrc`
+// sets `UPD_REPORT_TARGET="$UPD_VERSION"` right after `_upd_resolve`
+// returns (line ~11872), unconditionally, before `_upd_fetch` (where every
+// provenance die lives) ever runs — true whichever of `_upd_target`'s two
+// arms resolved it: the PROJECTION (`ok`/`none`, this box's `desired`) or
+// the not-configured `latest/download` fallback, where the tag is not known
+// until SHA256SUMS answers. Both are measured here, for real: a real
+// tar.gz, a real sha256sum, curl exit 22 for the absent bundle, the real
+// D-3239 die.
+describeLinux('the D-3239 no-bundle provenance die, no --to (§8, §10)', () => {
+  it('(b) resolved from the PROJECTION: target is the resolved tag, not null', () => {
+    const home = mkTmp('ccrc-cross-provenance-projection-');
+    plantNode(home, 'fleet');
+    const now = Math.floor(Date.now() / 1000);
+    writeFileSync(path.join(home, '.ccrc', 'update-intent'), [
+      'epoch 1', `issued ${now}`, `lease ${now + 900}`, 'channel stable',
+      'desired v0.0.11', 'desired-stable v0.0.11', 'desired-dev v0.0.12', 'auto off', 'end', '',
+    ].join('\n'), { mode: 0o600 });
+    const releases = path.join(home, 'releases');
+    releaseLayout(releases, 'download/v0.0.11', 'v0.0.11');
+    plainLocalCurl(home);
+    const r = spawnSync('bash', [CCRC, 'update'],
+      { env: { ...nodeEnv(home), CCRC_RELEASE_BASE_URL: `local://${releases}` }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the release ships no provenance bundle .* installs only with --allow-unsigned/m);
+    const content = readFileSync(path.join(home, '.ccrc', 'update.json'), 'utf8');
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    expect(raw['phase']).toBe('failed');
+    expect(raw['target'], 'the real writer\'s own target').toBe('v0.0.11');
+    const rep = reportFrom({ ok: true, content });
+    expect(rep!.target, 'W2\'s reportFrom read the target as null — its provenance gate would refuse nothing').toBe('v0.0.11');
+    expect(rep!.detail).toMatch(/^provenance: /);
+  });
+
+  it('(b2) resolved on a NOT-CONFIGURED box following latest/download: target is the tag SHA256SUMS named, not null', () => {
+    const home = mkTmp('ccrc-cross-provenance-latest-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    // Deliberately NO ccrc.env role, NO update-intent file, NO timer unit —
+    // `_upd_intent_state` answers `not-configured`, and `_upd_target`
+    // follows `latest/download`: the tag is unknown until SHA256SUMS names it.
+    const releases = path.join(home, 'releases');
+    releaseLayout(releases, 'latest/download', 'v0.0.13');
+    plainLocalCurl(home);
+    const r = spawnSync('bash', [CCRC, 'update'],
+      { env: { ...nodeEnv(home), CCRC_RELEASE_BASE_URL: `local://${releases}` }, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the release ships no provenance bundle .* installs only with --allow-unsigned/m);
+    const content = readFileSync(path.join(home, '.ccrc', 'update.json'), 'utf8');
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    expect(raw['phase']).toBe('failed');
+    expect(raw['target'], 'the real writer\'s own target').toBe('v0.0.13');
+    const rep = reportFrom({ ok: true, content });
+    expect(rep!.target, 'W2\'s reportFrom read the target as null — its provenance gate would refuse nothing').toBe('v0.0.13');
+    expect(rep!.detail).toMatch(/^provenance: /);
   });
 });
 

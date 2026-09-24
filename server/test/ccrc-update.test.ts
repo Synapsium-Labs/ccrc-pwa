@@ -46,7 +46,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
-import { UPDATE_PHASES } from '../../shared/api.js';
+import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2555,7 +2555,7 @@ const lastReport = (home: string): Record<string, unknown> =>
 const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid'];
 /** The report's clock: unix SECONDS (`date +%s` on `_upd_phase`'s `now=`
  *  line) — the unit W2's `reportFrom` reads, converting once to ms and
- *  nulling anything above `REPORT_TIME_MAX_S` (a 13-digit ms stamp). Ten
+ *  nulling anything above `UNIX_SECONDS_MAX` (a 13-digit ms stamp). Ten
  *  digits until the year 2286. */
 const REPORT_TIME = /^\d{10}$/;
 
@@ -4851,11 +4851,12 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   const nowS = (): number => Math.floor(Date.now() / 1000);
   /** One minute: a 90 s report is stale, a 200 s one is past twice it. */
   const DEADLINE_MS = '60000';
-  /** W2's `IN_FLIGHT_UPDATE_PHASES`, spelled from spec §6 until Task 15
-   *  merges W2 and swaps this literal for the import. */
-  const IN_FLIGHT = ['queued', 'resolving', 'fetching', 'verifying', 'backing-up',
-    'installing', 'restarting', 'checking', 'restoring'];
-  const NOT_IN_FLIGHT = ['done', 'reverted', 'failed', 'unknown'];
+  /** W2's own `IN_FLIGHT_UPDATE_PHASES` (shared/api.ts), not a hand copy of
+   *  spec §6 (W4a Task 15): the order check below (`toEqual(IN_FLIGHT)`)
+   *  measures `ccd/ccrc`'s bash array against W2's REAL array — exact set
+   *  AND order — by construction. */
+  const IN_FLIGHT: readonly string[] = IN_FLIGHT_UPDATE_PHASES;
+  const NOT_IN_FLIGHT = UPDATE_PHASES.filter((p) => !IN_FLIGHT.includes(p));
 
   /** `$HOME/.local/bin/ccrc` — the launcher the watchdog's rollback runs
    *  through — as a RECORDER: its argv; whether ~/.ccrc/update.lock was FREE
@@ -4994,7 +4995,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     for (const bad of ['not json\n', '[1,2]\n', '{"phase":"installing"}\n',
       '{"phase":"installing","updatedAt":"yesterday"}\n', '{"phase":"installing","updatedAt":1.5}\n',
       // A MILLISECOND stamp (13 digits): not this file's unit (rulings R1,
-      // R14), and past W2's REPORT_TIME_MAX_S — unreadable, never "fresh".
+      // R14), and past W2's UNIX_SECONDS_MAX — unreadable, never "fresh".
       `{"phase":"installing","updatedAt":${Date.now()}}\n`,
       '{"phase":"install\\u001bing","updatedAt":1}\n']) {
       writeFileSync(jsonPath(home), bad);
