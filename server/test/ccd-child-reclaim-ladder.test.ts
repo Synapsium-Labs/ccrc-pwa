@@ -598,6 +598,84 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     expect(r.verdict, r.detail).toBe('containment-unproven');
   }, 60_000);
 
+  // A ROW ROOTED INSIDE THE CHILD IS ANOTHER SESSION'S TREE (spec §5.5, rung 9
+  // asked of the path, extended to a path below it). The review measured both
+  // shapes reclaimed: a nested same-repository worktree with its own row had
+  // its files pinned and its tree and branch deleted, and a row at
+  // `<child>/server` was left naming a deleted directory — neither session's
+  // unit or pane ever stopped. `POST /api/sessions` starts a session at any
+  // directory, so either shape is reachable.
+  const otherRow = (id: string, workdir: string): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
+  };
+
+  it('refuses when ANOTHER registry row is rooted inside the child — a nested worktree on another branch', () => {
+    const { main, wt, tip } = makeChild(h);
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/other-live', inner);
+    fs.writeFileSync(path.join(inner, 'live.txt'), 'another session’s uncommitted work\n');
+    otherRow('demo-other-live', inner);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail, 'the detail names the session to end or purge').toContain('demo-other-live');
+    expect(r.detail).toContain('rooted inside');
+    expect(r.token).toBe('');
+    expect(fs.readFileSync(path.join(inner, 'live.txt'), 'utf8')).toContain('uncommitted');
+    expect(h.git(wt, 'rev-parse', 'HEAD')).toBe(tip);
+  }, 60_000);
+
+  it('refuses when ANOTHER registry row is rooted at `<child>/server` — a plain subdirectory', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    otherRow('demo-sub', path.join(wt, 'server'));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('demo-sub');
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  it('refuses a nested row spelled through a symlinked ANCESTOR that resolves inside the child — the resolved comparison', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const spelled = path.join(h.home, 'wtlink', 'demo', 'quiet-basin', 'server');
+    expect(spelled.startsWith(`${wt}/`), 'the CONTROL: no literal prefix of the child').toBe(false);
+    otherRow('demo-alias-sub', spelled);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('demo-alias-sub');
+  }, 60_000);
+
+  it('refuses a row spelled through a link INSIDE the child that resolves outside it — the literal comparison', () => {
+    // The resolved arm alone would pass this row: its path resolves to
+    // `$HOME/elsewhere`. But the path it names, `<child>/lnk`, goes with the
+    // child, so the literal arm is not implied by the resolved one here.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    fs.symlinkSync(path.join(h.home, 'elsewhere'), path.join(wt, 'lnk'));
+    otherRow('demo-through-link', path.join(wt, 'lnk'));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('demo-through-link');
+  }, 60_000);
+
+  it('the CONTROLS: a `<child>x` sibling row and an ANCESTOR row are not inside the child, and it reclaims', () => {
+    // A component boundary, not a string prefix: `quiet-basinx` starts with
+    // `quiet-basin` and is a sibling. And a session rooted ABOVE the child is
+    // not this refusal — the child is inside IT, not the other way about.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(`${wt}x`);
+    otherRow('demo-sibling', `${wt}x`);
+    const sib = evalOf(h);
+    expect(sib.verdict, `a <child>x sibling: ${sib.detail}`).toBe('reclaimable');
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-sibling.uuid'));
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-sibling.workdir'));
+    otherRow('demo-above', path.dirname(wt));
+    const above = evalOf(h);
+    expect(above.verdict, `an ancestor row: ${above.detail}`).toBe('reclaimable');
+  }, 60_000);
+
   it('a trailing slash cannot walk past the leaf: a LIVE link spelled `<wt>/` refuses, and `other` is untouched', () => {
     // `lstat("<link>/")` follows the link, so `-L "<wt>/"` is false: the
     // spelling itself is refused where the row is read.

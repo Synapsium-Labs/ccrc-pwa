@@ -315,6 +315,45 @@ describe('the verb never acts on a tree it cannot prove is the child’s own —
     expect(h.reg('demo-twin', 'workdir'), 'the other row survives').toBe(c.wt);
     expect(h.reg(CHILD_ID, 'uuid')).not.toBeNull();
   }, 90_000);
+
+  // A ROW ROOTED INSIDE THE CHILD (the review's two measured shapes). The token
+  // is minted BEFORE the other session's row appears — an audit, then a session
+  // started inside the child — so the token is valid and the refusal is the
+  // verb's own ladder asking again, never a token mismatch.
+  const nestedShapes = {
+    'a nested worktree `inner` on another branch': (c: Child): string => {
+      const inner = path.join(c.wt, 'inner');
+      h.git(c.main, 'worktree', 'add', '-b', 'ws/other-live', inner);
+      fs.writeFileSync(path.join(inner, 'live.txt'), 'another session’s uncommitted work\n');
+      return inner;
+    },
+    'a plain subdirectory `<child>/server`': (c: Child): string => {
+      const sub = path.join(c.wt, 'server');
+      fs.mkdirSync(sub);
+      return sub;
+    },
+  } as const;
+  for (const [label, plant] of Object.entries(nestedShapes)) {
+    it(`refuses when ANOTHER registry row is rooted inside the child — ${label} — and nothing is pinned or deleted`, () => {
+      const c = makeChild(h);
+      const root = plant(c);
+      const tok = evalOf(h).token;
+      expect(tok, 'the audit minted a token before the other row existed').toMatch(/^[0-9a-f]{64}$/);
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.uuid'), 'u-nested');
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.workdir'), root);
+      const before = treeOf(c.wt);
+      const r = childReclaimVerb(h, tok);
+      // What is on disk FIRST: a reclaim that went ahead shows here.
+      expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
+      expect(atticShas(c), 'nothing was pinned').toEqual([]);
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`)), 'no tombstone').toBe(false);
+      expect(refusedWith(r)).toBe('containment-unproven');
+      expect(JSON.parse(r.stdout).detail, 'the detail names the session to end or purge').toContain('demo-nested');
+      intact(c);
+      expect(h.reg('demo-nested', 'workdir'), 'the other row survives').toBe(root);
+      expect(refusalsOf(h.home)).toContainEqual({ act: 'reclaim', token: 'containment-unproven' });
+    }, 90_000);
+  }
 });
 
 describe('the resumed arm', () => {
@@ -973,6 +1012,38 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     expect(r.code, r.stdout + r.stderr).toBe(1);
     expect(JSON.parse(r.stdout).detail).toContain('another registry row');
   }, 90_000);
+
+  // The resumed arm has no ladder in front of it, so this is where the tail's
+  // own re-proof is the only thing between a row rooted inside the child and
+  // `git worktree remove --force` — the review's two shapes, on a resume.
+  for (const shape of ['inner', 'server'] as const) {
+    it(`a registry row rooted INSIDE the child (\`<child>/${shape}\`) stops a RESUMED tail — nothing further is deleted`, () => {
+      const c = makeChild(h);
+      interrupted(c, 'worktree');
+      const root = path.join(c.wt, shape);
+      if (shape === 'inner') {
+        h.git(c.main, 'worktree', 'add', '-b', 'ws/other-live', root);
+        fs.writeFileSync(path.join(root, 'live.txt'), 'another session’s uncommitted work\n');
+      } else fs.mkdirSync(root);
+      const tok = resumeToken('worktree');
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.uuid'), 'u-nested');
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.workdir'), root);
+      const before = treeOf(c.wt);
+      const r = childReclaimVerb(h, tok);
+      expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
+      expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
+      if (shape === 'inner') {
+        expect(h.git(c.main, 'branch', '--list', 'ws/other-live'), 'the other session’s branch survives').toContain('ws/other-live');
+      }
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.detail, 'the detail names the session to end or purge').toContain('demo-nested');
+      expect(o.detail).toContain('rooted inside');
+      failedPairAgrees(r);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+    }, 90_000);
+  }
 
   it('a tree that stands with NO record in git of it is not removed by a resumed tail', () => {
     // The ladder's `no-worktree-record`, re-asked on every arm: a directory
