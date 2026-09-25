@@ -12985,7 +12985,7 @@ cmd_watchdog() {
   fi
   command -v flock >/dev/null 2>&1 \
     || _ccrc_die "watchdog: flock (util-linux) is not on PATH, so a live updater cannot be told from a dead one — nothing was re-measured or reverted"
-  # The compound form (`ccd/ccd:4381-4410`): a failed open is this line's
+  # The compound form (`_lc_rotate`'s own "THE GENERAL RULE" comment in `ccd/ccd`): a failed open is this line's
   # answer, never bash's own diagnostic on stderr. THREE answers, never two
   # (ruling R16; `_upd_lock_probe`'s contract, Task 2): 0 this process took
   # it, 1 a LIVE holder (contention), 3 UNMEASURED — the open failed, or
@@ -13550,7 +13550,7 @@ _upd_lock() {
   { [ -d "${BOX_UPDATE_LOCK%/*}" ] || mkdir -p "${BOX_UPDATE_LOCK%/*}"; } 2>/dev/null \
     || _ccrc_die "cannot create ~/.ccrc, so ~/.ccrc/update.lock cannot be taken — nothing on this box was changed"
   # The COMPOUND form: a bare `exec {fd}>>… 2>/dev/null` leaks bash's own
-  # open-failure diagnostic (`ccd/ccd:4381-4410` records why).
+  # open-failure diagnostic (`_lc_rotate`'s own comment in `ccd/ccd` records why).
   { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null \
     || { UPD_LOCK_FD=""; _ccrc_die "cannot open ~/.ccrc/update.lock — nothing on this box was changed"; }
   # D-3274 (found reviewing Task 2): contention told from a flock that could
@@ -13580,14 +13580,14 @@ _upd_unlock() {
 }
 
 # ── _upd_intent_state — the projection, measured (design 2026-09-20 §9) ──
-# `_acct_pool_state`'s vocabulary (`ccd/ccd:2162`) re-derived for this file,
+# `_acct_pool_state`'s vocabulary (`ccd/ccd`) re-derived for this file,
 # plus `none` — `ok`'s twin for a document that resolves no target — and made
 # ROLE-AWARE, because "is a control plane configured here" is measured
 # differently per role (spec §9's table), and the timer-unit test alone is
 # false on exactly the node that is most centrally managed:
 #   macOS — never configured (decision 17), decided before anything is read.
 #   fleet, or no role recorded — `ccd-update-sync.timer`'s unit FILE is
-#       installed (`_pool_sync_installed`'s rule, `ccd/ccd:2116-2122`: the
+#       installed (`_pool_sync_installed`'s rule in `ccd/ccd`: the
 #       artifact the installer left, NEVER the projection's own absence,
 #       which is the thing being told apart). Absent file and no unit file:
 #       `not-configured`, the one answer that falls back to stable. Absent
@@ -13604,7 +13604,7 @@ _upd_unlock() {
 # with no timer unit file reads an ABSENT projection as `not-configured`.
 # rollout refuses a no-role box (D-3106), so no release-lane box is one.
 # A present file is judged the same way on every role: a bounded, NUL-aware
-# read (`_acct_pool_state`'s INVERTED rc, `ccd/ccd:2252-2254` — 0 means the
+# read (`_acct_pool_state`'s INVERTED rc on its own `-n 65536` bounded read in `ccd/ccd` — 0 means the
 # read stopped short of EOF, at the 65536-byte cap or a NUL), `end` as the
 # last line (the torn-write detector), exactly nine lines in spec order,
 # each its own grammar, and `lease` against `date +%s` — SECONDS, spec §9's
@@ -13944,7 +13944,7 @@ _upd_marker_unsigned() {
 # The release URL space's root — GitHub's layout under the one owner/repo pair
 # — spelled ONCE in this file: `_upd_resolve` fetches under it and
 # `_upd_asset_listed` asks it whether a release carries an asset.
-# (install.sh:51 carries its own copy of this expression — the release
+# (install.sh's own `BASE=` line carries its own copy of this expression — the release
 # source's deliberate cross-file second, argued in the RELEASE SOURCE
 # header above `CCRC_RELEASE_OWNER`: install.sh runs before any ccrc exists.)
 _upd_release_base() {
@@ -14383,11 +14383,13 @@ _upd_stamp_moved() {   # <old_sha>
 }
 
 # ── _upd_health_version — what the server on THIS box says it runs ───────
-# `GET /health` is auth-EXEMPT (server/src/auth/gate.ts:195-198) and carries
-# `version` for a versioned build only (server/src/server.ts:1073-1078). The
+# `GET /health` is auth-EXEMPT (the `EXEMPT` map's `'GET /health'` entry in
+# server/src/auth/gate.ts) and carries `version` for a versioned build only
+# (the `app.get('/health'` handler in server/src/server.ts). The
 # address is `_box_server_addr`'s — CCRC_ADDR, then ccrc.env's
 # CCRC_HOST/CCRC_PORT — and NOTHING CONFIGURED is the server's own default
-# bind, 127.0.0.1:7788 (server/src/config.ts:305-318; the pair
+# bind, 127.0.0.1:7788 (`loadConfig`'s `host`/`port` defaults in
+# server/src/config.ts; the pair
 # `cmd_install`'s landing block falls back to), not a failure: the gate only
 # asks on a server/both box, which runs a server whether or not its seed-once
 # env file names the two keys (D-3255). An address
@@ -14679,7 +14681,9 @@ _upd_backup_copy() {
 # `_upd_backup_pairs` — `<class>\t<source>\t<name>` per row of `_upd_backup_set`,
 # every row whether or not it exists (arm 3 checks the BACKUP's side).
 # coord.db is no row: it goes through backup-coord.mjs and is never restored
-# (design §11 — an older server reads a newer db, `db.ts:176-181`).
+# (design §11 — an older server reads a newer db, the `current >
+# COORD_SCHEMA_VERSION` arm's own "Rule 3" comment in
+# `server/src/coord/db.ts`).
 _upd_backup_pairs() {
   local UPD_BACKUP_LISTING=1
   _upd_backup_set
