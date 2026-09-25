@@ -946,16 +946,41 @@ export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
  */
 export const MAIL_REBIND_SUPERSEDED_ERROR = 'recipient rebound';
 
-/** The three parks that are DECISIONS rather than abandonment — a run closing
- *  (`closeRun`), a chair changing hands (`reclaimProgram`) and an occupant
- *  changing (`bindSession`) — as one SQL list, so the read-side exclusion below
- *  names a set rather than growing a second hand-written `!=` per writer. Every
- *  future "this delivery was cancelled on purpose" park joins HERE and inherits
- *  the exclusion; a park that means "we gave up" (the replay ceiling, the
- *  attempt ceiling, a purged recipient) must never be added, because those are
- *  exactly the rows that predicate exists to keep visible. */
+/**
+ * The child-reclaim park (child-reclamation spec 2026-09-22 §5.6): every
+ * outstanding delivery ADDRESSED TO a child workspace the server has just
+ * reclaimed, parked by `cancelDeliveriesTo`. Its OWN sentence, for
+ * `MAIL_REBIND_SUPERSEDED_ERROR`'s reason: `'run closed'` is false of a
+ * delivery from an earlier wave's run or from a peer (no run at all), and
+ * `lastError` reaches an operator's eye through `MailSummary.lastError`.
+ *
+ * A DELIBERATE cancel, so it joins `DELIBERATE_CANCEL_ERRORS_SQL` below — and
+ * it is not "a purged recipient", the abandonment park that set must never
+ * hold. That park (`watch.ts`'s `sweepMail`) is the lane DISCOVERING a
+ * recipient gone from under it, ~26 minutes after the fact, which is worth a
+ * human's look. This one is the server's own act, taken the instant the
+ * reclaim it caused succeeded: the recipient was removed ON PURPOSE because
+ * its run had closed, and a row that stayed visible as "this still needs a
+ * human" would ask a human to act on mail to a workspace that, by rule 4, no
+ * human was ever meant to open. It is also what ends the recycled-slug hazard
+ * `sweepMail`'s own comment names: `_ws_slug_new` re-mints a purged id, and a
+ * delivery left outstanding would be typed into the stranger that inherits
+ * it. No apostrophe: it is interpolated into the SQL fragment below.
+ */
+export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
+
+/** The four parks that are DECISIONS rather than abandonment — a run closing
+ *  (`closeRun`), a chair changing hands (`reclaimProgram`), an occupant
+ *  changing (`bindSession`) and a child workspace reclaimed
+ *  (`cancelDeliveriesTo`, child-reclamation wave 3) — as one SQL list, so the
+ *  read-side exclusion below names a set rather than growing a second
+ *  hand-written `!=` per writer. Every future "this delivery was cancelled on
+ *  purpose" park joins HERE and inherits the exclusion; a park that means "we
+ *  gave up" (the replay ceiling, the attempt ceiling, a purged recipient)
+ *  must never be added, because those are exactly the rows that predicate
+ *  exists to keep visible. */
 const DELIBERATE_CANCEL_ERRORS_SQL =
-  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}')`;
+  `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}')`;
 
 /** The ABANDONMENT half of the predicate below, lifted into its own name because
  *  it is about to have a second reader: `requeueAbandonedMail`
@@ -1798,7 +1823,7 @@ export class CoordStore {
    *     non-NULL state on every row it can select. It is `GET
    *     /api/mail?program=`'s default, non-`all`, arm.
    *
-   * On the narrower `OUTSTANDING_STATES_SQL` — ten holders, in file order:
+   * On the narrower `OUTSTANDING_STATES_SQL` — eleven holders, in file order:
    *   `OUTSTANDING_OR_ABANDONED_SQL`'s own definition — the composed constant,
    *     no reader of its own.
    *   `cancelKickoffsTo` and `repointCoordinatorMail` — both run BEFORE this
@@ -1816,8 +1841,8 @@ export class CoordStore {
    *     single-line-signature method (D-2338; see `requeueAbandonedMail`'s
    *     call site) rather than inlined, and therefore a THIRD, separate
    *     holder: its own `WHERE state IN` guards exactly which outstanding
-   *     rows the predecessor loses. This whole bullet, and the "ten holders"
-   *     count above, is itself a consequence of D-2338 — the brief's own
+   *     rows the predecessor loses. This whole bullet, and the tenth holder
+   *     counted above, is itself a consequence of D-2338 — the brief's own
    *     verbatim replacement text for this docstring (Step 7) named nine and
    *     said nothing about this method, because it assumed the inline shape.
    *   `cancelOutstandingDeliveries` — reached, and correctly. A new row belongs
@@ -1825,6 +1850,13 @@ export class CoordStore {
    *     other outstanding delivery, with `MAIL_RUN_CLOSED_ERROR` — a DELIBERATE
    *     cancel, which `ABANDONED_PARK_SQL` excludes, so it cannot come back
    *     round through this arm on a later reclaim.
+   *   `cancelDeliveriesTo` (child reclamation, wave 3) — reached only if an
+   *     operator named a CHILD workspace as the heir chair, and correct then
+   *     too: it runs after that child has been reclaimed, so the re-queued row
+   *     is parked like every other delivery to it, with
+   *     `MAIL_CHILD_RECLAIMED_ERROR` — a DELIBERATE cancel, which
+   *     `ABANDONED_PARK_SQL` excludes, so it cannot come back round through
+   *     this arm either.
    *   `runHealth`'s outstanding-vs-parked count — THE ONE READER WHOSE OUTPUT
    *     THIS ARM CHANGES, and the one the hand-typed walk omitted. Both halves
    *     of that query are per-DELIVERY, exactly as `RunHealth.mailOutstanding`
@@ -2219,6 +2251,36 @@ export class CoordStore {
       `lastError = '${MAIL_RUN_CLOSED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} ` +
       'AND mailId IN (SELECT id FROM mail WHERE runId = ?)',
     ).run(runId);
+  }
+
+  /** Child reclamation (spec 2026-09-22 §5.6): every outstanding delivery
+   *  ADDRESSED TO `toId`, parked `rejected('undeliverable')` with
+   *  `MAIL_CHILD_RECLAIMED_ERROR` — called by `reclaimChild` ONLY once the
+   *  child is gone: after `ws-reclaim` answered `reclaimed`, or when its own
+   *  registry read MEASURED the row absent — confirmed by a second listing
+   *  naming no `.uuid`/`.child` for the id (an earlier attempt's box half
+   *  finished without reaching this call). Never before, and never on a
+   *  refusal or a failure — those leave a live recipient that may still read
+   *  its mail.
+   *
+   *  KEYED ON THE RECIPIENT, and that is why it is its own writer rather than
+   *  `cancelOutstandingDeliveries` above: that one is keyed on `mail.runId`, so
+   *  it cannot reach a delivery from an EARLIER wave's run that the child never
+   *  acked, nor peer mail with no run at all. `mail_deliveries.toId` is the
+   *  RESOLVED session, never the `'coordinator'`/`'worker'` role `mail.toId`
+   *  may carry, so this parks exactly what was sent to the child.
+   *
+   *  RETURNS the number of rows it parked, never `void` — so it is not one of
+   *  the writers CLAUDE.md lists as returning `void`, and a caller can tell a
+   *  park from a no-op. An already-`acked` or already-parked row is left
+   *  alone: `OUTSTANDING_STATES_SQL` is the whole guard. Plain enough (no
+   *  nested `tx()`) to call standalone, like its sibling. */
+  cancelDeliveriesTo(toId: string): number {
+    const res = this.db.prepare(
+      "UPDATE mail_deliveries SET state = 'rejected', rejectCode = 'undeliverable', " +
+      `lastError = '${MAIL_CHILD_RECLAIMED_ERROR}' WHERE state IN ${OUTSTANDING_STATES_SQL} AND toId = ?`,
+    ).run(toId);
+    return Number(res.changes);
   }
 
   /**
@@ -2945,11 +3007,20 @@ export class CoordStore {
    *  (idle ∪ terminal, dispatched/working/unknown sessions only survive it),
    *  while this one still names `TERMINAL_RUN_STATES_SQL`'s complement
    *  (every non-terminal state, IDLE included) — a program with every run
-   *  parked at `awaiting-review` is still open, and must stay so. */
-  programOpenRunCount(program: string): number {
+   *  parked at `awaiting-review` is still open, and must stay so.
+   *
+   *  `excludeRunId` (child reclamation, wave 3) asks the SAME question with one
+   *  run set aside: "would closing THIS run retire the program?", which
+   *  `closeRun` in `coord/close.ts` must answer BEFORE its fleet act, while the
+   *  closing run is still non-terminal. One predicate, two askers — the
+   *  retirement check above passes no exclusion, because by then the closing
+   *  run already reads terminal inside its own transaction. `-1` when absent,
+   *  an id AUTOINCREMENT never mints, so both are ONE query —
+   *  `openRunsForSession`'s own idiom. */
+  programOpenRunCount(program: string, excludeRunId?: number): number {
     return (this.db.prepare(
-      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
-    ).get(program) as { c: number }).c;
+      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ?`,
+    ).get(program, excludeRunId ?? -1) as { c: number }).c;
   }
 
   /** The one NON-TERMINAL review run naming `workRunId`, or null (design
