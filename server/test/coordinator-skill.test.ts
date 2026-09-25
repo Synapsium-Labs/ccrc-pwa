@@ -224,12 +224,29 @@ describe('the coordinator skill: its contract', () => {
       lifecycle.indexOf('## What happened to a workspace that is gone')));
     expect(s6).toContain('**A child is reclaimed; your own workspace is not.**');
     expect(s6).toContain('`"childReclaim":"queued"`');
-    for (const why of ['not-a-child', 'marker-unreadable', 'siblings-open', 'siblings-unreadable', 'review-report-live',
-                       'not-finished']) {
-      expect(s6, `§6 never names childReclaimWhy ${why}`).toContain(`\`${why}\``);
-    }
+    // Fix round 1, I1: a substring `toContain` over the whole flattened section
+    // binds no subject — `review-report-live` is also said in the review-child
+    // carve-out sentence below, so DELETING it from the `childReclaimWhy` list
+    // alone left this green (measured, task-10-report.md's row 3). Anchor the
+    // assertion to the list itself, and make it SET EQUALITY against the
+    // shipped union — never a hand-kept array — so a seventh word ADDED to
+    // `ChildReclaimNotWhy` is caught too.
+    const LEAD = '`childReclaimWhy` says why:';
+    const lead = s6.indexOf(LEAD);
+    const end = s6.indexOf(' — the last is', lead);
+    expect(lead, 'the childReclaimWhy list lost its lead').toBeGreaterThanOrEqual(0);
+    expect(end, 'the childReclaimWhy list lost its end').toBeGreaterThan(lead);
+    const listed = [...s6.slice(lead + LEAD.length, end).matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
+    const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
+    const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
+    const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(6);
+    expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
     // Spec §5.7: the report outlives the review close; the coordinator
     // cites the reviewer's own path, and step 6 is not changed to say otherwise.
+    // This is the carve-out's OWN claim — kept as a separate toContain, distinct
+    // from the list above, because it is a different sentence about the same word.
+    expect(s6).toContain('answers `review-report-live`');
     expect(s6).toContain('kept while the run it reviewed is open');
     expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
     expect(s6).toContain('it stays until a human cleans it up');
@@ -241,6 +258,15 @@ describe('the coordinator skill: its contract', () => {
     expect(s6, 'the unlimited "nothing else does either" is back').not.toContain('and nothing else does either');
     expect(s6).toContain('A workspace that is not a child — your own, or any workspace dispatch did not mint — is an ordinary unheld, unclaimed row again');
     expect(s6).toContain('Neither notice archives anything, and nothing else touches a workspace that is not a child.');
+  });
+
+  // Fix round 1, M3: step 7's own child-reclaim facts were lens-4 claims with
+  // no pin of their own — deleting either sentence stayed green, because only
+  // §6 and the reviewer's own sentence were pinned. Anchor step 7 directly.
+  it('step 7 says a child is queued for server reclaim and names the still-claimed exception', () => {
+    const step7 = flat(skill.slice(skill.indexOf("7. **Final merge:**"), skill.indexOf('## When a wave crosses')));
+    expect(step7).toContain('`"childReclaim":"queued"`');
+    expect(step7).toContain('nothing is reclaimed while it is');
   });
 
   it('names the three destructive verbs ONLY inside the clause that forbids them', () => {

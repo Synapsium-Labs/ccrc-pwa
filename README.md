@@ -1969,11 +1969,12 @@ server itself removes one kind of workspace: a CHILD — one dispatch minted for
 a run, marked `$REG/<id>.child` — once the coordinator has finished with it,
 through `ccd ws-reclaim`. That is not `ws-reap` delegated. It is a separate
 verb that refuses anything but a child whose marker names the run the server
-holds as having minted it, pins every uncommitted change, commit and stash
-before it deletes anything, and re-proves its token on the box inside the reap
-lock; the server composes it and no session runs it. The coordinator's clause
-3 still excludes every reap, and a coordinator's own workspace is still
-cleaned up by a human.
+holds as having minted it, pins every uncommitted change, commit and stash —
+except a secret-shaped file, which is never committed and is deleted with the
+tree — before it deletes anything, and re-proves its token on the box inside
+the reap lock; the server composes it and no session runs it. The
+coordinator's clause 3 still excludes every reap, and a coordinator's own
+workspace is still cleaned up by a human.
 
 **Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes

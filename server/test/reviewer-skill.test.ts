@@ -76,6 +76,10 @@ describe('the reviewer skill: its contract', () => {
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting review-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
     expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
+    // Fix round 1, M3: this claim (the report outlives the review's own close)
+    // was a lens-4 fact with no pin — deleting it stayed green.
+    expect(skill.slice(at).replace(/\s+/g, ' '))
+      .toContain('Your report stays where you wrote it for as long as the run you reviewed is open');
     expect(skill).not.toContain('ws-reclaim');
   });
 

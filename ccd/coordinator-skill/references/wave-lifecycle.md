@@ -823,24 +823,28 @@ a PR, or a close that leaves your program with no open run — the server
 RELEASES it rather than holding it for a next wave, and the close response
 carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
 on the child's own queue: it commits anything left uncommitted on the child's
-branch as a WIP commit, pins every commit and stash in the attic, writes a
-tombstone, and then removes the pane, the worktree, the branch, the clips
-directory and the child's temp directory. Its outcome lands in the feed —
-reclaimed, deferred with its reason, refused with its sentence — and never in
-a reply to you. A child that another open run still names, or that the
-operator is looking at, is deferred and picked up later; nothing you do
-speeds it or stops it. Otherwise the response carries
-`"childReclaim":"not-queued"` and `childReclaimWhy` says why: `not-a-child`,
-`marker-unreadable`, `siblings-open`, `siblings-unreadable`,
-`review-report-live` or `not-finished` — the last is the ordinary non-final
-close holding a child for wave N+1. **A review run's reviewer is a child
-too, but it is kept while the run it reviewed is open**: its clips directory
-holds the report you cite by path in every `fix-round` mail, so closing the
-review run releases the reviewer and answers `review-report-live`, and the
-reviewer is reclaimed only after the run it reviewed has closed. Nothing
-changes in how you read or cite the report (SKILL.md step 6). Your own
-workspace, and any workspace dispatch did not mint, is never reclaimed — it
-stays until a human cleans it up.
+branch as a WIP commit — except a secret-shaped file, which is never
+committed and is deleted with the tree — pins every commit and stash in the
+attic, writes a tombstone, and then removes the pane, the worktree, the
+branch, the clips directory and the child's temp directory. Its outcome
+lands in the feed — reclaimed, deferred with its reason, refused with its
+sentence, or failed — and never in a reply to you. A child that another open
+run still names, or that the operator is looking at, is deferred and picked
+up later by wave 4's sweep; nothing you do speeds it or stops it. Otherwise
+the response carries `"childReclaim":"not-queued"` and `childReclaimWhy`
+says why: `not-a-child`, `marker-unreadable`, `siblings-open`,
+`siblings-unreadable`, `review-report-live` or `not-finished` — the last is
+the ordinary non-final close holding a child for wave N+1. No
+`childReclaimWhy` at all means the child was eligible but the hand-off did
+not start; wave 4's sweep reaches it regardless. **A review run's reviewer
+is a child too, but it is kept while the run it reviewed is open**: its
+clips directory holds the report you cite by path in every `fix-round` mail,
+so closing the review run releases the reviewer and answers
+`review-report-live`, and the reviewer is reclaimed by wave 4's sweep only
+after the run it reviewed has closed. Nothing changes in how you read or
+cite the report (SKILL.md step 6). Your own workspace, and any workspace
+dispatch did not mint, is never reclaimed — it stays until a human cleans
+it up.
 
 ## What happened to a workspace that is gone
 

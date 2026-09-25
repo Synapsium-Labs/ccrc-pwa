@@ -145,7 +145,7 @@ released with it.
 
 **This workspace ends when its run closes.** You are a child the server
 minted for this review, so once the coordinator closes your run AND the run
-you reviewed has closed, the server reclaims it: anything not committed on
+you reviewed has closed, wave 4's sweep reclaims it: anything not committed on
 this branch by then is committed for you as a WIP commit and attic-pinned,
 and then the worktree, the branch, the clips directory — your report's
 directory — and this session's temp directory are removed. Your report stays

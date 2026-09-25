@@ -5644,7 +5644,7 @@ export interface RunHealth {
    *  run ended), a `coordinator reclaimed` park (a chair changed hands), a
    *  `recipient rebound` park (a worker was re-bound to a new session,
    *  cross-repo §4) and a `child workspace reclaimed` park (the server
-   *  reclaimed a finished child, spec 2026-09-22 §6) are all the machinery
+   *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
    *  working as designed, and reporting any of them would announce a change
    *  that has already been handled. */
   readonly mailParked: number;
