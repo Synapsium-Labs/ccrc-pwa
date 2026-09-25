@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in review** 2026-09-25: run 148 on `plain-summit` at `c5962a94` (3352–3366 defined); review run 170 (seven lenses, SAFETY at xhigh) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **fix round** 2026-09-25 after review 170 (4 critical); run 148 on `plain-summit`, sent back from `c5962a94` |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -43,6 +43,43 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-25 — review 170 on wave 3 (`c5962a94`): four critical, seven important, twelve minor; ONE full fix round.**
+  - **The panel.** Nine Opus lenses, SAFETY at xhigh; 126 agents; 32 findings survived and merge into 22; 7 were
+    refuted. Suites green except the box-local `tmp-sweep` case. AGENT-FIRST, the run-id parses and fixture-only
+    tests hold. Whole-branch (a), "nothing deleted that was not first kept", held only pending the critical rulings.
+  - **The criticals, each a way to delete something not first kept:**
+    - F1: rung 5 and the tail read an unreachable tmux as no session;
+    - F2: a registry row nested inside the child is torn out;
+    - F3: the reflog pin keeps the 200 lowest shas repo-wide, so the child's own reflog-only commits can be lost;
+    - F4: `skip-worktree`/`assume-unchanged` edits are deleted unrecorded.
+  - **The rulings were attacked before sending.** Three Opus agents found that my first F1 control would itself have
+    reopened the D-308 fail-open, since `no server running` is `unknown`, never gone. They also found:
+    - F1: the tmux exit-empty strand, and `_session_probe`'s missing anchor;
+    - F7: `_svc_is_loaded` folds "could not ask launchd" into "not loaded";
+    - F4: record-only contradicts spec §5.5 step 2 for non-secret tracked edits;
+    - F3: nested branches' reflogs were missed, as were unreadable-reflog refusal and pin-before-delete order.
+
+    Every amendment is incorporated. The full rulings travel with the fix-round mail, in the coordinator's clips as
+    `rulings-review-170.md`.
+  - **Rulings, in short:**
+    - F1: `_session_probe` with an anchored target (one authorised line-neutral edit above the boundary); only
+      `can't find session` is gone; the tail re-measures the pane, with one exit-empty exception;
+    - F2: refuse a nested row (an ancestor row is not refused);
+    - F3: the child's own reflogs pinned completely, old and new values, each before its deleting act;
+    - F4: a hidden-flag edit goes through the secret classifier, kept in the WIP unless it is secret-shaped;
+    - F5: the ladder's reads contained at `_ws_reclaim_fork`;
+    - F6: the claim narrowed;
+    - F7: stopped only on launchctl rc 113;
+    - F8: numbered;
+    - F9 to F13: sentences and prose made true;
+    - F20: pre-lock dies recognised positively;
+    - F21: `wip` discriminated;
+    - every other minor fixed.
+  - **Accepted:** the +35 lines above the boundary, which are code plus one-line pointers under plan rule R9.
+  - **Numbers.** 3367 for F8 and 3368 for F11 and F13, from the programme's block. A new block, 3513 through 3520,
+    was minted for this round's safety fixes; 3369 and 3520 stay unassigned.
+  - **Advance commitment.** After this round, a review scoped to its commits. Only a destroy path, or a
+    shipped-behaviour defect the round introduces, earns another send-back.
 - **2026-09-25 — wave 3 in review.** The worker defined 3352 to 3366 in one docs-only commit (`c5962a94`); the
   commit's one moved line repointed the plan's own lens-1 citation. Run 148 advanced to awaiting-review, and
   review run 170 was dispatched with seven lenses: the held-out three, plus the plan's four, SAFETY at xhigh.
