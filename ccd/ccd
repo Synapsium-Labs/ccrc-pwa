@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=989c76f536d3a10ab918da736ebab38671aa5f01e1a8c2ab27b60b1bbc8f9e66
+# ccrc:generated 1 sha256=f8cca8bdaa8da73ab84c0923dfc25387174497fc6854aa4a15697fb66b369707
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23777,10 +23777,12 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
   return 0
 }
 
-_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_SHARED_WHY=''
+_WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
-  #                                 `.workdir` names workdir, and _WS_NESTED_ROWS = those whose `.workdir`
-  #                                 lies INSIDE it, each comma-joined ('' = none); rc 2 when that could
+  #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
+  #                                 lies INSIDE it, and _WS_THROUGH_ROWS = those spelled THROUGH it, not as
+  #                                 one plain path, that do not resolve inside it — each comma-joined
+  #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, or a row's
   #                                 `.workdir` would not read
   # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
@@ -23805,6 +23807,12 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # child resolves outside it, yet the path it names goes with the child. A row
   # ABOVE the child is not refused: the child lies inside that session's
   # tree, and nothing of that session's is removed by removing the child.
+  # One narrow exception, fail-closed and named as what it is: a row whose
+  # workdir is spelled THROUGH the child's path but not as one plain path
+  # (`<child>/..`, `<child>/../x` — `ccd start` stores a workdir as given,
+  # checked only with `-d`) refuses even when it names an ancestor or a path
+  # outside: its spelling stops resolving once the child is removed, and its
+  # detail says it is spelled through the child, never that it lies inside.
   #
   # GLOBALS, NOT STDOUT: the caller reads the why too, and a command
   # substitution would lose it in its subshell. The listing is `find`'s, whose
@@ -23815,7 +23823,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # a refusal: the caller answers `_ws_reclaim_unmeasured`, and the vocabulary
   # stays fourteen words.
   local id="$1" wd="$2" mine names n o w wr rc
-  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_SHARED_WHY=''
+  _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
   mine=$(_ws_realpath "$wd")
@@ -23830,8 +23838,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     wr=$(_ws_realpath "$w")
     if [[ "$w" == "$wd" || "$wr" == "$mine" ]]; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
-    elif [[ "$w" == "${wd%/}/"* || "$wr" == "${mine%/}/"* ]]; then
+    elif [[ "$wr" == "${mine%/}/"* ]] || { [[ "$w" == "${wd%/}/"* ]] && _ws_reclaim_plain_path "$w"; }; then
       _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o"
+    elif [[ "$w" == "${wd%/}/"* ]]; then
+      _WS_THROUGH_ROWS+="${_WS_THROUGH_ROWS:+, }$o"
     fi
   done <<< "$names"
   return 0
@@ -24050,6 +24060,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _reap_refuse containment-unproven "$workdir is also named by registry row(s) $_WS_SHARED_ROWS — ccd cannot prove the tree at that path is $id's own"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] \
     || { _reap_refuse containment-unproven "$workdir has registry row(s) $_WS_NESTED_ROWS rooted inside it, each another session's tree — ccd cannot prove the tree at that path is $id's own"; return 1; }
+  [[ -z "$_WS_THROUGH_ROWS" ]] \
+    || { _reap_refuse containment-unproven "registry row(s) $_WS_THROUGH_ROWS spell their workdir through $workdir, not as one plain path, so ccd cannot prove it lies outside $workdir — ccd cannot prove the tree at that path is $id's own"; return 1; }
   # A VANISHED WORKTREE IS NOT A REFUSAL (spec §5.5). NOTHING stands at the
   # workdir — `! -e` and `! -L`, so a dangling link is never read as absence —
   # and no breadcrumb exists (this function only runs where there is none), so
@@ -24873,6 +24885,7 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
     || { _WS_OWNED_WHY="could not ask whether another registry row names $wd or a path inside it: $_WS_SHARED_WHY"; return 1; }
   [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] || { _WS_OWNED_WHY="$wd has registry row(s) $_WS_NESTED_ROWS rooted inside it, each another session's tree"; return 1; }
+  [[ -z "$_WS_THROUGH_ROWS" ]] || { _WS_OWNED_WHY="registry row(s) $_WS_THROUGH_ROWS spell their workdir through $wd, not as one plain path, so ccd cannot prove it lies outside $wd"; return 1; }
   return 0
 }
 

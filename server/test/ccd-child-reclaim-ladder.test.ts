@@ -658,22 +658,60 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('containment-unproven');
     expect(r.detail).toContain('demo-through-link');
+    expect(r.detail, 'a plain path below the child IS inside it').toContain('rooted inside');
   }, 60_000);
 
-  it('the CONTROLS: a `<child>x` sibling row and an ANCESTOR row are not inside the child, and it reclaims', () => {
+  it('refuses a row spelled THROUGH the child with `..` — even one naming an ANCESTOR — and says so, not "rooted inside"', () => {
+    // Fail-closed, and named as what it is: `ccd start` stores a workdir as
+    // given, so `<child>/..` is writable, and it stops resolving once the
+    // child is removed. Its detail says it is spelled through the child; it
+    // never claims the row lies inside it. (Strings, not `path.join`, which
+    // would normalise the very spelling under test.)
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    for (const [id, spelled] of [['demo-up', `${wt}/..`], ['demo-out', `${wt}/../../../elsewhere`]] as const) {
+      otherRow(id, spelled);
+      const r = evalOf(h);
+      expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
+      expect(r.detail).toContain(id);
+      expect(r.detail).toContain(`spell their workdir through ${wt}, not as one plain path`);
+      expect(r.detail).toContain('cannot prove it lies outside');
+      expect(r.detail, 'it is not inside the child, and the detail does not say it is').not.toContain('rooted inside');
+      expect(r.token).toBe('');
+      fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.uuid`));
+      fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.workdir`));
+    }
+    expect(evalOf(h).verdict, 'the CONTROL: without those rows').toBe('reclaimable');
+  }, 60_000);
+
+  it('the vanished arm asks it too: a GONE child with a row rooted at `<child>/server` is not reclaimed over', () => {
+    const { wt } = makeChild(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    expect(evalOf(h).verdict, 'the CONTROL: the vanished child alone reclaims').toBe('reclaimable');
+    otherRow('demo-sub', path.join(wt, 'server'));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('demo-sub');
+    expect(r.detail).toContain('rooted inside');
+  }, 60_000);
+
+  it('the CONTROL: a `<child>x` sibling row is not inside the child, and it reclaims', () => {
     // A component boundary, not a string prefix: `quiet-basinx` starts with
-    // `quiet-basin` and is a sibling. And a session rooted ABOVE the child is
-    // not this refusal — the child is inside IT, not the other way about.
+    // `quiet-basin` and is a sibling.
     const { wt } = makeChild(h);
     fs.mkdirSync(`${wt}x`);
     otherRow('demo-sibling', `${wt}x`);
-    const sib = evalOf(h);
-    expect(sib.verdict, `a <child>x sibling: ${sib.detail}`).toBe('reclaimable');
-    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-sibling.uuid'));
-    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-sibling.workdir'));
+    const r = evalOf(h);
+    expect(r.verdict, `a <child>x sibling: ${r.detail}`).toBe('reclaimable');
+  }, 60_000);
+
+  it('the CONTROL: an ANCESTOR row, spelled plainly, is not this refusal, and it reclaims', () => {
+    // A session rooted ABOVE the child is not refused — the child is inside
+    // IT, not the other way about.
+    const { wt } = makeChild(h);
     otherRow('demo-above', path.dirname(wt));
-    const above = evalOf(h);
-    expect(above.verdict, `an ancestor row: ${above.detail}`).toBe('reclaimable');
+    const r = evalOf(h);
+    expect(r.verdict, `an ancestor row: ${r.detail}`).toBe('reclaimable');
   }, 60_000);
 
   it('a trailing slash cannot walk past the leaf: a LIVE link spelled `<wt>/` refuses, and `other` is untouched', () => {
