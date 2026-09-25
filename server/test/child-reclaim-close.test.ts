@@ -202,6 +202,20 @@ describe('two authorities, equal — anything else is not a child here', () => {
       .toMatchObject({ ok: true, released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' });
     expect(b.handed).toEqual([]);
   });
+
+  // Review m1 (P5): a dropped row with NO `.child` marker at all is a
+  // `.uuid`-only listing — `none` at close, never `unreadable`. Without this
+  // case, folding `.uuid` into the "still listed" condition (so it reads
+  // `unreadable` too) stays green.
+  it('a DROPPED row with NO .child marker — a .uuid-only listing is none at close (P5)', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, null);   // no `.child` marker written at all
+    writeFileSync(path.join(b.reg, `${ID}.workdir`), '');   // buildRecord drops this row -> absent
+    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'operator'))
+      .toMatchObject({ ok: true, released: true, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+    expect(b.handed).toEqual([]);
+  });
 });
 
 describe('the fleet act for a finished child is a RELEASE — never a hold, never an archive', () => {
@@ -213,6 +227,12 @@ describe('the fleet act for a finished child is a RELEASE — never a hold, neve
     expect(await closeRun(child.deps, c, FAILED_CLOSE, 'coordinator'))
       .toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
     expect(child.acts()).toEqual(['ws-release']);
+    // Review I1: the ORDINARY arm's hand-off must also run AFTER the commit —
+    // `stateAtCall` (read from `coord.run` at the moment the port is called)
+    // is the run's OWN post-commit state, `failed`, never a pre-commit one.
+    expect(child.handed).toEqual([{ req: { sessionId: ID, runId: c, trigger: 'close', deferExpired: false,
+                                          deferredSinceMs: null },
+                                    stateAtCall: 'failed' }]);
 
     const plain = build();
     const p = plain.dispatched(ID);
@@ -221,6 +241,22 @@ describe('the fleet act for a finished child is a RELEASE — never a hold, neve
     expect(await closeRun(plain.deps, p, FAILED_CLOSE, 'coordinator'))
       .toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
     expect(plain.acts()).toEqual(['ws-hold']);
+  });
+
+  // Review I1: a commit that fails on the ORDINARY arm must hand nothing off
+  // either — the abandon arm already pins this (`a commit that fails hands
+  // nothing off`), but that case exercises `abandon`'s own early return, never
+  // the ordinary path's `handOffChildReclaim(deps, childGate)` at close.ts's
+  // final return.
+  it('an ordinary close whose commit fails hands nothing off — the ordinary arm too', async () => {
+    const b = build();
+    const c = b.dispatched(ID);
+    b.seed(ID, String(c));
+    b.dispatched('demo-next-wave', 2);
+    b.deps.coord.closeRun = () => ({ ok: false, error: 'unknown-run' });
+    const out = await closeRun(b.deps, c, FAILED_CLOSE, 'coordinator');
+    expect(out).toMatchObject({ ok: false, kind: 'advanceFailed' });
+    expect(b.handed).toEqual([]);
   });
 
   it('archive:true on a child releases it instead — a child is never archived; a non-child still is', async () => {
@@ -264,6 +300,26 @@ describe('a REVIEW child lives until the run it reviewed is terminal (spec §5.7
     expect(await closeRun(b.deps, review, { intent: 'abandon' }, 'operator'))
       .toEqual({ ok: true, id: review, state: 'failed', released: true, childReclaim: 'queued' });
     expect(b.handed.map((h) => h.req.runId)).toEqual([review]);
+  });
+
+  // Review I1: `closeReviewRun` itself (not the abandon arm — the case above
+  // reaches the reclaim through `intent:'abandon'`, which closeRun's own
+  // abandon branch special-cases for a review run's `run.kind==='review'`
+  // target, never calling `closeReviewRun` at all) must ALSO hand off only
+  // after ITS OWN commit. `{state:'failed'}` with no `intent` routes through
+  // the ordinary `run.kind === 'review'` dispatch into `closeReviewRun`
+  // (D-2812: a dead reviewer's fingerprint is optional on a failed close).
+  it('a review close (not an abandon) queues a finished review child’s reclaim, after ITS OWN commit', async () => {
+    const b = build();
+    const work = b.dispatched('demo-worker-mesa');
+    const review = b.reviewDispatched(ID, work);
+    b.seed(ID, String(review));
+    expect(b.deps.coord.advance(work, 'failed', 'test').ok).toBe(true);   // the reviewed run is already terminal
+    const out = await closeRun(b.deps, review, { state: 'failed' }, 'coordinator');
+    expect(out).toEqual({ ok: true, id: review, state: 'failed', released: true, childReclaim: 'queued' });
+    expect(b.handed).toEqual([{ req: { sessionId: ID, runId: review, trigger: 'close', deferExpired: false,
+                                       deferredSinceMs: null },
+                                stateAtCall: 'failed' }]);
   });
 });
 

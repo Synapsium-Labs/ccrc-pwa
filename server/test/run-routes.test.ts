@@ -2021,7 +2021,20 @@ describe('POST /api/runs/:id/close', () => {
    *  `createdAt` must be safely AFTER the minting run's `dispatchStartedAt`
    *  (a real clock read, stamped by `dispatchRun` moments before this row is
    *  built) for that redate to answer `this`. A one-hour margin swallows any
-   *  test-execution jitter between the two reads. */
+   *  test-execution jitter between the two reads.
+   *
+   *  Departure `pr-open-fixture-real-clock` (review m5): P8 says a fixture
+   *  needing a placeable birth calls `markDispatchStarted` "under a fixed
+   *  clock" — this fixture uses the REAL clock (`Date.now() + 1h`), not a
+   *  mocked one, because the birth here is stamped by the real `dispatchRun`
+   *  through a genuine `POST /api/runs/:id/dispatch` (`postDispatch` below),
+   *  not by a direct `coord.markDispatchStarted` call under a caller-chosen
+   *  timestamp the way `child-reclaim-close.test.ts`'s own A2 cases do it.
+   *  Freezing `Date.now()` for the whole route-level dispatch path (which
+   *  also stamps `checkedAt`/`openedAt` and the notify log's own clock)
+   *  would reach well past this one fixture; the 1 h margin is sound because
+   *  it swallows every real-world test-execution delay this suite has ever
+   *  measured, so it is declared rather than forced onto a fixed clock. */
   const PR_OPEN = (s: string) =>
     ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`,
       [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
@@ -2111,6 +2124,56 @@ describe('POST /api/runs/:id/close', () => {
     await c.settled();
     expect(seen).toContain(sessionId);
     expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('an abandoned child’s reclaim reaches ws-audit --reclaim and ws-reclaim through the REAL agent whitelist (review m2)', async () => {
+    // Every other child-reclaim case in this file ends at `unsupported` —
+    // `testDeps`'s box advertises no capability, so `capSupported` refuses
+    // before any argv naming `ws-reclaim` is ever built, and the whitelist
+    // rule (`server/test/helpers.ts`'s `guardRunner`, which wraps every
+    // runner here) is satisfied only because the destructive verb is never
+    // ATTEMPTED. This case advertises `reclaim-v1` (plus `ws-audit` and
+    // `ws-reclaim` themselves) so the executor runs the whole ladder for
+    // real — `CCD_ARGV.wsReclaimAudit`/`wsReclaim` cross `guardRunner`'s
+    // `isExecAllowed` call for real, proving the whitelist actually admits
+    // the argv shapes the server composes, not merely that nothing tried.
+    const sessionId = `${PROJECT}-child8`;
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run: baseRun, calls } = makeRunner(home, { wsAddCreates: [sessionId] });
+    let childRunId = 0;
+    const seenVerbs: string[] = [];
+    const run: Runner = async (cmd, args) => {
+      const verb = args[0] ?? '';
+      if (verb === 'ws-audit' && args.includes('--reclaim')) {
+        seenVerbs.push('ws-audit --reclaim');
+        return { code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
+          token: 'a'.repeat(64), childOf: childRunId })}\n`, stderr: '' };
+      }
+      if (verb === 'ws-reclaim') {
+        seenVerbs.push('ws-reclaim');
+        return { code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
+      }
+      return baseRun(cmd, args);
+    };
+    const fleetState = { connected: true, downSince: null,
+      ccdVerbs: ['reclaim-v1', 'ws-audit', 'ws-reclaim', 'ws-release', 'ws-hold'], rosterFp: null, build: null };
+    const queue = new KeyedQueue();
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, queue, notifyLog, fleetState });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    childRunId = opened.id;
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.child`), String(opened.id));
+    calls.length = 0;
+    const res = await app!.inject({ method: 'POST', url: `/api/runs/${opened.id}/abandon` });
+    expect(res.json()).toMatchObject({ ok: true, childReclaim: 'queued' });
+    await queue.run(sessionId, async () => undefined);
+    const feed = w.coord.feedEvents(50).filter((e) => e.sessionId === sessionId).map((e) => e.title);
+    expect(feed).toEqual(['child reclaimed']);
+    expect(seenVerbs).toEqual(['ws-audit --reclaim', 'ws-reclaim']);
   });
 
   it('refuses an oversized next-wave hold before changing the fleet or closing the run', async () => {

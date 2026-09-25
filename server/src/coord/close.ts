@@ -595,9 +595,22 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * evidence may belong to an earlier workspace. The close never reclaims on
  * that alone: it re-dates the same PR through `childSpentLive` and decides on
  * the LIVE answer ONLY — `spent`/`this` finishes the child, anything else
- * (unspent, unmeasured, or still `unplaced`) holds it. This second gh round
- * trip runs INSIDE the coordination mutex, exactly as the first would have,
- * bounded by `pr-state`'s own 20 s remote budget.
+ * (unspent, unmeasured, or still `unplaced`) holds it.
+ *
+ * COST (review m3, stated truthfully rather than as "the second of two"):
+ * `childSpentLive` HERE REPLACES `childSpent`'s own would-be live rung — the
+ * fast path already answered, so `childSpent` never calls it a second time —
+ * so this is not a second gh round trip on top of one `childSpent` would
+ * have made anyway. It IS a second `ccd pr-state` call inside THIS close's
+ * mutex hold when `state !== 'failed'`: `verifyDone` (`fingerprint.ts`) always
+ * makes its own `pr-state` call first, on the SAME session, before this
+ * function is ever reached. So an ordinary non-final `done` close of a child
+ * whose evidence is fast-path-spent can make TWO sequential `pr-state` calls
+ * inside the coordination mutex — up to ~40 s against the 30 s client
+ * timeout `CloseRunDeps.childReclaim`'s own docstring cites — each bounded by
+ * `pr-state`'s own 20 s remote budget. The brief's design accepts this; it is
+ * not this task's defect, and wave 4 (or a future `verifyDone`-measurement
+ * reuse) is where the aggregate would be addressed.
  */
 async function childGateAtClose(
   deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
