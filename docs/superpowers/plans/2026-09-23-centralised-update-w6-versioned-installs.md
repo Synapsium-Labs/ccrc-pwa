@@ -8107,6 +8107,19 @@ Programme wave 4 (PR #181) merged with three node-side items carried, by the rul
   - Ruling: spec §9's placement stays; there is no departure here. The refusal a later move meets names the floor AND the update that raised it (the tag, and that its gate failed and was restored), so the operator can see why `--downgrade` is being asked for.
   - Pin that sentence.
 
+
+- **From W4's review run 167 (W4's fix-round-1 scoped review; carried by the bar its coordinator committed before it).** Anchor each by symbol, and re-measure it on `main` first.
+  - **F3 (citations).** `session-hook.test.ts`'s positional census for `ccd/ccrc` reads 4. All FIVE live `ccd/ccrc` citations resolve to lines their citers do not mean; one passes only because the clause's token `ccrc update` happens to occur on a comment line. The five are: spec `2026-09-09-graphify-compaction-card-design.md` :106-107 (three of them, meaning `ccrc uninstall`'s `"$reg/compact-card.mjs"` line and its two neighbours) and plan `2026-09-10-graphify-compaction-card-plan-a.md` :3326 (two).
+    - Re-anchor each BY CONTENT in Task 9's citation step (the S6-R11 procedure this plan already uses), so no citation passes by coincidence.
+    - Then re-measure the census, and pin what the audit then measures, with a comment naming the repair.
+  - **F5 (behaviour, cosmetic).** `_upd_redact`'s HOME replacement (and `ccd-update-sync`'s copy) anchors only the boundary after HOME, so `/srv/home/u/x` becomes `/srv~/x`. Anchor the boundary before it too. Pin the reviewer's three shapes.
+  - **F6 (behaviour).** `ccrc rollout` relays the remote `ccrc update` output unredacted, including the staged spine's `install: caps: … ($BOX_CAPS_FILE …)` line, which carries an absolute home path. Redact that relay, or the source line, by the same helper. Pin it.
+  - **F7 (behaviour, needs an environment ccrc did not write).** `CCRC_UPDATE_SYNC_TIMEOUT` goes to `--max-time` unvalidated; `0` means no limit. Validate it like the `CCRC_RELEASE_*` knobs. Pin `0`.
+  - **F8 (behaviour).** After a watchdog rollback is killed at `resolving`/`fetching`/`backing-up`, the watchdog's pre-install arm records "tree never moved, nothing reverted", which is false (the original update's tree did move). Give that case its own true sentence, and correct the C29 comment that says it cannot happen. Pin it.
+  - **F9 (prose).** The legacy-parent arm (`_inst_legacy_verified_parent`) admits a stale `CCRC_UPDATE_VERIFIED=1` from a v0.0.4–v0.0.10 parent. Narrow its comment to what it keeps out, or refuse a parent tree whose `ccrc` lacks the `env -u` spine.
+  - **F10 (prose).** W4's plan Task 16 Step 3's "One claim waits on a ruling" note is false about the block above it. Delete it.
+  - **The pre-detach probe's bound (refuted, noted).** `CCRC_RELEASE_PROBE_MAX_TIME` above 20 s passes silently. Cap that one call site below W5's `UPDATE_SPAWN_TIMEOUT_MS`.
+  - **W4's worker's own carries:** the `*.tmp.$$` EXIT-trap class (4 sites; a per-function trap clobbers `_upd_fetch`'s); `ccd-pool-sync`'s unbounded read; and the release-host timeout defaults (10 s connect, 15 s probe, 1024 B/s over 30 s), which were the implementer's choice. Measure each default against a real release fetch before keeping it.
 **Steps:**
 
 - [ ] **Step 1: Re-measure.** On `main`, decide for each item whether it is open. Write the list (open or closed-on-arrival, with a one-line reason) to `$SCRATCH/w6-t8a-remeasure.md`.
@@ -8121,6 +8134,10 @@ Programme wave 4 (PR #181) merged with three node-side items carried, by the rul
 | C26 | arm 1 skipped for a pre-W4 target | the gate-failed downgrade onto a pre-W4 release |
 | C27 | `ccrc rollback` trusts `previous` without the layout check | the pre-W4 detour |
 | floor | the refusal drops the raising update's tag | the post-restore move below the floor |
+| W4-167 F5 | drop the before-HOME boundary | the `/srv/home/u/x` shape |
+| W4-167 F6 | remove the relay's redaction | a rollout whose spine prints the caps line |
+| W4-167 F7 | skip the timeout validation | `CCRC_UPDATE_SYNC_TIMEOUT=0` |
+| W4-167 F8 | restore the pre-install sentence for a killed watchdog rollback | the killed-at-fetching watchdog rollback |
 
 ### Task 9: Docs, the citation corpus, the gate, the PR
 
