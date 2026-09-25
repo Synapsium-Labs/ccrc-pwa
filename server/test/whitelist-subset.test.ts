@@ -245,6 +245,28 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(UNGRANTABLE_VERBS, 'ws-reclaim has a lawful grantable form; it is not ungrantable').not.toContain('ws-reclaim');
   });
 
+  // Fix round 1: the `deferExpired` polarity was unpinned in one arm of each
+  // builder. Layer 2c's exact-argv table (below) pins `wsReclaimAudit(…, true)`
+  // and `wsReclaim(…, false, …)` only — one arm each, from `SAMPLES`' own
+  // fixed shape — so dropping `...deferFlags(deferExpired)` from `wsReclaim`,
+  // or hardcoding `'--defer-expired'` into `wsReclaimAudit` regardless of its
+  // argument, survived every other test in this file. This pins BOTH arms of
+  // BOTH builders, independent of the dec.
+  it('wsReclaimAudit and wsReclaim both flip on deferExpired, independent of the dec', () => {
+    const tok = 'a'.repeat(64);
+    const dec = { surface: 'agent' as const, actor: 'run:7 reclaim sweep', reason: null };
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', false))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim']);
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--defer-expired', '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+  });
+
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
   // because it is the OTHER write the server calls unattended — `ws-archive`
