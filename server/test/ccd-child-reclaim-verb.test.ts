@@ -539,13 +539,15 @@ describe('the settle', () => {
     expect(h.git(c.main, 'ls-tree', '-r', '--name-only', out.wip).split('\n')).toContain('late.txt');
     expect(atticShas(c)).toContain(out.wip);
     expect(tombOf()['wip']).toBe(out.wip);
-    expect(tombOf()['tip'], 'the tombstone names the tip the branch was deleted at').toBe(out.wip);
+    expect(tombOf()['tip'], 'the tombstone names the tip the branch was deleted at — its own: the WIP commit moves no ref')
+      .toBe(c.tip);
   }, 90_000);
 
-  it('re-records a NESTED checkout’s head when it commits there, so its branch is deleted at the head that was pinned', () => {
+  it('pins a NESTED checkout’s late write, and deletes its branch at its own head — the WIP commit moves no ref', () => {
     const c = makeChild(h);
     const inner = path.join(c.wt, 'inner');
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    const nestedTip = h.git(c.main, 'rev-parse', 'refs/heads/ws/nested');
     const late = `_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; echo late > "${inner}/late.txt"; };`;
     const r = childReclaimVerb(h, evalOf(h).token, { pre: late });
     expect(r.code, r.stdout + r.stderr).toBe(0);
@@ -554,8 +556,9 @@ describe('the settle', () => {
       try { return h.git(c.main, 'ls-tree', '-r', '--name-only', sha).split('\n').includes('late.txt'); } catch { return false; }
     });
     expect(nestedWip, 'the late write into the nested checkout is in the attic').toBeDefined();
+    expect(h.git(c.main, 'log', '-1', '--format=%P', nestedWip!), 'the WIP commit sits on the nested HEAD').toBe(nestedTip);
     const nestedLine = (tombOf()['children'] as string[]).find((l) => l.split('\t')[1] === 'ws/nested');
-    expect(nestedLine?.split('\t')[2], 'the record names the head the branch was deleted at').toBe(nestedWip);
+    expect(nestedLine?.split('\t')[2], 'the record names the head the branch was deleted at').toBe(nestedTip);
   }, 90_000);
 });
 
@@ -1436,4 +1439,157 @@ describe('the residue probe’s DEFAULT root is the BOX’s own TMPDIR, never a 
     const out = Number(h.sh(`_ws_reclaim_residue "${c.wt}"`, { TMPDIR: boxTmp }));
     expect(out, 'measured under $TMPDIR/claude-<uid>, never a bare /tmp/claude-<uid>').toBe(expected);
   });
+});
+
+describe('the tail never deletes, and the pin never writes, what is not provably the child’s own (spec §5.5; the final review’s probes)', () => {
+  const tombKept = (): string => ((tombOf()['keptBranches'] as string[] | undefined) ?? []).join('; ');
+  const done = (): Record<string, unknown> => {
+    const rows = eventsOf(h.home, 'reclaim').filter((e) => e['outcome'] === 'done');
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
+
+  it('P1: a child drifted onto `main` (its main checkout elsewhere) keeps `main`, records it, and deletes only its own branch', () => {
+    const c = makeChild(h);
+    expect(h.git(c.main, 'symbolic-ref', '-q', 'refs/remotes/origin/HEAD'), 'the fixture names the main line').toBe('refs/remotes/origin/main');
+    h.git(c.main, 'checkout', '-q', '-b', 'side');
+    h.git(c.wt, 'checkout', '-q', 'main');
+    const mainTip = h.git(c.main, 'rev-parse', 'refs/heads/main');
+    fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'uncommitted\n');
+    const e = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(e.verdict, e.detail).toBe('reclaimable');
+    const r = childReclaimVerb(h, e.token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { reclaimed?: string; wip: string };
+    expect(out.reclaimed).toBe(CHILD_ID);
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/main'), 'the project’s main line was deleted or written').toBe(mainTip);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s own branch was left').toBe('');
+    expect(atticShas(c)).toContain(c.tip);
+    expect(atticShas(c)).toContain(out.wip);
+    expect(h.git(c.main, 'log', '-1', '--format=%P', out.wip)).toBe(mainTip);
+    expect(h.git(c.main, 'show', `${out.wip}:wip.txt`)).toBe('uncommitted');
+    expect(tombOf()['branch']).toBe(CHILD_BRANCH);
+    expect(tombKept()).toContain(`main (checked out at ${c.wt} in place of ${CHILD_BRANCH})`);
+    expect(String(done()['detail'])).toContain('kept branch(es): main (');
+  }, 90_000);
+
+  it('P1, vanished: a record left on `main` keeps `main` — the registry’s branch is the one deleted', () => {
+    const c = makeChild(h);
+    h.git(c.main, 'checkout', '-q', '-b', 'side');
+    h.git(c.wt, 'checkout', '-q', 'main');
+    const mainTip = h.git(c.main, 'rev-parse', 'refs/heads/main');
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const e = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(e.verdict, e.detail).toBe('reclaimable');
+    const r = childReclaimVerb(h, e.token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/main'), 'the project’s main line was deleted').toBe(mainTip);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
+    expect(tombKept()).toContain(`main (git's record of ${c.wt} named it in place of ${CHILD_BRANCH})`);
+  }, 90_000);
+
+  it('the ladder refuses branch-elsewhere — terminal, nothing touched — when the child’s own branch is the main line, or that cannot be told', () => {
+    const c = makeChild(h);
+    h.git(c.main, 'update-ref', `refs/remotes/origin/${CHILD_BRANCH}`, c.tip);
+    h.git(c.main, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${CHILD_BRANCH}`);
+    const line = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(line.verdict).toBe('branch-elsewhere');
+    expect(line.detail).toContain(`${CHILD_BRANCH} is the main line of`);
+    h.git(c.main, 'symbolic-ref', '-d', 'refs/remotes/origin/HEAD');
+    const unset = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(unset.verdict, 'an unset origin/HEAD proves nothing — never 1, never a delete').toBe('branch-elsewhere');
+    expect(unset.detail).toContain('could not be told');
+    expect(refusedWith(childReclaimVerb(h, line.token || '0'.repeat(64)))).toBe('branch-elsewhere');
+    intact(c);
+  }, 90_000);
+
+  it('the tail keeps the branch when it becomes unprovable between the pin and step (5) — a breadcrumb, never a delete', () => {
+    const c = makeChild(h);
+    const late = `_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; git -C "${c.main}" symbolic-ref -d refs/remotes/origin/HEAD; };`;
+    const r = childReclaimVerb(h, evalOf(h).token, { pre: late });
+    expect(r.code).toBe(1);
+    expect((JSON.parse(r.stdout) as { failed: string; detail: string }).failed).toBe('branch-elsewhere');
+    expect(r.stdout).toContain('could not be told');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch was deleted').toBe(c.tip);
+    expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:branch');
+  }, 90_000);
+
+  it('P4: a COPY of another worktree inside the child refuses containment-unproven, and the other session’s branch and index are untouched', () => {
+    const c = makeChild(h);
+    const other = path.join(h.home, 'other');
+    h.git(c.main, 'worktree', 'add', '-q', '-b', 'ws/other', other);
+    const otherTip = h.git(c.main, 'rev-parse', 'refs/heads/ws/other');
+    fs.cpSync(other, path.join(c.wt, 'copy'), { recursive: true });
+    fs.writeFileSync(path.join(c.wt, 'copy', 'dirty.txt'), 'x\n');
+    const e = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(e.verdict).toBe('containment-unproven');
+    expect(e.detail).toContain(`${path.join(c.wt, 'copy')}`);
+    expect(refusedWith(childReclaimVerb(h, '0'.repeat(64)))).toBe('containment-unproven');
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/ws/other'), 'another session’s branch was written').toBe(otherTip);
+    expect(h.git(other, 'status', '--porcelain'), 'another session’s index was changed').toBe('');
+    intact(c);
+  }, 90_000);
+
+  it('P8: a child whose `.git` names a DETACHED sibling’s admin directory refuses containment-unproven, and the sibling is untouched', () => {
+    const c = makeChild(h);
+    const other = path.join(h.home, 'other');
+    h.git(c.main, 'worktree', 'add', '-q', '--detach', other, 'main');
+    const otherHead = h.git(other, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(c.wt, '.git'), fs.readFileSync(path.join(other, '.git')));
+    fs.writeFileSync(path.join(c.wt, 'child-work.txt'), 'x\n');
+    const e = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(e.verdict).toBe('containment-unproven');
+    expect(e.detail).toContain('another checkout');
+    expect(refusedWith(childReclaimVerb(h, '0'.repeat(64)))).toBe('containment-unproven');
+    expect(h.git(other, 'rev-parse', 'HEAD'), 'the sibling’s HEAD moved').toBe(otherHead);
+    expect(h.git(other, 'status', '--porcelain'), 'the sibling’s index was changed').toBe('');
+  }, 90_000);
+
+  it('P5: a registered nested worktree ON `main` is pinned without writing `main`, and `main` is kept', () => {
+    const c = makeChild(h);
+    h.git(c.main, 'checkout', '-q', '-b', 'side');
+    const nest = path.join(c.wt, 'nest');
+    h.git(c.main, 'worktree', 'add', '-q', nest, 'main');
+    const mainTip = h.git(c.main, 'rev-parse', 'refs/heads/main');
+    fs.writeFileSync(path.join(nest, 'nwip.txt'), 'nested uncommitted\n');
+    const r = childReclaimVerb(h, evalOf(h, { childOf: String(CHILD_RUN) }).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/main'), 'the project’s main line was written').toBe(mainTip);
+    const nestedWip = atticShas(c).find((sha) => {
+      try { return h.git(c.main, 'ls-tree', '-r', '--name-only', sha).split('\n').includes('nwip.txt'); } catch { return false; }
+    });
+    expect(nestedWip, 'the nested work is not in the attic').toBeDefined();
+    expect(tombKept()).toContain('main (the main line of');
+  }, 90_000);
+
+  it('P2: a stale index.lock defers tree-busy on the fresh arm, and --defer-expired reclaims through it — never pin-failed for good', () => {
+    const c = makeChild(h);
+    const lock = `${h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.lock`;
+    fs.writeFileSync(lock, '');
+    fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
+    const e = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(e.verdict).toBe('tree-busy');
+    expect(e.detail).toContain('index lock');
+    expect(refusedWith(childReclaimVerb(h, '0'.repeat(64)))).toBe('tree-busy');
+    intact(c);
+    const d = evalOf(h, { childOf: String(CHILD_RUN), defer: 1 });
+    expect(d.verdict, d.detail).toBe('reclaimable');
+    const r = childReclaimVerb(h, d.token, { extra: '--defer-expired' });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { wip: string };
+    expect(h.git(c.main, 'show', `${out.wip}:wip.txt`)).toBe('w');
+    expect(fs.existsSync(c.wt)).toBe(false);
+  }, 90_000);
+
+  it('P3: an index.lock the pane kill leaves behind does not fail the settle — the reclaim completes', () => {
+    const c = makeChild(h);
+    const lock = `${h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.lock`;
+    const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}"; return 1; };`;
+    fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.calls()).toContain(KILL);
+    expect(fs.existsSync(c.wt)).toBe(false);
+    expect(h.reg(CHILD_ID, 'uuid')).toBeNull();
+  }, 90_000);
 });

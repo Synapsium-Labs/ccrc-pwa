@@ -718,3 +718,59 @@ describe('the region', () => {
     expect(code).not.toMatch(/_ws_reap_tail\b/);
   });
 });
+
+describe('rung 6 defers a held index lock; rung 8 keeps `tree-unreadable` for a read that RAN (the final review’s P2, P6)', () => {
+  it('P2: an index.lock in the child’s own tree is tree-busy — and --defer-expired passes it', () => {
+    const { wt } = makeChild(h);
+    const lock = `${h.git(wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.lock`;
+    fs.writeFileSync(lock, '');
+    const busy = evalOf(h);
+    expect(busy.verdict).toBe('tree-busy');
+    expect(busy.detail).toBe(`a git command holds the index lock of ${wt} (${lock})`);
+    expect(evalOf(h, { defer: 1 }).verdict, 'a bounded deferral — the ceiling passes it').toBe('reclaimable');
+    fs.rmSync(lock);
+    expect(evalOf(h).verdict).toBe('reclaimable');
+  }, 60_000);
+
+  it('P6: the ignored scan running out of time is unmeasured — never tree-unreadable, and never reap’s "reap again"', () => {
+    const { wt } = makeChild(h);
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'build/\n');
+    h.git(wt, 'add', '.gitignore'); h.git(wt, 'commit', '-q', '-m', 'ignore');
+    fs.mkdirSync(path.join(wt, 'build', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'build', 'deep', 'a.o'), 'x');
+    const e = evalOf(h, { pre: 'REAP_SCAN_SECONDS=0;' });
+    expect(e.verdict, e.detail).toBe('unmeasured');
+    expect(e.token).toBe('');
+    expect(e.detail).toContain('did not finish within 0s');
+    expect(e.detail, 'reap’s remedy asks a human to act').not.toContain('reap again');
+    const a = h.run(`${CHILD_STUBS} REAP_SCAN_SECONDS=0; cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+    expect(a.code, 'the audit exits 1 on unmeasured').toBe(1);
+    expect((JSON.parse(a.stdout) as { verdict: string }).verdict).toBe('unmeasured');
+  }, 60_000);
+
+  it.each([
+    ['its own git status was killed (rc 137)',
+      'git() { case "$*" in *"--untracked-files=all"*) return 137 ;; esac; command git "$@"; };'],
+    ['its own git status could not start (rc 126)',
+      'git() { case "$*" in *"--untracked-files=all"*) return 126 ;; esac; command git "$@"; };'],
+    ['the ignored scan could not make a scratch file',
+      '_ws_collect_ignored() { REAP_IGNREASON=""; return 1; }; _plat_mktemp() { case "${FUNCNAME[1]}" in _ws_reclaim_ignored_fail) return 1 ;; esac; mktemp; };'],
+    ['the collector’s own read failed once and not again',
+      '_ws_collect_ignored() { REAP_IGNREASON=""; return 1; };'],
+    ['the collector’s git status was killed, and is killed again',
+      '_ws_collect_ignored() { REAP_IGNREASON=""; return 1; }; git() { case "$*" in *"--ignored=matching"*) return 143 ;; esac; command git "$@"; };'],
+  ])('%s → unmeasured, not tree-unreadable', (_what, pre) => {
+    makeChild(h);
+    const r = evalOf(h, { pre });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  it('the CONTROL: a collector read that RAN and reported the tree unreadable keeps the terminal word', () => {
+    makeChild(h);
+    const r = evalOf(h, { pre: '_ws_collect_ignored() { REAP_IGNREASON=""; return 1; };'
+      + ' git() { case "$*" in *"--ignored=matching"*) echo "warning: could not open directory \'x/\'" >&2; return 0 ;; esac; command git "$@"; };' });
+    expect(r.verdict, r.detail).toBe('tree-unreadable');
+    expect(r.detail).toContain('could not open directory');
+  }, 60_000);
+});

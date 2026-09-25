@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6603d3a5b7796c23127e859e84392cfa6947c745c4639762a55e58e39325774e
+# ccrc:generated 1 sha256=bceaeedab7845d3c5c5b05ba9a8f6ece9777d4bba44c1eaed7ed1a4e87749ee5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23545,6 +23545,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   RECLAIM_WIP=""            # the child's own WIP commit, or '' when there was nothing to commit
   RECLAIM_WIP_SHA=""        # `_ws_wip_commit`'s answer for the tree it was just handed
   RECLAIM_WIP_WHY=""; RECLAIM_PIN_WHY=""; _WS_RECLAIM_CLASSIFY_WHY=""
+  RECLAIM_KEPT=()           # branches this reclaim KEEPS, never deletes, and records (`keptBranches`)
 }
 
 _ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input is NAMED, so a
@@ -23650,9 +23651,11 @@ _ws_reclaim_secret_path() {   # relpath -> 0 when ANY component is secret-shaped
 }
 
 _ws_reclaim_classify() {   # dir prefix -> 0 with RECLAIM_STAGE (this dir's non-secret untracked paths)
-  #                             set and "$prefix<path>" appended to RECLAIM_SECRETS; 1 when the tree
-  #                             could not be read (_WS_RECLAIM_CLASSIFY_WHY names why); 2 when the read
-  #                             could not RUN — no scratch file (never `tree-unreadable`: spec §5.5, rung 8)
+  #                             set and "$prefix<path>" appended to RECLAIM_SECRETS; 1 when a read that
+  #                             RAN reported the tree unreadable (_WS_RECLAIM_CLASSIFY_WHY names why); 2
+  #                             when a read did not run to its end — no scratch file, a `git status`
+  #                             killed or unable to start (>= 125), the ignored scan out of time or
+  #                             unable to start (never `tree-unreadable`: spec §5.5, rung 8)
   # THE PIN PHASE'S STEP 1 (spec §5.5): untracked AND ignored files through the
   # secret-shape classifier. A secret-shaped file is never staged — ignored or
   # merely untracked — so an accident of `.gitignore` never decides whether a
@@ -23666,7 +23669,9 @@ _ws_reclaim_classify() {   # dir prefix -> 0 with RECLAIM_STAGE (this dir's non-
   git -C "$dir" -c core.quotePath=false status --porcelain=v1 -z --untracked-files=all >"$outf" 2>"$errf"; rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if (( rc != 0 )) || [[ -n "$err" ]]; then
-    rm -f "$outf"; _WS_RECLAIM_CLASSIFY_WHY="git status at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"; return 1
+    rm -f "$outf"; _WS_RECLAIM_CLASSIFY_WHY="git status at $dir answered rc $rc${err:+: ${err%%$'\n'*}}"
+    (( rc < 125 )) || return 2
+    return 1
   fi
   [[ -n "$prefix" ]] || RECLAIM_STATUSDIGEST=$(_plat_sha256 <"$outf" | cut -d' ' -f1)
   while IFS= read -r -d '' entry; do
@@ -23680,13 +23685,43 @@ _ws_reclaim_classify() {   # dir prefix -> 0 with RECLAIM_STAGE (this dir's non-
     if _ws_reclaim_secret_path "$p"; then RECLAIM_SECRETS+=("$prefix$p"); else RECLAIM_STAGE+=("$p"); fi
   done <"$outf"
   rm -f "$outf"
-  _ws_collect_ignored "$dir" \
-    || { _WS_RECLAIM_CLASSIFY_WHY="could not read the ignored set at $dir${REAP_IGNREASON:+ — $REAP_IGNREASON}"; return 1; }
+  if ! _ws_collect_ignored "$dir"; then
+    _ws_reclaim_ignored_fail "$dir"; return $?
+  fi
   local s
   for s in ${REAP_SENSITIVE[@]+"${REAP_SENSITIVE[@]}"}; do
     [[ -n "$s" ]] && RECLAIM_SECRETS+=("$prefix$s")
   done
   return 0
+}
+
+_ws_reclaim_ignored_fail() {   # dir -> after `_ws_collect_ignored` failed over dir: rc 2 when its read did
+  #                                not run to its end, rc 1 when a read that ran reported the tree
+  #                                unreadable; _WS_RECLAIM_CLASSIFY_WHY names which, in words of its own
+  # A SCAN THAT DID NOT FINISH MEASURED NOTHING (spec §5.5, rung 8's rule):
+  # the collector is ws-reap's, and it folds every failure into one status —
+  # right for reap, which refuses, and wrong here, where `tree-unreadable` is
+  # TERMINAL. So the fold is undone from what can be measured: its REASON
+  # names the deadline (the scan ran out of time); a scratch file this uid
+  # cannot make, or no `find`, is a scan that could not start; and a failure
+  # with no reason is the collector's own `git status`, read again once — a
+  # read that fails again below 125, or warns, reported the tree; one killed or
+  # unable to start (>= 125), or one that now succeeds, measured nothing about
+  # it. Only then is it `tree-unreadable`. Reap's own remedy ("… and reap
+  # again") asks a human to act, and a child has none: it is cut off here.
+  local dir="$1" why="${REAP_IGNREASON%%: remove or move*}" t err rc
+  _WS_RECLAIM_CLASSIFY_WHY="could not read the ignored set at $dir${why:+ — $why}"
+  [[ "$REAP_IGNREASON" != *'did not finish within'* ]] || return 2
+  command -v find >/dev/null 2>&1 || return 2
+  t=$(_plat_mktemp) || return 2
+  [[ -z "$REAP_IGNREASON" ]] || { rm -f "$t"; return 1; }
+  git -C "$dir" -c core.quotePath=false status --porcelain --ignored=matching -z >/dev/null 2>"$t"; rc=$?
+  err=$(head -1 "$t" 2>/dev/null); rm -f "$t"
+  (( rc < 125 )) || { _WS_RECLAIM_CLASSIFY_WHY+=" — its git status did not run to its end (rc $rc)"; return 2; }
+  (( rc != 0 )) || [[ -n "$err" ]] \
+    || { _WS_RECLAIM_CLASSIFY_WHY+=" — the read failed once and not again, so nothing about the tree was measured"; return 2; }
+  _WS_RECLAIM_CLASSIFY_WHY+=" — git status answered rc $rc${err:+: $err}"
+  return 1
 }
 
 _ws_reclaim_stash_shas() {   # main branch -> the stash commits attributed to branch, one sha per line;
@@ -23824,17 +23859,62 @@ _ws_reclaim_absent() {   # path -> 0 when nothing stands at path and that is PRO
 }
 
 _ws_reclaim_main_branch() {   # main branch -> 0 when branch is $main's OWN line: the branch its main checkout
-  #                                is on, or the one origin/HEAD names; 1 when it is neither; 2 when either
-  #                                could not be read (`symbolic-ref --quiet` answers 1 for "not a symbolic
-  #                                ref" — detached, or no origin/HEAD — and 128 for a read that failed)
+  #                                is on, or the one origin/HEAD names; 1 when it is PROVEN neither; 2 when
+  #                                that could not be told (`symbolic-ref --quiet` answers 1 for "not a
+  #                                symbolic ref" and 128 for a read that failed)
+  # ASKED OF EVERY BRANCH A RECLAIM WOULD DELETE — the child's own at the
+  # ladder and at the tail's step (5), on both arms, and every nested one
+  # (spec §5.5: nothing that is not the child's is deleted). A detached MAIN
+  # checkout names no line, so origin/HEAD is still asked; but an UNSET
+  # origin/HEAD names none either, and "the project's main line is not this
+  # branch" is then a guess, never a proof: 2, so the branch is kept.
   local main="$1" b="$2" ref rc
   ref=$(git -C "$main" symbolic-ref --quiet HEAD 2>/dev/null); rc=$?
   (( rc <= 1 )) || return 2
   [[ "$ref" != "refs/heads/$b" ]] || return 0
   ref=$(git -C "$main" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null); rc=$?
-  (( rc <= 1 )) || return 2
+  (( rc == 0 )) || return 2
   [[ "$ref" != "refs/remotes/origin/$b" ]] || return 0
   return 1
+}
+
+_ws_reclaim_main_line_refuse() {   # main branch -> 0 when branch is PROVEN not $main's line; else rc 1 with
+  #                                    the ladder's TERMINAL `branch-elsewhere` refusal set (spec §5.5)
+  local rc
+  _ws_reclaim_main_branch "$1" "$2"; rc=$?
+  (( rc != 0 )) || { _reap_refuse branch-elsewhere "$2 is the main line of $1 — a reclaim never deletes it"; return 1; }
+  (( rc != 2 )) || { _reap_refuse branch-elsewhere "whether $2 is the main line of $1 could not be told (its main checkout's HEAD, or origin/HEAD, names no line or would not read) — a reclaim never deletes a branch it cannot prove is not"; return 1; }
+  return 0
+}
+
+_WS_GITDIR_WHY=''
+_ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
+  #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
+  #                               `<tree>/.git`; 1 (_WS_GITDIR_WHY) when it is proven not; 2 when it
+  #                               could not be read
+  # A TREE IS PINNED ONLY THROUGH ITS OWN RECORD (spec §5.5, rung 9). The
+  # common directory and `show-toplevel` are what a COPY of another worktree
+  # answers too — its `.git` file came with it — and a `.git` file rewritten to
+  # name a sibling's admin directory answers them the same way: the scratch
+  # index would be that other tree's, and the tail's removal would follow its
+  # record. So git's record is read the other way round: the admin directory
+  # the tree resolves to must say it belongs to exactly this tree, compared
+  # literally — the tree as given, or resolved (git records the resolved path of
+  # a worktree added through a symlinked ancestor; measured, git 2.43), never a
+  # path resolved through anything INSIDE a tree. A record in any other form (a
+  # relative `gitdir`) is not proven, and the tree is not pinned.
+  local t="$1" common="$2" gd rec
+  _WS_GITDIR_WHY=''
+  gd=$(git -C "$t" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
+    || { _WS_GITDIR_WHY="could not read the git directory of $t"; return 2; }
+  [[ "$gd" == "$common/worktrees/"?* && "${gd#"$common/worktrees/"}" != */* ]] \
+    || { _WS_GITDIR_WHY="the git directory of $t is $gd, which is none of $common's worktree records"; return 1; }
+  [[ -e "$gd/gitdir" || -L "$gd/gitdir" ]] \
+    || { _WS_GITDIR_WHY="$gd, the git directory of $t, holds no record of which tree it belongs to"; return 1; }
+  { rec=$(< "$gd/gitdir"); } 2>/dev/null || { _WS_GITDIR_WHY="could not read $gd/gitdir"; return 2; }
+  [[ "$rec" == "$t/.git" || "$rec" == "$(_ws_realpath "$t")/.git" ]] \
+    || { _WS_GITDIR_WHY="the git directory of $t is $gd, which git records as $rec's — another checkout's"; return 1; }
+  return 0
 }
 
 _WS_FOREIGN_WHY=''
@@ -23987,8 +24067,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   (( rc == 0 )) \
     || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
-  # would pin a WIP commit onto the project's own branch and hand the tail
-  # that branch's name; no child is ever the main worktree. The vanished arm
+  # would pin the project's own checkout and hand the tail its branch's
+  # name; no child is ever the main worktree. The vanished arm
   # cannot reach this: `$main` was just resolved, so it exists, and a canonical
   # path that does not exist resolves to no path that does. Asked TWICE: git's
   # first stanza, and the resolved (`pwd -P`) path against `$main`'s — a project
@@ -23998,19 +24078,37 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _reap_refuse not-a-workspace "$workdir is $main's main checkout, not a workspace of $id"; return 1; }
   [[ "$(_ws_realpath "$workdir")" != "$(_ws_realpath "$main")" ]] \
     || { _reap_refuse not-a-workspace "$workdir is the project directory $main itself, not a workspace of $id"; return 1; }
+  # AND THE TREE'S GIT DIRECTORY IS GIT'S OWN RECORD OF IT (spec §5.5, rung 9
+  # asked of the child itself) — `_ws_reclaim_gitdir_own` says why.
+  _ws_reclaim_gitdir_own "$workdir" "$mainreal"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
+  (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY — ccd cannot prove the tree at that path is $id's own"; return 1; }
   wthead="$RECLAIM_REC_BRANCH"
-  # 6 — no in-progress git operation in the child's OWN tree.
+  # 6 — no in-progress git operation in the child's OWN tree, and no git
+  # command holding its index lock: the pin copies that index, and a command
+  # mid-write leaves the copy a state the tree is leaving. A deferral like the
+  # rest of this rung, so `--defer-expired` passes it — the copy is never torn
+  # (git replaces an index by rename), and a lock a crash left must not wedge
+  # the child for good.
   if (( ! defer )); then
     op=$(_ws_child_op "$workdir") \
       || { _ws_reclaim_unmeasured "could not probe $workdir for an in-progress git operation"; return 1; }
     [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at $workdir"; return 1; }
+    h=$(git -C "$workdir" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
+      || { _ws_reclaim_unmeasured "could not locate the index of $workdir"; return 1; }
+    [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
+      || { _reap_refuse tree-busy "a git command holds the index lock of $workdir ($h.lock)"; return 1; }
   fi
-  # git's record names the branch removed; a DETACHED child removes the one the
-  # registry names — its HEAD commit is pinned on its own (the pin phase).
-  branch="${wthead:-$regbranch}"
+  # THE BRANCH DELETED IS THE REGISTRY'S (spec §5.5: nothing that is not the
+  # child's is deleted). A worktree whose HEAD has DRIFTED onto another branch
+  # — a `git checkout main` in the child — keeps that branch: it is recorded
+  # (`keptBranches`, by the pin, which reads HEAD again) and never deleted.
+  # A DETACHED child also deletes the registry's; its HEAD commit is pinned on
+  # its own (the pin phase).
+  branch="$regbranch"
   REAP_REGBRANCH="$regbranch"; REAP_BRANCH="$branch"; REAP_WTHEAD="$wthead"
   [[ -z "$wthead" || "$wthead" == "$regbranch" ]] \
-    || REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $wthead is the branch reclaimed, and $regbranch is left alone"
+    || REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $regbranch is the branch reclaimed, and $wthead is kept"
   # 7 — the branch is checked out in no other worktree: the tail deletes it
   # with `update-ref -d`, which does NOT make the check `git branch -d` makes.
   elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir"); elsrc=$?
@@ -24018,6 +24116,8 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
   [[ -z "$elsewhere" ]] \
     || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+  # ... and it is not the project's main line, PROVEN (`_ws_reclaim_main_branch`).
+  _ws_reclaim_main_line_refuse "$main" "$branch" || return 1
   # 8 — the tree reads, after the permission pass. Its clips directory is
   # normalised too: the tail deletes it, and its manifest is a fingerprint input.
   # NO FOLD: a pass that could not RUN (`_ws_reclaim_normalise` rc 2 — it ran
@@ -24057,6 +24157,9 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
         || { _ws_reclaim_unmeasured "could not read the top of the checkout at $p"; return 1; }
       [[ "$ptop" == "$p" ]] \
         || { _reap_refuse containment-unproven "the checkout at $p names $mainreal but is not a worktree root"; return 1; }
+      _ws_reclaim_gitdir_own "$p" "$mainreal"; rc=$?
+      (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
+      (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY"; return 1; }
       RECLAIM_NESTED+="$p"$'\n'
       continue
     fi
@@ -24115,19 +24218,23 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   _ws_reclaim_record "$main" "$workdir"; rec=$?
   (( rec == 2 )) \
     && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
-  # git's record, when it still holds one, names the branch removed (a DETACHED
-  # record removes the registry's); with no record left, the registry's name.
+  # The branch deleted is the REGISTRY's, exactly as on the present arm; a
+  # record left on ANOTHER branch (the tree drifted before it vanished) keeps
+  # that one, recorded — the pin of this arm reads no HEAD, so it is noted here.
   wthead="$RECLAIM_REC_BRANCH"; RECLAIM_HEAD="$RECLAIM_REC_HEAD"
-  branch="${wthead:-$regbranch}"
+  branch="$regbranch"
   REAP_REGBRANCH="$regbranch"; REAP_BRANCH="$branch"; REAP_WTHEAD="$wthead"
-  [[ -z "$wthead" || "$wthead" == "$regbranch" ]] \
-    || REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $wthead is the branch reclaimed, and $regbranch is left alone"
-  # 7 — no OTHER worktree holds the branch.
+  if [[ -n "$wthead" && "$wthead" != "$regbranch" ]]; then
+    REAP_DRIFT="the registry recorded $regbranch; git's worktree record for $workdir says $wthead — $regbranch is the branch reclaimed, and $wthead is kept"
+    RECLAIM_KEPT+=("$wthead (git's record of $workdir named it in place of $regbranch)")
+  fi
+  # 7 — no OTHER worktree holds the branch, and it is not the main line.
   elsewhere=$(_ws_branch_elsewhere "$main" "$branch" "$workdir"); elsrc=$?
   (( elsrc == 0 )) \
     || { _ws_reclaim_unmeasured "could not enumerate $main's worktrees, so whether another checkout holds $branch was never asked"; return 1; }
   [[ -z "$elsewhere" ]] \
     || { _reap_refuse branch-elsewhere "$branch is also checked out at $elsewhere"; return 1; }
+  _ws_reclaim_main_line_refuse "$main" "$branch" || return 1
   # 8 — the clips directory only: there is no tree.
   _ws_reclaim_normalise "$HOME/.cc-clips/$id"; rc=$?
   (( rc == 2 )) && { _ws_reclaim_unmeasured "the permission pass over $HOME/.cc-clips/$id could not run: $_WS_NORMALISE_WHY"; return 1; }
@@ -24219,8 +24326,8 @@ _ws_reclaim_secret_note() {   # path -> appends path to RECLAIM_SECRETS unless i
 _ws_reclaim_opheads() {   # dir -> the commit of every in-progress operation head present, one per line
   # `rev-parse` reads a head's FIRST line: an octopus merge's MERGE_HEAD lists
   # several commits, and the rest are not read here. They are not lost: a WIP
-  # commit made while the merge is in progress concludes it and takes EVERY
-  # line of MERGE_HEAD as a parent, so the pinned WIP commit reaches them all.
+  # commit made while the merge is in progress is given EVERY line of
+  # MERGE_HEAD as a parent, so the pinned WIP commit reaches them all.
   local d="$1" h s
   for h in REBASE_HEAD MERGE_HEAD CHERRY_PICK_HEAD ORIG_HEAD; do
     s=$(git -C "$d" rev-parse --verify --quiet "$h^{commit}" 2>/dev/null) && printf '%s\n' "$s"
@@ -24230,25 +24337,36 @@ _ws_reclaim_opheads() {   # dir -> the commit of every in-progress operation hea
 
 _WS_INDEX_SRC=''; _WS_INDEX_WHY=''
 _ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index file; rc 1 (_WS_INDEX_WHY)
-  #                            when it cannot be located, is missing, or is LOCKED
-  # A lock is a git operation in progress in that tree: what it is about to
-  # write is not in the file yet, so a copy taken now would pin a state the
-  # tree is leaving. A missing index is a tree git has no staging record for.
-  # Either fails the pin; neither is guessed around.
+  #                            when it cannot be located or is missing
+  # A missing index is a tree git has no staging record for: the pin fails,
+  # and nothing is guessed around. A LOCK IS NOT A FAILURE HERE: the pin only
+  # COPIES the index, and git replaces an index by an atomic rename, so a copy
+  # is never torn. On the fresh arm rung 6 defers a held lock (`tree-busy`);
+  # the settle runs with the unit measured stopped and the pane dead, so a lock
+  # then is a leftover a failure here would turn into a wedge for good.
   local d="$1" f
   _WS_INDEX_SRC=''; _WS_INDEX_WHY=''
   f=$(git -C "$d" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$f" ]] \
     || { _WS_INDEX_WHY="could not locate the index of $d"; return 1; }
-  [[ ! -e "$f.lock" ]] \
-    || { _WS_INDEX_WHY="the index of $d is locked ($f.lock) — a git operation is in progress there"; return 1; }
   [[ -f "$f" ]] || { _WS_INDEX_WHY="$d has no index at $f"; return 1; }
   _WS_INDEX_SRC="$f"
 }
 
-_ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new commit ('' when nothing
-  #                     was uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY `git commit` IN ccd, and its
+_ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP commit ('' when nothing
+  #                     was uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY COMMIT ccd WRITES, and its
   #                     one call site is `_ws_reclaim_pin` — which is reason enough for it to be one
   #                     function (spec §5.5, pin phase step 2).
+  # THE COMMIT MOVES NO REF AND NO HEAD — a departure from spec §5.5 step 2's
+  # "one WIP commit on the child's own branch", named `wip-moves-no-ref`. It
+  # is built with `git commit-tree` from the scratch index below and pinned by
+  # sha under `refs/ccrc/attic/<id>/` by the caller, so which branch the tree
+  # happens to have checked out (another session's, drifted, `main`) is never
+  # written, the live session's HEAD never moves over its own stale index
+  # before the kill, and the tail's CAS reads the branch's REAL tip. Its
+  # parents are what `git commit` would give it: HEAD, then every line of
+  # MERGE_HEAD while a merge is in progress. And it is IDEMPOTENT: an attic
+  # WIP of the same tree, parents and message is answered instead of a second
+  # one, so the settle re-pin of an unchanged tree adds nothing.
   # THE COMMIT IS BUILT IN A SCRATCH COPY OF THE USER'S OWN INDEX, and the
   # user's index file is never written. A copy, not HEAD: the index is the
   # user's record of what they meant — a force-added file under an ignored
@@ -24275,13 +24393,10 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new
   # THE IDENTITY IS FIXED, in both channels. `-c user.*` names it to git's
   # config; the GIT_* environment is what outranks config, so a caller
   # that happened to export GIT_AUTHOR_NAME cannot put its own name on a commit
-  # it did not write. No hook runs: the caller runs this under
-  # `_ws_reclaim_contained`, and the commit line says so again itself.
-  #
-  # On a DETACHED HEAD (a rebase stopped, or a checkout of a sha) the commit
-  # lands on HEAD and not on the branch; the caller pins it by sha.
-  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err
-  local cand=() back=()
+  # it did not write. `commit-tree` runs no hook; the caller runs this under
+  # `_ws_reclaim_contained` all the same.
+  local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err tree hsha mh line sha msg have plist
+  local cand=() back=() parents=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
   _ws_reclaim_index_src "$dir" || { RECLAIM_WIP_WHY="$_WS_INDEX_WHY"; return 1; }
   sd=$(_plat_mktemp_d) || { RECLAIM_WIP_WHY='could not make a scratch directory'; return 1; }
@@ -24341,16 +24456,34 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the new
   fi
   # Nothing staged is the ordinary case for a finished child: no commit.
   if GIT_INDEX_FILE="$idx" git -C "$dir" diff --cached --quiet 2>/dev/null; then rm -rf "$sd"; return 0; fi
-  GIT_INDEX_FILE="$idx" \
-  GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
-  GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
-    git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' \
-      -c commit.gpgsign=false -c core.hooksPath=/dev/null -c core.fsmonitor=false \
-      commit --no-verify --quiet -m "ccrc: WIP pinned at reclaim of $id (run $childof)" 2>"$sd/err" \
-    || { RECLAIM_WIP_WHY="git commit at $dir failed: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  tree=$(GIT_INDEX_FILE="$idx" git -C "$dir" write-tree 2>"$sd/err") && [[ -n "$tree" ]] \
+    || { RECLAIM_WIP_WHY="could not write the tree of $dir's uncommitted work: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  hsha=$(git -C "$dir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
+    || { RECLAIM_WIP_WHY="the HEAD of $dir does not resolve — the WIP commit has no parent to record"; rm -rf "$sd"; return 1; }
+  parents=(-p "$hsha"); plist="$hsha"
+  mh=$(git -C "$dir" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null) && [[ -n "$mh" ]] \
+    || { RECLAIM_WIP_WHY="could not locate the MERGE_HEAD of $dir"; rm -rf "$sd"; return 1; }
+  if [[ -e "$mh" ]]; then
+    [[ -f "$mh" && -r "$mh" ]] || { RECLAIM_WIP_WHY="the MERGE_HEAD of $dir cannot be read"; rm -rf "$sd"; return 1; }
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -n "$line" ]] || continue
+      sha=$(git -C "$dir" rev-parse --verify --quiet "$line^{commit}" 2>/dev/null) \
+        || { RECLAIM_WIP_WHY="the MERGE_HEAD of $dir names '$line', which is not a commit"; rm -rf "$sd"; return 1; }
+      parents+=(-p "$sha"); plist+=" $sha"
+    done < "$mh"
+  fi
+  msg="ccrc: WIP pinned at reclaim of $id (run $childof)"
+  have=$(git -C "$dir" for-each-ref --format='%(objectname)%09%(tree) %(parent)%09%(authoremail)%09%(subject)' \
+    "refs/ccrc/attic/$id/" 2>/dev/null \
+    | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
+        '$2 == want && $3 == "<ccrc-reclaim@invalid>" && $4 == subj { print $1; exit }')
+  if [[ "$have" =~ ^[0-9a-f]{40}$ ]]; then RECLAIM_WIP_SHA="$have"; rm -rf "$sd"; return 0; fi
+  RECLAIM_WIP_SHA=$(GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
+    GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
+    git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' -c commit.gpgsign=false \
+      commit-tree "${parents[@]}" -m "$msg" "$tree" 2>"$sd/err") && [[ "$RECLAIM_WIP_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    || { RECLAIM_WIP_WHY="could not write the WIP commit at $dir: $(head -1 "$sd/err" 2>/dev/null)"; RECLAIM_WIP_SHA=""; rm -rf "$sd"; return 1; }
   rm -rf "$sd"
-  RECLAIM_WIP_SHA=$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null) \
-    || { RECLAIM_WIP_WHY="the WIP commit at $dir landed but HEAD does not resolve"; return 1; }
   return 0
 }
 
@@ -24369,9 +24502,10 @@ _ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned und
 }
 
 _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything recoverable is pinned;
-  #                        1 with RECLAIM_PIN_WHY. Sets RECLAIM_WIP, REAP_TIP (the branch tip AFTER
-  #                        the WIP commit), RECLAIM_SECRETS, REAP_IGNORED (the child's own) and
-  #                        REAP_CHILDLINES (path\tbranch\thead per same-repository nested checkout).
+  #                        1 with RECLAIM_PIN_WHY. Sets RECLAIM_WIP, REAP_TIP (the branch's own tip —
+  #                        the WIP commit moves no ref), RECLAIM_SECRETS, RECLAIM_KEPT, REAP_IGNORED
+  #                        (the child's own) and REAP_CHILDLINES (path\tbranch\thead per
+  #                        same-repository nested checkout).
   # THE PIN PHASE (spec §5.5), runnable more than once: the fresh arm runs it
   # before anything is destroyed, and the tail runs it again as the SETTLE, once
   # the pane is dead, to catch anything the session wrote between the two. Every
@@ -24384,7 +24518,7 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   local id="$1" workdir="$2" main="$3" branch="$4" childof="$5"
   local oph headsha headref rc nested cpath cpcommon cbr chead mainreal wdreal sha stashes
   local extras=() same=()
-  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""
+  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; RECLAIM_KEPT=()
   # THE LEAF IS NEVER FOLLOWED, here as at the ladder (spec §5.5): the settle
   # re-pin runs with no ladder in front of it, so this guard stands alone. A
   # link at the workdir reaches a tree ccd cannot prove is this child's, and
@@ -24397,23 +24531,31 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   [[ ! -L "$workdir" ]] \
     || { RECLAIM_PIN_WHY="$workdir is a symbolic link — ccd never follows a link to a tree it would pin"; return 1; }
   [[ -d "$workdir" ]] || { RECLAIM_PIN_WHY="$workdir is gone — there is nothing to pin"; return 1; }
-  # THE WIP COMMIT LANDS ON THE CHILD'S OWN BRANCH OR A DETACHED HEAD, nothing
-  # else (spec §5.5, step 2). The ladder read the tree once; the session is
-  # alive until the tail kills it, and the settle runs after an arbitrary gap,
-  # so HEAD is read again HERE, before anything is committed. `symbolic-ref`
+  mainreal=$(_ws_common_dir "$main") || { RECLAIM_PIN_WHY="could not resolve the repository of $main"; return 1; }
+  # THE TREE IS PINNED ONLY THROUGH ITS OWN RECORD (spec §5.5, rung 9): the
+  # scratch index is copied from the git directory the tree names, so that
+  # directory must be git's record of THIS tree. Asked here as at the ladder,
+  # because the settle and the resumed arm have no ladder in front of them.
+  _ws_reclaim_gitdir_own "$workdir" "$mainreal" \
+    || { RECLAIM_PIN_WHY="$_WS_GITDIR_WHY — ccd pins only a tree it can prove is $id's own"; return 1; }
+  # A HEAD THAT HAS DRIFTED ONTO ANOTHER BRANCH KEEPS IT (spec §5.5: nothing
+  # that is not the child's is deleted). The ladder read the tree once; the
+  # session is alive until the tail kills it, and the settle runs after an
+  # arbitrary gap, so HEAD is read again HERE. The WIP commit moves no ref,
+  # so that branch is never written; the tail deletes only `$branch`, so it
+  # is never deleted; and it is RECORDED, never kept in silence. `symbolic-ref`
   # answers 1 for a detached HEAD; any other failure is a read that did not run.
   headref=$(git -C "$workdir" symbolic-ref -q HEAD 2>/dev/null); rc=$?
   if (( rc == 0 )); then
     [[ "$headref" == "refs/heads/$branch" ]] \
-      || { RECLAIM_PIN_WHY="$workdir has $headref checked out, not refs/heads/$branch — the WIP commit lands only on $id's own branch or a detached HEAD"; return 1; }
+      || RECLAIM_KEPT+=("${headref#refs/heads/} (checked out at $workdir in place of $branch)")
   elif (( rc != 1 )); then
     RECLAIM_PIN_WHY="could not read which branch $workdir has checked out"; return 1
   fi
-  # (0) The in-progress operation heads, FIRST: a commit concludes a merge or a
-  # cherry-pick and deletes MERGE_HEAD / CHERRY_PICK_HEAD (measured, git 2.43).
+  # (0) The in-progress operation heads, pinned by sha: `commit-tree` concludes
+  # nothing, and a head a later git command clears is kept all the same.
   oph=$(_ws_reclaim_opheads "$workdir")
   while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$oph"
-  mainreal=$(_ws_common_dir "$main") || { RECLAIM_PIN_WHY="could not resolve the repository of $main"; return 1; }
   wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) || { RECLAIM_PIN_WHY="could not resolve $workdir"; return 1; }
   nested=$(_ws_nested_checkouts "$workdir") \
     || { RECLAIM_PIN_WHY="could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
@@ -24436,16 +24578,18 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
         || { RECLAIM_PIN_WHY="$_WS_FOREIGN_WHY — it would be removed with the tree, and nothing of it can be pinned here"; return 1; }
       continue
     fi
+    _ws_reclaim_gitdir_own "$cpath" "$mainreal" \
+      || { RECLAIM_PIN_WHY="$_WS_GITDIR_WHY — ccd pins only a nested checkout it can prove is the one git records there"; return 1; }
     git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" >/dev/null 2>&1 \
       || { RECLAIM_PIN_WHY="the checkout at $cpath has no commit at HEAD — there is nothing the tail could remove it at"; return 1; }
     same+=("$cpath")
   done <<< "$nested"
   # (1b) Same-repository nested checkouts, innermost first: their operation
-  # heads and their HEAD first, exactly as for the child's own tree below,
-  # then classify, commit, remember the head. Their HEAD REFLOGS need no walk
-  # of their own: `reflog show --all` lists every worktree's HEAD reflog
-  # (`worktrees/<name>/HEAD`) from any one of them — measured, git 2.43 — so
-  # step (4)'s `_ws_attic_pin` over the child's tree already reads them.
+  # heads and their HEAD, exactly as for the child's own tree below, then
+  # classify, commit (moving nothing), remember the head. Their HEAD REFLOGS
+  # need no walk of their own: `reflog show --all` lists every worktree's
+  # HEAD reflog (`worktrees/<name>/HEAD`) from any one of them — measured, git
+  # 2.43 — so step (4)'s `_ws_attic_pin` over the child's tree already reads them.
   while IFS= read -r -u 9 cpath; do
     [[ -n "$cpath" ]] || continue
     oph=$(_ws_reclaim_opheads "$cpath")
@@ -24457,9 +24601,6 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
       || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
     _ws_wip_commit "$cpath" "$id" "$childof" "${cpath#"$wdreal"/}/" || { RECLAIM_PIN_WHY="$RECLAIM_WIP_WHY"; return 1; }
     [[ -n "$RECLAIM_WIP_SHA" ]] && extras+=("$RECLAIM_WIP_SHA")
-    chead=$(git -C "$cpath" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
-      || { RECLAIM_PIN_WHY="the HEAD of the checkout at $cpath does not resolve after its WIP commit"; return 1; }
-    extras+=("$chead")
     cbr=$(git -C "$cpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || cbr=""
     REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\n'
   done 9< <(printf '%s\n' ${same[@]+"${same[@]}"} | awk 'NF { print length($0) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
@@ -24471,10 +24612,10 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   headsha=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) \
     || { RECLAIM_PIN_WHY="the HEAD of $workdir does not resolve"; return 1; }
   extras+=("$headsha")
-  # THE BRANCH TIP IS A REQUIRED PIN (spec §5.5, step 3: "the branch tip
-  # including that WIP commit"): it is the commit the tail deletes the branch
-  # at, and on a DETACHED child it is not HEAD, so nothing else pins it. A
-  # branch that does not resolve leaves the tail no tip to delete it at.
+  # THE BRANCH TIP IS A REQUIRED PIN (spec §5.5, step 3): it is the commit the
+  # tail deletes the branch at, and on a DETACHED or drifted child it is not
+  # HEAD, so nothing else pins it. The WIP commit is pinned beside it by sha.
+  # A branch that does not resolve leaves the tail no tip to delete it at.
   REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) \
     || { REAP_TIP=""; RECLAIM_PIN_WHY="refs/heads/$branch does not resolve in $main — there is no branch tip to pin"; return 1; }
   extras+=("$REAP_TIP")
@@ -24507,7 +24648,7 @@ _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclai
   # `worktree` says whether there was a tree to pin at all: `absent` is a child
   # whose worktree had VANISHED (spec §5.5) — the record then holds its branch
   # tip and stashes and nothing of a tree, and says so rather than implying one.
-  local childof="$1" worktree="${2:-present}" p first same="[" foreign="["
+  local childof="$1" worktree="${2:-present}" p first same="[" foreign="[" kept=""
   first=1
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
@@ -24519,9 +24660,20 @@ _ws_reclaim_tomb_fields() {   # childof [worktree: present|absent] -> the reclai
     (( first )) || foreign+=","; first=0; foreign+="$(_json_str "$p")"
   done <<< "$RECLAIM_FOREIGN"
   foreign+="]"
-  printf '"mode":"reclaim","childOf":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
+  # A branch this reclaim KEEPS (a drifted HEAD's) is recorded from the start;
+  # the key is written only when there is one, as the tail's own patch does.
+  (( ${#RECLAIM_KEPT[@]} )) && kept="\"keptBranches\":$(_ws_reclaim_kept_json),"
+  printf '"mode":"reclaim","childOf":%s,"worktree":%s,"wip":%s,"secretsDropped":%s,%s"containment":{"sameRepository":%s,"foreignProven":%s},"residueBytes":null,' \
     "$childof" "$(_json_str "$worktree")" "$( [[ -n "$RECLAIM_WIP" ]] && _json_str "$RECLAIM_WIP" || echo null)" \
-    "$(_ws_reclaim_secrets_json)" "$same" "$foreign"
+    "$(_ws_reclaim_secrets_json)" "$kept" "$same" "$foreign"
+}
+
+_ws_reclaim_kept_json() {   # -> RECLAIM_KEPT as a JSON array of strings, on stdout
+  local out="[" first=1 k
+  for k in ${RECLAIM_KEPT[@]+"${RECLAIM_KEPT[@]}"}; do
+    (( first )) || out+=","; first=0; out+="$(_json_str "$k")"
+  done
+  printf '%s]' "$out"
 }
 
 _ws_tombstone_patch() {   # id json-object -> merges its keys into the EXISTING tombstone and rewrites it
@@ -24617,15 +24769,17 @@ _ws_reclaim_failed_json() {   # token detail -> the post-start failure document 
 }
 
 _ws_reclaim_children_merge() {   # recorded settled -> the nested-checkout lines the tail acts on, one per path
-  # THE SETTLE MOVES A NESTED HEAD TOO. The tail deletes each nested branch by
-  # CAS on the head the record names, and the settle re-pin (spec §5.5, run
-  # again once the pane is dead) may have just made a WIP commit in a nested
-  # checkout the session wrote into — its branch now stands on that commit, and
-  # a CAS on the recorded head would refuse `branch-moved` on every attempt, for
-  # ever. So the settle's lines REPLACE the recorded line for the same path; a
-  # recorded path the settle no longer found (gone from disk) keeps its line, so
-  # its branch is still deleted at the head that was pinned; and a path the
-  # settle found that the record lacks is added, pinned by the same settle.
+  # A NESTED HEAD CAN MOVE BEFORE THE SETTLE. The tail deletes each nested
+  # branch by CAS on the head the record names, and the session, alive until
+  # the kill, may have COMMITTED in a nested checkout since the pin phase (the
+  # WIP commit itself moves no ref) — its branch then stands on that commit,
+  # and a CAS on the recorded head would refuse `branch-moved` on every
+  # attempt, for ever. The settle re-pin (spec §5.5, run again once the pane
+  # is dead) reads each head again, so its lines REPLACE the recorded line for
+  # the same path; a recorded path the settle no longer found (gone from
+  # disk) keeps its line, so its branch is still deleted at the head that was
+  # pinned; and a path the settle found that the record lacks is added, pinned
+  # by the same settle.
   local recorded="$1" settled="$2" line p out=""
   local -A fresh=() seen=()
   while IFS= read -r line; do
@@ -24750,7 +24904,7 @@ _ws_reclaim_nested_record() {   # main cpath -> rc 0 with _WS_NREC_BRANCH ('' = 
   return 0
 }
 
-_ws_reclaim_kept_read() {   # tombstone -> the nested branches a reclaim KEPT (`keptBranches`), '; '-joined
+_ws_reclaim_kept_read() {   # tombstone -> the branches a reclaim KEPT (`keptBranches`), '; '-joined
   [[ -s "$1" ]] || return 1
   LC_ALL=C.UTF-8 python3 -c '
 import json, sys
@@ -24853,7 +25007,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not read the nested checkouts from $tomb"; return 1
     }
     merged=$(_ws_reclaim_children_merge "$recorded" "$REAP_CHILDLINES")
-    if [[ -n "$RECLAIM_WIP" || "$REAP_TIP" != "$tip" || "$merged" != "$recorded" ]]; then
+    if [[ -n "$RECLAIM_WIP" || "$REAP_TIP" != "$tip" || "$merged" != "$recorded" ]] || (( ${#RECLAIM_KEPT[@]} )); then
       [[ -n "$RECLAIM_WIP" ]] && wip="$RECLAIM_WIP"
       tip="$REAP_TIP"
       cj="["; first=1
@@ -24862,9 +25016,10 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         (( first )) || cj+=","; first=0; cj+="$(_json_str "$cline")"
       done <<< "$merged"
       cj+="]"
-      if ! _ws_tombstone_patch "$id" "$(printf '{"tip":%s,"wip":%s,"secretsDropped":%s,"children":%s}' \
+      if ! _ws_tombstone_patch "$id" "$(printf '{"tip":%s,"wip":%s,"secretsDropped":%s,%s"children":%s}' \
              "$(_json_str "$tip")" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
-             "$(_ws_reclaim_secrets_json)" "$cj")"; then
+             "$(_ws_reclaim_secrets_json)" \
+             "$( (( ${#RECLAIM_KEPT[@]} )) && printf '"keptBranches":%s,' "$(_ws_reclaim_kept_json)")" "$cj")"; then
         _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable \
           "could not record the settle's pins in $tomb — refusing to delete what the record does not name"
         return 1
@@ -25081,6 +25236,14 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
         _ws_reclaim_fail "$id" "$lctx" branch-elsewhere "$branch is now checked out at ${holders//$'\n'/, } — the branch was kept"
         return 1
       fi
+      # NOT THE PROJECT'S MAIN LINE, PROVEN AT THIS INSTANT (spec §5.5), as the
+      # ladder asked it: a main checkout can have moved onto it since.
+      _ws_reclaim_main_branch "$main" "$branch"; crc=$?
+      if (( crc != 1 )); then
+        _ws_reclaim_fail "$id" "$lctx" branch-elsewhere \
+          "$( (( crc == 0 )) && printf '%s is the main line of %s' "$branch" "$main" || printf 'whether %s is the main line of %s could not be told' "$branch" "$main") — the branch was kept"
+        return 1
+      fi
       git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
         || { _ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"; return 1; }
     fi
@@ -25144,13 +25307,13 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       meas.branch "$branch"
     return 1
   fi
-  # A NESTED BRANCH THIS ACT KEPT is said on the done row, whichever attempt
-  # kept it: the record carries it across a resume.
+  # A BRANCH THIS ACT KEPT — nested, or a drifted HEAD's — is said on the done
+  # row, whichever attempt kept it: the record carries it across a resume.
   keptall=$(_ws_reclaim_kept_read "$tomb") || keptall=""
   _lc_done reclaim "$id" "$lctx" verb ws-reclaim meas.childOf "$childof" meas.branch "$branch" \
     meas.tip "$tip" meas.wip "$wip" meas.tombstone "$tomb" meas.attic "${attic:-0}" \
     meas.residueBytes "$residue" meas.resumed "$resumed" \
-    detail "${keptall:+kept nested branch(es): $keptall}"
+    detail "${keptall:+kept branch(es): $keptall}"
   printf '{"reclaimed":%s,"childOf":%s,"wip":%s,"attic":%s,"residueBytes":%s}\n' \
     "$(_json_str "$id")" "$childof" "$( [[ -n "$wip" ]] && _json_str "$wip" || echo null)" \
     "${attic:-0}" "$residue"

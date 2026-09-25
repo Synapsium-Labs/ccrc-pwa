@@ -51,6 +51,7 @@ describe('the WIP commit', () => {
     fs.mkdirSync(path.join(c.wt, 'secrets')); fs.writeFileSync(path.join(c.wt, 'secrets', 'token.txt'), 't');
     fs.writeFileSync(path.join(c.wt, '.env.local'), 'KEY=local');
     fs.mkdirSync(path.join(c.wt, 'build')); fs.writeFileSync(path.join(c.wt, 'build', 'out.o'), 'o');
+    const head = h.git(c.wt, 'rev-parse', 'HEAD');
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
     expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
@@ -61,8 +62,30 @@ describe('the WIP commit', () => {
     }
     expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('edited');
     expect([...p.secrets].sort()).toEqual(['.env', '.env.local', 'secrets/token.txt']);
-    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the WIP commit is ON the branch').toBe(p.wip);
-    expect(p.tip).toBe(p.wip);
+    // THE COMMIT MOVES NO REF (`wip-moves-no-ref`): it sits on HEAD, is pinned
+    // by sha, and the branch, HEAD and the user's index are exactly as found.
+    expect(h.git(c.main, 'log', '-1', '--format=%P', p.wip), 'the WIP commit sits on HEAD').toBe(head);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch moved').toBe(head);
+    expect(h.git(c.wt, 'rev-parse', 'HEAD'), 'HEAD moved').toBe(head);
+    expect(h.git(c.wt, 'status', '--porcelain', '--', 'f1.txt'), 'the user’s index was written').toBe('M f1.txt');
+    expect(p.tip, 'the tip is the branch’s own').toBe(head);
+    expect(atticShas(c)).toContain(p.wip);
+  }, 60_000);
+
+  it('is IDEMPOTENT — a second pin of an unchanged tree answers the same WIP commit, and a changed one a new one', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const first = pinOf(c);
+    expect(first.rc, first.why).toBe('0');
+    const again = h.sh(`${CHILD_STUBS} sleep 1; _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" ${CHILD_BRANCH} ${CHILD_RUN}`
+      + ` && printf '%s' "$RECLAIM_WIP"`);
+    expect(again, 'a second WIP commit of the same tree').toBe(first.wip);
+    fs.writeFileSync(path.join(c.wt, 'later.txt'), 'l');
+    const later = h.sh(`${CHILD_STUBS} _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" ${CHILD_BRANCH} ${CHILD_RUN}`
+      + ` && printf '%s' "$RECLAIM_WIP"`);
+    expect(later).toMatch(/^[0-9a-f]{40}$/);
+    expect(later).not.toBe(first.wip);
+    expect(h.git(c.main, 'ls-tree', '-r', '--name-only', later).split('\n')).toContain('later.txt');
   }, 60_000);
 
   it('reads every path LITERALLY — an untracked file named `[.]env` never globs a secret into the commit', () => {
@@ -182,10 +205,13 @@ describe('the attic pins', () => {
     const inner = path.join(c.wt, 'inner');
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
     fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
+    const nestedTip = h.git(c.main, 'rev-parse', 'refs/heads/ws/nested');
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
-    const nestedTip = h.git(c.main, 'rev-parse', 'refs/heads/ws/nested');
-    expect(h.git(c.main, 'ls-tree', '-r', '--name-only', nestedTip).split('\n')).toContain('dirty.txt');
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/ws/nested'), 'the nested branch moved').toBe(nestedTip);
+    const nestedWip = atticShas(c).find((sha) => h.git(c.main, 'ls-tree', '-r', '--name-only', sha).split('\n').includes('dirty.txt'));
+    expect(nestedWip, 'the nested uncommitted work is not in the attic').toBeDefined();
+    expect(h.git(c.main, 'log', '-1', '--format=%P', nestedWip!)).toBe(nestedTip);
     expect(atticShas(c)).toContain(nestedTip);
     expect(p.childlines).toContain(`${inner}\tws/nested\t${nestedTip}`);
     expect(h.git(c.main, 'ls-tree', '-r', '--name-only', `refs/heads/${CHILD_BRANCH}`).split('\n')
@@ -222,13 +248,14 @@ describe('the attic pins', () => {
   }, 60_000);
 });
 
-describe('the only git commit in ccd', () => {
-  it('is one line, inside _ws_wip_commit, and _ws_wip_commit is called only from _ws_reclaim_pin', () => {
+describe('the only commit ccd writes', () => {
+  it('is one `commit-tree` line, inside _ws_wip_commit — no `git commit` at all — and _ws_wip_commit is called only from _ws_reclaim_pin', () => {
     const src = fs.readFileSync(CCD, 'utf8');
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l));
-    expect(code.filter((l) => /\bcommit --no-verify\b/.test(l))).toHaveLength(1);
+    expect(code.filter((l) => /\bcommit-tree\b/.test(l))).toHaveLength(1);
+    expect(code.filter((l) => /\bcommit --no-verify\b|\bgit( -C "[^"]*")?( -c [^ ]+)* commit\b/.test(l)), 'a `git commit`, which moves a ref').toEqual([]);
     const wipBody = src.slice(src.indexOf('_ws_wip_commit() {'), src.indexOf('_ws_reclaim_attic_extra() {'));
-    expect(wipBody).toMatch(/\bcommit --no-verify\b/);
+    expect(wipBody).toMatch(/^[^#\n]*\bcommit-tree\b/m);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
     expect(calls(src)).toBe(2);
@@ -257,7 +284,7 @@ describe('the tombstone', () => {
     expect(tomb['childOf']).toBe(CHILD_RUN);
     expect(tomb['worktree'], 'the default: a tree was there to pin').toBe('present');
     expect(tomb['wip']).toBe(out);
-    expect(tomb['tip'], 'the tip AFTER the WIP commit — what the tail deletes by CAS').toBe(out);
+    expect(tomb['tip'], 'the branch’s own tip — what the tail deletes by CAS; the WIP commit moves no ref').toBe(c.tip);
     expect(tomb['secretsDropped']).toEqual(['.env']);
     expect(tomb['containment']).toEqual({ sameRepository: [], foreignProven: [] });
     expect(tomb['residueBytes']).toBeNull();
@@ -385,7 +412,7 @@ describe('the workdir leaf is never followed — the settle re-pin runs without 
     const p = pinOf({ ...c, wt: viaLink });
     expect(p.rc, p.why).toBe('0');
     expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
-    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(p.wip);
+    expect(atticShas(c)).toContain(p.wip);
   }, 60_000);
 });
 
@@ -486,16 +513,20 @@ describe('the WIP commit never holds a secret-shaped path whose content differs 
   }, 60_000);
 });
 
-describe('the WIP commit lands only on the child’s own branch or a detached HEAD', () => {
-  it('FAILS when the tree has switched to another branch after the ladder — that branch does not move', () => {
+describe('the WIP commit lands on no branch — a drifted HEAD’s branch is KEPT and recorded', () => {
+  it('pins a tree that switched to another branch after the ladder: that branch does not move, and is recorded as kept', () => {
     const c = makeChild(h);
     fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
-    const p = pinOf(c, { between: `git -C "${c.wt}" switch -q -c shared-feature` });
-    expect(p.rc, p.why).toBe('1');
-    expect(p.why).toContain('refs/heads/shared-feature');
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 ${CHILD_RUN} >/dev/null`
+      + ` && git -C "${c.wt}" switch -q -c shared-feature`
+      + ` && _ws_reclaim_pin ${CHILD_ID} "${c.wt}" "${c.main}" "$REAP_BRANCH" ${CHILD_RUN}; rc=$?;`
+      + ` printf '%s\x1f%s\x1f%s\x1f%s' "$rc" "$RECLAIM_WIP" "$RECLAIM_PIN_WHY" "$(printf '%s\n' "\${RECLAIM_KEPT[@]}")"`);
+    const [rc = '', wip = '', why = '', kept = ''] = out.split('\x1f');
+    expect(rc, why).toBe('0');
     expect(h.git(c.main, 'rev-parse', 'refs/heads/shared-feature'), 'the WIP commit landed on another branch').toBe(c.tip);
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
-    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+    expect(atticShas(c)).toContain(wip);
+    expect(kept, 'the drifted branch is not recorded as kept').toContain(`shared-feature (checked out at ${c.wt} in place of ${CHILD_BRANCH})`);
   }, 60_000);
 });
 
@@ -575,7 +606,7 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'nothing was committed').toBe(c.tip);
   }, 60_000);
 
-  it('pins a nested checkout’s operation heads BEFORE its WIP commit concludes them', () => {
+  it('pins a nested checkout’s operation heads — and its WIP commit concludes nothing', () => {
     const c = makeChild(h);
     const inner = path.join(c.wt, 'inner');
     h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
@@ -587,8 +618,10 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
     expect(fs.existsSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')),
-      'the CONTROL: the nested WIP commit concluded the merge').toBe(false);
+      'the nested WIP commit concluded the merge — it moves no ref and no state of the tree').toBe(true);
     expect(atticShas(c), 'the nested MERGE_HEAD is not pinned').toContain(mergeSide);
+    const nestedWip = atticShas(c).find((sha) => h.git(c.main, 'ls-tree', '-r', '--name-only', sha).split('\n').includes('dirty.txt'));
+    expect(h.git(c.main, 'log', '-1', '--format=%P', nestedWip!).split(' '), 'the WIP commit carries the merged-in side').toContain(mergeSide);
   }, 60_000);
 
   it('pins a commit that only a nested checkout’s own HEAD reflog names', () => {
@@ -651,13 +684,19 @@ describe('the WIP commit starts from a COPY of the user’s own index', () => {
     expect(h.git(c.main, 'show', `${p.wip}:keep/x`)).toBe('keep edited');
   }, 60_000);
 
-  it('FAILS — commits nothing — when the user’s index is LOCKED', () => {
+  it('pins through a LOCKED index — it only copies the index, and leaves the lock and the index as found', () => {
+    // Rung 6 defers a held lock on the fresh arm; the pin itself must not fail
+    // on one, or a lock a crash (or the pane kill) left wedges the child for
+    // good — the settle runs with the pane dead.
     const c = makeChild(h);
     fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
     const idx = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const before = fs.readFileSync(idx);
     const p = pinOf(c, { between: `: > "${idx}.lock"` });
-    expect(p.rc, p.why).toBe('1');
-    expect(p.why).toContain('is locked');
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('edited');
+    expect(fs.existsSync(`${idx}.lock`), 'the lock was removed').toBe(true);
+    expect(fs.readFileSync(idx).equals(before), 'the user’s index was written').toBe(true);
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
   }, 60_000);
 
@@ -745,5 +784,45 @@ describe('intent-to-add entries (`git add -N`), and every status code accounted 
     expect(p.rc, p.why).toBe('1');
     expect(p.why).toContain('does not know');
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
+  }, 60_000);
+});
+
+describe('the pin proves every tree’s git directory is git’s own record of it, before any commit (spec §5.5, rung 9; the final review’s P4, P8)', () => {
+  it('FAILS — writes nothing anywhere — when the child’s `.git` is re-pointed at a sibling’s admin directory after the ladder', () => {
+    const c = makeChild(h);
+    const other = path.join(h.home, 'other');
+    h.git(c.main, 'worktree', 'add', '-q', '--detach', other, 'main');
+    const otherHead = h.git(other, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(c.wt, 'child-work.txt'), 'x\n');
+    const p = pinOf(c, { between: `cp -- "${other}/.git" "${c.wt}/.git"` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain('another checkout');
+    expect(p.wip).toBe('');
+    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+    expect(h.git(other, 'rev-parse', 'HEAD')).toBe(otherHead);
+    expect(h.git(other, 'status', '--porcelain')).toBe('');
+  }, 60_000);
+
+  it('FAILS — writes nothing anywhere — when a COPY of another worktree appears inside the child after the ladder', () => {
+    const c = makeChild(h);
+    const other = path.join(h.home, 'other');
+    h.git(c.main, 'worktree', 'add', '-q', '-b', 'ws/other', other);
+    const otherTip = h.git(c.main, 'rev-parse', 'refs/heads/ws/other');
+    const p = pinOf(c, { between: `cp -R -- "${other}" "${c.wt}/copy" && echo x > "${c.wt}/copy/dirty.txt"` });
+    expect(p.rc, p.why).toBe('1');
+    expect(p.why).toContain(path.join(c.wt, 'copy'));
+    expect(p.why).toContain('another checkout');
+    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+    expect(h.git(c.main, 'rev-parse', 'refs/heads/ws/other')).toBe(otherTip);
+    expect(h.git(other, 'status', '--porcelain')).toBe('');
+  }, 60_000);
+
+  it('the CONTROL: a registered nested worktree is its own record, and pins', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-q', '-b', 'ws/nested', inner);
+    fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
   }, 60_000);
 });
