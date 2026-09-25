@@ -18,18 +18,93 @@ export const CHILD_ID = 'demo-quiet-basin';
 export const CHILD_RUN = 7;
 export const CHILD_BRANCH = 'ws/quiet-basin';
 
-/** `_ws_unsupervise` and `tmux` RECORD to `$HOME/ccd-calls` and act on
- *  nothing. `tmux` answers 1 to every verb, `has-session` included, so rung 5
- *  sees no session and therefore no attached client; a case that needs a live
- *  session redefines `tmux` AFTER this string. `_svc_is_active` answers
- *  `inactive` — what systemd prints once the unit is disabled and stopped —
- *  because the harness's `systemctl` poison prints NOTHING, and Task 4's tail
- *  reads an empty answer as "unmeasured", which fails shut; a case that needs
- *  a unit that stayed up redefines it AFTER this string. */
+/** A MODEL of the tmux server, as a bash function — never a real tmux. It
+ *  RECORDS every argv to `$HOME/ccd-calls` and answers from files in the
+ *  fixture HOME, in tmux's own words (the messages `_session_probe`'s header
+ *  in `ccd/ccd` lists as measured):
+ *
+ *  - `$HOME/tmux-sessions`, one session name per line (absent: none). A
+ *    `=name` target matches EXACTLY; a bare target matches exactly first and
+ *    otherwise the first session it is a PREFIX of — tmux's own resolution,
+ *    so an unanchored `cc-<id>` finds a sibling `cc-<id>x`, and the anchoring
+ *    is something a case can see fail. No match: `can't find session: <t>`.
+ *  - `$HOME/tmux-clients-<name>`: what `list-clients` prints for that session.
+ *  - `$HOME/tmux-fault`: while it exists, EVERY call prints its text to
+ *    stderr and exits 1 — the server could not be asked (`error connecting
+ *    to … (Permission denied)`, `no server running on …`).
+ *    `$HOME/tmux-fault-at-tail` becomes `tmux-fault` when the reclaim tail
+ *    unsupervises (the `_ws_unsupervise` stub below moves it), so a case can
+ *    let rung 5 pass and break tmux between the ladder and the tail's kill.
+ *  - `kill-session` removes the session it resolves and exits 0; removing
+ *    the LAST one leaves `no server running on …` as the fault — tmux's
+ *    exit-empty, the server exiting because it has nothing left to serve.
+ *    `$HOME/tmux-kill-noop` makes it exit 0 and remove nothing.
+ *  Every other verb exits 1. */
+const TMUX_MODEL = [
+  'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; local verb="$1" t="" s hit=""; shift;',
+  ' while (( $# )); do case "$1" in -t) t="$2"; shift 2 ;; *) shift ;; esac; done;',
+  ' if [[ -e "$HOME/tmux-fault" ]]; then cat "$HOME/tmux-fault" >&2; return 1; fi;',
+  ' if [[ -f "$HOME/tmux-sessions" ]]; then while IFS= read -r s; do',
+  '  if [[ "$t" == =* ]]; then [[ "$s" == "${t#=}" ]] && hit="$s";',
+  '  elif [[ "$s" == "$t" ]]; then hit="$s"; break;',
+  '  elif [[ -z "$hit" && "$s" == "$t"* ]]; then hit="$s"; fi;',
+  ' done < "$HOME/tmux-sessions"; fi;',
+  ' [[ -n "$hit" ]] || { echo "can\'t find session: $t" >&2; return 1; };',
+  ' case "$verb" in',
+  '  has-session) return 0 ;;',
+  '  list-clients) cat "$HOME/tmux-clients-$hit" 2>/dev/null; return 0 ;;',
+  '  kill-session) [[ -e "$HOME/tmux-kill-noop" ]] && return 0;',
+  '   { command grep -vxF -- "$hit" "$HOME/tmux-sessions" || :; } > "$HOME/tmux-sessions.new";',
+  '   mv "$HOME/tmux-sessions.new" "$HOME/tmux-sessions";',
+  '   [[ -s "$HOME/tmux-sessions" ]] || echo "no server running on /tmp/tmux-fixture/default" > "$HOME/tmux-fault";',
+  '   return 0 ;;',
+  '  *) return 1 ;;',
+  ' esac; };',
+].join('');
+
+/** `_ws_unsupervise` RECORDS to `$HOME/ccd-calls` and acts on nothing (it
+ *  also moves `tmux-fault-at-tail` into place — see `TMUX_MODEL`); `tmux` is
+ *  `TMUX_MODEL`, which with no files planted answers `can't find session`
+ *  to every target, so rung 5 sees no session and therefore no attached
+ *  client, and the tail's kill finds none to kill. A case that needs a live
+ *  session plants `tmux-sessions`, or redefines `tmux` AFTER this string.
+ *  `_svc_is_active` answers `inactive` — what systemd prints once the unit is
+ *  disabled and stopped — because the harness's `systemctl` poison prints
+ *  NOTHING, and Task 4's tail reads an empty answer as "unmeasured", which
+ *  fails shut; a case that needs a unit that stayed up redefines it AFTER
+ *  this string. */
 export const CHILD_STUBS =
-  '_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; };'
-  + ' tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };'
+  '_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls";'
+  + ' if [[ -e "$HOME/tmux-fault-at-tail" ]]; then mv "$HOME/tmux-fault-at-tail" "$HOME/tmux-fault"; fi; };'
+  + ` ${TMUX_MODEL}`
   + ' _svc_is_active() { printf inactive; };';
+
+/** The three ways tmux answers "I could not be asked", in its own words (the
+ *  messages `_session_probe`'s header in `ccd/ccd` lists as measured). None of
+ *  them says the session is gone: each is UNKNOWN to ws-reclaim (spec §5.5,
+ *  rung 5; §5.6, the tail) — a server may be there, or the pane may be. */
+export const TMUX_FAULTS = {
+  'permission denied': 'error connecting to /tmp/tmux-fixture/default (Permission denied)',
+  'no server running': 'no server running on /tmp/tmux-fixture/default',
+  'no socket': 'error connecting to /tmp/tmux-fixture/default (No such file or directory)',
+} as const;
+
+/** Plants `TMUX_MODEL`'s state in the fixture HOME (see there). */
+export function plantTmux(h: PrHarness, o: {
+  sessions?: string[]; clients?: Record<string, string>; fault?: string; faultAtTail?: string; killNoop?: boolean;
+}): void {
+  if (o.sessions) fs.writeFileSync(path.join(h.home, 'tmux-sessions'), o.sessions.map((s) => `${s}\n`).join(''));
+  for (const [s, c] of Object.entries(o.clients ?? {})) fs.writeFileSync(path.join(h.home, `tmux-clients-${s}`), `${c}\n`);
+  if (o.fault !== undefined) fs.writeFileSync(path.join(h.home, 'tmux-fault'), `${o.fault}\n`);
+  if (o.faultAtTail !== undefined) fs.writeFileSync(path.join(h.home, 'tmux-fault-at-tail'), `${o.faultAtTail}\n`);
+  if (o.killNoop) fs.writeFileSync(path.join(h.home, 'tmux-kill-noop'), '');
+}
+
+/** What `TMUX_MODEL` holds now: the sessions still up, one per entry. */
+export function tmuxSessions(h: PrHarness): string[] {
+  const p = path.join(h.home, 'tmux-sessions');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+}
 
 /** The residue probe's root, INSIDE the fixture HOME — never the real
  *  `/tmp/claude-<uid>`. Prefixed onto every call that can reach the probe. */

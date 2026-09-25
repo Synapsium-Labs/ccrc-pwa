@@ -12,7 +12,7 @@ import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import {
-  CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child,
+  CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -75,6 +75,21 @@ describe('ws-audit --reclaim', () => {
     expect(a['token'], 'no token for a ladder that did not finish').toBeUndefined();
     expect(a['verdict']).toBe('unmeasured');
     expect(eventsOf(h.home, 'reclaim'), 'an unmeasured answer is journaled nowhere').toEqual([]);
+  }, 60_000);
+
+  it.each(Object.entries(TMUX_FAULTS))('rung 5: tmux answering %s EXITS 1 unmeasured — never "no session", never a token', (_what, fault) => {
+    // Rung 5 reads presence through `_session_probe`; only `can't find session`
+    // is gone. The server reads this exit 1 as `failed`, not resumable.
+    const c = makeChild(h);
+    plantTmux(h, { fault });
+    const r = h.run(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+    expect(fs.existsSync(c.wt), 'the audit touched nothing').toBe(true);
+    expect(r.code, r.stdout).toBe(1);
+    const a = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(a['mode']).toBe('reclaim');
+    expect(a['verdict']).toBe('unmeasured');
+    expect(a['token']).toBeUndefined();
+    expect(String(a['detail'])).toContain(fault);
   }, 60_000);
 
   it('a breadcrumb that STANDS but cannot be read is unmeasured too — never a fresh ladder over a half-torn-down child', () => {

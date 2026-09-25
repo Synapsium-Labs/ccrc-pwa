@@ -7637,7 +7637,7 @@ export type LcRefusalToken =
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): the pin phase could not keep the child's work, so the verb stopped before its first deletion
-  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit did not answer "stopped" after unsupervise, so the tail stopped before its first deletion
+  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before its next deletion
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7707,13 +7707,13 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // earlier attempt may already have removed either.
   'pin-failed':
     'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting anything further. Reclamation tries again.',
-  // Child reclamation, wave 3. The tail disabled the child's unit, then asked
-  // the service manager, and it did not answer "stopped" — a Restart=always
-  // unit left up would respawn against a workspace with no row. Only ever
-  // rides `_lc_fail`; the breadcrumb stays and a retry disables it again. As
-  // above, it claims only what is true on every arm: nothing FURTHER went.
+  // Child reclamation, wave 3. The tail disabled the unit and killed the pane,
+  // then asked the service manager and tmux, and one did not PROVE "stopped":
+  // still up, or not answering (a Restart=always unit; a claude left in its
+  // pane by KillMode=process). Only ever rides `_lc_fail`; the breadcrumb stays
+  // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
   'unit-still-active':
-    'ccrc could not confirm this session’s service had stopped, so it stopped before deleting anything further. Reclamation tries again.',
+    'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

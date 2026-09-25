@@ -14,8 +14,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
-  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, otherSnapshot, plantOther,
-  wideDigitLocale, type Child,
+  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, otherSnapshot,
+  plantOther, plantTmux, tmuxSessions, wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -527,6 +527,105 @@ describe('failures after the act started', () => {
       intact(c);
     } finally { fs.chmodSync(stale, 0o644); }
   }, 60_000);
+});
+
+describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5 and after the tail’s kill (spec §5.5-§5.6)', () => {
+  // `can't find session` is the one answer that is gone. Every "could not be
+  // asked" stops the verb before anything is deleted: at rung 5 as the
+  // `probe-unmeasured` failure, and in the tail — where `KillMode=process`
+  // means stopping the unit never stopped the pane — as `unit-still-active`.
+  const PROBE = `tmux has-session -t =cc-${CHILD_ID}`;
+  /** Everything a stopped tail must leave standing: the tree, the branch, the
+   *  row, and the breadcrumb for the retry. Read off disk FIRST. */
+  const tailStopped = (c: Child): void => {
+    expect(fs.existsSync(c.wt), 'the worktree survives').toBe(true);
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'its files survive').toBe(true);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the registry row survives').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:children');
+  };
+
+  it.each(Object.entries(TMUX_FAULTS))('rung 5: %s → `probe-unmeasured` at exit 1, and nothing is touched', (_what, fault) => {
+    const c = makeChild(h);
+    const tok = evalOf(h).token;
+    plantTmux(h, { fault });
+    const r = childReclaimVerb(h, tok);
+    intact(c);
+    expect(h.reg(CHILD_ID, 'reaping'), 'nothing started: no breadcrumb').toBeNull();
+    expect(r.code, r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(o['failed']).toBe('probe-unmeasured');
+    expect(String(o['detail'])).toContain(fault);
+    expect(o['reclaimed']).toBeUndefined();
+  }, 60_000);
+
+  it.each(Object.entries(TMUX_FAULTS))('the tail: %s after the kill → `unit-still-active`, and nothing further is deleted', (_what, fault) => {
+    // The ladder saw no session; tmux breaks between the ladder and the tail,
+    // so this attempt's own kill does not exit 0 either — `no server running`
+    // here is NOT the exit-empty exception.
+    const c = makeChild(h);
+    plantTmux(h, { faultAtTail: fault });
+    const r = childReclaimVerb(h, evalOf(h).token);
+    tailStopped(c);
+    expect(r.code, r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('unit-still-active');
+    expect(o.detail).toContain(fault);
+    failedPairAgrees(r);
+    expect(h.calls(), 'the kill was attempted').toContain(KILL);
+    expect(h.calls().lastIndexOf(PROBE), 'the pane was re-measured after it').toBeGreaterThan(h.calls().indexOf(KILL));
+  }, 60_000);
+
+  it('the tail, RESUMED: `no server running` with no rc-0 kill of this attempt’s own still stops', () => {
+    const c = makeChild(h);
+    interrupted(c, 'children');
+    plantTmux(h, { fault: TMUX_FAULTS['no server running'] });
+    const r = childReclaimVerb(h, resumeToken('children'));
+    tailStopped(c);
+    expect(r.code, r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('unit-still-active');
+  }, 60_000);
+
+  it('the tail: a pane still LIVE after a kill that exited 0 stops it too', () => {
+    const c = makeChild(h);
+    plantTmux(h, { sessions: [`cc-${CHILD_ID}`], killNoop: true });
+    const r = childReclaimVerb(h, evalOf(h).token);
+    tailStopped(c);
+    expect(r.code, r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('unit-still-active');
+  }, 60_000);
+
+  it('the CONTROL: `can’t find session` after the kill reclaims — and the pane WAS re-measured', () => {
+    const c = makeChild(h);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt)).toBe(false);
+    expect(h.calls().lastIndexOf(PROBE), 'the re-measure follows the kill').toBeGreaterThan(h.calls().indexOf(KILL));
+  }, 90_000);
+
+  it('the CONTROL: this attempt’s rc-0 kill of the LAST session, then `no server running`, passes the tail — tmux’s exit-empty', () => {
+    const c = makeChild(h);
+    plantTmux(h, { sessions: [`cc-${CHILD_ID}`] });
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt)).toBe(false);
+    expect(tmuxSessions(h), 'the kill took the pane').toEqual([]);
+    expect(fs.readFileSync(path.join(h.home, 'tmux-fault'), 'utf8'), 'and the server exited empty')
+      .toContain('no server running');
+  }, 90_000);
+
+  it('the CONTROL: an attached prefix-SIBLING `cc-<id>x` neither blocks the reclaim nor is killed', () => {
+    const c = makeChild(h);
+    const sib = `cc-${CHILD_ID}x`;
+    plantTmux(h, { sessions: [`cc-${CHILD_ID}`, sib], clients: { [sib]: '/dev/pts/9' } });
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt)).toBe(false);
+    expect(tmuxSessions(h), 'the child’s pane went, the sibling stands').toEqual([sib]);
+  }, 90_000);
 });
 
 describe('the settle', () => {
@@ -1601,7 +1700,10 @@ describe('the tail never deletes, and the pin never writes, what is not provably
   it('P3: an index.lock the pane kill leaves behind does not fail the settle — the reclaim completes', () => {
     const c = makeChild(h);
     const lock = `${h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index')}.lock`;
-    const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}"; return 1; };`;
+    // No session to find, in tmux's words: rung 5 and the tail's re-measure
+    // read an rc 1 with no message as "could not be asked", which stops them.
+    const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}";`
+      + ` echo "can't find session: =cc-${CHILD_ID}" >&2; return 1; };`;
     fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);

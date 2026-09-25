@@ -12,7 +12,9 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { CCD } from './ccdWsHelpers.js';
-import { CHILD_BRANCH, CHILD_ID, CHILD_STUBS, evalOf, makeChild, wideDigitLocale } from './childReclaimFixture.js';
+import {
+  CHILD_BRANCH, CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux, wideDigitLocale,
+} from './childReclaimFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-ladder-'); });
@@ -175,6 +177,46 @@ describe('rungs 3 to 6 — the retryable ones', () => {
     fs.writeFileSync(reg('hold'), 'x');
     expect(evalOf(h, { defer: 1 }).verdict, 'nor is the hold').toBe('held');
   }, 90_000);
+});
+
+describe('rung 5 asks tmux through `_session_probe`, ANCHORED — "tmux could not be asked" is unmeasured, never "no session" (spec §5.5)', () => {
+  // `can't find session` is the ONE answer that means gone. A server that
+  // refused the connection, a socket with nobody serving it and a socket that
+  // is not there all say only that tmux could not be asked: a live, attached
+  // session may be behind any of them. The verb never reads PROBE_SUBSTRATE,
+  // so `no server running` and a missing socket are unknown here too.
+  it.each(Object.entries(TMUX_FAULTS))('%s → unmeasured, no token, and tmux’s own words in the detail', (_what, fault) => {
+    makeChild(h);
+    plantTmux(h, { fault });
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(fault);
+    expect(calls(), 'asked, and asked ANCHORED').toContain(`tmux has-session -t =cc-${CHILD_ID}`);
+  }, 60_000);
+
+  it('the CONTROL: `can’t find session` is gone — reclaimable; and a live session with no client passes too', () => {
+    makeChild(h);
+    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}`).stderr, 'the model says gone')
+      .toContain(`can't find session: =cc-${CHILD_ID}`);
+    expect(evalOf(h).verdict).toBe('reclaimable');
+    plantTmux(h, { sessions: [`cc-${CHILD_ID}`] });
+    expect(evalOf(h).verdict).toBe('reclaimable');
+    plantTmux(h, { clients: { [`cc-${CHILD_ID}`]: '/dev/pts/4' } });
+    expect(evalOf(h).verdict, 'and the attached check still runs on a live one').toBe('attached');
+  }, 60_000);
+
+  it('the CONTROL: an attached prefix-SIBLING `cc-<id>x` does not make the child read present', () => {
+    makeChild(h);
+    const sib = `cc-${CHILD_ID}x`;
+    plantTmux(h, { sessions: [sib], clients: { [sib]: '/dev/pts/9' } });
+    // The model resolves a BARE target as tmux does — to the sibling — so the
+    // anchoring is what this case measures, not an artefact of the stub.
+    expect(h.run(`${CHILD_STUBS} tmux has-session -t cc-${CHILD_ID}`).code, 'an unanchored target finds the sibling').toBe(0);
+    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}`).code, 'an anchored one does not').toBe(1);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
 });
 
 describe('rung 7 — branch-elsewhere', () => {

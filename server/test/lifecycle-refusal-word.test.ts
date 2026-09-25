@@ -99,6 +99,17 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
     expect(LC_REFUSAL_WORD[t]).toMatch(/anything further/);
   });
 
+  // The tail answers `unit-still-active` for a unit that did not answer
+  // "stopped" AND for a pane it could not prove gone after the kill (a live
+  // pane, or tmux not answering) — so its word names both, and claims neither
+  // was seen running: "could not prove" is true of every cause.
+  it('unit-still-active names the service AND the terminal pane, and claims only that neither was proven stopped', () => {
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/service/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/pane/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/could not prove/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/tries again/);
+  });
+
   // Three reap words that ws-reclaim's tail also emits, each widened to be
   // true of every site: a removal refused because a tree (or a checkout inside
   // it) could not be PROVEN the workspace's own, not only because git refused;

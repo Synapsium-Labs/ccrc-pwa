@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=cdb94018451b4db91ed5623fb3055a2221ceafb6992042f0217b2c7ffdd0686d
+# ccrc:generated 1 sha256=588669409d5c499037195ad040c0ba9e3750842244f2abc8063bc3fba231b9db
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2672,9 +2672,9 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   # stubbed substrate needs no deadline, it cannot wedge.
   local out rc
   if [[ $(type -t tmux) == function ]]; then
-    out=$(tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+    out=$(tmux has-session -t "${2:+=}$(_tmux "$1")" 2>&1); rc=$?
   else
-    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux "$1")" 2>&1); rc=$?
+    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "${2:+=}$(_tmux "$1")" 2>&1); rc=$?
   fi
   if (( rc == 0 )); then PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; return 0; fi
   # rc 124 is timeout's own kill: tmux printed nothing, so the reason is SYNTHESIZED —
@@ -23999,16 +23999,28 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   main="$PROJECTS_ROOT/$project"
   # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
   # (`=`): a bare `-t cc-<id>` is an fnmatch pattern and resolves a prefix to a
-  # DIFFERENT session (`cmd_win_size`'s measured case). A session that does not
-  # exist has no client; a session that exists and will not list its clients is
-  # presence UNMEASURED, which is not absence.
+  # DIFFERENT session (`cmd_win_size`'s measured case). Whether the session is
+  # up is asked through `_session_probe` — ccd's ONE classifier, with its
+  # deadline — and its second argument is what anchors the target there. Only
+  # `gone` (`can't find session`) passes: a session that does not exist has no
+  # client. `unknown` — a refused connection, a socket nobody serves, no socket
+  # at all, no answer in time — means tmux could NOT BE ASKED, never "no
+  # session", so it is unmeasured and nothing is touched (the probe's own
+  # polarity: unknown refuses, gone destroys). This verb never reads
+  # PROBE_SUBSTRATE: "no server" is a claim about the server, and a probe that
+  # could not connect proved nothing about this pane. A session that exists and
+  # will not list its clients is presence UNMEASURED too, which is not absence.
   if (( ! defer )); then
-    if tmux has-session -t "=$(_tmux "$id")" 2>/dev/null; then
-      clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
-        || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
-      [[ -z "$clients" ]] \
-        || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; }
-    fi
+    _session_probe "$id" anchored
+    case "$PROBE_VERDICT" in
+      gone) : ;;
+      live)
+        clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
+          || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
+        [[ -z "$clients" ]] \
+          || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
+      *) _ws_reclaim_unmeasured "whether $(_tmux "$id") is up could not be asked — tmux answered: ${PROBE_DETAIL:-nothing}"; return 1 ;;
+    esac
   fi
   # NO OTHER REGISTRY ROW NAMES THIS WORKDIR (spec §5.5, rung 9 asked of the
   # path) — `_ws_reclaim_workdir_shared` says why. Asked BEFORE the vanished
@@ -24922,7 +24934,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
   local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
-  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc
+  local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc killrc
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
@@ -24945,7 +24957,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
-  tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null || true
+  tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
   # is still up is exactly the Restart=always hazard this arm exists for (spec
@@ -24959,6 +24971,32 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     inactive|failed) : ;;
     *) _ws_reclaim_fail "$id" "$lctx" unit-still-active \
          "claude-session@$id answered '${unitstate:-no answer}' after it was disabled — nothing further was deleted, and the next attempt disables it again"
+       return 1 ;;
+  esac
+  # THE PANE IS RE-MEASURED TOO, the same way and for the same reason: the kill
+  # above answers nothing anyone reads, and `claude-session@.service` is
+  # `KillMode=process`, so stopping the unit never stopped the claude in its
+  # pane. Asked through `_session_probe`, ANCHORED, exactly as rung 5 asks it:
+  # only `gone` passes. `live` (the kill did not take) and `unknown` (tmux could
+  # not be asked — a refused connection, a socket nobody serves, no socket, no
+  # answer in time) stop here, before the first deletion, with the breadcrumb
+  # kept so the next attempt kills and re-measures again. ONE EXCEPTION, tmux's
+  # exit-empty: when THIS attempt's own anchored kill exited 0 and the probe
+  # then finds `no server running`, tmux confirmed the kill and its server
+  # exited because nothing was left to serve. Only this attempt's rc counts — a
+  # resumed attempt whose kill did not exit 0 still stops on it, an accepted
+  # strand that lasts until tmux answers again. `no server running` is read from
+  # PROBE_DETAIL, never PROBE_SUBSTRATE, which would admit a missing socket too.
+  _session_probe "$id" anchored
+  case "$PROBE_VERDICT" in
+    gone) : ;;
+    unknown) if (( killrc == 0 )) && [[ "$PROBE_DETAIL" == *"no server running"* ]]; then :; else
+        _ws_reclaim_fail "$id" "$lctx" unit-still-active \
+          "whether the pane $(_tmux "$id") stopped could not be asked after the kill (exit $killrc) — tmux answered: ${PROBE_DETAIL:-nothing}; nothing further was deleted, and the next attempt kills it again"
+        return 1
+      fi ;;
+    *) _ws_reclaim_fail "$id" "$lctx" unit-still-active \
+         "the pane $(_tmux "$id") is still up after the kill (exit $killrc) — nothing further was deleted, and the next attempt kills it again"
        return 1 ;;
   esac
   # THE TOMBSTONE IS THE ONE SOURCE for what this tail deletes, fresh and
