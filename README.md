@@ -1324,8 +1324,10 @@ can carry config dirs no roster entry names. **Scratch slugs are skipped**, beca
 mints one for every throwaway directory a session was started in — four prefixes, because the OS
 scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
 `-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
-`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
-this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`) — and one infix, `*--cc-tmp-*`,
+a marked child's own temp root (`$HOME/.cc-tmp/<id>`, which is its `TMPDIR`), wherever that home
+lives. `/var/tmp` is **not** scratch by the prefixes — POSIX makes it persistent — so a project kept
+there is censused like any other, unless its path runs through a `.cc-tmp` directory. The
 summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
 slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
 
@@ -1671,7 +1673,10 @@ what it cannot.
    an unmeasured marker must not read as "running".
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
-   control anywhere on the sheet. An abandon asserts nothing about PR
+   control anywhere on the sheet. A CHILD goes further: an abandon finishes
+   it, so once no other open run names it the server reclaims it after the
+   release — pinned, then removed (**A child is not a reap**, below;
+   `wave-lifecycle.md` §6). An abandon asserts nothing about PR
    lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
    the case it exists for is a run whose claim can no longer be measured.
 3. **Start a program.** Composition over existing routes, not a new one:
@@ -2118,6 +2123,12 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    run just went terminal — abandoning mid-program needs `final:true` or
    `archive:true` explicitly, or the workspace stays held for a wave that
    is never coming.
+   **Except a CHILD** (**A child is not a reap**, above): a close that
+   finishes one no other open run names — `final:true`, `state:'failed'`,
+   and the other cases `wave-lifecycle.md` §6 lists — releases it and never
+   re-holds it, the server then reclaims it (pinned, then removed; a review
+   child once the run it reviewed is terminal), and an `archive:true` on it
+   is overruled into that release.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed

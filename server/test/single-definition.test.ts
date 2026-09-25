@@ -3084,7 +3084,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
 });
 
 // ── D-2375: the scratch-slug predicate ─────────────────────────────────────
-describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+describe('one scratch-slug predicate — four prefixes and one infix, three bash sites, one mirror', () => {
   // "Did the harness mint this slug for a throwaway directory?" is asked at
   // three sites that cannot share a function between them:
   //
@@ -3181,7 +3181,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
   // neither the equality row (it reads three sites by name) nor the narrowing
   // row (it looks for the old `case` spelling). Nothing here scans for an
   // arbitrary re-implementation of the question.
-  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes and one infix', () => {
     // Three suites state fixture preconditions against this rule and none can
     // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
     // they share. The first cut of D-2375 put a copy in each suite and pinned
@@ -3212,7 +3212,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
       // the bare needle read the regex literal in the row above and reported
       // THIS file as a second holder (measured). A declaration is what the
       // row claims anyway.
-      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_(?:PREFIXES|INFIXES)\s*=/m
         .test(readFileSync(f, 'utf8')))
       .map(rel)
       .sort();

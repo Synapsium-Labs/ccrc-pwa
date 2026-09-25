@@ -601,16 +601,16 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * `childSpentLive` HERE REPLACES `childSpent`'s own would-be live rung — the
  * fast path already answered, so `childSpent` never calls it a second time —
  * so this is not a second gh round trip on top of one `childSpent` would
- * have made anyway. It IS a second `ccd pr-state` call inside THIS close's
- * mutex hold when `state !== 'failed'`: `verifyDone` (`fingerprint.ts`) always
- * makes its own `pr-state` call first, on the SAME session, before this
- * function is ever reached. So an ordinary non-final `done` close of a child
- * whose evidence is fast-path-spent can make TWO sequential `pr-state` calls
- * inside the coordination mutex — up to ~40 s against the 30 s client
- * timeout `CloseRunDeps.childReclaim`'s own docstring cites — each bounded by
- * `pr-state`'s own 20 s remote budget. The brief's design accepts this; it is
- * not this task's defect, and wave 4 (or a future `verifyDone`-measurement
- * reuse) is where the aggregate would be addressed.
+ * have made anyway. But `verifyDone` (`fingerprint.ts`) always makes its own
+ * `pr-state` call first, on the SAME session, before this function is reached
+ * (`state !== 'failed'`), so a non-final `done` close of a child with no open
+ * sibling makes TWO sequential `pr-state` calls inside the mutex in BOTH of
+ * its cases: a fast-path spent re-dated here through `childSpentLive`, and a
+ * fast-path MISS, where `childSpent`'s own live rung makes the second — the
+ * ordinary PR-bearing wave. Up to ~40 s against the 30 s client timeout
+ * `CloseRunDeps.childReclaim`'s docstring cites, each call bounded by
+ * `pr-state`'s 20 s remote budget. Accepted by design; wave 4 (reusing
+ * `verifyDone`'s measurement) is where the aggregate would be addressed.
  */
 async function childGateAtClose(
   deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
