@@ -1503,6 +1503,23 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     intact(c);
   }, 90_000);
 
+  it('the VANISHED arm’s ladder refuses branch-elsewhere the same way — the main line, or an unset origin/HEAD', () => {
+    const c = makeChild(h);
+    h.git(c.main, 'update-ref', `refs/remotes/origin/${CHILD_BRANCH}`, c.tip);
+    h.git(c.main, 'symbolic-ref', 'refs/remotes/origin/HEAD', `refs/remotes/origin/${CHILD_BRANCH}`);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const line = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(line.verdict, line.detail).toBe('branch-elsewhere');
+    expect(line.detail).toContain(`${CHILD_BRANCH} is the main line of`);
+    h.git(c.main, 'symbolic-ref', '-d', 'refs/remotes/origin/HEAD');
+    const unset = evalOf(h, { childOf: String(CHILD_RUN) });
+    expect(unset.verdict, unset.detail).toBe('branch-elsewhere');
+    expect(unset.detail).toContain('could not be told');
+    expect(refusedWith(childReclaimVerb(h, '0'.repeat(64)))).toBe('branch-elsewhere');
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch was deleted').toBe(c.tip);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the registry row was purged').not.toBeNull();
+  }, 90_000);
+
   it('the tail keeps the branch when it becomes unprovable between the pin and step (5) — a breadcrumb, never a delete', () => {
     const c = makeChild(h);
     const late = `_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; git -C "${c.main}" symbolic-ref -d refs/remotes/origin/HEAD; };`;
