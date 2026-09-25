@@ -1504,13 +1504,57 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
+      // cmd_update (review fix round 1 I4): whether the OLD (running) build
+      // was itself a COMPLETED install of its own tag, captured before this
+      // run's spine clears the record — arm 2's same-tag skip narrows to
+      // this, so a same-tag rerun over a HALF-installed tree still lets arm
+      // 2 restore `previous` instead of falling straight to arm 3.
+      'if [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
+      'IFS= read -r old_rec < "$BOX_INSTALLED_FILE" 2>/dev/null || old_rec=""',
       // cmd_update (D-3114): cleared right before the staged install, so its
       // presence afterwards means this run's spine completed — the one fact
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // cmd_rollback (D-3285, final review B3(i), then a re-review clause):
+      // a read-only convergence check — the running stamp's version and sha
+      // against the completed-install record — before any network call or
+      // lock, so a HAND-TYPED rollback (`--from cli`) already converged on
+      // its target prints a runnable remedy instead of falling into
+      // `cmd_update`'s own `--force`-to-reinstall no-op. Gated to `--from
+      // cli` only: every other caller (pwa, watchdog, …) must reach
+      // `cmd_update`'s converged path instead, which writes the terminal
+      // `done` report this early return does not. The guarded read (the
+      // same shape `cmd_update`'s own `old_completed` capture above uses,
+      // review fix round 1 I4) so an absent record prints no stray bash
+      // error.
+      '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
+      // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
+      // ONE line; its failed-detail sentence names no path (the assertion
+      // above). Measured (not the brief's claimed anchor, which put this
+      // above `_upd_converged`'s lines): `cmd_watchdog` sits between
+      // `cmd_update` (whose own read is the line above) and
+      // `_upd_marker_unsigned` (whose reads are the two lines below) in
+      // `ccd/ccrc`'s FILE ORDER, so its entry goes here — controller ruling
+      // C3, "let single-definition.test.ts decide".
+      '[ -f "$BOX_INSTALLED_FILE" ] && { IFS= read -r rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null || true',
+      // _upd_marker_unsigned (wave 4, Task 6): the ONE read of the record's
+      // line 2 for an update — cmd_update's arm-2 precondition and
+      // cmd_rollback's --allow-unsigned both call it, so neither caller
+      // names the record here.
+      '[ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ] || return 1',
+      '{ IFS= read -r m1; IFS= read -r m2; } < "$BOX_INSTALLED_FILE" || :',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
+      // W4 Task 4 (D-3254): `_upd_write_previous`
+      // asks whether the record is ABSENT before `cmd_update` removes it — a stamp
+      // with no record is not a completed baseline. Plain `if` (review fix
+      // round 1 I2): the same-tag arm above now `return`s unconditionally,
+      // so this is no longer its `elif`.
+      'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // _upd_restore_arm3 (wave 4, Task 6, D-3260):
+      // removes the record a completed spine wrote before its gate failed.
+      'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);

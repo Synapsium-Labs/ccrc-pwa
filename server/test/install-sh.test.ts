@@ -132,8 +132,8 @@ function plantLowNode(home: string, fakeVersion: string): void {
  *  immediately — before the argument loop, before node, before anything. It
  *  is also the README's own first command: `cd ccrc && bash install.sh`. */
 function runInstallSh(root: string, args: string[], home: string, pathDir: string,
-  opts: { bareFromRoot?: boolean } = {}): Result {
-  const env = { HOME: home, PATH: pathDir };
+  opts: { bareFromRoot?: boolean; env?: NodeJS.ProcessEnv } = {}): Result {
+  const env = { ...opts.env, HOME: home, PATH: pathDir };
   const r = opts.bareFromRoot
     ? spawnSync(BASH, ['install.sh', ...args], { cwd: root, env, encoding: 'utf8' })
     : spawnSync(BASH, [join(root, 'install.sh'), ...args], { env, encoding: 'utf8' });
@@ -357,7 +357,8 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     const payload = join(home, 'payload');
     mkdirSync(join(payload, 'ccd'), { recursive: true });
     writeFileSync(join(payload, 'ccd', 'ccrc'),
-      '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/ccrc-argv"\nexit 0\n', { mode: 0o755 });
+      '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/ccrc-argv"\n'
+      + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/ccrc-env"\nexit 0\n', { mode: 0o755 });
     writeFileSync(join(payload, 'MARKER'), 'release payload\n');
     const relDir = opts.tag
       ? join(home, 'releases', 'download', opts.tag)
@@ -380,9 +381,10 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
   /** TMPDIR is pointed INSIDE the fixture home so the `mktemp -d` staging
    *  dir — whose path the test cannot predict — is still inside a tree the
    *  test can search, making "nothing extracted" a positive assertion. */
-  function runRelease(root: string, args: string[], home: string): Result {
+  function runRelease(root: string, args: string[], home: string, extraEnv: NodeJS.ProcessEnv = {}): Result {
     mkdirSync(join(home, 'tmp'), { recursive: true });
     const env = {
+      ...extraEnv,
       HOME: home,
       PATH: fixtureBin(home),
       TMPDIR: join(home, 'tmp'),
@@ -542,5 +544,49 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     expect(existsSync(join(home, 'ccrc-argv'))).toBe(false);
     const staged = filesUnder(join(home, 'tmp'));
     expect(staged.some((f) => f.endsWith('MARKER'))).toBe(false);
+  });
+
+  // W1 minor M6. `_inst_installed` decides the marker's line 2 from
+  // CCRC_UPDATE_VERIFIED and nothing else, so an export left in an operator's
+  // shell (or a CI job's) around a first install would record a
+  // trust-on-first-use tree as VERIFIED. install.sh unsets it before BOTH
+  // hand-offs; what the staged verb SEES is the measurement, because that
+  // one variable is the whole of what the marker reads.
+  it('an ambient CCRC_UPDATE_VERIFIED=1 never reaches the staged verb — a first install is recorded unsigned (M6; §18 "--allow-unsigned is recorded")', () => {
+    const home = mkTmp('install-sh-release-verified-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    plantReleaseTools(home);
+    fixtureRelease(home);
+    const r = runRelease(root, ['--release'], home, { CCRC_UPDATE_VERIFIED: '1' });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(readFileSync(join(home, 'ccrc-env'), 'utf8')).toBe('unset\n');
+  });
+});
+
+describe('install.sh: the checkout hand-off strips an ambient CCRC_UPDATE_VERIFIED too (M6)', () => {
+  // The same rule as the release arm's case, on the other `exec`: a checkout
+  // install verified nothing, so it must be recorded unsigned whatever the
+  // caller's shell exported. The fixture is the thinnest checkout that
+  // reaches the hand-off — the three directories install.sh `cd`s into, the
+  // npm recorder, the REAL node for the floor read, and a `ccd/ccrc` that
+  // records what it was handed.
+  it('an ambient CCRC_UPDATE_VERIFIED=1 is gone by the time ccd/ccrc install runs', () => {
+    const home = mkTmp('install-sh-checkout-verified-');
+    const root = fixtureRoot(home, REAL_FLOOR_RANGE);
+    for (const d of ['pwa', 'agent', 'ccd']) mkdirSync(join(root, d), { recursive: true });
+    writeFileSync(join(root, 'ccd', 'ccrc'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$*" > "$HOME/ccrc-argv"',
+      'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/ccrc-env"',
+      'exit 0',
+    ].join('\n') + '\n', { mode: 0o755 });
+    const bin = fixtureBin(home);
+    symlinkSync(BASH, join(bin, 'bash'));
+    symlinkSync(REAL_NODE, join(bin, 'node'));
+    plantNpmRecorder(home);
+    const r = runInstallSh(root, [], home, bin, { env: { CCRC_UPDATE_VERIFIED: '1' } });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    expect(readFileSync(join(home, 'ccrc-argv'), 'utf8')).toBe('install\n');
+    expect(readFileSync(join(home, 'ccrc-env'), 'utf8')).toBe('unset\n');
   });
 });

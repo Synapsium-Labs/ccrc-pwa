@@ -8240,7 +8240,30 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // The clause's true anchor is `_inst_atomic()`'s own definition line,
       // `:9650` -> `:9668` here. It is inside the FROZEN spec, so it is
       // COUNTED rather than repaired; Task 11 still owns the re-anchor.
-      'ccd/ccrc': 5,
+      //
+      // 5 -> 4 on `9059e772` (batch E review fix round 1, a batch commit —
+      // not a merge of `origin/main`): `ccd/ccrc` grew 16,386 -> 16,467 lines
+      // (`wc -l`), and spec `:106`'s three-way Task-10 clause lost its
+      // `:11635` reference — "the matching removal line `\"$reg/compact-
+      // card.mjs\"` in `ccrc uninstall`'s own list" — not by SUB-RULE A but
+      // by the PRIMARY rule, on a coincidence of the clause's OTHER quoted
+      // token: at the parent (`3b33960e`), `:11635` held
+      // `# such a HOME now records \`unsigned\` instead of \`verified\` — the`,
+      // inside `_inst_legacy_verified_parent`'s trailing docstring; X1's
+      // insertions above it (`UPD_REDACT_ACTIVE` and its scoping) slid the
+      // SAME function's own rewritten header — the batch-B-rereview N1
+      // paragraph about the leading-word tightening — underneath `:11635`,
+      // which now reads `# word as \`[^[:space:]]+\`, ANY word — so
+      // \`python3 <path>/ccrc update\` or`. That line carries the literal
+      // substring "ccrc update", the clause's own `` `_upd_backup_copy` in
+      // `ccrc update` `` token, so the reference passes for a reason having
+      // nothing to do with the uninstall list it cites. MEASURED by swapping
+      // `ccd/ccrc` ALONE for its `3b33960e` content on the `9059e772` tree
+      // and re-running this audit: the whole map reverts and this assertion
+      // passes, so the entry is the only thing this commit moves. Not
+      // repairable here — re-pointing spec `:106` is a referent correction
+      // no finding in this wave authorised; Task 11 still owns it.
+      'ccd/ccrc': 4,
       // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
       // (#137): its own additions moved this file's lines, and repairing the
       // README anchors it broke re-pointed BY CONTENT the one anchor that was
@@ -8440,7 +8463,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // AND 195 -> 194 ONCE MORE, on this wave's own fix round 1 (`9059e772`,
+    // batch E review fix round 1 — a batch commit, not a merge of
+    // `origin/main`), by the same arithmetic: `ccd/ccrc` 5 -> 4 (argued
+    // beside the map above, above the `'ccd/ccrc'` entry) and nothing else
+    // moved.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

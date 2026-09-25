@@ -1234,7 +1234,28 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // each case: it filters the PLACED set, so an empty one would pass on its
   // own however deploy.sh reads, and an empty deploy side would red every name
   // for a reason that is this file's, not deploy.sh's.
-  it('every binary _inst_bins places, deploy.sh places too', () => {
+  //
+  // DEPLOY_SH_WITHHOLDS (D-3287, spec §19 of
+  // docs/superpowers/specs/2026-09-20-centralised-update-management-design.md).
+  // deploy.sh is deliberately NOT taught the update-sync/watchdog names: the
+  // projection reader (`_upd_intent_state` in ccd/ccrc) treats an absent
+  // `ccd-update-sync.timer` unit file as "not configured → follow stable", and
+  // a deploy.sh fleet box must keep reading that way. Placing the timer's unit
+  // file via deploy.sh would flip that box to "configured, never synced →
+  // refuse" and break every no-`--to` update there. This is a declared,
+  // EXACT, two-sided exemption, not the one-way kind the graphify-link comment
+  // above warns against (`_inst_graphify_engine`'s "WHY A SECOND PLACEMENT
+  // SOURCE RATHER THAN AN EXEMPTION": "An exemption would protect one
+  // direction only"): here BOTH directions are asserted below — each withheld
+  // name must be placed by `ccrc install` (a stale entry reds direction 1) and
+  // must NOT be placed by deploy.sh (direction 2 reds the day someone teaches
+  // deploy.sh to place one, telling them to remove it from this list).
+  const DEPLOY_SH_WITHHOLDS = {
+    bins: ['ccd-update-sync'],
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
+  } as const;
+
+  it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {
     const placed = placedBins();
     const deployed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
     expect(placed.size,
@@ -1244,15 +1265,28 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       'the deploy.sh `install_atomic` extractor found too few binaries under .local/bin — it has gone stale, unless deploy.sh really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
 
-    expect([...placed].filter((n) => !deployed.has(n)).sort(),
+    expect([...placed].filter((n) => !deployed.has(n) && !(DEPLOY_SH_WITHHOLDS.bins as readonly string[]).includes(n)).sort(),
       `these are placed into ${BIN_DIR} by _inst_bins' \`_inst_atomic\` destinations and no \`install_atomic\` `
       + `destination in ${DEPLOY_WHERE} places them under .local/bin, so a fallback deploy ships them into ~/ccrc `
       + 'and never onto PATH. Add `install_atomic ccd/<name> .local/bin/<name> 755` to its agent lane. '
       + '(_inst_graphify_engine\'s link is not compared — header: READING deploy.sh.)')
       .toEqual([]);
+
+    // Direction 1: every withheld bin name really is placed by `ccrc install`
+    // — a stale entry (renamed or dropped from _inst_bins) reds here.
+    expect([...DEPLOY_SH_WITHHOLDS.bins].filter((n) => !placed.has(n)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.bins names are not in placedBins() (ccrc install no longer places them) — '
+      + 'the exemption is stale, remove the name from DEPLOY_SH_WITHHOLDS.bins')
+      .toEqual([]);
+    // Direction 2: deploy.sh really does NOT place any withheld bin name — if
+    // it starts to, the exemption must be removed (D-3287's whole argument).
+    expect([...DEPLOY_SH_WITHHOLDS.bins].filter((n) => deployed.has(n)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.bins names ARE placed by deploy.sh now — the exemption no longer holds, '
+      + 'remove them from DEPLOY_SH_WITHHOLDS.bins so this case checks them like any other name')
+      .toEqual([]);
   });
 
-  it('every systemd unit file _inst_units places, deploy.sh places too', () => {
+  it('every systemd unit file _inst_units places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.units)', () => {
     const placed = placedUnits();
     const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);
     expect(placed.size,
@@ -1262,11 +1296,25 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
       'the deploy.sh `_unit_atomic` extractor found too few unit files — it has gone stale, unless deploy.sh really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
 
-    expect([...placed].filter((u) => !deployed.has(u)).sort(),
+    expect([...placed].filter((u) => !deployed.has(u) && !(DEPLOY_SH_WITHHOLDS.units as readonly string[]).includes(u)).sort(),
       'these are `_inst_atomic` destinations in _inst_units\' systemd arm and no `_unit_atomic` destination in '
       + `${DEPLOY_WHERE} places them, in either lane's remote build command, so a fallback deploy ships them into `
       + '~/ccrc and systemd never sees them. Add `_unit_atomic ~/ccrc/deploy/systemd/<unit> '
       + '~/.config/systemd/user/<unit>` to the chain of the lane that runs the unit.')
+      .toEqual([]);
+
+    // Direction 1: every withheld unit name really is placed by `ccrc install`
+    // — a stale entry reds here.
+    expect([...DEPLOY_SH_WITHHOLDS.units].filter((u) => !placed.has(u)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.units names are not in placedUnits() (ccrc install no longer places them) — '
+      + 'the exemption is stale, remove the name from DEPLOY_SH_WITHHOLDS.units')
+      .toEqual([]);
+    // Direction 2: deploy.sh really does NOT place any withheld unit name —
+    // spec §19 keeps deploy.sh untouched on purpose (D-3287); if that changes,
+    // this reds and the exemption must be removed.
+    expect([...DEPLOY_SH_WITHHOLDS.units].filter((u) => deployed.has(u)).sort(),
+      'these DEPLOY_SH_WITHHOLDS.units names ARE placed by deploy.sh now — the exemption no longer holds, '
+      + 'remove them from DEPLOY_SH_WITHHOLDS.units so this case checks them like any other name')
       .toEqual([]);
   });
 

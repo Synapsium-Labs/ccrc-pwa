@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3300 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3400 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -51,7 +51,10 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden.
+  other actor remains forbidden. Two callers reach that same `_upd_sweep` THROUGH `cmd_update`, never a copy of
+  it: `ccrc rollback`, and — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`, whose
+  `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop (design 2026-09-20 §11:
+  R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
@@ -118,7 +121,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
   anyway). An update that completed under a failing doctor exits 3, not 1 — the box IS on the new build, its FAIL lines
-  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). An update whose post-install
+  **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
+  the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
+  `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
+  a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
   `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
   box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
