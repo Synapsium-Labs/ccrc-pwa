@@ -318,7 +318,19 @@ describe('POST /api/runs/:id/abandon', () => {
     recording = true;
     const res = await postAbandon(app, id);
     expect(res.statusCode).toBe(200);
-    expect(reads).toEqual([]);
+    // CHILD RECLAMATION (wave 3) NARROWS THIS PIN BY ONE DIRECTORY and keeps
+    // its power. An abandon counts as FINISHED (spec 2026-09-22 §5.7), so the
+    // arm now reads THIS session's registry row for its `.child` marker — the
+    // box's half of the two authorities — and "no I/O at all" became "no I/O
+    // outside the registry". `verifyDone` still cannot pass: before it can
+    // answer anything but the claim-shape refusal it reads git's own ref files
+    // under the projects root (`gitref.ts`), which is what this now watches —
+    // measured by folding `verifyDone` back into the arm (the plan's mutation
+    // row). And a registry read cannot disable the valve D-275 protects: an
+    // unlistable or unreadable registry answers `marker-unreadable`, and the
+    // abandon proceeds exactly as before.
+    const registry = path.join(home, '.cc-sessions');
+    expect(reads.filter((p) => p !== registry && !p.startsWith(`${registry}/`))).toEqual([]);
     expect(calls.map((c) => c[0])).not.toContain('pr-state');
     expect(res.json()).not.toMatchObject({ error: 'stale-tip' });
   });
@@ -502,7 +514,8 @@ describe("closeRun's abandon arm, called directly", () => {
     // one place the WHOLE ok-arm shape is pinned, so a silently-added field
     // reds here rather than reaching a client that never learns to read it.
     expect(await closeRun(deps, id, { intent: 'abandon' }, 'operator'))
-      .toEqual({ ok: true, id, state: 'failed', released: true });
+      .toEqual({ ok: true, id, state: 'failed', released: true,
+                 childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
   });
 
   it('refuses bad-request for {intent:"abandon", archive:true} — a mixed shape is not a shape', async () => {

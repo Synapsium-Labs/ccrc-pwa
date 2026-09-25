@@ -528,10 +528,9 @@ export type ChildReclaimRowListing =
  *  `ChildReclaimDeps` — a caller with no `coord`/`runCcd` wired (the close
  *  path does not need them for this read) can call it without faking them.
  *
- *  ONE caller today: the executor's own gone-check above, which folds
- *  `uuid || child` into its `.uuid`-OR-`.child` rule (unchanged by this fix —
- *  only the export's return shape changed). The close path (Task 9,
- *  `childGateAtClose`) will be the SECOND caller, folding `.child` ALONE
+ *  TWO callers: the executor's own gone-check above, which folds `uuid ||
+ *  child` into its `.uuid`-OR-`.child` rule, and the close path (Task 9,
+ *  `childGateAtClose`, `close.ts`), the SECOND caller, folding `.child` ALONE
  *  (`none` when absent, `unreadable` when listed — controller ruling P5).
  *  Wave 2's `childBindGate` (`childBind.ts`) is NOT a caller: it takes its own
  *  `readdir` and asks the same `.child`-alone question independently — a
