@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **wave-done** 2026-09-25 at `fcd84cd0` (run 148 on `plain-summit`); numbers being defined, then the full review with the xhigh safety lens |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in review** 2026-09-25: run 148 on `plain-summit` at `c5962a94` (3352–3366 defined); review run 170 (seven lenses, SAFETY at xhigh) |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -39,10 +39,18 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (review **170**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-09-25 — wave 3 in review.** The worker defined 3352 to 3366 in one docs-only commit (`c5962a94`); the
+  commit's one moved line repointed the plan's own lens-1 citation. Run 148 advanced to awaiting-review, and
+  review run 170 was dispatched with seven lenses: the held-out three, plus the plan's four, SAFETY at xhigh.
+  - **macOS is partly measured.** test-macos 1/2 (job 108201932197) passed 210/210 files, including the ladder
+    suite, so `find -perm`/`-quit` are measured on Darwin.
+  - Leg 2/2 (job 108201932195) hung on main's `ccgpt-proxy` wedge after `ccd-ws-reap` and `ccd-lifecycle-purge`.
+    The pin, audit and close suites are therefore unmeasured on Darwin. A re-run would hang the same way, and
+    CI's workflow_dispatch cannot select files, so the review reads their portability by hand.
 - **2026-09-25 — wave 3's wave-done at `fcd84cd0` (PR #187); re-measured; numbers assigned before review.**
   - **The claim holds.** PR #187 is open against main, and the merge base is current main (`dcac4691`, merged twice,
     never rebased). 70 files, +9616 lines, 38 commits under the noreply identity.
