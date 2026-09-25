@@ -9524,6 +9524,42 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     expect(fs.existsSync(storeRoot())).toBe(false);
   });
 
+  it("skips a marked child's own temp root — the infix (A4)", () => {
+    // A4: `$HOME/.cc-tmp/<id>` is the TMPDIR wave 1 mints for a marked child
+    // (`_child_tmpdir`, ccd/ccd), and its `/.` becomes TWO dashes once
+    // slugified — `--cc-tmp-` — an INFIX, not a prefix, so it needs its own
+    // arm in the `case`. Rooted under `/var/tmp`: under `/tmp` the existing
+    // `-tmp*` prefix arm already matches, and this row would stay green with
+    // the infix arm deleted (A4's own warning).
+    const base = mkProjBase();
+    const childRoot = path.join(base, '.cc-tmp', '7', 'proj');
+    fs.mkdirSync(childRoot, { recursive: true });
+    const childSlug = slugOf(childRoot);
+    expect(isScratchSlug(childSlug),
+      `a marked child's temp root ${childRoot} is not a shape the shipped guard skips`).toBe(true);
+    const d = path.join(home, '.claude-x', 'projects', childSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: childRoot, transcript_path: path.join(d, 'x.jsonl') }));
+    expect(fs.existsSync(path.join(d, 'memory'))).toBe(false);
+    expect(fs.existsSync(storeRoot())).toBe(false);
+  });
+
+  it('does NOT skip a `.cc-tmpx` lookalike root — the infix needs the second dash', () => {
+    // THE CONTROL for the row above: `.cc-tmpx` slugifies to `--cc-tmpx-…`,
+    // one character short of the shipped `--cc-tmp-` arm (the dash the glob
+    // requires right after `tmp` is an `x` here instead), so a careless
+    // widening that dropped the trailing `-` would swallow this fixture too.
+    const base = mkProjBase();
+    const lookalike = path.join(base, '.cc-tmpx', '9', 'proj');
+    fs.mkdirSync(lookalike, { recursive: true });
+    const lookalikeSlug = slugOf(lookalike);
+    expect(isScratchSlug(lookalikeSlug), lookalikeSlug).toBe(false);
+    const d = path.join(home, '.claude-x', 'projects', lookalikeSlug);
+    fs.mkdirSync(d, { recursive: true });
+    run(payload({ cwd: lookalike, transcript_path: path.join(d, 'y.jsonl') }));
+    expect(fs.lstatSync(path.join(d, 'memory')).isSymbolicLink()).toBe(true);
+  });
+
   // ── R32: the worktree fixtures ──────────────────────────────────────────
   it('converges the MAIN CHECKOUT pair, not the transcript pair, from inside a git worktree (R32)', () => {
     const wt = mkWorktree(root);

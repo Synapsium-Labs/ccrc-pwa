@@ -3111,7 +3111,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
   // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
   // records why it does not. If that is ever revisited, this list shrinks to
   // two — a deliberate edit, not a drift.
-  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*';
 
   /** The guard line at one site, found by the one token no other line in
    *  these tools carries. Exactly one per file, or the row that reads it is
@@ -3190,9 +3190,15 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
     const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
     expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
     const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
-    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    const arms = PRED.split('|'), infix = arms.pop() ?? '';   // A4: the infix has its own list, below
     expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
-    expect(mirror).toEqual(shipped);
+    expect(mirror).toEqual(arms.map((p) => p.replace(/\*$/, '')).sort());
+    // A4: stripping only a TRAILING `*` leaves the infix's leading one on, so
+    // `arms.map` above cannot fold it in — `SCRATCH_INFIXES` is its own list.
+    const im = /export const SCRATCH_INFIXES = \[([^\]]*)\]/.exec(src);
+    expect(im, 'scratchSlugs.ts declares no SCRATCH_INFIXES').toBeTruthy();
+    const infixMirror = [...(im?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]);
+    expect(infixMirror).toEqual([infix.replace(/^\*/, '').replace(/\*$/, '')]);
   });
 
   it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
