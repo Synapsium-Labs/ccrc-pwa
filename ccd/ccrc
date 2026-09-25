@@ -14617,7 +14617,7 @@ _upd_backup() {
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
-  echo "$say: $(_upd_redact "$UPD_BACKUP_DIR") (coord.db snapshot, dists, ccd, units — taken before anything was installed)"
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, dists, ccd, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
 }
 
 # ── _upd_backup_set — the ONE list of what a backup copies ────────────────

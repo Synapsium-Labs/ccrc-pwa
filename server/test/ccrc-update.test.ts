@@ -6679,7 +6679,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   // TimeoutStartSec. Bounded by `runBounded` (GNU `timeout -k`, the process
   // GROUP) because a plain spawnSync timeout cannot reach a hang inside
   // jq, a grandchild of the watchdog process.
-  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+  it.skipIf(process.platform !== 'linux' || UPD_DEADLINE_BIN === null)(
     'a FIFO at ~/.ccrc/update.json is refused UNOPENED, promptly, never blocking the tick (fix round 1 item 9 / review 155 C15)', () => {
       const home = watchBox('ccrc-watchdog-fifo-');
       mkdirSync(join(home, '.ccrc'), { recursive: true });
@@ -6961,7 +6961,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   // update.json for a FIFO right before it exits refused, so the watchdog's
   // re-lock-and-re-read meets it. Bounded (`runBounded`, GNU `timeout -k`):
   // a regression here is a hang, not an assertion failure.
-  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+  it.skipIf(process.platform !== 'linux' || UPD_DEADLINE_BIN === null)(
     'M1: a FIFO at update.json during the refused-rollback re-lock (the THIRD read) is refused too, never blocking the tick (review fix round 1 M1)', () => {
       const home = watchBox('ccrc-watchdog-m1-third-read-fifo-');
       report(home, { phase: 'installing', ageS: 90 });
@@ -7310,7 +7310,7 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
   // read — except this shim swaps in a FIFO instead of a moved report.
   // Bounded (`runBounded`): a regression here is a hang, not merely a wrong
   // verdict.
-  itLinux.skipIf(UPD_DEADLINE_BIN === null)(
+  it.skipIf(process.platform !== 'linux' || UPD_DEADLINE_BIN === null)(
     'M2: a FIFO swapped in between the first read and D-3277\'s own second read is refused too, never blocking the tick (review fix round 1 M2)', () => {
       const home = watchBox('ccrc-watchdog-m2-second-read-fifo-');
       report(home, { phase: 'installing', ageS: 90 });
