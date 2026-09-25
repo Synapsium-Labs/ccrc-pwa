@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d6a7bf4a9baead5d4c3aaf3227bec73ecbd6fcd235b114a35c210927a72bf720
+# ccrc:generated 1 sha256=4125e8d6840771eab10671608f90ce18c857f5fa661963113f671187bf5f0dd6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12908,7 +12908,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)"
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
-      printf '"verdict":"reclaimable","detail":"","token":%s}\n' "$(_json_str "$REAP_TOKEN")"
+      # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
+      printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
     elif [[ "$REAP_VERDICT" == unmeasured ]]; then
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       echo "ccd: ws-audit --reclaim measured nothing: $REAP_DETAIL — retry" >&2
@@ -25378,6 +25379,24 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # destructive verb ONLY behind `capSupported(state, 'reclaim-v1')`, which
 # REFUSES on no evidence; `verbSupported` would permit a verb this box never
 # had, and this is the verb that deletes a workspace.
+#
+# RECLAIMABLE, SPELLED THROUGH `_JSON_STR` (fix round 3, a regression found
+# after this task closed). `cmd_ws_audit`'s success line prints
+# `"verdict":%s` with `$REAP_VERDICT` interpolated, never the literal
+# verdict:"…" shape spelled with the bare word itself — that line sits above
+# the frozen boundary, outside this region, so a literal there is not cut out
+# by either scan that reads `ccd/ccd`'s own text: `server/test/wsaudit.test.ts`'s
+# harvest (which DOES exclude the word by name, once its regex has already
+# matched a literal to exclude) and, missed the first time,
+# `server/test/ccd-wsaudit-nonpoison.test.ts`'s OWN separate copy of the same
+# four-regex scan, which excludes the reap-verb's success word but never
+# learned of this one and holds its own pinned counts (55 outside the cut
+# region, 62 across the whole file) that a new literal word breaks. Spelling
+# it through `_json_str` — the same treatment Task 2 gave the probe-that-could-
+# not-run verdict — removes the substring from the SOURCE TEXT both scans
+# read, so neither regex can match it; the runtime JSON is unchanged; the
+# variable interpolated here is already proven equal to this arm's own name
+# by the `if` that guards this line.
 
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 

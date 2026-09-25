@@ -8200,7 +8200,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // final net shape alone.) Neither corpus document changed
       // (`spec`/`plan` byte-identical to this task's base, measured). Still
       // stale in fact; Task 11 still owns the re-anchor. S6-R11, no D-number.
-      'ccd/ccd': 149,
+      // FIX ROUND 3 (a `ccd-wsaudit-nonpoison.test.ts` regression found after
+      // this task closed — its own pinned counts, outside this census, are
+      // argued in that file) moves it, across the whole task, base -> HEAD,
+      // 147 -> 148, +1: the same two ENTER as above, and now ONE LEAVES,
+      // `spec:2230 ccd/ccd:13618` — a coincidental pass, not a repair (neither
+      // corpus document changed). The cause is this round's one added line: a
+      // one-line pointer comment inside `cmd_ws_audit`'s success arm (`#
+      // never the literal … — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in
+      // the RECLAIM region`), which spells the `"verdict":"reclaimable"` line
+      // through `_json_str` instead of as a literal, so
+      // `ccd-wsaudit-nonpoison.test.ts`'s own separate harvest — which has no
+      // `reclaimable` exclusion of its own — stops counting it as a new word.
+      // Task 11 still owns the re-anchor. S6-R11, no D-number.
+      'ccd/ccd': 148,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8460,7 +8473,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // stays true until main moves again. Derive it last, then merge.
     // 195 -> 197 at child-reclamation wave 3 (Task 5, fix round 1): the same
     // +2 the `'ccd/ccd'` entry above carries, and nothing else moved.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
+    // 197 -> 196 at fix round 3: the same +1 the `'ccd/ccd'` entry above
+    // carries (one coincidental pass), and nothing else moved.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
