@@ -634,6 +634,65 @@ describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5
     expect(JSON.parse(r.stdout).failed).toBe('unit-still-active');
   }, 60_000);
 
+  // THE EXCEPTION IS NARROW: an rc-0 kill excuses `no server running` and
+  // nothing else. Another session keeps the server up, so this is not
+  // exit-empty; tmux becomes unaskable right after the kill succeeded. Only
+  // tmux's own `no server running` words pass — never a refused connection,
+  // and never a missing socket, which PROBE_SUBSTRATE would also call absent.
+  it.each([['permission denied', TMUX_FAULTS['permission denied']], ['no socket', TMUX_FAULTS['no socket']]])(
+    'the tail: an rc-0 kill, then %s → `unit-still-active`, and nothing further is deleted', (_what, fault) => {
+      const c = makeChild(h);
+      plantTmux(h, { sessions: [`cc-${CHILD_ID}`, 'cc-demo-other'], faultAfterKill: fault });
+      const r = childReclaimVerb(h, evalOf(h).token);
+      tailStopped(c);
+      expect(tmuxSessions(h), 'the kill itself exited 0 — it took the child’s pane').toEqual(['cc-demo-other']);
+      expect(r.code, r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('unit-still-active');
+      expect(o.detail).toContain(fault);
+      expect(o.detail).toContain('(exit 0)');
+    }, 60_000);
+
+  // The re-measure is step (1) of the tail, so it guards EVERY arm: the
+  // vanished-worktree arm (which enters at the branch) and a resume at any
+  // phase past the first, not only the fresh `children` entry.
+  const stoppedAt = (c: Child, phase: string, worktree: boolean): void => {
+    expect(fs.existsSync(c.wt), worktree ? 'the worktree survives' : 'the worktree was already gone').toBe(worktree);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the registry row survives').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays at its phase').toBe(`reclaim:${phase}`);
+  };
+  const PANE = {
+    'tmux could not be asked': { faultAtTail: TMUX_FAULTS['permission denied'] },
+    'the pane still live': { sessions: [`cc-${CHILD_ID}`], killNoop: true },
+  } as const;
+
+  it.each(Object.entries(PANE))('the VANISHED arm: %s after the kill stops it before the branch goes', (_what, tmux) => {
+    const c = makeChild(h);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const tok = evalOf(h).token;
+    plantTmux(h, tmux);
+    const r = childReclaimVerb(h, tok);
+    stoppedAt(c, 'branch', false);
+    expect(tombOf()['worktree']).toBe('absent');
+    expect(r.code, r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).failed).toBe('unit-still-active');
+  }, 60_000);
+
+  for (const phase of ['worktree', 'branch'] as const) {
+    it.each(Object.entries(PANE))(`a RESUME at \`${phase}\`: %s after the kill stops it, and nothing further is deleted`, (_what, tmux) => {
+      const c = makeChild(h);
+      interrupted(c, phase);
+      // A resume runs no rung 5, so the fault can stand from the start.
+      plantTmux(h, 'faultAtTail' in tmux ? { fault: tmux.faultAtTail } : tmux);
+      const r = childReclaimVerb(h, resumeToken(phase));
+      stoppedAt(c, phase, true);
+      expect(r.code, r.stderr).toBe(1);
+      expect(JSON.parse(r.stdout).failed).toBe('unit-still-active');
+      expect(h.calls(), 'the resumed tail killed first').toContain(KILL);
+    }, 60_000);
+  }
+
   it('the CONTROL: `can’t find session` after the kill reclaims — and the pane WAS re-measured', () => {
     const c = makeChild(h);
     const r = childReclaimVerb(h, evalOf(h).token);

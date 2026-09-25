@@ -38,7 +38,9 @@ export const CHILD_BRANCH = 'ws/quiet-basin';
  *  - `kill-session` removes the session it resolves and exits 0; removing
  *    the LAST one leaves `no server running on …` as the fault — tmux's
  *    exit-empty, the server exiting because it has nothing left to serve.
- *    `$HOME/tmux-kill-noop` makes it exit 0 and remove nothing.
+ *    `$HOME/tmux-kill-noop` makes it exit 0 and remove nothing, and
+ *    `$HOME/tmux-fault-after-kill` becomes `tmux-fault` once a kill has
+ *    exited 0 — tmux unaskable right AFTER a kill that succeeded.
  *  Every other verb exits 1. */
 const TMUX_MODEL = [
   'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; local verb="$1" t="" s hit=""; shift;',
@@ -57,6 +59,7 @@ const TMUX_MODEL = [
   '   { command grep -vxF -- "$hit" "$HOME/tmux-sessions" || :; } > "$HOME/tmux-sessions.new";',
   '   mv "$HOME/tmux-sessions.new" "$HOME/tmux-sessions";',
   '   [[ -s "$HOME/tmux-sessions" ]] || echo "no server running on /tmp/tmux-fixture/default" > "$HOME/tmux-fault";',
+  '   if [[ -e "$HOME/tmux-fault-after-kill" ]]; then mv "$HOME/tmux-fault-after-kill" "$HOME/tmux-fault"; fi;',
   '   return 0 ;;',
   '  *) return 1 ;;',
   ' esac; };',
@@ -92,12 +95,14 @@ export const TMUX_FAULTS = {
 /** Plants `TMUX_MODEL`'s state in the fixture HOME (see there). */
 export function plantTmux(h: PrHarness, o: {
   sessions?: string[]; clients?: Record<string, string>; fault?: string; faultAtTail?: string; killNoop?: boolean;
+  faultAfterKill?: string;
 }): void {
   if (o.sessions) fs.writeFileSync(path.join(h.home, 'tmux-sessions'), o.sessions.map((s) => `${s}\n`).join(''));
   for (const [s, c] of Object.entries(o.clients ?? {})) fs.writeFileSync(path.join(h.home, `tmux-clients-${s}`), `${c}\n`);
   if (o.fault !== undefined) fs.writeFileSync(path.join(h.home, 'tmux-fault'), `${o.fault}\n`);
   if (o.faultAtTail !== undefined) fs.writeFileSync(path.join(h.home, 'tmux-fault-at-tail'), `${o.faultAtTail}\n`);
   if (o.killNoop) fs.writeFileSync(path.join(h.home, 'tmux-kill-noop'), '');
+  if (o.faultAfterKill !== undefined) fs.writeFileSync(path.join(h.home, 'tmux-fault-after-kill'), `${o.faultAfterKill}\n`);
 }
 
 /** What `TMUX_MODEL` holds now: the sessions still up, one per entry. */
