@@ -16,6 +16,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
+import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -794,8 +795,18 @@ describe('the rejection table is total, in both directions', () => {
         // route) — nothing is recorded, nothing replays — so their words are
         // neither mail rejections nor run refusals. Admitted through their own
         // exported guard, for the reason every union above gives.
-        || isUpdateStoreRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode or UpdateStoreRefuseCode`).toBe(true);
+        || isUpdateStoreRefuseCode(tok)
+        // CHILD RECLAMATION, WAVE 3 — the ELEVENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/childReclaim.ts` spells ccd's fourteen `ws-reclaim` words, the
+        // executor's defer reasons and the close decision's reasons as
+        // literals, and `coord/close.ts` spells `not-queued`. None is a mail
+        // rejection or a run refusal: the box's words are ccd's own
+        // vocabulary, and the reasons ride `CloseOutcome` and the feed, never
+        // a `refused`/`reject.code`. Admitted through the exported guard,
+        // never NOT_CODES, for the reason every union above gives.
+        || isChildReclaimKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode or child-reclaim word`).toBe(true);
     }
   });
 });
