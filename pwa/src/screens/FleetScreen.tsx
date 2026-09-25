@@ -13,6 +13,8 @@ import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { BuildLine } from '../fleet/BuildLine';
 import { useFleetHealth } from '../fleet/useFleetHealth';
+import { UpdateBanner } from '../fleet/UpdateBanner';
+import { useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
@@ -441,7 +443,11 @@ export function FleetScreen({
   const [folded, toggleFold] = useFolded();
   // One poll of /api/fleet/health feeds both the banner and BuildLine below
   // (spec §6) — the screen owns it so the two never issue their own requests.
+  // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
+  // view handed down to every reader of the inventory on this screen, none of
+  // which polls on its own.
   const fleetHealth = useFleetHealth();
+  const updates = useUpdatesView();
   // One sheet for the whole screen, fed by whichever line was tapped. Only
   // the id is the source of truth (Finding 5 of the whole-branch review):
   // `actionsSession` is refreshed from the live `sessions` list below rather
@@ -565,12 +571,35 @@ export function FleetScreen({
             <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
             Account
           </button>
+          {/* THE DOOR TO /settings (centralised update management §13) — the
+              `.accounts-door` pattern directly above, for the argument its
+              comment makes: a glyph AND a short text label, because an
+              icon-only gear would be exactly as undiscoverable as the
+              AccountsStrip tap target that D-161 found was the only door to
+              /accounts. The accessible name says what is behind it — updates
+              and notifications — because "Settings" alone names no content;
+              it begins with the visible word, so a voice user saying what
+              they see still reaches it. Rendered unconditionally: a first-run
+              fleet with no sessions needs the screen as much as any. A fifth
+              item does not fit this group's measured width budget on a
+              phone, so the group now wraps rather than overflowing
+              (fleet.css, D-3303). */}
+          <button
+            type="button"
+            className="settings-door"
+            aria-label="Settings — updates and notifications"
+            onClick={() => navigate('/settings')}
+          >
+            <span className="settings-door-glyph" aria-hidden="true">⚙</span>
+            Settings
+          </button>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>
       </header>
 
-      <FleetHostBanner health={fleetHealth} />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      <UpdateBanner updates={updates.view} health={fleetHealth} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can
@@ -929,7 +958,7 @@ export function FleetScreen({
         onReaped={() => setReapId(null)}
       />
 
-      <BuildLine health={fleetHealth} />
+      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} />
     </main>
   );
 }

@@ -736,12 +736,76 @@ export const INHERITED_GROUNDS = {
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
   'fleet.css .build-line': {
-    under: ['var(--bg-page)'],
-    why: "release/rollout Task 7: the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own — so the pixels behind it are the app shell's --bg-page. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone.",
+    under: ['var(--bg-surface)'],
+    why: "release/rollout Task 7, corrected fix round 1 (F15): the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own. But FleetScreen is always mounted inside app.tsx's <aside className=\"shell-nav\">, and at the desktop breakpoint (min-width: 900px) .shell-nav DOES paint one, --bg-surface (styles/shell.css:131-155) — an ancestor the old claim ('no ancestor … paints a background') denied existed. Registered against that ground because it is the one an ancestor actually paints; at the mobile breakpoint .shell-nav sets no background of its own and falls through to the app shell's --bg-page instead, separately re-measured safe (6.23:1 dark / 5.25:1 light for --ink-tertiary on it — corrected fix round 2, review of d5aefc4a item 8: this entry previously misquoted --status-attention-text's 10.89/5.45 pair here instead of --ink-tertiary's own, both clearing the 4.5 floor) rather than registered, since the auditor takes one ground per rule.",
   },
   'fleet.css .build-line-side--warn': {
+    under: ['var(--bg-surface)'],
+    why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same real ground as the base rule above — corrected the same way, fix round 1 (F15). Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
+  },
+  'fleet.css .build-line-next': {
+    under: ['var(--bg-surface)'],
+    why: "centralised-update W3 Task 12, corrected fix round 1 (F15): BuildLine's ' → vX' affix, a span inside a .build-line-side span inside .build-line, the last child of FleetScreen's own <main class=\"fleet\">, itself always inside app.tsx's <aside className=\"shell-nav\">. The old claim — 'no ancestor between it and the app shell paints a background' — was false on desktop: .shell-nav paints --bg-surface there (styles/shell.css:131-155), the same corrected ground as the two build-line rules above. Re-measured 10.09:1 dark / 5.92:1 light for --status-attention-text on it, both clearing the 4.5 floor. Mobile's .shell-nav sets no background and falls through to --bg-page instead (also safe, 10.89:1 dark / 5.45:1 light), not registered for the same one-ground-per-rule reason the base rule's entry gives.",
+  },
+  // ── centralised update management W3, Task 6: the /settings shell and its door ──
+  'fleet.css .settings-back': {
     under: ['var(--bg-page)'],
-    why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same .fleet ground as the base rule above. Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
+    why: "SettingsScreen's back chevron, in .settings-head inside .settings-screen inside .shell-detail — none of the three paints a background, so body's --bg-page (styles/base.css:111) is behind it, the .mail-chip reasoning. Its selector names no painted ancestor, so no route could ground it; .accounts-back, its twin, is grandfathered debt, and the frozen census admits no new identity (D-2689)",
+  },
+  'fleet.css .settings-back:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same chevron, same ground. Registered separately for the reason the .mail-chip[data-on] entry states: it overrides `color` directly, and grounding only the base rule would leave the state a tap confirms unmeasured',
+  },
+  'fleet.css .settings-title': {
+    under: ['var(--bg-page)'],
+    why: "the screen's own <h1> beside the chevron, on the same unpainted .settings-head, so the same --bg-page ground and the same reason as .settings-back",
+  },
+  'fleet.css .settings-door': {
+    under: ['var(--bg-page)'],
+    why: "the fleet header's door to /settings, in .fleet-head-right beside .accounts-door and .pool-epoch-lag. .fleet, .fleet-head and .fleet-head-right paint nothing, so on a phone the ground is body's --bg-page — the .pool-epoch-lag entry's ground and reasoning. On the desktop sidebar it is .shell-nav's --bg-surface instead, which one layer stack cannot also say; contrast.test.ts measures this rule's own ink on that second ground in both themes, so this registration is not the whole claim",
+  },
+  'fleet.css .settings-door:active': {
+    under: ['var(--bg-page)'],
+    why: 'the pressed state of the same door, with the same two grounds and the same second measurement in contrast.test.ts; registered separately because it overrides `color` directly (the .mail-chip[data-on] reason)',
+  },
+  // ── centralised update management W3, Task 7: the Updates section ───────
+  'fleet.css .settings-note': {
+    under: ['var(--bg-page)'],
+    why: "SettingsScreen's explanatory lines (the auto-install gate note, the Check now answer, the not-configured and stale-read sentences). .settings-section and .settings-screen paint no background, and neither does .shell-detail, so body's --bg-page (styles/base.css:111) is behind them — the .pool-epoch-lag reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-catalogue': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's calm rendering ('checked 4m ago') in the same unpainted Updates section on SettingsScreen. Same ground and same reason as .settings-note",
+  },
+  'fleet.css .settings-catalogue--amber': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's amber rendering (couldn't reach GitHub …), retinted to --status-attention-text on the same unpainted section. Registered separately because it overrides `color` directly — the .build-line-side--warn reason",
+  },
+  'fleet.css .settings-catalogue--muted': {
+    under: ['var(--bg-page)'],
+    why: "the catalogue line's 'never checked' rendering in --ink-tertiary, on the same unpainted section as .settings-catalogue. Registered separately because it overrides `color` directly",
+  },
+  // ── centralised update management W3, Task 8: the release list ──────────
+  'fleet.css .settings-release-date': {
+    under: ['var(--bg-page)'],
+    why: "the release row's publish date on SettingsScreen. .settings-release draws a hairline and no fill, .settings-section/.settings-screen paint no background, and neither does .shell-detail, so body's --bg-page (styles/base.css:111) is behind it — the .pool-epoch-lag reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-release-refused': {
+    under: ['var(--bg-page)'],
+    why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
+  },
+  'fleet.css .settings-move-note': {
+    under: ['var(--bg-page)'],
+    why: "the 'lands with the next release (W4)' note beside a disabled Install/Roll back button, in the same unfilled release row (and in any other unfilled row of this screen that reuses it). Same ground as .settings-release-date; the NOTE is live text and is measured, unlike the disabled button beside it (primitives.css .btn-ghost:disabled, WCAG 1.4.3)",
+  },
+  // ── centralised update management W3, Task 9: the node inventory ───────
+  'fleet.css .settings-node-current--amber': {
+    under: ['var(--bg-page)'],
+    why: "the amber current-version cell of a SettingsScreen inventory row (unversioned, unverified, incomplete, stamp not read, never measured). .settings-node draws a hairline and no fill, .settings-section/.settings-screen and .shell-detail paint no background, so body's --bg-page (styles/base.css:111) is behind it — the .settings-release-date reasoning. Its selector names no painted ancestor",
+  },
+  'fleet.css .settings-node-detail': {
+    under: ['var(--bg-page)'],
+    why: "the muted role/os, desired-resolution, request, reachability and state lines of the same unfilled inventory row, in --ink-tertiary. Same ground and same reason as .settings-node-current--amber; registered separately because it sets its own colour",
   },
 };
 

@@ -91,6 +91,20 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
   under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
   real `timeout`-wrapped child process, so a badly loaded box can still starve it.
+- **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
+  `ci.yml`, whose trigger picks a mode). **A pull request** runs the server tests its change can affect, chosen
+  from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
+  summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
+  `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
+  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
+  map, runs the full suite instead — and **while
+  `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
+  runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
+  head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
+  gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
+  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
+  selection, not the whole suite; the daily run and the stable gate are where a miss is caught.
 - **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
   fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
@@ -100,9 +114,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `deploy/release-main.sh prepare` → `build-release.sh` → `actions/attest-build-provenance` → `release-main.sh publish`;
   patch-per-merge, a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`; both attest the tarball keylessly and
   publish the bundle beside it). A prerelease is the `dev` channel; **`stable` is a promotion, never a rebuild**: a
-  fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`,
-  which flips the existing release's flag and makes it latest (design `2026-09-20-centralised-update-management-design.md`
-  §4). Demotion is `gh release edit <tag> --prerelease` by hand and moves no box. Moving the fleet
+  fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`
+  (only once the commit has a green `full-suite`, above), which flips the existing release's flag and makes it
+  latest (design `2026-09-20-centralised-update-management-design.md` §4). Demotion is `gh release edit <tag>
+  --prerelease` by hand and moves no box. Moving the fleet
   is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
