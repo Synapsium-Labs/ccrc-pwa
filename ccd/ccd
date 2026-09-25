@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bceaeedab7845d3c5c5b05ba9a8f6ece9777d4bba44c1eaed7ed1a4e87749ee5
+# ccrc:generated 1 sha256=cdb94018451b4db91ed5623fb3055a2221ceafb6992042f0217b2c7ffdd0686d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23703,7 +23703,7 @@ _ws_reclaim_ignored_fail() {   # dir -> after `_ws_collect_ignored` failed over 
   # right for reap, which refuses, and wrong here, where `tree-unreadable` is
   # TERMINAL. So the fold is undone from what can be measured: its REASON
   # names the deadline (the scan ran out of time); a scratch file this uid
-  # cannot make, or no `find`, is a scan that could not start; and a failure
+  # cannot make is a read that could not start; and a failure
   # with no reason is the collector's own `git status`, read again once — a
   # read that fails again below 125, or warns, reported the tree; one killed or
   # unable to start (>= 125), or one that now succeeds, measured nothing about
@@ -23712,7 +23712,6 @@ _ws_reclaim_ignored_fail() {   # dir -> after `_ws_collect_ignored` failed over 
   local dir="$1" why="${REAP_IGNREASON%%: remove or move*}" t err rc
   _WS_RECLAIM_CLASSIFY_WHY="could not read the ignored set at $dir${why:+ — $why}"
   [[ "$REAP_IGNREASON" != *'did not finish within'* ]] || return 2
-  command -v find >/dev/null 2>&1 || return 2
   t=$(_plat_mktemp) || return 2
   [[ -z "$REAP_IGNREASON" ]] || { rm -f "$t"; return 1; }
   git -C "$dir" -c core.quotePath=false status --porcelain --ignored=matching -z >/dev/null 2>"$t"; rc=$?
