@@ -33,6 +33,14 @@ import { itLinux } from './platformFixtures.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SYNC = join(REPO, 'ccd', 'ccd-update-sync');
 const CCRC = join(REPO, 'ccd', 'ccrc');
+// The real python3 a stub shadows, found by walking PATH in node — no bash
+// call site, so ccd-workspaces' gh-containment scan has nothing to route.
+function realPython3Path(): string {
+  for (const d of (process.env.PATH ?? '').split(':')) {
+    if (d !== '' && existsSync(join(d, 'python3'))) return join(d, 'python3');
+  }
+  return '';
+}
 /** Lowercase, as `_inst_node_id` mints and W2's `NODE_ID_RE` keys rows. */
 const NODE_ID = '0123abcd-0000-4000-8000-000000000001';
 const TOKEN = 'tok-update-sync-fixture';
@@ -377,7 +385,7 @@ describe('ccd-update-sync: no credential or absolute home path in a printed line
   it('a rename failure never prints the absolute HOME either (batch C re-review item 0)', () => {
     const home = box('upd-sync-redact-rename-fail-');
     answer(home, intentDoc());
-    const realPython3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+    const realPython3 = realPython3Path();
     expect(realPython3, 'no real python3 on PATH to shadow').not.toBe('');
     writeFileSync(join(home, 'bin', 'python3'), [
       '#!/usr/bin/env bash',
@@ -525,7 +533,7 @@ describe('ccd-update-sync: the EXIT trap removes the staged file too (C19, fix r
     // have cleaned up.
     const home = box('upd-sync-trap-kill-');
     answer(home, intentDoc());
-    const realPython3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+    const realPython3 = realPython3Path();
     expect(realPython3, 'no real python3 on PATH to shadow').not.toBe('');
     writeFileSync(join(home, 'bin', 'python3'), [
       '#!/usr/bin/env bash',
