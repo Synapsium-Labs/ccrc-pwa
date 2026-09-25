@@ -5641,10 +5641,12 @@ export interface RunHealth {
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
    *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
    *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
-   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands), a
    *  `recipient rebound` park (a worker was re-bound to a new session,
-   *  cross-repo §4) are all the machinery working as designed, and reporting
-   *  any of them would announce a change that has already been handled. */
+   *  cross-repo §4) and a `child workspace reclaimed` park (the server
+   *  reclaimed a finished child, spec 2026-09-22 §6) are all the machinery
+   *  working as designed, and reporting any of them would announce a change
+   *  that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -6348,10 +6350,11 @@ export interface MailSummary {
    * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
    * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
    * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
-   * Three direct SQL writers add the deliberate-cancel sentences `'run
-   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
-   * examples of the column's contents, not a closed census or vocabulary: it
-   * is a maintainer's grep target and has never been validated on the way in.
+   * Four direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, `'recipient rebound'` and `'child
+   * workspace reclaimed'`. Those are examples of the column's contents, not
+   * a closed census or vocabulary: it is a maintainer's grep target and has
+   * never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a

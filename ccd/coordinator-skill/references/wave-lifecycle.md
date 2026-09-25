@@ -790,9 +790,11 @@ whole time, which is the only prevention this ordering rule buys.
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold
 (`ws-release`) **only when no other open run names this session**. The response
-carries `released`. `released: true` means the claim is gone — this workspace is
-an ordinary unheld, unclaimed row again, and nothing archives it: it stays live
-and supervised until a human archives it. `released: false` means the
+carries `released`. `released: true` means the claim is gone. A workspace that
+is not a child — your own, or any workspace dispatch did not mint — is an
+ordinary unheld, unclaimed row again; nothing archives it, and it stays live
+and supervised until a human cleans it up. A child is reclaimed instead (below).
+`released: false` means the
 claim was **handed over**, not dropped: another run still owns this workspace,
 so the hold was rewritten with that run's own reason and nothing was archived.
 That is not an error — it is the ordinary consequence of opening wave N+1
@@ -804,11 +806,41 @@ picks which notice to push: a workspace whose hold is absent but whose run is
 still open is announced as **still claimed**, naming that run. Releasing a hold
 by hand only changes which of the two notices the next sweep sends.
 
-Neither notice archives anything, and nothing else does either. A merged
-workspace stays where it is — live, supervised, its PR merged — until a human
-archives it, and when a human does, its manifest carries the whole PR lineage.
+Neither notice archives anything, and nothing else touches a workspace that is
+not a child. Such a merged workspace stays where it is — live, supervised, its
+PR merged — until a human archives it, and when a human does, its manifest
+carries the whole PR lineage. A child the close has finished with is the one
+exception, and the server's, not yours (below).
 You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
+
+**A child is reclaimed; your own workspace is not.** A CHILD is a workspace
+dispatch minted for one of your runs — the box marks it with the run that
+minted it, and the server holds the same run as having minted it; both must
+agree, or it is not a child. When a close FINISHES with a child — a `final`
+close, an abandon (`state:'failed'`), a close of a child whose branch has had
+a PR, or a close that leaves your program with no open run — the server
+RELEASES it rather than holding it for a next wave, and the close response
+carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
+on the child's own queue: it commits anything left uncommitted on the child's
+branch as a WIP commit, pins every commit and stash in the attic, writes a
+tombstone, and then removes the pane, the worktree, the branch, the clips
+directory and the child's temp directory. Its outcome lands in the feed —
+reclaimed, deferred with its reason, refused with its sentence — and never in
+a reply to you. A child that another open run still names, or that the
+operator is looking at, is deferred and picked up later; nothing you do
+speeds it or stops it. Otherwise the response carries
+`"childReclaim":"not-queued"` and `childReclaimWhy` says why: `not-a-child`,
+`marker-unreadable`, `siblings-open`, `siblings-unreadable`,
+`review-report-live` or `not-finished` — the last is the ordinary non-final
+close holding a child for wave N+1. **A review run's reviewer is a child
+too, but it is kept while the run it reviewed is open**: its clips directory
+holds the report you cite by path in every `fix-round` mail, so closing the
+review run releases the reviewer and answers `review-report-live`, and the
+reviewer is reclaimed only after the run it reviewed has closed. Nothing
+changes in how you read or cite the report (SKILL.md step 6). Your own
+workspace, and any workspace dispatch did not mint, is never reclaimed — it
+stays until a human cleans it up.
 
 ## What happened to a workspace that is gone
 
