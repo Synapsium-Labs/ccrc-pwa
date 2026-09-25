@@ -94,7 +94,7 @@ export const TMUX_FAULTS = {
 
 /** Plants `TMUX_MODEL`'s state in the fixture HOME (see there). */
 export function plantTmux(h: PrHarness, o: {
-  sessions?: string[]; clients?: Record<string, string>; fault?: string; faultAtTail?: string; killNoop?: boolean;
+  sessions?: readonly string[]; clients?: Record<string, string>; fault?: string; faultAtTail?: string; killNoop?: boolean;
   faultAfterKill?: string;
 }): void {
   if (o.sessions) fs.writeFileSync(path.join(h.home, 'tmux-sessions'), o.sessions.map((s) => `${s}\n`).join(''));
