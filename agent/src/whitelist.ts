@@ -310,7 +310,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
-  'win-size': '--session',
+  'win-size': '--session', 'ws-reclaim': '--expect',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -408,6 +408,16 @@ export const EXEC_WHITELIST = {
     ['ws-restore', '--session'],
     ['ws-audit', '--session'],
     ['ws-reap',  '--expect'],   // load-bearing: no reap without a confirmation token
+    // CHILD-WORKSPACE RECLAMATION (spec 2026-09-22 §5.5): the one destructive
+    // verb the SERVER sends with no human in the path. Granted on its
+    // confirmation token for ws-reap's own reason — a bare `['ws-reclaim']` is
+    // not a narrower grant, it permits an UNCONFIRMED reclaim of any id — and
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, so that narrowing is a TS2322
+    // and a boot refusal (g13). ccd re-proves the token inside the reap lock,
+    // and refuses `not-a-child` unless the box's `.child` marker equals the
+    // `--child-of` the server composed. `ws-audit --reclaim` needs NO grant of
+    // its own: it rides `['ws-audit','--session']`, and it destroys nothing.
+    ['ws-reclaim', '--expect'],
     ['ws-attic', '--session'],
     // The workspace-hold pair. The spec's "zero new agent whitelist grants"
     // bullet is about KEYS — no `gh`, no new command — and its own next clause

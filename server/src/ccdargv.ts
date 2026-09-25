@@ -107,6 +107,17 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
 
 /**
+ * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
+ * presence defer's ceiling, spent on the audit and the verb alike). A named
+ * helper and not an inline ternary ON PURPOSE: `ccdargv-dec-parity.test.ts`
+ * derives the dec-appending verbs from every `argv([…])` literal in the table
+ * below with a LAZY match to the first `])`, and an inline `: []` inside
+ * `wsReclaim`'s literal would end that match before `decFlags(` — hiding
+ * `ws-reclaim` from the one test that runs the real binary on its dec.
+ */
+const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
+
+/**
  * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
  * `route`, the one dec-carrying verb below that never touches a pane and
  * whose real parser (`cmd_route`, `ccd/ccd`) has no `--surface` case at all.
@@ -389,6 +400,23 @@ export const CCD_ARGV = {
                argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
+  /** `ws-audit --reclaim` (child reclamation, spec 2026-09-22 §5.5): the SAME
+   *  verb and the SAME granted prefix as `wsAudit` — `['ws-audit','--session']`
+   *  — with the mode flag AFTER the id, the order `cmd_ws_audit`'s fixed-arity
+   *  parse reads. No grant of its own: the audit destroys nothing. */
+  wsReclaimAudit: (id: string, deferExpired: boolean) =>
+    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired)]),
+  /** `ws-reclaim` — the ONE destructive argv this server composes with no human
+   *  in the path (spec §5.5). `childOf` is the run the SERVER holds as having
+   *  minted the workspace — the second authority, which ccd compares to the
+   *  box's `.child` marker, refusing `not-a-child` on any disagreement.
+   *  `token` is `ws-audit --reclaim`'s, re-proven by ccd inside the reap lock.
+   *  The confirmation token LEADS (`['ws-reclaim','--expect']` is the grant);
+   *  `--defer-expired` and the dec trail, and ccd strips both before it binds a
+   *  positional. */
+  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null) =>
+    argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
+          ...deferFlags(deferExpired), ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says

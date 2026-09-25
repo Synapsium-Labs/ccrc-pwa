@@ -76,6 +76,11 @@ export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-r
  *  of the positive control. `g12-win-size-without-session.ts` is the same
  *  mechanism from the other side. */
 export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win-size'], '--session'>>;
+/** Child reclamation (wave 3). The destructive verb the server composes with no
+ *  human in the path is enrolled on its confirmation token; losing the
+ *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`
+ *  is the same mechanism from the other side. */
+export type ReclaimNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reclaim'], '--expect'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

@@ -120,6 +120,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the window-size verb granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // CHILD RECLAMATION wave 3, g5's shape for the second destructive verb with a
+  // confirmation token: the enrolment, not the grant, is what refuses it.
+  'g13-ws-reclaim-without-expect.ts': {
+    what: 'the child-reclaim verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
