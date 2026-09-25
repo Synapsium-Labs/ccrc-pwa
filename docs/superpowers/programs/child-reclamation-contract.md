@@ -511,3 +511,23 @@ leave a wave undispatchable pending a ruling below.
   Measured on git 2.43.0: with the child's directory replaced by a link to a dirty sibling worktree, the planned
   WIP commit lands on the sibling's branch. With the child's worktree record gone, `git worktree remove --force`
   deletes the sibling outright.
+- **R32 — a held child is reclaimed when its programme retires; `not-finished` names its cause** (wave 3's
+  wave-done, open item 1, 2026-09-25). R30 has a non-final close HOLD a child whose spent evidence is undated,
+  unmeasurable or a merge-commit `.prnumber`, while the bind refuses that same child `workspace-spent`. No later
+  close decides a child that an earlier run minted, and the sweep as planned skips held children. Such a child
+  would therefore stay held for ever, with nothing destroyed. That breaks the operator's rule 1 ("that workspace
+  always gets cleaned up"), and R30's own "reclaimed at a final close or when the programme retires" had no
+  executor.
+  - **Wave 4's sweep owns it.** A `program:` hold that names a programme with no open run does not protect a marked
+    child. The sweep re-judges such a child by its own ladder, and treats it as finished because its programme is
+    done with it.
+  - A hold naming a programme that still has an open run protects as before.
+  - `not-finished` splits into three words at the seam: undated, unmeasurable, and merge-commit. The sweep and
+    wave 5's chip act on them differently, so one word would be an overloaded null.
+  - Wave 3 is unchanged; it holds, which is the safe side.
+- **R33 — a child's birth is the FIRST dispatch stamp** (wave 3's wave-done, open item 2, 2026-09-25).
+  `markDispatchStarted` rewrites `dispatchStartedAt` on every attempt. A workspace minted by one attempt and adopted
+  by a later one therefore gets a late birth. PRs opened in between would then read `inherited`, and a bind could
+  pass, which is a narrow fail-open. R30's "never cleared" held, but "never moved" did not. Wave 4 makes birth the
+  earliest stamp for the minting session, either by keeping the first stamp or by adding a separate minted-at field,
+  whichever its plan measures as safe for `dispatchStartedAt`'s other readers. The close only holds meanwhile.

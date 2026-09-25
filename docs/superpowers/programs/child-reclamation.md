@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | **dispatched** 2026-09-24 as run 148 (Opus·high, Sonnet subagents, workflows off, compact 40) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **wave-done** 2026-09-25 at `fcd84cd0` (run 148 on `plain-summit`); numbers being defined, then the full review with the xhigh safety lens |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -43,6 +43,29 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-25 — wave 3's wave-done at `fcd84cd0` (PR #187); re-measured; numbers assigned before review.**
+  - **The claim holds.** PR #187 is open against main, and the merge base is current main (`dcac4691`, merged twice,
+    never rebased). 70 files, +9616 lines, 38 commits under the noreply identity.
+  - **What the worker measured.** The frozen boundary measured three times at `ccd/ccd:19131`. S6-R11 was paid per
+    task, with the headline at 196. First full run on the merged tree: server 16187 passed, and the ONE red was the
+    box-local `tmp-sweep` case. At the tip, server 16210, agent 331 and pwa 3010. The scratch-slug case is green in
+    both TMPDIR arms (10b).
+  - **Mutations.** Every task has a mutation table. The survivors are named double defences, and the final fix wave
+    has 29 rows.
+  - **Numbers.** Fifteen plan departures, one per task (T1–T10b, the merge), plus `wip-moves-no-ref` and
+    `child-gitdir-proof-before-rung-6`. They are 3352 to 3366, to be defined in the wave-3 plan before the review
+    opens.
+  - **`wip-moves-no-ref` is ACCEPTED.** The WIP is built with `commit-tree` and pinned in the attic, and moves no
+    branch or HEAD. "Pin everything" holds, and moving no ref is safer. The spec §5.5 step 2 wording follows later.
+  - **Ledger-only.** T0's two commits are a brief-level departure. Tasks 2–4 ran Opus implementers where the brief
+    said Sonnet, because the plan's routing row asked for Opus on the destructive ladder, pin and verb. That is a
+    routing change under clause 13, judged right for the destructive tasks and recorded here; nothing is escalated
+    or demoted.
+  - **Open items ruled.** #1, the stranded held child, becomes contract R32 for wave 4's sweep. #2, a retry that
+    re-stamps the birth, becomes R33 for wave 4. #3 to #6 are carried (Carried constraints). None destroys
+    anything it should not, so none is a send-back.
+  - **macOS.** `_ws_reclaim_residue` now derives its root from `${TMPDIR:-/tmp}` and is pinned. The normalise
+    cases' `find -perm`/`-quit` await the PR's macOS leg.
 - **2026-09-24 — main's macOS leg is red on wave 1's `_child_tmpdir`; fixed by a separate one-wave programme.**
   - **The defect.** `chmod 0700 -- "$dir"` puts `--` after the mode operand. BSD `chmod` reads it as a file and
     exits 1, so on macOS every child answers rc 2 and spawns uncontained. Reported by bright-river; upheld by a
@@ -353,6 +376,23 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - "the decision lives in _spawn_start" should move out of the `describe.each(CHMODS)` block, or its plan
     entry should be narrowed;
   - the shim comment's "on macOS the real chmod is already BSD" should say it was measured on the CI runner.
+- **Wave 4 inherits from wave 3's wave-done** (2026-09-25):
+  - contract R32: the sweep reclaims a child held by a programme that has retired, and `not-finished` splits into
+    three words;
+  - contract R33: birth is the FIRST dispatch stamp;
+  - the close's two pr-state calls run inside the coordination mutex for up to ~40 s, against the client's 30 s
+    timeout. Bound them, or document the client-side retry;
+  - coordinator clause 3 says "reclaimed … when that child's run closes", which overstates for review children and
+    non-final closes. It is pinned verbatim, so the change needs a test edit;
+  - `wave-lifecycle.md`'s "commits … on the child's branch" is wrong under `wip-moves-no-ref`;
+  - the fail-safe portability residuals, recorded, not scheduled:
+    - no `origin/HEAD` refuses every child `branch-elsewhere`;
+    - git ≥2.48 relative worktree paths refuse `containment-unproven`;
+    - a SHA-256 repository gets `pin-failed`;
+    - two terminal `tree-unreadable` residuals;
+    - an unsearchable `$REG`, clips or temp root.
+  Spec text owed by the coordinator's docs PR: R30's placement is in the contract only, while comments cite §5.3;
+  §5.5 step 2 needs rewording for `wip-moves-no-ref`; §6 and Appendix A carry T1's counts.
 - **Wave 4 inherits, from wave 3's pre-flight:**
   - `is_ours` three-valued;
   - a `ws-reap` guard mirroring R31's symlinked-workdir refusal (`ws-reap` is human-gated but follows the link the
