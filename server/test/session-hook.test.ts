@@ -8182,20 +8182,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
-      // CHILD-RECLAMATION WAVE 3 (Task 5, fix round 1) moves it 147 -> 149,
-      // +2, measured against the pre-Task-5 tree (this task's own base) and
-      // diffing the two failure lists: TWO ENTER, `spec:1210 ccd/ccd:13602`
-      // and `spec:2123 ccd/ccd:13573-13575`; NONE LEAVES — `spec:91
-      // ccd/ccd:13602` still fails at both trees, on a different token of the
-      // same line. None is a repair: fix round 1 (review I1, I2) deleted five
-      // prose lines above the frozen boundary and extracted the flavour fork
-      // into one shared helper (`_ws_reclaim_fork`, called by both
-      // `cmd_ws_audit` and `_ws_reclaim_locked`), net shrinking the insertion
-      // above `:13602`/`:13573-13575` from the first commit's, and sliding
-      // other bytes under these same fixed line numbers; neither corpus
-      // document changed (`spec`/`plan` byte-identical to this task's base,
-      // measured). Still stale in fact; Task 11 still owns the re-anchor.
-      // S6-R11, no D-number.
+      // CHILD-RECLAMATION WAVE 3 (Task 5) moves it, across the whole task,
+      // base -> `35d6d510`, 147 -> 149, +2, measured against the pre-Task-5
+      // tree (this task's own base) and diffing the two failure lists: TWO
+      // ENTER, `spec:1210 ccd/ccd:13602` and `spec:2123 ccd/ccd:13573-13575`;
+      // NONE LEAVES — `spec:91 ccd/ccd:13602` still fails at both trees, on a
+      // different token of the same line. None is a repair: the ONE cause,
+      // relative to base, is this task's own net insertion above these lines
+      // — `cmd_ws_audit`'s header, argv parse, one shared-fork call and its
+      // verdict line, plus `cmd_caps`'s verb line and token echo, and the
+      // dispatcher arm — sliding other bytes under these same fixed line
+      // numbers. (Fix round 1, review I1/I2, extracted that shared call,
+      // `_ws_reclaim_fork` — called by both `cmd_ws_audit` and
+      // `_ws_reclaim_locked` — and shrank the net insertion from the first
+      // commit's own shape; that shrink explains the difference FROM
+      // `791d2256`, not the cause relative to base, which is this task's
+      // final net shape alone.) Neither corpus document changed
+      // (`spec`/`plan` byte-identical to this task's base, measured). Still
+      // stale in fact; Task 11 still owns the re-anchor. S6-R11, no D-number.
       'ccd/ccd': 149,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
@@ -9082,9 +9086,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // PASSES there. Task 5's net insertion above it — `cmd_ws_audit`'s
         // header, argv parse, one shared-fork call and its verdict line, plus
         // `cmd_caps`'s verb line and token echo, and the dispatcher arm — moves
-        // `_reg_purge "$id"` DOWN to `:13625`, so `:13573-13575` no longer holds
-        // it and now FAILS (enters). `:13650-13652` now PASSES on some other
-        // token of its row landing there instead. Neither corpus document
+        // `_reg_purge "$id"` DOWN — to `:13608` at THIS tree (`35d6d510`; it
+        // stood at `:13625` at the fix round's own first commit, `791d2256`,
+        // before `_ws_reclaim_fork`'s extraction shrank the insertion again) —
+        // so `:13573-13575` no longer holds it and now FAILS (enters).
+        // `:13650-13652` now PASSES on some other token of its row landing
+        // there instead. Neither corpus document
         // changed (byte-identical to this task's base, measured); still stale
         // in fact, and Task 11 still owns the re-anchor. S6-R11, no D-number.
         'ccd/ccd:203',
@@ -9225,16 +9232,22 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
-      // RE-MEASURED at child-reclamation wave 3 (Task 5, fix round 1), 35 ->
-      // 36: `spec:2123 ccd/ccd:13573-13575` enters and NOTHING leaves —
-      // `spec:2125 ccd/ccd:13567` stands at BOTH trees (a prior round of this
-      // paragraph read it as leaving, wrongly; it is re-added above). This set
-      // is NOT derived from the row-pass set above this round — that one's own
-      // mover is `:13650-13652`, which no other pass reaches, so it is absent
-      // here, exactly as this list's own rule states. One cause — fix round
-      // 1's shrink of the insertion above these lines (review I1, I2) — and
-      // nothing re-pointed: both corpus documents are byte-identical to this
-      // task's base, measured. S6-R11, no D-number.
+      // RE-MEASURED across the whole of child-reclamation wave 3 (Task 5),
+      // base -> `35d6d510`, 35 -> 36: `spec:2123 ccd/ccd:13573-13575` enters
+      // and NOTHING leaves — `spec:2125 ccd/ccd:13567` stands at BOTH the base
+      // and this tree. It is not unmoved in between: it correctly LEFT at the
+      // task's own first commit, `791d2256` (measured there, and right for
+      // that tree), then came back when fix round 1 (review I1, I2) shrank
+      // the net insertion above these lines from +50 (at `791d2256`) to +33
+      // (at `35d6d510`), sliding the row's token back within reach of this
+      // line — the fork extraction's own doing, not a fresh cause relative to
+      // base. This set is NOT derived from the row-pass set above this round
+      // — that one's own mover is `:13650-13652`, which no other pass reaches,
+      // so it is absent here, exactly as this list's own rule states. One
+      // cause, relative to base — this task's net insertion above these lines
+      // (the +33 it ends at) — and nothing re-pointed: both corpus documents
+      // are byte-identical to this task's base, measured. S6-R11, no
+      // D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
