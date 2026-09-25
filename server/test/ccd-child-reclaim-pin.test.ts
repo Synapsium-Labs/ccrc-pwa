@@ -700,6 +700,18 @@ describe('the WIP commit starts from a COPY of the user’s own index', () => {
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`)).toBe(c.tip);
   }, 60_000);
 
+  it('pins through a leftover HEAD.lock and a lock on the child’s own branch ref — the WIP commit moves no ref', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const headLock = `${h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'HEAD')}.lock`;
+    const refLock = `${h.git(c.main, 'rev-parse', '--path-format=absolute', '--git-path', `refs/heads/${CHILD_BRANCH}`)}.lock`;
+    const p = pinOf(c, { between: `: > "${headLock}" && : > "${refLock}"` });
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('edited');
+    expect(atticShas(c)).toContain(p.wip);
+    expect(fs.existsSync(headLock) && fs.existsSync(refLock), 'a lock was removed').toBe(true);
+  }, 60_000);
+
   it('FAILS — commits nothing — when the tree has NO index', () => {
     const c = makeChild(h);
     fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
