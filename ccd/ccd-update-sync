@@ -49,11 +49,14 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token bel
 #     A 13-digit
 #     `issued`/`lease` is GRAMMATICAL, and a seconds reader reads a
 #     millisecond lease as ~56,700 years away — `ok`, never `stale`. The
-#     reader's own lease-window check (review 155, fix round 1 item 15)
-#     refuses a ms-shaped `lease` beside a seconds `issued`, and a document
-#     where both are ms-shaped, as a side effect — either way the pair falls
-#     outside `[issued, issued + DAY]` — but the reader still carries no
-#     digit-count check of its own, so this file must: `issued` and `lease` carry at
+#     reader (`_upd_intent_state`, review 155 fix round 1 item 15) re-checks
+#     this file's own PASS 3 values — its own `SECONDS_DIGITS=11` width
+#     bound first, then the future-clock bound, the lease window and channel
+#     agreement — so a 13-digit value is refused there by WIDTH, before it
+#     ever reaches the window. This file keeps its own checks anyway: it must
+#     never install what the reader refuses (D-3279's principle), and on a
+#     fleet box this file is the only gate in front of the projection — so
+#     this file must: `issued` and `lease` carry at
 #     most 11 digits (unix seconds until the year 5138; W2's
 #     `UNIX_SECONDS_MAX` bound), `issued` is within a day of this node's
 #     clock (a node further out than that cannot judge a 15-minute lease, and

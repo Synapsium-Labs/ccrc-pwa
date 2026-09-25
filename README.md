@@ -594,15 +594,17 @@ floor and reading `current` on the older tag included — stops a rollout before
 `caps=`, so a box still on an older `ccrc` is never handed a flag it does not know.
 
 **Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
-Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a dated snapshot,
-so an upstream key rotation it outlives makes it refuse every newer bundle until refreshed — and a box's first
+Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a snapshot taken
+when it was vendored, whose age nothing on the box reports, so an upstream key rotation it outlives makes it
+refuse every newer bundle until refreshed (the override below, for one update) — and a box's first
 `install.sh --release`, which trusts the transport checksum alone — trust on first use — and places the verifier
-every later update runs. The verifier's own npm dependencies come from `npm ci`, the same install that places the
-server, never from the attested tarball itself. And whoever controls the environment can substitute the vendored
-root through `CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches
-a `--detach` unit and the watchdog the same as a shell would. Doctor's `provenance` check PASSes, naming the next
-step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a
-checkout install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
+every later update runs. Whoever controls the environment can substitute the vendored root through
+`CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
+`--detach` unit and the watchdog, though a value exported only in a shell does not. A separate supply-chain fact,
+not a third root: the verifier's own npm dependencies are fetched from the registry, pinned by the attested
+tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Doctor's `provenance`
+check PASSes, naming the next step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a checkout
+install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
 
 **Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
 door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.

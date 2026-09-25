@@ -12985,8 +12985,9 @@ cmd_watchdog() {
   fi
   command -v flock >/dev/null 2>&1 \
     || _ccrc_die "watchdog: flock (util-linux) is not on PATH, so a live updater cannot be told from a dead one — nothing was re-measured or reverted"
-  # The compound form (`_lc_rotate`'s own "THE GENERAL RULE" comment in `ccd/ccd`): a failed open is this line's
-  # answer, never bash's own diagnostic on stderr. THREE answers, never two
+  # The compound form (`_lc_rotate`'s own "THE GENERAL RULE" comment in
+  # `ccd/ccd`): a failed open is this line's answer, never bash's own
+  # diagnostic on stderr. THREE answers, never two
   # (ruling R16; `_upd_lock_probe`'s contract, Task 2): 0 this process took
   # it, 1 a LIVE holder (contention), 3 UNMEASURED — the open failed, or
   # `flock` failed with anything but contention's 1. Folding 3 into 1 would
@@ -13550,7 +13551,8 @@ _upd_lock() {
   { [ -d "${BOX_UPDATE_LOCK%/*}" ] || mkdir -p "${BOX_UPDATE_LOCK%/*}"; } 2>/dev/null \
     || _ccrc_die "cannot create ~/.ccrc, so ~/.ccrc/update.lock cannot be taken — nothing on this box was changed"
   # The COMPOUND form: a bare `exec {fd}>>… 2>/dev/null` leaks bash's own
-  # open-failure diagnostic (`_lc_rotate`'s own comment in `ccd/ccd` records why).
+  # open-failure diagnostic (`_lc_rotate`'s own comment in `ccd/ccd`
+  # records why).
   { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null \
     || { UPD_LOCK_FD=""; _ccrc_die "cannot open ~/.ccrc/update.lock — nothing on this box was changed"; }
   # D-3274 (found reviewing Task 2): contention told from a flock that could
@@ -13604,8 +13606,9 @@ _upd_unlock() {
 # with no timer unit file reads an ABSENT projection as `not-configured`.
 # rollout refuses a no-role box (D-3106), so no release-lane box is one.
 # A present file is judged the same way on every role: a bounded, NUL-aware
-# read (`_acct_pool_state`'s INVERTED rc on its own `-n 65536` bounded read in `ccd/ccd` — 0 means the
-# read stopped short of EOF, at the 65536-byte cap or a NUL), `end` as the
+# read (`_acct_pool_state`'s own `-n 65536` read in `ccd/ccd`, and its
+# INVERTED rc — 0 means the read stopped short of EOF, at the 65536-byte
+# cap or a NUL), `end` as the
 # last line (the torn-write detector), exactly nine lines in spec order,
 # each its own grammar, and `lease` against `date +%s` — SECONDS, spec §9's
 # unit (the C1 defect — `/api/pools/epoch`'s own doc comment in server.ts

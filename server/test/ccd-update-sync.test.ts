@@ -546,9 +546,12 @@ describe('ccd-update-sync: the EXIT trap removes the staged file too (C19, fix r
 
 describe('ccd-update-sync: seconds stay seconds (the C1 lesson — the pool-epoch route\'s own doc comment in server.ts)', () => {
   // A 13-digit value is GRAMMATICAL, and a seconds reader reads a millisecond
-  // lease as ~56,700 years away: `ok`, never `stale`. The reader's own
-  // lease-window check now refuses a ms-shaped lease (beside it) as a side
-  // effect, but carries no digit-count check of its own, so the puller must.
+  // lease as ~56,700 years away: `ok`, never `stale`. The reader
+  // (`_upd_intent_state`) re-checks this file's own PASS 3 values, its own
+  // `SECONDS_DIGITS=11` width bound first — so a 13-digit value is refused
+  // there by width, before it ever reaches the lease window — and this file
+  // keeps its own copy anyway: it must never install what the reader
+  // refuses, and on a fleet box it is the only gate in front of the file.
   it('a millisecond `issued` is refused by its digit count', () => {
     const ms = String(Date.now());
     refusesAndKeeps('upd-sync-ms-issued-', intentDoc({ issued: ms, lease: ms }), /issued carries 13 digits/);
