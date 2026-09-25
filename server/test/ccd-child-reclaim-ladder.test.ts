@@ -645,6 +645,7 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('containment-unproven');
     expect(r.detail).toContain('demo-alias-sub');
+    expect(r.detail, 'its resolved path is one plain path below the child: inside, not merely spelled through').toContain('rooted inside');
   }, 60_000);
 
   it('refuses a row spelled through a link INSIDE the child that resolves outside it — the literal comparison', () => {
@@ -693,6 +694,29 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     expect(r.verdict, r.detail).toBe('containment-unproven');
     expect(r.detail).toContain('demo-sub');
     expect(r.detail).toContain('rooted inside');
+  }, 60_000);
+
+  it('the vanished arm: a row spelled THROUGH the gone child (`<child>/..`) refuses as spelled through, never "rooted inside"', () => {
+    // With the child's tree gone, `_ws_realpath` resolves only the prefix that
+    // still exists and re-attaches the rest as written, so `<child>/..`
+    // resolves to `<child>/..` itself — below the child as a string, and not
+    // one plain path. Strings, not `path.join`, which would normalise it.
+    // The third spelling reaches the child through a symlinked ANCESTOR, so
+    // only its resolved form is below the child — and it is not plain either.
+    const { wt } = makeChild(h);
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    for (const [id, spelled] of [['demo-up', `${wt}/..`], ['demo-out', `${wt}/../../../elsewhere`],
+      ['demo-alias-up', `${path.join(h.home, 'wtlink', 'demo', 'quiet-basin')}/..`]] as const) {
+      otherRow(id, spelled);
+      const r = evalOf(h);
+      expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
+      expect(r.detail).toContain(`registry row(s) ${id} spell their workdir through ${wt}, not as one plain path`);
+      expect(r.detail, 'it is not inside the child, and the detail does not say it is').not.toContain('rooted inside');
+      fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.uuid`));
+      fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.workdir`));
+    }
   }, 60_000);
 
   it('the CONTROL: a `<child>x` sibling row is not inside the child, and it reclaims', () => {

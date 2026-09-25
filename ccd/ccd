@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f8cca8bdaa8da73ab84c0923dfc25387174497fc6854aa4a15697fb66b369707
+# ccrc:generated 1 sha256=36f3a6acd06e57ebb0e3fbfee6be0d2bcf125d0ea5c0f7fde4a971c271e88bd7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23780,8 +23780,9 @@ _ws_reclaim_record() {   # main path -> git's worktree record for path, read fro
 _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
   #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
-  #                                 lies INSIDE it, and _WS_THROUGH_ROWS = those spelled THROUGH it, not as
-  #                                 one plain path, that do not resolve inside it — each comma-joined
+  #                                 lies INSIDE it, and _WS_THROUGH_ROWS = those spelled THROUGH it (as
+  #                                 written or resolved), not as one plain path, and not proven inside it by
+  #                                 a plain one — each comma-joined
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, or a row's
   #                                 `.workdir` would not read
@@ -23802,7 +23803,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # its unit and pane never stopped. The nested checkouts rung 9 pins and
   # removes are the child's own, and have no row. Inside means at a path
   # COMPONENT boundary — `<child>/x` is inside, `<child>x` is a sibling — asked
-  # literally and resolved, as the equality is. Here the literal arm is NOT
+  # literally and resolved, as the equality is — each only when that spelling
+  # is ONE PLAIN path, because `_ws_realpath` re-attaches whatever lies below
+  # the last existing directory as written: once the child's tree is gone,
+  # `<child>/..` "resolves" to itself. Here the literal arm is NOT
   # implied by the resolved one: a row spelled through a link INSIDE the
   # child resolves outside it, yet the path it names goes with the child. A row
   # ABOVE the child is not refused: the child lies inside that session's
@@ -23838,9 +23842,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     wr=$(_ws_realpath "$w")
     if [[ "$w" == "$wd" || "$wr" == "$mine" ]]; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
-    elif [[ "$wr" == "${mine%/}/"* ]] || { [[ "$w" == "${wd%/}/"* ]] && _ws_reclaim_plain_path "$w"; }; then
+    elif { [[ "$wr" == "${mine%/}/"* ]] && _ws_reclaim_plain_path "$wr"; } \
+         || { [[ "$w" == "${wd%/}/"* ]] && _ws_reclaim_plain_path "$w"; }; then
       _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o"
-    elif [[ "$w" == "${wd%/}/"* ]]; then
+    elif [[ "$w" == "${wd%/}/"* || "$wr" == "${mine%/}/"* ]]; then
       _WS_THROUGH_ROWS+="${_WS_THROUGH_ROWS:+, }$o"
     fi
   done <<< "$names"

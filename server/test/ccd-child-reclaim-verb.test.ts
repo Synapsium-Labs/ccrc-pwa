@@ -1123,6 +1123,27 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
   }, 90_000);
 
+  it('the same row stops a RESUMED tail whose tree is already GONE, and still says spelled through — never "rooted inside"', () => {
+    // A resume past `worktree`: the child's tree was removed before the
+    // interruption, so `<child>/..` no longer resolves and `_ws_realpath`
+    // hands it back as written — below the child as a string, and not plain.
+    const c = makeChild(h);
+    interrupted(c, 'branch');
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const tok = resumeToken('branch');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-up.uuid'), 'u-up');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-up.workdir'), `${c.wt}/..`);
+    const r = childReclaimVerb(h, tok);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.detail).toContain(`registry row(s) demo-up spell their workdir through ${c.wt}, not as one plain path`);
+    expect(o.detail).not.toContain('rooted inside');
+    failedPairAgrees(r);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:branch');
+  }, 90_000);
+
   it('a tree that stands with NO record in git of it is not removed by a resumed tail', () => {
     // The ladder's `no-worktree-record`, re-asked on every arm: a directory
     // $main does not record is not provably one of its worktrees.
