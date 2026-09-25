@@ -93,11 +93,19 @@ export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
 }
 
 export type ChildReclaimOutcome =
-  | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number; readonly wip: string | null }
+  | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
+      readonly wip: string | null | 'unreadable' }
   | { readonly kind: 'deferred'; readonly sessionId: string; readonly runId: number; readonly why: ChildReclaimDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
-  | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number; readonly detail: string };
+  /** `stage` says WHERE the failure happened (fix round 1, review minor #4):
+   *  `'audit'` is `ws-audit --reclaim` itself — nothing on the box's
+   *  destructive path ever started, so a retry starts fresh; `'verb'` is
+   *  `ws-reclaim` — its own breadcrumb lets the next attempt resume where it
+   *  stopped. The feed text must not say "resumes" for a failure that never
+   *  began. */
+  | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
+      readonly stage: 'audit' | 'verb'; readonly detail: string };
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the
@@ -277,7 +285,11 @@ export function isChildReclaimKebab(v: unknown): boolean {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const TOKEN_SHAPE = /^[0-9a-f]{64}$/;
-const SHA_SHAPE = /^[0-9a-f]{40}$/;
+/** A commit id ccd's own reader can attribute to a WIP pin: 40 lower-hex
+ *  (SHA-1) or 64 lower-hex (a SHA-256 repository). Anything else is a shape
+ *  this build cannot attribute to a real commit — never silently folded into
+ *  "no WIP was pinned" (fix round 1, review minor #2). */
+const WIP_SHAPE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /** `ccd ws-audit --session <id> --reclaim [--defer-expired]`'s answer, read
  *  for exactly what the executor needs. `unreadable` is its own arm: a
@@ -287,10 +299,21 @@ export type ChildReclaimAuditRead =
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   | { readonly kind: 'unreadable'; readonly detail: string };
 
-export function parseChildReclaimAudit(stdout: string): ChildReclaimAuditRead {
+/** `sessionId` is checked against the document's own `id` field exactly as
+ *  `parseChildReclaimResult` checks `reclaimed`/`refused` against it (fix
+ *  round 1, review minor #3, symmetry) — every ccd read of the registry
+ *  prints `"id":<the --session argument>` first, so a mismatch here is either
+ *  a caller bug or a race the audit itself cannot see past; `unreadable` is
+ *  the existing vocabulary for "this document cannot be trusted", and the
+ *  executor already maps that to the `failed` outcome (never a token spent
+ *  on the wrong id). */
+export function parseChildReclaimAudit(sessionId: string, stdout: string): ChildReclaimAuditRead {
   let v: unknown;
   try { v = JSON.parse(stdout.trim()); } catch { return { kind: 'unreadable', detail: 'ws-audit --reclaim printed no JSON document' }; }
   if (!isRecord(v)) return { kind: 'unreadable', detail: 'ws-audit --reclaim printed no JSON object' };
+  if (v.id !== sessionId) {
+    return { kind: 'unreadable', detail: `ws-audit --reclaim answered for ${String(v.id)}, not ${sessionId}` };
+  }
   // An older ccd prints the PLAIN audit for an argv it does not parse only if
   // something upstream skipped the capability gate; either way, a document
   // without `mode: reclaim` was not minted by the reclaim ladder.
@@ -319,7 +342,13 @@ export function parseChildReclaimAudit(stdout: string): ChildReclaimAuditRead {
  *  not a document at all, a call cut short with nothing printed, which is
  *  `failed` too: the breadcrumb on the box resumes it on the next attempt. */
 export type ChildReclaimVerbRead =
-  | { readonly kind: 'reclaimed'; readonly wip: string | null }
+  /** `wip`: `null` — ccd printed no WIP commit, genuinely nothing uncommitted;
+   *  a string — the pinned commit id, 40 or 64 lower-hex; `'unreadable'` — ccd
+   *  printed a `wip` value that is present but not a shape this build can
+   *  attribute to a commit (fix round 1, review minor #2) — work MAY still be
+   *  pinned (the attic holds it either way), but the feed must not claim
+   *  nothing was left when it cannot read what was. */
+  | { readonly kind: 'reclaimed'; readonly wip: string | null | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   | { readonly kind: 'failed'; readonly detail: string };
 
@@ -329,7 +358,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
   if (isRecord(v)) {
     if (typeof v.reclaimed === 'string') {
       if (v.reclaimed !== sessionId) return { kind: 'failed', detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
-      const wip = typeof v.wip === 'string' && SHA_SHAPE.test(v.wip) ? v.wip : null;
+      const wip = typeof v.wip !== 'string' ? null : (WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable');
       return { kind: 'reclaimed', wip };
     }
     if (typeof v.refused === 'string') {
@@ -383,8 +412,10 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
     // `marker-unreadable`, and so is a second listing that fails. See
     // `childReclaimRowListing`.
     const again = await childReclaimRowListing(deps, sessionId);
-    if (again === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
-    if (again === 'listed') {
+    if (again.kind === 'unlistable') return deferred('marker-unreadable', 'the registry could not be listed');
+    // The executor's OWN gone-check: `.uuid`-OR-`.child` (fix round 1, review
+    // Important #1) — `childReclaimRowListing` no longer folds this for us.
+    if (again.uuid || again.child) {
       return deferred('marker-unreadable', 'the registry lists this workspace but its row could not be built');
     }
     // GONE, AND THE MAIL GOES WITH IT. The box half of a reclaim can finish
@@ -430,21 +461,36 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
-  if (audit.kind === 'unreadable') return { kind: 'failed', sessionId, runId, detail: audit.detail };
-  if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
+  if (audit.kind === 'unreadable') return { kind: 'failed', sessionId, runId, stage: 'audit', detail: audit.detail };
+  if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail, 'audit');
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
   }
   // 6 — the act. ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
-  if (act.kind === 'failed') return { kind: 'failed', sessionId, runId, detail: act.detail };
-  if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
+  if (act.kind === 'failed') return { kind: 'failed', sessionId, runId, stage: 'verb', detail: act.detail };
+  if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail, 'verb');
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
   // or into a stranger that inherits its recycled slug.
   childReclaimCancelMail(deps, sessionId, 'reclaimed');
   return { kind: 'reclaimed', sessionId, runId, wip: act.wip };
 }
+
+/** What a second registry listing found, or that it could not be taken.
+ *  NEVER pre-folded (fix round 1, review Important #1): `.uuid` and `.child`
+ *  are reported SEPARATELY, because the executor's own question ("is this
+ *  workspace gone?", `.uuid`-OR-`.child`) is not the close path's (Task 9,
+ *  controller ruling P5: a `.uuid`-only listing at close is `none` — not a
+ *  child — while a LISTED `.child` is `unreadable`, a box that could not be
+ *  read). Folding the two booleans into one `'listed'` word — the shape this
+ *  export carried before this fix — would force the close path to either
+ *  read a dropped non-child row as `unreadable` (the wrong word) or re-list
+ *  the registry on its own, which is the second spelling this export exists
+ *  to prevent. */
+export type ChildReclaimRowListing =
+  | { readonly kind: 'unlistable' }
+  | { readonly kind: 'listed'; readonly uuid: boolean; readonly child: boolean };
 
 /** `readSessionRecord`'s `{ found: false, reason: 'absent' }` is TWO
  *  populations (its own docstring; wave 2's `childBindGate` reads it the same
@@ -453,26 +499,27 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
  *  or listed-then-gone, or one the reconfirm listing lost. The second can be a
  *  LIVE, MARKED child, and calling it gone would cancel its outstanding mail
  *  with no feed row. So this lists the registry ONCE MORE, paid only on a
- *  miss: `gone` iff the listing names neither `<id>.uuid` nor `<id>.child`;
- *  `listed` when it names either (a row that exists and could not be built);
- *  `unlistable` when the listing fails (it proves nothing).
+ *  miss, and returns WHAT it listed rather than an answer: each caller folds
+ *  it into its own question (amendment A6).
  *
- *  EXPORTED (amendment A6): it returns what it LISTED, never a caller's
- *  question pre-folded, so each caller asks its own. Three callers today —
- *  the executor's own gone-check above, keeping its `.uuid`-or-`.child` rule;
- *  the close path's marker read (Task 9, `childGateAtClose`), which asks
- *  `.child` alone (a `.uuid`-only listing at close is `none`, not a child, per
- *  controller ruling P5) — and wave 2's `childBindGate`, which already asks
- *  `.child` alone for the same reason a bind's question is "is this a marked
- *  child", not "does any session still hold this id". Named here so a fourth
- *  reader of this listing's shape finds its callers rather than re-deriving
- *  the fold. */
+ *  Takes only the two ports it reads (`io`, `cfg`), not the whole
+ *  `ChildReclaimDeps` — a caller with no `coord`/`runCcd` wired (the close
+ *  path does not need them for this read) can call it without faking them.
+ *
+ *  ONE caller today: the executor's own gone-check above, which folds
+ *  `uuid || child` into its `.uuid`-OR-`.child` rule (unchanged by this fix —
+ *  only the export's return shape changed). The close path (Task 9,
+ *  `childGateAtClose`) will be the SECOND caller, folding `.child` ALONE
+ *  (`none` when absent, `unreadable` when listed — controller ruling P5).
+ *  Wave 2's `childBindGate` (`childBind.ts`) is NOT a caller: it takes its own
+ *  `readdir` and asks the same `.child`-alone question independently — a
+ *  parallel reader of the same registry, not a consumer of this export. */
 export async function childReclaimRowListing(
-  deps: ChildReclaimDeps, sessionId: string,
-): Promise<'gone' | 'listed' | 'unlistable'> {
+  deps: Pick<ChildReclaimDeps, 'io' | 'cfg'>, sessionId: string,
+): Promise<ChildReclaimRowListing> {
   const names = await deps.io.readdir(deps.cfg.registryDir);
-  if (names === null) return 'unlistable';
-  return names.includes(`${sessionId}.uuid`) || names.includes(`${sessionId}.child`) ? 'listed' : 'gone';
+  if (names === null) return { kind: 'unlistable' };
+  return { kind: 'listed', uuid: names.includes(`${sessionId}.uuid`), child: names.includes(`${sessionId}.child`) };
 }
 
 /** The ONE place the executor cancels a child's mail — on `reclaimed`, and on
@@ -489,8 +536,13 @@ function childReclaimCancelMail(deps: ChildReclaimDeps, sessionId: string, why: 
   }
 }
 
-/** A box word, turned into an outcome by the ONE kind map. */
-function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken, detail: string): ChildReclaimOutcome {
+/** A box word, turned into an outcome by the ONE kind map. `stage` names the
+ *  call the token arrived from (audit or verb) — carried only for the
+ *  defensive `failed` fallback below, which this map's own equality with the
+ *  defer vocabulary (`child-reclaim.test.ts`) makes unreachable in practice. */
+function childReclaimRefusal(
+  req: ChildReclaimRequest, token: ChildReclaimToken, detail: string, stage: 'audit' | 'verb',
+): ChildReclaimOutcome {
   const { sessionId, runId } = req;
   switch (CHILD_RECLAIM_TOKEN_KIND[token]) {
     case 'gone': return { kind: 'gone', sessionId };
@@ -499,7 +551,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
     // answered as a failure, never cast into a reason it is not.
     case 'retry': return isChildReclaimDeferWhy(token)
       ? { kind: 'deferred', sessionId, runId, why: token, detail }
-      : { kind: 'failed', sessionId, runId, detail: `${token} is marked retry but is no defer reason` };
+      : { kind: 'failed', sessionId, runId, stage, detail: `${token} is marked retry but is no defer reason` };
     case 'terminal': return { kind: 'refused', sessionId, runId, token, sentence: refusalSentence(token), detail };
   }
 }
@@ -516,7 +568,7 @@ async function childReclaimAudit(deps: ChildReclaimDeps, req: ChildReclaimReques
   if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
   if (!res.ok) return { kind: 'unreadable', detail: `ws-audit --reclaim failed: ${res.stderr.trim()}` };
-  return parseChildReclaimAudit(res.stdout);
+  return parseChildReclaimAudit(req.sessionId, res.stdout);
 }
 
 /** The act — its own function, and the capability asked AGAIN inside it, not
@@ -573,10 +625,19 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
   switch (o.kind) {
     case 'reclaimed':
       return `${who}, was reclaimed (${req.trigger}). `
-        + (o.wip === null ? 'Nothing uncommitted was left.' : `Uncommitted work was pinned as ${o.wip}.`) + wait;
+        + (o.wip === null ? 'Nothing uncommitted was left.'
+          : o.wip === 'unreadable' ? 'Uncommitted work was pinned, but its commit id could not be read.'
+          : `Uncommitted work was pinned as ${o.wip}.`) + wait;
     case 'deferred': return `${who}: reclaim deferred (${o.why}) — ${childReclaimSentence(o.detail)}${wait}`;
     case 'refused': return `${who}: ${o.sentence}${o.detail === '' ? '' : ` (${o.detail})`}${wait}`;
-    case 'failed': return `${who}: reclaim failed — ${o.detail}. It is retried; the box resumes where it stopped.${wait}`;
+    // `stage` says what to promise the reader (fix round 1, review minor #4):
+    // an AUDIT failure never reached the box's destructive path, so the next
+    // attempt starts fresh; a VERB failure may have partially run, and its
+    // own breadcrumb resumes it. `childReclaimSentence` (not a bare `.`)
+    // avoids doubling the punctuation when `o.detail` already ends a sentence.
+    case 'failed': return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} `
+      + (o.stage === 'verb' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.')
+      + wait;
   }
 }
 

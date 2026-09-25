@@ -129,13 +129,24 @@ describe('the fourteen words', () => {
     // equal here rather than trusted. The right-hand side is DERIVED from the
     // map, never a second literal: a word the map moves between kinds moves
     // the expectation with it.
+    //
+    // Fix round 1, review Minor #1 (departure `r5-list-outside-region`): the
+    // notes said to read this list "from the RECLAIM region ONLY", but the
+    // list actually lives in `cmd_ws_audit` at ccd/ccd:12919-12921, well ABOVE
+    // `RECLAIM-BEGIN` — the letter cannot be met. The intent (never let a
+    // SECOND copy silently become the one compared, since `.exec` takes only
+    // the first match) is what this asserts instead: `matchAll` over the
+    // WHOLE file, and an exact count of one.
     const ccd = readFileSync(CCD, 'utf8');
-    const m = /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit reclaim refused "\$id" "" verb ws-audit/.exec(ccd);
-    expect(m, 'cmd_ws_audit no longer journals a terminal reclaim refusal').not.toBeNull();
+    const matches = [...ccd.matchAll(
+      /case "\$REAP_VERDICT" in\n\s+([a-z|-]+)\)\n\s+_lc_emit reclaim refused "\$id" "" verb ws-audit/g,
+    )];
+    expect(matches, 'cmd_ws_audit no longer journals a terminal reclaim refusal, or a second site appeared')
+      .toHaveLength(1);
     const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND)
       .filter(([, kind]) => kind === 'terminal').map(([token]) => token).sort();
     expect(terminal.length, 'guards the guard: an empty arm would equal an empty list').toBeGreaterThan(0);
-    expect(m![1]!.split('|').sort()).toEqual(terminal);
+    expect(matches[0]![1]!.split('|').sort()).toEqual(terminal);
   });
 
   it('every RETRY word is a defer reason, and no other word is', () => {
@@ -153,12 +164,20 @@ describe('the fourteen words', () => {
 
 describe('parseChildReclaimAudit', () => {
   it('reads a token and the run the marker names', () => {
-    expect(parseChildReclaimAudit(auditDoc(7, 'reclaimable', { token: TOK })))
+    expect(parseChildReclaimAudit(ID, auditDoc(7, 'reclaimable', { token: TOK })))
       .toEqual({ kind: 'token', token: TOK, childOf: 7 });
   });
   it('reads a refusal by its word', () => {
-    expect(parseChildReclaimAudit(auditDoc(7, 'attached', { detail: 'a client' })))
+    expect(parseChildReclaimAudit(ID, auditDoc(7, 'attached', { detail: 'a client' })))
       .toEqual({ kind: 'refused', token: 'attached', detail: 'a client' });
+  });
+  // Fix round 1, review Minor #3: symmetric with `parseChildReclaimResult`,
+  // which already checks its document's `reclaimed`/`refused` id against
+  // `sessionId`. Every ccd registry read prints `"id":<--session argument>`
+  // first, so this is a one-line defence, not a new failure mode.
+  it('an id naming ANOTHER session is unreadable, never spent on the wrong workspace', () => {
+    expect(parseChildReclaimAudit(ID, auditDoc(7, 'reclaimable', { token: TOK, id: 'demo-other' })).kind)
+      .toBe('unreadable');
   });
   it.each([
     ['no JSON at all', 'ccd: usage: ccd ws-audit --session <id>'],
@@ -167,16 +186,16 @@ describe('parseChildReclaimAudit', () => {
     ['the PLAIN audit (no mode)', JSON.stringify({ id: ID, verdict: 'no-such-session', detail: '' })],
     ['reclaimable with no token', auditDoc(7, 'reclaimable')],
     ['reclaimable with a short token', auditDoc(7, 'reclaimable', { token: 'abc' })],
-    ['reclaimable with no childOf', JSON.stringify({ mode: 'reclaim', childOf: null, verdict: 'reclaimable', token: TOK })],
+    ['reclaimable with no childOf', JSON.stringify({ id: ID, mode: 'reclaim', childOf: null, verdict: 'reclaimable', token: TOK })],
     // One run-id grammar (wave 2's `CHILD_RUN_ID`, ten ASCII digits): a
     // `childOf` no marker could carry is not a run id, however numeric.
-    ['reclaimable with an eleven-digit childOf', JSON.stringify({ mode: 'reclaim', childOf: 12345678901, verdict: 'reclaimable', token: TOK })],
+    ['reclaimable with an eleven-digit childOf', JSON.stringify({ id: ID, mode: 'reclaim', childOf: 12345678901, verdict: 'reclaimable', token: TOK })],
     ['a verdict this build does not know', auditDoc(7, 'sensitive-ignored')],
     // The audit's unmeasured answer is a DOCUMENT, not a word the ladder
     // refuses with: read at all, it is unreadable — `failed`, like its exit 1.
     ['the unmeasured answer', auditDoc(7, 'unmeasured', { detail: 'could not read the stash list' })],
   ])('%s is unreadable — never a token, never a refusal', (_what, stdout) => {
-    expect(parseChildReclaimAudit(stdout).kind).toBe('unreadable');
+    expect(parseChildReclaimAudit(ID, stdout).kind).toBe('unreadable');
   });
 });
 
@@ -184,6 +203,19 @@ describe('parseChildReclaimResult', () => {
   it('reads reclaimed, with and without a WIP commit', () => {
     expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP), '')).toEqual({ kind: 'reclaimed', wip: WIP });
     expect(parseChildReclaimResult(ID, reclaimedDoc(7), '')).toEqual({ kind: 'reclaimed', wip: null });
+  });
+  // Fix round 1, review Minor #2: a SHA-256 repository pins a 64-hex commit,
+  // not 40 — that must not be dropped to `null` (which would say nothing was
+  // left uncommitted when work was in fact pinned). Any OTHER shape (present
+  // but unattributable) is `'unreadable'`, a third state distinct from both
+  // "no wip" and "a wip we can name".
+  it('reads a 64-hex WIP commit (a SHA-256 repository), and calls a malformed one unreadable', () => {
+    const WIP256 = 'c'.repeat(64);
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP256), '')).toEqual({ kind: 'reclaimed', wip: WIP256 });
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, 'not-hex-at-all'), ''))
+      .toEqual({ kind: 'reclaimed', wip: 'unreadable' });
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, 'a'.repeat(39)), ''))
+      .toEqual({ kind: 'reclaimed', wip: 'unreadable' });
   });
   it('a reclaim of ANOTHER id is a failure, not a success', () => {
     expect(parseChildReclaimResult('demo-other', reclaimedDoc(7), '').kind).toBe('failed');
@@ -270,20 +302,43 @@ describe('childReclaimDecision — has the coordinator finished with this child?
   });
 });
 
-describe('childReclaimRowListing — what the second listing found (amendment A6)', () => {
-  it('gone: neither .uuid nor .child is listed', async () => {
-    const s = await rig({ row: false });
-    expect(await childReclaimRowListing(s.deps, ID)).toBe('gone');
-  });
-  it('listed: the registry names .uuid or .child even though the row could not be built', async () => {
-    const s = await rig();
-    writeFileSync(path.join(s.reg, `${ID}.workdir`), '');
-    expect(await childReclaimRowListing(s.deps, ID)).toBe('listed');
-  });
+describe('childReclaimRowListing — what the second listing found (amendment A6, fix round 1)', () => {
+  // Fix round 1, review Important #1: the export must return WHAT it
+  // listed — `.uuid` and `.child` reported SEPARATELY — never a caller's
+  // question pre-folded into one `'listed'` word. Its own rig calls it with
+  // exactly `{ io, cfg }`, never the whole `ChildReclaimDeps`, to pin the
+  // narrowed dependency the fix also asked for: no `coord`/`runCcd` needed.
+  const freshListingDeps = () => {
+    const home = mkTmp('ccrc-child-reclaim-listing-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const { io, cfg } = testDeps(home);
+    return { reg, deps: { io, cfg } };
+  };
   it('unlistable: the listing itself failed, proving nothing', async () => {
-    const s = await rig({ row: false });
-    const deps: ChildReclaimDeps = { ...s.deps, io: { ...s.deps.io, readdir: async () => null } };
-    expect(await childReclaimRowListing(deps, ID)).toBe('unlistable');
+    const { deps } = freshListingDeps();
+    expect(await childReclaimRowListing({ ...deps, io: { ...deps.io, readdir: async () => null } }, ID))
+      .toEqual({ kind: 'unlistable' });
+  });
+  it('neither .uuid nor .child is listed', async () => {
+    const { deps } = freshListingDeps();
+    expect(await childReclaimRowListing(deps, ID)).toEqual({ kind: 'listed', uuid: false, child: false });
+  });
+  it('.uuid only — a session identity with no child marker (P5, Task 9: `none` at close, not a child)', async () => {
+    const { reg, deps } = freshListingDeps();
+    writeFileSync(path.join(reg, `${ID}.uuid`), `u-${ID}`);
+    expect(await childReclaimRowListing(deps, ID)).toEqual({ kind: 'listed', uuid: true, child: false });
+  });
+  it('.child only — a marker with no session identity (P5, Task 9: `unreadable` at close, defer)', async () => {
+    const { reg, deps } = freshListingDeps();
+    writeFileSync(path.join(reg, `${ID}.child`), '7');
+    expect(await childReclaimRowListing(deps, ID)).toEqual({ kind: 'listed', uuid: false, child: true });
+  });
+  it('both .uuid and .child listed', async () => {
+    const { reg, deps } = freshListingDeps();
+    writeFileSync(path.join(reg, `${ID}.uuid`), `u-${ID}`);
+    writeFileSync(path.join(reg, `${ID}.child`), '7');
+    expect(await childReclaimRowListing(deps, ID)).toEqual({ kind: 'listed', uuid: true, child: true });
   });
 });
 
@@ -299,6 +354,17 @@ describe('reclaimChild — the one executor', () => {
     ]);
     expect(s.deliveryState()).toEqual({ state: 'rejected', lastError: MAIL_CHILD_RECLAIMED_ERROR });
     expect(s.feed()).toEqual(['child reclaimed']);
+  });
+
+  // Fix round 1, review Minor #2, at the feed row: a malformed WIP does not
+  // silently claim nothing was left.
+  it('a malformed WIP commit renders as unreadable in the feed, not as nothing left', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { code: 0, stdout: JSON.stringify({ reclaimed: ID, childOf: runId, wip: 'not-a-real-sha', attic: 2, residueBytes: null }) } }) });
+    const out = await reclaimChild(s.deps, s.req());
+    expect(out).toMatchObject({ kind: 'reclaimed', wip: 'unreadable' });
+    expect(s.bodies()[0]).toContain('its commit id could not be read');
+    expect(s.bodies()[0]).not.toContain('Nothing uncommitted was left');
   });
 
   it('refuses on NO evidence of the capability — the verb alone is not the token', async () => {
@@ -477,15 +543,49 @@ describe('reclaimChild — the one executor', () => {
     expect(refused.deliveryState().state).toBe('queued');
     const failed = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
       verb: { code: 1, stdout: JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }) } }) });
-    expect(await reclaimChild(failed.deps, failed.req()))
-      .toMatchObject({ kind: 'failed', detail: 'worktree-remove-failed: busy' });
+    const out = await reclaimChild(failed.deps, failed.req());
+    // Fix round 1, review Minor #4: a VERB failure carries `stage: 'verb'` —
+    // its own breadcrumb resumes it — and the feed text says so.
+    expect(out).toMatchObject({ kind: 'failed', stage: 'verb', detail: 'worktree-remove-failed: busy' });
     expect(failed.deliveryState().state).toBe('queued');
     expect(failed.feed()).toEqual(['child reclaim failed']);
+    expect(failed.bodies()[0]).toContain('the box resumes where it stopped');
   });
 
-  it('an audit the box could not answer is a failure', async () => {
+  // Fix round 1, review Minor #6: a coverage gap — both paths already run
+  // through code other cases test only at parse level.
+  it('a verb reclaimed document naming ANOTHER id is a failure, not a success — mail stays', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
+    const out = await reclaimChild(s.deps, s.req());
+    expect(out).toMatchObject({ kind: 'failed', stage: 'verb' });
+    expect(out.kind === 'failed' ? out.detail : '').toContain('demo-other');
+    expect(s.deliveryState().state).toBe('queued');
+    expect(s.feed()).toEqual(['child reclaim failed']);
+  });
+
+  it('a verb-level refused: no-such-session is gone, with no cancel and no feed row', async () => {
+    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { code: 0, stdout: JSON.stringify({ refused: 'no-such-session', detail: 'raced with a purge', paths: [] }) } }) });
+    expect(await reclaimChild(s.deps, s.req())).toEqual({ kind: 'gone', sessionId: ID });
+    expect(s.deliveryState().state).toBe('queued');
+    expect(s.feed()).toEqual([]);
+  });
+
+  it('an audit the box could not answer is a failure, staged AUDIT', async () => {
     const s = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'ccd: python3 unavailable' } }) });
-    expect(await reclaimChild(s.deps, s.req())).toMatchObject({ kind: 'failed' });
+    const out = await reclaimChild(s.deps, s.req());
+    expect(out).toMatchObject({ kind: 'failed', stage: 'audit' });
+    // Fix round 1, review Minor #4: nothing on the box's destructive path
+    // started, so the feed must not promise a resume.
+    expect(s.bodies()[0]).toContain('It is retried from the start.');
+    expect(s.bodies()[0]).not.toContain('resumes where it stopped');
+  });
+
+  it('the failed feed text never doubles the final punctuation', async () => {
+    const s = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'ccd: something failed.' } }) });
+    await reclaimChild(s.deps, s.req());
+    expect(s.bodies()[0]).not.toContain('..');
   });
 
   it('an audit that EXITS 1 is failed whatever it printed — its unmeasured document, and even a token', async () => {
@@ -497,11 +597,11 @@ describe('reclaimChild — the one executor', () => {
       stdout: auditDoc(runId, 'unmeasured', { detail: 'could not read the stash list' }),
       stderr: 'ccd: ws-audit --reclaim measured nothing: could not read the stash list — retry' } }) });
     const out = await reclaimChild(u.deps, u.req());
-    expect(out).toMatchObject({ kind: 'failed' });
+    expect(out).toMatchObject({ kind: 'failed', stage: 'audit' });
     expect(out.kind === 'failed' ? out.detail : '').toContain('measured nothing');
     expect(u.feed()).toEqual(['child reclaim failed']);
     const t = await rig({ script: (runId) => ({ audit: { code: 1, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) } }) });
-    expect(await reclaimChild(t.deps, t.req())).toMatchObject({ kind: 'failed' });
+    expect(await reclaimChild(t.deps, t.req())).toMatchObject({ kind: 'failed', stage: 'audit' });
     expect(t.calls.map((c) => c[0]), 'the verb was never called on an exit-1 token').toEqual(['ws-audit']);
     expect(t.deliveryState().state).toBe('queued');
   });
