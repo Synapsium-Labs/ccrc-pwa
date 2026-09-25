@@ -98,14 +98,19 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'deferred'; readonly sessionId: string; readonly runId: number; readonly why: ChildReclaimDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
-  /** `stage` says WHERE the failure happened (fix round 1, review minor #4):
-   *  `'audit'` is `ws-audit --reclaim` itself — nothing on the box's
-   *  destructive path ever started, so a retry starts fresh; `'verb'` is
-   *  `ws-reclaim` — its own breadcrumb lets the next attempt resume where it
-   *  stopped. The feed text must not say "resumes" for a failure that never
-   *  began. */
+  /** `resumable` says whether the box left a breadcrumb the next attempt can
+   *  pick up FROM (fix round 1 review minor #4, corrected in fix round 2
+   *  minor C): true only for a `ws-reclaim` failure that genuinely started —
+   *  its own `{failed:…}` document at exit 1, or a call cut short with
+   *  nothing printed (ccd's breadcrumb survives either). False for
+   *  `ws-audit --reclaim` itself (a non-destructive verb that never reaches
+   *  the reap lock), and for a `ws-reclaim` answer that is a REFUSAL in
+   *  substance even though this build cannot name it — an unrecognised
+   *  refusal word, or a `reclaimed` document naming another session — where
+   *  ccd's own ladder never advanced this session's state at all. The feed
+   *  text must not promise a resume where there is nothing to resume. */
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
-      readonly stage: 'audit' | 'verb'; readonly detail: string };
+      readonly resumable: boolean; readonly detail: string };
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the
@@ -342,37 +347,54 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
  *  not a document at all, a call cut short with nothing printed, which is
  *  `failed` too: the breadcrumb on the box resumes it on the next attempt. */
 export type ChildReclaimVerbRead =
-  /** `wip`: `null` — ccd printed no WIP commit, genuinely nothing uncommitted;
-   *  a string — the pinned commit id, 40 or 64 lower-hex; `'unreadable'` — ccd
-   *  printed a `wip` value that is present but not a shape this build can
-   *  attribute to a commit (fix round 1, review minor #2) — work MAY still be
-   *  pinned (the attic holds it either way), but the feed must not claim
-   *  nothing was left when it cannot read what was. */
+  /** `wip`: `null` — ccd printed a LITERAL `null`, genuinely nothing
+   *  uncommitted (fix round 2, review minor B: ONLY `null` means this — a
+   *  present non-string value, a number, boolean or object, and a MISSING
+   *  key all read `'unreadable'`, exactly like a malformed string); a string
+   *  — the pinned commit id, 40 or 64 lower-hex; `'unreadable'` — a `wip`
+   *  this build cannot attribute to a commit, whatever shape it took (fix
+   *  round 1, review minor #2) — work MAY still be pinned (the attic holds
+   *  it either way), but the feed must not claim nothing was left when it
+   *  cannot read what was. */
   | { readonly kind: 'reclaimed'; readonly wip: string | null | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
-  | { readonly kind: 'failed'; readonly detail: string };
+  /** `resumable` (fix round 2, review minor C): true only when ccd's own
+   *  destructive tail genuinely started and left a breadcrumb — a
+   *  `{failed:…}` document, or a call cut short with nothing printed. An
+   *  unrecognised refusal word and a `reclaimed` document naming another
+   *  session are REFUSALS in substance (ccd's ladder never advanced this
+   *  session's state), so neither is resumable. */
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string };
 
 export function parseChildReclaimResult(sessionId: string, stdout: string, stderr: string): ChildReclaimVerbRead {
   let v: unknown = null;
   try { v = JSON.parse(stdout.trim()); } catch { v = null; }
   if (isRecord(v)) {
     if (typeof v.reclaimed === 'string') {
-      if (v.reclaimed !== sessionId) return { kind: 'failed', detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
-      const wip = typeof v.wip !== 'string' ? null : (WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable');
+      if (v.reclaimed !== sessionId) {
+        return { kind: 'failed', resumable: false,
+          detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
+      }
+      const wip = v.wip === null ? null : (typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable');
       return { kind: 'reclaimed', wip };
     }
     if (typeof v.refused === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
       return isChildReclaimToken(v.refused)
         ? { kind: 'refused', token: v.refused, detail }
-        : { kind: 'failed', detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
+        : { kind: 'failed', resumable: false,
+            detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
     }
     if (typeof v.failed === 'string') {
-      return { kind: 'failed', detail: `${v.failed}: ${typeof v.detail === 'string' ? v.detail : ''}` };
+      // Fix round 2, review minor C: an empty `detail` must not render
+      // "…failed: ." — omit the separator rather than leave it dangling.
+      const detail = typeof v.detail === 'string' ? v.detail : '';
+      return { kind: 'failed', resumable: true, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
     }
   }
   const err = stderr.trim();
-  return { kind: 'failed', detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };
+  return { kind: 'failed', resumable: true,
+    detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };
 }
 
 // ── the ONE executor ─────────────────────────────────────────────────────────
@@ -461,16 +483,16 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
-  if (audit.kind === 'unreadable') return { kind: 'failed', sessionId, runId, stage: 'audit', detail: audit.detail };
-  if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail, 'audit');
+  if (audit.kind === 'unreadable') return { kind: 'failed', sessionId, runId, resumable: false, detail: audit.detail };
+  if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
   }
   // 6 — the act. ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
-  if (act.kind === 'failed') return { kind: 'failed', sessionId, runId, stage: 'verb', detail: act.detail };
-  if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail, 'verb');
+  if (act.kind === 'failed') return { kind: 'failed', sessionId, runId, resumable: act.resumable, detail: act.detail };
+  if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
   // or into a stranger that inherits its recycled slug.
   childReclaimCancelMail(deps, sessionId, 'reclaimed');
@@ -536,13 +558,12 @@ function childReclaimCancelMail(deps: ChildReclaimDeps, sessionId: string, why: 
   }
 }
 
-/** A box word, turned into an outcome by the ONE kind map. `stage` names the
- *  call the token arrived from (audit or verb) — carried only for the
- *  defensive `failed` fallback below, which this map's own equality with the
- *  defer vocabulary (`child-reclaim.test.ts`) makes unreachable in practice. */
-function childReclaimRefusal(
-  req: ChildReclaimRequest, token: ChildReclaimToken, detail: string, stage: 'audit' | 'verb',
-): ChildReclaimOutcome {
+/** A box word, turned into an outcome by the ONE kind map. The defensive
+ *  `failed` fallback below is `resumable: false` — a refusal, in whichever
+ *  ladder produced it, never advanced the box's destructive state — and is
+ *  unreachable in practice, since this map's own equality with the defer
+ *  vocabulary is held by `child-reclaim.test.ts`. */
+function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken, detail: string): ChildReclaimOutcome {
   const { sessionId, runId } = req;
   switch (CHILD_RECLAIM_TOKEN_KIND[token]) {
     case 'gone': return { kind: 'gone', sessionId };
@@ -551,7 +572,8 @@ function childReclaimRefusal(
     // answered as a failure, never cast into a reason it is not.
     case 'retry': return isChildReclaimDeferWhy(token)
       ? { kind: 'deferred', sessionId, runId, why: token, detail }
-      : { kind: 'failed', sessionId, runId, stage, detail: `${token} is marked retry but is no defer reason` };
+      : { kind: 'failed', sessionId, runId, resumable: false,
+          detail: `${token} is marked retry but is no defer reason` };
     case 'terminal': return { kind: 'refused', sessionId, runId, token, sentence: refusalSentence(token), detail };
   }
 }
@@ -630,13 +652,16 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
           : `Uncommitted work was pinned as ${o.wip}.`) + wait;
     case 'deferred': return `${who}: reclaim deferred (${o.why}) — ${childReclaimSentence(o.detail)}${wait}`;
     case 'refused': return `${who}: ${o.sentence}${o.detail === '' ? '' : ` (${o.detail})`}${wait}`;
-    // `stage` says what to promise the reader (fix round 1, review minor #4):
-    // an AUDIT failure never reached the box's destructive path, so the next
-    // attempt starts fresh; a VERB failure may have partially run, and its
-    // own breadcrumb resumes it. `childReclaimSentence` (not a bare `.`)
-    // avoids doubling the punctuation when `o.detail` already ends a sentence.
+    // `resumable` says what to promise the reader (fix round 1 review minor
+    // #4, corrected fix round 2 minor C): true only when ccd's own tail
+    // genuinely started and left a breadcrumb; false for an audit failure
+    // (never reached the destructive path) and for a verb answer that is a
+    // REFUSAL in substance (an unrecognised word, or `reclaimed` naming
+    // another session) — neither advanced this session's state, so neither
+    // has anything to resume. `childReclaimSentence` (not a bare `.`) avoids
+    // doubling the punctuation when `o.detail` already ends a sentence.
     case 'failed': return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} `
-      + (o.stage === 'verb' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.')
+      + (o.resumable ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.')
       + wait;
   }
 }
