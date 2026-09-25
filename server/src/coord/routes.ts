@@ -1353,7 +1353,7 @@ export function registerCoordRoutes(
     // codes are spelled here, not forwarded from the verdict: `mail-routes.
     // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
     if (typeof sessionId === 'string') {
-      const gate = await childBindGate(deps, sessionId);
+      const gate = await childBindGate(deps, coord, sessionId);
       if (!gate.ok) {
         return gate.code === 'workspace-spent'
           ? reply.code(409).send({ ok: false, refused: 'workspace-spent', pr: gate.pr })

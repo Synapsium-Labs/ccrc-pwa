@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d99e52e47b24b1f3c96a1b5ef1ba026b39016991bfc3dfce2025558b2d5b3c39
+# ccrc:generated 1 sha256=d6a7bf4a9baead5d4c3aaf3227bec73ecbd6fcd235b114a35c210927a72bf720
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5138,7 +5138,7 @@ PR_GH_TIMEOUT=8           # gh pr list has no --timeout of its own; a blocking
 # PRs cannot be read inside the bound loses its check glyphs for that sweep and
 # nothing else — which is the whole point of the split.
 PR_GH_CHECKS_TIMEOUT=5
-PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft
+PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt
 # NAMED ONCE, spent in two places — the head-filtered row window that carries it
 # in-band, and the open-PR window `_gh_pr_checks` asks for on its own. A second
 # spelling of the token is a second thing to keep in step with `checksFor`'s
