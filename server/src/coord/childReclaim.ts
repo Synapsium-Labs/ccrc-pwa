@@ -131,6 +131,14 @@ export type ChildReclaimWip =
  *     something DIFFERENT from both other cases. */
 export type ChildReclaimResume = 'resumable' | 'not-resumable' | 'pre-lock-die';
 
+const CHILD_RECLAIM_RESUME: Readonly<Record<ChildReclaimResume, true>> = {
+  resumable: true, 'not-resumable': true, 'pre-lock-die': true,
+};
+
+export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
+}
+
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
       readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
@@ -302,15 +310,19 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
 
 /** `mail-routes.test.ts`'s kebab scanner reads every quoted hyphenated literal
  *  in `server/src/coord` and admits it through an exported guard per
- *  vocabulary. This file's three vocabularies — the box's tokens, the defer
- *  reasons and the close decision's reasons — plus close's `not-queued`, are
- *  one family, admitted here, so a word added to any of the three types is
- *  accepted and a typo is not. Deliberately NOT named `isChildReclaimWord`:
- *  wave 5 owns that name, in `shared/api.ts`, as the type guard of the run
- *  chip's `ChildReclaimWord` vocabulary (spec §5.9) — a different set with a
+ *  vocabulary. This file's vocabularies — the box's tokens, the defer
+ *  reasons, the close decision's reasons and (review 170 F20, fix round 3 of
+ *  the gate's real red) the verb-parse `ChildReclaimResume` word — plus
+ *  close's `not-queued`, are one family, admitted here, so a word added to
+ *  any of these types is accepted and a typo is not. `ChildReclaimResume`'s
+ *  own `isChildReclaimResume` guard, not a second hand-kept list here: the
+ *  same reason every other member of this function is a guard call, never an
+ *  inline set. Deliberately NOT named `isChildReclaimWord`: wave 5 owns that
+ *  name, in `shared/api.ts`, as the type guard of the run chip's
+ *  `ChildReclaimWord` vocabulary (spec §5.9) — a different set with a
  *  different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
-  return isChildReclaimToken(v) || isChildReclaimDeferWhy(v)
+  return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
