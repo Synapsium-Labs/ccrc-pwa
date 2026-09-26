@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in scoped review** 2026-09-26 at `1715d410` (run 148 on `plain-summit`; review 171 on `brisk-meadow`) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **second fix round** 2026-09-26 (review 171 found two destroy paths; run 148 on `plain-summit`) |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
@@ -39,10 +39,33 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**; a third, scoped, follows the second fix round). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-09-26 — review 171 on wave 3's fix round (`1715d410`): two destroy paths; a SECOND, tight fix round.**
+  - **The panel.** Five Opus lenses (SAFETY at xhigh), and three Sonnet refuters per finding. 56 agents ran, none
+    died; 15 survived and merged into 8 findings, and 2 were refuted. The reviewer reproduced the two class-1
+    findings, and measured every mutation row for F1, F2, F3, F4, F7 and 3520 itself: all red.
+  - **Class 1.**
+    - F-A: the round OPENED a narrow loss. F3's four-reflog keep skips the child's per-worktree refs. Under
+      `core.logAllRefUpdates=always` the base kept those commits, by accident, and the tip loses them.
+    - F-B: F2's nested-row check misses a RELATIVE `.workdir` spelling, and the other session's tree is removed.
+  - **Class 2.** F-C: the hidden-link hash lacks `-C`, which is fail-safe.
+  - **Class 3.** F-D to F-H.
+  - **The rulings were attacked before sending** (three Opus agents, on git 2.43, in fixture HOMEs). They measured:
+    - `for-each-ref` passes a mode-000 ref at rc 0, a live destroy path. So F-A reads the worktree's own git
+      directory's FILES, and covers pseudo-ref reflogs and the autostash too. An autostash is a user's uncommitted
+      edits, lost today under `--defer-expired`.
+    - F-B's `cd && pwd` writer stores two lines under an exported CDPATH, and lets a command into the pane through a
+      quote in the cwd's name. So the writer is rewritten, and the reader decides after the loop.
+    - A new pre-existing destroy path, F-I: rung 9's foreign-clean proof obeys `status.showUntrackedFiles=no`.
+  - **Numbers:** 3369 (F-A), 3521 (F-B) and 3523 (F-I, issued; 3522 went to another session).
+  - **Measured live before ruling:** 0 of 75 registry rows hold a relative workdir, so F-B's fail-closed reader
+    strands nothing today. It is re-measured immediately before rollout.
+  - **Review run 171 is closed. Run 148 is at `working`**, with fix-round mail 2439. The rulings are in the
+    coordinator's clips, `rulings-review-171.md` and `attack-rulings-171.json`. After this round's scoped review,
+    only a destroy path the round opens earns another round.
 - **2026-09-26 — wave 4 pre-flight: four lenses, three blocking; rulings attacked before sending; contract §10.**
   - **Why.** The operator ruled on 2026-09-24 that wave 4 dispatches the moment wave 3 merges. Wave 4's plan predates
     wave 3's amendments and departures, R25, R32 and R33, and every item the ledger carried into it.
@@ -501,6 +524,17 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
     job id.
   - the comment above `_ws_wip_commit`'s index copy says "a hidden one too"; 3520's copy fixes ordinary tracked edits
     only, and a hidden-flag edit is found by content. Correct the comment.
+- **Wave 4 also inherits from review 171's rulings** (2026-09-26, measured by the attack; none of it is opened by wave 3):
+  - a staged intermediate version is lost (stage A, edit to B; the WIP keeps B). Rule a second WIP parent from the
+    unmodified index copy, or name the residual;
+  - a foreign clone's reflog-only commits go with its tree (rung 9's `rev-list --all` counts 0, `--reflog` 1).
+    Design a keep, for example fetch those ids into the child's repository and pin them, or name the residual.
+    Refusing would strand every clone with amend history;
+  - `parseChildReclaimResult` maps every `{failed:…}` to resumable, including ccd's in-lock `probe-unmeasured`;
+  - an absolute other row whose `_ws_realpath` fails is compared unresolved;
+  - minor, fail-closed: a flagged link whose target ends in a newline; an inherited `GIT_DIR`, `GIT_WORK_TREE` or
+    `GIT_INDEX_FILE`; a `$REG` filename containing a newline;
+  - git ≥ 2.48 is unmeasured on the box.
 
   Accepted residuals, all fail-safe:
   - an aliased `..` row through a link to a standing child is not refused;
