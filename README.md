@@ -2102,13 +2102,15 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    is `done` with a full 40-hex `handoffCommit`. If the consumer depends
    on an interface from this producer, independently prove it
    by PR NUMBER — `gh pr view <pr> --repo <owner/repo>
-   --json state,headRefOid` (`<owner/repo>` read from `producerRepoRoot`,
-   never assumed off the coordinator's own cwd, a different repository
-   here), where `<pr>` is the producer's own wave-done fingerprint's
-   `prNumber` — the same number this close submitted, held from before
-   the close, because the closed row carries none of its own — requiring
-   `state` to be `MERGED` and raw `headRefOid` to equal both that
-   `handoffCommit` and `producerSha` —
+   --json state,headRefOid`, where `<owner/repo>` is
+   `gh repo view --json nameWithOwner -q .nameWithOwner` run FROM INSIDE
+   `producerRepoRoot` (that path itself is not a `--repo` value `gh`
+   accepts, and the coordinator's own cwd is never assumed to be the
+   producer's repository), and `<pr>` is the producer's own wave-done
+   fingerprint's `prNumber` — the same number this close submitted, held
+   from before the close, because the closed row carries none of its
+   own — requiring `state` to be `MERGED` and raw `headRefOid` to equal
+   both that `handoffCommit` and `producerSha` —
    prove its PR merged at the named producer SHA
    before dispatching the consumer. Never prove it through
    `ccd pr-state --session <producer-session>` after this close: a CHILD

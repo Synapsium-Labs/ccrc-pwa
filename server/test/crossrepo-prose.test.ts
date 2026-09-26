@@ -420,25 +420,36 @@ describe('README: the run lifecycle and programme mail', () => {
         .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove/i);
     }
 
-    // Same-project: unchanged by this fix round. Proof is BY SESSION, because
-    // this arm's `final:false` close never releases the workspace
-    // `ccd pr-state --session` reads — kept at its ORIGINAL 200-char window
-    // (fix round, review 170 M2: the cross arm's own growth must not loosen
-    // this one).
+    // Same-project (fix round, review 170/fr-J-r1 M2/N3): two SEPARATE
+    // bindings, restoring the pre-F10 tightness the merged M2 regex had
+    // loosened. (1) the OPENING sentence's own "prove the producer PR merged
+    // at `producerSha`" — measured 47 chars from "independently prove" — is
+    // bound on its own, tightly, so deleting "at `producerSha`" from that
+    // sentence reds here (it did not before: the merged regex's lazy match
+    // skipped past it to the LATER equality clause's `producerSha`, 312
+    // chars on, and stayed green). (2) the session-based mechanism
+    // (`ccd pr-state --session`, `phase`, and that same later `producerSha`)
+    // is its own, separate assertion — unaffected by anything the cross arm
+    // does.
+    expect(same, 'same-project succession does not bind its opening sentence to `producerSha` directly')
+      .toMatch(/independently prove[\s\S]{0,60}?producerSha/i);
     expect(same, 'same-project succession does not prove merge by session, reading `phase`')
-      .toMatch(/independently prove[\s\S]{0,200}?`ccd pr-state --session[\s\S]{0,150}?`phase`[\s\S]{0,170}?producerSha/i);
+      .toMatch(/`ccd pr-state --session[\s\S]{0,150}?`phase`[\s\S]{0,170}?producerSha/i);
 
-    // Cross-project: proof is BY PR NUMBER, tied to the one sentence that
-    // states it — `gh pr view`, `--repo`/`producerRepoRoot` (M1) and `MERGED`
-    // each measured in the order and proximity the prose actually uses them,
-    // not as bare substrings anywhere in a wide window (review 170 M2). The
-    // widened distance from "independently prove" to the first `producerSha`
-    // (measured here at 1007-481=526 chars) is THIS clause — the `gh pr
-    // view`/`--repo`/`producerRepoRoot` mechanism M1 added — never the later
-    // "Never … after this close" caution, which sits further on past that
-    // first `producerSha` and is bound by its own regex below.
+    // Cross-project (review 170 M2, corrected fr-J-r1 N1): proof is BY PR
+    // NUMBER, tied to the one sentence that states it — `gh pr view`,
+    // `--repo`, `producerRepoRoot` (M1's `--repo` value, now N1's derivation:
+    // `gh repo view --json nameWithOwner` run FROM INSIDE `producerRepoRoot`)
+    // and `MERGED`, each measured in the order and proximity the prose
+    // actually uses them, not as bare substrings anywhere in a wide window.
+    // The distance from "independently prove" to the first `producerSha`
+    // (measured here at 1141-481=660 chars) is THIS clause — the `gh pr
+    // view`/`--repo`/`producerRepoRoot` derivation N1 added on top of M1 —
+    // never the later "Never … after this close" caution, which sits
+    // further on past that first `producerSha` and is bound by its own
+    // regex below.
     expect(cross, 'cross-project succession does not prove merge by PR number, scoped to producerRepoRoot, requiring MERGED')
-      .toMatch(/independently prove[\s\S]{0,60}?`gh pr view[\s\S]{0,30}?--repo[\s\S]{0,90}?producerRepoRoot[\s\S]{0,340}?`MERGED`[\s\S]{0,90}?producerSha/i);
+      .toMatch(/independently prove[\s\S]{0,60}?`gh pr view[\s\S]{0,30}?--repo[\s\S]{0,170}?producerRepoRoot[\s\S]{0,400}?`MERGED`[\s\S]{0,90}?producerSha/i);
     expect(cross, 'cross-project succession does not forbid the session-scoped proof after its close')
       .toMatch(/never[\s\S]{0,40}?`ccd pr-state --session[\s\S]{0,40}?after this close/i);
   });
