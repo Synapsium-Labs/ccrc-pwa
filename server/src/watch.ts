@@ -428,6 +428,8 @@ export type ReleasePushOutcome =
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
+  /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
+  private lastFleet: FleetSession[] | null = null;
   /** Last-reported dialog id per session id. */
   private dialogIds = new Map<string, string>();
   /**
@@ -1106,8 +1108,10 @@ export class FleetWatcher {
 
   /**
    * The set of session ids that currently have a pending menu dialog. Exposed
-   * so a one-shot fleet assembly (the /api/fleet REST + the initial /ws/fleet
-   * push on connect) can reflect an ALREADY-pending dialog. Without this, a
+   * so a one-shot fleet assembly (the /api/fleet REST, and the /ws/fleet push
+   * on a connect before this watcher's first broadcast — after it, the cold
+   * frame IS that broadcast, `currentFleet`) can reflect an ALREADY-pending
+   * dialog. Without this, a
    * dialog that appeared before a client connected shows no "needs you" marker
    * on the fleet overview: the initial push omits it and the watcher only
    * re-emits 'fleet' when the JSON *changes*, so an unchanged pending state is
@@ -1115,6 +1119,15 @@ export class FleetWatcher {
    */
   currentPending(): Set<string> {
     return new Set(this.dialogIds.keys());
+  }
+
+  /** The fleet this watcher last BROADCAST, or null before its first. A new
+   *  /ws/fleet socket takes it as its cold frame: it is exactly what every
+   *  connected client already holds, and this watcher re-emits only on change,
+   *  so a cold frame assembled apart from it — from state captured at connect,
+   *  or off a registry listing that failed once — was never corrected. */
+  currentFleet(): FleetSession[] | null {
+    return this.lastFleet;
   }
 
   /** Last-seen statuslines — passed into a one-shot fleet assembly (REST +
@@ -1604,6 +1617,7 @@ export class FleetWatcher {
       const json = JSON.stringify(sessions);
       if (json === this.lastJson) return;
       this.lastJson = json;
+      this.lastFleet = sessions;
       this.bus.emit('fleet', sessions);
     } finally {
       this.ticking = false;
