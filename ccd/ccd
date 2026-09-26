@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=36f3a6acd06e57ebb0e3fbfee6be0d2bcf125d0ea5c0f7fde4a971c271e88bd7
+# ccrc:generated 1 sha256=f9d4b7bc84cf6ca6022bf53711608911cf1cc8157431ba256d33ee8d19e4b894
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24351,7 +24351,7 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # git reads GIT_CONFIG_COUNT/KEY/VALUE at command-line precedence, above any
   # repository config, and every git that runs beneath cmd inherits it —
   # including the helpers the pin calls (`_ws_reclaim_classify`,
-  # `_ws_collect_ignored`, `_ws_reclaim_stash_shas`, `_ws_attic_pin`). `local
+  # `_ws_collect_ignored`, `_ws_reclaim_stash_shas`, `_ws_reclaim_keep_reflogs`). `local
   # -x` scopes the export to this call, and entries a caller already exported
   # are kept: ours are APPENDED, and a later entry wins.
   local n="${GIT_CONFIG_COUNT:-0}"
@@ -24438,11 +24438,8 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # differs from HEAD's, and every such path is in RECLAIM_SECRETS (the
   # tombstone's `secretsDropped`) as "$prefix<path>".
   #
-  # THE IDENTITY IS FIXED, in both channels. `-c user.*` names it to git's
-  # config; the GIT_* environment is what outranks config, so a caller
-  # that happened to export GIT_AUTHOR_NAME cannot put its own name on a commit
-  # it did not write. `commit-tree` runs no hook; the caller runs this under
-  # `_ws_reclaim_contained` all the same.
+  # THE IDENTITY IS FIXED, and it is `_ws_reclaim_commit_tree`'s (below): the
+  # one identity every commit a reclaim writes carries.
   local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err tree hsha mh line sha msg have plist
   local cand=() back=() parents=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
@@ -24526,19 +24523,35 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
     | awk -F'\t' -v want="$tree $plist" -v subj="$msg" \
         '$2 == want && $3 == "<ccrc-reclaim@invalid>" && $4 == subj { print $1; exit }')
   if [[ "$have" =~ ^[0-9a-f]{40}$ ]]; then RECLAIM_WIP_SHA="$have"; rm -rf "$sd"; return 0; fi
-  RECLAIM_WIP_SHA=$(GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
-    GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
-    git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' -c commit.gpgsign=false \
-      commit-tree "${parents[@]}" -m "$msg" "$tree" 2>"$sd/err") && [[ "$RECLAIM_WIP_SHA" =~ ^[0-9a-f]{40}$ ]] \
+  RECLAIM_WIP_SHA=$(_ws_reclaim_commit_tree "$dir" "${parents[@]}" -m "$msg" "$tree" 2>"$sd/err") \
+    && [[ "$RECLAIM_WIP_SHA" =~ ^[0-9a-f]{40}$ ]] \
     || { RECLAIM_WIP_WHY="could not write the WIP commit at $dir: $(head -1 "$sd/err" 2>/dev/null)"; RECLAIM_WIP_SHA=""; rm -rf "$sd"; return 1; }
   rm -rf "$sd"
   return 0
 }
 
+_ws_reclaim_commit_tree() {   # dir args... -> the new commit's id on stdout, and git's status; its args
+  #                                are git's own for writing a commit object (parents, message, tree)
+  # THE ONE COMMIT WRITER, and the ONE IDENTITY, of the RECLAIM region: the WIP
+  # commit (`_ws_wip_commit`) and the reflog keep (`_ws_reclaim_keep_reflogs`)
+  # both write through here, so no second identity exists to drift. It is FIXED,
+  # in both channels. `-c user.*` names it to git's config; the GIT_*
+  # environment is what outranks config, so a caller that happened to export
+  # GIT_AUTHOR_NAME cannot put its own name on a commit it did not write. The
+  # date is git's own clock, as it always was for the WIP commit. Writing a
+  # commit object runs no hook and moves no ref; both callers run under
+  # `_ws_reclaim_contained` all the same.
+  local dir="$1"; shift
+  GIT_AUTHOR_NAME='ccrc reclaim' GIT_AUTHOR_EMAIL='ccrc-reclaim@invalid' \
+    GIT_COMMITTER_NAME='ccrc reclaim' GIT_COMMITTER_EMAIL='ccrc-reclaim@invalid' \
+    git -C "$dir" -c user.name='ccrc reclaim' -c user.email='ccrc-reclaim@invalid' -c commit.gpgsign=false \
+      commit-tree "$@"
+}
+
 _ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned under refs/ccrc/attic/<id>/<sha>;
   #                               1 on the first one that cannot be — a pin that cannot be taken
-  #                               is a FAILURE here, never a skip (`_ws_attic_pin` may skip a pruned
-  #                               reflog entry; nothing handed to THIS function is optional)
+  #                               is a FAILURE here, never a skip (`_ws_reclaim_keep_reflogs` skips a
+  #                               reflog entry git no longer has; nothing handed to THIS function is optional)
   local main="$1" id="$2" sha; shift 2
   for sha in "$@"; do
     [[ -n "$sha" ]] || continue
@@ -24547,6 +24560,162 @@ _ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned und
     git -C "$main" update-ref "refs/ccrc/attic/$id/$sha" "$sha" 2>/dev/null || return 1
   done
   return 0
+}
+
+# THE CHILD'S OWN REFLOGS, KEPT COMPLETELY (spec §5.5: nothing is deleted that
+# was not first kept). The reclaim deletes four kinds of reflog, and each can
+# be the only thing that still names a commit — one made and then reset away,
+# a detached commit left behind, a branch moved and moved back:
+#   - the child worktree's HEAD reflog, `worktrees/<name>/logs/HEAD` in the
+#     common dir, which `git worktree remove` takes with the admin directory
+#     (the tail's step 4, or its step 5 for a vanished tree's record);
+#   - the child branch's reflog, `logs/refs/heads/<branch>`, which the branch
+#     CAS (`update-ref -d`, step 5) takes;
+#   - the HEAD reflog of every nested same-repository checkout the tail
+#     removes, and the reflog of every nested branch it deletes (step 3).
+# NO OTHER REFLOG IS READ. ws-reap's `_ws_attic_pin` (unchanged, above the
+# frozen boundary) reads `reflog show --all` — every reflog of the SHARED
+# repository, other sessions' included — and keeps only the 200 lowest ids of
+# it: on a busy repository a commit only the child's reflog named was not kept,
+# and every reclaim wrote attic refs for other sessions' commits. The reclaim
+# no longer calls it. Everything it pinned that a reclaim still needs is pinned
+# on its own: the branch tip (a required pin) and the stashes attributed to the
+# branch (`_ws_reclaim_stash_shas`) by `_ws_reclaim_attic_extra`, and these
+# four reflogs here; `refs/stash` itself, and every other session's reflog, is
+# never deleted by a reclaim.
+#
+# COMPLETELY: every entry's OLD and NEW id is read from the log FILE itself —
+# a `%H` listing prints one id per entry and drops the old side. Each file is
+# MEASURED: absent (`_ws_reclaim_absent`, proven) holds nothing to keep; one
+# that stands and cannot be read, or is not a regular file, or holds a line
+# that is not a reflog entry, FAILS — its commits are unknown, and the caller
+# deletes nothing further. An entry naming an object git no longer has, or
+# the all-zero id (a ref's creation or deletion), is not a commit and is
+# skipped; that is not a failure. There is NO cap. A repository whose refs are
+# not stored as files (`extensions.refStorage`, e.g. `reftable`) has no reflog
+# files to read, and that FAILS, with the reason — never "no reflog".
+#
+# THE MECHANISM: one attic ref, `refs/ccrc/attic/<id>/reflogs`, at a synthetic
+# commit of the empty tree whose parents are every distinct commit those
+# reflogs name — written through `_ws_reclaim_commit_tree`, the WIP commit's
+# own identity. The parents go a hundred to a commit, each commit's first
+# parent the one before, so no argv grows with the reflog; the chain's first
+# commit's first parent is the ref's value before this call, so a later keep
+# (the settle, the tail's step) adds to what an earlier one kept and never
+# replaces it. The ref moves by compare-and-swap. `git gc --prune=now` keeps
+# every commit reachable from a ref, and an attic ref is never expired.
+_WS_LOGS=(); _WS_KEEP_WHY=''
+_ws_reclaim_log_of() {   # main kind(tree|branch) arg -> 0 with the reflog file(s) that deleting it takes
+  #                           appended to _WS_LOGS; 1 (_WS_KEEP_WHY) when they could not be located.
+  #                           `tree` takes a checkout's path, `branch` a branch name.
+  # LOCATED THROUGH GIT, never guessed. A checkout that stands answers its own
+  # HEAD reflog through `rev-parse --git-path logs/HEAD` inside it. A checkout
+  # that is GONE (proven, `_ws_reclaim_absent`) cannot be asked, and
+  # `worktree list --porcelain` does not print the admin directory's name, so
+  # its HEAD reflog is found through the common dir's `worktrees/*/gitdir`
+  # entry that names `<path>/.git` — the entry by which `git worktree remove
+  # <path>` itself finds the admin directory it deletes. A `worktrees`
+  # directory, or a `gitdir` file, that cannot be read measured nothing.
+  local main="$1" kind="$2" arg="$3" common f d g real rc
+  common=$(_ws_common_dir "$main") \
+    || { _WS_KEEP_WHY="could not resolve the repository of $main, so no reflog of it could be located"; return 1; }
+  if [[ "$kind" == branch ]]; then
+    _WS_LOGS+=("$common/logs/refs/heads/$arg"); return 0
+  fi
+  if [[ -d "$arg" && ! -L "$arg" ]]; then
+    f=$(git -C "$arg" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null) && [[ "$f" == /* ]] \
+      || { _WS_KEEP_WHY="could not locate the HEAD reflog of the checkout at $arg"; return 1; }
+    _WS_LOGS+=("$f"); return 0
+  fi
+  _ws_reclaim_absent "$arg"; rc=$?
+  (( rc == 0 )) \
+    || { _WS_KEEP_WHY="${_WS_ABSENT_WHY:-something that is not a directory stands at $arg} — the HEAD reflog of the checkout there could not be located"; return 1; }
+  _ws_reclaim_absent "$common/worktrees"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — whether git keeps a HEAD reflog for $arg was never asked"; return 1; }
+  [[ -d "$common/worktrees" && ! -L "$common/worktrees" && -r "$common/worktrees" && -x "$common/worktrees" ]] \
+    || { _WS_KEEP_WHY="$common/worktrees cannot be listed — whether git keeps a HEAD reflog for $arg was never asked"; return 1; }
+  real=$(_ws_realpath "$arg")
+  for d in "$common/worktrees"/* "$common/worktrees"/.*; do
+    case "${d##*/}" in .|..) continue ;; esac
+    [[ -e "$d" || -L "$d" ]] || continue
+    _ws_reclaim_absent "$d/gitdir"; rc=$?
+    (( rc != 0 )) || continue
+    (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — whether $d is git's record of $arg was never asked"; return 1; }
+    g=$(cat -- "$d/gitdir" 2>/dev/null) \
+      || { _WS_KEEP_WHY="$d/gitdir cannot be read — whether $d is git's record of $arg was never asked"; return 1; }
+    g="${g%%$'\n'*}"
+    [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] && _WS_LOGS+=("$d/logs/HEAD")
+  done
+  return 0
+}
+
+_ws_reclaim_keep_reflogs() {   # main id logfile... -> 0 once every commit the named reflog files name is
+  #                                 reachable from refs/ccrc/attic/<id>/reflogs; 1 (_WS_KEEP_WHY) when one
+  #                                 could not be read or the keep could not be written. Run it under
+  #                                 `_ws_reclaim_contained`: its `update-ref` fires reference-transaction.
+  local main="$1" id="$2" ref="refs/ccrc/attic/$2/reflogs" f rc rs sd prev tree c i s msg
+  local all=() args=()
+  shift 2
+  _WS_KEEP_WHY=''
+  rs=$(git -C "$main" config --get extensions.refStorage 2>/dev/null); rc=$?
+  if (( rc == 0 )); then
+    [[ "${rs,,}" == files ]] \
+      || { _WS_KEEP_WHY="$main stores its refs as '$rs', not as files — its reflogs are not files ccd can read, so none was read"; return 1; }
+  elif (( rc != 1 )); then
+    _WS_KEEP_WHY="could not read how $main stores its refs (git config answered $rc), so its reflogs were never read"; return 1
+  fi
+  sd=$(_plat_mktemp_d) || { _WS_KEEP_WHY='could not make a scratch directory'; return 1; }
+  : > "$sd/ids"
+  for f in "$@"; do
+    [[ -n "$f" ]] || continue
+    _ws_reclaim_absent "$f"; rc=$?
+    (( rc != 0 )) || continue
+    if (( rc == 2 )); then _WS_KEEP_WHY="$_WS_ABSENT_WHY — the reflog there was never read"; rm -rf "$sd"; return 1; fi
+    # `-f`, because awk is no reader of anything else: gawk SKIPS a directory
+    # operand with a warning and exits 0 (measured), which would read as empty.
+    if [[ ! -f "$f" ]]; then _WS_KEEP_WHY="the reflog $f is not a regular file — it was never read"; rm -rf "$sd"; return 1; fi
+    LC_ALL=C awk 'function oid(s) { return (length(s) == 40 || length(s) == 64) && s !~ /[^0-9a-f]/ }
+      NF == 0 { next }
+      !oid($1) || !oid($2) { exit 3 }
+      { print $1; print $2 }' "$f" >> "$sd/ids" 2>/dev/null; rc=$?
+    if (( rc != 0 )); then
+      _WS_KEEP_WHY="the reflog $f $( (( rc == 3 )) && printf 'holds a line that is not a reflog entry' || printf 'cannot be read') — the commits it names are unknown"
+      rm -rf "$sd"; return 1
+    fi
+  done
+  LC_ALL=C sort -u "$sd/ids" | LC_ALL=C awk '$0 !~ /^0+$/' > "$sd/uniq" \
+    && git -C "$main" cat-file --batch-check='%(objectname) %(objecttype)' < "$sd/uniq" > "$sd/types" 2>/dev/null \
+    && LC_ALL=C awk '$2 == "commit" { print $1 }' "$sd/types" > "$sd/keep" \
+    || { _WS_KEEP_WHY="could not ask $main which of the ids its reflogs name are commits"; rm -rf "$sd"; return 1; }
+  mapfile -t all < "$sd/keep"
+  rm -rf "$sd"
+  (( ${#all[@]} )) || return 0
+  prev=$(git -C "$main" for-each-ref --format='%(refname)%09%(objectname)' "$ref" 2>/dev/null) \
+    || { _WS_KEEP_WHY="could not read $ref"; return 1; }
+  prev=$(LC_ALL=C awk -F'\t' -v r="$ref" '$1 == r { print $2 }' <<< "$prev")
+  tree=$(git -C "$main" mktree < /dev/null 2>/dev/null) && [[ "$tree" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] \
+    || { _WS_KEEP_WHY="could not write the empty tree the reflog keep is made of"; return 1; }
+  msg="ccrc: reflog commits kept at reclaim of $id"
+  c="$prev"
+  for (( i = 0; i < ${#all[@]}; i += 100 )); do
+    args=()
+    [[ -n "$c" ]] && args+=(-p "$c")
+    for s in "${all[@]:i:100}"; do args+=(-p "$s"); done
+    c=$(_ws_reclaim_commit_tree "$main" "${args[@]}" -m "$msg" "$tree" 2>/dev/null) \
+      && [[ "$c" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] \
+      || { _WS_KEEP_WHY="could not write the commit that keeps $main's reflog commits"; return 1; }
+  done
+  git -C "$main" update-ref "$ref" "$c" "$prev" 2>/dev/null \
+    || { _WS_KEEP_WHY="the reflog commits could not be pinned under $ref"; return 1; }
+  return 0
+}
+
+_ws_reclaim_keep_of() {   # main id kind(tree|branch) arg -> 0 once the reflog(s) that deleting `kind arg`
+  #                            takes are kept; 1 (_WS_KEEP_WHY). The TAIL's call, made just before each act
+  #                            that deletes a reflog, under `_ws_reclaim_contained`.
+  _WS_LOGS=()
+  _ws_reclaim_log_of "$1" "$3" "$4" && _ws_reclaim_keep_reflogs "$1" "$2" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}
 }
 
 _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything recoverable is pinned;
@@ -24566,7 +24735,7 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   local id="$1" workdir="$2" main="$3" branch="$4" childof="$5"
   local oph headsha headref rc nested cpath cpcommon cbr chead mainreal wdreal sha stashes
   local extras=() same=()
-  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; RECLAIM_KEPT=()
+  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; RECLAIM_KEPT=(); _WS_LOGS=()
   # THE LEAF IS NEVER FOLLOWED, here as at the ladder (spec §5.5): the settle
   # re-pin runs with no ladder in front of it, so this guard stands alone. A
   # link at the workdir reaches a tree ccd cannot prove is this child's, and
@@ -24634,10 +24803,9 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   done <<< "$nested"
   # (1b) Same-repository nested checkouts, innermost first: their operation
   # heads and their HEAD, exactly as for the child's own tree below, then
-  # classify, commit (moving nothing), remember the head. Their HEAD REFLOGS
-  # need no walk of their own: `reflog show --all` lists every worktree's
-  # HEAD reflog (`worktrees/<name>/HEAD`) from any one of them — measured, git
-  # 2.43 — so step (4)'s `_ws_attic_pin` over the child's tree already reads them.
+  # classify, commit (moving nothing), remember the head — and name its HEAD
+  # reflog, and its branch's, for step (4): the tail removes the checkout and
+  # deletes that branch, and both reflogs go with them.
   while IFS= read -r -u 9 cpath; do
     [[ -n "$cpath" ]] || continue
     oph=$(_ws_reclaim_opheads "$cpath")
@@ -24651,6 +24819,8 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
     [[ -n "$RECLAIM_WIP_SHA" ]] && extras+=("$RECLAIM_WIP_SHA")
     cbr=$(git -C "$cpath" symbolic-ref --quiet --short HEAD 2>/dev/null) || cbr=""
     REAP_CHILDLINES+="$cpath"$'\t'"$cbr"$'\t'"$chead"$'\n'
+    _ws_reclaim_log_of "$main" tree "$cpath" || { RECLAIM_PIN_WHY="$_WS_KEEP_WHY"; return 1; }
+    [[ -z "$cbr" ]] || _ws_reclaim_log_of "$main" branch "$cbr" || { RECLAIM_PIN_WHY="$_WS_KEEP_WHY"; return 1; }
   done 9< <(printf '%s\n' ${same[@]+"${same[@]}"} | awk 'NF { print length($0) "\t" $0 }' | LC_ALL=C sort -rn | cut -f2-)
   # (2) The child's own tree, LAST, so REAP_IGNORED describes it for the tombstone.
   _ws_reclaim_classify "$workdir" "" || { RECLAIM_PIN_WHY="$_WS_RECLAIM_CLASSIFY_WHY"; return 1; }
@@ -24671,12 +24841,17 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { RECLAIM_PIN_WHY="could not read the stash list of $main"; return 1; }
   while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$stashes"
-  # (4) The pins: the reflog and the tip through the EXISTING pin (its 200 + tip
-  # cap, unchanged; best-effort, as its own header says), then everything above,
-  # which is never optional — the branch tip among it.
-  _ws_attic_pin "$main" "$id" "$workdir" "$REAP_TIP" >/dev/null
+  # (4) The pins: everything above, which is never optional — the branch tip
+  # among it — then every commit the child's own reflogs name (its HEAD's, its
+  # branch's, and each nested checkout's and nested branch's, named in (1b)),
+  # completely (`_ws_reclaim_keep_reflogs`). Taken HERE, before the breadcrumb,
+  # so a reflog that cannot be read fails the pin while nothing is destroyed;
+  # the tail takes each one again just before the act that deletes it.
   _ws_reclaim_attic_extra "$main" "$id" ${extras[@]+"${extras[@]}"} \
     || { RECLAIM_PIN_WHY="a commit this reclaim must keep could not be pinned under refs/ccrc/attic/$id/"; return 1; }
+  _ws_reclaim_log_of "$main" tree "$workdir" && _ws_reclaim_log_of "$main" branch "$branch" \
+    && _ws_reclaim_keep_reflogs "$main" "$id" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"} \
+    || { RECLAIM_PIN_WHY="$_WS_KEEP_WHY"; return 1; }
   return 0
 }
 
@@ -24752,8 +24927,9 @@ os.replace(tmp, path)
 ' "$f" 2>/dev/null
 }
 
-_ws_reclaim_pin_absent() {   # id main branch recordhead -> 0 once the branch tip, the stashes attributed to
-  #                               the branch and git's recorded HEAD ('' = no record) are pinned; 1 with
+_ws_reclaim_pin_absent() {   # id main branch recordhead workdir -> 0 once the branch tip, the stashes attributed
+  #                               to the branch, git's recorded HEAD ('' = no record) and the child's reflogs
+  #                               git still keeps are pinned; 1 with
   #                               RECLAIM_PIN_WHY. Sets REAP_TIP; empties RECLAIM_WIP, RECLAIM_SECRETS and
   #                               REAP_CHILDLINES — there is no tree to commit, classify or descend.
   # THE PIN PHASE OF A CHILD WHOSE WORKTREE HAS VANISHED (spec §5.5, "A
@@ -24771,8 +24947,8 @@ _ws_reclaim_pin_absent() {   # id main branch recordhead -> 0 once the branch ti
 }
 
 _ws_reclaim_pin_absent_contained() {   # `_ws_reclaim_pin_absent`'s body, run under `_ws_reclaim_contained` — call that
-  local id="$1" main="$2" branch="$3" rhead="$4" stashes sha extras=()
-  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""
+  local id="$1" main="$2" branch="$3" rhead="$4" workdir="$5" stashes sha extras=()
+  RECLAIM_PIN_WHY=""; RECLAIM_WIP=""; RECLAIM_SECRETS=(); REAP_CHILDLINES=""; _WS_LOGS=()
   REAP_TIP=$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) || REAP_TIP=""
   stashes=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { RECLAIM_PIN_WHY="could not read the stash list of $main"; return 1; }
@@ -24780,6 +24956,12 @@ _ws_reclaim_pin_absent_contained() {   # `_ws_reclaim_pin_absent`'s body, run un
   while IFS= read -r sha; do [[ -n "$sha" ]] && extras+=("$sha"); done <<< "$stashes"
   _ws_reclaim_attic_extra "$main" "$id" "${extras[@]}" \
     || { RECLAIM_PIN_WHY="a commit this reclaim must keep could not be pinned under refs/ccrc/attic/$id/"; return 1; }
+  # What git still has of the child's reflogs, as on the fresh arm: the
+  # branch's, and the HEAD reflog git's record of the vanished tree still
+  # keeps (found through its `gitdir` entry — there is no tree to ask).
+  _ws_reclaim_log_of "$main" tree "$workdir" && _ws_reclaim_log_of "$main" branch "$branch" \
+    && _ws_reclaim_keep_reflogs "$main" "$id" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"} \
+    || { RECLAIM_PIN_WHY="$_WS_KEEP_WHY"; return 1; }
   return 0
 }
 
@@ -25103,6 +25285,13 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       fi
     fi
   fi
+  # EVERY REFLOG THIS TAIL DELETES IS KEPT JUST BEFORE THE ACT THAT DELETES IT
+  # (`_ws_reclaim_keep_of`): a checkout's HEAD reflog before `worktree remove`
+  # of its record, a branch's reflog before its CAS — here, in step (4) and in
+  # step (5). The pin phase and the settle took them too, but a resumed tail
+  # past the settle, and the vanished arm, have none in front of them, and on
+  # every arm the act comes after an arbitrary gap. A keep that fails is
+  # `pin-failed`, the breadcrumb stays, and nothing further is deleted.
   # (3) Registered nested children of THIS repository, innermost first. EACH
   # IS PROVEN BEFORE IT IS TOUCHED, AT THIS INSTANT (spec §5.5, rung 9):
   # `_ws_reclaim_nested_proven` walks every component from the child's
@@ -25180,6 +25369,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the checkout at $cpath is $( (( rec == 0 )) && printf "on '%s', not '%s'" "$_WS_NREC_BRANCH" "$cbr" || printf 'missing') — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
           return 1
         fi
+        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the checkout at $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(git -C "$main" worktree remove --force "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       elif (( rec == 0 )); then
@@ -25188,6 +25379,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the vanished checkout at $cpath is on '$_WS_NREC_BRANCH', not '$cbr' — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
           return 1
         fi
+        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
+          || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(git -C "$main" worktree remove "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
@@ -25216,6 +25409,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
               "$chead, the head of $cbr at the vanished checkout $cpath, could not be pinned under refs/ccrc/attic/$id/ — a branch is never deleted unpinned"
             return 1
           fi
+          _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" branch "$cbr" \
+            || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — $cbr stands, and nothing further was deleted"; return 1; }
           git -C "$main" update-ref -d "refs/heads/$cbr" "$chead" 2>/dev/null || {
             _ws_reclaim_fail "$id" "$lctx" branch-moved "$cbr moved after it was pinned at $chead — nothing further was deleted"
             return 1
@@ -25252,6 +25447,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ -d "$workdir" ]]; then
+      _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
+        || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — the tree at $workdir stands, and nothing further was deleted"; return 1; }
       wtout=$(git -C "$main" worktree remove --force "$workdir" 2>&1) \
         || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
     elif ! _ws_reclaim_absent "$workdir"; then
@@ -25294,6 +25491,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if (( rec == 0 )); then
       _ws_reclaim_record "$main" "$workdir"; rec=$?
       if (( rec == 0 )); then
+        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
+          || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $workdir stands, and nothing further was deleted"; return 1; }
         wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
       fi
@@ -25321,6 +25520,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
           "$( (( crc == 0 )) && printf '%s is the main line of %s' "$branch" "$main" || printf 'whether %s is the main line of %s could not be told' "$branch" "$main") — the branch was kept"
         return 1
       fi
+      _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" branch "$branch" \
+        || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — $branch stands, and nothing further was deleted"; return 1; }
       git -C "$main" update-ref -d "refs/heads/$branch" "$tip" 2>/dev/null \
         || { _ws_reclaim_fail "$id" "$lctx" branch-moved "$branch moved after it was pinned at $tip — nothing further was deleted"; return 1; }
     fi
@@ -25536,7 +25737,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
     # tombstone saying `worktree: absent`, and a tail that starts at the
     # branch, because there is no tree for the children and worktree steps.
     if [[ "$RECLAIM_WORKTREE" == absent ]]; then
-      _ws_reclaim_pin_absent "$id" "$main" "$REAP_BRANCH" "$RECLAIM_HEAD" && pinned=1
+      _ws_reclaim_pin_absent "$id" "$main" "$REAP_BRANCH" "$RECLAIM_HEAD" "$workdir" && pinned=1
       start=branch
     else
       _ws_reclaim_pin "$id" "$workdir" "$main" "$REAP_BRANCH" "$RECLAIM_CHILDOF" && pinned=1

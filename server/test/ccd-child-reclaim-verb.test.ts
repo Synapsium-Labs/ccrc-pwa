@@ -14,8 +14,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
-  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, otherSnapshot,
-  plantOther, plantTmux, tmuxSessions, wideDigitLocale, type Child,
+  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, gcNow, hasCommit,
+  highCommit, makeChild, otherSnapshot, plantOther, plantReflogNoise, plantTmux, tmuxSessions, wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -1881,4 +1881,216 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     expect(fs.existsSync(c.wt)).toBe(false);
     expect(h.reg(CHILD_ID, 'uuid')).toBeNull();
   }, 90_000);
+});
+
+describe('the child’s own reflogs are kept, completely, before the acts that delete them (spec §5.5)', () => {
+  // The tail deletes four kinds of reflog: the child's HEAD reflog (with its
+  // worktree record), its branch's (with the branch), and each nested
+  // checkout's and nested branch's. A commit only one of them names is kept
+  // by `refs/ccrc/attic/<id>/reflogs`, and nothing ANOTHER session's reflog
+  // names is. Asserted by reading git after the act — and after `git gc
+  // --prune=now`, which leaves a commit only when a ref reaches it.
+  const branchLog = (c: Child): string =>
+    h.git(c.main, 'rev-parse', '--path-format=absolute', '--git-path', `logs/refs/heads/${CHILD_BRANCH}`);
+  /** Moves `ref` to `id` and back, from the MAIN checkout — so only that
+   *  ref's own reflog names `id` (main's HEAD is on `main`, not on it). */
+  const movedAndBack = (c: Child, ref: string, id: string): void => {
+    const was = h.git(c.main, 'rev-parse', ref);
+    h.git(c.main, 'update-ref', '-m', 'moved away', ref, id);
+    h.git(c.main, 'update-ref', '-m', 'moved back', ref, was);
+  };
+  /** After the act: kept by the attic, and still kept once gc has pruned
+   *  everything no ref reaches — with the CONTROL that gc did prune. */
+  const keptThroughGc = (c: Child, id: string): void => {
+    expect(atticReach(h, c), `${id} is not kept by the attic`).toContain(id);
+    const dangling = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-m', 'referenced by nothing');
+    gcNow(h, c.main);
+    expect(hasCommit(h, c.main, dangling), 'the CONTROL: gc pruned a commit no ref reaches').toBe(false);
+    expect(hasCommit(h, c.main, id), `${id} did not survive git gc --prune=now`).toBe(true);
+    expect(atticReach(h, c)).toContain(id);
+  };
+  const rankAmongAllReflogs = (dir: string, id: string): number =>
+    [...new Set(h.git(dir, 'reflog', 'show', '--all', '--format=%H').split('\n'))].sort().indexOf(id);
+
+  it('(1) the review’s shape: a commit only the child’s reflogs name, past 650 unrelated reflog entries, is kept and survives gc', () => {
+    const c = makeChild(h);
+    plantReflogNoise(h, c.main, 650);
+    const lost = highCommit(h, c.wt, 'committed, then reset away');
+    h.git(c.wt, 'reset', '-q', '--hard', lost);
+    h.git(c.wt, 'reset', '-q', '--hard', c.tip);
+    h.git(c.wt, 'reset', '-q', '--hard', 'HEAD');   // and moved on: ORIG_HEAD no longer names it
+    // The CONTROLS: no branch and no operation head reaches it, and at least
+    // 200 other reflog ids sort below it — a keep of the 200 lowest never
+    // reached it.
+    expect(h.git(c.main, 'branch', '--contains', lost)).toBe('');
+    expect(h.git(c.wt, 'rev-parse', 'ORIG_HEAD')).toBe(c.tip);
+    expect(rankAmongAllReflogs(c.wt, lost)).toBeGreaterThanOrEqual(200);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(c.wt), 'the worktree — and its HEAD reflog — went').toBe(false);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch — and its reflog — went').toBe('');
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('keeps a commit only the child’s HEAD reflog names — a detached commit left behind', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(c.wt, 'detached.txt'), 'left behind');
+    h.git(c.wt, 'add', 'detached.txt'); h.git(c.wt, 'commit', '-q', '-m', 'detached, then left');
+    const lost = h.git(c.wt, 'rev-parse', 'HEAD');
+    h.git(c.wt, 'checkout', '-q', CHILD_BRANCH);
+    expect(h.git(c.main, 'reflog', 'show', '--format=%H', `refs/heads/${CHILD_BRANCH}`), 'the CONTROL: no branch reflog').not.toContain(lost);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('keeps a commit only the child’s BRANCH reflog names — a branch moved and moved back', () => {
+    const c = makeChild(h);
+    const lost = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-p', c.tip, '-m', 'the branch stood here once');
+    movedAndBack(c, `refs/heads/${CHILD_BRANCH}`, lost);
+    expect(h.git(c.wt, 'reflog', 'show', '--format=%H', 'HEAD'), 'the CONTROL: the HEAD reflog does not name it').not.toContain(lost);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('(2) a mode-000 child BRANCH reflog fails pin-failed — the branch, the tree and the row untouched, no breadcrumb', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, 'notes.txt'), 'uncommitted work');
+    const log = branchLog(c);
+    expect(fs.statSync(log).isFile(), 'the CONTROL: the branch has a reflog').toBe(true);
+    const tok = evalOf(h).token;
+    const before = treeOf(c.wt);
+    let r: { code: number; stdout: string; stderr: string };
+    fs.chmodSync(log, 0o000);
+    try { r = childReclaimVerb(h, tok); } finally { fs.chmodSync(log, 0o644); }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain(`the reflog ${log} cannot be read`);
+    failedPairAgrees(r);
+    intact(c);
+    expect(treeOf(c.wt), 'the tree is byte-identical').toEqual(before);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch did not move').toBe(c.tip);
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+  }, 90_000);
+
+  it('(2) the same reflog unreadable on a RESUME at the branch step stops the tail there — the branch stands, the breadcrumb stays — and it is no wedge', () => {
+    const c = makeChild(h);
+    interrupted(c, 'branch');
+    h.git(c.main, 'worktree', 'remove', '--force', c.wt);
+    const log = branchLog(c);
+    let r: { code: number; stdout: string; stderr: string };
+    fs.chmodSync(log, 0o000);
+    try { r = childReclaimVerb(h, resumeToken('branch')); } finally { fs.chmodSync(log, 0o644); }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain(`the reflog ${log} cannot be read`);
+    expect(o.detail).toContain(`${CHILD_BRANCH} stands, and nothing further was deleted`);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:branch');
+    const again = childReclaimVerb(h, resumeToken('branch'));
+    expect(again.code, again.stdout + again.stderr).toBe(0);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
+  }, 90_000);
+
+  it('(2) on the VANISHED arm too: a mode-000 branch reflog fails pin-failed before anything is touched — no breadcrumb, the unit untouched', () => {
+    const c = makeChild(h);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const log = branchLog(c);
+    const tok = evalOf(h).token;
+    let r: { code: number; stdout: string; stderr: string };
+    fs.chmodSync(log, 0o000);
+    try { r = childReclaimVerb(h, tok); } finally { fs.chmodSync(log, 0o644); }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain(`the reflog ${log} cannot be read`);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'git’s record of the tree stands').toMatch(/^prunable /m);
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+  }, 90_000);
+
+  it('(3) a NESTED branch whose reflog alone holds a commit: the branch is deleted, the commit is kept and survives gc', () => {
+    const c = makeChild(h);
+    plantReflogNoise(h, c.main, 650);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    const lost = highCommit(h, inner, 'the nested branch stood here once');
+    movedAndBack(c, 'refs/heads/ws/nested', lost);
+    expect(h.git(inner, 'reflog', 'show', '--format=%H', 'HEAD'), 'the CONTROL: the nested HEAD reflog does not name it').not.toContain(lost);
+    expect(rankAmongAllReflogs(c.wt, lost)).toBeGreaterThanOrEqual(200);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(inner), 'the nested checkout went').toBe(false);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the nested branch — and its reflog — went').toBe('');
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('(4) the attic keeps NOTHING only another session’s reflogs name — its HEAD’s, its branch’s, or main’s', () => {
+    const c = makeChild(h);
+    const other = path.join(h.home, 'other');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/other', other);
+    h.git(other, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(other, 'o.txt'), 'another session’s');
+    h.git(other, 'add', 'o.txt'); h.git(other, 'commit', '-q', '-m', 'another session, detached');
+    const otherHead = h.git(other, 'rev-parse', 'HEAD');
+    h.git(other, 'checkout', '-q', 'ws/other');
+    const otherBranch = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-m', 'another session’s branch stood here');
+    movedAndBack(c, 'refs/heads/ws/other', otherBranch);
+    const mainLine = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-m', 'main stood here');
+    movedAndBack(c, 'refs/heads/main', mainLine);
+    const all = h.git(c.wt, 'reflog', 'show', '--all', '--format=%H');
+    for (const id of [otherHead, otherBranch, mainLine]) expect(all, `the CONTROL: a reflog names ${id}`).toContain(id);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const kept = atticReach(h, c);
+    expect(kept, 'the CONTROL: the attic keeps the child’s own tip').toContain(c.tip);
+    for (const id of [otherHead, otherBranch, mainLine]) expect(kept, `${id} is another session’s`).not.toContain(id);
+  }, 120_000);
+
+  it('(5) the VANISHED arm keeps a commit only the branch’s reflog names', () => {
+    const c = makeChild(h);
+    const lost = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-p', c.tip, '-m', 'the branch stood here once');
+    movedAndBack(c, `refs/heads/${CHILD_BRANCH}`, lost);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(tombOf()['worktree'], 'the CONTROL: the vanished arm ran').toBe('absent');
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('(5) the VANISHED arm keeps a commit only the vanished tree’s HEAD reflog names — found through git’s `gitdir` record', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(c.wt, 'detached.txt'), 'left behind');
+    h.git(c.wt, 'add', 'detached.txt'); h.git(c.wt, 'commit', '-q', '-m', 'detached, then left');
+    const lost = h.git(c.wt, 'rev-parse', 'HEAD');
+    h.git(c.wt, 'checkout', '-q', CHILD_BRANCH);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git still records the tree').toMatch(/^prunable /m);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the record — and its HEAD reflog — went').not.toMatch(/^prunable /m);
+    keptThroughGc(c, lost);
+  }, 120_000);
+
+  it('ORDER: an entry written after the pin, on a RESUME at the branch step, is kept before the CAS deletes the reflog', () => {
+    // No settle runs on this arm: the only keep in front of the branch's
+    // deletion is the tail's own, just before its CAS.
+    const c = makeChild(h);
+    interrupted(c, 'branch');
+    h.git(c.main, 'worktree', 'remove', '--force', c.wt);
+    const late = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-p', c.tip, '-m', 'moved after the pin, and back');
+    movedAndBack(c, `refs/heads/${CHILD_BRANCH}`, late);
+    expect(atticReach(h, c), 'the CONTROL: the pin phase ran before it existed').not.toContain(late);
+    const r = childReclaimVerb(h, resumeToken('branch'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
+    keptThroughGc(c, late);
+  }, 120_000);
 });

@@ -9,6 +9,7 @@
 // and the verb this programme adds is destructive, so the rule is absolute:
 // `CHILD_STUBS` records the unit and pane calls instead of making them, and
 // `CHILD_ENV` points the residue probe at a directory inside that HOME.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WS_ADD } from './ccdWsHelpers.js';
@@ -204,4 +205,83 @@ export function otherSnapshot(h: PrHarness, c: Child, other: string): Record<str
     status: h.git(other, 'status', '--porcelain=v1', '--untracked-files=all'),
     subjects: h.git(c.main, 'log', '--format=%s', 'refs/heads/ws/other'),
   };
+}
+
+/** Every commit the child's attic KEEPS: whatever is reachable from any ref
+ *  under `refs/ccrc/attic/<id>/` — the reflog keep's parents included, which
+ *  are kept by one ref and are not refs of their own. Read from git. */
+export function atticReach(h: PrHarness, c: Child): string[] {
+  const refs = h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`)
+    .split('\n').filter(Boolean);
+  return refs.length ? h.git(c.main, 'rev-list', ...refs).split('\n').filter(Boolean) : [];
+}
+
+/** `n` commits that NO ref reaches, each a child of `repo`'s HEAD — siblings,
+ *  never a chain, so keeping one keeps no other — written by ONE
+ *  `git fast-import` (a loop of `commit-tree` would cost n processes). Their
+ *  ids, in order. */
+export function looseCommits(h: PrHarness, repo: string, n: number, label: string): string[] {
+  const base = h.git(repo, 'rev-parse', 'HEAD');
+  const ref = 'refs/ccrc-fixture/loose';
+  let stream = '';
+  for (let i = 1; i <= n; i++) {
+    const msg = `${label} ${i}\n`;
+    stream += `commit ${ref}\nmark :${i}\ncommitter T <t@x> ${1700000000 + i} +0000\n`
+      + `data ${Buffer.byteLength(msg)}\n${msg}from ${base}\n\n`;
+  }
+  const marks = path.join(h.home, `loose-${label.replace(/[^a-z0-9]+/gi, '-')}.marks`);
+  execFileSync('git', ['-C', repo, 'fast-import', '--quiet', `--export-marks=${marks}`],
+    { input: stream, env: { ...process.env, HOME: h.home } });
+  h.git(repo, 'update-ref', '-d', ref);
+  const byMark = new Map(fs.readFileSync(marks, 'utf8').split('\n').filter(Boolean)
+    .map((l) => l.split(' ') as [string, string]));
+  return Array.from({ length: n }, (_, i) => byMark.get(`:${i + 1}`)!);
+}
+
+/** Appends one reflog ENTRY per id to the log FILE git keeps for `ref`,
+ *  located through git (`rev-parse --git-path logs/<ref>` run in `dir`, so
+ *  `HEAD` in a linked worktree is that worktree's own), then one entry back to
+ *  the ref's current value: the shape of a ref moved n times and moved back.
+ *  Each entry's old side is the id before it. */
+export function appendReflog(h: PrHarness, dir: string, ref: string, ids: readonly string[]): void {
+  const file = h.git(dir, 'rev-parse', '--path-format=absolute', '--git-path', `logs/${ref}`);
+  const cur = h.git(dir, 'rev-parse', ref);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let prev = cur; let out = '';
+  for (const id of [...ids, cur]) { out += `${prev} ${id} T <t@x> 1700000000 +0000\tfixture: moved\n`; prev = id; }
+  fs.appendFileSync(file, out);
+}
+
+/** The busy repository the review measured: a branch `noise` of `main`'s
+ *  repository whose reflog holds `n` entries of commits unrelated to the
+ *  child — another session's history, which a reclaim must neither keep nor
+ *  let crowd out the child's own. */
+export function plantReflogNoise(h: PrHarness, main: string, n: number): void {
+  const ids = looseCommits(h, main, n, 'noise');
+  h.git(main, 'update-ref', 'refs/heads/noise', ids[n - 1]!);
+  appendReflog(h, main, 'refs/heads/noise', ids);
+}
+
+/** A commit on `dir`'s HEAD, referenced by nothing, whose id starts with
+ *  `c`-`f` — so, of 650 random reflog ids, about 480 sort below it and a keep
+ *  capped at the 200 LOWEST (the review's measured defect) never reaches it.
+ *  Each case asserts that rank as its CONTROL rather than trusting this. */
+export function highCommit(h: PrHarness, dir: string, label: string): string {
+  for (let k = 0; ; k++) {
+    const id = h.git(dir, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', `${label} ${k}`);
+    if (id[0]! >= 'c') return id;
+  }
+}
+
+/** Expires EVERY reflog of `main`'s repository and runs `git gc
+ *  --prune=now` there — the fixture repository only. After it, a commit
+ *  exists only if a ref reaches it. */
+export function gcNow(h: PrHarness, main: string): void {
+  h.git(main, 'reflog', 'expire', '--expire=now', '--expire-unreachable=now', '--all');
+  h.git(main, 'gc', '--prune=now', '--quiet');
+}
+
+/** Whether `main`'s repository still HAS the commit `id` (`cat-file -e`). */
+export function hasCommit(h: PrHarness, main: string, id: string): boolean {
+  return h.run(`git -C "${main}" cat-file -e "${id}^{commit}" 2>/dev/null`).code === 0;
 }

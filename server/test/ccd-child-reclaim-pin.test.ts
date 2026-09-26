@@ -11,7 +11,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import {
-  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, makeChild, type Child,
+  CHILD_BRANCH, CHILD_ID, CHILD_RUN, CHILD_STUBS, appendReflog, atticReach, hasCommit, looseCommits, makeChild, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -171,11 +171,9 @@ describe('the attic pins', () => {
     fs.appendFileSync(path.join(c.wt, 'f2.txt'), 'stashed\n');
     h.git(c.wt, 'stash', 'push', '-m', 'kept');
     const stash = h.git(c.main, 'rev-parse', 'refs/stash');
-    // The two heads are commits NO reflog names. `_ws_reclaim_pin` also runs
-    // the existing `_ws_attic_pin`, which pins every sha in
-    // `git -C <workdir> reflog show --all` — and in a linked worktree that
-    // includes main's branch reflog, `refs/stash` and the child's own branch
-    // reflog (measured, git 2.43). A head that is in any of those is pinned
+    // The two heads are commits NO reflog names. `_ws_reclaim_pin` also keeps
+    // every commit the child's own reflogs name (`_ws_reclaim_keep_reflogs`) —
+    // its HEAD's and its branch's. A head that is in either of those is kept
     // whatever step (0) does, and "before the commit" would be untested. A
     // `commit-tree` object referenced by nothing is pinned ONLY by step (0).
     const tree = h.git(c.wt, 'rev-parse', 'HEAD^{tree}');
@@ -249,13 +247,22 @@ describe('the attic pins', () => {
 });
 
 describe('the only commit ccd writes', () => {
-  it('is one `commit-tree` line, inside _ws_wip_commit — no `git commit` at all — and _ws_wip_commit is called only from _ws_reclaim_pin', () => {
+  it('is one `commit-tree` line, inside _ws_reclaim_commit_tree — no `git commit` at all — whose only callers are the WIP commit and the reflog keep; and _ws_wip_commit is called only from _ws_reclaim_pin', () => {
+    // ONE writer, so ONE identity: the reflog keep (`_ws_reclaim_keep_reflogs`)
+    // writes through the WIP commit's own helper, never a second copy of it.
     const src = fs.readFileSync(CCD, 'utf8');
     const code = src.split('\n').filter((l) => !/^\s*#/.test(l));
     expect(code.filter((l) => /\bcommit-tree\b/.test(l))).toHaveLength(1);
     expect(code.filter((l) => /\bcommit --no-verify\b|\bgit( -C "[^"]*")?( -c [^ ]+)* commit\b/.test(l)), 'a `git commit`, which moves a ref').toEqual([]);
-    const wipBody = src.slice(src.indexOf('_ws_wip_commit() {'), src.indexOf('_ws_reclaim_attic_extra() {'));
-    expect(wipBody).toMatch(/^[^#\n]*\bcommit-tree\b/m);
+    const writer = src.slice(src.indexOf('_ws_reclaim_commit_tree() {'), src.indexOf('_ws_reclaim_attic_extra() {'));
+    expect(writer).toMatch(/^[^#\n]*\bcommit-tree\b/m);
+    let fn = '';
+    const callers: string[] = [];
+    for (const l of src.split('\n')) {
+      fn = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(l)?.[1] ?? fn;
+      if (!/^\s*#/.test(l) && /_ws_reclaim_commit_tree "/.test(l)) callers.push(fn);
+    }
+    expect(callers, 'the commit writer’s callers, by enclosing function').toEqual(['_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
     expect(calls(src)).toBe(2);
@@ -632,9 +639,10 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     fs.writeFileSync(path.join(inner, 'x.txt'), 'x'); h.git(inner, 'add', 'x.txt'); h.git(inner, 'commit', '-q', '-m', 'detached, then left');
     const lost = h.git(inner, 'rev-parse', 'HEAD');
     h.git(inner, 'checkout', '-q', 'ws/nested');
+    expect(h.git(c.main, 'reflog', 'show', '--format=%H', 'refs/heads/ws/nested'), 'the CONTROL: no branch reflog names it').not.toContain(lost);
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
-    expect(atticShas(c)).toContain(lost);
+    expect(atticReach(h, c)).toContain(lost);
   }, 60_000);
 });
 
@@ -836,5 +844,81 @@ describe('the pin proves every tree’s git directory is git’s own record of i
     fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
+  }, 60_000);
+});
+
+describe('the child’s own reflogs are kept COMPLETELY — every entry, both sides, read from the log file (spec §5.5)', () => {
+  const REFLOGS_REF = `refs/ccrc/attic/${CHILD_ID}/reflogs`;
+  const branchLog = (c: Child): string =>
+    h.git(c.main, 'rev-parse', '--path-format=absolute', '--git-path', `logs/refs/heads/${CHILD_BRANCH}`);
+
+  it('keeps every one of 250 commits the child’s branch reflog names — no cap — under ONE attic ref, written as ccrc', () => {
+    // 250 SIBLINGS, never a chain: keeping one keeps no other, so a keep that
+    // dropped any of them — a `head -200`, a lost chunk — is seen.
+    const c = makeChild(h);
+    const ids = looseCommits(h, c.main, 250, 'moved');
+    appendReflog(h, c.main, `refs/heads/${CHILD_BRANCH}`, ids);
+    const p = pinOf(c, { env: { GIT_AUTHOR_NAME: 'intruder', GIT_AUTHOR_EMAIL: 'intruder@x',
+      GIT_COMMITTER_NAME: 'intruder', GIT_COMMITTER_EMAIL: 'intruder@x' } });
+    expect(p.rc, p.why).toBe('0');
+    const kept = new Set(atticReach(h, c));
+    expect(ids.filter((id) => !kept.has(id)), 'reflog commits the attic does not keep').toEqual([]);
+    const refs = h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`).split('\n');
+    expect(refs.filter((r) => !/\/[0-9a-f]{40}$/.test(r)), 'the reflog commits are kept by ONE ref, not a ref each').toEqual([REFLOGS_REF]);
+    expect(h.git(c.main, 'log', '-1', '--format=%an <%ae>|%cn <%ce>|%s', REFLOGS_REF)).toBe(
+      'ccrc reclaim <ccrc-reclaim@invalid>|ccrc reclaim <ccrc-reclaim@invalid>'
+      + `|ccrc: reflog commits kept at reclaim of ${CHILD_ID}`);
+  }, 60_000);
+
+  it('reads the OLD side of an entry too — a commit an entry names only as the value it moved FROM is kept', () => {
+    // The first entry left after a reflog is expired names, as its old value,
+    // a commit whose own entry is gone. A `%H` listing prints new values only.
+    const c = makeChild(h);
+    const [oldOnly] = looseCommits(h, c.main, 1, 'old side');
+    fs.appendFileSync(branchLog(c), `${oldOnly} ${c.tip} T <t@x> 1700000000 +0000\tfixture: moved back\n`);
+    expect(h.git(c.main, 'reflog', 'show', '--format=%H', `refs/heads/${CHILD_BRANCH}`), 'the CONTROL: no %H listing names it')
+      .not.toContain(oldOnly);
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(atticReach(h, c)).toContain(oldOnly);
+  }, 60_000);
+
+  it('SKIPS an entry naming a commit git no longer has — never a failure — and keeps the rest', () => {
+    const c = makeChild(h);
+    const [kept] = looseCommits(h, c.main, 1, 'still here');
+    appendReflog(h, c.main, `refs/heads/${CHILD_BRANCH}`, ['d'.repeat(40), kept!]);
+    expect(hasCommit(h, c.main, 'd'.repeat(40)), 'the CONTROL: git has no such commit').toBe(false);
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(atticReach(h, c)).toContain(kept);
+  }, 60_000);
+
+  it('FAILS on a reflog line that is not an entry — the commits that file names are unknown', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(branchLog(c), 'not a reflog entry\n');
+    const p = pinOf(c);
+    expect(p.rc).toBe('1');
+    expect(p.why).toContain(`the reflog ${branchLog(c)} holds a line that is not a reflog entry`);
+  }, 60_000);
+
+  it('FAILS on a HEAD reflog that is not a regular file — awk would skip a directory and read it as empty', () => {
+    const c = makeChild(h);
+    const headLog = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD');
+    fs.rmSync(headLog); fs.mkdirSync(headLog);
+    const p = pinOf(c);
+    expect(p.rc).toBe('1');
+    expect(p.why).toContain(`the reflog ${headLog} is not a regular file`);
+  }, 60_000);
+
+  it('FAILS — never reads "no reflog" — when the repository’s refs are not stored as files (`extensions.refStorage`)', () => {
+    // git 2.43 cannot open a reftable repository at all, so the one read that
+    // decides is stubbed: `git config --get extensions.refStorage` answers
+    // `reftable`, every other git call is the real one.
+    const c = makeChild(h);
+    const pre = 'git() { if [[ " $* " == *" config --get extensions.refStorage "* ]]; then echo reftable; return 0; fi; command git "$@"; };';
+    const p = pinOf(c, { pre });
+    expect(p.rc).toBe('1');
+    expect(p.why).toContain(`stores its refs as 'reftable', not as files`);
+    expect(h.git(c.main, 'for-each-ref', `refs/ccrc/attic/${CHILD_ID}/reflogs`), 'nothing was kept as if there were no reflog').toBe('');
   }, 60_000);
 });
