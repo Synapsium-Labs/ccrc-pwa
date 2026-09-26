@@ -2469,23 +2469,30 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       'and its replacement heads all four durable callers').toBe(4);
   });
 
-  // Review 170 F18: `cmd_ws_reclaim`'s purge-refused detail is a FIFTH durable
-  // caller of this shared renderer (`_rcl_why=$(_compact_lock_why_remedy "$id"
-  // ws-reclaim)`), and nothing may run `ws-reclaim` by hand — it is a
-  // server-only verb. Before this fix the ordinary-contention catch-all arm
-  // rendered "re-run ccd $verb $id", which for this verb read "re-run ccd
-  // ws-reclaim <id>" — a shape `cmd_ws_reclaim` dies on and a verb no human
-  // may run. MEASURED red first, before the fix: with `COMPACT_LOCK_WHY`
-  // empty and `verb=ws-reclaim`, the renderer answered "...re-run ccd
-  // ws-reclaim demo-child-row once the compaction settles". Every other
-  // `COMPACT_LOCK_WHY` arm's non-`ws-gc --prune` branch also says bare
-  // "re-run", which is likewise wrong for a verb no human runs, so each is
-  // asserted here too.
-  it('(d1g) ws-reclaim never tells a human to "re-run ccd" — the server retries instead', () => {
+  // Review 170 F18 (fix round 1, review-fr-H I2): `cmd_ws_reclaim`'s
+  // purge-refused detail is a FIFTH durable caller of this shared renderer
+  // (`_rcl_why=$(_compact_lock_why_remedy "$id" ws-reclaim)`), and nothing may
+  // run `ws-reclaim` by hand — it is a server-only verb. Before the F18 fix
+  // the ordinary-contention catch-all arm rendered "re-run ccd $verb $id",
+  // which for this verb read "re-run ccd ws-reclaim <id>" — a shape
+  // `cmd_ws_reclaim` dies on and a verb no human may run. MEASURED red first,
+  // before the fix: with `COMPACT_LOCK_WHY` empty and `verb=ws-reclaim`, the
+  // renderer answered "...re-run ccd ws-reclaim demo-child-row once the
+  // compaction settles".
+  //
+  // Every other `COMPACT_LOCK_WHY` arm's non-`ws-gc --prune` branch ALSO said
+  // bare "re-run" before the fix (ccd/ccd:3332, :3338, :3349, :3374, each now
+  // substituting `$rerun`), which is equally wrong for a verb no human runs —
+  // so each of those four is asserted POSITIVELY here too, not merely by the
+  // absence of "re-run ccd" (which their pre-fix text never contained, so that
+  // check alone cannot catch a REVERTED `$rerun`). Reverting any ONE of the
+  // four back to a literal "re-run" must turn ONLY that row red — verified in
+  // an isolated copy, below.
+  it('(d1h) ws-reclaim never tells a human to "re-run ccd" — the server retries instead, on every token', () => {
     const id = 'demo-child-row';
-    const whys = ['', 'canonical-vanished', 'lock-path-occupied', 'lock-source-refused',
-      'lock-publish-failed', 'a-token-with-no-arm'] as const;
-    for (const why of whys) {
+    const knownTokens = ['', 'canonical-vanished', 'lock-path-occupied', 'lock-source-refused',
+      'lock-publish-failed'] as const;
+    for (const why of knownTokens) {
       const out = h.sh(`COMPACT_LOCK_WHY='${why}' `
         + `_r=$(_compact_lock_why_remedy ${id} ws-reclaim); printf 'OUT<<%s>>' "$_r"`);
       const m = /OUT<<([\s\S]*)>>/.exec(out);
@@ -2493,11 +2500,24 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       const sentence = m![1]!;
       expect(sentence, `WHY=${why || '(empty)'}: never tells a human to run the verb itself`)
         .not.toContain('re-run ccd');
-      if (why === '') {
-        expect(sentence, 'ordinary contention names the SERVER as the one that retries')
-          .toContain('the server retries the reclaim once the compaction settles');
-      }
+      // POSITIVE: names the server as the one that retries. The empty-WHY arm
+      // has trailing words after `$rerun` ("… once the compaction settles");
+      // the other four end the sentence AT `$rerun` — asserted both ways so a
+      // reverted substitution reds this exact row.
+      expect(sentence, `WHY=${why || '(empty)'}: names the SERVER as the one that retries`)
+        .toContain('the server retries the reclaim');
+      expect(sentence, `WHY=${why || '(empty)'}: and never falls back to the bare human-facing "re-run"`)
+        .not.toMatch(/(and|then) re-run$/);
     }
+    // THE ONE ARM WITH NO RE-RUN WORDING AT ALL: an unrecognised token reaches
+    // the outer catch-all, which never names a remedy clause and carries no
+    // `$rerun` substitution — so only the baseline negative applies.
+    const out = h.sh(`COMPACT_LOCK_WHY='a-token-with-no-arm' `
+      + `_r=$(_compact_lock_why_remedy ${id} ws-reclaim); printf 'OUT<<%s>>' "$_r"`);
+    const m = /OUT<<([\s\S]*)>>/.exec(out);
+    expect(m, 'the catch-all answered at all').not.toBeNull();
+    expect(m![1], 'the catch-all never tells a human to run the verb itself either')
+      .not.toContain('re-run ccd');
   });
 
   it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {

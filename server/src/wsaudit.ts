@@ -45,7 +45,7 @@ export const SENTENCES: Record<string, string> = {
   // checkout is standing on. `update-ref -d` — the CAS this verb deletes with,
   // because `git branch -d` refuses a squash merge — does not make the check
   // `branch -d` makes, so ccd makes it.
-  'branch-elsewhere': 'This branch is one ccrc will not delete without being sure only this workspace holds it: another checkout has it checked out, it is the project’s main line, or which of those is true could not be told. Nothing is removed.',
+  'branch-elsewhere': 'ccrc deletes a branch only when it is proven to belong to this workspace alone — checked out nowhere else, and not the project’s main line — and here that could not be proven. Nothing is removed.',
   'dirty-tree': 'There are uncommitted or untracked changes here. Commit or move them first.',
   // A read that FAILED, not a tree that was clean. It gets its own sentence
   // rather than borrowing dirty-tree's, because "commit or move them first" is
@@ -199,11 +199,11 @@ export const SENTENCES: Record<string, string> = {
   // ladder's new words. A CHILD has no human to act on a sentence (rule 4), so
   // none of these tells anyone to do anything: the retryable ones say the lane
   // tries again, the terminal ones say what was not proven. The reused tokens
-  // (`no-such-session`, `not-a-workspace`, `held`, `branch-elsewhere`,
-  // `tree-unreadable`, `no-worktree-record`, `state-changed`, `in-progress`)
-  // keep their sentences: the server only ever shows a TERMINAL token's
-  // sentence for a child — `no-worktree-record`'s ("nothing here is ccrc's to
-  // remove") is true of one and asks nothing of anyone — and
+  // (`no-such-session`, `not-a-workspace`, `held`, `tree-unreadable`,
+  // `no-worktree-record`, `state-changed`, `in-progress`) keep their sentences
+  // UNEDITED: the server only ever shows a TERMINAL token's sentence for a
+  // child — `no-worktree-record`'s ("nothing here is ccrc's to remove") is
+  // true of one and asks nothing of anyone — and
   // `held`/`state-changed`/`in-progress` — the three whose copy names a human
   // remedy — are retryable, carried as a deferral's `detail`, never rendered.
   // `containment-unproven` has several causes in ccd (a nested checkout that is
@@ -212,21 +212,26 @@ export const SENTENCES: Record<string, string> = {
   // workdir that belongs to another repository, that is a symbolic link, that
   // is not one plain absolute path, or that is not git's own record of that
   // tree; or that another registry row names, is rooted inside, or is spelled
-  // through it), so its sentence lists them and claims only what every one of
-  // them proves: the tree at that path is not proven to be the child's own. A
-  // read that FAILED is not among them — ccd answers that unmeasured, and the
-  // lane retries it.
-  // `branch-elsewhere` and `tree-busy` are reused from ws-reap too, so each
-  // sentence is written to stay true of BOTH: `branch-elsewhere` also covers a
-  // reclaim's own two ws-reap-absent causes (the branch IS the project's main
-  // line, or whether it is could not be told at all — an unset origin/HEAD);
-  // `tree-busy` also covers a held `index.lock` in the child's own tree, never
-  // only an in-progress operation.
+  // through it), so its sentence gives them as EXAMPLES rather than an
+  // exhaustive reading — general enough that one more cause need not reopen
+  // it — and claims only what every one of them proves: the tree at that path
+  // is not proven to be the child's own. A read that FAILED is not among
+  // them — ccd answers that unmeasured, and the lane retries it.
+  // `branch-elsewhere` IS reused from ws-reap, but its sentence is WIDENED here
+  // rather than merely kept: ws-reap's own two emitters mean only "another
+  // checkout holds it", while reclaim's ladder also refuses it when the branch
+  // IS the project's main line, or when whether it is could not be told at all
+  // (an unset origin/HEAD) — so the sentence states the general rule, true of
+  // all three, rather than listing them. `tree-busy` is NOT reused: it is new
+  // in wave 3 (reclaim's rung 6 alone; ws-reap has no emitter of this token at
+  // all), and its sentence covers a held `index.lock` FILE standing in the
+  // child's own tree (possibly left by a crash — no command need be holding
+  // it), never only an in-progress git operation.
   'not-a-child': 'ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees — so it is never reclaimed automatically. Nothing was removed.',
   'paused': 'Reclamation is paused fleet-wide. Nothing was removed; it resumes when the pause is lifted.',
   'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
-  'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, or a git command holds its index lock, so nothing was removed. Reclamation tries again later.',
-  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed. That is the answer when the path is a symbolic link, is not one plain absolute path, or is not git’s own record of that tree; when the directory belongs to another repository; when a checkout nested inside it is not itself this project’s own worktree, or is one of another repository not proven clean, fully pushed and free of any edit ccd cannot pin elsewhere; or when another session’s record names, sits inside, or is spelled through this same path.',
+  'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, or its index is locked (an `index.lock` file is present, possibly left by a crash), so nothing was removed. Reclamation tries again later.',
+  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed — for example when the path is a symbolic link, is not one plain absolute path, or is not git’s own record of that tree; when the directory belongs to another repository; when a checkout nested inside it is not itself this project’s own worktree, or is one of another repository not proven clean, fully pushed and free of any edit ccd cannot pin elsewhere; or when another session’s record names, sits inside, or is spelled through this same path.',
   // The flavour pair (spec §5.6): neither verb finishes the other's interrupted
   // work. `reap-in-progress` is ws-reclaim's refusal of a ws-reap breadcrumb;
   // `reclaim-in-progress` is ws-reap's refusal of a `reclaim:` one.

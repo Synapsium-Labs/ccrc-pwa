@@ -7636,7 +7636,7 @@ export type LcRefusalToken =
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
-  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): the pin phase could not keep the child's work, so the verb stopped before deleting anything further
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
   | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
 
 /**
