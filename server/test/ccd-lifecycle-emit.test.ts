@@ -25,7 +25,7 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     // `expected [ …20 acts… ] to deeply equal [ …21 acts… ]`, and an act ccd
     // emits would degrade to `unknown` on a build that models it perfectly well.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
-    expect(want.length, 'guards the guard: an empty want passes everything').toBe(24);
+    expect(want.length, 'guards the guard: an empty want passes everything').toBe(25);
     const got = lines(h.sh('printf "%s\\n" "${_LC_ACTS[@]}"'));
     expect([...got].sort()).toEqual([...want].sort());
     expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')
@@ -55,6 +55,17 @@ describe('_LC_ACTS / _LC_OUTCOMES — the closed vocabularies, bound to L0', () 
     expect([...got].sort()).toEqual([...want].sort());
     expect(got, 'unknown is the READER\'s degrade, never a call site\'s choice')
       .not.toContain(LC_OUTCOME_UNKNOWN);
+  });
+
+  it('journals `reclaim` as ITSELF — never the unknown degrade with a badact (child reclamation, wave 3)', () => {
+    // The act `ws-reclaim` writes (spec 2026-09-22 §5.9). An act missing from
+    // `_LC_ACTS` does not fail: `_lc_emit` maps it to `unknown` and keeps the raw
+    // word in `badact`, so every reclaim row would read as "an unmodelled act"
+    // while the set-equality case above stayed green on a wrong L0 too.
+    h.sh(`${NO_TMUX} _lc_emit reclaim done demo-quiet-basin "" verb ws-reclaim`);
+    const ev = readJournal(h.home).filter((e) => e['id'] === 'demo-quiet-basin');
+    expect(ev.map((e) => e['act'])).toEqual(['reclaim']);
+    expect(ev[0]!['badact']).toBeUndefined();
   });
 });
 

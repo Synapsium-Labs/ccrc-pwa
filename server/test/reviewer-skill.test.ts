@@ -67,6 +67,22 @@ describe('the reviewer skill: its contract', () => {
     }
   });
 
+  // Child reclamation, wave 3 (spec 2026-09-22 §6): not a clause — the count
+  // stays ten — but the reporting section's own fact: this workspace, and the
+  // report directory in it, end when the run closes.
+  it('says, in its reporting section, that this workspace ends when its run closes', () => {
+    const at = skill.indexOf('**This workspace ends when its run closes.**');
+    expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
+    expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting review-done'));
+    expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
+    expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
+    // Fix round 1, M3: this claim (the report outlives the review's own close)
+    // was a lens-4 fact with no pin — deleting it stayed green.
+    expect(skill.slice(at).replace(/\s+/g, ' '))
+      .toContain('Your report stays where you wrote it for as long as the run you reviewed is open');
+    expect(skill).not.toContain('ws-reclaim');
+  });
+
   it('names the five destructive verbs ONLY inside the clause that forbids them', () => {
     for (const verb of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore']) {
       const hits = skill.split(verb).length - 1;

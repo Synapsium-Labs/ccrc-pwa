@@ -1324,8 +1324,10 @@ can carry config dirs no roster entry names. **Scratch slugs are skipped**, beca
 mints one for every throwaway directory a session was started in — four prefixes, because the OS
 scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
 `-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
-`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
-this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`) — and one infix, `*--cc-tmp-*`,
+a marked child's own temp root (`$HOME/.cc-tmp/<id>`, which is its `TMPDIR`), wherever that home
+lives. `/var/tmp` is **not** scratch by the prefixes — POSIX makes it persistent — so a project kept
+there is censused like any other, unless its path runs through a `.cc-tmp` directory. The
 summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
 slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
 
@@ -1671,7 +1673,11 @@ what it cannot.
    an unmeasured marker must not read as "running".
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
-   control anywhere on the sheet. An abandon asserts nothing about PR
+   control anywhere on the sheet. A CHILD goes further: an abandon finishes
+   it, so once no other open run names it the server reclaims it after the
+   release — pinned, then removed; a review child only once the run it
+   reviewed is terminal (**A child is not a reap**, below;
+   `wave-lifecycle.md` §6). An abandon asserts nothing about PR
    lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
    the case it exists for is a run whose claim can no longer be measured.
 3. **Start a program.** Composition over existing routes, not a new one:
@@ -1979,11 +1985,23 @@ run against that home. One of the coordinator's clauses is
 that **`ws-reap` stays human-only, by convention plus a speed bump, named as
 exactly that**: the skill's contract excludes the verb outright (the same
 test asserts it is named only inside the clause that forbids it), the
-coordinator holds every workspace it owns so a reap needs a deliberate
-release first, and reap consent stays the PWA's own ceremony either way.
+coordinator holds every non-child workspace it owns so a reap needs a
+deliberate release first, and reap consent stays the PWA's own ceremony
+either way.
 Nothing server-side makes reap mechanically impossible for a process with a
 shell — see "The honest boundary" below for what a contract does and does not
-buy.
+buy. **A child is not a reap.** Since child reclamation (spec
+`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`) the
+server itself removes one kind of workspace: a CHILD — one dispatch minted for
+a run, marked `$REG/<id>.child` — once the coordinator has finished with it,
+through `ccd ws-reclaim`. That is not `ws-reap` delegated. It is a separate
+verb that refuses anything but a child whose marker names the run the server
+holds as having minted it, pins every uncommitted change, commit and stash —
+except a secret-shaped file, which is never committed and is deleted with the
+tree — before it deletes anything, and re-proves its token on the box inside
+the reap lock; the server composes it and no session runs it. The
+coordinator's clause 3 still excludes every reap, and a coordinator's own
+workspace is still cleaned up by a human.
 
 **Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
@@ -2082,12 +2100,23 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    its now-distinct workspace is released, require `released:true`
    in the close response, then verify the exact producer closed row
    is `done` with a full 40-hex `handoffCommit`. If the consumer depends
-   on an interface from this producer, independently prove
-   through `ccd pr-state --session <producer-session>` that the
-   selected `phase` is `merged` and raw `headRefOid` equals both that
-   `handoffCommit` and `producerSha` —
+   on an interface from this producer, independently prove it
+   by PR NUMBER — `gh pr view <pr> --repo <owner/repo>
+   --json state,headRefOid`, where `<owner/repo>` is
+   `gh repo view --json nameWithOwner -q .nameWithOwner` run FROM INSIDE
+   `producerRepoRoot` (that path itself is not a `--repo` value `gh`
+   accepts, and the coordinator's own cwd is never assumed to be the
+   producer's repository), and `<pr>` is the producer's own wave-done
+   fingerprint's `prNumber` — the same number this close submitted, held
+   from before the close, because the closed row carries none of its
+   own — requiring `state` to be `MERGED` and raw `headRefOid` to equal
+   both that `handoffCommit` and `producerSha` —
    prove its PR merged at the named producer SHA
-   before dispatching the consumer. Only then dispatch the consumer
+   before dispatching the consumer. Never prove it through
+   `ccd pr-state --session <producer-session>` after this close: a CHILD
+   producer's `final:true` close queues its reclaim, which purges the row
+   that proof would need, so it would race the reclaim and usually could
+   not run. Only then dispatch the consumer
    fresh in its target project.
    A `done` run proves fingerprint and close, **not merge proof**;
    missing, ambiguous, or mismatched PR evidence means report and do
@@ -2106,6 +2135,12 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    run just went terminal — abandoning mid-program needs `final:true` or
    `archive:true` explicitly, or the workspace stays held for a wave that
    is never coming.
+   **Except a CHILD** (**A child is not a reap**, above): a close that
+   finishes one no other open run names — `final:true`, `state:'failed'`,
+   and the other cases `wave-lifecycle.md` §6 lists — releases it and never
+   re-holds it, the server then reclaims it (pinned, then removed; a review
+   child once the run it reviewed is terminal), and an `archive:true` on it
+   is overruled into that release.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed
@@ -2600,8 +2635,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7611-7613`), each with an operator sentence of its own at `:7651`,
-`:7659` and `:7672`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7636-7638`), each with an operator sentence of its own at `:7678`,
+`:7686` and `:7699`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2639,8 +2674,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21356`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20143-20145`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21391`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20178-20180`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a

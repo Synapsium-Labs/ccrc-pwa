@@ -44,9 +44,13 @@ const seed = (home: string, id: string, over: Record<string, string> = {}): void
 };
 const spend = (home: string, id: string, pr: number): void =>
   writeFileSync(path.join(home, '.cc-sessions', `${id}.prnumber`), String(pr));
-// `tip` is a real-looking sha, never absent: an absent/null tip is D-3351's
-// own "not measured" (`childSpent.ts`) and would answer `spent-unmeasured`
-// rather than the `unspent`/`spent` these two lines exist to drive.
+// `tip` is a real-looking sha, never absent, on `noPrLine`: an absent/null
+// tip there is D-3351's own "not measured" (`childSpent.ts`) and would answer
+// `spent-unmeasured` rather than the `unspent` this line exists to drive.
+// `openPrLine`'s tip is not load-bearing the same way — its same-repo
+// same-branch row answers `spent` at `childSpent.ts`'s same-branch rung,
+// before the tip rung ever runs, exactly the precedence (xi) pins in
+// child-reclaim-spent.test.ts.
 const noPrLine = (id: string): string =>
   JSON.stringify({ id, rows: [], baseShort: 'main', branch: `ws/${id}`, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
 const openPrLine = (id: string): string => JSON.stringify({ id, rows: [{

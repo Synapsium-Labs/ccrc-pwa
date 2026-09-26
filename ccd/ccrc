@@ -3426,7 +3426,7 @@ _mem_homes() {   # -> one agent-home path per line
 
 # THE OS SCRATCH ROOT IS NOT ONE SPELLING (D-2375). This predicate answers a
 # single question — "did the harness mint this slug for a throwaway directory?"
-# — and it takes four prefixes to ask it on both platforms `ccrc` ships to. It
+# — and it takes four prefixes plus one infix (A4) to ask it on both platforms. It
 # shipped as a bare `-tmp*`, which is the LINUX spelling alone: on Darwin
 # `/tmp` is a symlink to `/private/tmp`, `$TMPDIR` is a per-user
 # `/var/folders/<x>/<y>/T`, and the one site that DERIVES a slug resolves
@@ -3483,7 +3483,7 @@ _mem_homes() {   # -> one agent-home path per line
 # the hook's arm moves and `single-definition.test.ts`'s site list shrinks to
 # two: a deliberate edit, not a drift.
 _mem_is_scratch() {   # <slug> -> 0 iff the slug names a throwaway temp dir
-  case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) return 0 ;; esac
+  case "$1" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*) return 0 ;; esac
   return 1
 }
 

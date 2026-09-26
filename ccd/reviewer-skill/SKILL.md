@@ -143,6 +143,15 @@ client exits 0 whenever a response arrived, so read stdout, not the exit code.
 Then end your turn. The coordinator closes your run; your workspace is
 released with it.
 
+**This workspace ends when its run closes.** You are a child the server
+minted for this review, so once the coordinator closes your run AND the run
+you reviewed has closed, the server reclaims it: anything not committed on
+this branch by then is committed for you as a WIP commit and attic-pinned,
+and then the worktree, the branch, the clips directory — your report's
+directory — and this session's temp directory are removed. Your report stays
+where you wrote it for as long as the run you reviewed is open, because the
+coordinator cites it by path; you do nothing different.
+
 ## When something is wrong
 
 - **The worker branch moved while you read** (`git rev-parse` no longer

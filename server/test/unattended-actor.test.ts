@@ -43,7 +43,7 @@ import { mkTmp } from './tmpHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
 const NEW = { ccdVerbs: [ACTOR_FLAGS_CAP] };
-const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.ts'];
+const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.ts', 'coord/childReclaim.ts'];
 // THE FIVE WORKSPACE VERBS, and that boundary is ccd's, not this file's:
 // `cmd_caps`'s own docstring says `actor-flags-v1` "decides ONE server-side
 // thing: whether to APPEND `--surface`/`--actor`/`--reason` to the FIVE
@@ -62,7 +62,7 @@ const FILES = ['watch.ts', 'coord/close.ts', 'coord/dispatch.ts', 'coord/routes.
 // the dec-appending builders from `CCD_ARGV` itself and runs each one's verb
 // through the real ccd — the crossing THIS scan cannot make, because a
 // name-list can only ever see the names somebody typed into it.
-const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename)\(/;
+const BUILDERS = /CCD_ARGV\.(wsArchive|wsRestore|wsHold|wsRelease|wsRename|wsReclaim)\(/;
 
 describe('sweepDec', () => {
   it('declares the agent lane and names the sweep', () => {
@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the thirteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the fourteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -120,6 +120,10 @@ describe('every unattended ccd call site names itself', () => {
     // thirteen with child-reclamation wave 2's `refuseSpentChild`
     // (`coord/dispatch.ts`): a hand-over and a release, both spending
     // `dispatchDec`.
+    // Thirteen became fourteen with child reclamation (wave 3):
+    // `CCD_ARGV.wsReclaim(…)` in `coord/childReclaim.ts`, the one destructive
+    // argv the server composes with no human in the path, which is exactly the
+    // act that must say whose it was.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
@@ -133,7 +137,7 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Thirteen sites — five distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
+ * Fourteen sites — six distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five `closeRun` sites share one identical label
@@ -215,6 +219,12 @@ const SITES: readonly Site[] = [
   { file: 'coord/dispatch.ts', what: 'dispatchRun\'s one dec — spent at the fresh-spawn ws-add and the step-5 hold',
     find: /const dispatchDec = sweepDec\(deps\.fleetState, (`[^`]*`)\);/,
     label: '`run:${run.id} dispatch`' },
+  // Child reclamation, wave 3: the ONE executor's act, shared by the close
+  // trigger and the sweep — so the label carries the trigger, and the minting
+  // run the `--child-of` names.
+  { file: 'coord/childReclaim.ts', what: 'the child-reclaim act (one executor, both triggers)',
+    find: /CCD_ARGV\.wsReclaim\(token, req\.runId, req\.sessionId, req\.deferExpired,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
+    label: '`run:${req.runId} reclaim ${req.trigger}`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },

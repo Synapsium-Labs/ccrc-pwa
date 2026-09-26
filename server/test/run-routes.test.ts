@@ -30,6 +30,8 @@ import {
   isSkillState,
 } from '../../shared/api.js';
 import { okRun, okRuns } from './coordReadHelpers.js';
+import { KeyedQueue } from '../src/inject/queue.js';
+import { NotifyLog } from '../src/notifylog.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -1841,10 +1843,12 @@ const gitRoot = (project: string, branch: string, tip: string): string => {
   return root;
 };
 
-const prRow = (branch: string, state: 'OPEN' | 'CLOSED' | 'MERGED'): Record<string, unknown> => ({
+const prRow = (branch: string, state: 'OPEN' | 'CLOSED' | 'MERGED',
+  extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   number: 7, state, headRefName: branch, baseRefName: 'main',
   isCrossRepository: false, ours: true, isDraft: false,
   ...(state === 'MERGED' ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
+  ...extra,
 });
 const ccdLine = (sessionId: string, branch: string, rows: Record<string, unknown>[]): string =>
   JSON.stringify({ id: sessionId, rows, baseShort: 'main', branch, ahead: 1, checkedAt: Date.now() });
@@ -1983,6 +1987,193 @@ describe('POST /api/runs/:id/close', () => {
     expect(calls).toContainEqual(
       ['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
     expect(calls.some((c) => c[0] === 'ws-release')).toBe(false);
+  });
+
+  // ---- child reclamation, wave 3 (spec 2026-09-22 §5.7): close decides, it does not wait ----
+
+  /** A dispatched run whose workspace is a CHILD of it — the `.child` marker
+   *  planted exactly as `ws-add --child <runId>` writes it (wave 1) — with the
+   *  process's one queue and a feed log wired into the app, so a case can wait
+   *  for the queued reclaim and read its one feed row back. `testDeps`' box
+   *  advertises no capability, so the executor always ends at `unsupported`:
+   *  that row is the proof the hand-off reached it, on this session's queue. */
+  const dispatchedChild = async (sessionId: string, prState: { code: number; stdout: string; stderr: string },
+    over: Partial<Deps> = {}) => {
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run, calls } = makeRunner(home, { wsAddCreates: [sessionId], prState });
+    const queue = new KeyedQueue();
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, queue, notifyLog, ...over });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.child`), String(opened.id));
+    return {
+      id: opened.id, coord: w.coord, calls, home,
+      settled: () => queue.run(sessionId, async () => undefined),
+      feed: () => w.coord.feedEvents(50).filter((e) => e.sessionId === sessionId).map((e) => e.title),
+    };
+  };
+  /** A2/P6: `childSpent`'s fast path never dates its evidence, so the close
+   *  re-dates it through the LIVE rung before deciding — this row's own
+   *  `createdAt` must be safely AFTER the minting run's `dispatchStartedAt`
+   *  (a real clock read, stamped by `dispatchRun` moments before this row is
+   *  built) for that redate to answer `this`. A one-hour margin swallows any
+   *  test-execution jitter between the two reads.
+   *
+   *  Departure `pr-open-fixture-real-clock` (review m5): P8 says a fixture
+   *  needing a placeable birth calls `markDispatchStarted` "under a fixed
+   *  clock" — this fixture uses the REAL clock (`Date.now() + 1h`), not a
+   *  mocked one, because the birth here is stamped by the real `dispatchRun`
+   *  through a genuine `POST /api/runs/:id/dispatch` (`postDispatch` below),
+   *  not by a direct `coord.markDispatchStarted` call under a caller-chosen
+   *  timestamp the way `child-reclaim-close.test.ts`'s own A2 cases do it.
+   *  Freezing `Date.now()` for the whole route-level dispatch path (which
+   *  also stamps `checkedAt`/`openedAt` and the notify log's own clock)
+   *  would reach well past this one fixture; the 1 h margin is sound because
+   *  it swallows every real-world test-execution delay this suite has ever
+   *  measured, so it is declared rather than forced onto a fixed clock. */
+  const PR_OPEN = (s: string) =>
+    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`,
+      [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
+  const PR_NONE = (s: string) =>
+    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`, [])}\n`, stderr: '' });
+  const NONE_CLAIM = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
+  const fleetActs = (calls: string[][]) => calls.map((c) => c[0]).filter((v) => v === 'ws-hold' || v === 'ws-release'
+    || v === 'ws-archive' || v === 'ws-audit' || v === 'ws-reclaim');
+
+  it('a FINAL close of a child releases it and queues its reclaim — the answer does not wait on the act', async () => {
+    const sessionId = `${PROJECT}-child1`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(fleetActs(c.calls), 'released, and nothing sent to a box with no reclaim-v1').toEqual(['ws-release']);
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('a NON-final close of a SPENT child releases it too — one PR per child (rule 3)', async () => {
+    const sessionId = `${PROJECT}-child2`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    await postOpen(app!, { ...OPEN_BODY, wave: 2 });            // the program stays open: wave 2 gets a FRESH child
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
+    expect(fleetActs(c.calls)).toEqual(['ws-release']);
+  });
+
+  it('a non-final close of an UNSPENT child with its program still open holds it for wave N+1, as ever', async () => {
+    const sessionId = `${PROJECT}-child3`;
+    const c = await dispatchedChild(sessionId, PR_NONE(sessionId));
+    await postOpen(app!, { ...OPEN_BODY, wave: 2 });
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: NONE_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(c.calls).toContainEqual(['ws-hold', '--session', sessionId, '--reason', 'program:build4 wave:2/3']);
+    expect(fleetActs(c.calls)).toEqual(['ws-hold']);
+  });
+
+  it('a non-final close that RETIRES its program releases the child — never a hold for a wave that cannot open', async () => {
+    const sessionId = `${PROJECT}-child4`;
+    const c = await dispatchedChild(sessionId, PR_NONE(sessionId));
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: NONE_CLAIM, final: false });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
+    expect(fleetActs(c.calls)).toEqual(['ws-release']);
+    const program = c.coord.db.prepare("SELECT state FROM programs WHERE slug = 'build4'").get() as { state: string };
+    expect(program.state, 'D-51 retired it in the same close').toBe('done');
+  });
+
+  it('an unreadable marker never authorises a reclaim — the close still does exactly what it did before', async () => {
+    const sessionId = `${PROJECT}-child5`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    writeFileSync(path.join(c.home, '.cc-sessions', `${sessionId}.child`), 'seven');
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toMatchObject({ ok: true, released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' });
+    await c.settled();
+    expect(c.feed()).toEqual([]);
+  });
+
+  it('the operator abandon of a child queues its reclaim — an abandon is finished', async () => {
+    const sessionId = `${PROJECT}-child6`;
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId));
+    c.calls.length = 0;
+    const res = await app!.inject({ method: 'POST', url: `/api/runs/${c.id}/abandon` });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'failed', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('the reclaim port wires every port reclaimChild declares — presence included (Task 8 review)', async () => {
+    // A route-level proof, not merely a type check: `ChildReclaimDeps.presence`
+    // is OPTIONAL, so an omission at the route's wiring is not a compile
+    // error. If `childReclaimPort` (`routes.ts`) failed to pass `presence`
+    // through, `isVisible` below would never be called and the executor would
+    // run straight past step 3 to `unsupported` — this proves it does not.
+    const sessionId = `${PROJECT}-child7`;
+    const seen: string[] = [];
+    const presence = { isVisible: (id: string): boolean => { seen.push(id); return id === sessionId; } };
+    const c = await dispatchedChild(sessionId, PR_OPEN(sessionId), { presence: presence as Deps['presence'] });
+    c.calls.length = 0;
+    const res = await postClose(app!, c.id, { fingerprint: GOOD_CLAIM, final: true });
+    expect(res.json()).toEqual({ ok: true, id: c.id, state: 'done', released: true, childReclaim: 'queued' });
+    await c.settled();
+    expect(seen).toContain(sessionId);
+    expect(c.feed()).toEqual(['child reclaim deferred']);
+  });
+
+  it('an abandoned child’s reclaim reaches ws-audit --reclaim and ws-reclaim through the REAL agent whitelist (review m2)', async () => {
+    // Every other child-reclaim case in this file ends at `unsupported` —
+    // `testDeps`'s box advertises no capability, so `capSupported` refuses
+    // before any argv naming `ws-reclaim` is ever built, and the whitelist
+    // rule (`server/test/helpers.ts`'s `guardRunner`, which wraps every
+    // runner here) is satisfied only because the destructive verb is never
+    // ATTEMPTED. This case advertises `reclaim-v1` (plus `ws-audit` and
+    // `ws-reclaim` themselves) so the executor runs the whole ladder for
+    // real — `CCD_ARGV.wsReclaimAudit`/`wsReclaim` cross `guardRunner`'s
+    // `isExecAllowed` call for real, proving the whitelist actually admits
+    // the argv shapes the server composes, not merely that nothing tried.
+    const sessionId = `${PROJECT}-child8`;
+    const home = mkTmp('ccrc-runs-');
+    const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+    const { run: baseRun, calls } = makeRunner(home, { wsAddCreates: [sessionId] });
+    let childRunId = 0;
+    const seenVerbs: string[] = [];
+    const run: Runner = async (cmd, args) => {
+      const verb = args[0] ?? '';
+      if (verb === 'ws-audit' && args.includes('--reclaim')) {
+        seenVerbs.push('ws-audit --reclaim');
+        return { code: 0, stdout: `${JSON.stringify({ id: sessionId, mode: 'reclaim', verdict: 'reclaimable',
+          token: 'a'.repeat(64), childOf: childRunId })}\n`, stderr: '' };
+      }
+      if (verb === 'ws-reclaim') {
+        seenVerbs.push('ws-reclaim');
+        return { code: 0, stdout: `${JSON.stringify({ reclaimed: sessionId, wip: null })}\n`, stderr: '' };
+      }
+      return baseRun(cmd, args);
+    };
+    const fleetState = { connected: true, downSince: null,
+      ccdVerbs: ['reclaim-v1', 'ws-audit', 'ws-reclaim', 'ws-release', 'ws-hold'], rosterFp: null, build: null };
+    const queue = new KeyedQueue();
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const w = await openApp(home, run, { cfg: { projectsRoot: root }, queue, notifyLog, fleetState });
+    app = w.app;
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    childRunId = opened.id;
+    writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.child`), String(opened.id));
+    calls.length = 0;
+    const res = await app!.inject({ method: 'POST', url: `/api/runs/${opened.id}/abandon` });
+    expect(res.json()).toMatchObject({ ok: true, childReclaim: 'queued' });
+    await queue.run(sessionId, async () => undefined);
+    const feed = w.coord.feedEvents(50).filter((e) => e.sessionId === sessionId).map((e) => e.title);
+    expect(feed).toEqual(['child reclaimed']);
+    expect(seenVerbs).toEqual(['ws-audit --reclaim', 'ws-reclaim']);
   });
 
   it('refuses an oversized next-wave hold before changing the fleet or closing the run', async () => {
@@ -3942,7 +4133,8 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
     const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true });
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
     expect(okRun(w.coord.run(reviewId))!.state).toBe('done');
     expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');   // the coordinator rules next
     expectReleasedReviewerOnly(calls);
@@ -4021,6 +4213,20 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
   });
 
+  it('a review close of a reviewer CHILD releases it and KEEPS it — the report is live while the reviewed run is open (child reclamation, wave 3; spec §5.7)', async () => {
+    // The coordinator rules on the report NEXT, citing it by path in any
+    // send-back `fix-round` mail; the work run is `awaiting-review` here, so
+    // the reviewer's clips — the report's directory — must outlive this close.
+    const home = mkTmp('ccrc-runs-');
+    const { w, workId, reviewId, report, calls } = await reviewInFlight(home);
+    writeFileSync(path.join(home, '.cc-sessions', 'demo-r1.child'), String(reviewId));
+    const res = await postClose(app, reviewId, { fingerprint: { reviewedTip: TIPW, report } });
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'done', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'review-report-live' });
+    expect(okRun(w.coord.run(workId))!.state).toBe('awaiting-review');
+    expectReleasedReviewerOnly(calls);
+  });
+
   it('the UNGATED abandon valve reaches a working review run: failed directly, no closing hop (D-2807)', async () => {
     const home = mkTmp('ccrc-runs-');
     const { w, reviewId, calls } = await reviewInFlight(home);
@@ -4030,7 +4236,8 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     // BODY FIRST, then the status: without D-2807 this route answers
     // `bad-transition` working->closing, and asserting the body first is what
     // puts that refusal in the failure output rather than a bare status diff.
-    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'failed', released: true });
+    expect(res.json()).toEqual({ ok: true, id: reviewId, state: 'failed', released: true,
+      childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
     expect(res.statusCode).toBe(200);
     expect(okRun(w.coord.run(reviewId))!.state).toBe('failed');
     expectReleasedReviewerOnly(calls);
