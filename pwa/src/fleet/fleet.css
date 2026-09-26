@@ -47,7 +47,12 @@
    already leave only ~38px of slack at 390px, so this is sized to fit inside
    that margin for the common short case ("epoch 12 / observed 11") rather
    than assumed to have room. A sustained large gap producing a long string
-   is the one case this has not been measured against in a real browser. */
+   is the one case this has not been measured against in a real browser.
+   (Centralised update management, Task 6, D-3303, later added a FIFTH item
+   — the settings door — to this group; the four-item, 38px figure above is
+   unchanged by that addition, and the group now WRAPS at 390px rather than
+   holding everything on the one line this note assumes — see the override
+   comment near `.settings-door` below.) */
 .pool-epoch-lag {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -69,6 +74,11 @@
  * hold a `<select>` sized to its widest option, "Coordinator row", which
  * measures 167px. No floor, cap or shrink factor closes a 129px deficit; only
  * leaving the row does. Measured in Chromium from 320px to 1440px.
+ * (Centralised update management, Task 6, D-3303, later added a FIFTH item —
+ * the settings door — to this same group; "four other items" above still
+ * names only the ones this note measured, unaffected by that addition, and a
+ * fortiori closes no more of the 129px deficit — see the `.fleet-head-right`
+ * wrap override near `.settings-door` for what the fifth item does instead.)
  *
  * It does not get a row of its own either — that read as an orphan, a lone
  * right-aligned control on an otherwise empty band. `.fleet-runs-row` was
@@ -2944,3 +2954,322 @@ button.proj-card-pool::before {
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
 .hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+
+/* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
+   The AccountsScreen skeleton, class for class. `.settings-screen` paints NO
+   background of its own, and neither does `.shell-detail`, so every rule
+   here that sets a colour sits on body's --bg-page and is registered on that
+   ground in design/audit.mjs's INHERITED_GROUNDS (the `.mail-chip` /
+   `.pool-epoch-lag` reasoning) — the uncovered census is frozen (D-2689).
+   Tasks 7-10 append the screen's sections after this block. */
+.settings-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
+.settings-head { display: flex; align-items: center; gap: var(--sp-2); }
+/* Same visual contract as `.accounts-back` (and chat.css's `.chat-back`) — a
+   rule of its own rather than a shared class, for the reason `.accounts-back`
+   gives: two screens with one shape are not one thing. */
+.settings-back {
+  flex: none;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  color: var(--ink-secondary);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.settings-back:active { transform: scale(0.88); color: var(--ink-primary); }
+.settings-title {
+  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-primary);
+}
+/* — The door to /settings, in the fleet header beside `.accounts-door` —
+   The `.accounts-door` box exactly: the 44px floor, no background, the same
+   ink as its neighbours, a TEXT label (FleetScreen.tsx says why). Its ground
+   is two — the page on a phone, `.shell-nav`'s --bg-surface in the desktop
+   sidebar — and unlike `.accounts-door` it is REGISTERED, on the page
+   (design/audit.mjs; the `.pool-epoch-lag` entry, same header, is the
+   precedent), because the frozen census admits no new identity; the sidebar
+   ground is measured off this rule's own ink in contrast.test.ts, so neither
+   ground is claimed without a number (D-3304). */
+.settings-door {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: var(--tap-min); padding: 0 var(--sp-1);
+  border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  cursor: pointer;
+  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+}
+.settings-door:active { transform: scale(0.88); color: var(--ink-primary); }
+/* The glyph is decoration beside the word — aria-hidden in the markup, sized
+   in the UI font, as `.accounts-door-glyph` is. */
+.settings-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+/* THE HEAD'S RIGHT GROUP WRAPS (D-3303). The width
+   note above `.fleet-runs-line` is a Chromium measurement: the group's four
+   steady-state items need 244px of min-content and have 294px at 390px, so
+   ~38px is left once a fifth item's 12px gap is paid. The labelled door —
+   glyph, "Settings" in 11px mono, padding: ~80px by the tokens, an ESTIMATE
+   and not a measurement — cannot fit that, and nor could a glyph-only door at
+   the 44px floor. Without this rule the head would push the fleet screen past
+   the viewport, the defect #116 shipped. With it, a group that does not fit
+   breaks onto a second right-aligned line. CORRECTED (R3 + the coordinator's
+   parked note): "where it fits nothing moves" is not true at every width
+   this rule reaches — measured in Chromium, the group does NOT fit on one
+   line at exactly the 390px viewport this note's own math is about (the
+   fleet header grows from 48px to 92px there), nor in the desktop sidebar
+   between roughly 300px and 380px wide, so it wraps in both places; outside
+   those two bands the group does fit and the header stays a single 48px
+   row, which is the one case "nothing moves" still describes correctly.
+   The descendant form out-specifies `.fleet-head-right` (0,2,0 against
+   0,1,0), so it wins from any position — the cascade trap documented at the
+   class chooser. No row gap: every control on the group is already a 44px
+   box. */
+.fleet-head > .fleet-head-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0; }
+
+/* — centralised update management W3, Task 7: SettingsScreen's Updates section —
+   The section is a hairline-topped block on the screen's own ground, not a
+   card: .settings-screen and .settings-section paint no background, and
+   neither does .shell-detail, so body's --bg-page is what sits behind every
+   line here. Each rule below that sets `color` is therefore registered in
+   design/audit.mjs's INHERITED_GROUNDS against --bg-page; the rules that set
+   none inherit body's --ink-primary, which the page ground already measures.
+   The three selectors are native radios (D-3299):
+   a <label> row is the whole tap target, floored at --tap-min. */
+.settings-section {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-section-title { font: var(--weight-semibold) var(--text-sm) / var(--leading-tight) var(--font-ui); }
+/* A fieldset's UA default is `min-inline-size: min-content`, which lets one
+   long sentence push the page sideways on a phone; zero it like every grid
+   child in this file. */
+.settings-fieldset { display: grid; min-width: 0; margin: 0; padding: 0; border: 0; }
+.settings-legend {
+  padding: 0;
+  margin-bottom: var(--sp-1);
+  font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
+}
+.settings-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: var(--tap-min);
+  cursor: pointer;
+}
+.settings-option input { flex: none; width: 18px; height: 18px; margin: 0; }
+.settings-fieldset:disabled .settings-option { cursor: default; }
+.settings-option-sentence { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.settings-note { font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--ink-secondary); }
+/* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
+   disabled ink; this only stops it filling the section's width. */
+.settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }
+/* The catalogue line: three renderings, and the amber one is never the calm
+   one (spec §13). Calm is the secondary ink, "never checked" the tertiary,
+   and an unreached catalogue borrows the attention amber BuildLine's warn
+   side already uses. */
+.settings-catalogue {
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  color: var(--ink-secondary);
+}
+.settings-catalogue--amber { color: var(--status-attention-text); }
+.settings-catalogue--muted { color: var(--ink-tertiary); }
+
+/* — centralised update management W3, Task 8: the release list —
+   One row per catalogue release, newest first by semver. The row paints no
+   ground of its own (a hairline between rows, the .hotfiles-row shape), so
+   every rule below that sets `color` and no `background` is registered in
+   design/audit.mjs's INHERITED_GROUNDS against --bg-page: .settings-screen
+   paints nothing, and neither do .shell-detail's ancestors, so body's
+   --bg-page is what is behind the text. The badges and the notes block are
+   self-grounded (each sets its own background AND colour) so the auditor
+   measures them without a registration. */
+.settings-releases { list-style: none; margin: 0; padding: 0; display: grid; }
+.settings-release {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.settings-release-tag { font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono); }
+.settings-release-date { font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono); color: var(--ink-tertiary); }
+.settings-badge {
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  background: var(--bg-raised);
+  color: var(--ink-secondary);
+  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  white-space: nowrap;
+}
+/* Each variant restates its ground: a variant selector names no painted
+   ancestor, so a colour-only override would be measured at nothing. */
+.settings-badge--dev { background: var(--bg-raised); color: var(--ink-secondary); }
+.settings-badge--stable { background: var(--bg-raised); color: var(--ink-primary); }
+/* Green only for a MEASURED verdict — some node's provenance at this tag —
+   never for `bundle listed`, which keeps the base badge's quiet ink. */
+.settings-badge--verified { background: var(--bg-raised); color: var(--status-busy-text); }
+.settings-release-refused { margin: 0; font-size: var(--text-xs); color: var(--status-attention-text); }
+/* Notes are untrusted same-user text, rendered as ONE text child: wrapping
+   keeps a long line or an unbroken URL inside the phone's width, and there is
+   no markdown, HTML or link pass anywhere on this path. */
+.settings-release-notes {
+  margin: 0;
+  padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-surface);
+  color: var(--ink-secondary);
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.settings-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+/* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
+   disabled ink; this only stops it filling the row. Compound on purpose: it
+   wins .btn-ghost's `width: 100%` by SPECIFICITY (0,2,0 over 0,1,0), not by
+   which sheet loads last, and any disabled move button on this screen (the
+   node rows' Update / Roll back too) can carry the same pair of classes. */
+.btn-ghost.settings-move { width: auto; padding: 0 var(--sp-3); }
+.settings-move-note { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+
+/* — centralised update management W3, Task 9: the node inventory —
+   One row per live node, in the server's order (label, then nodeId). Same
+   unfilled row as the release list above it — a hairline, no fill — so the
+   two rules that set `color` without a `background` (the amber current and
+   the muted detail lines) are registered in design/audit.mjs's
+   INHERITED_GROUNDS against --bg-page, the .settings-release-date argument.
+   The desired cell reuses the release list's self-grounded channel badges
+   and the move row reuses its .settings-move-note, both already measured. */
+.settings-nodes { list-style: none; margin: 0; padding: 0; display: grid; }
+.settings-node {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--edge-subtle);
+}
+.settings-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); min-width: 0; }
+/* A label is same-user-writable text: it may be long and unbroken. */
+.settings-node-label { font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui); overflow-wrap: anywhere; }
+.settings-node-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-mono);
+}
+.settings-node-current { font-variant-numeric: tabular-nums; }
+/* Amber for a current the row cannot vouch for — unversioned, unverified,
+   incomplete, a stamp that could not be read, or a node never measured. The
+   same ink .build-line-side--warn uses for the same meaning. */
+.settings-node-current--amber { color: var(--status-attention-text); }
+.settings-node-desired { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.settings-node-detail { margin: 0; font-size: var(--text-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+/* The three node buttons carry the `btn-ghost settings-move` pair: .btn-ghost
+   (primitives.css) supplies the tap floor, the border and the disabled ink,
+   and Task 8's compound .btn-ghost.settings-move already stops it filling the
+   row — so no second override is written here. */
+.settings-node-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+
+/* — centralised update management W3, Task 10: Notifications + the unarmed banner —
+   .settings-unarmed is the §12 red sentence: the gate is off and this page
+   was reached over a non-loopback address. It is SELF-GROUNDED — its own
+   background AND colour, the .fleet-host-banner pair (--status-dead-text on
+   --status-dead-tint-solid, the 12% wash pre-composited on --bg-surface) — so
+   the auditor measures it with no INHERITED_GROUNDS registration, and it is
+   not sticky: it heads a screen, it does not float over a list.
+   .settings-bell-row is layout only (it sets no colour): the reused
+   NotificationBell button beside its one-line caption. The ROW is at the tap
+   floor (`min-height` below); the BUTTON itself was not, until fix round 1
+   (F2): `.bell` (this file, above) is a bare 4px-padding glyph — 29.2 × 25 px
+   in real Chromium at 390px, well under `--tap-min` — and the caption span
+   beside it is not a `<label>` for the button, so the row's own height added
+   the control no tap area. `.settings-bell-row .bell` below is the
+   settings-scoped fix, on the CONTROL rather than the row; the header bell's
+   own size (fleet header, unscoped `.bell`) is not this wave's (F2's own
+   scope note). */
+.settings-unarmed {
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--status-dead);
+  border-radius: var(--r-md);
+  background: var(--status-dead-tint-solid);
+  color: var(--status-dead-text);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.settings-bell-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--tap-min);
+}
+/* F2: the settings section's primary mobile control gets a real hit area —
+   layout only, no colour, so it needs no INHERITED_GROUNDS registration. */
+.settings-bell-row .bell {
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+}
+
+/* ── UpdateBanner (centralised-update design 2026-09-20 §13) ─────────────
+   "vX is out on <channel>": news, not a fault, so it is neither the dead red
+   nor the attention amber the fleet-host banner above uses for its three warn
+   arms. Self-grounded on the preselected-row pair — --ink-primary on
+   --accent-tint, 13.43:1 dark / 14.19:1 light (tokens.css) — so
+   design/contrast-check.mjs measures it as a rule of its own and the children
+   below set no colour of their own. No margin: it is a child of the .fleet
+   column, whose padding is the gutter and whose gap is the spacing. Not
+   sticky: the fleet-host banner owns the sticky slot, and two sticky banners
+   would stack over the list. */
+.update-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--accent-tint);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+}
+.update-banner-msg {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The shared buttons are full-width sheet buttons (primitives.css); in a
+   banner row they size to their label and keep their --tap-min height. */
+.update-banner-actions .btn-primary,
+.update-banner-actions .btn-ghost {
+  flex: none;
+  width: auto;
+  padding: 0 var(--sp-3);
+}
+.update-banner-note {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+}
+
+/* BuildLine's affix (centralised-update design 2026-09-20 §13): " → v0.0.9"
+ * after a side whose node the inventory says should move up (`pendingTag`).
+ * Amber like the warn side — something to do, not a fault — and a rule of its
+ * own, so the contrast audit measures it (audit.mjs INHERITED_GROUNDS). */
+.build-line-next {
+  color: var(--status-attention-text);
+}

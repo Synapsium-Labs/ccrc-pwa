@@ -3461,7 +3461,7 @@ describe('the update ring — nothing under server/src/update holds the handle (
    *  routes.ts). A FLOOR, not a count: a new file raises it rather than
    *  breaking it, and a listed file that is gone — a moved or renamed
    *  directory — reds instead of disarming the scan. */
-  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts'];
+  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts', 'notify.ts'];
   // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
   // too — the coord ring's `from\s+'node:sqlite'` sees neither.
   const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;
@@ -3612,5 +3612,68 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     const hits = ALL.filter((f) => rel(f).startsWith('server/src/'))
       .flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/\bframe\.ops\b/g)].map(() => rel(f)));
     expect(hits).toEqual(['server/src/remote/client.ts']);
+  });
+});
+
+describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', () => {
+  // D-3301: the release push's body (server) and the update banner (pwa) say the same
+  // clause. A second spelling in either package is a sentence to keep in step by hand, so it has ONE holder
+  // across the four TS roots — the L0 module both import.
+  it("'fleet and server are on ' is spelled in shared/update-summary.ts and nowhere else", () => {
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes('fleet and server are on ')).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
+
+  // Fix round 2 (review of def82cd4): `remoteSides` moved here from
+  // `pwa/src/fleet/BuildLine.tsx` (D-3313) in fix round 1, but no case here ever pinned it as a single
+  // holder — `update-summary.test.ts`'s own comment claimed this suite already did, falsely.
+  it('remoteSides is declared once, in shared/update-summary.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export function remoteSides\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
+
+  // Fix round 2 (review of d5aefc4a, item 5): `statedOf` — the one predicate for "does this reading vouch
+  // for its version" (measuredAt/stampRead/reachable) — is called from `pushRelease` (server), the banner,
+  // BuildLine and FleetHostBanner's skew arm (PWA); none of them may re-derive the same three-clause fact
+  // inline, the exact drift BuildLine's own narrower `reachable`-only form was before this fix.
+  it('statedOf is declared once, in shared/update-summary.ts', () => {
+    const holders = ALL.filter((f) => /^\s*export function statedOf\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/update-summary.ts']);
+  });
+});
+
+// Design 2026-09-20 §9/§13 (programme wave 3, Task 7; D-3305):
+// the ccrc-caps word the auto-install gate reads is spelled ONCE. W2 declared it
+// in the server's L1 resolver, which the PWA cannot import — and the settings
+// screen now disables its auto-install control on the same word
+// (D-3297), so a second literal in pwa/src would be two
+// spellings of one gate that nothing forces to agree. The declaration moved to
+// L0 and `server/src/update/resolve.ts` re-exports it, so every W2 importer
+// keeps its path. KNOWN WIDTH: the literal scan reads single- and double-quoted
+// strings; a backticked mention is prose (`routes.ts`'s docstring names the word
+// that way) and a template-literal copy in code would pass it. APPENDED after the
+// file's last line: `session-hook.test.ts`'s citation audit cites this file by
+// line, so nothing above may move (R13).
+describe('the auto-install gate word is declared once, in L0 (programme wave 3)', () => {
+  const LITERAL = /(['"])update-gate\1/;
+  const DEF = /^\s*(?:export\s+)?(?:const|let|var)\s+UPDATE_GATE_CAP\b/m;
+
+  it('CONTROL: the patterns see a declaration and a quoted copy, and not a re-export or a prose mention', () => {
+    expect(DEF.test("export const UPDATE_GATE_CAP = 'update-gate';")).toBe(true);
+    expect(DEF.test('const UPDATE_GATE_CAP = GATE;'), 'an un-exported copy is still a copy').toBe(true);
+    expect(DEF.test('export { UPDATE_GATE_CAP };'), 'a re-export declares nothing').toBe(false);
+    expect(DEF.test("import { UPDATE_GATE_CAP } from '../../../shared/api.js';"), 'an import declares nothing').toBe(false);
+    expect(LITERAL.test("caps.includes('update-gate')")).toBe(true);
+    expect(LITERAL.test('caps.includes("update-gate")')).toBe(true);
+    expect(LITERAL.test('lacks `update-gate` in its measured caps'), 'a backticked prose mention').toBe(false);
+    expect(LITERAL.test("'update-gates'"), 'another word').toBe(false);
+  });
+
+  it('UPDATE_GATE_CAP is declared in shared/api.ts and nowhere else — resolve.ts re-exports it', () => {
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('the word is quoted in shared/api.ts and nowhere else across the four roots', () => {
+    expect(ALL.filter((f) => LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
   });
 });

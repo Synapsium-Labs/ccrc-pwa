@@ -60,7 +60,7 @@
 // closes any of the four; what closes them today is a reviewer reading the
 // diff, not a mechanism.
 //
-// None of the four also defeats "finds every W2 writer writing" (the test
+// None of the four also defeats "finds every W2 and W3 writer writing" (the test
 // below) for a writer with more than one statement in this scan — six of
 // the eleven W2_WRITERS do (`applyReleaseListing`, `upsertNodeMeasurement`,
 // `markUnreachable`, `rekeyNode`, `ackNode`, `setIntent`): `found` is
@@ -123,6 +123,13 @@ const ROW_KEYS: Readonly<Record<Table, readonly string[]>> = {
  *  assertion below is satisfied by an extractor that found nothing. */
 const W2_WRITERS = ['applyReleaseListing', 'refuseRelease', 'clearRefusals', 'upsertNodeMeasurement', 'markUnreachable',
   'rekeyNode', 'releaseLease', 'settleNode', 'resolveNode', 'ackNode', 'setIntent'] as const;
+
+/** The W3 writers the same floor requires (programme wave 3, Task 1): the
+ *  notification group's writer — named in `WRITER_GROUPS` by W2, written by
+ *  W3. A list of its own rather than an edit to W2's, so each floor entry
+ *  says which wave put it there. Programme wave 5 (spec W4's dispatcher)
+ *  appends `dispatchNode`/`requestNode` the same way. */
+const W3_WRITERS = ['markReleaseNotified'] as const;
 
 // ── the analyser ─────────────────────────────────────────────────────────────
 
@@ -342,9 +349,9 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
+  it('finds every W2 and W3 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
     const found = new Set(stmts.map((s) => s.method));
-    for (const w of W2_WRITERS) {
+    for (const w of [...W2_WRITERS, ...W3_WRITERS]) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);
       expect(found.has(w), `the scan found no statement of ${w} writing an update table`).toBe(true);
     }

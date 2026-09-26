@@ -507,9 +507,30 @@ role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from 
 says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
 (once a minute) and `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is now a view of the inventory rows. Not yet: no apply or rollback route, no
-fleet-side projection reader, no release notification, no settings screen — and an `auto` other than `off` is
-refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. Not yet: no
+apply or rollback route and no fleet-side projection reader — and an `auto` other than `off` is refused
+(`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+
+**Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
+door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.
+Updates: the fleet's channel (stable or dev); auto-install (off; stable releases only and every release on
+my channel — the latter two disabled, naming the nodes, until every node lists `update-gate`); **Check
+now** (`POST /api/updates/refresh`); and the catalogue line — how long ago GitHub was last reached, amber
+with the reason when it could not be, `never checked` until the server's first poll since it started, and
+never "up to date" while nothing was reached. Then the release list (newest first by version; `verified`
+only when a node runs that tag and its bundle verified — a listed bundle alone reads `bundle listed`;
+notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
+and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
+that would move a node — Install, Roll back, Update, Update all — is shown disabled until the next
+release. A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+address. On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
+`/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
+whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
+has answered since the server started. A `server` or `both` box sends at most one Web Push per release tag,
+for the newest tag its release-notification setting (on my channel, stable only, off) selects, recorded in
+`coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
+measured node already runs is recorded without a push. It has no session, so an open app does not suppress
+it; tapping it opens `/settings`.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made

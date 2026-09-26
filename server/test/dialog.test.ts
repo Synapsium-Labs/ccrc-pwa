@@ -687,3 +687,259 @@ describe('hasMenu: the prompt box with the statusline under it is never a menu',
     expect(hasMenu(pane)).toBe(true);
   });
 });
+
+// Real Claude Code 2.1.280 menus (private tmux, mock API), each scrubbed of the
+// rig path with same-length tokens so every wrap point is where the TUI put it.
+// Each case is a class of screen the parser used to misread; the rows it read
+// are what the phone renders and what `answerDialog` walks by index.
+describe('parseDialog on real 2.1.280 menus', () => {
+  it('reads the menu, not a longer numbered list in the chat above it', () => {
+    // A three-item reply above a two-option permission prompt: the longest
+    // 1,2,3… run on screen was the reply, and the prompt's own rows came back
+    // as unnumbered "extras" — twelve options, cursor on the tenth.
+    const d = parseDialog(fixture('cc280-list-above-permission.txt'))!;
+    expect(d.parsed).toBe(true);
+    expect(d.options.map((o) => o.label)).toEqual(['Yes', 'No']);
+    expect(d.selectedIndex).toBe(1);
+    expect(paneOptionRows(fixture('cc280-list-above-permission.txt')).map((r) => r.label)).toEqual(['Yes', 'No']);
+  });
+
+  it('a 2.1.280 multi-select is not parsed as a single-select, whatever its footer says', () => {
+    // 2.1.280 dropped "Space to select": its multi-select footer reads "Enter
+    // to select", and Enter on a row TOGGLES that box (measured) — so a
+    // single-select sheet over it could only ever tick boxes, never answer.
+    // The checkboxes on the rows are what say multi-select now.
+    for (const f of ['cc280-multiselect.txt', 'cc280-multiselect-toggled.txt']) {
+      const pane = fixture(f);
+      expect(pane, f).not.toContain('Space to select');
+      expect(hasMenu(pane), f).toBe(true);
+      const d = parseDialog(pane)!;
+      expect(d.parsed, f).toBe(false);
+      expect(d.options, f).toEqual([]);
+      // The keystroke gate's row reader still reads them, box stripped.
+      expect(paneOptionRows(pane).slice(0, 4).map((r) => r.label), f).toEqual(['Logging', 'Metrics', 'Tracing', 'Caching']);
+    }
+  });
+
+  it("a permission prompt's footer is not its last option's description", () => {
+    const d = parseDialog(fixture('cc280-permission.txt'))!;
+    expect(d.options.map((o) => o.label)).toEqual(['Yes', 'No']);
+    expect(d.options[1]!.description).toBeUndefined();
+    expect(d.title).toBe('Bash command');
+  });
+
+  it('a label the pane wrapped stays one label, and the footer stays off the last row', () => {
+    // At 100 columns the path in option 2 fills the row and breaks mid-word.
+    const d = parseDialog(fixture('cc280-permission-wrapped-100.txt'))!;
+    expect(d.options.map((o) => o.label)).toEqual([
+      'Yes',
+      'Yes, and always allow access to /tmp/claude-1000/-home-rigoperatr-worktrees-ccrc-pwa-soft-basin/00000000-0000-4000-8000-000000000000/scratchpad/rig2/runs/menus/repo from this project',
+      'Yes, and switch to auto mode · auto mode handles these prompts for you',
+      'No',
+    ]);
+    expect(d.options.map((o) => o.description)).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it('a label the pane WORD-wrapped stays one label, and the description under it stays a description', () => {
+    // The description sits at the label's own column, so column alone cannot
+    // tell a wrapped label from a description; the word-wrap test can. The
+    // label row stops at 97 of 100 columns because "new" did not fit; the
+    // description's first row follows a 31-column row it could have extended.
+    const d = parseDialog(fixture('cc280-ask-wrapped-label-100.txt'))!;
+    expect(d.options[0]!.label).toBe(
+      'Roll the fleet box first and then the server box, waiting for every supervisor to report the new build before moving on',
+    );
+    expect(d.options[0]!.description).toBe('Slow and careful, the default order.');
+    expect(d.options.map((o) => o.label).slice(1)).toEqual(['Server first', 'Type something.', 'Chat about this']);
+  });
+
+  it('a row at another column never continues a label, even after a row that filled the pane', () => {
+    // DERIVED from the real 100-column prompt — no capture shows this shape:
+    // option 4 lengthened to end exactly at the pane edge, and the blank row
+    // under it removed, so the footer (column 1) sits directly beneath a row
+    // that filled the pane. The wrap test alone would read the footer as the
+    // rest of the label; a wrapped label always resumes at its own column.
+    const base = fixture('cc280-permission-wrapped-100.txt');
+    const row = '   4. No';
+    const full = (row + ', and tell Claude what to do differently instead of running this command now').padEnd(100, '!');
+    expect(full).toHaveLength(100);
+    const pane = base.replace(`${row}\n\n Esc to cancel`, `${full}\n Esc to cancel`);
+    expect(pane).toContain(`${full}\n Esc to cancel`);
+    const d = parseDialog(pane)!;
+    expect(d.options[3]!.label).toBe(full.slice(6));
+    expect(d.options[3]!.description).toBeUndefined();
+  });
+
+  it('control: description rows under short labels stay descriptions at the same width', () => {
+    const d = parseDialog(fixture('cc280-ask-long-descriptions-100.txt'))!;
+    expect(d.options.map((o) => o.label)).toEqual([
+      'Target number 1', 'Target number 2', 'Target number 3', 'Target number 4', 'Type something.', 'Chat about this',
+    ]);
+    expect(d.options[0]!.description).toBe(
+      'Option 1 long description: this text is deliberately long so that it wraps past the pane edge at narrow widths and tests whether description rows are attributed to the right option in the parsed dialog output.',
+    );
+    expect(d.options[4]!.description).toBeUndefined();
+  });
+
+  it("the fullscreen overlay's ▔ edge bounds the header, so the title is the dialog's own", () => {
+    const effort = parseDialog(fixture('cc280-effort-confirm-fullscreen.txt'))!;
+    expect(effort.title).toBe('Change effort level?');
+    expect(effort.options.map((o) => o.label)).toEqual(['Yes, switch to low', 'No, go back']);
+    expect(effort.body).not.toContain('hello from mock');
+    expect(parseDialog(fixture('cc280-model-fullscreen-100.txt'))!.title).toBe('Select model');
+  });
+
+  it("/model: each row's right-hand text is its description, and the effort row and footer belong to no option", () => {
+    const d = parseDialog(fixture('cc280-model-fullscreen-100.txt'))!;
+    expect(d.options.map((o) => o.label)).toEqual([
+      'Default (recommended) ✔', 'Opus (1M context)', 'Fable', 'Sonnet', 'Sonnet 5 (1M context)', 'Haiku',
+    ]);
+    expect(d.options.map((o) => o.description)).toEqual([
+      'Use the default model (currently Opus 5.5 (1M context)) · $4/$20 per Mtok',
+      'Opus 5.5 with 1M context · Best for everyday, complex tasks · $4/$20 per Mtok',
+      'Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok',
+      'Sonnet 5 · Efficient for routine tasks · $2/$10 per Mtok',
+      'Sonnet 5 for long sessions · $2/$10 per Mtok',
+      'Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok',
+    ]);
+  });
+
+  it("a numbered list inside an option's description is not the menu", () => {
+    // Three real screens. The description rows' "1."/"2." sit at the label's
+    // column, below the menu's own rows: the lowest run on screen, and on the
+    // first two a run of two. Taking it made a tap on its first "option" press
+    // Enter on the real cursor row (Fast / Alpha).
+    const list = parseDialog(fixture('cc280-description-list.txt'))!;
+    expect(list.options.map((o) => o.label)).toEqual(['Fast', 'Medium', 'Careful', 'Type something.', 'Chat about this']);
+    expect(list.options[2]!.description).toBe(
+      '1. lint every package in the workspace including the generated clients and all vendored tooling 2. run the test suites, then 3. build',
+    );
+    expect(list.selectedIndex).toBe(1);
+    for (const f of ['cc280-description-steps.txt', 'cc280-description-steps-one.txt']) {
+      const d = parseDialog(fixture(f))!;
+      expect(d.parsed, f).toBe(true);
+      expect(d.options.map((o) => o.label), f).toEqual(['Alpha', 'Beta', 'Gamma', 'Type something.', 'Chat about this']);
+      expect(d.options[2]!.description, f).toMatch(/^Pick this when the old cluster must stay readable.* 1\. stop the writers/);
+      // The keystroke gate's rows are the menu's too.
+      expect(paneOptionRows(fixture(f)).map((r) => r.label).slice(0, 3), f).toEqual(['Alpha', 'Beta', 'Gamma']);
+    }
+  });
+
+  it('with the cursor on an unnumbered row, the menu is the shallowest run above it, not the lowest', () => {
+    // DERIVED from the real description-steps screen into the older layout,
+    // whose "Chat about this" is unnumbered: the cursor moved onto that row,
+    // "4. Type something." removed. Gamma's description list is now the lowest
+    // run on screen, two columns deeper than the menu's.
+    const pane = fixture('cc280-description-steps.txt')
+      .replace('❯ 1. Alpha', '  1. Alpha')
+      .replace('  4. Type something.\n', '')
+      .replace('  5. Chat about this', '❯ Chat about this');
+    const d = parseDialog(pane)!;
+    expect(d.options.map((o) => o.label)).toEqual(['Alpha', 'Beta', 'Gamma', 'Chat about this']);
+    expect(d.selectedIndex).toBe(4);
+  });
+
+  it('a label row that fills the pane on a whole word joins its continuation with a space', () => {
+    // DERIVED from the real 100-column prompt: option 2's path shortened so the
+    // row ends exactly at the edge on the path's last character, and "from this
+    // project" wraps. Only a token too long for any one row is cut mid-word.
+    const base = fixture('cc280-permission-wrapped-100.txt').split('\n');
+    const at = base.findIndex((l) => l.startsWith('   2. Yes, and always allow access to '));
+    const head = '   2. Yes, and always allow access to ';
+    const path = ('/tmp/' + 'x'.repeat(100)).slice(0, 100 - head.length);
+    base.splice(at, 2, head + path, '      from this project');
+    expect(base[at]).toHaveLength(100);
+    const d = parseDialog(base.join('\n'))!;
+    expect(d.options[1]!.label).toBe(`Yes, and always allow access to ${path} from this project`);
+  });
+
+  it('a one-row label that ends at or near the edge keeps its description', () => {
+    // Two real screens: option 1 is ONE row, ending 2 columns short of the
+    // 100-column edge and exactly at it. Its description's first word would
+    // not have fit either row, so the wrap test alone takes the description as
+    // the rest of the label; the option is then left with no description while
+    // its siblings have one, and gives that row back.
+    for (const [f, label] of [
+      ['cc280-label-near-edge-98.txt', 'Roll the fleet box first and then the server box, waiting for every supervisor to report back'],
+      ['cc280-label-near-edge-100.txt', 'Roll the fleet box first and then the server box, waiting for each supervisor to report back ok'],
+    ] as const) {
+      const d = parseDialog(fixture(f))!;
+      expect(d.options[0]!.label, f).toBe(label);
+      expect(d.options[0]!.description, f).toBe('Slow and careful, the default order.');
+      expect(d.options[1]!.description, f).toBe('When the server arm widens a reader.');
+    }
+  });
+
+  it('a near-edge label gives back its WHOLE description, however many rows it wrapped to', () => {
+    // A real screen: the same one-row label, with a two-row description. Each
+    // wrapped description row chains the wrap test, so all of it was taken.
+    const d = parseDialog(fixture('cc280-label-near-edge-long-description.txt'))!;
+    expect(d.options[0]!.label).toBe('Roll the fleet box first and then the server box, waiting for each supervisor to report back ok');
+    expect(d.options[0]!.description).toBe(
+      'Slow and careful, the default order, because every box is drained and re-measured before the next one is touched at all.',
+    );
+  });
+
+  it('a single-select label that starts with a bracketed letter is not a checkbox', () => {
+    // DERIVED from the real long-descriptions question: two labels given a
+    // "[A]"/"[B]" prefix. Only a box's states — space, x, ✔ — mark a row.
+    const pane = fixture('cc280-ask-long-descriptions-100.txt')
+      .replace('1. Target number 1', '1. [A] Target number 1')
+      .replace('2. Target number 2', '2. [B] Target number 2');
+    const d = parseDialog(pane)!;
+    expect(d.parsed).toBe(true);
+    expect(d.options.map((o) => o.label).slice(0, 2)).toEqual(['[A] Target number 1', '[B] Target number 2']);
+    expect(paneOptionRows(pane).map((r) => r.label).slice(0, 2)).toEqual(['[A] Target number 1', '[B] Target number 2']);
+  });
+
+  it('a multi-select keeps one id and its question while it is answered in the terminal', () => {
+    // Five real screens of one question: opened, cursor down, a box ticked,
+    // the same box unticked, another ticked by digit. Its id is what the push
+    // edge-triggers on, so a new id per keystroke was a new push per keystroke.
+    const seq = ['cc280-multiselect-seq-0.txt', 'cc280-multiselect-seq-1-down.txt', 'cc280-multiselect-toggled.txt',
+      'cc280-multiselect-seq-3-enter-again.txt', 'cc280-multiselect-seq-4-digit3.txt'].map((f) => parseDialog(fixture(f))!);
+    // Four distinct screens: ticking a box and unticking it again repaints
+    // the cursor-down screen exactly.
+    expect(new Set(seq.map((d) => d.raw)).size).toBe(4);
+    expect(new Set(seq.map((d) => d.id)).size).toBe(1);
+    for (const d of seq) {
+      expect(d.parsed).toBe(false);
+      expect(d.title).toBe('Which features do you want to enable?');
+    }
+  });
+
+  it('the overlay edge still bounds the header when a tmux hint has overwritten all but its last ▔', () => {
+    // DERIVED: the real fullscreen /model screen with its edge row swapped for
+    // the real hint-covered edge row of a 100-column fullscreen /effort screen.
+    const hint = " tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll ▔";
+    const lines = fixture('cc280-model-fullscreen-100.txt').split('\n');
+    expect(lines[0]!.startsWith('▔▔▔')).toBe(true);
+    lines[0] = hint;
+    const d = parseDialog(['● hello from mock', ...lines].join('\n'))!;
+    expect(d.title).toBe('Select model');
+  });
+
+  it('the pane width is the WIDEST rule, not a shorter one quoted in chat above the menu', () => {
+    // DERIVED: real chat rows (a reply quoting a titled rule) plus a short
+    // plain rule, put above real questions. A width read off the short rule
+    // makes nearly every row "wrap".
+    const pane = ['● Quoting two pane lines verbatim:', '  ────────── ultracode ─', '  ──────────', fixture('cc280-ask-wrapped-label-100.txt')].join('\n');
+    const d = parseDialog(pane)!;
+    expect(d.options[0]!.label).toBe(
+      'Roll the fleet box first and then the server box, waiting for every supervisor to report the new build before moving on',
+    );
+    expect(d.options[0]!.description).toBe('Slow and careful, the default order.');
+    // And a question whose options each carry three description rows, where a
+    // too-narrow width would read all three as label.
+    const tall = parseDialog(['● Quoting two pane lines verbatim:', '  ────────── ultracode ─', '  ──────────', fixture('cc280-ask-long-descriptions-100.txt')].join('\n'))!;
+    expect(tall.options.map((o) => o.label).slice(0, 4)).toEqual(['Target number 1', 'Target number 2', 'Target number 3', 'Target number 4']);
+    expect(tall.options[0]!.description).toMatch(/^Option 1 long description: .* parsed dialog output\.$/);
+  });
+
+  it("/model at 24 rows: a row carrying the ↓ scroll marker is still an option", () => {
+    const d = parseDialog(fixture('cc280-model-fullscreen-100x24.txt'))!;
+    expect(d.options.map((o) => o.label)).toEqual(['Default (recommended) ✔', 'Opus (1M context)', 'Fable']);
+    expect(d.options[2]!.description).toBe('Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok');
+    expect(d.title).toBe('Select model');
+  });
+});
