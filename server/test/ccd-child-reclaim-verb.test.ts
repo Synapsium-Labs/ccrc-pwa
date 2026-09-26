@@ -631,7 +631,10 @@ describe('on Darwin, a `.svcfailed` stamp reads as stopped only when launchd say
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
     expect(o.failed).toBe('unit-still-active');
-    expect(o.detail).toContain(`exit ${print.rc}`);
+    // Bound to THIS block's sentence, not a bare `exit N`, which the pane
+    // re-measure's detail ("after the kill (exit N)") could also satisfy.
+    expect(o.detail).toContain('from its stamp');
+    expect(o.detail).toContain(`(print exit ${print.rc})`);
     failedPairAgrees(r);
     expect(h.calls(), 'launchd was asked by the label ccd spells').toContain(`launchctl print ${LABEL}`);
   }, 90_000);
@@ -646,6 +649,24 @@ describe('on Darwin, a `.svcfailed` stamp reads as stopped only when launchd say
     expect(fs.existsSync(c.wt), 'the worktree is gone').toBe(false);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch is gone').toBe('');
     expect(h.calls()).toContain(`launchctl print ${LABEL}`);
+  }, 90_000);
+
+  // THE GATE IS DARWIN'S ONLY: on Linux `failed` is systemd's own answer (a
+  // start-limited unit, which is stopped), so the tail passes it as before and
+  // never consults launchctl. `itLinux`, stated: this row is ABOUT the Linux
+  // arm, and forcing `CCD_OS=linux` on the macOS leg would send every `_plat_*`
+  // helper the whole verb calls down its GNU arm on a BSD userland.
+  itLinux('the Linux arm: `_svc_is_active` answers `failed` → reclaimed as before, and launchctl is never asked', () => {
+    const c = makeChild(h);
+    const tok = evalOf(h).token;
+    stamp();
+    const r = childReclaimVerb(h, tok, {
+      pre: `_svc_is_active() { printf failed; }; _svc_launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 1; };`,
+    });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt), 'the worktree is gone').toBe(false);
+    expect(h.calls().filter((l) => l.startsWith('launchctl')), 'launchctl was never asked').toEqual([]);
   }, 90_000);
 });
 
