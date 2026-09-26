@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **fix round** 2026-09-25 after review 170 (4 critical); run 148 on `plain-summit`, sent back from `c5962a94` |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **fix round done** 2026-09-26 at `f2b32a86` (run 148 on `plain-summit`); 3520 being defined, then the scoped review |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -43,6 +43,22 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-26 — wave 3's fix round done (`f2b32a86`, 31 commits); departures ruled; 3520 assigned.**
+  - **The round.** All 23 findings were fixed, each through an Opus review and re-reviews until clean. Every number
+    is defined in the commit that shipped its fix: 3367, 3368 and 3513 to 3519.
+  - **Boundary.** Nothing new above `ccd/ccd:19131` except the authorised in-place `_session_probe` anchor (two
+    lines), line-neutral comments, and F5's one in-place audit line. Line 19131 is byte-identical, and S6-R11 was
+    green on every ccd commit.
+  - **Suites.** The first full run caught one real red, the new `resume` words missing from the kebab guard, fixed
+    in-round. The second: server 16339 passed, only the box-local `tmp-sweep` case red; agent 331; pwa 3010.
+  - **Departures.** Covered by their fixes' numbers, apart from `index-copy-keeps-its-mtime`, which takes 3520. It
+    also fixes a pre-existing WIP loss for ordinary tracked files (a same-second, same-size edit was left out).
+    Accepted within the fixes:
+    - a `..`-spelled row refuses even when it names an ancestor (narrow fail-closed);
+    - `cmd_ws_audit --reclaim` is contained whole (wrapping only the fork left a hook running);
+    - F20 recognises ccd's pinned pre-lock texts.
+  - **F1's exit-empty exception matches real tmux.** Measured by the rulings' attacker on tmux 3.4 with an isolated
+    socket: the last `kill-session` exits 0, then `no server running`.
 - **2026-09-25 — review 170 on wave 3 (`c5962a94`): four critical, seven important, twelve minor; ONE full fix round.**
   - **The panel.** Nine Opus lenses, SAFETY at xhigh; 126 agents; 32 findings survived and merge into 22; 7 were
     refuted. Suites green except the box-local `tmp-sweep` case. AGENT-FIRST, the run-id parses and fixture-only
@@ -415,6 +431,19 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - R1: case (vii)'s label reads F7, and D-3351's "for either" gains "for every row with a string head".
   - `wave-lifecycle.md`: a repeated `spent-unmeasured` usually means the child's branch no longer resolves (a hand
     rename), and the next run opens on a fresh child instead of retrying (review 147's dissenting refuter).
+- **Wave 4 also inherits from wave 3's fix round** (2026-09-26):
+  - the tail's anchored `kill-session` has no deadline (pre-existing);
+  - `_ws_tombstone`'s `reflog` field still writes `reflog show --all | head -200`, other sessions' commit ids, into a
+    child's tombstone, beside `_ws_attic_pin`'s capped read;
+  - `_ws_tombstone`'s comment is inverted under branch drift (F8);
+  - a nested checkout's held `index.lock` is checked nowhere, so a nested tree mid-write is committed from disk;
+  - "before wave 1's deploy" in `wave-lifecycle.md` and the coordinator SKILL.md (#178) has F11's problem;
+  - the reclaim verb suite runs ~414 s against a 600 s ceiling; split it.
+
+  Accepted residuals, all fail-safe:
+  - an aliased `..` row through a link to a standing child is not refused;
+  - an exec-bit-only change on a flagged file is not an edit;
+  - launchctl's rc 113 is taken from ccd's measured comments, not measured on a real macOS.
 - **Wave 4 also carries review 163's three test-text minors** from `child-tmpdir-bsd` (#185), in
   `server/test/ccd-child-tmpdir.test.ts`:
   - the census comment should name line continuation among its blind spots, or join `\`-continued lines first;
