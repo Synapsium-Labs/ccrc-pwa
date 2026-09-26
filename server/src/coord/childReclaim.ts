@@ -92,9 +92,25 @@ export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_DEFER_WHY, v);
 }
 
+/** `wip`, discriminated (review 170 F21): a bare `string | null | 'unreadable'`
+ *  collapses in TypeScript to `string | null` — the `'unreadable'` sentinel is
+ *  just another string, so nothing forces a consumer to branch on it (the seam
+ *  rule: two conditions a caller handles differently must not collapse to the
+ *  same value). `none` — ccd printed a LITERAL `null`, genuinely nothing
+ *  uncommitted; `commit` — the pinned commit id, 40 or 64 lower-hex (`sha`);
+ *  `unreadable` — a `wip` this build cannot attribute to a commit, whatever
+ *  shape it took (work MAY still be pinned — the attic holds it either way —
+ *  but the feed must not claim nothing was left when it cannot read what
+ *  was). `WIP_SHAPE` stays the one parse check that decides `commit` from
+ *  `unreadable`. */
+export type ChildReclaimWip =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'commit'; readonly sha: string }
+  | { readonly kind: 'unreadable' };
+
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
-      readonly wip: string | null | 'unreadable'; readonly secretsDropped: number | 'unreadable' }
+      readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'deferred'; readonly sessionId: string; readonly runId: number; readonly why: ChildReclaimDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
@@ -108,9 +124,22 @@ export type ChildReclaimOutcome =
    *  substance even though this build cannot name it — an unrecognised
    *  refusal word, or a `reclaimed` document naming another session — where
    *  ccd's own ladder never advanced this session's state at all. The feed
-   *  text must not promise a resume where there is nothing to resume. */
+   *  text must not promise a resume where there is nothing to resume.
+   *
+   *  `preLockDie` (review 170 F20): true only for a `ws-reclaim` call that
+   *  died BEFORE the reap lock (a usage error, a malformed token/run
+   *  id/session id, a missing `python3`, a missing `flock` binary, or an
+   *  unopenable lock file — ccd's RECLAIM region, before `_ws_reclaim_locked`
+   *  runs). None of these start the destructive tail, and every one of them
+   *  recurs IDENTICALLY on a plain retry — a structural or environmental
+   *  problem, not a race — so `resumable` is false for these exactly as it is
+   *  for the other false cases above, but the feed must say something
+   *  DIFFERENT: not "retried from the start" (which is true of a race that
+   *  might clear) but that the retry will fail the same way until the
+   *  problem is fixed on the box. False for every other `failed` outcome,
+   *  recognised, including the other `resumable:false` cases above. */
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
-      readonly resumable: boolean; readonly detail: string };
+      readonly resumable: boolean; readonly preLockDie: boolean; readonly detail: string };
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the
@@ -342,34 +371,59 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
   return { kind: 'unreadable', detail: `ws-audit --reclaim answered a verdict this build does not know: ${String(v.verdict)}` };
 }
 
+/** The exact stderr words ccd's own `die`/`_lc_refuse` calls print for a
+ *  PRE-LOCK die of `cmd_ws_reclaim` — a usage error, a malformed
+ *  token/run id/session id, a missing `python3`, a missing `flock` binary, or
+ *  an unopenable lock file (ccd/ccd's RECLAIM region, everything above the
+ *  `_ws_reclaim_locked "$token" …` call). None of these ever reach the reap
+ *  lock, so none of them start the destructive tail, and every one recurs
+ *  IDENTICALLY on a retry — the die is read POSITIVELY, against ccd's own
+ *  text (review 170 F20), so a reworded die reds `child-reclaim.test.ts`
+ *  rather than silently promising a resume that cannot happen. The lock-path
+ *  message ends in a path this build never composes ($REG/.reap-<id>.lock),
+ *  so it is matched by its fixed prefix; every other one is fixed in full. */
+const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly RegExp[] = [
+  /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/,
+  /^bad token$/,
+  /^bad run id$/,
+  /^bad session id$/,
+  /^python3 unavailable — cannot quote the reclaim record safely$/,
+  /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
+  /^cannot open the reap lock at /,
+];
+
+function isChildReclaimPreLockDie(msg: string): boolean {
+  return CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS.some((p) => p.test(msg));
+}
+
 /** `ccd ws-reclaim …`'s answer. Three documents (spec §5.6): `reclaimed` and
  *  `refused` at exit 0, `failed` at exit 1 — and a fourth condition that is
  *  not a document at all, a call cut short with nothing printed, which is
  *  `failed` too: the breadcrumb on the box resumes it on the next attempt. */
 export type ChildReclaimVerbRead =
-  /** `wip`: `null` — ccd printed a LITERAL `null`, genuinely nothing
-   *  uncommitted (fix round 2, review minor B: ONLY `null` means this — a
-   *  present non-string value, a number, boolean or object, and a MISSING
-   *  key all read `'unreadable'`, exactly like a malformed string); a string
-   *  — the pinned commit id, 40 or 64 lower-hex; `'unreadable'` — a `wip`
-   *  this build cannot attribute to a commit, whatever shape it took (fix
-   *  round 1, review minor #2) — work MAY still be pinned (the attic holds
-   *  it either way), but the feed must not claim nothing was left when it
-   *  cannot read what was.
+  /** `wip` (review 170 F21 — see `ChildReclaimWip`'s own docstring for why
+   *  this is a discriminated shape rather than `string | null | 'unreadable'`).
    *  `secretsDropped`: how many secret-shaped paths the reclaim dropped and
    *  recorded instead of committing (spec §5.5 step 2) — a hidden-flag secret
    *  edit among them; `'unreadable'` when ccd printed anything but a
    *  non-negative integer, or no key at all. A reclaim with no WIP that
    *  dropped a secret did leave something uncommitted, and the feed says so. */
-  | { readonly kind: 'reclaimed'; readonly wip: string | null | 'unreadable'; readonly secretsDropped: number | 'unreadable' }
+  | { readonly kind: 'reclaimed'; readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   /** `resumable` (fix round 2, review minor C): true only when ccd's own
    *  destructive tail genuinely started and left a breadcrumb — a
    *  `{failed:…}` document, or a call cut short with nothing printed. An
    *  unrecognised refusal word and a `reclaimed` document naming another
    *  session are REFUSALS in substance (ccd's ladder never advanced this
-   *  session's state), so neither is resumable. */
-  | { readonly kind: 'failed'; readonly resumable: boolean; readonly detail: string };
+   *  session's state), so neither is resumable.
+   *  `preLockDie` (review 170 F20): true only for a recognised PRE-LOCK die
+   *  of `cmd_ws_reclaim` (`isChildReclaimPreLockDie`, above) — always paired
+   *  with `resumable: false`, but a DISTINCT reason from the other false
+   *  cases: those might succeed on a plain retry (a race, an unknown word a
+   *  newer ccd sent), this one is a structural or environmental problem that
+   *  recurs identically until it is fixed on the box, and the feed must say
+   *  so rather than reuse either sentence. */
+  | { readonly kind: 'failed'; readonly resumable: boolean; readonly preLockDie: boolean; readonly detail: string };
 
 export function parseChildReclaimResult(sessionId: string, stdout: string, stderr: string): ChildReclaimVerbRead {
   let v: unknown = null;
@@ -377,10 +431,12 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
   if (isRecord(v)) {
     if (typeof v.reclaimed === 'string') {
       if (v.reclaimed !== sessionId) {
-        return { kind: 'failed', resumable: false,
+        return { kind: 'failed', resumable: false, preLockDie: false,
           detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
       }
-      const wip = v.wip === null ? null : (typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable');
+      const wip: ChildReclaimWip = v.wip === null ? { kind: 'none' }
+        : typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? { kind: 'commit', sha: v.wip }
+        : { kind: 'unreadable' };
       const secretsDropped = typeof v.secretsDropped === 'number' && Number.isSafeInteger(v.secretsDropped)
         && v.secretsDropped >= 0 ? v.secretsDropped : 'unreadable';
       return { kind: 'reclaimed', wip, secretsDropped };
@@ -389,18 +445,26 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       const detail = typeof v.detail === 'string' ? v.detail : '';
       return isChildReclaimToken(v.refused)
         ? { kind: 'refused', token: v.refused, detail }
-        : { kind: 'failed', resumable: false,
+        : { kind: 'failed', resumable: false, preLockDie: false,
             detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
     }
     if (typeof v.failed === 'string') {
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      return { kind: 'failed', resumable: true, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      return { kind: 'failed', resumable: true, preLockDie: false,
+        detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
     }
   }
   const err = stderr.trim();
-  return { kind: 'failed', resumable: true,
+  // A pre-lock die's stderr is `ccd: <message>` (`die`'s own format, review
+  // 170 F20) — strip the prefix before matching, so the recogniser is pinned
+  // against ccd's message text alone, not its wrapper.
+  const msg = err.startsWith('ccd: ') ? err.slice('ccd: '.length) : err;
+  if (err !== '' && isChildReclaimPreLockDie(msg)) {
+    return { kind: 'failed', resumable: false, preLockDie: true, detail: msg };
+  }
+  return { kind: 'failed', resumable: true, preLockDie: false,
     detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };
 }
 
@@ -490,7 +554,9 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
-  if (audit.kind === 'unreadable') return { kind: 'failed', sessionId, runId, resumable: false, detail: audit.detail };
+  if (audit.kind === 'unreadable') {
+    return { kind: 'failed', sessionId, runId, resumable: false, preLockDie: false, detail: audit.detail };
+  }
   if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
@@ -498,7 +564,9 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // 6 — the act. ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
-  if (act.kind === 'failed') return { kind: 'failed', sessionId, runId, resumable: act.resumable, detail: act.detail };
+  if (act.kind === 'failed') {
+    return { kind: 'failed', sessionId, runId, resumable: act.resumable, preLockDie: act.preLockDie, detail: act.detail };
+  }
   if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
   // or into a stranger that inherits its recycled slug.
@@ -578,7 +646,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
     // answered as a failure, never cast into a reason it is not.
     case 'retry': return isChildReclaimDeferWhy(token)
       ? { kind: 'deferred', sessionId, runId, why: token, detail }
-      : { kind: 'failed', sessionId, runId, resumable: false,
+      : { kind: 'failed', sessionId, runId, resumable: false, preLockDie: false,
           detail: `${token} is marked retry but is no defer reason` };
     case 'terminal': return { kind: 'refused', sessionId, runId, token, sentence: refusalSentence(token), detail };
   }
@@ -650,13 +718,15 @@ const childReclaimSentence = (t: string): string => (/[.!?]$/.test(t) ? t : `${t
  *  uncommitted was left" is said ONLY when there is no WIP commit AND ccd
  *  counted no dropped secret-shaped path: a secret edit — a hidden-flag one
  *  included — is uncommitted work that was dropped and recorded, not nothing. */
-function childReclaimWipText(wip: string | null | 'unreadable', dropped: number | 'unreadable'): string {
+function childReclaimWipText(wip: ChildReclaimWip, dropped: number | 'unreadable'): string {
   const secrets = dropped === 'unreadable' ? ' Whether a secret-shaped path was dropped could not be read.'
     : dropped === 0 ? ''
     : ` ${dropped} secret-shaped ${dropped === 1 ? 'path was' : 'paths were'} dropped, never committed — the record names ${dropped === 1 ? 'it' : 'them'}.`;
-  if (wip === null) return (secrets === '' ? 'Nothing uncommitted was left.' : 'No work was committed.') + secrets;
-  return (wip === 'unreadable' ? 'Uncommitted work was pinned, but its commit id could not be read.'
-    : `Uncommitted work was pinned as ${wip}.`) + secrets;
+  switch (wip.kind) {
+    case 'none': return (secrets === '' ? 'Nothing uncommitted was left.' : 'No work was committed.') + secrets;
+    case 'unreadable': return 'Uncommitted work was pinned, but its commit id could not be read.' + secrets;
+    case 'commit': return `Uncommitted work was pinned as ${wip.sha}.` + secrets;
+  }
 }
 
 function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
@@ -676,8 +746,16 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
     // another session) — neither advanced this session's state, so neither
     // has anything to resume. `childReclaimSentence` (not a bare `.`) avoids
     // doubling the punctuation when `o.detail` already ends a sentence.
+    // `preLockDie` (review 170 F20) gets its OWN third sentence: it is also
+    // `resumable: false`, but unlike the other false cases above it is not a
+    // race that a plain retry might clear — a usage, token, python3 or flock
+    // die recurs identically, so the text must not say "retried from the
+    // start" (which reads as "try again, it may work") and must instead say
+    // that the retry fails the same way and where to look.
     case 'failed': return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} `
-      + (o.resumable ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.')
+      + (o.preLockDie
+        ? 'It is retried from the start, but fails the same way — the problem is on the box, not the workspace, and stays until fixed there.'
+        : o.resumable ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.')
       + wait;
   }
 }
