@@ -9,7 +9,7 @@
 **Tech Stack:** bash 5 (`ccd/ccd`, `set -uo pipefail`, no `-e`), TypeScript 7.0.2 (server, agent) / 6.0.3 (pwa), vitest 4, `node:sqlite` `DatabaseSync`, React 19 + zustand (pwa).
 
 **Spec:** `docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md` — §5.7 "On the sweep" and "Presence, and its bound" (AS AMENDED: an absent minting run is never eligible), §5.8 in full, §5.9 "One fleet-level attention item", §6 (the censuses that move), §8's wave-4 row, §9. Cross-wave names: the programme's interface contract (next line), §4 (wave 4) and §3 (the wave-3 surfaces this wave consumes), as its §7 and §8 rulings amend them. Ledger: `docs/superpowers/programs/child-reclamation.md`.
-**Contract:** `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings)
+**Contract:** `docs/superpowers/programs/child-reclamation-contract.md` (cross-wave names and types; §7–§8 rulings; §9 R24–R33; §10 R34–R37) — and **the Pre-dispatch amendments at the end of this file bind every task and win over any task text they contradict**
 
 **Depends on:** waves 1, 2 and 3 of this programme merged into this branch's base. Task 1 measures that before anything is edited, and STOPS if it is not so.
 
@@ -4712,3 +4712,645 @@ Four lenses for this wave, all `opus`. The first two are MANDATORY, effort **`xh
 2. **SECURITY — the grant and the door (opus, xhigh, MANDATORY).** The untrusted-input lens. `['reclaim-pause','--state']` is two tokens wide and enrolled (`g14` is TS2322; `auditExecWhitelist` refuses the bare shape at module load); `gh` is still ungranted; the route is session-gated when armed and carries no box token; the coordinator corpus neither names the route nor may; the route validates the body to exactly `on|off` before any argv exists; the `capSupported` gate refuses on no evidence. And the switch's REALITY: re-derive, from `ccd/ccd` itself, that `ws-reclaim` reads `$REG/reclaim-paused` on its fresh arm and on resume — this wave's scan asserts the spelling, and the lens asserts the semantics.
 3. **Census and prose (opus, high).** Every guard that describes the door surface moved in the commit that moved the surface: `SESSION_ONLY` (both directions), `EXEMPT` plus the forbid-mention case, CLAUDE.md's session-only sentence (and no CAPS count word added to that bullet), `auth-gate`'s counts re-measured rather than typed (51 / 31 / 82), `verb-gate`'s `CAP_GATED_VERBS`, the single-definition pin, `mail-routes`' `NOT_CODES`, `KNOWN_CAPABILITY_TOKENS` appended not rewritten, `cmd_reclaim_pause` placed after `cmd_ls` and outside every `ccd-refusal-scan` slice (its mutation row moves it back and reds that suite), the `CAP_GATED_VERBS` docstring phrased without an ordinal, no committed code comment citing the contract rather than the spec (contract §8 R23), Task 2's (`ccd/ccd`) and Task 4's (`shared/api.ts`) S6-R11 compositions stated rather than inferred — README re-anchored by content and `diff`-proved, never by a delta, and the whole-branch run on ONE shard denominator whose file counts sum to the `find` total.
 4. **PWA honesty (opus, high).** The row renders nothing before a frame and nothing for an older server (never "unmeasurable" for absence); the toggle is not optimistic and settles only on a confirming frame; 501/502 inline through the one shared policy; the attention list is a report with no control on it and renders the server's sentence, never a token; `.child-reclaim-*` carries no glow and clears the tap floor; the wire readers tolerate every absent and malformed shape.
+
+## Pre-dispatch amendments (coordinator, 2026-09-26) — binding
+
+This plan was written on 2026-09-22. That was before wave 3 was amended (its plan's R-1 to R-8 and A1 to A10), before wave 3
+shipped with its ruled departures (3352 to 3368 and 3513 to 3520, defined in wave 3's plan), before contract R25, R32 and R33, and before the
+ledger carried a dozen items into this wave.
+
+On 2026-09-26 a pre-flight read the plan against three sources:
+- wave 3 as it merges (`1715d410`, PR #187);
+- the contract (§9, R24 to R33);
+- the ledger.
+
+It ran four Opus lenses: interfaces, carried items, safety, and rulings. It found three BLOCKING defects:
+- Task 1 stops on its own fact 4 (A1);
+- the presence ceiling licenses `--defer-expired` for good (A9);
+- R32 is contradicted by the plan's own tests (A9, A10).
+
+It also found every carried item unplaced. The coordinator drafted rulings, and three more Opus agents then attacked them
+before they were sent. The attacks turned up three more problems, and the rulings below incorporate their amendments:
+- a hand hold in the programme grammar, which the operator is told to write (R-1);
+- a cross-attempt adoption, which is live (R-3);
+- starvation and a stranding fence (R-5).
+
+These amendments are part of the plan: where one contradicts a task's text, the amendment wins. Plan citations inside
+this section (`plan:NNNN`) refer to this file as it stood before this section was appended; every line above it is
+unchanged except line 12's pointer. Code citations are to wave 3's tip. They are snapshots, so locate code by content.
+The pre-flight's and the attacks' records are in the coordinator's clips (`wave4-preflight/`) and are summarised here.
+
+### Rulings (the coordinator's, 2026-09-26; contract §10, R34 to R37)
+
+- **R-1 — R32 is built as a RELEASE, then the ordinary path, and a hold is ACCOUNTED, never parsed.**
+
+  A hold does not protect a marked child when all of the following hold. They are decided in this order, and any
+  unmeasured answer keeps the hold:
+  1. The minting run is proven present and TERMINAL (the orphan branch never releases a hold), and R-5d's fence passes.
+     This is decided after `minting-run-absent` and `minting-run-open`, never above them.
+  2. The hold is ACCOUNTED FOR. Among the runs whose `sessionId` is this child, plus the minting run, some TERMINAL run R
+     renders exactly the hold's text as the registry reads it (trimmed). The text must match one of two renderings:
+     - `holdReason(R.program, R.wave, R.waveOf, R.id)`, the open/dispatch claim;
+     - `holdReason(R.program, R.wave + 1, R.waveOf, null)`, a non-final close's claim.
+
+     The text is compared with the server's own renderings, never parsed. `run-routes.test.ts`'s "NOTHING in the tree
+     parses one back" stays green and unedited. Everything else protects:
+     - a human's hold, in or out of the programme grammar. Build 8's hand-hold convention and the PWA's
+       `program:name wave:2/4` placeholder both write the grammar on purpose;
+     - `HOLD_UNREADABLE` and `HOLD_NO_REASON`;
+     - a claim written by a run the database does not have, as after a restored snapshot.
+  3. R.program's open-run count reads, and reads zero.
+  4. No open run names the child, and the child has never coordinated a run (R-5c).
+
+  **The mechanism.** The sweep does NOT reclaim such a child directly, because ccd's rung 4 refuses any hold.
+  - When the conditions hold on two consecutive passes, the lane queues ONE release job on the child's own `KeyedQueue`
+    key.
+  - The job re-reads everything it relies on:
+    - the row: the marker names the same run, and the held text is equal after the trim;
+    - the accounting: the same R;
+    - R.program's count;
+    - the child's open runs;
+    - the coordinator reads.
+  - Every read is try-wrapped. A throw or an `ok:false` answers `failed` and composes no argv.
+  - Only then does it compose `CCD_ARGV.wsRelease`, gated as the close gates it (`verbSupported`). The release deletes
+    nothing but the hold file.
+  - The now-unheld child is then judged afresh by the ordinary verdict. It is reclaimed only after two further passes,
+    through `reclaimChild`, whose re-reads and ccd's in-lock ladder stand unchanged.
+
+  **The in-lock compare-and-swap is declined.** It would be a `--retired-hold <reason>` flag on `ws-audit --reclaim` and
+  `ws-reclaim`. Neither `ws-hold` nor `ws-release` takes a lock, so an in-lock compare only moves the window; it does not
+  close it. The tail's `_reg_purge` already removes a hold written after rung 4. The flag would also need new argument
+  parsing in `cmd_ws_audit`, above the frozen boundary.
+
+  **The residual, accepted and recorded:**
+  - (a) A hold written between the job's re-read and ccd's unlink is removed. That window is under a second: one agent
+    exec, ccd startup, and its journal write. A hand hold lost this way means the child is reclaimed two passes later.
+    Its commits and uncommitted work are pinned, but its pane, clips, temp root and ignored files are not (R30). A
+    re-bind in the window stays protected by its open run, and is re-held at its dispatch.
+  - (b) A hand hold that is byte-identical to the claim the server itself last wrote is treated as that claim.
+- **R-2 — R32's three words.** `ChildReclaimNotWhy` gains three words. The contract's "unmeasurable" is spelled
+  `-unmeasured`, to match `ChildSpentVerdict`:
+  - `not-finished-undated`: the live rung answered spent, but no dated row proves `this`;
+  - `not-finished-unmeasured`: the spent verdict was unmeasured;
+  - `not-finished-merge-commit`: a fast-path (registry or `.prhistory`) spent was re-dated `unspent`.
+
+  Plain `not-finished` stays for the ordinary unspent hand-over. With R-5c's `has-coordinated` (A6), there are ten words.
+  They ride the close response only; nothing persists them in this wave. Whether wave 5 records them is wave 5's
+  pre-flight's question.
+- **R-3 — R33 is built as a write-once birth per BOUND session.** It is not a first stamp per run.
+  - A new server-only column, `sessionBornAt`. The fresh arm captures its stamp once, passes it to
+    `markDispatchStarted`, and binds with it. An ADOPTED winner binds with null, because an adopted workspace may be an
+    earlier attempt's: `dispatch.ts`'s BEFORE read tolerates an unlistable registry as empty, and its own §1.5 comment
+    says such a false-new "WOULD BE ADOPTED". That is contract R33's live path. A null birth is unplaceable, so the bind
+    refuses on any PR evidence and the close holds. A final close, R-1 and the sweep still reclaim the child, because none
+    of them reads the birth.
+  - The open route's bind leaves a same-session birth untouched, and nulls it when the session changes. `clearSession`
+    nulls it. `dispatchStartedAt` keeps its every-attempt meaning, for the stall render, `SPAWN_STALL_MS` and this
+    plan's `dispatch-in-flight` rule.
+  - Backfill: `sessionBornAt = dispatchStartedAt` where `sessionId` is not null, EXCEPT runs with a `spawn-adopted:` run
+    event. Residual: an adoption whose dispatch never committed wrote no event, and keeps a possibly late birth, in
+    R33's narrow class.
+  - A COALESCE'd first stamp per run is declined. A failed fresh attempt followed, perhaps days later, by a successful
+    mint would date the child to the failed attempt.
+- **R-4 — the presence ceiling licenses ONE attempt per continuous episode** (spec §5.7: "15 minutes of continuous
+  deferral"). Any outcome other than a presence-class deferral ends the episode, including a refusal (R-5g). A request
+  sent licensed restarts the episode if it still comes back presence-class (A9). This is BLOCKING. As written, every
+  later retry would skip ccd's `attached` and `tree-busy` rungs, and the tail would kill a pane an operator had just
+  opened.
+- **R-5 — the sweep's own bounds.**
+  - (a) At most `CHILD_RECLAIM_MAX_IN_FLIGHT = 1` lane-asked reclaim at once. Close-path reclaims are not counted, and
+    neither is R-1's release job. Due children are sorted by `lastAskedAt` (never-asked first), then `firstEligibleAt`,
+    then id, so a child that defers every pass cannot hog the slot. A request that has not settled after twice the
+    reclaim budget (480 s) stops counting against the bound. It stays in flight, and the stall is logged once.
+  - (b) The lane runs only where BOTH `reclaim-v1` and `reclaim-pause-v1` are advertised, so no automatic reclaim runs
+    on a box whose kill-switch the phone cannot raise. The attention list is still computed.
+  - (c) A child that has EVER coordinated a run is never reclaimed automatically: not by the sweep, and not by the
+    close. The operator's rule 4 reserves manual cleanup for coordinator workspaces, and clause 3 says a coordinator's
+    own workspace is cleaned up by a human, never by a sweep. It covers a child made a programme's heir (the reclaim
+    door re-writes `claimedBy`) and any nested coordinator. The lane skips such a child as `coordinating`. The close
+    answers `has-coordinated` (A6). The executor defers `siblings-open`, detail "`<id>` has coordinated run(s)". An
+    unreadable read defers or skips, and never proceeds.
+  - (d) Run ids restart after a coord.db loss (`reconstruct` mints fresh AUTOINCREMENT ids). So a minting run opened
+    after the OPENING `create` row of the child's CURRENT generation, plus the skew, is not its minting run: skip it as
+    `minting-run-postdates-child`. A child with no such row skips as `child-birth-unplaced`.
+    - The row is read by a new, uncapped store read of the session's `create` rows. It is never the 500-row lifecycle
+      window, which a failing child scrolls through in days, and never the oldest `create`, which would skip every
+      recycled slug.
+    - The check sits after `minting-run-open` and `dispatch-in-flight`, and before R-1.
+    - Each skip is logged once, naming both instants, their difference, and both possible causes: a rebuilt database, or
+      the fleet box's clock behind the server's.
+    - After a database loss, pre-loss children are skipped until a human acts. That is fail-closed and accepted.
+  - (e) The lane's defaults are unmeasured, never "absent" or "zero".
+  - (g) A terminal refusal keeps its entry, with `firstPresenceDeferredAt: null` and `refusedAt: now`, and is re-asked no
+    sooner than the defer ceiling after `refusedAt`. This is lane pacing only; nothing feeds the frame (R5).
+  - (h) A workspace-less row is `not-a-workspace` (defence in depth; ccd's rung 1 refuses it too).
+  - The pre-flight's (f), clearing the memory after a tick gap, is DROPPED. Both verdicts it would discard are fresh
+    reads, and ccd re-checks everything under its lock.
+- **R-6 — R25's orphan temp-root collector moves to wave 5**, with its own token, grant and SAFETY lens.
+  - It is a second no-human destructive path, and R25 itself accepts the interim leak. `ccd-tmp-sweep` runs from a
+    systemd timer only, so the collector will be a capability-gated verb driven by the server lane.
+  - The requirements the pre-flight measured go to wave 5's plan:
+    - re-check under the per-id lock;
+    - no `$REG` entry of any suffix;
+    - two consecutive clean listings;
+    - the pause absent;
+    - a leaf older than a stated age;
+    - never follow a link;
+    - extract the tail's temp-root removal as the one helper.
+  - This plan's line 24 is corrected for R-1 (A15).
+- **R-7 — `is_ours` three-valued leaves this programme.** Since R28 no reclamation reader consults `ours`, and every
+  remaining effect is fail-closed or cosmetic. It goes to a follow-up, with the pre-flight's measured instrument, taken
+  with the `^{commit}` peel `is_ours` uses:
+  - `cat-file -e` answers 128 both for a missing object and for an unreadable repository;
+  - `cat-file --batch-check` answers `missing` at rc 0, and 128 when the repository is unreadable.
+- **R-8 — `_ws_attic_pin`'s capped reflog read leaves this wave for a one-wave follow-up, `reap-attic-complete`.**
+  Number 3515 (wave 3's plan) said its copy of F3's defect was wave 4's, but the attack measured that it cannot be fixed in place:
+  - it has two callers, `ws-reap` and `ws-rm`, both ignoring its status;
+  - `ws-reap` has no pin-failure path;
+  - the attic's one-ref-per-commit shape is read by the tombstone, the reap sheet's "N commits pinned", two specs and
+    `ccd-ws-reap`/`ccd-ws-rm-attic`'s tests.
+
+  The follow-up owns both callers, a ruled attic shape, every consumer, and a real failure path.
+- **R-9 — nested checkouts get rung 6's parity.** A held `index.lock` and an in-progress operation each refuse
+  `tree-busy`, naming the nested path (A3).
+- **R-10 — the close's second `pr-state` call is removed, not documented.** It is replaced by `verifyDone`'s measured
+  line, which is the same measurement (A7).
+- **R-11 — failures that never reach the mirror stay off the attention list in this wave.** These are:
+  - the audit-time `unmeasured`;
+  - `probe-unmeasured`;
+  - pre-lock dies;
+  - `flock-unavailable` and `lock-unopenable`.
+
+  They are retried with backoff and appear in the feed. The plan's claims are narrowed to match (A15). Journaling them
+  in ccd is carried. So is listing R-5c's and R-5d's skips on the attention list, which is wave 5's pre-flight's
+  question.
+- **R-12 — departures are named by slug in the wave-done mail only.** The worker writes no `D-` token of any form in
+  any tracked file or commit. The coordinator numbers them from this wave's block.
+- **R-13 — claims.** Proceed on paths another programme holds (`shared/api.ts`, `server/src/coord/schema.ts`,
+  `server/src/coord/store.ts`, `README.md`), as waves 2 and 3 did.
+  - Edits stay narrow and additive.
+  - Whichever PR merges second merges main (never rebases), resolves, and re-runs S6-R11.
+  - The schema slot is measured in-task, because the update programme's migrations collide on `user_version`.
+
+### A1 — Task 1: fact 4 stops the preflight; fact 5's grep; four new facts — BLOCKING
+
+- **Fact 4 (plan:175-176, :194).** At wave 3's tip its grep prints FIVE lines. `capSupported` also matches the comment
+  above the call ("`capSupported` refuses on no"). Replace it with this grep, which measures exactly four lines (slice
+  offsets 41, 46, 54 and 59):
+  `  | grep -n 'openRunsForSession(\|WAVE 4 ADDS THE SERVER-SIDE PAUSE READ HERE\|isVisible(\|capSupported('`
+- **Fact 5 (plan:180, :195).** Replace plan:180's grep with `grep -n "length).toBe([0-9]" server/test/auth-gate.test.ts`.
+  It prints exactly :216 `51`, :239 `30`, :244 `5` and :295 `86`. plan:132 reads "the four `auth-gate.test.ts` counts"
+  and "ten measured facts". plan:4697 reads "Task 1 Step 3's ten facts".
+- **New facts 7–9, each a STOP on mismatch:**
+  7. `sed -n '/^export type ChildReclaimNotWhy =/,/;$/p' server/src/coord/childReclaim.ts` prints six words ending
+     `'not-finished'`, and `grep -n "toHaveLength(6)" server/test/coordinator-skill.test.ts` prints one line.
+  8. `sed -n '/^  markDispatchStarted(/,/^  }/p' server/src/coord/store.ts` prints one `UPDATE runs SET
+     dispatchStartedAt = ?`, and `grep -n "ms: read.run.dispatchStartedAt" server/src/coord/childSpent.ts` prints one
+     line.
+  9. `awk '/^_ws_reclaim_eval\(\) \{/,/^}/' ccd/ccd | grep -c 'if \[\[ -e "\$REG/\$id.hold" \]\]'` prints `1`, and the
+     same over `_ws_reclaim_resume_eval` prints `1`.
+- **Fact 10, a record, not a STOP.** From `server/`, run `./node_modules/.bin/vitest run
+  test/ccd-child-reclaim-verb.test.ts` in the foreground with a 600000 ms timeout. Record the executed and skipped counts
+  and the wall time; this is Task 1b's baseline. A run that cannot finish is recorded as such.
+
+### A2 — NEW Task 1b: split the reclaim verb suite (directly after Task 1)
+
+**Model routing:** `sonnet`, effort `high`.
+
+`server/test/ccd-child-reclaim-verb.test.ts` is 2424 lines with 21 top-level `describe`s, and runs in about 414 s against
+the 600 s ceiling.
+- Its helpers (~:25-94) close over a module-level `let h: PrHarness`. `server/test/childReclaimVerbHelpers.ts` exports
+  `verbHelpers(getH: () => PrHarness)`, returning the same names.
+- Split the file along its `describe`s into three `ccd-child-reclaim-verb*.test.ts` files. Each declares its own
+  `let h`, its `beforeEach`/`afterEach`, and one destructuring line.
+- No `it(...)` body changes. The executed count before and after is equal, and each file runs in under ~250 s,
+  recorded.
+
+### A3 — NEW Task 2b: ccd below the boundary — nested checkouts, the kill deadline, one comment (after Task 2)
+
+**Model routing:** `opus`, effort `high`. The SAFETY lens reads it. Re-stamp and pay S6-R11.
+
+1. **Nested checkouts (R-9).** In rung 9's same-repository arm, directly after the `_WS_GITDIR_WHY` refusal, and under
+   `(( ! defer ))` as rung 6 is:
+   - locate the nested tree's index with `git -C "$p" rev-parse --path-format=absolute --git-path index`. A failure is
+     `_ws_reclaim_unmeasured`, naming the path;
+   - a present or symlinked `$h.lock` refuses `tree-busy`: "a git command holds the index lock of the nested checkout at
+     $p";
+   - `_ws_child_op "$p"`, the test rung 6 applies to the child's own tree, refuses `tree-busy` on an in-progress
+     operation, naming the path.
+
+   Cases (`ccd-child-reclaim-ladder.test.ts`):
+   - a nested same-repository checkout with `index.lock` → `ws-audit --reclaim` answers `tree-busy`, naming the path;
+   - the same with a nested `rebase-merge` → `tree-busy`;
+   - either one with `--defer-expired` → `reclaimable`;
+   - control: neither → `reclaimable`.
+
+   Mutation: delete each refusal line, and its case reds.
+2. **The tail's anchored `kill-session` gets a deadline.** When `tmux` is not a shell function, run it through
+   `_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S"`, as `_session_probe` bounds the same substrate. A timed-out kill is rc
+   124, never 0, so F1's exit-empty exception cannot admit it, and the tail answers `unit-still-active`.
+   - The case spawns `bash -c 'source ccd; SUBSTRATE_PROBE_DEADLINE_S=2; …'` through `execFileSync` with its own
+     `timeout: 20_000`. The harness's `h.sh` has none, and vitest cannot interrupt a synchronous spawn.
+   - A PATH `tmux` stub's `kill-session` runs `sleep 30`, and its `has-session` prints `no server running`.
+   - With the deadline, the verb answers `unit-still-active` in about 5 s, with nothing deleted.
+   - Mutation: drop `_plat_timeout`, and the spawn is killed at 20 s (ETIMEDOUT), a bounded red.
+3. **The comment above `_ws_wip_commit`'s index copy (3520), line-neutral.** It becomes "a same-size edit to a tracked
+   file in that second would be read as unchanged and never staged (a hidden-flag edit is found by content, step 3)".
+
+### A4 — NEW Task 2c: ccd ABOVE the boundary, in place and line-neutral (after Task 2b)
+
+**Model routing:** `opus`, effort `xhigh`. The SAFETY lens reads it.
+
+It is one task, so line-neutrality is proven by one measurement:
+- the diff above the boundary is replaced lines only;
+- `wc -l` moves only by Tasks 2, 2b and 9c;
+- wave 3's line-19131 bytes stand at 19131 plus Task 2's two lines;
+- then re-stamp and pay S6-R11.
+
+The frozen corpus cites none of these sites by content (measured).
+
+1. **`ws-reap` never follows a symlinked workdir** (R31's mirror).
+   - In `_ws_reap_eval`, on the `main="$PROJECTS_ROOT/$project"` line, before its first `-d "$workdir"` fork, refuse
+     `containment-unproven` when the workdir LEAF is a link. The sentence says ccd never follows a link to a tree it
+     would delete. Ancestor links stay legal.
+   - On the tail's `worktree remove` line, re-test `-L` at removal time, and answer the existing
+     `worktree-remove-failed` document.
+   - Add no vocabulary; `wsaudit.ts`'s `containment-unproven` sentence already covers a link.
+   - Cases:
+     - (a) an archived workspace whose workdir is replaced by a link to a sibling worktree → `ws-audit` answers
+       `containment-unproven`, and `ws-reap` leaves the sibling's files and branch intact;
+     - (b) an interrupted reap with breadcrumb `worktree`, the child's admin directory `.git/worktrees/<child>` removed,
+       and the workdir replaced by a link to a clean sibling worktree → `ws-reap` resumes and answers
+       `worktree-remove-failed`, with the sibling's directory, record and branch intact. The resume path does not call
+       `_ws_reap_eval`, and git 2.43 deletes the sibling with no `--force` once the record is gone (measured).
+   - Mutation: revert either guard, and its case reds.
+2. **`_ws_tombstone`'s `reflog` field** reads only the workdir's HEAD reflog and the tombstoned branch's reflog (`tbranch`),
+   never `--all`. It stays capped at 200, as a display field.
+   - Case: a child's tombstone does not name a commit that only another branch's reflog names.
+   - Mutation: restore `--all`.
+3. **F8: `_ws_tombstone`'s comment**, the same nine lines, says:
+   - `branch` is the branch this cleanup deletes: for `ws-reap`, git's worktree record; for `ws-reclaim`, the
+     registry's;
+   - a drifted HEAD's branch is kept, in `keptBranches`;
+   - `registryBranch` is the registry's name `ws-reap` left alone, and for `ws-reclaim` it equals `branch`.
+
+### A5 — NEW Task 4b: R33, the write-once birth (after Task 4)
+
+**Model routing:** `sonnet`, effort `high`. The SAFETY lens reads `childBirthOf`'s input and the adopted arm.
+
+- **`server/src/coord/schema.ts`.** The next `user_version` migration:
+  - `ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;`
+  - then `UPDATE runs SET sessionBornAt = dispatchStartedAt WHERE sessionId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM
+    run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%')`.
+
+  Measure the event table's and column's real names at the tip.
+- **`server/src/coord/store.ts`.**
+  - `setSession(runId, sessionId, bornAt?: number | null)` forwards `bornAt` to the binding write. After its one
+    `sessionId` UPDATE:
+    - if `bornAt !== undefined`, write `sessionBornAt = bornAt`;
+    - else, if the predecessor session differs, write NULL;
+    - else leave it.
+  - Neither statement names `sessionId` in its SET list, so the one-writer scan is unchanged.
+  - A crash between the two statements leaves a bound session with a null birth, which is unplaceable and fail-closed.
+  - `clearSession` adds `sessionBornAt = NULL`.
+  - The column rides `RunRow` server-only, beside `coordProject`, and `toRunSummary` strips it: it never reaches the wire.
+  - The 65 two-argument `setSession` calls in `server/test` stay valid.
+- **`server/src/coord/dispatch.ts`.** On the fresh arm, `const startedAt = Date.now()` is passed to
+  `markDispatchStarted(id, startedAt)` and to `setSession(id, sessionId, adopted ? null : startedAt)`. `routes.ts` is
+  unchanged: it passes no birth.
+- **`childBirthOf`** reads `sessionBornAt`. Its null detail becomes "the minting run recorded no birth for this session".
+  `ChildReclaimMinting`, `close.ts`'s minting read and `childBind.ts` follow it.
+- **Cases:**
+  - a clean spawn binds its stamp; an adopted spawn binds null (`dispatch-adopt.test.ts`). Mutation: pass the stamp on
+    adoption → red;
+  - two stamps T1 then T2 with the bind on the second: `sessionBornAt === T2`;
+  - a bound session, then a direct `markDispatchStarted`: `sessionBornAt` unchanged and `dispatchStartedAt` moved.
+    Mutation: write the birth inside `markDispatchStarted` → red;
+  - an open-route re-bind to another session → null; the same session keeps its birth;
+  - `clearSession` nulls it;
+  - `toRunSummary` has no `sessionBornAt` key;
+  - the migration backfills a bound row, and leaves an unbound row and a `spawn-adopted:` row null;
+  - the existing pin that `dispatchStartedAt` moves on retry stays green.
+- **Re-point wave 3's fixtures** that set a birth through `markDispatchStarted` to `setSession(id, ID, BIRTH_MS)`:
+  - `child-reclaim-close.test.ts`'s four;
+  - `child-reclaim-bind.test.ts`'s, including its case titled "markDispatchStarted is the birth", retitled;
+  - rename `dispatchStartedAt` fields in `child-reclaim-bind`, `-spent` and `child-reclaim.test.ts` where they mean the
+    birth.
+
+  Every case keeps its expected answer.
+
+### A6 — NEW Task 5b: R32's words, and `has-coordinated` (after Task 5)
+
+**Model routing:** `sonnet`, effort `high`. The SAFETY lens reads `childReclaimDecision`.
+
+- **Vocabulary.** `ChildReclaimNotWhy` and `CHILD_RECLAIM_NOT_WHY` gain R-2's three words and `has-coordinated`, and
+  `isChildReclaimKebab` admits them.
+- **`ChildReclaimDecisionInput` gains:**
+  - `readonly spentFastPath: boolean`, true exactly when `spent.kind === 'spent' && spent.source !== 'live'` triggered
+    the re-date;
+  - `readonly hasCoordinated: boolean`, from a new store read of every `claimedBy`, any state. An unreadable read
+    answers the existing `siblings-unreadable`.
+- **The decision:**
+  - `hasCoordinated` → `has-coordinated`, placed beside the sibling check, before `finished`;
+  - after `finished`: `spent` → `not-finished-undated`; `unmeasured` → `not-finished-unmeasured`; `unspent` with
+    `spentFastPath` → `not-finished-merge-commit`; otherwise `not-finished`. `unasked` falls through to `not-finished`.
+- **Re-point wave 3's rows:**
+  - `child-reclaim.test.ts`: `unplaced` → `-undated`; `unmeasured` → `-unmeasured`; a new `spentFastPath` row →
+    `-merge-commit`; the ordinary row stays;
+  - `child-reclaim-close.test.ts`: (i) stays `not-finished`, (ii) → `-undated`, (iii) → `-merge-commit`;
+  - `run-routes.test.ts`'s `not-finished` case is an unspent child with no fast path, so it stays;
+  - `coordinator-skill.test.ts` → `toHaveLength(10)`.
+
+  Add a `has-coordinated` row.
+- **`wave-lifecycle.md` §6** lists the new words before `not-finished`, keeping the ` — the last is` ending, and adds:
+  "`not-finished-undated`, `-merge-commit` and `-unmeasured` hold a child whose spent evidence the server could not use:
+  a PR from its branch that no dated row places in this workspace's life, a registry PR number the live read dated to
+  an earlier workspace of the same name, or a spent read that did not answer. A next wave's bind re-reads it and refuses
+  `workspace-spent` or `spent-unmeasured` rather than take a spent child; the server reclaims it once your program has
+  no open run. `has-coordinated` means the child has coordinated a run, so its workspace is cleaned up by a human."
+
+  It must not name `/api/coord/reclaim-pause` (Task 6's forbid case).
+- **Mutations:**
+  - drop the `spentFastPath` arm → (iii) reds;
+  - swap two words → their rows red;
+  - drop the `hasCoordinated` check → its row reds;
+  - omit a word from §6 → the set equality reds.
+
+### A7 — NEW Task 5c: one `pr-state` call per close, not two (with Task 5b; R-10)
+
+**Model routing:** `sonnet`, effort `high`. The SAFETY lens reads it, because this line decides a destroy.
+
+- `verifyDone`'s ok verdict carries its measured `CcdPrLine` (server-internal). It is the same
+  `CCD_ARGV.prStateSession` call and the same `parsePrLines`, and ccd's `--head` rows are unfiltered.
+- `childSpentLive` splits into a pure `childSpentLiveFrom(line, rec, birth)` plus the fetch. `childSpent` takes an
+  optional pre-read line for its live rung.
+- `childGateAtClose` passes `verifyDone`'s line when that line's id names this session, and otherwise fetches as today.
+- R30 holds: it is a live read, taken in the same mutex section. A PR opened in between can only hold the child.
+- **Cases:** count the recorded `pr-state` argv in a re-dated fast-path close and in a fast-path miss. Each is exactly
+  1; today each is 2.
+- **Mutation:** stop passing the line → 2.
+- Update the COST notes in `childSpent.ts` and the ~40 s comment in `close.ts` to the measured count.
+
+### A8 — Task 6: the route counts and the CLAUDE.md span
+
+- **Step 4(d) (plan:1748, :1756-1763, :1787).** Expected `expected 31 to be 30`, then `expected 87 to be 86`
+  (`ROUTES.length`). `server.ts` stays `51` and `update/routes.ts` stays `5`. The comment reads "51 + 31 + 5 = 87". The
+  PR body and review lens 3 say "51 / 31 / 5 / 87" and "86→87".
+- **Step 4(e) (plan:1766-1777).** Replace ONLY the mid-line span from `What does need saying here are the` through
+  `in both directions (D-1231).`. Leave `with its own argument — are the census, not this bullet.` before it and
+  ` The update control plane's …` after it untouched. Keep each backticked route on one line.
+
+### A9 — Task 7: the presence episode (BLOCKING), the hold, the fence, the skips
+
+1. **Presence (R-4).** `childReclaimNextEntry` takes `licensed = req.deferExpired`, and the arms at plan:2438-2445 become:
+   - `failed` → `firstPresenceDeferredAt: null`, beside its failure count;
+   - `refused` (R-5g) → `firstPresenceDeferredAt: null`, `refusedAt: nowMs`;
+   - `deferred`, presence-class → `licensed ? nowMs : (entry.firstPresenceDeferredAt ?? nowMs)`;
+   - `deferred`, anything else → null.
+
+   Every arm except `refused` sets `refusedAt: null`, and the entry gains `lastAskedAt` (R-5a).
+
+   **The Global Constraint at plan:26 gains:** "Any outcome other than a presence-class deferral ends the presence
+   episode, and a licensed request restarts it. The ceiling licenses exactly ONE attempt per continuous episode." This
+   ties to plan:3035's expected `firstPresenceDeferredAt`, now request 3's `now`.
+
+   **Cases:**
+   - for `failed`, `refused` and each non-presence `why`, starting past the ceiling, `childReclaimDeferExpired` is
+     false;
+   - a licensed presence answer restarts the episode;
+   - lane (Task 8): presence until the ceiling, then one licensed request answered `failed` or `refused`, and the next
+     request carries `deferExpired: false`.
+
+   **Mutation:** restore the old clock in any arm, and its case reds.
+2. **The hold (R-1).** This replaces `held: string | null` (plan:2343-2344) and plan:2373's check:
+   ```ts
+   export type ChildReclaimHoldRead =
+     | { readonly kind: 'none' }
+     | { readonly kind: 'held'; readonly reason: string }          // no terminal run naming this child renders these bytes
+     | { readonly kind: 'unmeasured'; readonly reason: string; readonly detail: string }
+     | { readonly kind: 'program'; readonly reason: string; readonly program: string; readonly accountedRunId: number;
+         readonly open: { readonly ok: true; readonly count: number } | { readonly ok: false; readonly detail: string } };
+   ```
+   The L1 matcher renders with `shared/api.ts`'s `holdReason` (L0, pure) over the runs naming the child plus the minting
+   run, and keeps only TERMINAL runs.
+
+   **The verdict:**
+   - `held` → `'held'`, at plan:2373's place;
+   - `unmeasured` → `hold-unmeasured` (a new skip);
+   - `program` is decided only after `minting-run-absent`, `minting-run-open`, `dispatch-in-flight` and R-5d's fence:
+     - a non-terminal minting run → `'held'`;
+     - `!open.ok` → `hold-unmeasured`;
+     - `count > 0` → `'held'`;
+     - otherwise, after the review, sibling and coordinating conjuncts, it answers
+       `{ eligible: false, why: 'hold-retired', runId, release: { reason, program, accountedRunId } }` where it would
+       have answered eligible.
+
+   It is never `eligible: true` while a hold exists.
+
+   **Policy rows:**
+   - a human hold in free text → `held`;
+   - the placeholder-shaped hand hold `program:demo wave:2/4`, where the child's only run is wave 2 → `held`;
+   - `program:demo wave:2/3 run:99`, with run 99 absent → `held`;
+   - a rendering of a run that names another session → `held`;
+   - `wave:02/3` → `held`;
+   - `HOLD_UNREADABLE` → `held`;
+   - a programme with an open run → `held`;
+   - an unreadable count → `hold-unmeasured`;
+   - an absent minting run plus a programme hold → `minting-run-absent`;
+   - a retired programme, accounted by a terminal run → `hold-retired`;
+   - retired, but siblings open → `siblings-open`;
+   - an open orphan-branch minting run with a retired-programme hold → `held`.
+
+   **Mutation rows**, each reds its row:
+   - drop the accounting (the placeholder row);
+   - account against every run, not only those naming the child (the other-session row);
+   - drop the terminal requirement;
+   - hoist the decision above `minting-run-absent`;
+   - read an unreadable count as zero.
+
+   The held case at plan:1917-1919 becomes these rows.
+3. **Coordinating (R-5c).** The input gains `coordinating: boolean` (ever), read from the same store read Task 5b adds.
+   It skips as `coordinating`, a word in the L1 file, which is outside the coordination kebab scan. It gets a row and a
+   mutation.
+4. **The run-id fence (R-5d).** The minting run's read gains `openedAt`. The input gains `childBornAt: number | null` and
+   `skewMs` (`CHILD_BIRTH_SKEW_MS`). After `dispatch-in-flight` and before the hold:
+   - a null birth → `child-birth-unplaced`;
+   - `openedAt > childBornAt + skewMs` → `minting-run-postdates-child`.
+
+   Rows: exactly `+skewMs` passes, `+skewMs+1` skips, and a null birth skips. There is a mutation for each line.
+5. **R-5h.** A `workspace === null` row → `not-a-workspace`, with one row.
+
+### A10 — Task 8: the lane
+
+1. **The release (R-1).**
+   - **The read.** The lane builds `ChildReclaimHoldRead` from the row's trimmed `held`. It uses a new
+     `CoordStore.runsNamingSession(id)`, shaped like `openRunsForSession` but with no state filter, in its own try, where
+     a throw or `!ok` gives `unmeasured`. `programOpenRunCount`, which throws bare, gets its own try.
+   - **The memory entry** records which verdict it counts (`'eligible' | 'hold-retired'`). A verdict of the other kind
+     starts a fresh sighting. The lane has no re-entrancy guard, and an overlapping pass must not turn "two further
+     passes" into one.
+   - **The job.** On the second pass the lane queues ONE `releaseRetiredChildHold(deps, { sessionId, runId, reason,
+     program, accountedRunId })`, a new export of `server/src/coord/childReclaim.ts`, on
+     `this.deps.queue.run(sessionId, …)`. The job re-reads as R-1 says, then composes
+     `CCD_ARGV.wsRelease(sessionId, sweepDec(fleetState, `run:${runId} reclaim sweep: program ${program} retired`))`
+     behind `verbSupported`.
+   - **Its answer** is `'released' | 'not-held' | 'changed' | 'failed'`. ccd prints `released <id>` or `not held <id>`,
+     both at exit 0. The job enters `childReclaimInFlight` but does not count against R-5a. Its answer deletes the entry
+     unconditionally.
+   - **Censuses.** The switches' early return covers the release. Every census the new `ws-release` site moves (the
+     unattended-actor SITES, the verb gate) is updated with its measured count. Any new hyphenated literal under
+     `server/src/coord` is admitted through an exported guard, because of the kebab scan.
+   - **Cases** (`exec: 'real'`, argv recorded). They replace plan:2983-2991's hold half:
+     - (i) an accounted `program:` hold protects while its programme has an open run;
+     - (ii) after the programme retires: pass 1 nothing; pass 2 one `ws-release` and no reclaim request; then two more
+       passes and one reclaim request;
+     - (iii) a human hold → nothing, ever;
+     - (iv) the hold text changes before the job runs → no release;
+     - (v) a run of that programme opens between the passes → no release;
+     - (vi) a lost database (the minting run absent) → nothing;
+     - (vii) the placeholder-shaped hand hold → nothing, ever;
+     - (viii) a restored-snapshot hold naming a run the database lacks → nothing;
+     - (ix) a release answered after the next pass began still needs two fresh unheld passes.
+   - **Mutations:** delete the byte re-check → (iv) reds; delete the count re-check → (v) reds; delete the accounting
+     re-read → (iv′) reds, where (iv′) is a different but equally renderable text.
+   - **The docstring** states R-1's residual.
+2. **Both caps (R-5b).** The early return reads:
+   `!capSupported(…, RECLAIM_CAP) || !capSupported(…, RECLAIM_PAUSE_CAP) || names.includes(RECLAIM_PAUSE_MARKER)`.
+   - The fixture's `ccdVerbs` (plan:2787) gains the pause token.
+   - Case: "does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still reports".
+   - A mutation row.
+3. **In flight (R-5a).** Add `CHILD_RECLAIM_MAX_IN_FLIGHT = 1` beside `CHILD_RECLAIM_SWEEP_MS`. Step three collects the due
+   children, sorts them by `lastAskedAt` (null first), then `firstEligibleAt`, then id, and dispatches at most the free
+   slots. A request older than twice the reclaim budget stops counting, and is logged once.
+   - **Cases:**
+     - three finished children → one request, none while it is in flight, and the second after it settles;
+     - A answers `state-changed` every time and B answers `reclaimed` → B is asked on the pass after A's first request;
+     - a request that never settles → after 480 s, the next child is asked.
+   - **Mutations:**
+     - drop the bound → three requests;
+     - sort by `firstEligibleAt` alone → B is never asked.
+4. **Coordinating (R-5c).** One store read of every `claimedBy` per pass, inside the pass's try. A throw fails the pass
+   shut, like the mirror read. There is a case.
+5. **The run-id fence (R-5d).** Take the opening `create` of the current generation:
+   `childBornAt = childReclaimGeneration(coord.lifecycleCreatesFor(r.id), now)[0]?.at ?? null`.
+   - `lifecycleCreatesFor` is a new uncapped read of the session's `create` rows through the lifecycle columns and its
+     session index.
+   - It is computed inside the per-child try.
+   - **Cases:**
+     - a marker naming a run opened after the child's `create` → no request, and one log line;
+     - a child with more than 500 newer lifecycle rows is still placed.
+6. **The attention list and the terminal exclusion (plan:3745)** build their generation over `lifecycleCreatesFor` merged
+   by id with the window's rows. A long-refused child must not drop off the list once its `create` scrolls out of the
+   500-row window. There is a case.
+7. **The ports.**
+   - `execChildReclaim` composes EXACTLY the close port's seven members (`coord, io, cfg, runCcd, fleetState, presence,
+     notifyLog`), with `now` unset. It builds the literal inside the queue callback, as the close port does. The text pin
+     at plan:3330 widens to match.
+   - New case: "composes the SAME ports the close route does — presence and the feed log included", with a recording
+     `presence.isVisible` that answers true, and a feed assertion.
+   - Mutation rows: delete `presence` (the feed reads `child reclaim failed`); delete `notifyLog` (the feed is empty).
+8. **Stubs (plan:2778, :3069, :3088, :3109).** A reclaimed outcome carries `wip: { kind: 'none' }, secretsDropped: 0`. A
+   `failed` outcome carries `resume: 'resumable'` in the backoff case, and there is one `'pre-lock-die'` row.
+   `typecheck-tests` stays green.
+9. **Defaults (R-5e).** plan:3797-3800's `mintingRun`, `siblings` and `reviewedRun` defaults become unmeasured shapes.
+10. **Terminal pacing (R-5g).**
+    - Case: two passes after a terminal refusal make no second request.
+    - Case: a licensed request refused with no mirror line → the next request carries `deferExpired: false`.
+11. **Lost triggers.** Two regression cases, each on a new watcher over the same database:
+    - (a) the minting run closed `done` non-final while the programme stays open on another session, with no hold and no
+      executor run → one request after two passes;
+    - (b) a planned run that named the child was unbound by wave 2's dispatch refusal, which released the child → one
+      request after two passes.
+12. **R-11.** Case: an executor `failed` with no mirror line is retried with backoff and never listed.
+
+### A11 — Task 5: the executor's coordinating re-read, and a wrapped phrase
+
+- Inside Task 5's edit block, after the sibling re-read and before the pause read, add a try-wrapped read of every
+  `claimedBy`, the same store read Task 5b adds:
+  - a throw → `deferred('siblings-unreadable', …)`;
+  - a hit → `deferred('siblings-open', "<id> has coordinated run(s)")`.
+
+  This covers both triggers. It gets a case and a mutation row.
+- plan:1427: the docstring phrase wraps at the tip. Locate it by `the open siblings, presence,` and edit across the wrap.
+
+### A12 — NEW Task 9b: prose and test text (after Task 9)
+
+**Model routing:** `sonnet`, effort `high`.
+
+1. **Coordinator clause 3.** Change `ccd/coordinator-skill/SKILL.md` and `CONTRACT[2]` in `coordinator-skill.test.ts`
+   together. The clause becomes:
+
+   "3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for
+   any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its
+   run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next
+   wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was
+   deferred or never started); this session’s own workspace is cleaned up by a human, never by a sweep."
+
+   The last clause stays byte-identical and true: R-5c keeps every workspace that has coordinated out of automatic
+   reclamation. The three-verb census still passes. Mutation: revert SKILL.md only → the verbatim case reds.
+2. **`wave-lifecycle.md` and the coordinator SKILL.md:**
+   - "it commits anything left uncommitted on the child's branch as a WIP commit" becomes "it records anything left
+     uncommitted as a WIP commit pinned in the attic (it moves no branch)".
+   - SKILL.md's "before wave 1's deploy" sentence (~:372-374), and the same sentence in wave-lifecycle.md (~:739-741,
+     keeping "(§2)"), read "every workspace minted without a marker: by a box whose ccd did not yet mark children, or
+     by a dispatch that journaled `child-omitted` —".
+3. **The worker and reviewer skills.** "This workspace ends when its run closes" (worker ~:262-266, reviewer ~:145-148)
+   becomes true of a held child: "This workspace ends when the coordinator is finished with it — usually when its run
+   closes". Keep "committed for you as a WIP commit and attic-pinned" byte-identical. If a clause pin covers the
+   sentence, change the pin in the same commit.
+4. **Review 163's three minors** (`server/test/ccd-child-tmpdir.test.ts`):
+   - the census comment names line continuation among its blind spots;
+   - "the decision lives in _spawn_start…" moves out of `describe.each(CHMODS)` into a plain `describe`. `CHMODS` has
+     two entries, so the executed count drops by exactly one; state it;
+   - the shim comment says the real chmod was measured BSD-order on the CI macOS runner (test-macos 2/2, job
+     107809367324).
+
+### A13 — NEW Task 9c: ws-slug-collision's residue (ccd below the boundary)
+
+**Model routing:** `sonnet`, effort `high`. Re-stamp and pay S6-R11.
+
+This is `_ws_slug_git_state`, per that programme's ledger, "Residue".
+- **Cases**, each with a mutation row for its arm:
+  - a `git` stub that fails only `for-each-ref` → `unmeasurable`;
+  - `$WORKTREES_ROOT` itself unsearchable → `unmeasurable`.
+- **The header:**
+  - lists every `taken` shape and every `free` condition;
+  - says "an unreadable or corrupt `packed-refs`";
+  - names the two levels checked, with the rest as residual;
+  - names the stale `refs/heads/ws/<slug>.lock`.
+- **An absent `$common/refs/heads`** answers `unmeasurable … refs/heads is absent`: narrowed, and still fail-closed.
+- **In `docs/superpowers/plans/2026-09-23-ws-slug-git-collision.md`,** edited in place with no new number:
+  - D-3474's mechanism says masking, not ordering;
+  - D-3476 cites rows 13–21 and gains one reftable sentence;
+  - the Global Constraints' show-ref premise gains "(false; see D-3476)".
+
+### A14 — Task 10: Darwin evidence and the file lists
+
+- New Step 5a: from the PR's CI, record the macOS job id that ran `ccd-child-reclaim-ladder`, `child-reclaim`,
+  `wsaudit`, and this wave's new and split ccd suites. Name each one not reached UNMEASURED, with the job id of the leg
+  that hung first. Report it in Step 7.
+- Step 4's suite list gains every file Tasks 1b to 9c create or split.
+
+### A15 — the header, Global Constraints, `## Deviations found`, `## Review lenses`, routing
+
+- **A new Global Constraint:**
+  - names R32 and R33 (built as R-1 to R-3) and R34 to R37 as this wave's;
+  - names R24, R27, R29, R30 and R31 as consumed unchanged;
+  - names R25 as wave 5's.
+- **plan:24:** "…The only destructive acts are wave 3's `ws-reclaim`, reached only through `reclaimChild`, and R-1's
+  `ws-release` of a retired programme's hold, which removes the hold file alone."
+- **plan:5, :7 and :4673:** the attention list is "every child whose `ws-reclaim` has kept failing, once an attempt has
+  started (its `_lc_fail` line), past the ceiling" (R-11).
+- **plan:4697 and :4703:** R-12's sentence replaces "writes `D-TBD-<slug>` in its report".
+- **Routing:** plan:126 becomes "`haiku` (no effort level)"; plan:873 (Task 4) becomes `sonnet`, effort `high`.
+- **`## Review lenses` (plan:4707-).** Prepend: "These four run IN ADDITION to the held-out panel
+  (`references/review-panel.md`), run as written. Every finding from them gets the panel's three Sonnet·high refuters.
+  A lens that dies or returns nothing is unverified. Each reviewer reads in its own worktree at one measured tip."
+
+  Lens 1 (SAFETY) gains:
+  - R-1: the accounting, the order, the in-job re-reads, and that a lost or restored database releases nothing;
+  - R-3: the adopted arm;
+  - R-4's single licensed attempt;
+  - R-5's in-flight bound and sort, both caps, coordinating children, and the fence's uncapped read;
+  - Task 2b's nested refusals and kill deadline;
+  - Task 2c's `ws-reap` link guard.
