@@ -45,7 +45,7 @@ export const SENTENCES: Record<string, string> = {
   // checkout is standing on. `update-ref -d` — the CAS this verb deletes with,
   // because `git branch -d` refuses a squash merge — does not make the check
   // `branch -d` makes, so ccd makes it.
-  'branch-elsewhere': 'ccrc deletes a branch only when it is proven to belong to this workspace alone — checked out nowhere else, and not the project’s main line — and here that could not be proven. Nothing is removed.',
+  'branch-elsewhere': 'ccrc deletes a branch only when it is proven to belong to this workspace alone — checked out nowhere else (and, for a reclaim, not the project’s main line) — and here that could not be proven. Nothing is removed.',
   'dirty-tree': 'There are uncommitted or untracked changes here. Commit or move them first.',
   // A read that FAILED, not a tree that was clean. It gets its own sentence
   // rather than borrowing dirty-tree's, because "commit or move them first" is
