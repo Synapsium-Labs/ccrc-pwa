@@ -1129,6 +1129,23 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     expect(atticShas(c), 'nothing was pinned').toEqual([]);
   }, 60_000);
 
+  it.each([
+    ['core.fileMode true (the default): the disk’s exec bit is kept', null, '100755'],
+    ['core.fileMode false: the index’s mode is kept, as `git add` keeps it', 'false', '100644'],
+  ] as const)('a hidden edit that also gained an exec bit — %s', (_what, fileMode, want) => {
+    const c = makeChild(h);
+    const f = path.join(c.wt, 'run.sh');
+    fs.writeFileSync(f, 'echo one\n', { mode: 0o644 });
+    h.git(c.wt, 'add', 'run.sh'); h.git(c.wt, 'commit', '-m', 'run.sh');
+    h.git(c.wt, 'update-index', '--skip-worktree', 'run.sh');
+    if (fileMode) h.git(c.wt, 'config', 'core.fileMode', fileMode);
+    fs.writeFileSync(f, 'echo two\n'); fs.chmodSync(f, 0o755);
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'show', `${p.wip}:run.sh`)).toBe('echo two');
+    expect(h.git(c.main, 'ls-tree', p.wip, 'run.sh'), 'the mode git add would keep').toMatch(new RegExp(`^${want} `));
+  }, 60_000);
+
   it('FAILS when a hidden edit cannot be READ — a read that fails is unmeasured, never "not an edit"', () => {
     const c = makeChild(h);
     flagged(c, 'db.yml', '--skip-worktree');

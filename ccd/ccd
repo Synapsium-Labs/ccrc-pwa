@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d16b8ec714f7abe6de9b59a5b9c539c68acf02c5014d54f86f5f9424c53b0789
+# ccrc:generated 1 sha256=319126c13f6ea1926452c20abe87463077a2941e1e1e66799aa2a0cb6b20cd6e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23991,7 +23991,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_reset
   local id="$1" defer="$2" childof="$3"
   local ws mark project workdir regbranch branch wthead main mainreal common
-  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp
+  local op clients elsewhere elsrc nested p pcommon ptop rc h hs clipsjson hp wdreal
   RECLAIM_DEFER="$defer"
   # 1 — registry identity
   [[ -f "$REG/$id.uuid" ]] || { _reap_refuse no-such-session "no registry entry for $id"; return 1; }
@@ -24210,6 +24210,10 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   # one of its own remotes.
   nested=$(_ws_nested_checkouts "$workdir") \
     || { _ws_reclaim_unmeasured "could not scan for nested checkouts${_WS_NESTED_WHY:+ — $_WS_NESTED_WHY}"; return 1; }
+  # The nested roots come back RESOLVED; a path under one is named relative to
+  # the RESOLVED workdir, as the pin names it (its `wdreal`).
+  wdreal=$(cd -- "$workdir" >/dev/null 2>&1 && pwd -P) \
+    || { _ws_reclaim_unmeasured "could not resolve $workdir"; return 1; }
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
     # A READ THAT FAILED MEASURED NOTHING (spec §5.5, rung 8's rule, carried
@@ -24229,7 +24233,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       _ws_reclaim_hidden "$p" || { _ws_reclaim_unmeasured "$_WS_HIDDEN_WHY"; return 1; }
       for hp in ${_WS_HIDDEN_PATHS[@]+"${_WS_HIDDEN_PATHS[@]}"}; do
         RECLAIM_HIDDEN+=("$p/$hp")
-        _ws_reclaim_secret_path "$hp" && REAP_SENSITIVE+=("${p#"$workdir"/}/$hp")
+        _ws_reclaim_secret_path "$hp" && REAP_SENSITIVE+=("${p#"$wdreal"/}/$hp")
       done
       RECLAIM_NESTED+="$p"$'\n'
       continue
@@ -24424,11 +24428,10 @@ _ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index f
   _WS_INDEX_SRC="$f"
 }
 
-_WS_HIDDEN_PATHS=(); _WS_HIDDEN_OIDS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
+_WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
 _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktree and assume-unchanged
   #                          paths PRESENT on disk whose content differs from their index blob,
-  #                          _WS_HIDDEN_OIDS = the object each one's RAW bytes hash to, and
-  #                          _WS_HIDDEN_MODES = each one's index mode, index for index; rc 1
+  #                          and _WS_HIDDEN_MODES = each one's index mode, index for index; rc 1
   #                          (_WS_HIDDEN_WHY) when a read failed. The index read is the one
   #                          GIT_INDEX_FILE names when the caller sets it (the WIP commit's scratch copy).
   # AN EDIT GIT IS TOLD NOT TO LOOK AT (spec §5.5 step 2). `git status` does
@@ -24456,7 +24459,7 @@ _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktr
 
 _ws_reclaim_hidden_contained() {   # `_ws_reclaim_hidden`'s body, run under `_ws_reclaim_contained` — call that
   local dir="$1" lsf entry tag meta mode rest oid stage p f disk raw islink wantlink
-  _WS_HIDDEN_PATHS=(); _WS_HIDDEN_OIDS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
+  _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
   lsf=$(_plat_mktemp) || { _WS_HIDDEN_WHY='could not make a scratch file'; return 1; }
   git -C "$dir" ls-files -v -s -z >"$lsf" 2>/dev/null \
     || { rm -f "$lsf"; _WS_HIDDEN_WHY="could not read which paths of $dir are skip-worktree or assume-unchanged"; return 1; }
@@ -24493,7 +24496,7 @@ _ws_reclaim_hidden_contained() {   # `_ws_reclaim_hidden`'s body, run under `_ws
     islink=0; [[ -L "$f" ]] && islink=1
     wantlink=0; [[ "$mode" == 120000 ]] && wantlink=1
     if [[ "$disk" == "$oid" || "$raw" == "$oid" ]] && (( islink == wantlink )); then continue; fi
-    _WS_HIDDEN_PATHS+=("$p"); _WS_HIDDEN_OIDS+=("$raw"); _WS_HIDDEN_MODES+=("$mode")
+    _WS_HIDDEN_PATHS+=("$p"); _WS_HIDDEN_MODES+=("$mode")
   done <"$lsf"
   rm -f "$lsf"
   return 0
@@ -24568,7 +24571,7 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # THE IDENTITY IS FIXED, and it is `_ws_reclaim_commit_tree`'s (below): the
   # one identity every commit a reclaim writes carries.
   local dir="$1" id="$2" childof="$3" prefix="$4" sd idx entry p xy rc err tree hsha mh line sha msg have plist i
-  local f kmode blob
+  local f kmode blob fmode
   local cand=() back=() parents=() kept=()
   RECLAIM_WIP_SHA=""; RECLAIM_WIP_WHY=""
   _ws_reclaim_index_src "$dir" || { RECLAIM_WIP_WHY="$_WS_INDEX_WHY"; return 1; }
@@ -24641,7 +24644,17 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # disk. A plain `add` trusts a stat record that still matches (the user's,
   # stale by design for an assume-unchanged entry), exits 0 and stages
   # nothing, and a clean filter would store other bytes than the disk's.
+  # A regular file's mode is the DISK's (`-x`: 100755, else 100644), as `git
+  # add` takes it — an exec bit is part of the edit — unless `core.fileMode`
+  # is false, where git keeps the index's; read once, and a value git cannot
+  # read measured nothing.
   GIT_INDEX_FILE="$idx" _ws_reclaim_hidden "$dir" || { RECLAIM_WIP_WHY="$_WS_HIDDEN_WHY"; rm -rf "$sd"; return 1; }
+  fmode=''
+  if (( ${#_WS_HIDDEN_PATHS[@]} )); then
+    fmode=$(git -C "$dir" config --bool --get core.fileMode 2>"$sd/err"); rc=$?
+    (( rc == 0 || rc == 1 )) \
+      || { RECLAIM_WIP_WHY="could not read core.fileMode at $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
+  fi
   for (( i = 0; i < ${#_WS_HIDDEN_PATHS[@]}; i++ )); do
     p="${_WS_HIDDEN_PATHS[$i]}"; f="$dir/$p"
     if _ws_reclaim_secret_path "$p"; then _ws_reclaim_secret_note "$prefix$p"; continue; fi
@@ -24652,7 +24665,11 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
     if [[ -L "$f" ]]; then
       kmode=120000; blob=$(readlink "$f") && blob=$(printf '%s' "$blob" | git -C "$dir" hash-object -w --stdin 2>"$sd/err")
     elif [[ -f "$f" ]]; then
-      [[ "$kmode" != 120000 ]] || { kmode=100644; [[ -x "$f" ]] && kmode=100755; }
+      if [[ "$fmode" == false ]]; then
+        [[ "$kmode" != 120000 ]] || kmode=100644
+      else
+        kmode=100644; [[ -x "$f" ]] && kmode=100755
+      fi
       blob=$(git -C "$dir" hash-object -w --no-filters -- "$p" 2>"$sd/err")
     else
       blob=''

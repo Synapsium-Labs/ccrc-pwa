@@ -1039,6 +1039,20 @@ describe('the hidden-edit PATH set is a fingerprint input — the audit and the 
     expect(sensitive.sort()).toEqual(['.env', 'inner/.env']);
   }, 90_000);
 
+  it('`sensitive` names a nested hidden secret relative to the RESOLVED workdir — as the pin records it — when the workdir is spelt through a symlinked parent', () => {
+    const { wt, main } = makeChild(h);
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    hide(inner, '.env', '--assume-unchanged');
+    fs.writeFileSync(path.join(inner, '.env'), 'KEY=live\n');
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    fs.writeFileSync(reg('workdir'), path.join(h.home, 'wtlink', 'demo', 'quiet-basin'));
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s\\n' "$REAP_VERDICT" "\${REAP_SENSITIVE[@]}"`);
+    const [verdict, ...sensitive] = out.split('\n').filter(Boolean);
+    expect(verdict).toBe('reclaimable');
+    expect(sensitive, 'the audit spells the path the verb records as `inner/.env`').toEqual(['inner/.env']);
+  }, 90_000);
+
   it('answers unmeasured — never a token — when `ls-files -v` answers a tag it does not know', () => {
     const { wt } = makeChild(h);
     const blob = h.git(wt, 'rev-parse', 'HEAD:f1.txt');
