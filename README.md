@@ -1675,7 +1675,8 @@ what it cannot.
    It **releases** the hold; it never archives, and there is no archive
    control anywhere on the sheet. A CHILD goes further: an abandon finishes
    it, so once no other open run names it the server reclaims it after the
-   release — pinned, then removed (**A child is not a reap**, below;
+   release — pinned, then removed; a review child only once the run it
+   reviewed is terminal (**A child is not a reap**, below;
    `wave-lifecycle.md` §6). An abandon asserts nothing about PR
    lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
    the case it exists for is a run whose claim can no longer be measured.
@@ -2099,12 +2100,16 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    its now-distinct workspace is released, require `released:true`
    in the close response, then verify the exact producer closed row
    is `done` with a full 40-hex `handoffCommit`. If the consumer depends
-   on an interface from this producer, independently prove
-   through `ccd pr-state --session <producer-session>` that the
-   selected `phase` is `merged` and raw `headRefOid` equals both that
-   `handoffCommit` and `producerSha` —
+   on an interface from this producer, independently prove it
+   by PR NUMBER — `gh pr view <pr> --json state,headRefOid`, where `<pr>`
+   is that closed row's own `pr` — requiring `state` to be `MERGED` and
+   raw `headRefOid` to equal both that `handoffCommit` and `producerSha` —
    prove its PR merged at the named producer SHA
-   before dispatching the consumer. Only then dispatch the consumer
+   before dispatching the consumer. Never prove it through
+   `ccd pr-state --session <producer-session>` after this close: a CHILD
+   producer's `final:true` close queues its reclaim, which purges the row
+   that proof would need, so it would race the reclaim and usually could
+   not run. Only then dispatch the consumer
    fresh in its target project.
    A `done` run proves fingerprint and close, **not merge proof**;
    missing, ambiguous, or mismatched PR evidence means report and do
@@ -2662,8 +2667,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21357`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20177-20179`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21391`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20178-20180`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a

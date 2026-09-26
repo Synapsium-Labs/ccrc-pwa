@@ -397,15 +397,38 @@ describe('README: the run lifecycle and programme mail', () => {
     // this producer," from the SAME-project arm left every scoped assertion
     // green, because nothing checked that arm's own dependency gate. All
     // three predicates now run over `same` and over `cross` independently.
+    //
+    // Fix round (review 170 F10): the cross arm's own workspace is RELEASED
+    // by its `final:true` close, and a CHILD producer's release queues its
+    // reclaim, which purges the row `ccd pr-state --session` would need — so
+    // that proof, done AFTER this close, usually cannot run (a race the
+    // same-project arm never has: its `final:false` close never releases the
+    // workspace `ccd pr-state --session` reads). The cross arm now proves the
+    // merge by PR NUMBER instead (`gh pr view <pr> --json state,headRefOid`,
+    // MERGED), and only NAMES `ccd pr-state --session` to forbid it after the
+    // close — so `phase` (a `ccd pr-state` field the cross arm's new
+    // mechanism never reads) is common evidence no longer; it is asserted for
+    // the same-project arm alone, and the cross arm gets its own two words.
     for (const [armName, arm] of [['same-project', same], ['cross-project', cross]] as const) {
-      for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'phase', 'headRefOid', 'producerSha']) {
+      for (const evidence of ['handoffCommit', 'ccd pr-state --session', 'headRefOid', 'producerSha']) {
         expect(arm, `${armName} producer merge proof does not name ${evidence}`).toContain(evidence);
       }
       expect(arm, `${armName}'s named producer SHA is not pinned to the closed row and raw PR row`)
         .toMatch(/`headRefOid`[\s\S]{0,160}?`handoffCommit`[\s\S]{0,120}?`producerSha`/);
       expect(arm, `${armName} succession makes merge proof universal instead of dependency-gated`)
-        .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove[\s\S]{0,200}?producerSha/i);
+        // 260, not 200 (fix round, review 170 F10): the cross arm's own
+        // caution against `ccd pr-state --session` after its releasing close
+        // sits between "independently prove" and `producerSha` and is longer
+        // prose than the same-project arm's — both arms share this window.
+        .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove[\s\S]{0,260}?producerSha/i);
     }
+    expect(same, 'same-project succession does not prove merge by `phase`').toContain('phase');
+    expect(cross, 'cross-project succession does not prove merge by PR number')
+      .toContain('gh pr view');
+    expect(cross, 'cross-project succession does not require the answer MERGED')
+      .toContain('MERGED');
+    expect(cross, 'cross-project succession does not forbid the session-scoped proof after its close')
+      .toMatch(/never[\s\S]{0,40}?`ccd pr-state --session[\s\S]{0,40}?after this close/i);
   });
 
   it('the programme-mail paragraph names both roles and the exact read semantics', () => {

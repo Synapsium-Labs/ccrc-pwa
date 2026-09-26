@@ -262,7 +262,8 @@ re-send the old numbers.
 
 **This workspace ends when its run closes.** A workspace dispatch minted for a
 run is a child, and once the coordinator has finished with it — the last wave,
-a wave that opened a PR, an abandon — the server reclaims it: anything not
+a wave that opened a PR after this workspace was created, an abandon — the
+server reclaims it: anything not
 committed on this branch by then is committed for you as a WIP commit and
 attic-pinned, and then the worktree, the branch, the clips directory and this
 session's temp directory are removed. Commit what matters on this branch; a
