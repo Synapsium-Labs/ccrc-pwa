@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **fix round done** 2026-09-26 at `f2b32a86` (run 148 on `plain-summit`); 3520 being defined, then the scoped review |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in scoped review** 2026-09-26 at `1715d410` (run 148 on `plain-summit`; review 171 on `brisk-meadow`) |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
 
@@ -39,10 +39,20 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (review **170**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-09-26 — wave 3's wave-done re-sent at `1715d410`; scoped review 171 dispatched.**
+  - **The claim holds.** The tip is one docs-only commit past `f2b32a86`, touching only the wave-3 plan, and main is
+    an ancestor. It defines 3520 (`index-copy-keeps-its-mtime`), names the fix commit, and names every fix-round slug
+    in its entry. The worker measured 3520 by mutation in an isolated copy: `cp -p --` changed to `cp --` reds the
+    tracked-file case only.
+  - **Recorded, not numbered:** the ccd comment above that copy says "a hidden one too", which overstates it at this
+    tree, because a hidden-flag edit is found by content in step 3. The comment rides wave 4 beside F8's.
+  - **Run 148 is at `awaiting-review`.** Review 171 covers `c5962a94` up to the tip, with the held-out panel plus the
+    plan's SAFETY lens at xhigh on the round's ccd changes. Only a destroy path, or a shipped-behaviour defect this
+    round introduced, re-opens the wave; anything else rides wave 4.
 - **2026-09-26 — wave 3's fix round done (`f2b32a86`, 31 commits); departures ruled; 3520 assigned.**
   - **The round.** All 23 findings were fixed, each through an Opus review and re-reviews until clean. Every number
     is defined in the commit that shipped its fix: 3367, 3368 and 3513 to 3519.
@@ -452,6 +462,8 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - `ccd-child-reclaim-ladder`, `child-reclaim` and `wsaudit` are unmeasured on Darwin, because main's macOS hang
     precedes them in leg 1. Measure them on the first macOS leg that gets past `ccgpt-proxy.test.ts`, and report the
     job id.
+  - the comment above `_ws_wip_commit`'s index copy says "a hidden one too"; 3520's copy fixes ordinary tracked edits
+    only, and a hidden-flag edit is found by content. Correct the comment.
 
   Accepted residuals, all fail-safe:
   - an aliased `..` row through a link to a standing child is not refused;
