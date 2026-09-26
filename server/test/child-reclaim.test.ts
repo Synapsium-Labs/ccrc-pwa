@@ -6,7 +6,7 @@
 // The runner is `testDeps`', so every argv the executor composes crosses the
 // agent's REAL exec whitelist first (`guardRunner`) — a `ws-reclaim` without
 // its `--expect` grant would throw here, not merely on the fleet.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
@@ -24,6 +24,8 @@ import { SENTENCES } from '../src/wsaudit.js';
 import { testDeps } from './helpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 
 const ID = 'demo-quiet-basin';
 const TOK = 'a'.repeat(64);
@@ -251,7 +253,7 @@ describe('parseChildReclaimResult', () => {
   it('a reclaim of ANOTHER id is a failure, not a success, and never resumable', () => {
     const out = parseChildReclaimResult('demo-other', reclaimedDoc(7), '');
     expect(out.kind).toBe('failed');
-    expect(out.kind === 'failed' ? out.resumable : true).toBe(false);
+    expect(out.kind === 'failed' ? out.resume : 'resumable').toBe('not-resumable');
   });
   it('reads a known refusal, and fails an unknown one', () => {
     expect(parseChildReclaimResult(ID, JSON.stringify({ refused: 'state-changed', detail: 'd', paths: [] }), ''))
@@ -261,42 +263,43 @@ describe('parseChildReclaimResult', () => {
     // Fix round 2, review minor C: an unrecognised refusal word is a
     // REFUSAL in substance — nothing on the box advanced — so it is never
     // resumable, unlike a genuine post-start `{failed:…}` document.
-    expect(unknown.kind === 'failed' ? unknown.resumable : true).toBe(false);
+    expect(unknown.kind === 'failed' ? unknown.resume : 'resumable').toBe('not-resumable');
   });
   it('reads a post-start failure, and a call cut short with nothing printed — both resumable', () => {
     expect(parseChildReclaimResult(ID, JSON.stringify({ failed: 'worktree-remove-failed', detail: 'busy' }), ''))
-      .toEqual({ kind: 'failed', resumable: true, preLockDie: false, detail: 'worktree-remove-failed: busy' });
+      .toEqual({ kind: 'failed', resume: 'resumable', detail: 'worktree-remove-failed: busy' });
     const cutShort = parseChildReclaimResult(ID, '', '');
     expect(cutShort.kind).toBe('failed');
-    expect(cutShort.kind === 'failed' ? cutShort.resumable : false).toBe(true);
-    expect(cutShort.kind === 'failed' ? cutShort.preLockDie : true).toBe(false);
+    expect(cutShort.kind === 'failed' ? cutShort.resume : 'not-resumable').toBe('resumable');
   });
 
   // Review 170 F20: a PRE-LOCK die of `cmd_ws_reclaim` — recognised POSITIVELY
   // against ccd's own stderr text, never guessed from the exit status alone —
-  // is `resumable: false` with `preLockDie: true`, distinct from every other
-  // non-resumable failure above. Read straight from ccd/ccd's RECLAIM region
-  // (the region above `_ws_reclaim_locked`), so a reworded die reds this case
-  // rather than silently drifting back to `resumable: true`.
+  // is `resume: 'pre-lock-die'`, distinct from every other non-resumable
+  // failure above. Read straight from ccd/ccd's RECLAIM region (the region
+  // above `_ws_reclaim_locked`), so a reworded die reds this case rather than
+  // silently drifting back to `resume: 'resumable'`.
   describe('a pre-lock die of cmd_ws_reclaim', () => {
     const ccdSrc = readFileSync(CCD, 'utf8');
     const region = ccdSrc.slice(ccdSrc.indexOf('\ncmd_ws_reclaim() {'), ccdSrc.indexOf('\n_ws_reclaim_fork() {'));
     // Extract the exact literal a ccd `die "..."` (or `_lc_refuse`'s trailing
-    // message argument) prints, by finding the quoted string that CONTAINS
-    // `needle` — read from ccd's own source, never copied by hand, so a
-    // reworded die reds here instead of silently going unrecognised. A message
-    // ccd builds with an interpolated variable (only the lock path today) is
-    // returned up to the `$`, its fixed prefix.
+    // message argument) prints — ANCHORED to the call itself (review 170 fr-I
+    // m3), never the first quoted string that happens to contain `needle`: a
+    // comment quoting a die's text ABOVE the die itself would otherwise become
+    // the pinned subject, silently. A message ccd builds with an interpolated
+    // variable (only the lock path today) is returned up to the `$`, its
+    // fixed prefix.
     const dieMessage = (needle: string): string => {
-      const re = /"((?:[^"\\]|\\.)*)"/g;
+      const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+reclaim\s+"\$id"\s+\S+[\s\\]*"((?:[^"\\]|\\.)*)"/g;
       let m: RegExpExecArray | null;
       while ((m = re.exec(region)) !== null) {
-        if (m[1].includes(needle)) {
-          const dollar = m[1].indexOf('$');
-          return dollar === -1 ? m[1] : m[1].slice(0, dollar);
+        const text = m[1] ?? m[2];
+        if (text.includes(needle)) {
+          const dollar = text.indexOf('$');
+          return dollar === -1 ? text : text.slice(0, dollar);
         }
       }
-      throw new Error(`no quoted string in the RECLAIM region contains ${JSON.stringify(needle)}`);
+      throw new Error(`no die("...")/_lc_refuse(...) call in the RECLAIM region contains ${JSON.stringify(needle)}`);
     };
     it.each([
       ['usage', 'usage: ccd ws-reclaim'],
@@ -305,22 +308,28 @@ describe('parseChildReclaimResult', () => {
       ['bad session id', 'bad session id'],
       ['python3 unavailable', 'cannot quote the reclaim record safely'],
       ['flock unavailable', 'flock (util-linux) is unavailable'],
-    ])('%s is resumable:false, preLockDie:true, and the detail is ccd\'s own message', (_what, needle) => {
+    ])('%s is resume: "pre-lock-die", and the detail is ccd\'s own message', (_what, needle) => {
       const msg = dieMessage(needle);
       const out = parseChildReclaimResult(ID, '', `ccd: ${msg}`);
-      expect(out).toEqual({ kind: 'failed', resumable: false, preLockDie: true, detail: msg });
+      expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: msg });
     });
-    it('an unopenable reap lock (a dynamic path suffix) is recognised by its fixed prefix', () => {
-      const prefix = dieMessage('cannot open the reap lock at');
-      // ccd interpolates the real lock path right after this prefix; assert
-      // the recogniser matches on the prefix alone, with a path it never
-      // composed itself.
-      const out = parseChildReclaimResult(ID, '', `ccd: ${prefix}/home/x/.cc-sessions/.reap-${ID}.lock`);
-      expect(out).toMatchObject({ kind: 'failed', resumable: false, preLockDie: true });
+    // Review 170 fr-I I2: the end anchors are what make "a reworded die reds"
+    // true for a rewording that EXTENDS the message (ccd adds detail to a die
+    // rather than changing it) — an unanchored `^bad token` would still match
+    // `bad token (want 64 hex)`. This is the pin for that: an EXTENDED die
+    // must NOT be recognised, and stays `resumable`, the safe direction.
+    it.each([
+      ['bad token', 'bad token'],
+      ['python3 unavailable', 'cannot quote the reclaim record safely'],
+    ])('an EXTENDED %s die (ccd appends detail) is NOT recognised', (_what, needle) => {
+      const msg = dieMessage(needle);
+      const out = parseChildReclaimResult(ID, '', `ccd: ${msg} (extra detail ccd could add)`);
+      expect(out).toEqual({ kind: 'failed', resume: 'resumable',
+        detail: `ccd: ${msg} (extra detail ccd could add)` });
     });
-    it('an UNRECOGNISED non-JSON stderr stays resumable:true, preLockDie:false — a post-lock abort has empty stdout too', () => {
+    it('an UNRECOGNISED non-JSON stderr stays resume: "resumable" — a post-lock abort has empty stdout too', () => {
       const out = parseChildReclaimResult(ID, '', 'ccd: worktree-remove-failed: device busy');
-      expect(out).toEqual({ kind: 'failed', resumable: true, preLockDie: false,
+      expect(out).toEqual({ kind: 'failed', resume: 'resumable',
         detail: 'ccd: worktree-remove-failed: device busy' });
     });
     it('reclaimChild renders the recur sentence, not "retried from the start" or "resumes where it stopped"', async () => {
@@ -328,10 +337,63 @@ describe('parseChildReclaimResult', () => {
       const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
         verb: { code: 1, stdout: '', stderr: `ccd: ${msg}` } }) });
       const out = await reclaimChild(s.deps, s.req());
-      expect(out).toMatchObject({ kind: 'failed', resumable: false, preLockDie: true, detail: msg });
-      expect(s.bodies()[0]).toContain('the problem is on the box, not the workspace');
+      expect(out).toMatchObject({ kind: 'failed', resume: 'pre-lock-die', detail: msg });
+      // Review 170 fr-I m2: the sentence must be true of BOTH families this
+      // recognises — an argv/version die (this case, "bad token") AND an
+      // environment die (python3/flock) — never "the problem is on the box",
+      // which would misdirect an operator at an argv defect.
+      expect(s.bodies()[0]).toContain('ccd refused the call before it started anything');
+      expect(s.bodies()[0]).toContain("the call's own arguments, or the box's ccd, python3 or flock");
+      expect(s.bodies()[0]).not.toContain('the problem is on the box');
       expect(s.bodies()[0]).not.toContain('resumes where it stopped');
       expect(s.bodies()[0]).not.toContain('It is retried from the start.');
+    });
+
+    // Review 170 fr-I I1: the lock-unopenable die's REAL shape, measured by
+    // running the ACTUAL committed verb in a fixture HOME with the lock path
+    // turned into a directory — never a hand-typed stderr string. The old
+    // synthetic `ccd: cannot open the reap lock at <prefix>` this replaced
+    // pinned a shape ccd never emits (a single line): bash's OWN redirection
+    // diagnostic always comes first.
+    describe('the lock-unopenable die, measured for real', () => {
+      let h: PrHarness;
+      beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-lockdie-'); });
+      afterEach(() => { h.cleanup(); });
+
+      it('is recognised from the REAL captured stdout/stderr/exit', () => {
+        makeChild(h);
+        const tok = evalOf(h).token;
+        const lockPath = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
+        mkdirSync(lockPath, { recursive: true });
+        const r = childReclaimVerb(h, tok);
+        expect(r.code, r.stderr).toBe(1);
+        expect(r.stdout).toBe('');
+        expect(r.stderr).toContain(`cannot open the reap lock at ${lockPath}`);
+        const out = parseChildReclaimResult(CHILD_ID, r.stdout, r.stderr);
+        expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die',
+          detail: `cannot open the reap lock at ${lockPath}` });
+      });
+    });
+
+    // The shape's boundary, from the REAL template above (never itself a
+    // hand-invented shape): the final line and every preceding line must
+    // name the SAME lock path, and nothing may follow the final line.
+    it('a bash diagnostic naming a DIFFERENT path than ccd\'s own line is not recognised', () => {
+      const stderr = '/x/ccd: line 25912: /other/path.lock: Is a directory\n'
+        + 'ccd: cannot open the reap lock at /real/path.lock';
+      const out = parseChildReclaimResult(ID, '', stderr);
+      expect(out).toEqual({ kind: 'failed', resume: 'resumable', detail: stderr });
+    });
+    it('trailing content after ccd\'s own line is not recognised', () => {
+      const stderr = '/x/ccd: line 25912: /real/path.lock: Is a directory\n'
+        + 'ccd: cannot open the reap lock at /real/path.lock\n'
+        + 'something else';
+      const out = parseChildReclaimResult(ID, '', stderr);
+      expect(out).toEqual({ kind: 'failed', resume: 'resumable', detail: stderr });
+    });
+    it('ccd\'s own line with NO preceding bash diagnostic is still recognised (zero-or-more)', () => {
+      const out = parseChildReclaimResult(ID, '', 'ccd: cannot open the reap lock at /real/path.lock');
+      expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: 'cannot open the reap lock at /real/path.lock' });
     });
   });
 });
@@ -684,7 +746,7 @@ describe('reclaimChild — the one executor', () => {
     // Fix round 1, review Minor #4 (corrected fix round 2 minor C): a
     // `{failed:…}` document genuinely started ccd's tail, so it IS
     // resumable — its own breadcrumb resumes it — and the feed text says so.
-    expect(out).toMatchObject({ kind: 'failed', resumable: true, detail: 'worktree-remove-failed: busy' });
+    expect(out).toMatchObject({ kind: 'failed', resume: 'resumable', detail: 'worktree-remove-failed: busy' });
     expect(failed.deliveryState().state).toBe('queued');
     expect(failed.feed()).toEqual(['child reclaim failed']);
     expect(failed.bodies()[0]).toContain('the box resumes where it stopped');
@@ -699,7 +761,7 @@ describe('reclaimChild — the one executor', () => {
     const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
       verb: { code: 0, stdout: JSON.stringify({ reclaimed: 'demo-other', childOf: runId, wip: null, attic: 2, residueBytes: null }) } }) });
     const out = await reclaimChild(s.deps, s.req());
-    expect(out).toMatchObject({ kind: 'failed', resumable: false });
+    expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(out.kind === 'failed' ? out.detail : '').toContain('demo-other');
     expect(s.deliveryState().state).toBe('queued');
     expect(s.feed()).toEqual(['child reclaim failed']);
@@ -711,7 +773,7 @@ describe('reclaimChild — the one executor', () => {
     const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
       verb: { code: 0, stdout: JSON.stringify({ refused: 'a-word-this-build-does-not-know', detail: 'd', paths: [] }) } }) });
     const out = await reclaimChild(s.deps, s.req());
-    expect(out).toMatchObject({ kind: 'failed', resumable: false });
+    expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(s.bodies()[0]).toContain('It is retried from the start.');
     expect(s.bodies()[0]).not.toContain('resumes where it stopped');
   });
@@ -727,7 +789,7 @@ describe('reclaimChild — the one executor', () => {
   it('an audit the box could not answer is a failure, never resumable', async () => {
     const s = await rig({ script: () => ({ audit: { code: 1, stdout: '', stderr: 'ccd: python3 unavailable' } }) });
     const out = await reclaimChild(s.deps, s.req());
-    expect(out).toMatchObject({ kind: 'failed', resumable: false });
+    expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     // Fix round 1, review Minor #4: nothing on the box's destructive path
     // started, so the feed must not promise a resume.
     expect(s.bodies()[0]).toContain('It is retried from the start.');
@@ -759,11 +821,11 @@ describe('reclaimChild — the one executor', () => {
       stdout: auditDoc(runId, 'unmeasured', { detail: 'could not read the stash list' }),
       stderr: 'ccd: ws-audit --reclaim measured nothing: could not read the stash list — retry' } }) });
     const out = await reclaimChild(u.deps, u.req());
-    expect(out).toMatchObject({ kind: 'failed', resumable: false });
+    expect(out).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(out.kind === 'failed' ? out.detail : '').toContain('measured nothing');
     expect(u.feed()).toEqual(['child reclaim failed']);
     const t = await rig({ script: (runId) => ({ audit: { code: 1, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) } }) });
-    expect(await reclaimChild(t.deps, t.req())).toMatchObject({ kind: 'failed', resumable: false });
+    expect(await reclaimChild(t.deps, t.req())).toMatchObject({ kind: 'failed', resume: 'not-resumable' });
     expect(t.calls.map((c) => c[0]), 'the verb was never called on an exit-1 token').toEqual(['ws-audit']);
     expect(t.deliveryState().state).toBe('queued');
   });
