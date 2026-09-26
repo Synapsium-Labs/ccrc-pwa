@@ -406,7 +406,7 @@ describe('reclaimChild — the one executor', () => {
   // a secret-shaped edit — a hidden-flag one among them — was dropped.
   it.each([
     ['nothing committed, nothing dropped', null, 0, 'Nothing uncommitted was left.', null],
-    ['nothing committed, one secret dropped', null, 1, 'Nothing uncommitted was committed. 1 secret-shaped path was dropped, never committed — the record names it.', 'Nothing uncommitted was left'],
+    ['nothing committed, one secret dropped', null, 1, 'No work was committed. 1 secret-shaped path was dropped, never committed — the record names it.', 'Nothing uncommitted was left'],
     ['nothing committed, the count unreadable', null, 'unreadable', 'Whether a secret-shaped path was dropped could not be read.', 'Nothing uncommitted was left'],
     ['a WIP, and two secrets dropped', WIP, 2, `Uncommitted work was pinned as ${WIP}. 2 secret-shaped paths were dropped, never committed — the record names them.`, 'Nothing uncommitted'],
   ] as const)('the feed row says what was left: %s', async (_what, wip, dropped, says, never) => {

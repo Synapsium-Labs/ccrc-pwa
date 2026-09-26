@@ -8,6 +8,7 @@
 // commit and the attic pins are read back from git refs; unsupervise runs on
 // the resumed arm.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
@@ -2256,6 +2257,28 @@ describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted 
     expect(refusedWith(childReclaimVerb(h, tok))).toBe('state-changed');
     intact(c);
   }, 90_000);
+
+  it('refuses — deletes nothing — a checkout of ANOTHER repository holding a hidden-flag edit (the review’s measured shape)', () => {
+    const c = makeChild(h);
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
+    h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(c.wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
+    // The token is minted while the file is unchanged — the audit's own
+    // answer then; the verb's ladder, inside the lock, must refuse on its own.
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: flagged but unchanged, the audit mints a token').toMatch(/^[0-9a-f]{64}$/);
+    fs.writeFileSync(path.join(clone, 'cfg.yml'), 'LOCAL-EDIT-ONLY-COPY\n');
+    expect(refusedWith(childReclaimVerb(h, tok))).toBe('containment-unproven');
+    intact(c);
+    expect(fs.readFileSync(path.join(clone, 'cfg.yml'), 'utf8'), 'the only copy of the edit').toBe('LOCAL-EDIT-ONLY-COPY\n');
+  }, 120_000);
 
   it('the SETTLE records a hidden secret edit made after the pin, even when nothing else moved', () => {
     // `_ws_unsupervise` is the tail's first act, after the pin and before the

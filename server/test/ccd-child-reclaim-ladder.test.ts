@@ -997,6 +997,48 @@ describe('the hidden-edit PATH set is a fingerprint input — the audit and the 
     expect(evalOf(h).token).not.toBe(base.token);
   }, 90_000);
 
+  /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other`, its `cfg.yml` flagged skip-worktree. */
+  const foreignFlagged = (wt: string): string => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
+    h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
+    return clone;
+  };
+
+  it('refuses containment-unproven for a checkout of ANOTHER repository holding a hidden-flag edit — it cannot be pinned here', () => {
+    const { wt } = makeChild(h);
+    const clone = foreignFlagged(wt);
+    expect(evalOf(h).verdict, 'the CONTROL: flagged but UNCHANGED, it holds nothing unkept').toBe('reclaimable');
+    fs.writeFileSync(path.join(clone, 'cfg.yml'), 'LOCAL-EDIT-ONLY-COPY\n');
+    expect(h.git(clone, 'status', '--porcelain'), 'the CONTROL: git status cannot see it').toBe('');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain(clone);
+    expect(r.detail).toContain('hidden-flag');
+    expect(r.detail).toContain('will not delete unkept');
+  }, 90_000);
+
+  it('the audit’s `sensitive` list names a hidden SECRET edit the pin will drop — the child’s and a nested checkout’s', () => {
+    const { wt, main } = makeChild(h);
+    hide(wt, '.env', '--skip-worktree');
+    fs.writeFileSync(path.join(wt, '.env'), 'KEY=live\n');
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    hide(inner, '.env', '--assume-unchanged');
+    fs.writeFileSync(path.join(inner, '.env'), 'KEY=live\n');
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null; printf '%s\\n' "$REAP_VERDICT" "\${REAP_SENSITIVE[@]}"`);
+    const [verdict, ...sensitive] = out.split('\n').filter(Boolean);
+    expect(verdict).toBe('reclaimable');
+    expect(sensitive.sort()).toEqual(['.env', 'inner/.env']);
+  }, 90_000);
+
   it('answers unmeasured — never a token — when `ls-files -v` answers a tag it does not know', () => {
     const { wt } = makeChild(h);
     const blob = h.git(wt, 'rev-parse', 'HEAD:f1.txt');

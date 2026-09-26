@@ -654,7 +654,7 @@ function childReclaimWipText(wip: string | null | 'unreadable', dropped: number 
   const secrets = dropped === 'unreadable' ? ' Whether a secret-shaped path was dropped could not be read.'
     : dropped === 0 ? ''
     : ` ${dropped} secret-shaped ${dropped === 1 ? 'path was' : 'paths were'} dropped, never committed — the record names ${dropped === 1 ? 'it' : 'them'}.`;
-  if (wip === null) return (secrets === '' ? 'Nothing uncommitted was left.' : 'Nothing uncommitted was committed.') + secrets;
+  if (wip === null) return (secrets === '' ? 'Nothing uncommitted was left.' : 'No work was committed.') + secrets;
   return (wip === 'unreadable' ? 'Uncommitted work was pinned, but its commit id could not be read.'
     : `Uncommitted work was pinned as ${wip}.`) + secrets;
 }

@@ -697,8 +697,11 @@ describe('the WIP commit starts from a COPY of the user’s own index', () => {
     expect(flags, 'the CONTROL: both flags are set').toContain('S db.yml');
     expect(flags, 'the CONTROL: both flags are set').toContain('h au.yml');
     expect(h.git(c.wt, 'status', '--porcelain'), 'the CONTROL: git status reports neither edit').toBe('');
+    const index = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+    const before = fs.readFileSync(index);
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
+    expect(fs.readFileSync(index).equals(before), 'the user’s index file was written — only the scratch copy may be').toBe(true);
     expect(p.wip, 'the hidden edits alone make a WIP commit').toMatch(/^[0-9a-f]{40}$/);
     expect(h.git(c.main, 'show', `${p.wip}:db.yml`), 'the skip-worktree edit was dropped').toBe('password: db-local');
     expect(h.git(c.main, 'show', `${p.wip}:au.yml`), 'the assume-unchanged edit was dropped').toBe('password: au-local');
@@ -1007,7 +1010,7 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     // `core.trustctime false`, and an edit of the same size whose mtime is put
     // back: git's stat check says the entry is unchanged, so `add` of the
     // unflagged path exits 0 and stages nothing. The content read found it,
-    // and `add --renormalize` hashes it afresh.
+    // and it is staged as its raw bytes, whatever the stat record says.
     const c = makeChild(h);
     const f = path.join(c.wt, 'db.yml');
     const old = new Date('2020-01-01T00:00:00Z');
@@ -1025,7 +1028,7 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
   it.each([
     ['alone', false],
     ['beside another edit', true],
-  ])('FAILS — never reads it as kept — when `git add` exits 0 without staging a hidden edit (%s)', (_what, other) => {
+  ])('FAILS — never reads it as kept — when the staging call exits 0 without staging a hidden edit (%s)', (_what, other) => {
     // The staging call answers 0 and stages nothing — what a bare `add` of a
     // flagged path does — on an edit whose stat record still matches, so the
     // ordinary `status`/`add` pass cannot pick it up either. Only the landing
@@ -1040,7 +1043,7 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     h.git(c.wt, 'config', 'core.trustctime', 'false');
     fs.writeFileSync(f, 'password: zzzzzzzz\n'); fs.utimesSync(f, old, old);
     if (other) fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
-    const pre = 'git() { case " $* " in *" add --renormalize "*) return 0 ;; esac; command git "$@"; };';
+    const pre = 'git() { case " $* " in *" --index-info "*) cat >/dev/null; return 0 ;; esac; command git "$@"; };';
     const p = pinOf(c, { pre });
     expect(p.rc, 'a hidden edit git did not stage was treated as kept').toBe('1');
     expect(p.why).toContain('db.yml');
@@ -1074,6 +1077,58 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     expect(h.git(c.main, 'show', `${p.wip}:db.yml`)).toBe('password: zzzzzzzz');
   }, 60_000);
 
+  /** `.env` and `cfg.txt` committed with CRLF bytes BEFORE `* text=auto`, so the
+   *  index holds CRLF blobs that `hash-object --path` would hash as LF; both flagged. */
+  const crlfUnderTextAuto = (c: Child): void => {
+    fs.writeFileSync(path.join(c.wt, 'cfg.txt'), 'a\r\nb\r\n');
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=template\r\n');
+    h.git(c.wt, 'add', 'cfg.txt', '.env'); h.git(c.wt, 'commit', '-m', 'crlf');
+    fs.writeFileSync(path.join(c.wt, '.gitattributes'), '* text=auto\n');
+    h.git(c.wt, 'add', '.gitattributes'); h.git(c.wt, 'commit', '-m', 'text=auto');
+    h.git(c.wt, 'update-index', '--skip-worktree', 'cfg.txt');
+    h.git(c.wt, 'update-index', '--assume-unchanged', '.env');
+  };
+
+  it('an UNTOUCHED flagged file whose CRLF bytes are its index blob (`text=auto`) is not an edit — no WIP, nothing recorded dropped', () => {
+    const c = makeChild(h);
+    crlfUnderTextAuto(c);
+    expect(h.git(c.wt, 'hash-object', '--path=cfg.txt', '--', 'cfg.txt'), 'the CONTROL: the filtered hash differs from the blob')
+      .not.toBe(h.git(c.wt, 'rev-parse', ':cfg.txt'));
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip, 'an untouched file made a WIP commit').toBe('');
+    expect(p.secrets, 'an untouched secret was recorded as dropped').toEqual([]);
+  }, 60_000);
+
+  it('a real edit of a CRLF file under `text=auto` is kept BYTE-EXACT — the WIP blob is the disk’s bytes', () => {
+    const c = makeChild(h);
+    crlfUnderTextAuto(c);
+    fs.writeFileSync(path.join(c.wt, 'cfg.txt'), 'one\r\nTWO\r\n');
+    const p = pinOf(c);
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip).toMatch(/^[0-9a-f]{40}$/);
+    const kept = execFileSync('git', ['-C', c.main, 'cat-file', 'blob', `${p.wip}:cfg.txt`]);
+    expect(kept.equals(fs.readFileSync(path.join(c.wt, 'cfg.txt'))), `kept ${JSON.stringify(kept.toString())}, not the disk's bytes`).toBe(true);
+  }, 60_000);
+
+  it('FAILS when a checkout of ANOTHER repository gained a hidden-flag edit after the ladder — it cannot be pinned here', () => {
+    const c = makeChild(h);
+    const origin = path.join(h.home, 'origins', 'other.git');
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    const seedRepo = path.join(h.home, 'seed-other');
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
+    h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(c.wt, 'vendor', 'other');
+    execFileSync('git', ['clone', '-q', origin, clone]);
+    h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
+    const p = pinOf(c, { between: `printf 'LOCAL-EDIT\\n' > "${clone}/cfg.yml"` });
+    expect(p.rc, 'a foreign hidden edit went with the tree unkept').toBe('1');
+    expect(p.why).toContain('hidden-flag');
+    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+  }, 60_000);
+
   it('FAILS when a hidden edit cannot be READ — a read that fails is unmeasured, never "not an edit"', () => {
     const c = makeChild(h);
     flagged(c, 'db.yml', '--skip-worktree');
@@ -1095,8 +1150,11 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     for (const f of ['cfg.yml', '.env']) fs.writeFileSync(path.join(inner, f), 'local\n');
     const envBlob = h.git(inner, 'rev-parse', 'HEAD:.env');
     const flags = h.git(inner, 'ls-files', '-v');
+    const indexes = [c.wt, inner].map((d) => h.git(d, 'rev-parse', '--path-format=absolute', '--git-path', 'index'));
+    const before = indexes.map((f) => fs.readFileSync(f));
     const p = pinOf(c);
     expect(p.rc, p.why).toBe('0');
+    indexes.forEach((f, i) => expect(fs.readFileSync(f).equals(before[i]!), `the user’s index ${f} was written`).toBe(true));
     const refs = h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`).split('\n').filter(Boolean);
     const shown = (ref: string, f: string): string => { try { return h.git(c.main, 'show', `${ref}:${f}`); } catch { return ''; } };
     const nestedWip = refs.find((r) => shown(r, 'cfg.yml') === 'local');
