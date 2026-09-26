@@ -2488,9 +2488,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   // asserted POSITIVELY here too, not merely by the absence of "re-run ccd"
   // (which their pre-fix text never contained, so that check alone cannot
   // catch a REVERTED `$rerun`). Reverting any ONE of the four back to a
-  // literal "re-run" turns ONLY that row red — verified in an isolated copy,
-  // recorded in fr-H-report.md's mutation table (this file carries no such
-  // verification itself).
+  // literal "re-run" turns ONLY that row red — verified by mutating each arm
+  // individually in an isolated copy (one edit per arm), running this case,
+  // and confirming exactly that row's assertion failed, before restoring the
+  // file and sha-checking it unchanged.
   it('(d1h) ws-reclaim never tells a human to "re-run ccd" — the server retries instead, on every token', () => {
     const id = 'demo-child-row';
     const knownTokens = ['', 'canonical-vanished', 'lock-path-occupied', 'lock-source-refused',

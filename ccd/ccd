@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=660e4c2cbb678af952d2ea884b749aa7773dc5eb9725910039ff60108fcdba1a
+# ccrc:generated 1 sha256=e97dc911e91240561c9cd44dab1cd2c8917b9d13f1f2486716a01a0571f5e72a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3296,12 +3296,12 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 # pass the literal `$id`. `<verb>` selects only
                                 # the SHAPE of the two clauses that are
                                 # caller-specific rather than token-specific:
-                                #   - the RE-RUN clause: on empty `WHY`,
-                                #     `ws-gc --prune` and `ws-reap` name no
-                                #     verb; `ws-rm`/`forget` name themselves
-                                #     and `$id`. On a TOKENED `WHY`, `ws-rm`,
-                                #     `ws-reap` and `forget` say a bare
-                                #     "re-run"; `ws-reclaim` says `$rerun`.
+                                #   - the RE-RUN clause: on empty `WHY`, `ws-gc --prune` and `ws-reap` name no verb;
+                                #     `ws-rm`/`forget` name themselves and `$id`, and `ws-reclaim` says `$rerun`. On a
+                                #     KNOWN token (a case arm below), `ws-rm`, `ws-reap` and `forget` say a bare
+                                #     "re-run", and `ws-reclaim` says `$rerun` again — but the outer `*)` catch-all
+                                #     carries NO re-run clause at all, for any verb (measured across all five with
+                                #     `COMPACT_LOCK_WHY=bogus-token`: every verb ends "… inspect … by hand" alone).
                                 #   - the SURVIVING-STATE clause, every token:
                                 #     `ws-rm`/`forget`/`ws-reap` have already
                                 #     torn the workspace down, so "$REG/$id.*
@@ -3312,7 +3312,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 #     so "the registry row is untouched" is
                                 #     the true fact there instead — a
                                 #     different claim, not a style choice.
-  local id="$1" verb="$2" tail sentence="" rerun="re-run"; [[ "$verb" != ws-reclaim ]] || rerun="the server retries the reclaim"  # ws-reclaim: the server's retry on every tokened arm but the catch-all — nothing may run it by hand
+  local id="$1" verb="$2" tail sentence="" rerun="re-run"; [[ "$verb" != ws-reclaim ]] || rerun="the server retries the reclaim"  # ws-reclaim: the server's retry, on the empty arm and every known token (never the catch-all) — nothing may run it by hand
   if [[ "$verb" == 'ws-gc --prune' ]]; then
     tail="the registry row is untouched"
   else
