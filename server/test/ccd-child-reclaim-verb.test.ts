@@ -2211,6 +2211,31 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
     expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:branch');
   }, 90_000);
+
+  it('the same for a GONE NESTED checkout’s record (resume at `children`) — pin-failed, its record, its branch and the breadcrumb stand', () => {
+    // The nested gone-record keep passes `recorded` too; the same relative
+    // respelling, with the nested record read answering as that git would.
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const admin = h.git(inner, 'rev-parse', '--path-format=absolute', '--git-dir');
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    fs.writeFileSync(path.join(admin, 'gitdir'), `${path.relative(admin, path.join(inner, '.git'))}\n`);
+    const pre = `eval "$(declare -f _ws_reclaim_nested_record | sed '1s/_ws_reclaim_nested_record/_frd_orig_nrec/')";`
+      + ` _ws_reclaim_nested_record() { _frd_orig_nrec "$@"; local rc=$?;`
+      + ` if (( rc == 1 )) && [[ "$2" == "${inner}" ]]; then _WS_NREC_BRANCH=ws/nested; return 0; fi; return $rc; };`;
+    const tok = h.sh(`${pre} _ws_reclaim_resume_eval ${CHILD_ID} 0 ${CHILD_RUN} children >/dev/null; printf '%s' "$REAP_TOKEN"`);
+    const r = childReclaimVerb(h, tok, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain(`git records a checkout at ${inner}, but no`);
+    expect(o.detail).toContain(`git's record of ${inner} stands, and nothing further was deleted`);
+    expect(fs.existsSync(path.join(admin, 'gitdir')), 'the nested record stands').toBe(true);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the nested branch stands').toContain('ws/nested');
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:children');
+  }, 90_000);
 });
 
 describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted in silence (spec §5.5 step 2)', () => {
