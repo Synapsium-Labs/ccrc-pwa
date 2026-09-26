@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=46e1f10dd1face6a7075794c8341102292db882328b35da8ebf26bd4378ed3b8
+# ccrc:generated 1 sha256=4a506b387ea53915e2e3c2ac4aba82af1df18e79af142fd25ea23b482f6362c8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25390,7 +25390,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   #                        skips unsupervise and the pane kill on resume (safe there only because
   #                        `ws-archive` did both first — nothing did for a child).
   local id="$1" phase="$2" lctx="$3" childof="$4" surface="$5" declared="$6" resumed="$7"
-  local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec
+  local project workdir main tomb branch tip wip tid tuuid tregbranch attic residue wtout stamp unitstate rec lrc
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal tdir troot cdir croot kept=() k keptjson keptall treegone crc killrc dropped
   tomb="$REG/.reaped/$id.json"
@@ -25431,6 +25431,26 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
          "claude-session@$id answered '${unitstate:-no answer}' after it was disabled — nothing further was deleted, and the next attempt disables it again"
        return 1 ;;
   esac
+  # ON DARWIN A `failed` IS A STAMP, NOT AN ANSWER FROM LAUNCHD: `_svc_is_active`
+  # prints it whenever `$REG/<id>.svcfailed` exists, before it asks launchd, and
+  # neither `_ws_supervise`'s re-enable nor a swap's `_svc_start` clears that
+  # stamp — so a job can be running under a stale one, and a bootout that also
+  # failed (`_ws_unsupervise` only warns) would leave it loaded, able to
+  # restart the pane. So launchd is asked here, by the label `_svc_is_active`
+  # itself asks by, and only its exit 113 ("Could not find service", the job is
+  # not loaded) lets the stamp stand for stopped. Every other status is
+  # `unit-still-active` — exit 1 included, which is also what a missing binary
+  # and the sandbox guard answer. Not `! _svc_is_loaded`: that boolean folds
+  # "could not be asked" into "not loaded". systemd's `failed` is its own
+  # answer, and the Linux arm is unchanged.
+  if [[ "$CCD_OS" == darwin && "$unitstate" == failed ]]; then
+    _svc_launchctl print "$(_svc_domain)/$(_svc_label "claude-session@$id")" >/dev/null 2>&1; lrc=$?
+    if (( lrc != 113 )); then
+      _ws_reclaim_fail "$id" "$lctx" unit-still-active \
+        "claude-session@$id answered 'failed' from its stamp, but launchd did not say the job is unloaded (print exit $lrc) — nothing further was deleted, and the next attempt disables it again"
+      return 1
+    fi
+  fi
   # THE PANE IS RE-MEASURED TOO, the same way and for the same reason: the kill
   # above answers nothing anyone reads, and `claude-session@.service` is
   # `KillMode=process`, so stopping the unit never stopped the claude in its

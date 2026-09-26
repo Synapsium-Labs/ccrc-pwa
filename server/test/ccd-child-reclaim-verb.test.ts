@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { CCD } from './ccdWsHelpers.js';
 import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
@@ -592,6 +593,60 @@ describe('failures after the act started', () => {
       intact(c);
     } finally { fs.chmodSync(stale, 0o644); }
   }, 60_000);
+});
+
+describe('on Darwin, a `.svcfailed` stamp reads as stopped only when launchd says the job is not loaded (spec §5.6)', () => {
+  // `_svc_is_active` answers `failed` from `$REG/<id>.svcfailed` BEFORE it asks
+  // launchd, and neither a re-enable nor a swap's start clears that stamp, so a
+  // running job can carry a stale one. When the unsupervise's bootout also
+  // failed, the tail would read `failed` as stopped and delete under a job that
+  // can restart the pane. So on Darwin the tail asks `launchctl print` itself,
+  // and only its exit 113 ("Could not find service") lets a stamped `failed`
+  // pass. The Darwin arm is forced on ANY host the way `macos-platform.test.ts`
+  // forces it — `CCD_OS=darwin` assigned after the source, in the same payload —
+  // so these rows run on the Linux box and on the macOS leg alike. The REAL
+  // `_svc_is_active` is put back over `CHILD_STUBS`' `inactive` (read from a
+  // subshell source of ccd), so it is the stamp that answers `failed`; and
+  // `_svc_launchctl`, ccd's one door to launchctl, records and answers.
+  const LABEL = `gui/${process.getuid?.() ?? 0}/app.ccrc.session.${CHILD_ID}`;
+  const darwin = (print: { out: string; rc: number }): string =>
+    `CCD_OS=darwin; eval "$(source '${CCD}' >/dev/null 2>&1; declare -f _svc_is_active)";`
+    + ` _svc_launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; [[ "$1" == print ]] || return 0;`
+    + ` printf '%s\\n' '${print.out}'; return ${print.rc}; };`;
+  const stamp = (): void => { fs.writeFileSync(reg('svcfailed'), '1700000000\n'); };
+
+  it.each([
+    ['launchd shows the job `state = running`', { out: 'state = running', rc: 0 }],
+    ['launchctl could not be asked (exit 1: no binary, or the sandbox guard)', { out: '', rc: 1 }],
+  ] as const)('a stamp, and %s → `unit-still-active`, and nothing is deleted', (_what, print) => {
+    const c = makeChild(h);
+    const tok = evalOf(h).token;
+    stamp();
+    const r = childReclaimVerb(h, tok, { pre: darwin(print) });
+    expect(fs.existsSync(c.wt), 'the worktree survives').toBe(true);
+    expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'its files survive').toBe(true);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
+    expect(h.reg(CHILD_ID, 'uuid'), 'the registry row survives').not.toBeNull();
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:children');
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('unit-still-active');
+    expect(o.detail).toContain(`exit ${print.rc}`);
+    failedPairAgrees(r);
+    expect(h.calls(), 'launchd was asked by the label ccd spells').toContain(`launchctl print ${LABEL}`);
+  }, 90_000);
+
+  it('the control: a stamp, and launchd answers exit 113 (not loaded) → the child is reclaimed', () => {
+    const c = makeChild(h);
+    const tok = evalOf(h).token;
+    stamp();
+    const r = childReclaimVerb(h, tok, { pre: darwin({ out: 'Could not find service', rc: 113 }) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt), 'the worktree is gone').toBe(false);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch is gone').toBe('');
+    expect(h.calls()).toContain(`launchctl print ${LABEL}`);
+  }, 90_000);
 });
 
 describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5 and after the tail’s kill (spec §5.5-§5.6)', () => {
