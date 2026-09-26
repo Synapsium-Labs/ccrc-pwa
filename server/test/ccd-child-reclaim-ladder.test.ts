@@ -10,7 +10,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { itLinux } from './platformFixtures.js';
 import { CCD } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux, wideDigitLocale,
@@ -82,7 +81,11 @@ describe('rungs 1 and 2 — identity, and the two authorities', () => {
     expect(evalOf(h).verdict, 'no marker').toBe('not-a-child');
   }, 60_000);
 
-  itLinux('refuses not-a-child when the marker is present but unreadable', () => {
+  // PORTED (fix round, F23): mode-000 on a regular file is a POSIX read
+  // refusal, not a systemd/launchd or GNU/BSD distinction — a non-root user
+  // is denied identically on Darwin. No `itLinux` reason survives; runnable
+  // on both platforms.
+  it('refuses not-a-child when the marker is present but unreadable', () => {
     makeChild(h);
     fs.chmodSync(reg('child'), 0o000);
     try { expect(evalOf(h).verdict).toBe('not-a-child'); } finally { fs.chmodSync(reg('child'), 0o644); }
@@ -132,7 +135,8 @@ describe('rungs 3 to 6 — the retryable ones', () => {
     expect(held.detail).toContain('program:x wave:2/3');
   }, 60_000);
 
-  itLinux('treats an unreadable hold as held', () => {
+  // PORTED (fix round, F23): same mode-000-on-a-regular-file shape as above.
+  it('treats an unreadable hold as held', () => {
     makeChild(h);
     fs.writeFileSync(reg('hold'), 'x');
     fs.chmodSync(reg('hold'), 0o000);
@@ -231,7 +235,11 @@ describe('rung 7 — branch-elsewhere', () => {
 });
 
 describe('rung 8 — the tree reads, after the permission pass', () => {
-  itLinux('normalises a mode-000 directory it owns, then reads it — the owner bits and nothing else', () => {
+  // PORTED (fix round, F23): the normalise pass is `find -P … -xdev -user …
+  // -perm -u=rwx … -exec chmod u+rwx {} \;` — read by the Darwin lens as
+  // BSD-valid — and mode-000 denies a non-root owner identically on both
+  // userlands. No `itLinux` reason survives.
+  it('normalises a mode-000 directory it owns, then reads it — the owner bits and nothing else', () => {
     const { wt } = makeChild(h);
     const a = path.join(wt, 'a');
     fs.mkdirSync(path.join(a, 'b'), { recursive: true });
@@ -248,7 +256,10 @@ describe('rung 8 — the tree reads, after the permission pass', () => {
     }
   }, 60_000);
 
-  itLinux('refuses tree-unreadable when the pass cannot fix the tree', () => {
+  // PORTED (fix round, F23): the shim replaces `chmod` on PATH with a plain
+  // `#!/bin/sh` script `find -exec` resolves the same way on both userlands;
+  // nothing here is GNU-only.
+  it('refuses tree-unreadable when the pass cannot fix the tree', () => {
     const { wt } = makeChild(h);
     const a = path.join(wt, 'a');
     fs.mkdirSync(a);
@@ -359,7 +370,8 @@ describe('a probe that could not RUN is `unmeasured` — never a token, never te
     expect(r.token).toBe('');
   }, 60_000);
 
-  itLinux('a tree STILL unreadable after the pass keeps the terminal word — the pass RAN', () => {
+  // PORTED (fix round, F23): same PATH-shim shape as the case above.
+  it('a tree STILL unreadable after the pass keeps the terminal word — the pass RAN', () => {
     // The `refuses tree-unreadable when the pass cannot fix the tree` case
     // above, restated as the control for this describe: rc 1 is not rc 2.
     const { wt } = makeChild(h);
@@ -378,7 +390,11 @@ describe('a probe that could not RUN, continued — the permission pass and rung
   // Spec §5.5, rung 8's rule: a probe that did not run measured nothing, so it
   // answers unmeasured and the lane retries it. The terminal words keep what a
   // read PROVED.
-  itLinux.each([[125], [126], [127], [137]])('the permission pass exited %i — it never ran to the end → unmeasured, not tree-unreadable', (code) => {
+  // PORTED (fix round, F23): `_plat_timeout` is a ccd shell FUNCTION this
+  // stub overrides directly — never the real `timeout(1)` — so the codes
+  // simulated here are not a GNU-coreutils fact and carry no platform
+  // dependency.
+  it.each([[125], [126], [127], [137]])('the permission pass exited %i — it never ran to the end → unmeasured, not tree-unreadable', (code) => {
     const { wt } = makeChild(h);
     const a = path.join(wt, 'a');
     fs.mkdirSync(a);
@@ -821,7 +837,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     expect(r.detail).toContain('main checkout');
   }, 60_000);
 
-  itLinux('an UNLISTABLE registry answers unmeasured — never a token, never a new word', () => {
+  // PORTED (fix round, F23): a directory's read-vs-execute (search) bits are
+  // standard POSIX semantics, not a Linux/Darwin difference.
+  it('an UNLISTABLE registry answers unmeasured — never a token, never a new word', () => {
     // Search permission without read: every `$REG/<id>.<field>` the rungs above
     // read by name still opens, and only the LISTING fails.
     makeChild(h);
@@ -834,7 +852,9 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
     } finally { fs.chmodSync(regDir, 0o755); }
   }, 60_000);
 
-  itLinux('an unreadable `.workdir` of another row answers unmeasured — it cannot be proven not to name this tree', () => {
+  // PORTED (fix round, F23): mode-000 on a regular file, same as the marker
+  // and hold cases above.
+  it('an unreadable `.workdir` of another row answers unmeasured — it cannot be proven not to name this tree', () => {
     makeChild(h);
     const f = path.join(h.home, '.cc-sessions', 'demo-twin.workdir');
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'), 'u-2');
