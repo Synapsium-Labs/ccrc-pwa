@@ -20,8 +20,8 @@ removed on 2026-09-10 was not.
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in scoped review** 2026-09-26 at `1715d410` (run 148 on `plain-summit`; review 171 on `brisk-meadow`) |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
-| 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
+| 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3 is the only wave that destroys anything.** Waves 3 and 4 do nothing on a
@@ -43,6 +43,43 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-26 — wave 4 pre-flight: four lenses, three blocking; rulings attacked before sending; contract §10.**
+  - **Why.** The operator ruled on 2026-09-24 that wave 4 dispatches the moment wave 3 merges. Wave 4's plan predates
+    wave 3's amendments and departures, R25, R32 and R33, and every item the ledger carried into it.
+  - **The pre-flight.** Four Opus lenses (interfaces, carried items, safety, rulings) read the plan against wave 3 at
+    `1715d410`. Three findings were blocking:
+    - Task 1's fact 4 prints five lines, not four;
+    - the presence ceiling, once expired, licenses `--defer-expired` for good, so the sweep would skip the `attached`
+      and `tree-busy` rungs and kill an operator's pane;
+    - R32 is contradicted by the plan's own tests.
+  - **The attack.** Three Opus agents attacked the drafted rulings, one for each of these areas:
+    - R32's release;
+    - the birth, presence and bounds;
+    - the ccd edits and the words.
+
+    They found:
+    - hand holds are written in the programme grammar BY DESIGN (Build 8, the PWA placeholder, the ledger template),
+      and a shipped pin forbids parsing a hold. So a hold is ACCOUNTED against the server's own renderings, never
+      parsed;
+    - cross-attempt adoption is live, because the BEFORE read tolerates an unlistable registry, so an adopted child
+      binds with a null birth;
+    - the drafted in-flight sort starved the queue, and the fence read a 500-row window that a failing child scrolls
+      through in days;
+    - `_ws_attic_pin` cannot be fixed in place (two callers, no failure path, and an attic shape that others read).
+  - **Ruled.** The rulings are R-1 to R-13 in the plan, and cross-wave as contract R34 to R37:
+    - R34: R32 is a release, then the ordinary path;
+    - R35: R33 is a write-once `sessionBornAt`;
+    - R36: R25's collector moves to wave 5;
+    - R37: a workspace that has ever coordinated is never reclaimed automatically.
+
+    Seven new tasks: 1b (split the verb suite), 2b (ccd below the boundary), 2c (ccd above it, line-neutral), 4b
+    (birth), 5b (words), 5c (one pr-state per close), 9b (prose) and 9c (the slug residue).
+  - **Left the programme**, as follow-ups with the measured instruments recorded in the plan:
+    - `is_ours` three-valued (R-7: since R28 no reclamation reader consults `ours`);
+    - `reap-attic-complete`, `_ws_attic_pin`'s capped reflog read on `ws-reap`/`ws-rm` (R-8). It carries the residue
+      of wave 3's number 3515.
+  - **Records.** The four lens reports and three attack reports are in the coordinator's clips, under
+    `wave4-preflight/`.
 - **2026-09-26 — wave 3's wave-done re-sent at `1715d410`; scoped review 171 dispatched.**
   - **The claim holds.** The tip is one docs-only commit past `f2b32a86`, touching only the wave-3 plan, and main is
     an ancestor. It defines 3520 (`index-copy-keeps-its-mtime`), names the fix commit, and names every fix-round slug
@@ -379,7 +416,7 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   refusal journaled without `at` keeps its child out of the sweep but off the attention list, and a clockless
   `create` cannot fence a recycled slug. ccd writes `at` from one clock read on every line, so both need a
   corrupt or degraded journal; a reviewer who finds a real producer of clockless lines reopens this.
-- **A child's temp root outlives a human verb until wave 4.** `ws-rm`/`ws-reap`/`ws-gc --prune`/`forget` on
+- **A child's temp root outlives a human verb until wave 5** (R36 moved R25's collector there, 2026-09-26). `ws-rm`/`ws-reap`/`ws-gc --prune`/`forget` on
   a child drop its marker and keep `~/.cc-tmp/<id>`; wave 4's sweep is its owner (ruled 2026-09-23 on
   wave 1's report). Wave 4's plan gains that task before its dispatch. And from wave 1's deploy until
   wave 3's, NO child's temp root is collected, live or finished: they accumulate, still marked, and wave 3's
@@ -498,6 +535,16 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
     same way);
   - the sweep as the owner of a child whose close trigger was lost to a server restart, or that wave 2's dispatch
     refusal released.
+- **Wave 4's inherited items above are placed** by its plan's pre-dispatch amendments (2026-09-26). Exceptions:
+  - `is_ours` and `_ws_attic_pin` left the programme (R-7, R-8);
+  - R25 moved to wave 5 (R36).
+- **Wave 5 inherits from wave 4's pre-flight:**
+  - R25's collector (R36), with the requirements the pre-flight measured;
+  - whether the ten close words are recorded for the chip;
+  - whether R37's and R-5d's skips (`coordinating`, `minting-run-postdates-child`, `child-birth-unplaced`) reach the
+    attention list;
+  - ccd journaling the failures the mirror never sees: audit-time `unmeasured`, `probe-unmeasured`, pre-lock dies,
+    `flock-unavailable` and `lock-unopenable`.
 - **Wave 5 inherits:** the PWA's abandon confirmation says the child's workspace will be reclaimed. The ungated
   abandon door (D-282) reaching a destructive act is inside the single-user trust model; it is recorded, not
   changed.
@@ -520,6 +567,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 **Wave 3 is dispatched (run 148).** Brief: the plan with its binding Pre-dispatch amendments; contract §9 R24–R31; the
 three A1 settlements and review 147's text corrections above. Its review panel keeps the plan's mandatory xhigh
-safety lens. After it merges: roll out AGENT-FIRST (fleet box first), then write wave 4's plan amendments
-(R25's orphan roots, `is_ours` three-valued, the `ws-reap` symlink guard, lost close triggers, the slug residue)
-before wave 4 dispatches.
+safety lens. After it merges: roll out AGENT-FIRST (fleet box first).
+
+**Wave 4 dispatches the moment wave 3 merges** (operator, 2026-09-24). Its pre-dispatch amendments are written
+(2026-09-26) and reach main in the coordinator's docs PR, which merges right after #187. The brief names:
+- the plan, with its binding amendments A1 to A15;
+- contract §9 and §10;
+- a fresh deviation block, allocated at its run-open;
+- the routing: the plan's per-task lines, and `opus` at `xhigh` for Task 2c.

@@ -453,7 +453,7 @@ leave a wave undispatchable pending a ruling below.
   defers `marker-unreadable` before any ccd call. ccd's own rung 2 stays a terminal `not-a-child` (re-worded
   2026-09-23 on wave 3's pre-flight; it once said wave 3's rung 2 defers). Every ccd reader of the marker speaks
   the one grammar of R2. Shipped in wave 1 (#175).
-- **R25 — an orphaned child temp root has an owner, and it is wave 4 (D-3337).** A child disposed of by a
+- **R25 — an orphaned child temp root has an owner, and it is wave 4 (D-3337; moved to wave 5 by R36).** A child disposed of by a
   human verb (`ws-rm`, `ws-reap`, `ws-gc --prune`, `forget`) loses its marker and its registry row, but keeps
   `$HOME/.cc-tmp/<id>`, which no marker-driven path can find again. Wave 4 collects such a leaf only when all
   of these hold:
@@ -531,3 +531,40 @@ leave a wave undispatchable pending a ruling below.
   pass, which is a narrow fail-open. R30's "never cleared" held, but "never moved" did not. Wave 4 makes birth the
   earliest stamp for the minting session, either by keeping the first stamp or by adding a separate minted-at field,
   whichever its plan measures as safe for `dispatchStartedAt`'s other readers. The close only holds meanwhile.
+
+## 10. Rulings, 2026-09-26 (wave 4's pre-flight) — binding; they AMEND sections 1–9
+
+Wave 4's pre-flight read its plan against wave 3 as it merges (`1715d410`, PR #187). Three Opus agents then attacked
+the rulings before they were sent. The wave-4 plan's appended "Pre-dispatch amendments" carry the detail, as R-1 to R-13
+and A1 to A15. These four rulings are the cross-wave ones.
+
+- **R34 — R32 is built as a release, and a hold is accounted, never parsed.**
+  - A hold stops protecting a marked child only when all of these hold:
+    - its text equals the server's own rendering of a TERMINAL run that names the child (the open/dispatch claim, or
+      a non-final close's claim);
+    - that run's programme has at least one run and zero open runs;
+    - the minting run is present and terminal;
+    - no open run names the child;
+    - the child has never coordinated.
+  - A hand hold is never released, even one written in the programme grammar, which the operator is told to use. So is
+    an unreadable hold, and a claim by a run the database lacks.
+  - The sweep releases the hold in its own re-checked job. The child is then reclaimed by the ordinary path, on fresh
+    passes.
+  - R32's three words are spelled `not-finished-undated`, `not-finished-unmeasured` and `not-finished-merge-commit`.
+    Plain `not-finished` stays for an unspent hand-over.
+  - Residual, accepted: a hold written in the sub-second window between the job's re-read and ccd's unlink is lost.
+- **R35 — R33 is built as a write-once birth per bound session** (`runs.sessionBornAt`, server-only).
+  - The fresh dispatch arm binds with its own stamp. An adopted winner binds with null, because it may be an earlier
+    attempt's workspace. A null birth is unplaceable, which is fail-closed.
+  - `dispatchStartedAt` keeps its every-attempt meaning.
+- **R36 — R25's collector belongs to wave 5, not wave 4.** It needs its own capability token, grant and SAFETY lens,
+  and it is driven by the server lane, because `ccd-tmp-sweep` runs from a systemd timer only. R25's conditions stand.
+  Wave 5 adds:
+  - a re-check under the per-id lock;
+  - no `$REG` entry of any suffix;
+  - a leaf older than a stated age;
+  - one extracted removal helper shared with wave 3's tail.
+- **R37 — a workspace that has ever coordinated a run is never reclaimed automatically.** Neither the sweep nor the
+  close reclaims a marked child that is any run's `claimedBy`, in any state. This covers a programme's heir, through the
+  reclaim door, and a nested coordinator. The operator's rule 4 reserves manual cleanup for coordinator workspaces, and
+  coordinator clause 3 says such a workspace is cleaned up by a human. The close answers `has-coordinated`.
