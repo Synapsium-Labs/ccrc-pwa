@@ -1289,6 +1289,18 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this classifier; a blank pane no longer blinds the rescue, and the `auto-rescue` line says
   ` via=transcript` when the pane alone would not have fired. The pane regex is deliberately not
   widened (D-2364).
+- **Auth loss is stuck too (D-3522).** Claude Code 2.1.280 renders every final banner four rows
+  above the prompt box, out of the rescue's pane window, so a 401 (`Invalid API key`, `Please run
+  /login`) reached no detector at all. The transcript arm now reads it in `stuck` mode:
+  `error:"authentication_failed"` with `apiErrorStatus:401`, written at or after the pane's tmux
+  `session_created` — a swap carries the transcript, so an earlier process's 401 is not evidence about
+  this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
+  marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
+  session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
+  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
+  feared.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -2639,8 +2651,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21356`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20143-20145`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21428`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20180-20182`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
