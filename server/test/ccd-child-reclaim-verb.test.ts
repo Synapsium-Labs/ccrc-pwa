@@ -985,9 +985,9 @@ describe('nested checkouts and artifacts', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-tmp')), 'the root itself stays').toBe(true);
   }, 90_000);
 
-  // PORTED (fix round, F23): mode-000 normalise is POSIX-portable (see
-  // ccd-child-reclaim-ladder.test.ts's rung-8 cases); a non-root user is
-  // denied and the `find -exec chmod` pass fixes it identically on Darwin.
+  // Mode-000 normalise is POSIX-portable (see
+  // ccd-child-reclaim-ladder.test.ts's rung-8 cases): a non-root user is
+  // denied, and the `find -exec chmod` pass fixes it, identically on Darwin.
   it('removes a clips directory holding a mode-000 subdirectory — normalised, then removed', () => {
     makeChild(h);
     const locked = path.join(h.home, '.cc-clips', CHILD_ID, 'locked');
