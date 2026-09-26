@@ -301,27 +301,30 @@ describe('parseChildReclaimResult', () => {
       }
       throw new Error(`no die("...")/_lc_refuse(...) call in the RECLAIM region contains ${JSON.stringify(needle)}`);
     };
-    it.each([
+    // The SIX single-line dies' needles, shared by the positive case below
+    // and the EXTENDED-die case (review 170 fr-I rereview-r1 I2: the first
+    // round's extended case covered only 2 of 6, leaving 4 patterns' `$`
+    // anchors unpinned individually — reusing one list makes that impossible).
+    const SINGLE_LINE_NEEDLES: readonly [string, string][] = [
       ['usage', 'usage: ccd ws-reclaim'],
       ['bad token', 'bad token'],
       ['bad run id', 'bad run id'],
       ['bad session id', 'bad session id'],
       ['python3 unavailable', 'cannot quote the reclaim record safely'],
       ['flock unavailable', 'flock (util-linux) is unavailable'],
-    ])('%s is resume: "pre-lock-die", and the detail is ccd\'s own message', (_what, needle) => {
+    ];
+    it.each(SINGLE_LINE_NEEDLES)('%s is resume: "pre-lock-die", and the detail is ccd\'s own message', (_what, needle) => {
       const msg = dieMessage(needle);
       const out = parseChildReclaimResult(ID, '', `ccd: ${msg}`);
       expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: msg });
     });
-    // Review 170 fr-I I2: the end anchors are what make "a reworded die reds"
-    // true for a rewording that EXTENDS the message (ccd adds detail to a die
-    // rather than changing it) — an unanchored `^bad token` would still match
-    // `bad token (want 64 hex)`. This is the pin for that: an EXTENDED die
-    // must NOT be recognised, and stays `resumable`, the safe direction.
-    it.each([
-      ['bad token', 'bad token'],
-      ['python3 unavailable', 'cannot quote the reclaim record safely'],
-    ])('an EXTENDED %s die (ccd appends detail) is NOT recognised', (_what, needle) => {
+    // Review 170 fr-I I2 (and its rereview-r1 residual): the end anchors are
+    // what make "a reworded die reds" true for a rewording that EXTENDS the
+    // message (ccd adds detail to a die rather than changing it) — an
+    // unanchored `^bad token` would still match `bad token (want 64 hex)`.
+    // ALL SIX needles, not a subset: dropping any ONE pattern's `$` must red
+    // exactly that die's case here.
+    it.each(SINGLE_LINE_NEEDLES)('an EXTENDED %s die (ccd appends detail) is NOT recognised', (_what, needle) => {
       const msg = dieMessage(needle);
       const out = parseChildReclaimResult(ID, '', `ccd: ${msg} (extra detail ccd could add)`);
       expect(out).toEqual({ kind: 'failed', resume: 'resumable',
@@ -338,13 +341,14 @@ describe('parseChildReclaimResult', () => {
         verb: { code: 1, stdout: '', stderr: `ccd: ${msg}` } }) });
       const out = await reclaimChild(s.deps, s.req());
       expect(out).toMatchObject({ kind: 'failed', resume: 'pre-lock-die', detail: msg });
-      // Review 170 fr-I m2: the sentence must be true of BOTH families this
-      // recognises — an argv/version die (this case, "bad token") AND an
-      // environment die (python3/flock) — never "the problem is on the box",
-      // which would misdirect an operator at an argv defect.
-      expect(s.bodies()[0]).toContain('ccd refused the call before it started anything');
-      expect(s.bodies()[0]).toContain("the call's own arguments, or the box's ccd, python3 or flock");
+      // Review 170 fr-I rereview-r1 m2: the sentence must be true of the
+      // THIRD family too (lock-unopenable, below), which "the call's own
+      // arguments, or ccd/python3/flock" is not — so it names no cause at
+      // all and leaves that to `detail` (asserted via `msg` above).
+      expect(s.bodies()[0]).toContain('ccd refused the call before anything started');
+      expect(s.bodies()[0]).toContain('it refuses the same way every time until that changes');
       expect(s.bodies()[0]).not.toContain('the problem is on the box');
+      expect(s.bodies()[0]).not.toContain("the call's own arguments");
       expect(s.bodies()[0]).not.toContain('resumes where it stopped');
       expect(s.bodies()[0]).not.toContain('It is retried from the start.');
     });
@@ -360,7 +364,7 @@ describe('parseChildReclaimResult', () => {
       beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-lockdie-'); });
       afterEach(() => { h.cleanup(); });
 
-      it('is recognised from the REAL captured stdout/stderr/exit', () => {
+      it('is recognised from the REAL captured stdout/stderr/exit, and gets the SAME feed sentence', async () => {
         makeChild(h);
         const tok = evalOf(h).token;
         const lockPath = path.join(h.home, '.cc-sessions', `.reap-${CHILD_ID}.lock`);
@@ -372,6 +376,19 @@ describe('parseChildReclaimResult', () => {
         const out = parseChildReclaimResult(CHILD_ID, r.stdout, r.stderr);
         expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die',
           detail: `cannot open the reap lock at ${lockPath}` });
+        // Review 170 fr-I rereview-r1 m2: the feed sentence for THIS die,
+        // fed from the REAL captured stderr — never a synthetic string —
+        // must be the same cause-neutral sentence as every other pre-lock
+        // die, and must not name "ccd, python3 or flock" (none of which
+        // caused this one: a lock/registry-directory state did).
+        const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+          verb: { code: r.code, stdout: r.stdout, stderr: r.stderr } }) });
+        const feedOut = await reclaimChild(s.deps, s.req());
+        expect(feedOut).toMatchObject({ kind: 'failed', resume: 'pre-lock-die' });
+        expect(s.bodies()[0]).toContain('ccd refused the call before anything started');
+        expect(s.bodies()[0]).toContain('it refuses the same way every time until that changes');
+        expect(s.bodies()[0]).not.toContain('ccd, python3 or flock');
+        expect(s.bodies()[0]).not.toContain('the problem is on the box');
       });
     });
 
@@ -394,6 +411,17 @@ describe('parseChildReclaimResult', () => {
     it('ccd\'s own line with NO preceding bash diagnostic is still recognised (zero-or-more)', () => {
       const out = parseChildReclaimResult(ID, '', 'ccd: cannot open the reap lock at /real/path.lock');
       expect(out).toEqual({ kind: 'failed', resume: 'pre-lock-die', detail: 'cannot open the reap lock at /real/path.lock' });
+    });
+    // Review 170 fr-I rereview-r1, "New Minor": the last-line pattern's `^`
+    // start anchor was correct in the shipped code but UNPINNED — no case
+    // exercised a final line with content BEFORE `ccd: `. `.exec` with no
+    // `^` searches anywhere in the string, so a line like `x ccd: cannot
+    // open the reap lock at /p` would be admitted and `.slice('ccd: '.length)`
+    // would then cut mid-string, returning a garbled detail.
+    it('a final line with content BEFORE "ccd: " is not recognised (the last-line start anchor)', () => {
+      const stderr = 'x ccd: cannot open the reap lock at /real/path.lock';
+      const out = parseChildReclaimResult(ID, '', stderr);
+      expect(out).toEqual({ kind: 'failed', resume: 'resumable', detail: stderr });
     });
   });
 });

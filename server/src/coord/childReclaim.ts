@@ -762,15 +762,18 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
     // `childReclaimSentence` (not a bare `.`) avoids doubling the punctuation
     // when `o.detail` already ends a sentence.
     case 'failed': {
-      // `pre-lock-die` (review 170 F20, wording per fr-I m2): true of BOTH
-      // families this recognises — an argv/version die (usage, a malformed
-      // token/run id/session id) and an environment die (no python3, no
-      // flock) — so it says what is true of both rather than naming "the
-      // box" alone, which would misdirect an operator looking at an argv
-      // defect: the call itself may be what needs to change, not the box.
+      // `pre-lock-die` (review 170 F20, wording per fr-I m2, corrected per
+      // fr-I rereview-r1 m2): the recogniser covers THREE families — an
+      // argv/version die (usage, a malformed token/run id/session id), a
+      // missing binary (python3, flock), and a lock/registry state die
+      // (lock-unopenable: EISDIR, EACCES, a missing `$REG`) — and no single
+      // named list of causes ("its own arguments, or ccd/python3/flock") is
+      // true of all three; naming only that list pointed an operator at the
+      // wrong thing for the third. The sentence stays CAUSE-NEUTRAL instead
+      // and leaves the cause to `o.detail` — ccd's own message, rendered
+      // immediately before this sentence — which already names it.
       const tail = o.resume === 'pre-lock-die'
-        ? 'ccd refused the call before it started anything; nothing was touched, and the same call is refused again '
-          + "until what caused it — the call's own arguments, or the box's ccd, python3 or flock — changes."
+        ? 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.'
         // `resumable`: ccd's own tail genuinely started and left a
         // breadcrumb. `not-resumable`: an audit failure (never reached the
         // destructive path) or a verb answer that is a REFUSAL in substance
