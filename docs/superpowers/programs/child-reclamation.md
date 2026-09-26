@@ -59,6 +59,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - F20 recognises ccd's pinned pre-lock texts.
   - **F1's exit-empty exception matches real tmux.** Measured by the rulings' attacker on tmux 3.4 with an isolated
     socket: the last `kill-session` exits 0, then `no server running`.
+  - **macOS at `f2b32a86` (CI run 36228530456).**
+    - test-macos 2/2 (job 108367122769) passed: 211 files, 6668 tests. That covers the pin, audit, ws-reap and
+      session-hook suites and the server's close, mark, prose and store cases.
+    - test-macos 1/2 (job 108367122762) passed 59 files, including the verb suite (143, with the F1, F2, F3, F4 and
+      F7 cases) and lifecycle-purge, then went silent at 08:26 and was cancelled at the 55-minute cap.
+    - probe-macos (job 108367079482) failed only on the known D-2661 FIFO flake. Leg 2 passed the same file 7/7.
+    - **Ruled: no re-run.** Leg 1's file list puts `ccgpt-proxy.test.ts` 19th, ahead of the ladder, `child-reclaim`
+      and `wsaudit` files. A re-run wedges at main's hang before it reaches them. The ladder's Darwin evidence (the
+      ported F23 normalise cases, A10 fail-closed, the F2 ladder cases) is therefore UNMEASURED. It is carried as a
+      post-merge measurement for when that hang is fixed on main.
 - **2026-09-25 — review 170 on wave 3 (`c5962a94`): four critical, seven important, twelve minor; ONE full fix round.**
   - **The panel.** Nine Opus lenses, SAFETY at xhigh; 126 agents; 32 findings survived and merge into 22; 7 were
     refuted. Suites green except the box-local `tmp-sweep` case. AGENT-FIRST, the run-id parses and fixture-only
@@ -438,7 +448,10 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   - `_ws_tombstone`'s comment is inverted under branch drift (F8);
   - a nested checkout's held `index.lock` is checked nowhere, so a nested tree mid-write is committed from disk;
   - "before wave 1's deploy" in `wave-lifecycle.md` and the coordinator SKILL.md (#178) has F11's problem;
-  - the reclaim verb suite runs ~414 s against a 600 s ceiling; split it.
+  - the reclaim verb suite runs ~414 s against a 600 s ceiling; split it;
+  - `ccd-child-reclaim-ladder`, `child-reclaim` and `wsaudit` are unmeasured on Darwin, because main's macOS hang
+    precedes them in leg 1. Measure them on the first macOS leg that gets past `ccgpt-proxy.test.ts`, and report the
+    job id.
 
   Accepted residuals, all fail-safe:
   - an aliased `..` row through a link to a standing child is not refused;
