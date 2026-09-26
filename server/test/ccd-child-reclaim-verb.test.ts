@@ -14,8 +14,8 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
-  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, gcNow, hasCommit,
-  highCommit, makeChild, otherSnapshot, plantOther, plantReflogNoise, plantTmux, tmuxSessions, wideDigitLocale, type Child,
+  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, appendReflog, atticReach, childReclaimVerb, evalOf, gcNow,
+  hasCommit, highCommit, looseCommits, makeChild, otherSnapshot, plantOther, plantReflogNoise, plantTmux, tmuxSessions, wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -2096,6 +2096,120 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
     keptThroughGc(c, late);
   }, 120_000);
+
+  // EACH OF THE TAIL'S KEEPS HAS A CASE OF ITS OWN: an entry written into the
+  // one reflog that act deletes, AFTER every earlier keep, so only that keep
+  // stands between the entry and its loss. Where a settle runs in the same
+  // invocation (a standing tree), the entry is written from INSIDE the settle
+  // — after its re-pin — through `_ws_reclaim_children_merge`, the device N1
+  // uses; where none runs (a resume past it, a tree already gone), it is
+  // written between the interrupted act and the resume.
+  /** Runs `snippet` inside the settle, after its re-pin, then the real merge. */
+  const afterSettle = (snippet: string): string =>
+    `eval "$(declare -f _ws_reclaim_children_merge | sed '1s/_ws_reclaim_children_merge/_frd_orig_merge/')";`
+    + ` _ws_reclaim_children_merge() { ${snippet} _frd_orig_merge "$@"; };`;
+  /** Bash that appends an entry to `log` naming `id`, and one back to `cur`. */
+  const lateEntry = (log: string, cur: string, id: string): string =>
+    `printf '%s %s T <t@x> 1700000000 +0000\\tfixture: late\\n%s %s T <t@x> 1700000000 +0000\\tfixture: back\\n'`
+    + ` ${cur} ${id} ${id} ${cur} >> "${log}";`;
+  const headLog = (dir: string): string => h.git(dir, 'rev-parse', '--path-format=absolute', '--git-path', 'logs/HEAD');
+
+  it('KEEP before a standing NESTED checkout’s removal: an entry its HEAD reflog gains after the settle is kept', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    const [late] = looseCommits(h, c.main, 1, 'nested head late');
+    const pre = afterSettle(lateEntry(headLog(inner), h.git(inner, 'rev-parse', 'HEAD'), late!));
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(inner), 'the nested checkout — and its HEAD reflog — went').toBe(false);
+    keptThroughGc(c, late!);
+  }, 120_000);
+
+  it('KEEP before a GONE nested checkout’s record is cleared (resume at `children`, the tree gone): its HEAD reflog’s late entry is kept', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const [late] = looseCommits(h, c.main, 1, 'gone nested head late');
+    appendReflog(h, inner, 'HEAD', [late!]);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git still records the nested checkout')
+      .toContain(`worktree ${inner}\n`);
+    const r = childReclaimVerb(h, resumeToken('children'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the nested record went').not.toContain(`worktree ${inner}\n`);
+    keptThroughGc(c, late!);
+  }, 120_000);
+
+  it('KEEP before a nested branch’s CAS (resume at `children`, the tree gone): its reflog’s late entry is kept', () => {
+    const c = makeChild(h);
+    const inner = path.join(c.wt, 'inner');
+    h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    interrupted(c, 'children');
+    const [late] = looseCommits(h, c.main, 1, 'nested branch late');
+    appendReflog(h, c.main, 'refs/heads/ws/nested', [late!]);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    const r = childReclaimVerb(h, resumeToken('children'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the nested branch — and its reflog — went').toBe('');
+    keptThroughGc(c, late!);
+  }, 120_000);
+
+  it('KEEP before step 4 removes the standing tree: an entry the child’s HEAD reflog gains after the settle is kept', () => {
+    const c = makeChild(h);
+    const [late] = looseCommits(h, c.main, 1, 'child head late');
+    const pre = afterSettle(lateEntry(headLog(c.wt), c.tip, late!));
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(c.wt), 'the tree — and its HEAD reflog — went').toBe(false);
+    keptThroughGc(c, late!);
+  }, 120_000);
+
+  it('KEEP before step 5 clears a VANISHED tree’s record (resume at `branch`, the record standing): a detached commit made after the pin is kept', () => {
+    // The review's probe: no settle runs at `branch`, and the tree is gone, so
+    // only the keep in front of `worktree remove` of the record reads its log.
+    const c = makeChild(h);
+    interrupted(c, 'branch');
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    fs.writeFileSync(path.join(c.wt, 'late.txt'), 'after the pin');
+    h.git(c.wt, 'add', 'late.txt'); h.git(c.wt, 'commit', '-q', '-m', 'detached, after the pin');
+    const late = h.git(c.wt, 'rev-parse', 'HEAD');
+    h.git(c.wt, 'checkout', '-q', CHILD_BRANCH);
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git still records the tree').toMatch(/^prunable /m);
+    const r = childReclaimVerb(h, resumeToken('branch'));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the record — and its HEAD reflog — went').not.toMatch(/^prunable /m);
+    keptThroughGc(c, late);
+  }, 120_000);
+
+  it('a record git HOLDS whose admin entry cannot be found is UNMEASURED — pin-failed, the record and the breadcrumb stand', () => {
+    // git 2.43 prints a `gitdir` entry verbatim, so there `worktree list` and
+    // the `gitdir` scan miss a respelled entry together. A git that writes
+    // RELATIVE worktree paths (`worktree.useRelativePaths`, 2.48+; not on this
+    // box) resolves one — so the record is found and the admin entry is not.
+    // The entry is respelled relative, and the record read answers as that git.
+    const c = makeChild(h);
+    interrupted(c, 'branch');
+    const admin = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-dir');
+    fs.rmSync(c.wt, { recursive: true, force: true });
+    fs.writeFileSync(path.join(admin, 'gitdir'), `${path.relative(admin, path.join(c.wt, '.git'))}\n`);
+    const pre = `eval "$(declare -f _ws_reclaim_record | sed '1s/_ws_reclaim_record/_frd_orig_record/')";`
+      + ` _ws_reclaim_record() { _frd_orig_record "$@"; local rc=$?;`
+      + ` if (( rc == 1 )) && [[ "$2" == "${c.wt}" ]]; then RECLAIM_REC_BRANCH=${CHILD_BRANCH}; RECLAIM_REC_HEAD=${c.tip};`
+      + ` RECLAIM_REC_MAIN=0; return 0; fi; return $rc; };`;
+    const tok = h.sh(`${pre} _ws_reclaim_resume_eval ${CHILD_ID} 0 ${CHILD_RUN} branch >/dev/null; printf '%s' "$REAP_TOKEN"`);
+    const r = childReclaimVerb(h, tok, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain(`git records a checkout at ${c.wt}, but no`);
+    expect(o.detail).toContain(`git's record of ${c.wt} stands, and nothing further was deleted`);
+    expect(fs.existsSync(path.join(admin, 'gitdir')), 'the record stands').toBe(true);
+    expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:branch');
+  }, 90_000);
 });
 
 describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted in silence (spec §5.5 step 2)', () => {

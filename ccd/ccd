@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=693753c244b55fae768b996068d5fc57f5f8b77d1955794e6d9cb3102f50cfae
+# ccrc:generated 1 sha256=9e50b9f72ec71947780b481ee9a6d65a85ad123e22a30317bef4d8a6964e2652
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24742,9 +24742,10 @@ _ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned und
 # replaces it. The ref moves by compare-and-swap. `git gc --prune=now` keeps
 # every commit reachable from a ref, and an attic ref is never expired.
 _WS_LOGS=(); _WS_KEEP_WHY=''
-_ws_reclaim_log_of() {   # main kind(tree|branch) arg -> 0 with the reflog file(s) that deleting it takes
-  #                           appended to _WS_LOGS; 1 (_WS_KEEP_WHY) when they could not be located.
-  #                           `tree` takes a checkout's path, `branch` a branch name.
+_ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with the reflog file(s) that deleting it
+  #                           takes appended to _WS_LOGS; 1 (_WS_KEEP_WHY) when they could not be located.
+  #                           `tree` takes a checkout's path, `branch` a branch name; `recorded` 1 says the
+  #                           caller holds git's worktree record of that path.
   # LOCATED THROUGH GIT, never guessed. A checkout that stands answers its own
   # HEAD reflog through `rev-parse --git-path logs/HEAD` inside it. A checkout
   # that is GONE (proven, `_ws_reclaim_absent`) cannot be asked, and
@@ -24753,7 +24754,13 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg -> 0 with the reflog file(
   # entry that names `<path>/.git` — the entry by which `git worktree remove
   # <path>` itself finds the admin directory it deletes. A `worktrees`
   # directory, or a `gitdir` file, that cannot be read measured nothing.
-  local main="$1" kind="$2" arg="$3" common f d g real rc
+  # A RECORD WITH NO ADMIN ENTRY IS UNMEASURED, never "no reflog": when the
+  # caller holds git's record of a gone checkout (`recorded` 1) and no `gitdir`
+  # entry names it — a git that spells worktree paths otherwise (relative ones,
+  # `worktree.useRelativePaths`, which git 2.43 prints verbatim, so there both
+  # readers miss together) — its HEAD reflog was never located, and removing
+  # that record would delete it unkept. So it fails, and the record stands.
+  local main="$1" kind="$2" arg="$3" recorded="${4:-0}" common f d g real rc n=0
   common=$(_ws_common_dir "$main") \
     || { _WS_KEEP_WHY="could not resolve the repository of $main, so no reflog of it could be located"; return 1; }
   if [[ "$kind" == branch ]]; then
@@ -24768,7 +24775,10 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg -> 0 with the reflog file(
   (( rc == 0 )) \
     || { _WS_KEEP_WHY="${_WS_ABSENT_WHY:-something that is not a directory stands at $arg} — the HEAD reflog of the checkout there could not be located"; return 1; }
   _ws_reclaim_absent "$common/worktrees"; rc=$?
-  (( rc != 0 )) || return 0
+  if (( rc == 0 )); then
+    (( recorded )) || return 0
+    _WS_KEEP_WHY="git records a checkout at $arg, but $common/worktrees does not exist — its HEAD reflog could not be located, so it was never read"; return 1
+  fi
   (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — whether git keeps a HEAD reflog for $arg was never asked"; return 1; }
   [[ -d "$common/worktrees" && ! -L "$common/worktrees" && -r "$common/worktrees" && -x "$common/worktrees" ]] \
     || { _WS_KEEP_WHY="$common/worktrees cannot be listed — whether git keeps a HEAD reflog for $arg was never asked"; return 1; }
@@ -24782,8 +24792,10 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg -> 0 with the reflog file(
     g=$(cat -- "$d/gitdir" 2>/dev/null) \
       || { _WS_KEEP_WHY="$d/gitdir cannot be read — whether $d is git's record of $arg was never asked"; return 1; }
     g="${g%%$'\n'*}"
-    [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] && _WS_LOGS+=("$d/logs/HEAD")
+    [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] && { _WS_LOGS+=("$d/logs/HEAD"); n=$(( n + 1 )); }
   done
+  (( n || ! recorded )) \
+    || { _WS_KEEP_WHY="git records a checkout at $arg, but no $common/worktrees/*/gitdir entry names $arg/.git — its HEAD reflog could not be located, so it was never read"; return 1; }
   return 0
 }
 
@@ -24848,11 +24860,11 @@ _ws_reclaim_keep_reflogs() {   # main id logfile... -> 0 once every commit the n
   return 0
 }
 
-_ws_reclaim_keep_of() {   # main id kind(tree|branch) arg -> 0 once the reflog(s) that deleting `kind arg`
-  #                            takes are kept; 1 (_WS_KEEP_WHY). The TAIL's call, made just before each act
-  #                            that deletes a reflog, under `_ws_reclaim_contained`.
+_ws_reclaim_keep_of() {   # main id kind(tree|branch) arg [recorded] -> 0 once the reflog(s) that deleting
+  #                            `kind arg` takes are kept; 1 (_WS_KEEP_WHY). The TAIL's call, made just before
+  #                            each act that deletes a reflog, under `_ws_reclaim_contained`.
   _WS_LOGS=()
-  _ws_reclaim_log_of "$1" "$3" "$4" && _ws_reclaim_keep_reflogs "$1" "$2" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}
+  _ws_reclaim_log_of "$1" "$3" "$4" "${5:-0}" && _ws_reclaim_keep_reflogs "$1" "$2" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}
 }
 
 _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything recoverable is pinned;
@@ -25095,8 +25107,9 @@ _ws_reclaim_pin_absent_contained() {   # `_ws_reclaim_pin_absent`'s body, run un
     || { RECLAIM_PIN_WHY="a commit this reclaim must keep could not be pinned under refs/ccrc/attic/$id/"; return 1; }
   # What git still has of the child's reflogs, as on the fresh arm: the
   # branch's, and the HEAD reflog git's record of the vanished tree still
-  # keeps (found through its `gitdir` entry — there is no tree to ask).
-  _ws_reclaim_log_of "$main" tree "$workdir" && _ws_reclaim_log_of "$main" branch "$branch" \
+  # keeps (found through its `gitdir` entry — there is no tree to ask), which
+  # must be found when the ladder read a record of it (`recordhead` set).
+  _ws_reclaim_log_of "$main" tree "$workdir" "${rhead:+1}" && _ws_reclaim_log_of "$main" branch "$branch" \
     && _ws_reclaim_keep_reflogs "$main" "$id" ${_WS_LOGS[@]+"${_WS_LOGS[@]}"} \
     || { RECLAIM_PIN_WHY="$_WS_KEEP_WHY"; return 1; }
   return 0
@@ -25531,7 +25544,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
             "git's record of the vanished checkout at $cpath is on '$_WS_NREC_BRANCH', not '$cbr' — ccd cannot prove it is the checkout this reclaim pinned, so nothing further was deleted"
           return 1
         fi
-        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" \
+        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$cpath" 1 \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $cpath stands, and nothing further was deleted"; return 1; }
         wtout=$(git -C "$main" worktree remove "$cpath" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
@@ -25643,7 +25656,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
     if (( rec == 0 )); then
       _ws_reclaim_record "$main" "$workdir"; rec=$?
       if (( rec == 0 )); then
-        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" \
+        _ws_reclaim_contained _ws_reclaim_keep_of "$main" "$id" tree "$workdir" 1 \
           || { _ws_reclaim_fail "$id" "$lctx" pin-failed "$_WS_KEEP_WHY — git's record of $workdir stands, and nothing further was deleted"; return 1; }
         wtout=$(git -C "$main" worktree remove "$workdir" 2>&1) \
           || { _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed "$(printf '%s' "$wtout" | head -3)"; return 1; }
