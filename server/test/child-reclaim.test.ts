@@ -34,8 +34,8 @@ const CAPS: FleetState = { connected: true, downSince: null, rosterFp: null, bui
 
 const auditDoc = (childOf: number, verdict: string, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ id: ID, mode: 'reclaim', childOf, verdict, detail: '', ...extra });
-const reclaimedDoc = (childOf: number, wip: string | null = null): string =>
-  JSON.stringify({ reclaimed: ID, childOf, wip, attic: 2, residueBytes: null });
+const reclaimedDoc = (childOf: number, wip: string | null = null, secretsDropped: unknown = 0): string =>
+  JSON.stringify({ reclaimed: ID, childOf, wip, attic: 2, residueBytes: null, secretsDropped });
 
 interface Script { audit?: { code: number; stdout: string; stderr?: string }; verb?: { code: number; stdout: string; stderr?: string } }
 
@@ -201,8 +201,21 @@ describe('parseChildReclaimAudit', () => {
 
 describe('parseChildReclaimResult', () => {
   it('reads reclaimed, with and without a WIP commit', () => {
-    expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP), '')).toEqual({ kind: 'reclaimed', wip: WIP });
-    expect(parseChildReclaimResult(ID, reclaimedDoc(7), '')).toEqual({ kind: 'reclaimed', wip: null });
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP), '')).toEqual({ kind: 'reclaimed', wip: WIP, secretsDropped: 0 });
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7), '')).toEqual({ kind: 'reclaimed', wip: null, secretsDropped: 0 });
+  });
+  // Review 170 F4: a reclaim that committed nothing but DROPPED a secret-shaped
+  // edit (a hidden-flag one among them) left something uncommitted. ccd counts
+  // them; anything but a non-negative integer — a missing key included — is
+  // `'unreadable'`, never 0.
+  it('reads secretsDropped as a count, and anything else — missing, negative, fractional, a string — as unreadable', () => {
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, null, 2), '')).toEqual({ kind: 'reclaimed', wip: null, secretsDropped: 2 });
+    for (const bad of [-1, 1.5, '1', null, [1]]) {
+      expect(parseChildReclaimResult(ID, reclaimedDoc(7, null, bad), ''), JSON.stringify(bad))
+        .toEqual({ kind: 'reclaimed', wip: null, secretsDropped: 'unreadable' });
+    }
+    expect(parseChildReclaimResult(ID, JSON.stringify({ reclaimed: ID, childOf: 7, wip: null, attic: 2, residueBytes: null }), ''))
+      .toEqual({ kind: 'reclaimed', wip: null, secretsDropped: 'unreadable' });
   });
   // Fix round 1, review Minor #2: a SHA-256 repository pins a 64-hex commit,
   // not 40 — that must not be dropped to `null` (which would say nothing was
@@ -211,25 +224,25 @@ describe('parseChildReclaimResult', () => {
   // "no wip" and "a wip we can name".
   it('reads a 64-hex WIP commit (a SHA-256 repository), and calls a malformed one unreadable', () => {
     const WIP256 = 'c'.repeat(64);
-    expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP256), '')).toEqual({ kind: 'reclaimed', wip: WIP256 });
+    expect(parseChildReclaimResult(ID, reclaimedDoc(7, WIP256), '')).toEqual({ kind: 'reclaimed', wip: WIP256, secretsDropped: 0 });
     expect(parseChildReclaimResult(ID, reclaimedDoc(7, 'not-hex-at-all'), ''))
-      .toEqual({ kind: 'reclaimed', wip: 'unreadable' });
+      .toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
     expect(parseChildReclaimResult(ID, reclaimedDoc(7, 'a'.repeat(39)), ''))
-      .toEqual({ kind: 'reclaimed', wip: 'unreadable' });
+      .toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
   });
   // Fix round 2, review minor B: ONLY a literal `null` means nothing was
   // pinned. A present non-string value (a number, a boolean, an object) and
   // a MISSING key must all render `'unreadable'`, exactly like a malformed
   // string — never silently folded into "nothing uncommitted was left".
   it('a wip that is a number, boolean, object or missing is unreadable — only null means nothing pinned', () => {
-    const doc = (wip: unknown) => JSON.stringify({ reclaimed: ID, childOf: 7, wip, attic: 2, residueBytes: null });
-    expect(parseChildReclaimResult(ID, doc(12345), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable' });
-    expect(parseChildReclaimResult(ID, doc(true), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable' });
-    expect(parseChildReclaimResult(ID, doc({ sha: WIP }), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable' });
+    const doc = (wip: unknown) => JSON.stringify({ reclaimed: ID, childOf: 7, wip, attic: 2, residueBytes: null, secretsDropped: 0 });
+    expect(parseChildReclaimResult(ID, doc(12345), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
+    expect(parseChildReclaimResult(ID, doc(true), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
+    expect(parseChildReclaimResult(ID, doc({ sha: WIP }), '')).toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
     expect(parseChildReclaimResult(
-      ID, JSON.stringify({ reclaimed: ID, childOf: 7, attic: 2, residueBytes: null }), '', // no `wip` key at all
-    )).toEqual({ kind: 'reclaimed', wip: 'unreadable' });
-    expect(parseChildReclaimResult(ID, doc(null), '')).toEqual({ kind: 'reclaimed', wip: null });
+      ID, JSON.stringify({ reclaimed: ID, childOf: 7, attic: 2, residueBytes: null, secretsDropped: 0 }), '', // no `wip` key at all
+    )).toEqual({ kind: 'reclaimed', wip: 'unreadable', secretsDropped: 0 });
+    expect(parseChildReclaimResult(ID, doc(null), '')).toEqual({ kind: 'reclaimed', wip: null, secretsDropped: 0 });
   });
   it('a reclaim of ANOTHER id is a failure, not a success, and never resumable', () => {
     const out = parseChildReclaimResult('demo-other', reclaimedDoc(7), '');
@@ -368,7 +381,7 @@ describe('reclaimChild — the one executor', () => {
   it('audit → token → verb, then cancels the child’s mail and writes ONE feed row', async () => {
     const s = await rig();
     const out = await reclaimChild(s.deps, s.req());
-    expect(out).toEqual({ kind: 'reclaimed', sessionId: ID, runId: s.runId, wip: null });
+    expect(out).toEqual({ kind: 'reclaimed', sessionId: ID, runId: s.runId, wip: null, secretsDropped: 0 });
     expect(s.calls).toEqual([
       ['ws-audit', '--session', ID, '--reclaim'],
       ['ws-reclaim', '--expect', TOK, '--child-of', String(s.runId), '--session', ID,
@@ -387,6 +400,22 @@ describe('reclaimChild — the one executor', () => {
     expect(out).toMatchObject({ kind: 'reclaimed', wip: 'unreadable' });
     expect(s.bodies()[0]).toContain('its commit id could not be read');
     expect(s.bodies()[0]).not.toContain('Nothing uncommitted was left');
+  });
+
+  // Review 170 F4: the feed must not say "Nothing uncommitted was left" while
+  // a secret-shaped edit — a hidden-flag one among them — was dropped.
+  it.each([
+    ['nothing committed, nothing dropped', null, 0, 'Nothing uncommitted was left.', null],
+    ['nothing committed, one secret dropped', null, 1, 'Nothing uncommitted was committed. 1 secret-shaped path was dropped, never committed — the record names it.', 'Nothing uncommitted was left'],
+    ['nothing committed, the count unreadable', null, 'unreadable', 'Whether a secret-shaped path was dropped could not be read.', 'Nothing uncommitted was left'],
+    ['a WIP, and two secrets dropped', WIP, 2, `Uncommitted work was pinned as ${WIP}. 2 secret-shaped paths were dropped, never committed — the record names them.`, 'Nothing uncommitted'],
+  ] as const)('the feed row says what was left: %s', async (_what, wip, dropped, says, never) => {
+    const s = await rig({ script: (runId) => ({ audit: { code: 0, stdout: auditDoc(runId, 'reclaimable', { token: TOK }) },
+      verb: { code: 0, stdout: reclaimedDoc(runId, wip, dropped === 'unreadable' ? null : dropped) } }) });
+    const out = await reclaimChild(s.deps, s.req());
+    expect(out).toMatchObject({ kind: 'reclaimed', wip, secretsDropped: dropped });
+    expect(s.bodies()[0]).toContain(says);
+    if (never !== null) expect(s.bodies()[0]).not.toContain(never);
   });
 
   it('refuses on NO evidence of the capability — the verb alone is not the token', async () => {

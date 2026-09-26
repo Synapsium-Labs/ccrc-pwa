@@ -94,7 +94,7 @@ export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
 
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
-      readonly wip: string | null | 'unreadable' }
+      readonly wip: string | null | 'unreadable'; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'deferred'; readonly sessionId: string; readonly runId: number; readonly why: ChildReclaimDeferWhy; readonly detail: string }
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
@@ -355,8 +355,13 @@ export type ChildReclaimVerbRead =
    *  this build cannot attribute to a commit, whatever shape it took (fix
    *  round 1, review minor #2) — work MAY still be pinned (the attic holds
    *  it either way), but the feed must not claim nothing was left when it
-   *  cannot read what was. */
-  | { readonly kind: 'reclaimed'; readonly wip: string | null | 'unreadable' }
+   *  cannot read what was.
+   *  `secretsDropped`: how many secret-shaped paths the reclaim dropped and
+   *  recorded instead of committing (spec §5.5 step 2) — a hidden-flag secret
+   *  edit among them; `'unreadable'` when ccd printed anything but a
+   *  non-negative integer, or no key at all. A reclaim with no WIP that
+   *  dropped a secret did leave something uncommitted, and the feed says so. */
+  | { readonly kind: 'reclaimed'; readonly wip: string | null | 'unreadable'; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   /** `resumable` (fix round 2, review minor C): true only when ccd's own
    *  destructive tail genuinely started and left a breadcrumb — a
@@ -376,7 +381,9 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
           detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
       }
       const wip = v.wip === null ? null : (typeof v.wip === 'string' && WIP_SHAPE.test(v.wip) ? v.wip : 'unreadable');
-      return { kind: 'reclaimed', wip };
+      const secretsDropped = typeof v.secretsDropped === 'number' && Number.isSafeInteger(v.secretsDropped)
+        && v.secretsDropped >= 0 ? v.secretsDropped : 'unreadable';
+      return { kind: 'reclaimed', wip, secretsDropped };
     }
     if (typeof v.refused === 'string') {
       const detail = typeof v.detail === 'string' ? v.detail : '';
@@ -496,7 +503,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
   // or into a stranger that inherits its recycled slug.
   childReclaimCancelMail(deps, sessionId, 'reclaimed');
-  return { kind: 'reclaimed', sessionId, runId, wip: act.wip };
+  return { kind: 'reclaimed', sessionId, runId, wip: act.wip, secretsDropped: act.secretsDropped };
 }
 
 /** What a second registry listing found, or that it could not be taken.
@@ -639,16 +646,26 @@ function childReclaimWaitText(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
 
 const childReclaimSentence = (t: string): string => (/[.!?]$/.test(t) ? t : `${t}.`);
 
+/** What a reclaim left uncommitted, in words (spec §5.5 step 2). "Nothing
+ *  uncommitted was left" is said ONLY when there is no WIP commit AND ccd
+ *  counted no dropped secret-shaped path: a secret edit — a hidden-flag one
+ *  included — is uncommitted work that was dropped and recorded, not nothing. */
+function childReclaimWipText(wip: string | null | 'unreadable', dropped: number | 'unreadable'): string {
+  const secrets = dropped === 'unreadable' ? ' Whether a secret-shaped path was dropped could not be read.'
+    : dropped === 0 ? ''
+    : ` ${dropped} secret-shaped ${dropped === 1 ? 'path was' : 'paths were'} dropped, never committed — the record names ${dropped === 1 ? 'it' : 'them'}.`;
+  if (wip === null) return (secrets === '' ? 'Nothing uncommitted was left.' : 'Nothing uncommitted was committed.') + secrets;
+  return (wip === 'unreadable' ? 'Uncommitted work was pinned, but its commit id could not be read.'
+    : `Uncommitted work was pinned as ${wip}.`) + secrets;
+}
+
 function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
   nowMs: number): string {
   const who = `${o.sessionId}, child of run #${o.runId}`;
   const wait = childReclaimWaitText(o, req, nowMs);
   switch (o.kind) {
     case 'reclaimed':
-      return `${who}, was reclaimed (${req.trigger}). `
-        + (o.wip === null ? 'Nothing uncommitted was left.'
-          : o.wip === 'unreadable' ? 'Uncommitted work was pinned, but its commit id could not be read.'
-          : `Uncommitted work was pinned as ${o.wip}.`) + wait;
+      return `${who}, was reclaimed (${req.trigger}). ${childReclaimWipText(o.wip, o.secretsDropped)}${wait}`;
     case 'deferred': return `${who}: reclaim deferred (${o.why}) — ${childReclaimSentence(o.detail)}${wait}`;
     case 'refused': return `${who}: ${o.sentence}${o.detail === '' ? '' : ` (${o.detail})`}${wait}`;
     // `resumable` says what to promise the reader (fix round 1 review minor

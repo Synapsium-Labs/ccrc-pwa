@@ -110,6 +110,8 @@ describe('a fresh reclaim', () => {
     expect(out.childOf).toBe(CHILD_RUN);
     expect(out.wip).toMatch(/^[0-9a-f]{40}$/);
     expect(out.residueBytes, 'measured').toBe(residueBytes);
+    expect((out as unknown as { secretsDropped: unknown }).secretsDropped, 'the answer counts what was dropped, as the record names it')
+      .toBe(1);
 
     expect(fs.existsSync(c.wt), 'worktree').toBe(false);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
@@ -915,6 +917,7 @@ describe('a vanished worktree is reclaimed from what is left; a directory git do
     const out = JSON.parse(r.stdout) as { reclaimed: string; wip: string | null; attic: number };
     expect(out.reclaimed).toBe(CHILD_ID);
     expect(out.wip, 'no tree, so no WIP commit').toBeNull();
+    expect((out as unknown as { secretsDropped: unknown }).secretsDropped, 'no tree, so nothing dropped').toBe(0);
 
     const attic = atticShas(c);
     expect(attic, 'the branch tip is pinned').toContain(c.tip);
@@ -2092,5 +2095,66 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH)).toBe('');
     keptThroughGc(c, late);
+  }, 120_000);
+});
+
+describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted in silence (spec §5.5 step 2)', () => {
+  /** `f`, committed as a template, flagged skip-worktree. */
+  const hide = (c: Child, f: string): void => {
+    fs.writeFileSync(path.join(c.wt, f), 'KEY=template\n');
+    h.git(c.wt, 'add', f); h.git(c.wt, 'commit', '-m', `add ${f}`);
+    h.git(c.wt, 'update-index', '--skip-worktree', f);
+  };
+
+  it('a hidden SECRET edit, and nothing else: no WIP, and the answer and the record both say one path was dropped', () => {
+    const c = makeChild(h);
+    hide(c, '.env');
+    fs.writeFileSync(path.join(c.wt, '.env'), 'KEY=live\n');
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { reclaimed: string; wip: string | null; secretsDropped: unknown };
+    expect(out.reclaimed).toBe(CHILD_ID);
+    expect(out.wip, 'nothing but a secret was uncommitted').toBeNull();
+    expect(out.secretsDropped, 'the answer must not read as "nothing was left"').toBe(1);
+    expect(tombOf()['secretsDropped']).toEqual(['.env']);
+  }, 120_000);
+
+  it('a hidden NON-SECRET edit is in the WIP the verb pins, read back from git after the tree is gone', () => {
+    const c = makeChild(h);
+    fs.writeFileSync(path.join(c.wt, 'db.yml'), 'password: template\n');
+    h.git(c.wt, 'add', 'db.yml'); h.git(c.wt, 'commit', '-m', 'db');
+    h.git(c.wt, 'update-index', '--assume-unchanged', 'db.yml');
+    fs.writeFileSync(path.join(c.wt, 'db.yml'), 'password: local\n');
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as { wip: string | null; secretsDropped: unknown };
+    expect(out.wip).toMatch(/^[0-9a-f]{40}$/);
+    expect(out.secretsDropped).toBe(0);
+    expect(fs.existsSync(c.wt), 'the CONTROL: the tree is gone').toBe(false);
+    expect(h.git(c.main, 'show', `${out.wip!}:db.yml`)).toBe('password: local');
+  }, 120_000);
+
+  it('refuses state-changed when a hidden path starts differing after the audit — and deletes nothing', () => {
+    const c = makeChild(h);
+    hide(c, 'cfg.yml');
+    const tok = evalOf(h).token;
+    fs.writeFileSync(path.join(c.wt, 'cfg.yml'), 'KEY=local\n');
+    expect(refusedWith(childReclaimVerb(h, tok))).toBe('state-changed');
+    intact(c);
+  }, 90_000);
+
+  it('the SETTLE records a hidden secret edit made after the pin, even when nothing else moved', () => {
+    // `_ws_unsupervise` is the tail's first act, after the pin and before the
+    // settle: the edit lands in exactly the window only the settle can see.
+    const c = makeChild(h);
+    hide(c, '.env');
+    const pre = `_ws_unsupervise() { echo "unsupervise $*" >> "$HOME/ccd-calls"; printf 'KEY=late\\n' > "${c.wt}/.env"; };`;
+    const r = childReclaimVerb(h, evalOf(h).token, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(h.home, 'ccd-calls'), 'utf8'), 'the CONTROL: the late edit ran').toContain('unsupervise');
+    const out = JSON.parse(r.stdout) as { wip: string | null; secretsDropped: unknown };
+    expect(out.wip).toBeNull();
+    expect(tombOf()['secretsDropped'], 'the settle dropped it and left no record').toEqual(['.env']);
+    expect(out.secretsDropped).toBe(1);
   }, 120_000);
 });

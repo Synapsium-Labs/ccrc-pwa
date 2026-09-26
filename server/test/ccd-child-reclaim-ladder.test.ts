@@ -956,3 +956,62 @@ describe('rung 6 defers a held index lock; rung 8 keeps `tree-unreadable` for a 
     expect(r.detail).toContain('could not open directory');
   }, 60_000);
 });
+
+describe('the hidden-edit PATH set is a fingerprint input — the audit and the verb share it (spec §5.5 step 2)', () => {
+  /** `f`, committed, flagged, and left as committed. */
+  const hide = (wt: string, f: string, flag: '--skip-worktree' | '--assume-unchanged'): void => {
+    fs.writeFileSync(path.join(wt, f), 'password: template\n');
+    h.git(wt, 'add', f); h.git(wt, 'commit', '-m', `add ${f}`);
+    h.git(wt, 'update-index', flag, f);
+  };
+
+  it('moves the token when a hidden path starts differing, and back when it stops — never on its mtime alone', () => {
+    const { wt } = makeChild(h);
+    hide(wt, 'db.yml', '--skip-worktree');
+    hide(wt, 'au.yml', '--assume-unchanged');
+    const base = evalOf(h);
+    expect(base.verdict, base.detail).toBe('reclaimable');
+    const later = new Date(Date.now() + 3_600_000);
+    fs.utimesSync(path.join(wt, 'db.yml'), later, later);
+    expect(evalOf(h).token, 'an mtime is not an edit').toBe(base.token);
+    fs.writeFileSync(path.join(wt, 'db.yml'), 'password: local\n');
+    expect(h.git(wt, 'status', '--porcelain'), 'the CONTROL: git status cannot see it').toBe('');
+    const skip = evalOf(h).token;
+    expect(skip, 'a skip-worktree path that starts differing is drift').not.toBe(base.token);
+    fs.writeFileSync(path.join(wt, 'au.yml'), 'password: local\n');
+    const both = evalOf(h).token;
+    expect(both, 'an assume-unchanged path that starts differing is drift').not.toBe(skip);
+    fs.writeFileSync(path.join(wt, 'db.yml'), 'password: template\n');
+    fs.writeFileSync(path.join(wt, 'au.yml'), 'password: template\n');
+    expect(evalOf(h).token, 'the SET is the input, not its history: both stopped differing').toBe(base.token);
+  }, 90_000);
+
+  it('moves the token when a NESTED same-repository checkout’s hidden path starts differing', () => {
+    const { wt, main } = makeChild(h);
+    const inner = path.join(wt, 'inner');
+    h.git(main, 'worktree', 'add', '-b', 'ws/nested', inner);
+    hide(inner, 'cfg.yml', '--skip-worktree');
+    const base = evalOf(h);
+    expect(base.verdict, base.detail).toBe('reclaimable');
+    fs.writeFileSync(path.join(inner, 'cfg.yml'), 'password: local\n');
+    expect(evalOf(h).token).not.toBe(base.token);
+  }, 90_000);
+
+  it('answers unmeasured — never a token — when `ls-files -v` answers a tag it does not know', () => {
+    const { wt } = makeChild(h);
+    const blob = h.git(wt, 'rev-parse', 'HEAD:f1.txt');
+    const r = evalOf(h, { pre: `git() { case " $* " in *" ls-files -v -s -z "*) printf 'K 100644 ${blob} 0\\tf1.txt\\0'; return 0 ;; esac; command git "$@"; };` });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain('a tag this reclaim does not know');
+  }, 60_000);
+
+  it('answers unmeasured — never a token — when a hidden path’s content cannot be read', () => {
+    const { wt } = makeChild(h);
+    hide(wt, 'db.yml', '--skip-worktree');
+    fs.writeFileSync(path.join(wt, 'db.yml'), 'password: local\n');
+    const r = evalOf(h, { pre: 'git() { case " $* " in *" hash-object "*) echo "fatal: could not open db.yml" >&2; return 128 ;; esac; command git "$@"; };' });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain('db.yml');
+  }, 60_000);
+});
