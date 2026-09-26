@@ -420,21 +420,25 @@ describe('README: the run lifecycle and programme mail', () => {
         .toMatch(/if the consumer depends[\s\S]{0,160}?independently prove/i);
     }
 
-    // Same-project (fix round, review 170/fr-J-r1 M2/N3): two SEPARATE
-    // bindings, restoring the pre-F10 tightness the merged M2 regex had
-    // loosened. (1) the OPENING sentence's own "prove the producer PR merged
-    // at `producerSha`" — measured 47 chars from "independently prove" — is
-    // bound on its own, tightly, so deleting "at `producerSha`" from that
-    // sentence reds here (it did not before: the merged regex's lazy match
-    // skipped past it to the LATER equality clause's `producerSha`, 312
-    // chars on, and stayed green). (2) the session-based mechanism
-    // (`ccd pr-state --session`, `phase`, and that same later `producerSha`)
-    // is its own, separate assertion — unaffected by anything the cross arm
-    // does.
+    // Same-project (fix round, review 170/fr-J-r1 M2/N3, corrected fr-J-r2
+    // R1): TWO SEPARATE bindings, both kept — the fix that restored (1) must
+    // not un-anchor (2) from the dependency gate. (1) the OPENING sentence's
+    // own "prove the producer PR merged at `producerSha`" — measured 47
+    // chars from "independently prove" — is bound on its own, tightly, so
+    // deleting "at `producerSha`" from that sentence reds here (a merged
+    // regex's lazy match once skipped past it to the LATER equality clause's
+    // `producerSha`, 312 chars on, and stayed green — fr-J-r1's own
+    // regression). (2) is the ORIGINAL pin, kept alongside rather than
+    // replaced: the session-based mechanism (`ccd pr-state --session`,
+    // `phase`, and that same later `producerSha`) anchored BACK to
+    // "independently prove" — dropping that anchor once let a mutation move
+    // the whole session-proof sentence outside the dependency gate (before
+    // "If the consumer depends …") and still pass, because the search then
+    // ran over `same` unconstrained (fr-J-r2's own regression, R1).
     expect(same, 'same-project succession does not bind its opening sentence to `producerSha` directly')
       .toMatch(/independently prove[\s\S]{0,60}?producerSha/i);
-    expect(same, 'same-project succession does not prove merge by session, reading `phase`')
-      .toMatch(/`ccd pr-state --session[\s\S]{0,150}?`phase`[\s\S]{0,170}?producerSha/i);
+    expect(same, 'same-project succession does not prove merge by session, reading `phase`, inside the dependency gate')
+      .toMatch(/independently prove[\s\S]{0,200}?`ccd pr-state --session[\s\S]{0,150}?`phase`[\s\S]{0,170}?producerSha/i);
 
     // Cross-project (review 170 M2, corrected fr-J-r1 N1): proof is BY PR
     // NUMBER, tied to the one sentence that states it — `gh pr view`,
