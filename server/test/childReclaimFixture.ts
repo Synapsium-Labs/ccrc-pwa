@@ -285,3 +285,45 @@ export function gcNow(h: PrHarness, main: string): void {
 export function hasCommit(h: PrHarness, main: string, id: string): boolean {
   return h.run(`git -C "${main}" cat-file -e "${id}^{commit}" 2>/dev/null`).code === 0;
 }
+
+/** The hooks `plantRepoPrograms` plants: every one a READ of the live child
+ *  could fire — `status` rewrites the index (post-index-change), a ref move
+ *  fires reference-transaction, a checkout post-checkout — and the commit
+ *  hooks, which no read may fire at all. */
+export const REPO_HOOKS = ['post-index-change', 'reference-transaction', 'post-checkout', 'pre-commit', 'post-commit'] as const;
+
+/** Programs the REPOSITORY names, which git itself runs: `REPO_HOOKS` in
+ *  `main`'s hooks directory — the one every linked worktree shares — and a
+ *  `core.fsmonitor`, each appending its own name to `$HOME/hook-runs` when it
+ *  runs (`hookRuns`). And the child's index made STALE: `f1.txt`'s mtime moves
+ *  with its bytes unchanged, so an UNCONTAINED `git status` refreshes that stat
+ *  record and rewrites the index — the write, under `index.lock`, that a read
+ *  of a live child must not make. Planted after `makeChild`, so the fixture's
+ *  own commits fire nothing; `hook-runs` starts empty. */
+export function plantRepoPrograms(h: PrHarness, c: Child): void {
+  const runs = path.join(h.home, 'hook-runs');
+  const hooks = path.join(c.main, '.git', 'hooks');
+  fs.mkdirSync(hooks, { recursive: true });
+  for (const hook of REPO_HOOKS) {
+    fs.writeFileSync(path.join(hooks, hook), `#!/bin/sh\necho ${hook} >> '${runs}'\nexit 0\n`, { mode: 0o755 });
+  }
+  const fsm = path.join(h.home, 'fsmonitor.sh');
+  fs.writeFileSync(fsm, `#!/bin/sh\necho fsmonitor >> '${runs}'\nexit 1\n`, { mode: 0o755 });
+  h.git(c.main, 'config', 'core.fsmonitor', fsm);
+  const past = new Date(Date.now() - 3_600_000);
+  fs.utimesSync(path.join(c.wt, 'f1.txt'), past, past);
+  fs.rmSync(runs, { force: true });
+}
+
+/** Every program `plantRepoPrograms` planted that has run since, in order. */
+export function hookRuns(h: PrHarness): string[] {
+  const runs = path.join(h.home, 'hook-runs');
+  return fs.existsSync(runs) ? fs.readFileSync(runs, 'utf8').split('\n').filter(Boolean) : [];
+}
+
+/** The child's OWN index file (located by git, which writes nothing to answer),
+ *  as it is now: its mtime and its bytes. */
+export function childIndex(h: PrHarness, c: Child): { file: string; mtimeMs: number; bytes: string } {
+  const file = h.git(c.wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index');
+  return { file, mtimeMs: fs.statSync(file).mtimeMs, bytes: fs.readFileSync(file).toString('base64') };
+}

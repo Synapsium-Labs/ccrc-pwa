@@ -12,7 +12,8 @@ import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
 import {
-  CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child,
+  CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childIndex, childReclaimVerb, evalOf, hookRuns, makeChild, plantRepoPrograms,
+  plantTmux, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -208,6 +209,35 @@ describe('ws-audit --reclaim', () => {
       expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]');
     }
   });
+});
+
+describe('ws-audit --reclaim reads the LIVE child contained (spec §5.5)', () => {
+  // The second row: the audit re-enters itself under the containment, marked
+  // by a flag ccd assigns when it is read — so an environment that exports the
+  // same name cannot make the outer call believe it is already the inner one.
+  it.each([['', {}], [' — and an exported _WS_AUDIT_INNER=1 does not skip it', { _WS_AUDIT_INNER: '1' }]] as const)(
+    'runs no hook and no fsmonitor of the repository, and leaves the child’s index byte-identical, mtime included%s', (_row, env) => {
+    // The session may be alive while the server audits it: a `git status` that
+    // is not contained refreshes and REWRITES the child's index under
+    // `index.lock`, and fires post-index-change — the write the audit's "one
+    // exception to read-only" never named (measured).
+    const c = makeChild(h);
+    plantRepoPrograms(h, c);
+    const before = childIndex(h, c);
+    const a = JSON.parse(h.sh(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`, env)) as Record<string, unknown>;
+    expect(a['verdict'], 'the WHOLE ladder ran — its git reads included').toBe('reclaimable');
+    expect(hookRuns(h), 'a repository-configured hook or fsmonitor ran inside ws-audit --reclaim').toEqual([]);
+    const after = childIndex(h, c);
+    expect(after.bytes, 'ws-audit --reclaim rewrote the child’s index').toBe(before.bytes);
+    expect(after.mtimeMs, 'ws-audit --reclaim touched the child’s index').toBe(before.mtimeMs);
+    // The CONTROL, after the subject so it cannot mask it: the same fixture
+    // DOES run the hook and the fsmonitor, and an uncontained read of the same
+    // tree DOES rewrite that index.
+    h.sh(`git -C "${c.wt}" status --porcelain >/dev/null`);
+    expect(hookRuns(h), 'the CONTROL: an uncontained status runs the repository’s programs')
+      .toEqual(expect.arrayContaining(['post-index-change', 'fsmonitor']));
+    expect(childIndex(h, c).bytes, 'the CONTROL: an uncontained status rewrites the stale index').not.toBe(before.bytes);
+  }, 60_000);
 });
 
 describe('reachable: the capability token and the dispatcher arm', () => {

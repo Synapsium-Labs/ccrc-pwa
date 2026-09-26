@@ -142,6 +142,25 @@ describe('the WIP commit', () => {
     expect(runs, 'a repository-configured program ran inside the pin phase').toBe('');
   }, 60_000);
 
+  it('still RUNS a gitattributes filter driver — the containment disables hooks, fsmonitor and optional locks, and names this', () => {
+    // The boundary `_ws_reclaim_contained`'s header states: a `filter.<x>.clean`
+    // is the user's own configured program (single-user trust model) and is
+    // not neutralised. Pinned so the comment and the code cannot drift apart:
+    // a change that neutralised filters would have to rewrite that header too.
+    const c = makeChild(h);
+    const drv = path.join(h.home, 'clean.sh');
+    fs.writeFileSync(drv, '#!/bin/sh\n[ -e "$HOME/pin-started" ] && echo clean >> "$HOME/filter-runs"\nexec cat\n', { mode: 0o755 });
+    h.git(c.main, 'config', 'filter.probe.clean', drv);
+    fs.mkdirSync(path.join(c.main, '.git', 'info'), { recursive: true });
+    fs.writeFileSync(path.join(c.main, '.git', 'info', 'attributes'), '*.txt filter=probe\n');
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'edited\n');
+    const p = pinOf(c, { between: 'touch "$HOME/pin-started"' });
+    expect(p.rc, p.why).toBe('0');
+    expect(h.git(c.main, 'show', `${p.wip}:f1.txt`)).toContain('edited');
+    const runs = fs.existsSync(path.join(h.home, 'filter-runs')) ? fs.readFileSync(path.join(h.home, 'filter-runs'), 'utf8') : '';
+    expect(runs, 'the clean filter did not run inside the pin phase').toContain('clean');
+  }, 60_000);
+
   it('makes no commit when there is nothing uncommitted — the ordinary finished child', () => {
     const c = makeChild(h);
     const p = pinOf(c);

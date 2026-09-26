@@ -16,7 +16,8 @@ import { decOf, eventsOf, measOf, refusalsOf } from './lifecycleHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, appendReflog, atticReach, childReclaimVerb, evalOf, gcNow,
-  hasCommit, highCommit, looseCommits, makeChild, otherSnapshot, plantOther, plantReflogNoise, plantTmux, tmuxSessions, wideDigitLocale, type Child,
+  childIndex, hasCommit, highCommit, hookRuns, looseCommits, makeChild, otherSnapshot, plantOther, plantReflogNoise, plantRepoPrograms, plantTmux,
+  tmuxSessions, wideDigitLocale, type Child,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -193,6 +194,28 @@ describe('a refusal destroys nothing, and every one is journaled', () => {
     expect(refusedWith(childReclaimVerb(h, 'f'.repeat(64)))).toBe('held');
     intact(c);
   }, 90_000);
+
+  it('a refusal reads the LIVE child contained: no hook or fsmonitor of the repository runs, and its index is untouched', () => {
+    // The ladder runs the whole of its git reads (a wrong token refuses only
+    // at rung 10, after every one) against a tree whose session may be alive:
+    // uncontained, `git status` rewrites the stale index under `index.lock`
+    // and fires post-index-change — a write the refusal says it never makes.
+    const c = makeChild(h);
+    plantRepoPrograms(h, c);
+    const before = childIndex(h, c);
+    expect(refusedWith(childReclaimVerb(h, 'f'.repeat(64)))).toBe('state-changed');
+    expect(hookRuns(h), 'a repository-configured hook or fsmonitor ran inside a refused ws-reclaim').toEqual([]);
+    const after = childIndex(h, c);
+    expect(after.bytes, 'a refused ws-reclaim rewrote the child’s index').toBe(before.bytes);
+    expect(after.mtimeMs, 'a refused ws-reclaim touched the child’s index').toBe(before.mtimeMs);
+    intact(c);
+    // The CONTROL, after the subject: the same fixture runs the programs and
+    // rewrites the index for an uncontained read.
+    h.sh(`git -C "${c.wt}" status --porcelain >/dev/null`);
+    expect(hookRuns(h), 'the CONTROL: an uncontained status runs the repository’s programs')
+      .toEqual(expect.arrayContaining(['post-index-change', 'fsmonitor']));
+    expect(childIndex(h, c).bytes, 'the CONTROL: an uncontained status rewrites the stale index').not.toBe(before.bytes);
+  }, 60_000);
 
   it('--defer-expired is a fingerprint input: a token minted without it cannot be spent with it', () => {
     const c = makeChild(h);

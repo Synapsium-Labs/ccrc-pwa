@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=319126c13f6ea1926452c20abe87463077a2941e1e1e66799aa2a0cb6b20cd6e
+# ccrc:generated 1 sha256=46e1f10dd1face6a7075794c8341102292db882328b35da8ebf26bd4378ed3b8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -12560,7 +12560,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if (( $# >= 3 )); then
     [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
       || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]"
-    mode=reclaim
+    [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
     (( $# == 4 )) && defer=1
   fi
   local id=$2
@@ -23984,7 +23984,12 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   #                       passes (REAP_TOKEN set, REAP_VERDICT=reclaimable), else REAP_VERDICT names it
   # THE LADDER, in spec §5.5's order. A refusal writes NOTHING — with one named
   # exception, rung 8's permission pass, which adds owner bits and destroys
-  # nothing. `ws-audit --reclaim` runs this with childof '' (the audit is not
+  # nothing. Its git reads write nothing either, because they run CONTAINED:
+  # `_ws_reclaim_fork`, this function's one caller, runs it under
+  # `_ws_reclaim_contained`, so no read rewrites the child's index or takes its
+  # `index.lock`, and no hook or fsmonitor of the repository runs. A
+  # gitattributes filter driver still can — `_ws_reclaim_contained` says why
+  # that is not disabled. `ws-audit --reclaim` runs this with childof '' (the audit is not
   # told the run); `ws-reclaim` runs it with its `--child-of`, so rung 2 is the
   # two-authority check there and a marker check here. It runs only where no
   # breadcrumb exists — a resumed reclaim is `_ws_reclaim_resume_eval`'s.
@@ -24369,26 +24374,41 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   return 0
 }
 
-_ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free and
-  #                              fsmonitor-free; answers cmd's status
-  # NO REPOSITORY-CONFIGURED PROGRAM RUNS INSIDE THE PIN PHASE (spec §5.5). A
-  # hook is not only a commit's: `git add` and `git status` fire
-  # post-index-change, and every `update-ref` fires reference-transaction; a
-  # repository's `core.fsmonitor` names a program `git status` and `git add`
-  # EXECUTE. So the containment is the environment's, not a flag on one call:
-  # git reads GIT_CONFIG_COUNT/KEY/VALUE at command-line precedence, above any
-  # repository config, and every git that runs beneath cmd inherits it —
-  # including the helpers the pin calls (`_ws_reclaim_classify`,
-  # `_ws_collect_ignored`, `_ws_reclaim_stash_shas`, `_ws_reclaim_keep_reflogs`). `local
-  # -x` scopes the export to this call, and entries a caller already exported
-  # are kept: ours are APPENDED, and a later entry wins.
+_ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free,
+  #                              fsmonitor-free and free of optional locks; answers cmd's status
+  # WHAT THIS DISABLES — EXACTLY THREE THINGS (the plan's Task 3: "no hook of
+  # the repository runs"): the repository's HOOKS (`core.hooksPath=/dev/null`),
+  # its FSMONITOR (`core.fsmonitor=false`) and git's OPTIONAL LOCKS
+  # (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a commit's: `git add` and
+  # `git status` fire post-index-change, and every `update-ref` fires
+  # reference-transaction; a repository's `core.fsmonitor` names a program
+  # `git status` and `git add` EXECUTE.
+  # WHAT IT DOES NOT DISABLE: a gitattributes FILTER DRIVER (`filter.<x>.clean`,
+  # `filter.<x>.process`) still runs wherever git cleans a file — in `status`,
+  # re-reading a file whose stat record moved; in `add`; in `hash-object
+  # --path` (`_ws_reclaim_hidden`). Measured: a clean driver that touched a
+  # marker ran inside the contained pin, and the pin succeeded. That driver is
+  # a program the USER configured, under the single-user trust model ccd runs
+  # on — one uid owns the repository, its config and ccd — so it is named
+  # here, not neutralised. (`_ws_wip_commit` stages a hidden edit with
+  # `--no-filters` for another reason: the disk's own bytes.)
+  # The containment is the environment's, not a flag on one call: git reads
+  # GIT_CONFIG_COUNT/KEY/VALUE at command-line precedence, above any repository
+  # config, and every git that runs beneath cmd inherits it — the helpers the
+  # pin calls (`_ws_reclaim_classify`, `_ws_collect_ignored`,
+  # `_ws_reclaim_stash_shas`, `_ws_reclaim_keep_reflogs`), and every read of the
+  # ladder (`_ws_reclaim_fork`) and of `ws-audit --reclaim`
+  # (`_ws_reclaim_audit_contained`). `local -x` scopes the export to this
+  # call, and entries a caller already exported are kept: ours are APPENDED,
+  # and a later entry wins.
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   local -x GIT_CONFIG_COUNT=$(( n + 2 )) \
     "GIT_CONFIG_KEY_$n=core.hooksPath" "GIT_CONFIG_VALUE_$n=/dev/null" \
     "GIT_CONFIG_KEY_$(( n + 1 ))=core.fsmonitor" "GIT_CONFIG_VALUE_$(( n + 1 ))=false"
   # And no READ writes the user's index: `status` refreshes and rewrites it
-  # opportunistically, and the pin phase promises that file stays byte-identical.
+  # opportunistically, under `index.lock`, and the pin phase, the ladder and
+  # the audit all promise that file stays byte-identical.
   local -x GIT_OPTIONAL_LOCKS=0
   "$@"
 }
@@ -24929,7 +24949,8 @@ _ws_reclaim_pin() {   # id workdir main branch childof -> 0 once everything reco
   # before anything is destroyed, and the tail runs it again as the SETTLE, once
   # the pane is dead, to catch anything the session wrote between the two. Every
   # pin is idempotent (`update-ref` of a ref to the sha it already names). The
-  # whole phase runs under `_ws_reclaim_contained`: no hook, no fsmonitor.
+  # whole phase runs under `_ws_reclaim_contained`: no hook, no fsmonitor, no
+  # optional lock — and a gitattributes filter driver still runs (see there).
   _ws_reclaim_contained _ws_reclaim_pin_contained "$@"
 }
 
@@ -25144,7 +25165,7 @@ _ws_reclaim_pin_absent() {   # id main branch recordhead workdir -> 0 once the b
   # never a skip (`_ws_reclaim_attic_extra`), exactly as on the fresh arm, and
   # the whole of it runs under the pin phase's containment
   # (`_ws_reclaim_contained`): every `update-ref` fires reference-transaction,
-  # a program the repository names, and no such program runs inside a pin.
+  # a hook the repository names, and no hook runs inside a pin.
   _ws_reclaim_contained _ws_reclaim_pin_absent_contained "$@"
 }
 
@@ -25889,6 +25910,18 @@ _ws_reclaim_fork() {   # id defer childof -> runs the flavour fork exactly once 
   #                          REAP_* through whichever eval it runs, and RECLAIM_RESUME_PHASE to the phase a
   #                          `reclaim:` breadcrumb names, or "" on every other path (fresh, mismatched
   #                          flavour, or unmeasured) — the one fact a caller cannot re-derive itself.
+  # EVERY GIT READ OF THE LADDER RUNS CONTAINED, and it is contained HERE,
+  # the one place `ws-audit --reclaim` and `ws-reclaim` both reach: the child
+  # the ladder reads may be ALIVE, and an uncontained `git status` refreshes and
+  # rewrites its index under `index.lock`, firing post-index-change — measured,
+  # the fixture's hook ran and the index moved on every audit and every
+  # refusal. `_ws_reclaim_contained` is a function call, not a subshell, so
+  # every REAP_*/RECLAIM_* global the evals set survives it. `_ws_collect_ignored`,
+  # shared with ws-reap, is not edited: it inherits the containment from here.
+  _ws_reclaim_contained _ws_reclaim_fork_contained "$@"
+}
+
+_ws_reclaim_fork_contained() {   # `_ws_reclaim_fork`'s body, run under `_ws_reclaim_contained` — call that
   local id="$1" defer="$2" childof="$3" rbc
   RECLAIM_RESUME_PHASE=""
   rbc=$(_reg_get "$id" reaping)
@@ -25915,6 +25948,17 @@ _ws_reclaim_fork() {   # id defer childof -> runs the flavour fork exactly once 
   else
     _ws_reclaim_eval "$id" "$defer" "$childof" || :
   fi
+}
+
+_WS_AUDIT_INNER=0   # 1 only inside `_ws_reclaim_audit_contained`'s own call
+_ws_reclaim_audit_contained() {   # cmd_ws_audit's args -> `ws-audit --reclaim` run whole, once, under
+  #                                   `_ws_reclaim_contained`; answers its status
+  # See "THE AUDIT READS THE LIVE CHILD CONTAINED" below. The flag is a LOCAL,
+  # which `cmd_ws_audit` sees by bash's dynamic scope for this one call only;
+  # the global above is assigned whenever ccd is read, so an environment that
+  # exports `_WS_AUDIT_INNER=1` cannot skip the containment.
+  local _WS_AUDIT_INNER=1
+  _ws_reclaim_contained cmd_ws_audit "$@"
 }
 
 _ws_reclaim_locked() {   # token childof id defer surface actor reason — everything the shared lock serialises
@@ -25999,7 +26043,27 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # because a mode-000 directory answers `git status` clean. Nothing is
 # destroyed or created; a mode changes. The plain form does neither, byte for
 # byte: `mode` is read at exactly two places, the eval call and the verdict
-# line, and both keep their old text on `reap`.
+# line, and both keep their old text on `reap`. It is the one exception
+# because every GIT read is contained (below): before that, `git status`
+# rewrote the child's index and ran the repository's hooks on every audit.
+#
+# THE AUDIT READS THE LIVE CHILD CONTAINED. The child may be
+# ALIVE while the server audits it, and an uncontained `git status` of its
+# tree refreshes and REWRITES its index under `index.lock` — racing the live
+# session for that lock — and fires post-index-change; a `core.fsmonitor`
+# runs too (measured: the fixture's hook ran and the index's bytes and mtime
+# moved). The ladder's reads are contained at `_ws_reclaim_fork`, but the
+# audit reads the same tree again after it, for its own document — `dirty`
+# (`git status` of the child) and `children` (`_ws_child_manifest`'s `status`
+# of each nested checkout) — in lines it shares with the plain audit; with
+# the fork alone contained, the hook still ran (measured). So `--reclaim`
+# re-enters `cmd_ws_audit` once, whole, under `_ws_reclaim_contained`
+# (`_ws_reclaim_audit_contained`, a one-line gate at the argv parse): every
+# git call of the reclaim audit runs with no hook, no fsmonitor and no
+# optional lock. The three change what git RUNS and WRITES, not what a read
+# answers. The plain audit is not contained: it is ws-reap's ceremony,
+# unchanged by this wave. A gitattributes filter driver still runs
+# (`_ws_reclaim_contained` says why).
 #
 # THE FLAVOUR FORK IS ONE COPY, `_ws_reclaim_fork` (single-definition; a fix
 # round found the brief's own prescribed copy verbatim in both `cmd_ws_audit`
