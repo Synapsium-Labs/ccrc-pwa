@@ -12,7 +12,8 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import {
-  CHILD_BRANCH, CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux, wideDigitLocale,
+  CHILD_BRANCH, CHILD_ID, CHILD_STUBS, TMUX_FAULTS, atticReach, childReclaimVerb, evalOf, makeChild, plantTmux,
+  wideDigitLocale, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
 
 let h: PrHarness;
@@ -489,6 +490,138 @@ describe('rung 9 — containment', () => {
     fs.writeFileSync(reg('workdir'), alien);
     expect(evalOf(h).verdict).toBe('containment-unproven');
   }, 60_000);
+});
+
+describe('rung 9 and the contained git read an untracked file whatever `status.showUntrackedFiles` says (spec §5.5)', () => {
+  // `status.showUntrackedFiles=no` — in a repository's own config or the
+  // user's global one — makes a bare `git status --porcelain` list NO
+  // untracked file, and makes `status --ignored=matching` die ("Unsupported
+  // combination of ignored and untracked-files arguments"). Rung 9's proof
+  // that a checkout of ANOTHER repository is clean must still see an
+  // untracked file there, or the tail's forced removal takes it unkept; and
+  // the child's own ignored-file read (rung 8) must not strand every child
+  // such a config covers: git exits 128 there, which the ladder reads as a
+  // read that did not run to its end — `unmeasured`, retried, never passing.
+  const NOTE = 'untracked-notes.txt';
+  const NO = '[status]\n\tshowUntrackedFiles = no\n';
+  /** A clean, pushed clone of ANOTHER repository at `<wt>/vendor/other`,
+   *  holding one UNTRACKED file — built through the harness's git (HOME = the
+   *  fixture HOME), never the vitest process's own git configuration. */
+  const foreignWithNote = (wt: string): string => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    h.git(h.home, 'init', '--bare', '-q', '-b', 'main', origin);
+    const seedRepo = path.join(h.home, 'seed-other');
+    h.git(h.home, 'init', '-q', '-b', 'main', seedRepo);
+    fs.writeFileSync(path.join(seedRepo, 'r'), 'r');
+    h.git(seedRepo, 'add', 'r'); h.git(seedRepo, 'commit', '-m', 'r');
+    h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    h.git(h.home, 'clone', '-q', origin, clone);
+    fs.writeFileSync(path.join(clone, NOTE), 'the only copy\n');
+    return clone;
+  };
+  /** The ladder as `ws-audit --reclaim` and `ws-reclaim` run it: under
+   *  `_ws_reclaim_contained` (their one fork, `_ws_reclaim_fork`). `evalOf`
+   *  calls `_ws_reclaim_eval` bare. */
+  const containedEvalOf = (): LadderAnswer => {
+    const out = h.sh(`${CHILD_STUBS} _ws_reclaim_contained _ws_reclaim_eval ${CHILD_ID} 0 '' >/dev/null;`
+      + ` printf '%s\\x1f%s\\x1f%s' "$REAP_VERDICT" "$REAP_TOKEN" "$REAP_DETAIL"`);
+    const [verdict = '', token = '', detail = ''] = out.split('\x1f');
+    return { verdict, token, detail };
+  };
+  /** The verb refused with `word`, and the clone's untracked file is still there, byte for byte. */
+  const refusedAndKept = (clone: string, token: string, word: string): void => {
+    const v = childReclaimVerb(h, token || 'f'.repeat(64));
+    expect(v.code, `a refusal is an ANSWER — exit 0. stderr: ${v.stderr}`).toBe(0);
+    expect((JSON.parse(v.stdout) as Record<string, unknown>)['refused'], v.stdout).toBe(word);
+    expect(fs.readFileSync(path.join(clone, NOTE), 'utf8'), 'the untracked file survives the verb').toBe('the only copy\n');
+  };
+
+  it('a foreign clone holding an untracked file, `status.showUntrackedFiles=no` in ITS OWN config, refuses containment-unproven — and the file is there after the verb', () => {
+    const c = makeChild(h);
+    const clone = foreignWithNote(c.wt);
+    h.git(clone, 'config', 'status.showUntrackedFiles', 'no');
+    expect(h.git(clone, 'status', '--porcelain'), 'the CONTROL: under this config a bare status reads the clone clean').toBe('');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain(clone);
+    expect(r.detail).toContain('1 uncommitted file(s)');
+    expect(r.token).toBe('');
+    const rc = containedEvalOf();
+    expect(rc.verdict, `contained, as the verb runs it: ${rc.detail}`).toBe('containment-unproven');
+    refusedAndKept(clone, r.token, 'containment-unproven');
+  }, 90_000);
+
+  it('the same, with `status.showUntrackedFiles=no` in the user’s GLOBAL config (the fixture HOME’s ~/.gitconfig)', () => {
+    const c = makeChild(h);
+    const clone = foreignWithNote(c.wt);
+    fs.appendFileSync(path.join(h.home, '.gitconfig'), NO);
+    expect(h.git(clone, 'status', '--porcelain'), 'the CONTROL: the global config reaches the clone').toBe('');
+    // The ladder is read contained here: bare, the child's own
+    // `--ignored=matching` read dies under a global `no` (the next cases).
+    const r = containedEvalOf();
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain(clone);
+    expect(r.detail).toContain('1 uncommitted file(s)');
+    refusedAndKept(clone, r.token, 'containment-unproven');
+  }, 90_000);
+
+  it('the CONTROL: the same clone with NO such config refuses containment-unproven, bare and contained, as it always did', () => {
+    const c = makeChild(h);
+    const clone = foreignWithNote(c.wt);
+    expect(h.git(clone, 'status', '--porcelain')).toBe(`?? ${NOTE}`);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('containment-unproven');
+    expect(r.detail).toContain('1 uncommitted file(s)');
+    expect(containedEvalOf().verdict).toBe('containment-unproven');
+    refusedAndKept(clone, r.token, 'containment-unproven');
+  }, 90_000);
+
+  // Mode 000 on a directory is a POSIX refusal for a non-root user on Linux
+  // and Darwin alike.
+  it('rung 9’s predicate, called bare, under `no`: a directory it cannot open answers 2 — a read that did not finish, never clean', () => {
+    const c = makeChild(h);
+    const clone = foreignWithNote(c.wt);
+    fs.rmSync(path.join(clone, NOTE));
+    h.git(clone, 'config', 'status.showUntrackedFiles', 'no');
+    const d = path.join(clone, 'd');
+    fs.mkdirSync(d);
+    fs.writeFileSync(path.join(d, 'f'), 'the only copy\n');
+    const probe = `_ws_reclaim_foreign_clean "${clone}"; printf '%s\\x1f%s' "$?" "$_WS_FOREIGN_WHY"`;
+    fs.chmodSync(d, 0o000);
+    try {
+      const [rc = '', why = ''] = h.sh(probe).split('\x1f');
+      expect(rc, why).toBe('2');
+      expect(why).toContain(`could not read the checkout of another repository at ${clone}`);
+    } finally { fs.chmodSync(d, 0o755); }
+    const [rc = '', why = ''] = h.sh(probe).split('\x1f');
+    expect(rc, `the CONTROL: opened, what it holds is uncommitted work — ${why}`).toBe('1');
+  }, 60_000);
+
+  /** The child reclaims, and its own untracked file is in the attic. */
+  const reclaimsKeeping = (c: Child): void => {
+    fs.writeFileSync(path.join(c.wt, 'late.txt'), 'uncommitted, untracked\n');
+    expect(h.git(c.wt, 'status', '--porcelain'), 'the CONTROL: under this config a bare status hides it').toBe('');
+    const r = containedEvalOf();
+    expect(r.verdict, r.detail).toBe('reclaimable');
+    const v = childReclaimVerb(h, r.token);
+    expect(v.code, v.stdout + v.stderr).toBe(0);
+    expect(fs.existsSync(c.wt), 'the child’s tree is gone').toBe(false);
+    const kept = atticReach(h, c).some((sha) => h.git(c.main, 'ls-tree', '-r', '--name-only', sha).split('\n').includes('late.txt'));
+    expect(kept, 'the untracked file the config hides was pinned before the tree went').toBe(true);
+  };
+
+  it('a child whose repository sets `status.showUntrackedFiles=no` reclaims — its ignored-file read no longer dies, which stranded it `unmeasured` for good', () => {
+    const c = makeChild(h);
+    h.git(c.main, 'config', 'status.showUntrackedFiles', 'no');
+    reclaimsKeeping(c);
+  }, 90_000);
+
+  it('a child under a GLOBAL `status.showUntrackedFiles=no` reclaims too', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(h.home, '.gitconfig'), NO);
+    reclaimsKeeping(c);
+  }, 90_000);
 });
 
 describe('the tree at the workdir must be the child’s own — a link, or a path another row names, refuses (spec §5.5, rung 9)', () => {

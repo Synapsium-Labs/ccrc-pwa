@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=15a9e5628cf6e8761537aa91a68c8cbbd8b941fe364fd776eb7fdb0436fd50da
+# ccrc:generated 1 sha256=aa6d71c8808f13a6b6f6849d53029584caba7a2b9b846abb2ac0713bdabed7fd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23961,7 +23961,14 @@ _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER reposit
   local p="$1" errf err rc dirt ahead
   _WS_FOREIGN_WHY=''
   errf=$(_plat_mktemp) || { _WS_FOREIGN_WHY="could not make a scratch file to read the checkout at $p"; return 2; }
-  dirt=$(git -C "$p" status --porcelain 2>"$errf"); rc=$?
+  # AN UNTRACKED FILE IS UNCOMMITTED WORK, WHATEVER THE CONFIG SAYS (spec
+  # §5.5, rung 9): under `status.showUntrackedFiles=no` — the checkout's own
+  # config or the user's global one — a bare `status` lists none, the
+  # checkout reads clean, and the tail's forced removal takes the file unkept.
+  # The flag on the command line outranks that config. It also descends into
+  # every untracked directory, so one it cannot open WARNS: a read that did
+  # not finish, 2 below — never clean.
+  dirt=$(git -C "$p" status --porcelain --untracked-files=all 2>"$errf"); rc=$?
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   { (( rc == 0 )) && [[ -z "$err" ]]; } \
     || { _WS_FOREIGN_WHY="could not read the checkout of another repository at $p"; return 2; }
@@ -24375,14 +24382,23 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
 }
 
 _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free,
-  #                              fsmonitor-free and free of optional locks; answers cmd's status
-  # WHAT THIS DISABLES — EXACTLY THREE THINGS (the plan's Task 3: "no hook of
-  # the repository runs"): the repository's HOOKS (`core.hooksPath=/dev/null`),
-  # its FSMONITOR (`core.fsmonitor=false`) and git's OPTIONAL LOCKS
-  # (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a commit's: `git add` and
-  # `git status` fire post-index-change, and every `update-ref` fires
-  # reference-transaction; a repository's `core.fsmonitor` names a program
-  # `git status` and `git add` EXECUTE.
+  #                              fsmonitor-free, free of optional locks and with untracked files
+  #                              shown whatever the config says; answers cmd's status
+  # WHAT THIS DOES — EXACTLY FOUR THINGS. Three it DISABLES (the plan's Task
+  # 3: "no hook of the repository runs"): the repository's HOOKS
+  # (`core.hooksPath=/dev/null`), its FSMONITOR (`core.fsmonitor=false`) and
+  # git's OPTIONAL LOCKS (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a
+  # commit's: `git add` and `git status` fire post-index-change, and every
+  # `update-ref` fires reference-transaction; a repository's `core.fsmonitor`
+  # names a program `git status` and `git add` EXECUTE.
+  # And one it PINS, the one of the four MEANT to change what a read
+  # answers: `status.showUntrackedFiles=normal`. Under `no` — a repository's
+  # own config or the user's global one — a `status` that names no `-u` lists
+  # no untracked file, and `status --ignored=matching` (`_ws_collect_ignored`)
+  # dies "Unsupported combination of ignored and untracked-files arguments"
+  # (rc 128), which stranded every child such a config covers. Pinned, those
+  # reads see the untracked files `no` hid; a read that names its own `-u`
+  # (`_ws_reclaim_classify`, the WIP commit's, rung 9's) is unchanged.
   # WHAT IT DOES NOT DISABLE: a gitattributes FILTER DRIVER (`filter.<x>.clean`,
   # `filter.<x>.process`) still runs wherever git cleans a file — in `status`,
   # re-reading a file whose stat record moved; in `add`; in `hash-object
@@ -24403,9 +24419,10 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # and a later entry wins.
   local n="${GIT_CONFIG_COUNT:-0}"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
-  local -x GIT_CONFIG_COUNT=$(( n + 2 )) \
+  local -x GIT_CONFIG_COUNT=$(( n + 3 )) \
     "GIT_CONFIG_KEY_$n=core.hooksPath" "GIT_CONFIG_VALUE_$n=/dev/null" \
-    "GIT_CONFIG_KEY_$(( n + 1 ))=core.fsmonitor" "GIT_CONFIG_VALUE_$(( n + 1 ))=false"
+    "GIT_CONFIG_KEY_$(( n + 1 ))=core.fsmonitor" "GIT_CONFIG_VALUE_$(( n + 1 ))=false" \
+    "GIT_CONFIG_KEY_$(( n + 2 ))=status.showUntrackedFiles" "GIT_CONFIG_VALUE_$(( n + 2 ))=normal"
   # And no READ writes the user's index: `status` refreshes and rewrites it
   # opportunistically, under `index.lock`, and the pin phase, the ladder and
   # the audit all promise that file stays byte-identical.
@@ -26080,10 +26097,13 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # re-enters `cmd_ws_audit` once, whole, under `_ws_reclaim_contained`
 # (`_ws_reclaim_audit_contained`, a one-line gate at the argv parse): every
 # git call of the reclaim audit runs with no hook, no fsmonitor and no
-# optional lock. The three change what git RUNS and WRITES, not what a read
-# answers. The plain audit is not contained: it is ws-reap's ceremony,
-# unchanged by this wave. A gitattributes filter driver still runs
-# (`_ws_reclaim_contained` says why).
+# optional lock. Those three change what git RUNS and WRITES, not what a read
+# answers. The fourth thing the containment does changes one: it pins
+# `status.showUntrackedFiles=normal`, so under a `no` config the reclaim
+# audit's `dirty` and `children` list the untracked files that the plain
+# audit's identical lines, uncontained, do not. The plain audit is not
+# contained: it is ws-reap's ceremony, unchanged by this wave. A
+# gitattributes filter driver still runs (`_ws_reclaim_contained` says why).
 #
 # THE FLAVOUR FORK IS ONE COPY, `_ws_reclaim_fork` (single-definition; a fix
 # round found the brief's own prescribed copy verbatim in both `cmd_ws_audit`
