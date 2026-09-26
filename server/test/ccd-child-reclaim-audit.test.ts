@@ -211,7 +211,7 @@ describe('ws-audit --reclaim', () => {
   });
 });
 
-describe('ws-audit --reclaim reads the LIVE child contained (spec §5.5)', () => {
+describe('ws-audit --reclaim reads the LIVE child contained (the plan’s Task 3)', () => {
   // The second row: the audit re-enters itself under the containment, marked
   // by a flag ccd assigns when it is read — so an environment that exports the
   // same name cannot make the outer call believe it is already the inner one.

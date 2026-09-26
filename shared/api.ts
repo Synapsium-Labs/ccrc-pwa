@@ -7396,10 +7396,10 @@ export interface LifecycleMeas {
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
   readonly bytes: number | null;
-  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
-   *  `ws-reap` was interrupted at, read back from the registry's own
-   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
-   *  wherever it stopped. */
+  /** The PHASE a resumed act was interrupted at, read back from the registry's
+   *  own `.reaping` marker — not a boolean, and ONE meaning for both verbs:
+   *  ws-reap's `children|worktree|branch|clips`, or ws-reclaim's
+   *  `children|worktree|branch|artifacts` (its `reclaim:` prefix stripped). */
   readonly resumed: string | null;
   /** The tombstone record's own path, as `_ws_tombstone` returned it. */
   readonly tombstone: string | null;
@@ -7636,8 +7636,8 @@ export type LcRefusalToken =
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
-  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): the pin phase could not keep the child's work, so the verb stopped before its first deletion
-  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before its next deletion
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): the pin phase could not keep the child's work, so the verb stopped before deleting anything further
+  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private

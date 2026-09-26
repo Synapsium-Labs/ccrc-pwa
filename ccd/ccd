@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4a506b387ea53915e2e3c2ac4aba82af1df18e79af142fd25ea23b482f6362c8
+# ccrc:generated 1 sha256=c63087a9b4c39c65709145bbc73b66805481d410e571221b9535980a3bfda240
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3282,17 +3282,17 @@ _compact_lock_release() {   # <fd>
 _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 # purge caller journals for the CURRENT
                                 # COMPACT_LOCK_WHY (r6 R5-M3). ONE renderer
-                                # consulted by all four durable callers
+                                # consulted by all five durable callers
                                 # (`ws-rm`, `ws-reap`, `ws-gc --prune`,
-                                # `forget`) instead of four copies, so a
-                                # single caller's text drifting from the
-                                # others is impossible rather than merely
-                                # unpinned — the reviewer's own named
+                                # `forget`, `ws-reclaim`) instead of five
+                                # copies, so a single caller's text drifting
+                                # from the others is impossible rather than
+                                # merely unpinned — the reviewer's own named
                                 # alternative to a fifth `LEGS` fixture.
                                 #
                                 # `<id>` IS THE ROW ID, spelled however the
                                 # caller already spells it: `ws-gc --prune`
-                                # passes `$project-$slug`, the other three
+                                # passes `$project-$slug`, the other four
                                 # pass the literal `$id`. `<verb>` selects only
                                 # the SHAPE of the two clauses that are
                                 # caller-specific rather than token-specific:
@@ -3312,7 +3312,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 #     so "the registry row is untouched" is
                                 #     the true fact there instead — a
                                 #     different claim, not a style choice.
-  local id="$1" verb="$2" tail sentence=""
+  local id="$1" verb="$2" tail sentence="" rerun="re-run"; [[ "$verb" != ws-reclaim ]] || rerun="the server retries the reclaim"
   if [[ "$verb" == 'ws-gc --prune' ]]; then
     tail="the registry row is untouched"
   else
@@ -3322,20 +3322,20 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
     '')
       case "$verb" in
         'ws-gc --prune') sentence="$REG/.$id.compactions.lock was unavailable; $tail" ;;
-        ws-reap) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run once the compaction settles" ;;
+        ws-reap) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run once the compaction settles" ;; ws-reclaim) sentence="$REG/.$id.compactions.lock was unavailable. $tail; $rerun once the compaction settles" ;;
         *) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run ccd $verb $id once the compaction settles" ;;
       esac ;;
     canonical-vanished)
       if [[ "$verb" == 'ws-gc --prune' ]]; then
         sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help; $tail, and if no holder remains, restore $REG/.$id.compactions.lock by hand"
       else
-        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $tail; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $tail; if no holder remains, restore $REG/.$id.compactions.lock by hand and $rerun"
       fi ;;
     lock-path-occupied)
       if [[ "$verb" == 'ws-gc --prune' ]]; then
         sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help; $tail, and the remedy is to confirm no holder remains and then remove that object by hand"
       else
-        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $tail; confirm no holder remains, then remove that object by hand and re-run"
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $tail; confirm no holder remains, then remove that object by hand and $rerun"
       fi ;;
     lock-source-refused)
       # r6 R5-M2: the guard cannot distinguish `$REG` itself refusing the
@@ -3346,7 +3346,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
       if [[ "$verb" == 'ws-gc --prune' ]]; then
         sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds; $tail — repair $REG"
       else
-        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds. $tail; repair $REG, then $rerun"
       fi ;;
     lock-publish-failed)
       # r7 R6-I1: the `link` that publishes the private source AS the lock
@@ -3371,7 +3371,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
       if [[ "$verb" == 'ws-gc --prune' ]]; then
         sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds; $tail — repair $REG"
       else
-        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds. $tail; repair $REG, then $rerun"
       fi ;;
     *)
       if [[ "$verb" == 'ws-gc --prune' ]]; then

@@ -8190,9 +8190,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // different token of the same line. None is a repair: the ONE cause,
       // relative to base, is this task's own net insertion above these lines
       // — `cmd_ws_audit`'s header, argv parse, one shared-fork call and its
-      // verdict line, plus `cmd_caps`'s verb line and token echo, and the
-      // dispatcher arm — sliding other bytes under these same fixed line
-      // numbers. (Fix round 1, review I1/I2, extracted that shared call,
+      // verdict line, plus `cmd_caps`'s verb line and token echo — sliding
+      // other bytes under these same fixed line numbers (review 170 F15:
+      // the dispatcher arm, measured at `ccd/ccd:26206`, sits below every
+      // corpus anchor here and contributes nothing — corrected in place,
+      // not re-measured). (Fix round 1, review I1/I2, extracted that shared call,
       // `_ws_reclaim_fork` — called by both `cmd_ws_audit` and
       // `_ws_reclaim_locked` — and shrank the net insertion from the first
       // commit's own shape; that shrink explains the difference FROM
@@ -9100,8 +9102,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `:13573-13575` itself (`cmd_ws_reap`'s prologue), so that citation
         // PASSES there. Task 5's net insertion above it — `cmd_ws_audit`'s
         // header, argv parse, one shared-fork call and its verdict line, plus
-        // `cmd_caps`'s verb line and token echo, and the dispatcher arm — moves
-        // `_reg_purge "$id"` DOWN — to `:13608` at THIS tree (`35d6d510`; it
+        // `cmd_caps`'s verb line and token echo (review 170 F15: not the
+        // dispatcher arm, which sits below every corpus anchor here and
+        // contributes nothing) — moves `_reg_purge "$id"` DOWN — to
+        // `:13608` at THIS tree (`35d6d510`; it
         // stood at `:13625` at the fix round's own first commit, `791d2256`,
         // before `_ws_reclaim_fork`'s extraction shrank the insertion again) —
         // so `:13573-13575` no longer holds it and now FAILS (enters).

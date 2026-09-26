@@ -439,7 +439,7 @@ describe('reclaimChild — the one executor', () => {
     expect(s.calls).toEqual([]);
   });
 
-  // Amendment A8 (R29 pinned at this wave's consumer): the registry's own
+  // The plan's Amendment A8 (pinned at this wave's consumer): the registry's own
   // `childMarkOf` already folds a LISTED-but-unreadable `.child` into
   // `unreadable` (F4, D-3348) — a dangling symlink is exactly that shape.
   // This pins the fold at THIS consumer: no ccd call, mail stays queued.

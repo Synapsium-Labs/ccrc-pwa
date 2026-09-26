@@ -2469,6 +2469,37 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       'and its replacement heads all four durable callers').toBe(4);
   });
 
+  // Review 170 F18: `cmd_ws_reclaim`'s purge-refused detail is a FIFTH durable
+  // caller of this shared renderer (`_rcl_why=$(_compact_lock_why_remedy "$id"
+  // ws-reclaim)`), and nothing may run `ws-reclaim` by hand — it is a
+  // server-only verb. Before this fix the ordinary-contention catch-all arm
+  // rendered "re-run ccd $verb $id", which for this verb read "re-run ccd
+  // ws-reclaim <id>" — a shape `cmd_ws_reclaim` dies on and a verb no human
+  // may run. MEASURED red first, before the fix: with `COMPACT_LOCK_WHY`
+  // empty and `verb=ws-reclaim`, the renderer answered "...re-run ccd
+  // ws-reclaim demo-child-row once the compaction settles". Every other
+  // `COMPACT_LOCK_WHY` arm's non-`ws-gc --prune` branch also says bare
+  // "re-run", which is likewise wrong for a verb no human runs, so each is
+  // asserted here too.
+  it('(d1g) ws-reclaim never tells a human to "re-run ccd" — the server retries instead', () => {
+    const id = 'demo-child-row';
+    const whys = ['', 'canonical-vanished', 'lock-path-occupied', 'lock-source-refused',
+      'lock-publish-failed', 'a-token-with-no-arm'] as const;
+    for (const why of whys) {
+      const out = h.sh(`COMPACT_LOCK_WHY='${why}' `
+        + `_r=$(_compact_lock_why_remedy ${id} ws-reclaim); printf 'OUT<<%s>>' "$_r"`);
+      const m = /OUT<<([\s\S]*)>>/.exec(out);
+      expect(m, `WHY=${why || '(empty)'}: the helper answered at all`).not.toBeNull();
+      const sentence = m![1]!;
+      expect(sentence, `WHY=${why || '(empty)'}: never tells a human to run the verb itself`)
+        .not.toContain('re-run ccd');
+      if (why === '') {
+        expect(sentence, 'ordinary contention names the SERVER as the one that retries')
+          .toContain('the server retries the reclaim once the compaction settles');
+      }
+    }
+  });
+
   it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {
     // The plan requires the arity pin to ship "with the behaviour control that
     // the `ws-gc --prune` forced-refusal fixture must still reach the NEXT
