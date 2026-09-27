@@ -33,6 +33,13 @@ const BLEND = 0.3;
 
 const KEY = 'ccrc:chat-item-height';
 
+/** The per-bucket record. A SECOND key rather than a rewrite of the first: a
+ *  browser that rolls back to an older build must keep working, and the old
+ *  build reads a scalar. The old key is still the SEED for every bucket
+ *  nobody has sampled yet, so an upgrade starts from what this browser already
+ *  learned instead of from the fallback. */
+const KINDS_KEY = 'ccrc:chat-item-heights';
+
 /** `localStorage` throws outright in some privacy modes, and a thumbnailer or
  *  a preview frame can hand back a store that refuses writes. Every access here
  *  goes through this, and every failure means "nothing remembered" — the list
@@ -49,26 +56,24 @@ export function clampHeight(px: number): number {
   return Math.min(MAX_ITEM_HEIGHT, Math.max(MIN_ITEM_HEIGHT, Math.round(px)));
 }
 
+/** What the OLD single-number build left in this browser, or null if it left
+ *  nothing usable. Absent and unusable fold together here on purpose — both
+ *  mean "nothing learned" and there is no caller that treats them apart — but
+ *  neither folds into a NUMBER, because "never learned" and "learned 96" are
+ *  two conditions `rememberHeights` answers differently. */
+function learnedScalar(s: Storage | null): number | null {
+  const raw = (() => { try { return s?.getItem(KEY) ?? null; } catch { return null; } })();
+  if (raw === null) return null;
+  const n = Number(raw);
+  // A corrupted or hand-edited value is not a reason to render badly.
+  return Number.isFinite(n) && n > 0 ? clampHeight(n) : null;
+}
+
 /** The height to open with. Read ONCE per mount by the caller: virtuoso takes
  *  `defaultItemHeight` at initialisation, so changing it later changes nothing
  *  and only risks re-running the initial positioning. */
 export function rememberedHeight(s: Storage | null = store()): number {
-  const raw = (() => { try { return s?.getItem(KEY) ?? null; } catch { return null; } })();
-  if (raw === null) return FALLBACK_ITEM_HEIGHT;
-  const n = Number(raw);
-  // A corrupted or hand-edited value is not a reason to render badly.
-  return Number.isFinite(n) && n > 0 ? clampHeight(n) : FALLBACK_ITEM_HEIGHT;
-}
-
-/** Fold this visit's measured average into what is remembered. */
-export function rememberHeight(sampleMean: number, s: Storage | null = store()): void {
-  if (!Number.isFinite(sampleMean) || sampleMean <= 0 || s === null) return;
-  const raw = (() => { try { return s.getItem(KEY); } catch { return null; } })();
-  const prev = raw === null ? null : Number(raw);
-  const next = prev !== null && Number.isFinite(prev) && prev > 0
-    ? prev * (1 - BLEND) + sampleMean * BLEND
-    : sampleMean;
-  try { s.setItem(KEY, String(clampHeight(next))); } catch { /* storage refused — keep the fallback */ }
+  return learnedScalar(s) ?? FALLBACK_ITEM_HEIGHT;
 }
 
 /** The average of what was actually measured. `null` when nothing was: virtuoso
@@ -81,4 +86,122 @@ export function meanSize(sizes: Iterable<number>): number | null {
     if (Number.isFinite(px) && px > 0) { sum += px; n += 1; }
   }
   return n === 0 ? null : sum / n;
+}
+
+/**
+ * THE POPULATION A ROW BELONGS TO, for sizing.
+ *
+ * WHY THIS EXISTS. One learned number had to serve every session, and the
+ * sessions do not agree: modelled against virtuoso's own total, a review
+ * session (mean 175px) and a debugging session (mean 73px) pull a single scalar
+ * in opposite directions for ever — 56% mean error at open, converging on
+ * nothing. The height of a ROW, though, is a property of the row and is stable
+ * across sessions; what varies between sessions is the MIXTURE, and the list
+ * already holds the mixture at mount, before anything is measured. So the
+ * learned values are per bucket and the opening number is this session's own
+ * composition weighed with them: 19% at open, and falling visit by visit.
+ *
+ * `message` splits by its event kind because a user turn and an assistant turn
+ * are the two ends of the distribution and lumping them is the whole problem in
+ * miniature. Every other member is its own `ChatItem` kind.
+ *
+ * THE RECORD IS THE VOCABULARY. `HEIGHT_BUCKETS` derives from it rather than
+ * restating it, so a new `ChatItem` kind is a compile error here and not a
+ * silently unsized row — the rule `single-definition.test.ts` enforces across
+ * this tree.
+ */
+export type HeightBucket =
+  | 'user' | 'assistant' | 'system'
+  | 'divider' | 'tool' | 'mail' | 'task' | 'pending' | 'working';
+
+const BUCKET_MAP: Record<HeightBucket, true> = {
+  user: true, assistant: true, system: true,
+  divider: true, tool: true, mail: true, task: true, pending: true, working: true,
+};
+
+export const HEIGHT_BUCKETS = Object.keys(BUCKET_MAP) as HeightBucket[];
+
+/** What this browser has learned, per bucket. A bucket nobody has sampled reads
+ *  the SCALAR the old build left — this browser's own number, not the shipped
+ *  fallback — so an upgrade keeps what it knew. */
+export function rememberedHeights(s: Storage | null = store()): Record<HeightBucket, number | null> {
+  const seed = learnedScalar(s);
+  const raw = (() => { try { return s?.getItem(KINDS_KEY) ?? null; } catch { return null; } })();
+  const saved: Record<string, unknown> = (() => {
+    if (raw === null) return {};
+    try {
+      const v: unknown = JSON.parse(raw);
+      return v !== null && typeof v === 'object' ? v as Record<string, unknown> : {};
+    } catch { return {}; }
+  })();
+  const out = {} as Record<HeightBucket, number | null>;
+  for (const b of HEIGHT_BUCKETS) {
+    const n = Number(saved[b]);
+    out[b] = Number.isFinite(n) && n > 0 ? clampHeight(n) : seed;
+  }
+  return out;
+}
+
+/** The number virtuoso opens with: THIS session's composition, weighed with
+ *  what the buckets are worth. Read once per mount by the caller, for the
+ *  reason `rememberedHeight` states. */
+export function openingHeight(
+  buckets: Iterable<HeightBucket>,
+  learned: Record<HeightBucket, number | null>,
+): number {
+  let sum = 0;
+  let n = 0;
+  for (const b of buckets) {
+    sum += learned[b] ?? FALLBACK_ITEM_HEIGHT;
+    n += 1;
+  }
+  // An empty transcript has no composition to weigh, and a mean of nothing is
+  // not zero — it is unknown, which is what the fallback is for.
+  return n === 0 ? FALLBACK_ITEM_HEIGHT : clampHeight(sum / n);
+}
+
+/**
+ * Fold this visit's measured averages into what is remembered — ONCE per visit,
+ * however many times this is called.
+ *
+ * THE BASELINE IS A PARAMETER, and that is the whole point. The blend is meant
+ * to let one atypical session nudge the estimate rather than seize it, and the
+ * previous wiring broke that guarantee without touching the arithmetic: the
+ * list saved every 25 new samples, so a 200-item visit blended eight times and
+ * took 94% of the distance instead of 30%. Blending from the value this VISIT
+ * opened with makes every save land in the same place, so saving early — which
+ * exists for the tab that is closed without running cleanup — stops being a
+ * second vote.
+ *
+ * A bucket with no sample is left exactly as it was: silence is not evidence.
+ */
+export function rememberHeights(
+  samples: ReadonlyMap<HeightBucket, number>,
+  baseline: Record<HeightBucket, number | null>,
+  s: Storage | null = store(),
+): void {
+  if (s === null || samples.size === 0) return;
+  const raw = (() => { try { return s.getItem(KINDS_KEY); } catch { return null; } })();
+  const merged: Record<string, number> = (() => {
+    if (raw === null) return {};
+    try {
+      const v: unknown = JSON.parse(raw);
+      return v !== null && typeof v === 'object' ? { ...v as Record<string, number> } : {};
+    } catch { return {}; }
+  })();
+  let took = 0;
+  for (const [bucket, sample] of samples) {
+    if (!Number.isFinite(sample) || sample <= 0) continue;
+    took += 1;
+    // A bucket this browser has never learned takes the sample WHOLE: there is
+    // nothing to blend with, and blending against the shipped fallback would
+    // hold every first visit 70% of the way to a number nobody measured.
+    const prev = baseline[bucket] ?? null;
+    merged[bucket] = clampHeight(prev === null ? sample : prev * (1 - BLEND) + sample * BLEND);
+  }
+  // A save that accepted no sample writes NOTHING. Storing the merge anyway
+  // would turn "nothing was measurable" into a record, and a later read cannot
+  // tell that record from a learned one.
+  if (took === 0) return;
+  try { s.setItem(KINDS_KEY, JSON.stringify(merged)); } catch { /* storage refused — keep the fallback */ }
 }

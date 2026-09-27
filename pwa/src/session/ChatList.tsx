@@ -16,7 +16,9 @@ import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
-import { meanSize, rememberedHeight, rememberHeight } from './itemHeight';
+import {
+  meanSize, openingHeight, rememberHeights, rememberedHeights, type HeightBucket,
+} from './itemHeight';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
 
@@ -483,6 +485,16 @@ export function ChatListInner({
  *  `localStorage` write on every scroll frame. */
 const PERSIST_EVERY = 25;
 
+/** Which sizing population a row belongs to. `message` splits by its event kind
+ *  because a user turn and an assistant turn are the two ends of the height
+ *  distribution, and lumping them is the whole reason one learned number could
+ *  not serve two session shapes. Every other member is its own `ChatItem` kind,
+ *  so a new kind is a compile error in `HeightBucket` rather than a row nobody
+ *  sized. */
+export function bucketOf(item: ChatItem): HeightBucket {
+  return item.kind === 'message' ? item.event.kind : item.kind;
+}
+
 /** Open at the newest turn. A module constant, not a per-render object: the
  *  prop is read once, and a fresh identity on every render is a needless
  *  invitation for the list to re-run its initial positioning. `'LAST'` +
@@ -510,19 +522,45 @@ export function ChatList({
 
   // WHY A REF AND WHY READ ONCE. Virtuoso takes `defaultItemHeight` when it
   // initialises; handing it a different number later changes nothing it reads
-  // and only invites it to redo its initial positioning. So the learned value
-  // is frozen for the life of this mount and the NEXT visit gets the benefit.
-  const openingHeight = useRef(rememberedHeight()).current;
+  // and only invites it to redo its initial positioning. So the learned values
+  // are frozen for the life of this mount and the NEXT visit gets the benefit.
+  //
+  // THE BASELINE IS ALSO WHAT EVERY SAVE BLENDS FROM, which is what makes
+  // saving mid-visit idempotent instead of a second vote. Measured before the
+  // fix: a 200-item visit saved eight times and moved the estimate 94% of the
+  // way, so the number tracked the last session rather than the long run.
+  const baseline = useRef(rememberedHeights()).current;
+  // The opening number is THIS session's composition weighed with those values.
+  // It can be: the screen gates this list behind `loading`, so the backlog that
+  // carries the events has already arrived when we first render. A scalar could
+  // not do this — the mixture is what differs between sessions, and the mixture
+  // is the one thing already known before anything is measured.
+  const opening = useRef<number | null>(null);
+  if (opening.current === null) opening.current = openingHeight(items.map(bucketOf), baseline);
   // Keyed by index, so an item that scrolls past twice is one sample, not two —
   // averaging repeats would weight the estimate toward whatever the reader
   // happens to be looking at. Last size wins: a card that expands is taller now
-  // and that is the truth about it.
-  const measured = useRef(new Map<number, number>());
+  // and that is the truth about it. The bucket is recorded WITH the sample
+  // rather than looked up at save time: the row at an index can change while
+  // the reader sits there, and the sample belongs to what was measured.
+  const measured = useRef(new Map<number, { px: number; bucket: HeightBucket }>());
   const persistedAt = useRef(0);
 
   const persist = (): void => {
-    const mean = meanSize(measured.current.values());
-    if (mean !== null) rememberHeight(mean);
+    const byBucket = new Map<HeightBucket, number[]>();
+    for (const { px, bucket } of measured.current.values()) {
+      const list = byBucket.get(bucket);
+      if (list === undefined) byBucket.set(bucket, [px]);
+      else list.push(px);
+    }
+    const samples = new Map<HeightBucket, number>();
+    for (const [bucket, sizes] of byBucket) {
+      // `meanSize` owns the rule that an unmeasured item is not a sample, and
+      // answers null when a bucket held none.
+      const mean = meanSize(sizes);
+      if (mean !== null) samples.set(bucket, mean);
+    }
+    rememberHeights(samples, baseline);
     persistedAt.current = measured.current.size;
   };
 
@@ -554,7 +592,7 @@ export function ChatList({
             </div>
           );
         }}
-        defaultItemHeight={openingHeight}
+        defaultItemHeight={opening.current}
         // The real pixel heights, straight from the component that measured
         // them. This is the whole self-correction: what a chat item costs is a
         // property of what this operator asks for, and no constant in a
@@ -563,7 +601,12 @@ export function ChatList({
           // No filtering here: `meanSize` owns the rule that an unmeasured
           // item (virtuoso reports size 0) is not a sample, and restating it
           // at the call site would be a second place for it to drift.
-          for (const item of rendered) measured.current.set(item.index, item.size);
+          for (const item of rendered) {
+            const row = items[item.index];
+            if (row !== undefined) {
+              measured.current.set(item.index, { px: item.size, bucket: bucketOf(row) });
+            }
+          }
           if (measured.current.size - persistedAt.current >= PERSIST_EVERY) persist();
         }}
         // Render well beyond the viewport in both directions. Two properties,

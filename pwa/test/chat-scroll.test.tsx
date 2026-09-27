@@ -32,6 +32,17 @@ vi.mock('react-virtuoso', async () => {
 const { ChatList } = await import('../src/session/ChatList');
 
 const KEY = 'ccrc:chat-item-height';
+const KINDS_KEY = 'ccrc:chat-item-heights';
+
+/** What the list saved for one bucket. The record replaced the single number
+ *  because one number could not serve two session shapes — see
+ *  `itemHeight.ts`'s own header for the measurement. */
+const saved = (bucket: string): number | null => {
+  const raw = localStorage.getItem(KINDS_KEY);
+  if (raw === null) return null;
+  const n = Number((JSON.parse(raw) as Record<string, unknown>)[bucket]);
+  return Number.isFinite(n) ? n : null;
+};
 
 afterEach(() => {
   cleanup();
@@ -45,6 +56,16 @@ const events = (n: number): ChatEvent[] =>
   Array.from({ length: n }, (_, i) => ({
     kind: 'user' as const, uuid: `u${i}`, ts: NOW, text: `message ${i}`,
   }));
+
+/** A transcript with a KNOWN mixture: `u` user turns then `a` assistant turns. */
+const mixed = (u: number, a: number): ChatEvent[] => [
+  ...Array.from({ length: u }, (_, i) => ({
+    kind: 'user' as const, uuid: `u${i}`, ts: NOW, text: `ask ${i}`,
+  })),
+  ...Array.from({ length: a }, (_, i) => ({
+    kind: 'assistant' as const, uuid: `a${i}`, ts: NOW, text: `answer ${i}`,
+  })),
+];
 
 const renderList = (n = 50) =>
   render(<ChatList id="s" events={events(n)} pending={[]} />);
@@ -90,7 +111,7 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
     // arithmetic is obvious: nothing was remembered before, so the first sample
     // is taken whole.
     rendered?.(Array.from({ length: 30 }, (_, index) => ({ index, size: 300, offset: 0 })));
-    expect(Number(localStorage.getItem(KEY))).toBe(300);
+    expect(saved('user')).toBe(300);
   });
 
   // Virtuoso reports a size of 0 for an item it has not measured yet; averaging
@@ -102,7 +123,7 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
       ...Array.from({ length: 29 }, (_, index) => ({ index, size: 100, offset: 0 })),
       { index: 29, size: 0, offset: 0 },
     ]);
-    expect(Number(localStorage.getItem(KEY))).toBe(100);
+    expect(saved('user')).toBe(100);
   });
 
   // Virtuoso re-reports the same item on every scroll frame. If each sighting
@@ -117,13 +138,56 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
       ...Array.from({ length: 29 }, (_, index) => ({ index, size: 60, offset: 0 })),
       tall,
     ]);
-    // (29 x 60 + 1200) / 30 = 98, taken whole because nothing was stored yet.
-    expect(Number(localStorage.getItem(KEY))).toBe(98);
+    // The list opens with a DATE DIVIDER before the first turn, so index 0 is
+    // not a user turn. That is the point of bucketing rather than a wrinkle in
+    // this test: 28 turns at 60 plus one at 1200 is 99 for the `user` bucket,
+    // and the divider's own 60 is kept apart from it.
+    expect(saved('user')).toBe(99); // (28 x 60 + 1200) / 29
+    expect(saved('divider')).toBe(60);
 
     // Comfortably more sightings than the write threshold, so an accumulator
     // that counted them would have persisted a much larger average by now.
     for (let i = 0; i < 60; i++) rendered?.([tall]);
-    expect(Number(localStorage.getItem(KEY))).toBe(98);
+    expect(saved('user')).toBe(99);
+  });
+
+  // THE RESIDUAL PR #191 LEFT. The thumb kept opening at the wrong size because
+  // one learned number had to serve every session, and sessions differ by their
+  // MIXTURE: modelled against virtuoso's own total, a review session and a
+  // debugging session pull a single scalar in opposite directions for ever
+  // (56% mean error at open, converging on nothing), while the same sequence
+  // weighed per bucket gives 19% and falls visit by visit. The mixture is the
+  // one thing already known at mount, before a single item is measured.
+  it('opens with THIS session\'s mixture, not with one number for every session', () => {
+    // The date divider is one of the rows, so it is one of the eleven — seeded
+    // here too, because this case is about the MIXTURE and a bucket falling
+    // back to a shipped constant would be measuring something else.
+    localStorage.setItem(KINDS_KEY, JSON.stringify({ divider: 40, user: 60, assistant: 300 }));
+    render(<ChatList id="s" events={mixed(9, 1)} pending={[]} />);
+    expect(seen.props?.defaultItemHeight).toBe(80); // (40 + 9 x 60 + 300) / 11
+    cleanup();
+    // Not reset to null in between: the second render overwrites it, and the
+    // two expectations differ, so a mount that never reached virtuoso reds here
+    // rather than passing on the first render's props.
+    render(<ChatList id="s" events={mixed(1, 9)} pending={[]} />);
+    expect(seen.props?.defaultItemHeight).toBe(255); // (40 + 60 + 9 x 300) / 11
+  });
+
+  it('keeps each bucket apart when it saves', () => {
+    render(<ChatList id="s" events={mixed(1, 1)} pending={[]} />);
+    const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;
+    rendered?.([
+      { index: 0, size: 40, offset: 0 },   // the date divider
+      { index: 1, size: 70, offset: 0 },   // the user turn
+      { index: 2, size: 900, offset: 0 },  // the assistant turn
+    ]);
+    // Three samples is under the mid-visit save threshold, so this visit saves
+    // the way most short ones do: on leaving. That path is the reason the
+    // threshold exists at all — a closed tab runs no cleanup.
+    cleanup();
+    expect(saved('divider')).toBe(40);
+    expect(saved('user')).toBe(70);
+    expect(saved('assistant')).toBe(600); // clamped at the top of the band
   });
 
   // Two properties for two failures. The pixel budget covers ordinary
