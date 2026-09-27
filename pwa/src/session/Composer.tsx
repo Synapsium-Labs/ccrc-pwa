@@ -11,7 +11,7 @@ import { Sheet } from '../components/Sheet';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
 import { AttachTray } from './AttachTray';
-import { clipboardImages, useStagedImages } from './useAttachImage';
+import { clipboardFiles, isAttachable, useStagedImages } from './useAttachImage';
 import { api } from '../lib/api';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import type { SlashCommand } from '../../../shared/api';
@@ -60,7 +60,7 @@ export function Composer({
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (id === undefined || disabled) return;
-    const files = clipboardImages(e.clipboardData);
+    const files = clipboardFiles(e.clipboardData);
     if (files.length === 0) return; // an ordinary text paste — leave it alone
     e.preventDefault();
     staged.add(files);
@@ -237,7 +237,11 @@ export function Composer({
         if (id === undefined || disabled) return;
         if (e.dataTransfer.files.length === 0) return; // a text/URL drop — leave it to the browser
         e.preventDefault();
-        staged.add(Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/')));
+        // `isAttachable`, not a bare `image/` type test: a dragged .md reports
+        // text/markdown on one OS and nothing at all on another, and the old
+        // type test dropped it SILENTLY — the file vanished with no chip, no
+        // toast and nothing in the box to say why.
+        staged.add(Array.from(e.dataTransfer.files).filter(isAttachable));
       }}
     >
       {matches.length > 0 && (

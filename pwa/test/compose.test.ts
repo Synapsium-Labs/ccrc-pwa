@@ -2,10 +2,13 @@
 // PWA that recognises its echo can never disagree — plus its inverse, which has
 // to cope with `ccd clip` typing a path on either side of the user's prose.
 import { describe, expect, it } from 'vitest';
-import { composePrompt, splitClipPaths, CLIP_PATH_RE } from '../../shared/api';
+import {
+  composePrompt, splitClipPaths, CLIP_EXTS, CLIP_PATH_RE, hasClipExt, isImageClip,
+} from '../../shared/api';
 
 const P1 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150340-a1b2.png';
 const P2 = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150341-c3d4.jpg';
+const DOC = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150342-e5f6-design-notes.md';
 
 describe('composePrompt', () => {
   it('puts each attachment on its own line above the text', () => {
@@ -26,6 +29,53 @@ describe('CLIP_PATH_RE', () => {
   it('exports a stateless regex — a g-flagged one would alternate true/false', () => {
     expect(CLIP_PATH_RE.test(P1)).toBe(true);
     expect(CLIP_PATH_RE.test(P1)).toBe(true);
+  });
+
+  // This regex is what lifts an attachment out of the bubble's prose. A
+  // document path it does not recognise is not a missing thumbnail — the raw
+  // path stays in the message as text, and no chip is drawn at all.
+  it('recognises a document clip, stem and all', () => {
+    expect(CLIP_PATH_RE.test(DOC)).toBe(true);
+    expect(splitClipPaths(composePrompt('read this', [DOC])))
+      .toEqual({ paths: [DOC], rest: 'read this' });
+  });
+
+  it('recognises every admitted extension, and nothing outside the list', () => {
+    const base = '/home/you/.cc-clips/claude2-demo-app-ts/clip-20260726-150340-a1b2';
+    for (const ext of CLIP_EXTS) expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(true);
+    for (const ext of ['docx', 'zip', 'exe', 'svg', 'html']) {
+      expect(CLIP_PATH_RE.test(`${base}.${ext}`), ext).toBe(false);
+    }
+  });
+});
+
+describe('the image / document split', () => {
+  // Every renderer asks this to decide between a thumbnail and a name chip,
+  // and it has to answer off a NAME — a bubble is rebuilt from prompt text,
+  // which carries no MIME types at all.
+  it('calls an image an image and a document not', () => {
+    expect(isImageClip(P1)).toBe(true);
+    expect(isImageClip(P2)).toBe(true);
+    expect(isImageClip(DOC)).toBe(false);
+    expect(isImageClip('/x/clip-1-a1b2-report.pdf')).toBe(false);
+  });
+
+  it('is case-blind, because a picked extension is whatever the user typed', () => {
+    expect(isImageClip('Screenshot.PNG')).toBe(true);
+    expect(hasClipExt('NOTES.MD')).toBe(true);
+  });
+
+  it('says no when there is no extension to read at all', () => {
+    expect(isImageClip('/x/clip-1-a1b2')).toBe(false);
+    expect(hasClipExt('/x/clip-1-a1b2')).toBe(false);
+    expect(hasClipExt('')).toBe(false);
+  });
+
+  // A dot in a DIRECTORY name is not an extension — the clips dir itself is
+  // `.cc-clips`, so a path with no dot in its last segment must not read the
+  // tail of the folder name as one.
+  it('reads the last segment only, never a dot from the path above it', () => {
+    expect(hasClipExt('/home/you/.cc-clips/claude2-x/README')).toBe(false);
   });
 });
 

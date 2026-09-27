@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { api, ApiError } from '../src/lib/api';
 import { AttachButton } from '../src/session/AttachButton';
 import { downscaleImage } from '../src/session/useAttachImage';
+import { CLIP_DOC_EXTS, CLIP_EXTS } from '../../shared/api';
 import { Composer } from '../src/session/Composer';
 
 afterEach(() => {
@@ -50,6 +51,25 @@ describe('AttachButton', () => {
     expect(fileInput()).toHaveAttribute('multiple');
   });
 
+  // The symptom this fixes was entirely in the OS picker: a bare `image/*`
+  // greyed out every PDF and .md, so the door existed and could not be walked
+  // through. Images stay a MIME pattern because that is what makes a phone
+  // open the gallery; documents go in as extensions because the type a phone
+  // reports for one is not something to gate on.
+  it('offers documents as well as images in the OS picker', () => {
+    render(<AttachButton onPick={vi.fn()} />);
+    const accept = fileInput().getAttribute('accept') ?? '';
+    expect(accept).toContain('image/*');
+    for (const ext of CLIP_DOC_EXTS) expect(accept.split(','), ext).toContain(`.${ext}`);
+  });
+
+  it('offers nothing the upload route would refuse', () => {
+    render(<AttachButton onPick={vi.fn()} />);
+    const offered = (fileInput().getAttribute('accept') ?? '').split(',')
+      .filter((t) => t.startsWith('.')).map((t) => t.slice(1));
+    expect(offered.filter((e) => !CLIP_EXTS.includes(e))).toEqual([]);
+  });
+
   it('clears the input value so re-picking the same file still fires change', () => {
     render(<AttachButton onPick={vi.fn()} />);
     pick(new File(['a'], 'a.png', { type: 'image/png' }));
@@ -58,7 +78,7 @@ describe('AttachButton', () => {
 
   it('a dead session disables the button', () => {
     render(<AttachButton onPick={vi.fn()} disabled />);
-    expect(screen.getByRole('button', { name: 'Attach an image' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
   });
 
   it('does not force direct camera capture — the gallery is the main lane', () => {
@@ -148,15 +168,15 @@ describe('downscaleImage', () => {
 describe('Composer attach wiring', () => {
   it('renders the attach button when given a session id, not otherwise', () => {
     const { rerender } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
-    expect(screen.getByRole('button', { name: 'Attach an image' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeInTheDocument();
 
     rerender(<Composer onSend={vi.fn()} pending={[]} />);
-    expect(screen.queryByRole('button', { name: 'Attach an image' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Attach a file' })).not.toBeInTheDocument();
   });
 
   it('a dead session disables attach along with the rest of the composer', () => {
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} disabled />);
-    expect(screen.getByRole('button', { name: 'Attach an image' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Attach a file' })).toBeDisabled();
   });
 
   it('sends the staged paths with the text and clears the tray', async () => {
@@ -241,6 +261,39 @@ describe('Composer drag-and-drop', () => {
     await screen.findByAltText('a.png');
     await screen.findByAltText('b.png');
     expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  // The reported symptom: dragging a .md onto the composer did NOTHING — no
+  // chip, no toast, nothing in the box. The filter was `f.type.startsWith
+  // ('image/')`, and a dragged document arrives with a type the OS invents or
+  // omits entirely, so it was dropped on the floor silently.
+  it('stages a dropped document, whatever type the OS put on it', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2-notes.md', name: 'clip-1-a1b2-notes.md', bytes: 9 });
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+    const md = new File(['# hi'], 'notes.md', { type: '' });
+
+    fireEvent(composer, dragEvent('drop', { files: [md] }));
+
+    expect(await screen.findByText('notes.md')).toBeInTheDocument();
+    expect(upload).toHaveBeenCalledTimes(1);
+    // Byte-identical: the canvas pass is image machinery and a document must
+    // never reach it. What goes up is the File that was dropped.
+    expect(upload.mock.calls[0]![1]).toBe(md);
+  });
+
+  it('still ignores a dropped file of a kind nothing here admits', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(
+      { path: '/p/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 });
+    const { container } = render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    const composer = composerEl(container);
+
+    fireEvent(composer, dragEvent('drop', {
+      files: [new File(['x'], 'bundle.zip', { type: 'application/zip' })],
+    }));
+
+    expect(upload).not.toHaveBeenCalled();
   });
 
   // Regression: a real `drop` event is never preceded by a `dragleave` on the

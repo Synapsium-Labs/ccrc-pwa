@@ -98,8 +98,8 @@ export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code]
  *  retry can never succeed — so the chip has to say what went wrong, in words
  *  that imply what to do instead. */
 const UPLOAD_ERROR_TEXT: Record<string, string> = {
-  'too-large': 'That image is too large — 12 MB is the limit.',
-  'unsupported-type': "Can't attach that — PNG, JPEG or WebP only.",
+  'too-large': 'That file is too large — 12 MB is the limit.',
+  'unsupported-type': "Can't attach that — images, text, PDF and RTF only.",
   'bad-request': "That upload didn't arrive — try attaching it again.",
   'unknown-session': 'That session is not running.',
   'bad-session-id': 'That session is not running.',

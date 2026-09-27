@@ -1,10 +1,18 @@
-// The staged-images tray's engine: the composer's "+" picker, pasting a
-// screenshot, and dragging one in all end up here — downscale if needed,
-// upload, and hold the result as a chip until the composer sends or the user
-// removes it. (This file used to also hold a fire-and-forget `useAttachImage`
-// that typed the upload's path straight into the textarea; the tray replaced
-// it — see git history around the attachment-tray feature for that path.)
+// The staged-attachments tray's engine: the composer's "+" picker, pasting a
+// screenshot, and dragging a file in all end up here — downscale if it is an
+// image, upload, and hold the result as a chip until the composer sends or the
+// user removes it. (This file used to also hold a fire-and-forget
+// `useAttachImage` that typed the upload's path straight into the textarea; the
+// tray replaced it — see git history around the attachment-tray feature.)
+//
+// TWO KINDS, one lane. An image is staged for what it looks like, so it may be
+// re-encoded on the way. A DOCUMENT is staged for what reads it — the path is
+// typed into the session and Claude Code opens the file itself — so it is
+// uploaded byte-identical and never touches the canvas. Which kind a file is
+// comes from `isImageClip` on its NAME, the same answer the server and the
+// bubble reach, rather than from a `File.type` the OS may not have set.
 import { useEffect, useRef, useState } from 'react';
+import { CLIP_DOC_EXTS, hasClipExt, isImageClip } from '../../../shared/api';
 import { toast } from '../components/Toast';
 import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
@@ -14,12 +22,37 @@ const SMALL_PNG_MAX = 1024 * 1024;
 const MAX_EDGE = 2048;
 const JPEG_QUALITY = 0.85;
 
-/** The image types the server admits, by filename extension. */
+/** The image types the server admits, by filename extension. Clipboard-only:
+ *  a picked or dropped file brings its own name, and that name is what decides. */
 const EXT_FOR_TYPE: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
 };
+
+/**
+ * The OS picker's filter. Images go in as `image/*` — a phone reads that as
+ * "open the gallery", and no extension list would — while documents go in as
+ * EXTENSIONS, because the type a phone reports for a .md or .rtf is unreliable
+ * and the server gates on the extension anyway.
+ */
+export const ATTACH_ACCEPT = ['image/*', ...CLIP_DOC_EXTS.map((e) => `.${e}`)].join(',');
+
+/** What a refusal offers instead. Named rather than enumerated: spelling the
+ *  ten document extensions into a toast would bury the one word — "text" — that
+ *  actually tells someone holding a .docx what to do about it. */
+const ATTACH_REFUSAL = 'images, text, PDF and RTF only';
+
+/**
+ * Worth handing to `add()`. Drag-and-drop and paste both use it, so a dropped
+ * .zip is ignored exactly as it was before documents existed rather than
+ * becoming a chip that fails at the server. `image/*` on top of the extension
+ * test is what keeps a clipboard screenshot — type set, name blank or `.gif` —
+ * reaching `namedUpload`, which owns the verdict on those.
+ */
+export function isAttachable(file: File): boolean {
+  return file.type.startsWith('image/') || hasClipExt(file.name);
+}
 
 /**
  * Canvas downscale: cap the longest edge at 2048px (never upscale). PNG sources
@@ -53,25 +86,30 @@ export async function downscaleImage(file: File | Blob): Promise<Blob> {
 }
 
 /**
- * A clipboard image arrives as a File with no useful name — Chrome calls every
- * one of them "image.png", Safari leaves it empty — but the server admits
- * uploads by filename extension. Give it one, derived from the actual MIME type,
- * and keep the timestamp so two pastes never collide in the clips directory.
- * Returns null for a type we can't accept, so the caller can say so.
+ * The name the upload will carry. A file the user PICKED or dropped already has
+ * one the server admits — hand it back untouched, so the stem that reaches the
+ * prompt is the name the user recognises. A clipboard image has no useful name
+ * — Chrome calls every one of them "image.png", Safari leaves it empty — so one
+ * is derived from the actual MIME type, with the timestamp keeping two pastes
+ * from colliding in the clips directory.
+ *
+ * Returns null for something we can't accept (a pasted GIF, say), so the caller
+ * can say so rather than stage a chip that is going to 415.
  */
-export function namedClipboardImage(file: File, now: number): File | null {
+export function namedUpload(file: File, now: number): File | null {
+  if (hasClipExt(file.name)) return file;
   const ext = EXT_FOR_TYPE[file.type];
   if (!ext) return null;
-  if (new RegExp(`\\.(png|jpe?g|webp)$`, 'i').test(file.name)) return file;
   return new File([file], `pasted-${now}.${ext}`, { type: file.type });
 }
 
-/** Every image on the clipboard. Text pastes give []. */
-export function clipboardImages(data: DataTransfer | null): File[] {
+/** Every attachable file on the clipboard. Text pastes give []. */
+export function clipboardFiles(data: DataTransfer | null): File[] {
   return Array.from(data?.items ?? [])
-    .filter((i) => i.kind === 'file' && i.type.startsWith('image/'))
+    .filter((i) => i.kind === 'file')
     .map((i) => i.getAsFile())
-    .filter((f): f is File => f !== null);
+    .filter((f): f is File => f !== null)
+    .filter(isAttachable);
 }
 
 export const MAX_IMAGES = 4;
@@ -79,7 +117,10 @@ export const MAX_IMAGES = 4;
 export interface StagedImage {
   key: string;
   file: File;
-  previewUrl: string;
+  /** Object URL behind the chip's thumbnail — IMAGES ONLY. A document has no
+   *  preview to draw, and minting a URL nobody renders is a leak waiting for
+   *  someone to forget the matching revoke. Absent means "draw the doc chip". */
+  previewUrl?: string;
   state: 'uploading' | 'staged' | 'failed';
   path?: string;
   width?: number;
@@ -121,6 +162,16 @@ export function useStagedImages(
 
   const upload = async (key: string, file: File): Promise<void> => {
     try {
+      if (!isImageClip(file.name)) {
+        // A document goes up EXACTLY as it arrived. Everything below this line
+        // is image machinery: the canvas pass would either throw on a PDF or,
+        // worse, succeed and upload a picture of nothing, and `createImageBitmap`
+        // throws on text — which would land the chip in `failed` with a decoder
+        // error as the reason. There are no dimensions to report either.
+        const staged = await api.upload(id, file);
+        patch(key, { state: 'staged', path: staged.path, error: undefined });
+        return;
+      }
       const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
       let payload = file;
       if (!keepOriginal) {
@@ -151,7 +202,7 @@ export function useStagedImages(
   const add = (files: readonly File[]): void => {
     const cur = listRef.current;
     const room = MAX_IMAGES - cur.length;
-    if (files.length > room) toast(`Four images per message — send these first`, 'error');
+    if (files.length > room) toast(`Four attachments per message — send these first`, 'error');
 
     // Built OUTSIDE any updater: pure, so StrictMode's double-invoke cannot
     // duplicate chips or leak an extra object URL, and two add() calls in the
@@ -159,16 +210,18 @@ export function useStagedImages(
     // closure over `cur`.
     const accepted: StagedImage[] = [];
     for (const file of files.slice(0, Math.max(0, room))) {
-      const named = namedClipboardImage(file, Date.now() + accepted.length);
+      const named = namedUpload(file, Date.now() + accepted.length);
       if (named === null) {
-        toast(`Can't attach ${file.type || 'that'} — PNG, JPEG or WebP only`, 'error');
+        toast(`Can't attach ${file.type || 'that'} — ${ATTACH_REFUSAL}`, 'error');
         continue;
       }
       seq.current += 1;
       accepted.push({
         key: `img${seq.current}`,
         file: named,
-        previewUrl: URL.createObjectURL(named),
+        // Images only — see the field's own note. `URL.createObjectURL` would
+        // happily hand back a URL for a .md nobody is going to render.
+        ...(isImageClip(named.name) ? { previewUrl: URL.createObjectURL(named) } : {}),
         state: 'uploading',
       });
     }
@@ -179,7 +232,7 @@ export function useStagedImages(
 
   const remove = (key: string): void => {
     const gone = listRef.current.find((i) => i.key === key);
-    if (gone) URL.revokeObjectURL(gone.previewUrl);
+    if (gone?.previewUrl) URL.revokeObjectURL(gone.previewUrl);
     commit(listRef.current.filter((i) => i.key !== key));
   };
 
@@ -200,7 +253,7 @@ export function useStagedImages(
   // Safe against release(): it empties listRef synchronously, so URLs already
   // handed to a PendingSend are no longer in the list this reads.
   useEffect(() => () => {
-    for (const img of listRef.current) URL.revokeObjectURL(img.previewUrl);
+    for (const img of listRef.current) if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
   }, []);
 
   return {
