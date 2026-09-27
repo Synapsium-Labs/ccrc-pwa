@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { RunningAgent } from '../../agent/src/server.js';
-import { connectFleet, FleetClient, type ConnectedFleet } from '../src/remote/client.js';
+import { connectFleet, FleetClient, readReadyOps, type ConnectedFleet } from '../src/remote/client.js';
+import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { TOKEN, bootAgent, connectToAgent, makeFixture, type RemoteFixture } from './remoteHelpers.js';
 
 describe('connectFleet — connection lifecycle', () => {
@@ -40,9 +41,14 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
+    // `agentOps: []`, not absent: a REAL W2 agent sends no `ops` (the field is
+    // W4's), and the client records "ready arrived, no op named" — `[]` — which
+    // is not local mode's `undefined`. When W4's agent starts advertising
+    // `['update']`, this literal is the line that must move with it.
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
+        agentOps: [],
       }),
       { timeout: 3000 });
   });
@@ -120,6 +126,13 @@ describe('connectFleet — connection lifecycle', () => {
     // ever asked.
     const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
     expect(client.state.observedEpoch).toBeUndefined();
+  });
+
+  it('starts with agentOps:undefined before any handshake — "no evidence", not "no ops"', () => {
+    // `[]` would claim a ready frame arrived and named nothing; before any
+    // handshake nothing arrived at all (design 2026-09-20 §8, decision 11).
+    const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
+    expect(client.state.agentOps).toBeUndefined();
   });
 });
 
@@ -624,5 +637,150 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
     extra = {};
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBeUndefined(), { timeout: 3000 });
+  });
+});
+
+describe('readReadyOps — the ONE validator of AgentReady.ops (design 2026-09-20 §8)', () => {
+  // §8: "`caps` and `agentOps` words must match `CAP_WORD` with at most 32
+  // words, and one bad word drops the whole file to ''". The inventory stores
+  // `[]` as `''`; the server row's NULL is the sweep's, never this reader's.
+  it.each<[string, unknown, string[]]>([
+    ['absent (every agent before W4)', undefined, []],
+    ['null', null, []],
+    ['a bare string', 'update', []],
+    ['an object', { update: true }, []],
+    ['an empty list', [], []],
+    ['one valid word', ['update'], ['update']],
+    ['two valid words', ['update', 'rollback'], ['update', 'rollback']],
+    ['one word off CAP_WORD drops the whole list', ['update', 'Update'], []],
+    ['a word with a space', ['update now'], []],
+    ['a non-string element', ['update', 1], []],
+    ['a 33-character word', ['a'.repeat(33)], []],
+  ])('%s', (_label, raw, want) => {
+    expect(readReadyOps(raw)).toEqual(want);
+  });
+
+  it('exactly MAX_CAP_WORDS words pass; one more drops them all', () => {
+    const words = (n: number): string[] => Array.from({ length: n }, (_, i) => `op-${i}`);
+    expect(readReadyOps(words(MAX_CAP_WORDS))).toEqual(words(MAX_CAP_WORDS));
+    expect(readReadyOps(words(MAX_CAP_WORDS + 1))).toEqual([]);
+  });
+});
+
+describe('FleetClient.onReady — ops is read through readReadyOps, on every ready', () => {
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  it('an absent ops (every agent before W4) is [] — connected, no op named', async () => {
+    fleet = await connect({});
+    expect(fleet.state.agentOps).toEqual([]);
+  });
+
+  it('a valid list is recorded verbatim', async () => {
+    fleet = await connect({ ops: ['update'] });
+    expect(fleet.state.agentOps).toEqual(['update']);
+  });
+
+  it('one bad word off the wire drops the whole list — never a partial', async () => {
+    fleet = await connect({ ops: ['update', 'RM -RF'] });
+    expect(fleet.state.agentOps).toEqual([]);
+  });
+
+  it('a peer that stops sending ops on RECONNECT drops what it had, not keeps it', async () => {
+    // The reset-on-every-ready guard, on the branch a fresh connection cannot
+    // reach: a W4 agent downgraded to a W2 one must not keep being sent an op
+    // it no longer answers.
+    let extra: Record<string, unknown> = { ops: ['update'] };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
+      reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.agentOps).toEqual(['update']), { timeout: 3000 });
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.agentOps).toEqual([]), { timeout: 3000 });
+  });
+});
+
+describe('the ~/.ccrc node files over a REAL agent — what the inventory sweep reads (design 2026-09-20 §8)', () => {
+  // The server's remote FleetIO against the real agent's checkPath, over a real
+  // loopback WS: the path Task 11's sweep takes for the fleet node. Fixture
+  // HOMEs only.
+  let agent: RunningAgent | undefined;
+  let fixture: RemoteFixture | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (agent) await agent.close();
+    agent = undefined;
+    if (fixture) {
+      rmSync(fixture.home, { recursive: true, force: true });
+      rmSync(fixture.projectsRoot, { recursive: true, force: true });
+    }
+    fixture = undefined;
+  });
+
+  const open = async (): Promise<string> => {
+    fixture = makeFixture();
+    const ccrc = path.join(fixture.home, '.ccrc');
+    mkdirSync(ccrc, { recursive: true });
+    agent = await bootAgent(fixture);
+    fleet = connectToAgent(agent.port, { heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(fleet!.state.connected).toBe(true), { timeout: 3000 });
+    return ccrc;
+  };
+
+  it('a node file reads, stats and lstats; an unwritten one is ABSENT; the secret beside them is refused', async () => {
+    const ccrc = await open();
+    writeFileSync(path.join(ccrc, 'build.json'), '{"sha":"abc"}\n');
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=not-for-the-wire\n');
+    const stamp = path.join(ccrc, 'build.json');
+    expect(await fleet!.io.readFileMeasured(stamp)).toEqual({ ok: true, content: '{"sha":"abc"}\n' });
+    expect(await fleet!.io.statMeasured(stamp)).toMatchObject({ ok: true, size: 14 });
+    expect(await fleet!.io.lstatMeasured(stamp)).toEqual({ ok: true, kind: 'regular' });
+    expect(await fleet!.io.readFileMeasured(path.join(ccrc, 'node-id'))).toEqual({ ok: false, reason: 'absent' });
+    expect(await fleet!.io.readFileMeasured(path.join(ccrc, 'agent.env'))).toEqual({ ok: false, reason: 'unreadable' });
+    expect(await fleet!.io.readdir(ccrc)).toBeNull();
+  });
+
+  it('a live symlink carrying a node-file name is never followed — refused over read and lstat alike', async () => {
+    const ccrc = await open();
+    writeFileSync(path.join(ccrc, 'agent.env'), 'CCRC_AGENT_TOKEN=not-for-the-wire\n');
+    writeFileSync(path.join(ccrc, 'installed'), 'abc\n');
+    symlinkSync(path.join(ccrc, 'agent.env'), path.join(ccrc, 'build.json'));
+    symlinkSync(path.join(ccrc, 'installed'), path.join(ccrc, 'floor'));
+    for (const name of ['build.json', 'floor']) {
+      const p = path.join(ccrc, name);
+      expect(await fleet!.io.readFileMeasured(p), name).toEqual({ ok: false, reason: 'unreadable' });
+      // `unmeasured`, never `regular`: the agent refuses the lstat outright
+      // (`forbidden`) and the remote io reports a refused lstat as `unmeasured`
+      // (`remote/io.ts`'s `lstatMeasured`), which the sweep folds to
+      // `unreadable` (D-3178). `regular` for `floor` is the
+      // regression the literal-basename rule exists to stop.
+      expect(await fleet!.io.lstatMeasured(p), name).toEqual({ ok: false, reason: 'unmeasured' });
+    }
+  });
+
+  it('a DANGLING symlink carrying a node-file name lstats as `symlink` — the kind the sweep refuses', async () => {
+    const ccrc = await open();
+    symlinkSync(path.join(ccrc, 'no-such-target'), path.join(ccrc, 'update.json'));
+    expect(await fleet!.io.lstatMeasured(path.join(ccrc, 'update.json'))).toEqual({ ok: true, kind: 'symlink' });
   });
 });

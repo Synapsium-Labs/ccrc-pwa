@@ -819,7 +819,9 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
 # (`~/.ccrc/graph-sweep.json`), and `_check_name` covers `ccrc-ddns.timer` by
 # re-measuring the DNS record the timer maintains rather than the timer's own
 # state. `ccd-usage-sweep.timer` is, measured, in NEITHER design — this file
-# asks about it nowhere. The timer-fired oneshot `.service` siblings (one
+# asks about it nowhere. `ccd-tmp-sweep.timer` is in `known`, the DIRECT
+# design, because it writes no artifact an effect check could read: its only
+# output is a journal line, and a stopped reaper is silent until the disk is. The timer-fired oneshot `.service` siblings (one
 # per timer) are out of THIS design BY CONSTRUCTION rather than by omission:
 # a timer-fired oneshot is never `active` between runs, so polling one here
 # would be a false positive. That does not leave them uncovered — the EFFECT
@@ -833,7 +835,7 @@ _check_services() {
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccd-pool-sync.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccd-pool-sync.timer ccd-tmp-sweep.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -909,6 +911,9 @@ _check_services() {
           # That silence is the ruling (task-4-brief.md) for putting this
           # timer in `known` at all.
           ccd-pool-sync.timer) why="the node stops refreshing its pool projection, and nothing surfaces until the lease expires and placement starts refusing with no error anywhere" ;;
+          # The temp-dir reaper: silent when stopped, loud only when `/` fills —
+          # /tmp/claude-1000 reached 138G on the fleet host before it existed.
+          ccd-tmp-sweep.timer) why="nothing reaps Claude Code's per-uid temp dir, which grows by gigabytes a day until / fills" ;;
           *) why="the job it fires is not running" ;;
         esac
         # Unreachable on macOS today (`_inst_units` installs none of these
@@ -2064,10 +2069,11 @@ _check_disk() {
 #
 # ── WHAT IT COMPARES, AND WHAT IT REFUSES TO DO ──────────────────────────
 # `~/.ccrc/accounts.json` (the roster — the source of truth, hand-owned) vs.
-# `~/.local/bin/<id>` (the wrappers — hand-made on each box; nothing in this
-# repository generates one yet). It REPORTS disagreement and resolves none of
-# it, which is `ccrc-adopt`'s own bias rule (that file's header, "the direction
-# of every uncertain call") applied to a tool that cannot write either side.
+# `~/.local/bin/<id>` (the wrappers — generated and Codex launchers are ccrc-
+# owned; external launchers remain hand-made). It REPORTS disagreement and
+# resolves none of it, which is `ccrc-adopt`'s own bias rule (that file's header,
+# "the direction of every uncertain call") applied to a tool that cannot write
+# either side.
 #
 # ── PATHS ONLY. THE SECRETS FILE IS NEVER OPENED ─────────────────────────
 # The wrapper's secrets line names a path; this check compares that path with
@@ -2217,10 +2223,10 @@ _dr_wr_note() {
   local p="$WRAPPER_BIN_DIR/$id"
   case "$dir" in
     a-only)
-      # This is the generated-account path (`wr_expect` is built from
-      # `generated` ids only, above): absent and a dangling symlink are
-      # exactly what `ccrc wrappers` writes — its `absent` decision-table arm
-      # writes, and `mv -f` over a dangling symlink replaces it — so those
+      # This is the ccrc-owned-wrapper path (`wr_expect` is built from
+      # `generated` and `codex` ids only, above): absent and a dangling symlink
+      # are exactly what `ccrc wrappers` writes — its `absent` decision-table
+      # arm writes, and `mv -f` over a dangling symlink replaces it — so those
       # findings go to `wr_absent`, not `wr_hard`.
       if _dr_wr_present "$id" wr_absent; then
         if ! _wrap_is_script "$p"; then
@@ -2245,6 +2251,19 @@ _dr_wr_note() {
 }
 
 _check_wrappers() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip wrappers "this box records CCRC_ROLE=server, so it hosts no sessions and no launcher on it is ccrc's concern (its roster was validated when accounts.sh was generated)"
+    return 3
+  fi
   # THE LIBRARY IS A SEPARATE INSTALL ARTIFACT. `ccrc` finds its siblings
   # through `${BASH_SOURCE[0]}`, which bash does not resolve through a symlink,
   # so a link to `ccrc` on PATH does not rescue a missing one: all three files
@@ -2281,7 +2300,7 @@ _check_wrappers() {
   #
   # A2-NEW (this task): `wr_upstream` is a FOURTH bucket, not a second name for
   # `wr_absent` — see the `upstream)` case arm below for why an absent upstream
-  # binary is not the same operator instruction as an absent generated wrapper.
+  # binary is not the same operator instruction as an absent ccrc-owned wrapper.
   local -a wr_hard=() wr_soft=() wr_absent=() wr_upstream=()
 
   if [ ! -e "$roster" ]; then
@@ -2393,7 +2412,7 @@ _check_wrappers() {
   local -a wr_ids=()
   local id suffix kind secrets _wr_rest _wr_line _wr_i
   local -a _wr_f=()
-  local n_up=0 n_gen=0 n_ext=0 upstream_id=""
+  local n_up=0 n_gen=0 n_ext=0 n_codex=0 upstream_id=""
   while IFS= read -r _wr_line; do
     _wr_f=(); _wr_rest="$_wr_line"
     for _wr_i in 1 2 3; do
@@ -2428,12 +2447,13 @@ _check_wrappers() {
       upstream)  n_up=$((n_up + 1)); [ -n "$upstream_id" ] || upstream_id="$id" ;;
       generated) n_gen=$((n_gen + 1)) ;;
       external)  n_ext=$((n_ext + 1)) ;;
+      codex)     n_codex=$((n_codex + 1)) ;;
     esac
   done <<< "$tsv"
 
   if [ ! -d "$bin" ]; then
     _dr_fail wrappers "no \$HOME/.local/bin at all, so the roster's ${#wr_ids[@]} accounts have nowhere to live" \
-      "run: ccrc wrappers — it creates \$HOME/.local/bin and writes every generated account's wrapper (an upstream or external account still needs installing by hand)"
+      "run: ccrc wrappers — it creates \$HOME/.local/bin and writes every generated and Codex account's wrapper (an upstream or external account still needs installing by hand)"
     return 1
   fi
 
@@ -2479,8 +2499,8 @@ _check_wrappers() {
 
   # ── both directions, reported ──────────────────────────────────────────
   # The roster ids that MUST be a CLAUDE_CONFIG_DIR-setting script on disk:
-  # `generated`, and ONLY generated — it is ccrc's own shape, the one thing
-  # here that is written against a contract this repository states.
+  # `generated` and `codex` — ccrc's own shape, the one thing here that is
+  # written against a contract this repository states.
   #
   # `upstream` is excluded because a 300 MB ELF is its normal shape, and
   # `external` because its shape is nobody's business: it may be compiled, and
@@ -2492,7 +2512,7 @@ _check_wrappers() {
   # thing ccd needs — an executable of that name — in the loop below.
   local -a wr_expect=()
   for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
-    case "${wr_kind[$id]}" in generated) wr_expect+=("$id") ;; esac
+    case "${wr_kind[$id]}" in generated|codex) wr_expect+=("$id") ;; esac
   done
   _wrap_set_diff _dr_wr_note wr_expect wr_seen
 
@@ -2510,7 +2530,7 @@ _check_wrappers() {
         # `wr_upstream`, NOT `wr_hard` and NOT `wr_absent` (A2-NEW): an absent
         # upstream binary is a fresh box that has never had Claude Code
         # installed on it at all — `ccrc wrappers` never writes this account
-        # either way (D-71: GENERATED wrappers only), so it is absent-class
+        # either way (D-71: ccrc-owned launchers only), so it is absent-class
         # same as `wr_absent`'s reasoning, but the ROSTER-SYNC remedy
         # ("make \$HOME/.ccrc/accounts.json and the wrapper agree") is
         # actively wrong for it — there is no wrapper to write or roster
@@ -2542,7 +2562,7 @@ _check_wrappers() {
         # installs on anyone's behalf, absent or present-but-wrong alike.
         _dr_wr_present "$id" wr_hard || true
         ;;
-      generated)
+      generated|codex)
         # Absent from disk, or not a wrapper at all: already reported, in the
         # words the measurement earned, by the set difference above.
         _dr_wr_has "$id" ${wr_seen[@]+"${wr_seen[@]}"} || continue
@@ -2600,13 +2620,13 @@ _check_wrappers() {
           local wr_sz=""
           wr_sz="$(_plat_size -L -- "$bin/$id" 2>/dev/null)" || wr_sz=""
           if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
-            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
+            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated wrapper shape, and never read")
             continue
           fi
         fi
         IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
         if [ "$ok" != ok ]; then
-          wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not the generated wrapper shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
           continue
         fi
         if [ -z "${wr_suffix[$id]}" ]; then
@@ -2624,7 +2644,11 @@ _check_wrappers() {
         elif [ "$wsecrets" != "${wr_secrets[$id]}" ]; then
           wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
         fi
-        if [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
+        if [ "${wr_kind[$id]}" = codex ]; then
+          if [ "$target" != ccgpt ]; then
+            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccgpt — a Codex lane's launcher hands off to the common GPT-lane launcher")
+          fi
+        elif [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
           wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")
         fi
         ;;
@@ -2675,7 +2699,7 @@ _check_wrappers() {
   if [ "${#wr_absent[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_absent[@]+"${wr_absent[@]}"})" \
-      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated account's wrapper"
+      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated and Codex account's wrapper"
     rc=1
   fi
   if [ "${#wr_hard[@]}" -gt 0 ]; then
@@ -2693,7 +2717,7 @@ _check_wrappers() {
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external, $n_codex Codex)"
 }
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
@@ -2717,14 +2741,17 @@ _check_skills() {
     _dr_skip skills "this box records CCRC_ROLE=server, so it hosts no sessions and no account's skills directory is its concern"
     return 3
   fi
-  local tree="$BOX_TREE_DIR/ccd" name
+  local tree="$BOX_TREE_DIR/ccd" name notree=""
+  # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
+  # operator back once per missing directory.
   for name in coordinator-skill worker-skill reviewer-skill; do
-    if [ ! -d "$tree/$name" ]; then
-      _dr_fail skills "the shipped tree has no $tree/$name, so nothing on this box says what the installed skills should be" \
-        "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
-      return 1
-    fi
+    [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
+  if [ -n "$notree" ]; then
+    _dr_fail skills "the shipped tree has no $notree, so nothing on this box says what the installed skills should be" \
+      "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+    return 1
+  fi
   if ! command -v diff >/dev/null 2>&1; then
     _dr_warn skills "diff is not on PATH, so the installed skills could not be compared with the shipped tree" \
       "install diffutils"
@@ -2740,20 +2767,16 @@ _check_skills() {
     return 1
   fi
   local rows rc
-  rows="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
-    const fs = require("fs");
-    let j;
-    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
-    catch (e) { process.exit(3); }
-    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
-    const ok = /^[a-z][a-z0-9-]{0,31}$/;
-    const dir = /^\.[A-Za-z0-9._-]{1,64}$/;
-    process.stdout.write(j.accounts
-      .filter((a) => a && typeof a === "object" && ok.test(a.id) && typeof a.configDirSuffix === "string" && dir.test(a.configDirSuffix))
-      .map((a) => a.id + "\t" + a.configDirSuffix).join("\n"));
-  ' 2>/dev/null)"; rc=$?
+  rows="$(_skills_roster_rows "$roster")"; rc=$?
   if [ "$rc" -ne 0 ]; then
     _dr_skip skills "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  # Two conditions used to share the "none of the config directories exist"
+  # SKIP below: no rostered home on this box, and NO USABLE ROW at all (R19,
+  # D-3112).
+  if [ -z "$rows" ]; then
+    _dr_skip skills "no usable account in \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
     return 3
   fi
   local id suffix dir homes=0 installed
@@ -2779,10 +2802,12 @@ _check_skills() {
     _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
     return 0
   fi
-  # THE HEADLINE SAYS BOTH CONDITIONS THE ENTRIES CAN SAY. An entry is
-  # either "<id>: <skill> differs" or "<id>: <skill> missing", and a headline
-  # naming only the first made a run whose every entry was `missing` read as
-  # a diff nobody could find.
+  # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
+  # differs" (the home's copy differs from the shipped tree) or "<id>: <skill>
+  # missing" (absent from that home — the tree's own absence is the FAIL above,
+  # with its own sentence). The count is of account-and-skill pairs, so
+  # "installed skill(s)" misdescribed a missing one; this says both conditions
+  # on the side they are on.
   #
   # THE REMEDY NAMES THE SHIPPED TREE'S OWN INSTALLERS, both halves (R12).
   # R10 already moved the SOURCE to `$BOX_TREE_DIR` — the tree this check
@@ -2792,10 +2817,55 @@ _check_skills() {
   # rsyncs `ccd/` whole), so both halves can come from the one place the
   # build stamp stands behind. It also keeps `.cc-sessions/<dir>` spelled
   # exactly once in this file — `_check_pools`' own literal — which
-  # `pool-name-parity.test.ts` pins.
-  _dr_fail skills "${#stale[@]} installed skill(s) differ from, or are missing in, the shipped tree: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc update' (re-places the tree and re-runs the installers) — or, when 'ccrc version' already names the intended build, converge from the tree the check just measured: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
+  # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
+  # remedy (`_fix_skills`, D-3113).
+  _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
   return 1
+}
+
+# The roster rows `_check_skills` and `_fix_skills` both read: "<id>\t<suffix>"
+# per usable account, exit 3 unreadable / 4 not a roster (the check's own
+# codes, unchanged). One reader, so the cure converges exactly the homes the
+# check measured.
+_skills_roster_rows() {   # <roster path>
+  CCRC_DOCTOR_ROSTER="$1" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    const dir = /^\.[A-Za-z0-9._-]{1,64}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && ok.test(a.id) && typeof a.configDirSuffix === "string" && dir.test(a.configDirSuffix))
+      .map((a) => a.id + "\t" + a.configDirSuffix).join("\n"));
+  ' 2>/dev/null
+}
+
+# The cure `ccrc doctor --fix` runs for `skills` (R19, ruled 2026-09-19,
+# D-3113): the shipped tree's OWN installers — the remedy the FAIL prints —
+# into every rostered home that exists on this box. Idempotent; the check then
+# measures again and the re-measurement is the verdict.
+_fix_skills() {
+  local tree="$BOX_TREE_DIR/ccd" roster="$HOME/.ccrc/accounts.json" rows id suffix dir name said n=0 list=""
+  rows="$(_skills_roster_rows "$roster")" || { echo "FIX skills: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
+  while IFS=$'\t' read -r id suffix; do
+    [ -n "$id" ] || continue
+    dir="$HOME/$suffix"
+    [ -d "$dir" ] || continue
+    for name in coordinator worker reviewer; do
+      # The interpreter running THIS file, not whatever `bash` PATH resolves to —
+      # doctor runs under a contained PATH in tests and under an operator's PATH
+      # on a box, and the installer is bash either way.
+      if ! said="$(CCRC_SKILL_SRC="$tree/$name-skill" "${BASH:-bash}" "$tree/install-$name-skill.sh" --homes "$dir" 2>&1)"; then
+        echo "FIX skills: refused — $tree/install-$name-skill.sh --homes $dir said: ${said##*$'\n'}"; return 1
+      fi
+    done
+    n=$((n + 1)); list="$list${list:+, }$id"
+  done <<< "$rows"
+  [ "$n" -gt 0 ] || { echo "FIX skills: nothing to cure — no rostered home exists on this box"; return 0; }
+  echo "FIX skills: re-ran the shipped tree's installers into $n home(s): $list"
 }
 
 # ── the accounts surface, by existence ────────────────────────────────────
@@ -2832,6 +2902,19 @@ _check_skills() {
 # usually has no node stub either and the sentence its operator needs is about
 # the roster.
 _check_accounts() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip accounts "this box records CCRC_ROLE=server, so it hosts no sessions and no account's credential or provider config on it is ccrc's concern"
+    return 3
+  fi
   local roster="$HOME/.ccrc/accounts.json" gen="$CCRC_HERE/../deploy/account-op.mjs"
   if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
     _dr_warn accounts "no readable account roster at \$HOME/.ccrc/accounts.json, so no account's credential or provider config was measured" \
@@ -3026,6 +3109,19 @@ _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of hays
   return 1
 }
 _check_pools() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip pools "this box records CCRC_ROLE=server, so it hosts no sessions and no pool marker on it is ccrc's concern"
+    return 3
+  fi
   # THE `pools` SEGMENT BELOW IS THE THIRD SPELLING of a name TypeScript holds
   # as `POOLS_DIR_NAME` (`server/src/pools.ts`) and `ccd/ccd` as
   # `POOLS_DIR="$REG/pools"`. It is spelled out rather than derived for the
@@ -4530,6 +4626,19 @@ _check_fleet() {
 # `.claude*` directory is the right answer — a silent blind spot for a name
 # this tool has no business knowing is worse than one more row in the census.
 _check_memory() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip memory "this box records CCRC_ROLE=server, so it hosts no sessions and no agent home's memory on it is ccrc's concern"
+    return 3
+  fi
   local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
   for h in "$HOME"/.claude*/; do
     b="${h%/}"; b="${b##*/}"
@@ -4606,6 +4715,19 @@ _check_memory() {
 }
 
 _check_routing() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip routing "this box records CCRC_ROLE=server, so it hosts no sessions and no lane's settings.json on it is ccrc's concern"
+    return 3
+  fi
   # Routing spec 2026-09-14 §5.2 / §8: on an Anthropic lane the subagent floor
   # rides the spawn PROCESS ENV (`CLAUDE_CODE_SUBAGENT_MODEL`, composed by ccd
   # from the routing record), which a `settings.json` env key would override

@@ -24,6 +24,7 @@ import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { mkTmp } from './tmpHelpers.js';
+import { parseStatusline } from '../src/pane/statusline.js';
 
 const SCRIPT = path.resolve(__dirname, '../../ccd/statusline-command.sh');
 
@@ -408,5 +409,29 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     delete p['effort']; delete p['cost'];
     runUsage(home, JSON.stringify(p), { tmux: 'cc-demo-a' });
     expect(usageFile(home, 'demo-a.json')).toMatchObject({ effort: null, cost: null, model: 'claude-opus-5' });
+  });
+});
+
+// The server reads identity only from the row that `👤` LEADS
+// (server/src/pane/statusline.ts's `statuslineRow`). That is a contract with
+// THIS script, and nothing else tied the two together: a segment written
+// before `👤` would silently stop every session's model, effort, branch and
+// ctx reading while both suites stayed green. So the script's own output is
+// parsed here, end to end.
+describe('the row this script prints is the row the server parses', () => {
+  it('round-trips model, effort, branch and ctx through parseStatusline', () => {
+    const home = seed('ccrc-statusline-roundtrip-');
+    const repo = mkTmp('ccrc-statusline-repo-');
+    const init = spawnSync('git', ['init', '-q', '-b', 'ws/round-trip', repo], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+    expect(init.status, init.stderr).toBe(0);
+    const payload = { ...JSON.parse(PAYLOAD), workspace: { current_dir: repo } };
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.zeta') };
+    const r = spawnSync('bash', [SCRIPT], { input: JSON.stringify(payload), encoding: 'utf8', env });
+    expect(r.status).toBe(0);
+    const row = plain(r.stdout);
+    expect(row.trimStart().startsWith('👤 '), `the row must be LED by 👤: ${row}`).toBe(true);
+    expect(parseStatusline(`  ${row.trimEnd()}`)).toMatchObject({
+      model: 'Opus 5', effort: 'high', branch: 'ws/round-trip', ctxPct: 12,
+    });
   });
 });

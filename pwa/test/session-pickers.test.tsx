@@ -78,11 +78,11 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   // chip. `Sonnet 5`/`medium`, deliberately neither of the values these
   // tests pick, so a tap is a real change to read back.
   version: null, model: 'Sonnet 5', effort: 'medium', ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...patch,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...patch,
 });
 
 const makeStore = (): SessionStore =>
@@ -359,7 +359,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });
@@ -392,7 +392,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });

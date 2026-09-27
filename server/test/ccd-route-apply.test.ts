@@ -39,16 +39,33 @@ afterEach(() => { h.cleanup(); });
 const ID = 'demo-quiet-mesa';
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
 
-const IDLE_PANE = '│ 🤖 Opus 5 · xhigh │ ▓ ctx ▁▁▁ 20% │\n❯ \n';
+/** Claude Code's idle bottom, as 2.1.280 draws it: the prompt box, the `👤`
+ *  statusline row directly under its bottom border, the mode row. The effort
+ *  ack is read only while this is on screen — a dialog or the slider hides it. */
+const RULE = '─'.repeat(40);
+const BOTTOM = (effort = 'xhigh'): string =>
+  `${RULE}\n❯ \n${RULE}\n  👤 acct-a │ 🤖 Opus 5 · ${effort} │ ▓ ctx ▁▁▁ 20% │ 💲 1.0\n  ⏸ manual mode on\n`;
+const IDLE_PANE = BOTTOM();
 const MID_TURN_PANE = 'Working… (esc to interrupt)\n';
 const PICKER_PANE = `${IDLE_PANE}❯ 1. Default (recommended) ✔\n  2. Sonnet\n  3. Opus\n  4. Haiku\nEnter to set as default · s to use this session only · Esc to cancel\n`;
-const ACK_EFFORT = (level: string): string => `${IDLE_PANE}Set effort level to ${level} (this session only): …\n`;
+/** The ack where Claude Code prints it: a `⎿` line under the echoed command,
+ *  ABOVE the prompt box — and the statusline row already showing the level
+ *  (ultracode shows as `xhigh`), as it does within a second on real 2.1.280
+ *  panes. The applier reads all three. */
+const ACK_EFFORT = (level: string, above = ''): string =>
+  `${above}❯ /effort\n  ⎿  Set effort level to ${level} (this session only): …\n${BOTTOM(level === 'ultracode' ? 'xhigh' : level)}`;
 const ACK_MODEL = (name: string): string => `${IDLE_PANE}Set model to ${name} for this session only\n`;
-const DIALOG_PANE = `${IDLE_PANE}Change effort level?\n❯ 1. Yes, switch to high\n  2. No, go back\n`;
+/** Opus 5's confirmation, as captured: it REPLACES the prompt box and the
+ *  statusline row, and its cursor row is the pane's lowest `❯ N.` row. */
+const DIALOG = (to: string, above = ''): string =>
+  `${above}❯ /effort\n${RULE}\n  Change effort level?\n  Your next response will be slower and use more tokens\n  ❯ 1. Yes, switch to ${to}\n    2. No, go back\n`;
+const DIALOG_PANE = DIALOG('high');
 
 /** tmux, RECORDING. `capture-pane` answers `$HOME/pane.txt`; a `send-keys`
  *  whose key text names an existing `$HOME/pane-after-<key>.txt` copies that
- *  file over `pane.txt`, so a case SCRIPTS the pane's transitions. The `Enter`
+ *  file over `pane.txt`, so a case SCRIPTS the pane's transitions. The N-th
+ *  Enter first looks for `pane-after-Enter-<N>.txt`, for a case whose two
+ *  Enters (submit, then confirm) lead to two different screens. The `Enter`
  *  transition is guarded on the dialog actually being up: the Enter that
  *  submits `/effort` comes first and must not land the acknowledgement early. */
 const TMUX_STUB = `tmux() {
@@ -62,7 +79,17 @@ const TMUX_STUB = `tmux() {
     capture-pane) cat "$HOME/pane.txt" ;;
     list-panes)   echo 4242 ;;
     send-keys)    shift; while [[ "\${1:-}" == -t ]]; do shift 2; done; k="$*"; k="\${k#-l }"; k="\${k#/}"
-                  if [[ -f "$HOME/pane-after-$k.txt" ]]; then
+                  # LOCAL, and not named n: this runs inside ccd's own functions, and
+                  # bash scopes dynamically — an unscoped counter here overwrote the
+                  # slider's Right count in the caller.
+                  local stub_enters=0 stub_numbered=0
+                  if [[ "$k" == Enter ]]; then
+                    stub_enters=$(( $(cat "$HOME/enter-count" 2>/dev/null || echo 0) + 1 )); echo "$stub_enters" > "$HOME/enter-count"
+                    if [[ -f "$HOME/pane-after-Enter-$stub_enters.txt" ]]; then
+                      cp "$HOME/pane-after-Enter-$stub_enters.txt" "$HOME/pane.txt"; stub_numbered=1
+                    fi
+                  fi
+                  if [[ "$stub_numbered" == 0 && -f "$HOME/pane-after-$k.txt" ]]; then
                     if [[ "$k" != Enter ]] || grep -q "Yes, switch" "$HOME/pane.txt"; then
                       cp "$HOME/pane-after-$k.txt" "$HOME/pane.txt"
                     fi
@@ -183,6 +210,125 @@ describe('route --apply (routing spec §5.3 live change; slice 1 keystrokes D-28
     h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=ultracode --apply`);
     expect(keys()).toEqual(['-l /effort ultracode', 'Enter']);
     expect(h.reg(ID, 'routeapplied')).toContain('effort=ultracode');
+  });
+
+  // Measured 2026-09-23 on real 2.1.280 panes: Opus 5 raises its switch
+  // confirmation for the PLAIN `/effort ultracode` too — `1. Yes, switch to
+  // xhigh` — and this path never answered it, so no ack came and every retry
+  // ended in Escape.
+  it('effort=ultracode confirms Opus 5\'s switch dialog, then reads the ack', () => {
+    after('Enter-1', DIALOG('xhigh')); after('Enter-2', ACK_EFFORT('ultracode'));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=ultracode --apply`);
+    expect(keys()).toEqual(['-l /effort ultracode', 'Enter', 'Enter']);
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=ultracode');
+  });
+
+  // An EARLIER ultracode ack stays on screen above later ones — the captures
+  // show `ultracode (this session only)` still visible over an open dialog.
+  // The whole-pane grep read it as this apply's confirmation.
+  it('a stale ultracode ack above an OPEN dialog confirms nothing — Escape, apply-unconfirmed', () => {
+    const history = '❯ /effort ultracode\n  ⎿  Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration\n'
+      + '❯ /effort\n  ⎿  Set effort level to max (this session only): …\n';
+    // The dialog appears, and the confirming Enter is swallowed: it stays up.
+    after('Enter-1', DIALOG('xhigh', history)); after('Enter-2', DIALOG('xhigh', history));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=ultracode --apply || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('effort=ultracode');
+    expect(keys()).toContain('Escape');
+  });
+
+  it('a "Yes, switch" QUOTED in chat above an idle box presses no Enter', () => {
+    // On the open slider an Enter is "Enter to confirm", the form that SAVES
+    // the level to the lane's settings.json; a reply quoting the dialog must
+    // not be read as the dialog.
+    after('s', ACK_EFFORT('high', '● The dialog reads "❯ 1. Yes, switch to high".\n'));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply`);
+    expect(keys().at(-1)).toBe('-l s');
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
+  });
+
+  it('…even the dialog\'s own lines, verbatim in chat (a Read of a capture), while the box is up', () => {
+    // Title and cursor row both on screen — only the prompt box and the
+    // statusline row under it say this is not the dialog, which hides both.
+    const quoted = '⏺ The capture shows:\n  Change effort level?\n  ❯ 1. Yes, switch to high\n    2. No, go back\n';
+    after('s', ACK_EFFORT('high', quoted));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply`);
+    expect(keys().at(-1)).toBe('-l s');
+  });
+
+  it('the LOWEST ack is the pane\'s word on its effort — an older one above it is superseded', () => {
+    // The keys were swallowed and the box came back with no new line: the
+    // screen still shows an old `ultracode` ack, but a later `max` one below
+    // it. The session is at max, whatever the older line says.
+    const history = '❯ /effort ultracode\n  ⎿  Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration\n'
+      + '❯ /effort\n  ⎿  Set effort level to max (this session only): …\n';
+    after('Enter-1', `${history}${IDLE_PANE}`);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=ultracode --apply || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('effort=ultracode');
+    expect(keys()).toContain('Escape');
+  });
+
+  it('a dialog QUOTED in chat above the still-open SLIDER presses no Enter', () => {
+    // The slider hides the box too and has no `❯ N.` rows of its own, so the
+    // quote's title and cursor row were all a pane-wide read could see — and
+    // an Enter on the slider is "Enter to confirm", which saves the level.
+    const SLIDER = `${RULE}\n  Effort\n  low     medium     high     xhigh      max       ultracode\n`
+      + '  ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel\n';
+    const quoted = '⏺ The dialog reads:\n    Change effort level?\n    ❯ 1. Yes, switch to high\n      2. No, go back\n';
+    after('s', `${quoted}❯ /effort\n${SLIDER}`);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+  });
+
+  it('…nor above the FULLSCREEN slider, whose top edge carries a tmux notice rather than a bare rule', () => {
+    // The real fullscreen edges (2.1.280): `▔▔… tmux focus-events off · … ▔`,
+    // and at 100 columns `tmux detected · scroll with PgUp/PgDn · … ▔`.
+    const quoted = '⏺ The dialog reads:\n    Change effort level?\n    ❯ 1. Yes, switch to high\n      2. No, go back\n';
+    for (const edge of [
+      `${'▔'.repeat(60)} tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf ▔`,
+      " tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll ▔",
+    ]) {
+      h.sh('rm -f "$HOME/tmux-calls" "$HOME/enter-count"');
+      const SLIDER = `${edge}\n  Effort\n  low     medium     high     xhigh      max       ultracode\n`
+        + '  ←/→ to adjust · Enter to confirm · s for this session only · Esc to cancel\n';
+      after('s', `${quoted}❯ /effort\n${SLIDER}`);
+      pane(IDLE_PANE);
+      h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply || :`);
+      expect(keys().slice(keys().indexOf('-l s') + 1), edge.slice(0, 30)).not.toContain('Enter');
+    }
+  });
+
+  it('the confirmation\'s cursor row must sit BELOW its title — the dialog\'s own shape', () => {
+    // An Enter here would pick option 1 of whatever menu this is. In the real
+    // dialog the title comes first and `❯ 1. Yes, switch to …` under it.
+    const MENU = `${RULE}\n ☐ Effort\n❯ 1. Yes, switch to high\n  2. No\n  Change effort level? (Claude is asking)\n`
+      + 'Enter to select · ↑/↓ to navigate · Esc to cancel\n';
+    after('s', `❯ /effort\n${MENU}`);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply || :`);
+    expect(keys().slice(keys().indexOf('-l s') + 1)).not.toContain('Enter');
+  });
+
+  it('an ack-shaped line a TOOL printed does not confirm while the statusline shows another effort', () => {
+    // A grep/echo whose output line starts `⎿  Set effort level to high …` is
+    // the lowest ack-shaped line on screen; the keys never landed, and the
+    // statusline row still says `· low`.
+    const tool = '● Bash(grep -oh "Set effort level to high (this session only)" notes.txt)\n'
+      + '  ⎿  Set effort level to high (this session only): …\n';
+    after('s', `${tool}${BOTTOM('low')}`);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply || :`);
+    expect(h.reg(ID, 'routeapplied')).not.toContain('effort=high');
+    expect(keys()).toContain('Escape');
+  });
+
+  it('an ack is read only once the prompt box is back — never over a dialog still open', () => {
+    // The lowest ack already names `high` (an earlier apply), and this
+    // attempt's dialog swallows the confirming Enter and stays up. Recording
+    // `high` applied now would press no Escape and leave the dialog to eat the
+    // next keystroke (S4-R9) — so it is apply-unconfirmed, and Escaped.
+    const history = '❯ /effort\n  ⎿  Set effort level to high (this session only): …\n';
+    after('s', DIALOG('high', history)); after('Enter-2', DIALOG('high', history));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply || :`);
+    expect(keys()).toContain('Escape');
+    expect(h.reg(ID, 'routeapplied')).not.toContain('effort=high');
   });
 
   it('class=sonnet reads the picker, moves the cursor from the ✔ row to the Sonnet row, presses s — never `/model sonnet`, never Left/Right', () => {

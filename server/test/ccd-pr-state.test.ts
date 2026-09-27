@@ -110,13 +110,16 @@ describe('the per-session call asks about one branch', () => {
   // same reader's same named second parameter — and the wide window was ninety-
   // nine other branches' PRs fetched so that `bound()` could drop them.
   //
-  // NARROWING IS SAFE HERE AND THE PROOF IS EXHAUSTIVE, not a judgement: every
-  // consumer of these rows conjoins `headRefName == branch`, so a head-filtered
-  // answer is a strict SUPERSET of what anything reads. `_pr_py`'s `bound()`,
-  // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
-  // the ccd side; `boundRow()` and `isMergedRow()` on the server's, and
-  // `line.rows` has exactly ONE server-side reader — `phaseFor`'s
-  // `boundRow(line.rows, …)`. Nothing iterates the rows for another branch.
+  // NARROWING IS SAFE HERE. Every BRANCH-MATCHING consumer of these rows
+  // conjoins `headRefName == branch`, so a head-filtered answer is a strict
+  // SUPERSET of what any of them reads: `_pr_py`'s `bound()`, `is_merged()`
+  // (which conjoins `bound`) and `pick()` (which filters by it) on the ccd
+  // side; `boundRow()` and `isMergedRow()` on the server's, and `childSpent`'s
+  // spent rung (D-3347), which conjoins `headRefName === line.branch` exactly
+  // as `boundRow` does. `childSpent`'s `unplaceable` rung (D-3351) has NO
+  // branch conjunct — it asks whether any non-fork row's head cannot be read —
+  // but a row `--head` drops is one gh placed on a DIFFERENT, readable head,
+  // so it is never unplaceable: that rung loses nothing to the filter either.
   //
   // `--project` is a different question — every workspace of the repo at once,
   // from one call — and keeps the wide window; the second test is that guard.

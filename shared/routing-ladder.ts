@@ -26,9 +26,24 @@ import type { FailureKind, RouteMode } from './api.js';
 export const EFFORT_LADDER = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type EffortRung = (typeof EFFORT_LADDER)[number];
 
-/** §3: a subagent's class ladder ends at Opus — Fable is never assigned to a
- *  subagent, however an escalation would otherwise resolve. */
+/** §3: a subagent's class ladder ends at Opus — the class above it is never
+ *  assigned to a subagent, however an escalation would otherwise resolve. */
 export const SUBAGENT_CLASS_CEILING: ModelClass = 'opus';
+
+/** Operator instruction 2026-09-22: a MAIN loop's class ladder ends at Opus
+ *  too. The class above it is reached only by an explicit human choice — the
+ *  PWA's model picker, `ccd route --set class=…`, `--route class=…` at the
+ *  mint, the coordinator door's explicit route POST — and escalation is by
+ *  definition not one: it is the mechanism deciding on its own that a failed
+ *  check has earned the next rung. So the two scopes now share a ceiling, and
+ *  the rung above it has no automatic path to it at all.
+ *
+ *  THIS IS A CEILING, NOT A FLOOR, AND ONLY ON THE WAY UP. `demote()` is
+ *  untouched: a session a human DID put on the top class must still be able to
+ *  degrade off it (the serviceability rung, the coordinator's own over-served
+ *  judgement), or an explicit choice would become a trap. Nothing here can put
+ *  a session on that class; everything that already could, still can. */
+export const MAIN_CLASS_CEILING: ModelClass = 'opus';
 
 /** §3: "A class rung resets effort to the new class's matrix row, never
  *  carries the old level across, because effort names do not transfer; where
@@ -93,8 +108,12 @@ const effortIndex = (e: EffortRung | 'auto' | 'ultracode'): number => {
  *  case on sonnet, and haiku's no-effort-ladder case — same mechanics (one
  *  class up, read off `CLASSES` by index rather than hand-typed, effort
  *  reset by `classRungEffortReset` (never carried across), a subagent stops
- *  at `SUBAGENT_CLASS_CEILING`, the top class
- *  has nothing above it), different reason for having been triggered. `reason`
+ *  at `SUBAGENT_CLASS_CEILING` and a main loop at `MAIN_CLASS_CEILING`, the
+ *  top class has nothing above it), different reason for having been
+ *  triggered. The two scope ceilings are tested AFTER the top-class test, so
+ *  a session already sitting on the top class — a human put it there — still
+ *  hears "nothing above it" rather than a ceiling sentence about a rung it is
+ *  already past. `reason`
  *  supplies that reason verbatim and is composed into the default `why`
  *  (`"${reason} — escalating to ${next}, effort reset to ${classRungEffortReset(next)}"`); a caller
  *  whose own `why` text does not fit that shape passes `wholeWhy` instead,
@@ -107,6 +126,9 @@ const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reaso
   if (scope === 'subagent' && current.class === SUBAGENT_CLASS_CEILING) {
     return { kind: 'ceiling', why: `a subagent ladder ends at ${SUBAGENT_CLASS_CEILING} — nothing past it is ever assigned to a subagent` };
   }
+  if (scope === 'main' && current.class === MAIN_CLASS_CEILING) {
+    return { kind: 'ceiling', why: `a main-loop ladder ends at ${MAIN_CLASS_CEILING} — nothing past it is ever reached by escalation, only by an explicit human choice` };
+  }
   return {
     kind: 'move', mode: 'escalate', field: 'class', from: current.class, to: next,
     why: wholeWhy ?? `${reason} — escalating to ${next}, effort reset to ${classRungEffortReset(next)}`,
@@ -118,7 +140,9 @@ const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reaso
  *  `xhigh` and only when priorSameKind ≥ 1 (a second failed check of the same kind). Any failed check first reverses `lastDemotion` if it is
  *  not yet reversed (mode 'reverse-demotion'), CLAMPED BY SCOPE — a subagent never receives back an origin rung it could not itself hold (an
  *  effort of `max`, or a class above `SUBAGENT_CLASS_CEILING`), answering `ceiling` instead; in `main` scope the reversal restores any origin,
- *  `max` included. The ladder then applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high. `effort: 'auto'` counts
+ *  `max` included — and a class origin above `MAIN_CLASS_CEILING` too, because a reversal is not an escalation: it puts back a rung the
+ *  session was already ON, which above that ceiling can only have been a human's explicit choice (the same reason ccd's `_route_restore`
+ *  may restore a recorded top-class intent). The ladder then applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high. `effort: 'auto'` counts
  *  as 'high' for the arithmetic (the model's default); 'ultracode' answers no-effort-rungs (its next rung is a class rung the caller decides).
  *  Whether a demotion is "not yet reversed" is bookkeeping the CALLER owns (Task 2 derives `lastDemotion` from the run's own event history) —
  *  this function only decides what a reversal, once handed one, is allowed to restore. */

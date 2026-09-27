@@ -27,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +130,8 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
+  // The per-uid temp-dir reaper, placed by `_inst_bins` on the non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
   // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
   // projection puller. `_inst_bins` places it on the non-Darwin arm for every
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
@@ -176,6 +178,8 @@ function plantInstalledBox(home: string): void {
     // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
     // terms as the graph sweep above it.
     'ccd-usage-sweep.service', 'ccd-usage-sweep.timer',
+    // The temp-dir reaper's pair, on the same role-gated terms.
+    'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -204,6 +208,9 @@ function plantInstalledBox(home: string): void {
     '{"sha":"fixturesha000000000000000000000000000000","ref":"main",'
     + '"builtAt":"2026-08-21T00:00:00Z","dirty":false}\n');
   writeFileSync(join(home, '.ccrc', 'installed'), 'fixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
+  writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
+  writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -362,6 +369,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       'ccd-pool-sync.service', 'ccd-pool-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+      'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
       'ccd-account-health.service', 'ccd-account-health.timer',
       'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
       // C5: the models pair, mirroring the three role-gated siblings above.
@@ -380,6 +388,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -536,7 +545,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // joins the set on `ccd-graph-sweep`'s own terms — its units go above and
     // the binary would otherwise stay on PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
-      'ccd-usage-sweep.py', 'ccd-account-health',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
       'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
@@ -545,6 +554,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The completed-install record is NOT config: a box with no tree has no
     // completed install, and leaving it would let a later `ccrc update` skip.
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    // The node's three files are install-state, not config (design 2026-09-20
+    // §3, §9): an uninstalled box has no identity to the console, no
+    // capabilities and no floor.
+    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+      expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
+    }
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
@@ -600,6 +615,50 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
+  // `_inst_bins` to these — the lane's launcher and runtime binaries are not
+  // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
+  // places them and this census names none of them either). The usage-window
+  // publisher's `ccgpt-usage@.{service,timer}` pair is the other half of this
+  // case since the final review's F-1: no installer places it, because on a
+  // live fleet box those two names hold ANOTHER repository's pair with an
+  // instance enabled, so an uninstall that removed them would delete a live
+  // unit ccrc never wrote. They must survive byte for byte, their enabled
+  // instance's wants link too, and no systemctl verb may name them. `itLinux`,
+  // as every other systemd-argv assertion in this file.
+  itLinux('uninstall removes the two GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
+    const home = mkTmp('ccrc-uninst-ccgpt-');
+    plantInstalledBox(home);
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
+    const units = join(home, '.config', 'systemd', 'user');
+    const foreignSvc = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.service, not ccrc\'s\n';
+    const foreignTimer = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.timer, not ccrc\'s\n';
+    writeFileSync(join(units, 'ccgpt-usage@.service'), foreignSvc);
+    writeFileSync(join(units, 'ccgpt-usage@.timer'), foreignTimer);
+    mkdirSync(join(units, 'timers.target.wants'), { recursive: true });
+    const wants = join(units, 'timers.target.wants', 'ccgpt-usage@codex-a.timer');
+    symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
+    }
+    expect(readFileSync(join(units, 'ccgpt-usage@.service'), 'utf8'), 'the foreign .service was removed or changed')
+      .toBe(foreignSvc);
+    expect(readFileSync(join(units, 'ccgpt-usage@.timer'), 'utf8'), 'the foreign .timer was removed or changed')
+      .toBe(foreignTimer);
+    expect(lstatSync(wants).isSymbolicLink(), 'the enabled instance\'s wants link was removed').toBe(true);
+    expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
+    expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
+      .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
+    expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
+      .toMatch(/uninstall: tree: .*ccgpt-usage\.py.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the

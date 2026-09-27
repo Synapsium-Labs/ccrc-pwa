@@ -409,7 +409,7 @@ describe('selection is polarity, status is hue', () => {
     expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
     const scrubbed = stripComments(css);
     const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
-    for (const variant of ['expired', 'unrecognised']) {
+    for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
       const sel = `.sess-spawn[data-spawn=${variant}]`;
       // The variant really does paint a colour of its own — without that there
       // is nothing to beat and everything below would be vacuous.
@@ -425,6 +425,35 @@ describe('selection is polarity, status is hue', () => {
         `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
         .toBeGreaterThan(spec(sel));
     }
+  });
+
+  it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
+    // rc 6 does not heal on its own: the window stays narrow after the client
+    // that narrowed it leaves, the startup gates it skipped are never revisited,
+    // and the stamp changes only on the next spawn. So it takes `.sess-spawn`'s
+    // default --status-dead-text, like blocked/login/vanished — which it gets by
+    // having NO variant rule of its own.
+    expect(declValue(ruleFor('.sess-spawn'), 'color')).toBe('var(--status-dead-text)');
+    // Every rule that names a `data-spawn` VALUE and sets a colour, however its
+    // selector is spelled (`[data-spawn=narrow].sess-spawn`, `:is(…)`, a second
+    // rule further down) — `narrow` must be in none of them.
+    const painted: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      if (!/data-spawn/.test(selector!) || !/(^|;)\s*color\s*:/.test(body!)) continue;
+      for (const v of selector!.matchAll(/data-spawn\s*=\s*['"]?([\w-]+)/g)) painted.push(v[1]!);
+    }
+    // The control: the scan does find the two quiet variants, so an empty
+    // result below is a finding, not a scan that saw nothing.
+    expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
+    expect(painted).not.toContain('narrow');
+  });
+
+  it('paints a narrow spawn whose pane is measured wide again (`narrow-widened`) in the QUIET ink', () => {
+    // History, not a fault: the pane is wide with its prompt up, and ccd's
+    // readers are back on (spawnWords.ts's `narrowSinceWidened`). What stays
+    // loud is a narrow spawn still unmeasured or narrow — the case above.
+    expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
   it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {

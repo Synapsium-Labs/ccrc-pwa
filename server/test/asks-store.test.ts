@@ -15,14 +15,16 @@ describe('the asks table', () => {
   it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    // THREE migrations have landed since this test's own version: MIGRATIONS[10]
+    // FOUR migrations have landed since this test's own version: MIGRATIONS[10]
     // (`runs.kind`/`runs.reviews`, review runs, design 2026-09-14 §5.1),
-    // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1) and
+    // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1),
     // MIGRATIONS[12] (`pool_edges`/`pool_epoch`, account-pool membership wave 1
-    // Task 6). None touches the asks table. This pin only needs the CURRENT
-    // total — it asserts "no migration after the one this test knows about has
-    // changed the asks table's columns", not anything about any of the three.
-    expect(COORD_SCHEMA_VERSION).toBe(13);
+    // Task 6) and MIGRATIONS[13] (the update control plane's five tables,
+    // centralised update management W2 Task 3). None touches the asks table.
+    // This pin only needs the CURRENT total — it asserts "no migration after
+    // the one this test knows about has changed the asks table's columns", not
+    // anything about any of the four.
+    expect(COORD_SCHEMA_VERSION).toBe(14);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

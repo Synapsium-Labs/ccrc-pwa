@@ -15,24 +15,27 @@
 //    can or should do. `'unknown'` renders nothing — an older agent reports no
 //    digest, and a banner that fires when nothing is wrong stops being read.
 //  - BUILD SKEWED (amber): the host is up, but the two boxes' `build.json`
-//    stamps disagree (`buildAgreement`, server/src/fleetstate.ts). Names both
-//    versions (or shas, for an unversioned deploy.sh stamp) when the server
-//    reports them. No action button: the fix is `ccrc rollout`/`ccrc update`,
-//    run from a terminal. `'unknown'` remains silent, same rule as the two
-//    above.
+//    stamps disagree (`buildAgreement`, server/src/fleetstate.ts — the TRIGGER
+//    stays that server-side word, D-3312). Names
+//    both versions (or shas, for an unversioned deploy.sh stamp) from the node
+//    inventory (`nodes`, FleetScreen's one /api/updates poll — centralised-
+//    update §14; the same `remoteSides` BuildLine reads), and says nothing of
+//    versions until that answer is in. No action button: the fix is `ccrc
+//    rollout`/`ccrc update`, run from a terminal. `'unknown'` remains silent,
+//    same rule as the two above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
 //    `'unknown'` remains silent.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetHealth } from '../../../shared/api';
-import type { BuildInfo } from '../../../shared/buildinfo';
+import type { FleetHealth, NodeWire } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
 import { useFleetHealth } from './useFleetHealth';
+import { remoteSides, statedOf } from '../../../shared/update-summary';
 import './fleet.css';
 
 const POLL_MS = 15_000;
@@ -43,10 +46,14 @@ const POLL_MS = 15_000;
 const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
-export function FleetHostBanner({ health: injected }: { health?: FleetHealth | null } = {}): ReactNode {
+export function FleetHostBanner(
+  { health: injected, nodes }: { health?: FleetHealth | null; nodes?: readonly NodeWire[] | null } = {},
+): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for this
   // banner and BuildLine together; the standalone shape (tests, other
-  // screens) still self-polls.
+  // screens) still self-polls the HEALTH route. It never polls /api/updates:
+  // without `nodes` the skew arm names no versions, which is also what it
+  // says while FleetScreen's inventory poll has not answered.
   const polled = useFleetHealth(injected === undefined ? POLL_MS : 0);
   const health = injected === undefined ? polled : injected;
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -75,9 +82,17 @@ export function FleetHostBanner({ health: injected }: { health?: FleetHealth | n
   // (a feature absent from the host is a smaller worry than two boxes
   // running different code).
   if (health && health.mode === 'remote' && health.connected && health.build === 'skewed') {
-    const name = (b: BuildInfo | null | undefined): string =>
-      b ? `${b.version ?? 'unversioned'} (${b.sha.slice(0, 8)})` : '—';
-    const fleet = health.builds ? ` fleet ${name(health.builds.fleet)} · server ${name(health.builds.own)}.` : '';
+    // Fix round 2 (review of d5aefc4a, item 6): a row that fails `statedOf`
+    // (unmeasured, unread stamp, or D-3316 unreachable) does not lend this
+    // arm its cached `current` either — the same rule BuildLine's `side()`
+    // applies, so a skewed-build warning never names a version off a stale
+    // reading nobody just measured.
+    const name = (row: NodeWire | null): string => {
+      const b = row && statedOf(row) ? row.current : null;
+      return b ? `${b.version ?? 'unversioned'} (${b.sha.slice(0, 8)})` : '—';
+    };
+    const sides = Array.isArray(nodes) ? remoteSides(nodes) : null;
+    const fleet = sides ? ` fleet ${name(sides.fleet)} · server ${name(sides.server)}.` : '';
     return (
       <div className="fleet-host-banner fleet-host-banner--warn" role="status">
         <span className="fleet-host-banner-msg">

@@ -3,7 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS, type IdentityField, type LifecycleField,
+  CHILD_RUN_ID, isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS,
+  type ChildMark, type IdentityField, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
@@ -61,7 +62,7 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     30 [registry-read-census:fields] field reads a session's
+   *                     31 [registry-read-census:fields] field reads a session's
    *                     read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
@@ -305,6 +306,67 @@ export interface SessionRecord {
   route: {
     fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[];
   } | null;
+  /**
+   * `$REG/<id>.child` — the run id `ccd ws-add --child <runId>` was told
+   * minted this workspace (child-reclamation spec §5.1). THREE answers, never
+   * a boolean (`ChildMark`, `shared/api.ts`), because the two callers that
+   * decide on it act in OPPOSITE directions on the third: the bind gate
+   * (`coord/childBind.ts`) REFUSES an unreadable marker, and wave 3's reclaim
+   * will DEFER on one. Collapsing `unreadable` into either neighbour is a
+   * fail-open in one of those two directions.
+   *
+   *   `none`       — no marker: either a proven ENOENT (a MEASURED absence),
+   *                  or a failed (`unreadable`) read — either way, of a file
+   *                  the directory listing this record was built from does
+   *                  NOT name. The listing rung `held`, `substrate` and
+   *                  `stranded` already apply. An agent older than the wire's
+   *                  `absent` marker answers "unreadable" for every missing
+   *                  file; without this rung every workspace on such a box
+   *                  would read as an unreadable child.
+   *   `child`      — the marker read back as a run id in ccd's own grammar
+   *                  (`CHILD_RUN_ID`, `shared/api.ts`: at most ten ASCII
+   *                  digits, no leading zero — spec §5.1), over the bytes
+   *                  ccd's `$(_reg_get …)` sees: NUL bytes dropped, trailing
+   *                  newlines stripped, nothing else trimmed. So the server
+   *                  and the box call exactly the same markers children —
+   *                  EXCEPT a symlinked or non-regular marker (F5): ccd's
+   *                  `_reg_get` (`ccd/ccd`, `[[ -f … && ! -L … ]]`) refuses
+   *                  any symlink outright and answers `""` (not a child),
+   *                  while this read follows a LIVE link through to its
+   *                  target — a symlink to a file holding `17` reads
+   *                  `{kind:'child', runId:17}` here. The server is the
+   *                  STRICTER side of that one divergence: it sees a child
+   *                  ccd does not, and refuses MORE. A DANGLING link is a
+   *                  different rung entirely — `unreadable`, below.
+   *   `unreadable` — the listing names the marker and its bytes did not come
+   *                  back — including a listed marker whose read comes back
+   *                  ABSENT (F4/D-3348: a dangling symlink, or a file removed
+   *                  between the listing and this read) — OR they came back
+   *                  as anything outside that grammar (empty, `0`, `017`,
+   *                  eleven digits, ` 17`, text). Something wrote the file; a
+   *                  malformed marker is not "no marker".
+   *
+   * NO second-listing reconfirm AT THIS LAYER, unlike `held`: nothing but
+   * `_reg_purge` removes a marker, and a purge removes `<id>.uuid` with it,
+   * which the identity reconfirm in `readRegistryMeasured` already retires
+   * the row for. A listed marker that reads back absent — the exact race
+   * this paragraph is about — now answers `unreadable` (F4/D-3348), not
+   * `none`, WHEN the rest of the record still resolves: `readSessionRecord`
+   * returns `found:true` with `child:unreadable`, and the caller (the bind
+   * gate) refuses, retryably. That is NOT the outcome for every ordering: if
+   * the same purge also carries off `<id>.uuid` — a full teardown, not
+   * merely the marker — the identity triple's own drop retires the WHOLE row
+   * first (`readSessionRecord` answers `found:false, reason:'absent'`
+   * without ever reaching this function), and `childBindGate`'s OWN second
+   * listing decides from there: once that later listing no longer names
+   * `<id>.child` either, the bind is permitted — correctly, because there is
+   * no longer a workspace here to protect.
+   *
+   * ATTRIBUTION, NOT AUTHENTICATION. Any process on the fleet box can write
+   * this file (CLAUDE.md, "Identity on the fleet"). It is the box's half of
+   * spec §5.1's two authorities and nothing may treat it as a credential.
+   */
+  child: ChildMark;
 }
 
 /**
@@ -350,7 +412,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires 30
+ * the agent WS is enough (`readRegistry` fires 31
  * [registry-read-census:fields] field reads per session under one request
  * timeout). Held with an unreadable reason, never unheld: the consumer
  * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
@@ -468,10 +530,25 @@ async function field(io: FleetIO, dir: string, id: string, name: string): Promis
  * default — a display default that would otherwise reach a decision as if it
  * were a measurement (cross-repo programmes wave 1, D-2342). Every other
  * caller stays in this file.
+ *
+ * `as: 'shell'` (child-reclamation wave 2) is for a field ccd DECIDES on and
+ * the server must decide on identically: it yields exactly what bash's
+ * `$(cat …)` yields — NUL bytes dropped, trailing newlines stripped, and
+ * nothing else trimmed — so a value with a leading space or a trailing `\r`
+ * reads the same on both sides of the wire. Its one caller is `.child`
+ * (spec §5.1); the default keeps every other caller's `.trim()` byte for byte.
+ * That equivalence is over CONTENT, once ccd's own guard lets the file be
+ * read at all (F5): a symlinked marker never reaches `$(cat …)` on ccd's
+ * side at all — `_reg_get`'s `[[ ! -L … ]]` refuses it outright — while this
+ * read follows the link through to its target, so the two sides can decide
+ * differently on that one shape (see `SessionRecord.child`'s `child` bullet).
  */
-export async function fieldMeasured(io: FleetIO, dir: string, id: string, name: string): Promise<MeasuredRead> {
+export async function fieldMeasured(
+  io: FleetIO, dir: string, id: string, name: string, as: 'trimmed' | 'shell' = 'trimmed',
+): Promise<MeasuredRead> {
   const r = await io.readFileMeasured(path.join(dir, `${id}.${name}`));
-  return r.ok ? { ok: true, content: r.content.trim() } : r;
+  if (!r.ok) return r;
+  return { ok: true, content: as === 'trimmed' ? r.content.trim() : r.content.replace(/\0/g, '').replace(/\n+$/, '') };
 }
 
 /** A registry field as a finite number, or null. `parseInt` alone yields NaN
@@ -481,6 +558,27 @@ function numOrNull(raw: string | null): number | null {
   if (raw === null || raw.trim() === '') return null;
   const n = Number(raw.trim());
   return Number.isFinite(n) ? n : null;
+}
+
+/** `$REG/<id>.child`'s ONE parser — see `SessionRecord.child` for the three
+ *  answers and why none of them may collapse into another. `read` is the
+ *  `'shell'` read, so `CHILD_RUN_ID` judges the bytes ccd judges. `listed` is
+ *  whether the directory listing `buildRecord` opened with names the file. */
+function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
+  if (read.ok) {
+    return CHILD_RUN_ID.test(read.content)
+      ? { kind: 'child', runId: Number(read.content) }
+      : { kind: 'unreadable' };
+  }
+  // F4 (D-3348): a `listed`-but-`absent` read — a dangling symlink, or a file
+  // gone between the listing and this read — used to fall through to `none`,
+  // permitting a bind on evidence that could not be read. Both failure
+  // reasons now share the same listing rung: `listed` refuses (`unreadable`,
+  // retryable), and an UNLISTED read answers `none` whichever failure reason
+  // came back — a failed (`unreadable`) read of a file the listing never
+  // named at all is `none` too (`child-reclaim-mark.test.ts`'s own kept
+  // case), same as a proven absence of one.
+  return listed ? { kind: 'unreadable' } : { kind: 'none' };
 }
 
 /** `<epoch> <rest>` — the packed two-token stamp shape every D3 field uses.
@@ -513,8 +611,8 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (30 [registry-read-census:fields] field reads per session — a 24-session
-// fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
+// (31 [registry-read-census:fields] field reads per session — a 24-session
+// fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
 // PER `readRegistry` call, before the conditional reconfirmation listing)
 // would otherwise log the same stuck field dozens of times a minute.
 // `warnOnce` is keyed `id#field`,
@@ -601,7 +699,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 30-field read [registry-read-census:fields] plus the
+ * One session's 31-field read [registry-read-census:fields] plus the
  * `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
@@ -620,6 +718,11 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * rises from 553 to 721 agent-WS operations per `readRegistry` call, before
  * the conditional reconfirmation listing.
  *
+ * 30 -> 31 (child-reclamation wave 2): `.child`, the marker that makes a
+ * workspace a CHILD, read MEASURED into `SessionRecord.child` — +1 read x the
+ * session count per sweep, so a 24-session fleet's whole-registry sweep rises
+ * from 721 to 745 agent-WS operations per `readRegistry` call.
+ *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
  * blanket rule to exactly two evidenced cases, both now LOGGED rather than
@@ -636,7 +739,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead, childRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -662,6 +765,10 @@ async function buildRecord(
     // survive a reorder of the L0 vocabulary.
     Promise.all(ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(io, cfg.registryDir, id, f))),
     fieldMeasured(io, cfg.registryDir, id, 'degraded'), fieldMeasured(io, cfg.registryDir, id, 'inert'),
+    // child-reclamation wave 2: the marker ws-add writes for a dispatched
+    // child. MEASURED — an unreadable marker must never read as "not a
+    // child" — and read as ccd reads it, untrimmed (see `SessionRecord.child`).
+    fieldMeasured(io, cfg.registryDir, id, 'child', 'shell'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -729,6 +836,7 @@ async function buildRecord(
   const holdListed = names.includes(`${id}.hold`);
   const substrateListed = names.includes(`${id}.substrate`);
   const strandedListed = names.includes(`${id}.stranded`);
+  const childListed = names.includes(`${id}.child`);
 
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
@@ -978,6 +1086,7 @@ async function buildRecord(
     lifecycleUnmeasured,
     unmeasured,
     route,
+    child: childMarkOf(childRead, childListed),
   };
 }
 
@@ -1084,9 +1193,9 @@ export type SingleRead =
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
- * `readdir` plus that id's 30 [registry-read-census:fields] field reads — 31
+ * `readdir` plus that id's 31 [registry-read-census:fields] field reads — 32
  * agent-WS operations [registry-read-census:single] in remote mode, instead of
- * `readRegistry`'s 721-operation baseline [registry-read-census:fleet] on a
+ * `readRegistry`'s 745-operation baseline [registry-read-census:fleet] on a
  * 24-session fleet. The conditional reconfirmation listing described below is
  * excluded from both baselines. This serves every caller that only asked "what does
  * the registry say about THIS session" and never needed uniqueness or a

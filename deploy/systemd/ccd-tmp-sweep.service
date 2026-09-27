@@ -1,0 +1,22 @@
+[Unit]
+Description=Reap stale session dirs and loose files from Claude Code's per-uid temp dir
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-tmp-sweep
+# Budget: the pass that first meets a neglected box is the expensive one. On
+# 2026-09-22 the fleet host's /tmp/claude-1000 held 138G across ~2000 stale
+# session dirs plus ~1800 loose entries, and every removal re-reads /proc and
+# re-walks its unit before the `rm` (the script's TOCTOU re-check) — minutes of
+# wall clock, not seconds. A steady-state hourly pass removes a handful. A pass
+# past this is wedged, not slow.
+TimeoutStartSec=3600
+# bash, find and du over a directory tree: the working set is the unit list and
+# /proc's link table, not the files. Capped so a reaper can never be the thing
+# that OOMs the fleet host (ccd-cap-scopes' own header is the reason every
+# oneshot here carries one).
+MemoryMax=1G
+# Idle CPU and idle IO: the scan walks hundreds of thousands of files on the
+# same disk every live session is working on, and nothing about reclaiming
+# space is urgent at the scale of a minute.
+Nice=19
+IOSchedulingClass=idle
