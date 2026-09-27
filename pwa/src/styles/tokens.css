@@ -165,6 +165,12 @@
   --limit-ok:       #45D67E;  /* 7.80:1 vs track (needs 3:1) */
   --limit-warn:     #F2B84B;  /* 8.19:1 vs track */
   --limit-critical: #E06A55;  /* 4.44:1 vs track */
+  /* The reclaimable half of the memory bar. NOT --ink-tertiary, which it was:
+     that is a PAGE ink, and this segment sits on the dark meter well beside a
+     band colour, where it measured 1.31:1 against --limit-ok and the two tones
+     read as one continuous fill (operator, 2026-09-28). Chosen against the
+     BANDS instead: 5.54:1 vs ok, 5.81:1 vs warn, 3.15:1 vs critical. */
+  --mem-cache:      #39423C;
 
   /* Diff accents inside wells only (tool-card results, terminal). */
   --diff-add: #57E08B;  /* 11.88:1 on well */
@@ -363,6 +369,10 @@
   --limit-ok:       #178A48;  /* 3.52:1 vs track (needs 3:1) */
   --limit-warn:     #B27400;  /* 3.12:1 vs track */
   --limit-critical: #B2402C;  /* 4.59:1 vs track */
+  /* Light theme takes the cache tone UP, not down: the bands here are already
+     dark and the well is darker still, so there is no headroom beneath them.
+     3.44:1 vs ok, 3.04:1 vs warn, 4.47:1 vs critical. */
+  --mem-cache:      #DEE5DF;
 
   /* Diff accents render inside dark wells in BOTH themes. */
   --diff-add: #57E08B;  /* 10.70:1 on light-theme well */

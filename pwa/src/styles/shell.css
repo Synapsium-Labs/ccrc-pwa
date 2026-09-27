@@ -133,13 +133,18 @@
      the host gauge does not move when it does. That is the whole point of the
      column: an operator glancing at box load looks at the right edge, not at
      wherever the fifth tile happened to land this week. When the accounts wrap
-     to a second row the column stays put at the top right — `align-items:
-     start`, not a stretched tile with its two rows floating in the middle. */
+     to a second row, the host column grows with them rather than floating at
+     its natural height: STRETCH, reversing this rule's first decision. The
+     account gauges already stretch to the strip's own grid row and centre their
+     contents, so `start` here left the host tile 37px tall beside their 44px —
+     the operator saw the short tile before he saw anything else (2026-09-28).
+     Matching the neighbours in the ordinary case beats staying compact in the
+     wrapped one, and a stretched tile centres its rows exactly as they do. */
   .shell-accounts .accounts-bar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--sp-3);
-    align-items: start;
+    align-items: stretch;
   }
   /* The divider lives on the COLUMN, not on the tile: it separates the two
      kinds of instrument, and a border on the tile would just look like a

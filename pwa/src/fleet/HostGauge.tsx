@@ -259,9 +259,13 @@ function MemRow({ stat }: { stat: HostStat }): ReactNode {
         </span>
       )}
       pct={`${Math.round(used)}%`}
-      // The swap figure displaces the totals when there is any: a box that has
-      // started swapping has one number worth the cell, and it is that one.
-      trail={mem.swapUsedKb > 0 ? `sw ${gib(mem.swapUsedKb)}G` : `${gib(mem.usedKb)}/${gib(mem.totalKb)}G`}
+      // ALWAYS the used figure. It used to be displaced by `sw <n>G` whenever
+      // any swap was in use, on the theory that a swapping box has one number
+      // worth the cell. On this fleet some swap is in use permanently, so the
+      // rule meant the gigabytes never appeared at all and the row answered
+      // "39%" of a total it never named (operator, 2026-09-28). Swap keeps its
+      // own hairline and its own title, which is where its number now lives.
+      trail={`${gib(mem.usedKb)}/${gib(mem.totalKb)}G`}
       title={title}
       dim={false}
     />

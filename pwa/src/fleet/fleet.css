@@ -976,7 +976,10 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--ink-tertiary);
+  /* A well-anchored tone, not a page ink — see --mem-cache. The pair has to
+     separate in BOTH themes, and the band it sits beside is bright in one and
+     dark in the other, so the cache tone moves the opposite way in each. */
+  background: var(--mem-cache);
 }
 /* MEMORY IS TWO TRACKS, not one track with swap crammed into it: RAM on top,
    swap on a hairline under it. Swap is a different device with its own total,
@@ -1013,20 +1016,41 @@
   background: var(--acct-violet);
   transition: width var(--dur-base) var(--ease-swift);
 }
-/* The two hottest threads, on the cpu track. They can only ever fall on the
-   empty part of it: no average outruns its own maximum. */
+/* The two hottest threads, on the cpu track. The HOTTEST can only fall on the
+   empty part of it — no average outruns its own maximum — but the second can
+   land anywhere, the fill included, so both carry a ring.
+
+   PAINTED AGAINST THE WELL, NOT THE PAGE. `--bg-well` is dark in BOTH themes
+   ("deliberately dark in light theme", tokens.css) while the ink tokens flip,
+   so `--ink-primary` — the obvious "strongest" colour — is near-white on the
+   well in dark and near-BLACK on the same well in light: 1.09:1, and the tick
+   the whole cpu row exists for was invisible on the operator's screen at 87%
+   (2026-09-28). `--ink-on-well` is defined once for both themes and reads
+   ~14:1 either way. The ring is what carries it across the fill, where a flat
+   light tick would drop to 1.46:1 against a bright band. */
 .host-tick {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--ink-primary);
+  background: var(--ink-on-well);
+  box-shadow: 0 0 0 1px var(--bg-well);
 }
-.host-tick[data-rank='second'] { background: var(--ink-secondary); }
+.host-tick[data-rank='second'] { background: color-mix(in srgb, var(--ink-on-well) 65%, var(--bg-well)); }
 /* AFTER the rank rule on purpose — equal specificity, so source order is what
    makes a pegged second thread amber rather than quiet grey. */
 .host-tick[data-hot='true'] { background: var(--status-attention); }
-.host-gauge .host-trail { color: var(--ink-tertiary); white-space: nowrap; }
+/* FIXED, so the two rows' meters are the same length. `.acct-row` is
+   `auto 1fr auto auto` computed per ROW, so a shorter trailing readout hands
+   its slack to the 1fr meter and the cpu track outruns the mem track by the
+   difference — two bars of different length in one tile (operator, 2026-09-28).
+   9ch is the widest this cell holds: `12.3/15.3G`. */
+.host-gauge .host-trail {
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+  min-width: 9ch;
+  text-align: right;
+}
 .host-gauge .host-stale {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);

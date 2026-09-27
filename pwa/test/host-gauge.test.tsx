@@ -7,7 +7,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import type { HostStat, HostStatFailure } from '../../shared/hoststat';
 import { HostGauge, failureWord, memBand } from '../src/fleet/HostGauge';
 import { api } from '../src/lib/api';
-import { declValue, ruleIn } from './cssRule';
+import { declValue, declaredValues, ruleIn } from './cssRule';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -32,7 +32,11 @@ describe('HostGauge readings', () => {
     expect(await screen.findByText('34%')).toBeTruthy();
     expect(screen.getByText('↑91·78')).toBeTruthy();
     expect(screen.getByText('57%')).toBeTruthy();       // 9.2G used of 16.0G
-    expect(screen.getByText('sw 0.5G')).toBeTruthy();   // swap displaces the totals
+    // The USED figure is present while swapping. It used to be displaced by the
+    // swap readout, and on a box that always has some swap in use — this fleet —
+    // that meant the gigabytes never showed at all (operator, 2026-09-28).
+    expect(screen.getByText('8.8/15.3G')).toBeTruthy();
+    expect(screen.queryByText(/^sw /)).toBeNull();
     const ticks = document.querySelectorAll('.host-tick');
     expect(ticks).toHaveLength(2);
     expect(ticks[0]?.getAttribute('data-hot')).toBe('true');   // 91% is pegged
@@ -69,7 +73,10 @@ describe('HostGauge readings', () => {
     expect(swap?.parentElement?.className).toBe('host-mem');
     // 1.9G of 2.0G swap = 95%, NOT 1.9G of 16G RAM = 12%.
     expect((document.querySelector('.host-swap-fill') as HTMLElement).style.width).toBe('95%');
-    expect(screen.getByText('sw 1.8G')).toBeTruthy();
+    expect(screen.getByText('14.2/15.3G')).toBeTruthy();
+    // Swap's own number lives on the hairline it belongs to, not in a cell that
+    // would cost the reading the bar is for.
+    expect(document.querySelector('.host-swap')?.getAttribute('title')).toContain('1.8G');
   });
 
   it('draws memory as one pill in two tones — the cap belongs to the last segment', async () => {
@@ -256,5 +263,88 @@ describe('where the gauge sits', () => {
     // strip's contents move.
     expect(declValue(ruleIn(shellCss, '.shell-accounts .accounts-strip'), 'grid-template-columns'))
       .toContain('auto-fit');
+  });
+});
+
+describe('what the meters are painted on', () => {
+  // The meter WELL is dark in BOTH themes (`--bg-well`, "deliberately dark in
+  // light theme"), while the ink tokens flip with the theme. So anything
+  // painted on the well must be chosen against the WELL, not against the page
+  // — the defect this pins: the hottest-thread tick took `--ink-primary`, which
+  // in the light theme is near-black on a near-black well, 1.09:1. The tick the
+  // whole cpu row exists for was invisible on the operator's own screen.
+  //
+  // The contrast GATE audits `color`, never a painted segment, so this is the
+  // mechanism for these four.
+  const tokens = readFileSync(path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+  const themeOf = (name: string): Record<string, string> => {
+    // The dark values sit in the first `:root` block; the light ones in the
+    // block that redefines them. Take the LAST definition for light, the first
+    // for dark, which is how the cascade reads them.
+    const all = [...tokens.matchAll(/--([a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})/g)];
+    const out: Record<string, string> = {};
+    for (const m of all) {
+      const k = m[1]!, v = m[2]!;
+      if (name === 'dark') { if (!(k in out)) out[k] = v; } else out[k] = v;
+    }
+    return out;
+  };
+  const lum = (hex: string): number => {
+    const n = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * n[0]! + 0.7152 * n[1]! + 0.0722 * n[2]!;
+  };
+  const ratio = (a: string, b: string): number => {
+    const [x, y] = [lum(a), lum(b)];
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  };
+
+  for (const theme of ['dark', 'light'] as const) {
+    it(`${theme}: the hottest tick reads on the well it sits on`, () => {
+      const t = themeOf(theme);
+      expect(ratio(t['ink-on-well']!, t['bg-well']!)).toBeGreaterThanOrEqual(7);
+    });
+
+    it(`${theme}: the cache tone is a step away from every band it sits beside`, () => {
+      const t = themeOf(theme);
+      // One pill in two tones only works if the two tones separate. At
+      // --ink-tertiary this was 1.31:1 against the ok band and the bar read as
+      // one continuous fill to the end of cache.
+      for (const band of ['limit-ok', 'limit-warn', 'limit-critical']) {
+        expect(ratio(t['mem-cache']!, t[band]!), `${theme} mem-cache vs ${band}`).toBeGreaterThanOrEqual(3);
+      }
+    });
+
+    it(`${theme}: a used fill reads against the empty track`, () => {
+      const t = themeOf(theme);
+      expect(ratio(t['limit-ok']!, t['bg-well']!)).toBeGreaterThanOrEqual(3);
+    });
+  }
+
+  it('paints the ticks and the cache from well-anchored tokens, never from page ink', () => {
+    // The mutation this catches: someone reaches for --ink-primary again because
+    // it is the obvious "strongest" colour. It is the strongest on the PAGE.
+    expect(ruleIn(fleetCss, '.host-tick')).toContain('var(--ink-on-well)');
+    expect(ruleIn(fleetCss, '.host-tick')).not.toContain('var(--ink-primary)');
+    // Two paints, in this order: its own tone, then the grey a STALE reading
+    // takes (further down the file). The page ink it used to carry is gone.
+    const cache = declaredValues(fleetCss, '.host-seg-cache', 'background');
+    expect(cache[0]).toBe('var(--mem-cache)');
+    expect(cache).not.toContain('var(--ink-tertiary)');
+  });
+});
+
+describe('the rows line up, and the tile matches its neighbours', () => {
+  it('gives both rows the same meter width by fixing the trailing column', () => {
+    // `.acct-row` is `auto 1fr auto auto` per row, so a shorter trailing readout
+    // hands its slack to the meter and the cpu track outruns the mem track —
+    // visible on the operator's screen as two bars of different length.
+    expect(declValue(ruleIn(fleetCss, '.host-gauge .host-trail'), 'min-width')).toBeTruthy();
+  });
+
+  it('lets the tile take the same height as the account gauges beside it', () => {
+    // The account gauges STRETCH to the accounts-strip row; `align-items: start`
+    // held the host tile at its natural height, 37px against their 44px.
+    expect(declValue(ruleIn(shellCss, '.shell-accounts .accounts-bar'), 'align-items')).toBe('stretch');
   });
 });
