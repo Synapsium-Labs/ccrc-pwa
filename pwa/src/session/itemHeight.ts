@@ -121,11 +121,24 @@ const BUCKET_MAP: Record<HeightBucket, true> = {
 
 export const HEIGHT_BUCKETS = Object.keys(BUCKET_MAP) as HeightBucket[];
 
-/** What this browser has learned, per bucket. A bucket nobody has sampled reads
- *  the SCALAR the old build left — this browser's own number, not the shipped
- *  fallback — so an upgrade keeps what it knew. */
+/**
+ * What this browser has MEASURED, per bucket, or null where it has measured
+ * nothing.
+ *
+ * THE OLD SCALAR IS NOT SEEDED IN HERE, and that is a correction rather than a
+ * detail. It was, and the cost was measured in a browser: the scalar is the
+ * mean of a MIXTURE, never a measurement of any one bucket, so seeding every
+ * bucket with it made the first real per-bucket sample blend against a number
+ * that had never described that bucket. Starting from a scalar of 240, a
+ * session whose true mean is 80 still opened at 192 on the second visit and
+ * needed five or six more to arrive — the fix looked inert exactly where it was
+ * meant to show.
+ *
+ * So the scalar stays what it always was: the best available GUESS, which
+ * `openingHeight` substitutes for a bucket with no measurement. A guess is not
+ * evidence, and the first measurement of a bucket is therefore taken whole.
+ */
 export function rememberedHeights(s: Storage | null = store()): Record<HeightBucket, number | null> {
-  const seed = learnedScalar(s);
   const raw = (() => { try { return s?.getItem(KINDS_KEY) ?? null; } catch { return null; } })();
   const saved: Record<string, unknown> = (() => {
     if (raw === null) return {};
@@ -137,7 +150,7 @@ export function rememberedHeights(s: Storage | null = store()): Record<HeightBuc
   const out = {} as Record<HeightBucket, number | null>;
   for (const b of HEIGHT_BUCKETS) {
     const n = Number(saved[b]);
-    out[b] = Number.isFinite(n) && n > 0 ? clampHeight(n) : seed;
+    out[b] = Number.isFinite(n) && n > 0 ? clampHeight(n) : null;
   }
   return out;
 }
@@ -148,11 +161,15 @@ export function rememberedHeights(s: Storage | null = store()): Record<HeightBuc
 export function openingHeight(
   buckets: Iterable<HeightBucket>,
   learned: Record<HeightBucket, number | null>,
+  unmeasured: number = FALLBACK_ITEM_HEIGHT,
 ): number {
   let sum = 0;
   let n = 0;
   for (const b of buckets) {
-    sum += learned[b] ?? FALLBACK_ITEM_HEIGHT;
+    // A bucket with no measurement takes the caller's guess — the scalar the
+    // old build left, or the shipped fallback. It is substituted HERE, at the
+    // render, and never written back, so it can never be mistaken for evidence.
+    sum += learned[b] ?? unmeasured;
     n += 1;
   }
   // An empty transcript has no composition to weigh, and a mean of nothing is

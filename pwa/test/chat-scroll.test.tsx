@@ -173,6 +173,34 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
     expect(seen.props?.defaultItemHeight).toBe(255); // (40 + 60 + 9 x 300) / 11
   });
 
+  // THE TWO-VISIT PATH, end to end through the component — the one the fix
+  // actually rides on, and the one a module test cannot show. Visit one opens
+  // with what the old build left (a single scalar seeding every bucket, so the
+  // mixture cannot speak yet), measures, and saves on leaving. Visit two opens
+  // with the mixture. If this ever stops holding, the fix is inert in a browser
+  // however green the arithmetic is.
+  it('the SECOND visit opens with what the first one measured, per bucket', () => {
+    localStorage.setItem(KEY, '240'); // what the old single-number build left
+    render(<ChatList id="s" events={mixed(9, 1)} pending={[]} />);
+    // Visit one cannot do better than the scalar: every bucket seeds from it.
+    expect(seen.props?.defaultItemHeight).toBe(240);
+
+    const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;
+    rendered?.([
+      { index: 0, size: 40, offset: 0 },                                        // divider
+      ...Array.from({ length: 9 }, (_, i) => ({ index: i + 1, size: 60, offset: 0 })), // user turns
+      { index: 10, size: 300, offset: 0 },                                      // the answer
+    ]);
+    cleanup(); // leaving the session is what saves
+
+    render(<ChatList id="s" events={mixed(9, 1)} pending={[]} />);
+    // Each bucket's FIRST measurement is taken whole — the 240 was a guess about
+    // a mixture, never a measurement of any bucket — so visit two opens on this
+    // session's own composition: (40 + 9 x 60 + 300) / 11 = 80. Blending against
+    // the guess instead would have opened at 192 and needed five more visits.
+    expect(seen.props?.defaultItemHeight).toBe(80);
+  });
+
   it('keeps each bucket apart when it saves', () => {
     render(<ChatList id="s" events={mixed(1, 1)} pending={[]} />);
     const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;

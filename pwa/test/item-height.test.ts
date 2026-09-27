@@ -40,6 +40,16 @@ const hostile = (): Storage => ({
 
 const KINDS_KEY = 'ccrc:chat-item-heights';
 
+/** A Storage that already holds PER-BUCKET measurements. Distinct from `fake`,
+ *  which seeds the OLD scalar: the scalar is a guess and a bucket's first real
+ *  measurement is taken whole, so a test about blending has to start from a
+ *  measurement. */
+const measured = (px: Partial<Record<HeightBucket, number>>): Storage => {
+  const s = fake();
+  s.setItem(KINDS_KEY, JSON.stringify(px));
+  return s;
+};
+
 /** ONE visit: it opens with whatever is stored, then saves. The blend is a
  *  property of the visit, so a test that wants two blends runs this twice. */
 const visit = (s: Storage, px: number, bucket: HeightBucket = 'tool'): void =>
@@ -113,7 +123,7 @@ describe('a new visit nudges the estimate rather than seizing it', () => {
   // should move the number, not replace it. Otherwise the estimate oscillates
   // between session shapes and the scrollbar jumps on every other visit.
   it('blends towards the new sample', () => {
-    const s = fake('100');
+    const s = measured({ tool: 100 });
     visit(s, 200);
     expect(learnedPx(s)).toBeGreaterThan(100);
     expect(learnedPx(s)).toBeLessThan(200);
@@ -130,7 +140,7 @@ describe('a new visit nudges the estimate rather than seizing it', () => {
   // property being pinned here is the one that always mattered — that the
   // estimate settles on the shape the content actually has.
   it('converges rather than drifting, when the content keeps its shape', () => {
-    const s = fake('100');
+    const s = measured({ tool: 100 });
     for (let i = 0; i < 25; i++) visit(s, 200);
     expect(learnedPx(s)).toBeGreaterThan(195);
     expect(learnedPx(s)).toBeLessThanOrEqual(200);
@@ -141,7 +151,9 @@ describe('a new visit nudges the estimate rather than seizing it', () => {
     visit(s, 0);
     visit(s, Number.NaN);
     expect(s.getItem(KINDS_KEY)).toBeNull();
-    expect(learnedPx(s)).toBe(150);
+    expect(learnedPx(s)).toBeNull();
+    // And the render still has a number to use: the old scalar, as a guess.
+    expect(openingHeight(['tool'], rememberedHeights(s), rememberedHeight(s))).toBe(150);
   });
 });
 
@@ -180,8 +192,8 @@ describe('one visit moves the estimate once, however often it saves', () => {
   // a `rememberHeights` that blended from the stored value instead of the
   // baseline, which is the exact defect it exists to catch.
   it('ten saves in one visit land exactly where one save lands', () => {
-    const many = fake('100');
-    const once = fake('100');
+    const many = measured({ tool: 100 });
+    const once = measured({ tool: 100 });
     const baseline = rememberedHeights(many);
     const sample = new Map<HeightBucket, number>([['tool', 300]]);
     for (let i = 0; i < 10; i++) rememberHeights(sample, baseline, many);
@@ -191,7 +203,7 @@ describe('one visit moves the estimate once, however often it saves', () => {
   });
 
   it('still moves toward the sample — idempotent is not inert', () => {
-    const s = fake('100');
+    const s = measured({ tool: 100 });
     const baseline = rememberedHeights(s);
     for (let i = 0; i < 10; i++) rememberHeights(new Map([['tool', 300]]), baseline, s);
     expect(learnedPx(s)).toBe(160);
@@ -225,9 +237,22 @@ describe('the opening height is THIS session, not an average of all sessions', (
 });
 
 describe('a browser that learned the old single number is not reset by the upgrade', () => {
-  it('seeds every bucket from the scalar it already had', () => {
+  // THE SCALAR IS A GUESS, NOT A MEASUREMENT of any bucket — it is the mean of
+  // a mixture. Seeding it INTO the buckets was measured as the reason the fix
+  // looked inert: from a scalar of 240, a session whose true mean is 80 still
+  // opened at 192 on its second visit and needed five or six more to arrive.
+  // So it is substituted at the render and never stored, and a bucket's first
+  // real measurement is taken whole.
+  it('uses the scalar to RENDER, and stores nothing in its name', () => {
     const s = fake('140');
-    for (const b of HEIGHT_BUCKETS) expect(rememberedHeights(s)[b]).toBe(140);
+    for (const b of HEIGHT_BUCKETS) expect(rememberedHeights(s)[b]).toBeNull();
+    expect(openingHeight(['tool', 'assistant'], rememberedHeights(s), rememberedHeight(s))).toBe(140);
+  });
+
+  it('a first real measurement replaces the guess outright, not by 30% of it', () => {
+    const s = fake('240');
+    visit(s, 80);
+    expect(learnedPx(s)).toBe(80);
   });
 
   // NOT the fallback: "never learned" and "learned 96" are two conditions and
@@ -241,11 +266,12 @@ describe('a browser that learned the old single number is not reset by the upgra
     expect(openingHeight(['tool'], rememberedHeights(s))).toBe(FALLBACK_ITEM_HEIGHT);
   });
 
-  it('a bucket nobody sampled keeps what it had', () => {
+  it('a bucket nobody sampled stays unmeasured, and still renders', () => {
     const s = fake('140');
-    rememberHeights(new Map([['tool', 300]]), rememberedHeights(s), s);
-    expect(rememberedHeights(s).assistant).toBe(140);
-    expect(rememberedHeights(s).tool).toBeGreaterThan(140);
+    visit(s, 300);
+    expect(rememberedHeights(s).assistant).toBeNull();
+    expect(learnedPx(s)).toBe(300); // first measurement, taken whole
+    expect(openingHeight(['assistant'], rememberedHeights(s), rememberedHeight(s))).toBe(140);
   });
 
   it('survives a browser that refuses storage outright', () => {

@@ -17,7 +17,8 @@ import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
 import {
-  meanSize, openingHeight, rememberHeights, rememberedHeights, type HeightBucket,
+  meanSize, openingHeight, rememberHeights, rememberedHeight, rememberedHeights,
+  type HeightBucket,
 } from './itemHeight';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -536,7 +537,14 @@ export function ChatList({
   // not do this — the mixture is what differs between sessions, and the mixture
   // is the one thing already known before anything is measured.
   const opening = useRef<number | null>(null);
-  if (opening.current === null) opening.current = openingHeight(items.map(bucketOf), baseline);
+  // The third argument is what an UNMEASURED bucket is worth at render time:
+  // the scalar the old single-number build left in this browser, or the shipped
+  // fallback. It makes the first visit after an upgrade no worse than before,
+  // and it is never written back — `rememberHeights` takes a bucket's first
+  // real measurement whole rather than blending it against a guess.
+  if (opening.current === null) {
+    opening.current = openingHeight(items.map(bucketOf), baseline, rememberedHeight());
+  }
   // Keyed by index, so an item that scrolls past twice is one sample, not two —
   // averaging repeats would weight the estimate toward whatever the reader
   // happens to be looking at. Last size wins: a card that expands is taller now
