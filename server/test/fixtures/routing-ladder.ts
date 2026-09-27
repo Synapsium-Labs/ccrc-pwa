@@ -73,6 +73,40 @@ export const ROUTING_LADDER_CASES: readonly RoutingLadderCase[] = [
     want: { kind: 'ceiling', why: 'fable is the top of the class ladder — nothing above it' },
   },
   {
+    // Operator instruction 2026-09-22: the row this pairs with is the one
+    // directly above it — `opus` on MAIN used to be the one rung from which
+    // escalation reached the top class on its own, and that is exactly what
+    // must not happen. Both scopes now answer `ceiling` from opus, in their
+    // own words, and the top class keeps its own distinct sentence (the row
+    // above): a session a human already put there is past this ceiling, not
+    // stopped by it.
+    name: 'ceiling: opus·high on MAIN ceilings too — the class above is an explicit human choice, never an escalation',
+    kind: 'ceiling', current: cur('opus', 'high'), scope: 'main', prior: 0, lastDemotion: null,
+    want: { kind: 'ceiling',
+      why: 'a main-loop ladder ends at opus — nothing past it is ever reached by escalation, only by an explicit human choice' },
+  },
+  {
+    // The other half of the same instruction: the ceiling is only on the way
+    // UP. A human who chose the top class must be able to come back down, or
+    // the choice is a trap — and the coordinator's over-served judgement and
+    // the serviceability rung both walk this function.
+    name: 'demote: the top class steps down to opus — the ceiling never blocks the way back down',
+    kind: 'demote-class', current: cur('fable', 'ultracode'),
+    want: { kind: 'move', mode: 'demote', field: 'class', from: 'fable', to: 'opus',
+      why: 'demoting class from fable to opus and resetting effort to high' },
+  },
+  {
+    // And a reversal is not an escalation: it puts back a rung the session
+    // was already on, which above the main ceiling can only have been a
+    // human's own choice. `_route_restore`'s restoration of a recorded intent
+    // after a serviceability degrade is the same argument in ccd.
+    name: 'on main, a demotion off the top class reverses — a reversal restores an explicit choice, it does not reach for one',
+    kind: 'shallow', current: cur('opus', 'high'), scope: 'main', prior: 0,
+    lastDemotion: { field: 'class', from: 'fable', to: 'opus' },
+    want: { kind: 'move', mode: 'reverse-demotion', field: 'class', from: 'opus', to: 'fable',
+      why: 'reversing the unreversed demotion (class fable->opus) before the ladder applies to this failure, effort reset to high' },
+  },
+  {
     name: 'unclear: opus·high escalates effort to xhigh — opus is not the class-aware case',
     kind: 'unclear', current: cur('opus', 'high'), scope: 'main', prior: 0, lastDemotion: null,
     want: { kind: 'move', mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh',

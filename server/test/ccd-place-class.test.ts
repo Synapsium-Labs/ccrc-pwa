@@ -20,7 +20,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD_REAL_SPAWN, type CcdHarness,
+  CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, seedAccountsSh, WS_ADD_REAL_SPAWN,
+  type CcdHarness,
 } from './ccdWsHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -101,10 +102,20 @@ const POOLED = {
     ? { ...a, homeAble: true, pool: 'codex' }
     : { ...a, pool: 'main' })),
 };
+/** `POOLED`'s declared tags as the shared `plantPoolEpoch` takes them. This
+ *  file builds its own roster rather than using `POOLED_TEST_ROSTER`, so the
+ *  map is derived from `POOLED.accounts` here — the DERIVATION is this file's,
+ *  the grammar is the harness's (see `plantPoolEpoch`'s own docstring for why
+ *  the two are not the same kind of thing). */
+const POOLED_TAGS: Record<string, string | undefined> = Object.fromEntries(
+  POOLED.accounts.map((a) => [a.id, typeof a.pool === 'string' ? a.pool : undefined]),
+);
+
 /** A pool whose only member is the codex lane: `fable` is unservable there by
  *  BACKEND, before any figure is read, so the rung below is the only answer. */
 const gptOnlyPool = (seven: number): void => {
   seedAccountsSh(h.home, POOLED);
+  plantPoolEpoch(h.home, POOLED_TAGS);
   install('gpt');
   tagPool('demo', 'codex');
   writeLimits('gpt', 5, seven);
@@ -189,6 +200,7 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     // The pool's one lane has no sweep row, so `_class_gate` answers 2. The
     // verb must place, not refuse.
     seedAccountsSh(h.home, POOLED);
+    plantPoolEpoch(h.home, POOLED_TAGS);
     install('gpt');
     tagPool('demo', 'codex');
     writeLimits('gpt', 5, 10);
@@ -198,23 +210,33 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     expect(h.reg('demo-quiet-mesa', 'degraded')).toBeNull();
   });
 
-  it('(f) an operator ws-add on a fleet at the ceiling: the coordinator row first, then the rung it took', () => {
+  it('(f) an operator ws-add on a fleet at the Fable ceiling: the coordinator row, and no rung — the ceiling no longer reaches a default spawn', () => {
+    // THE SHAPE THIS ROW USED TO MEASURE IS GONE, AND THAT IS THE POINT.
+    // Before the 2026-09-22 instruction the coordinator row's class was the
+    // top one, so an operator spawn onto a fleet at the share ceiling was the
+    // COMMON case of a degrade: seed the row, then stamp the rung. The row's
+    // class is `opus` now, the ceiling in `fleetAtFableCeiling` is a FABLE
+    // ceiling by construction (`_serviceable`'s share arm, which only that
+    // class reads), and every lane is far under the seven-day figure `opus`
+    // reads — so the default spawn places at its own class and stamps nothing.
+    // The degrade path itself is untouched and still measured by (a) and (d),
+    // which reach the class the only way anything reaches it now: explicitly.
     fleetAtFableCeiling();
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     const id = 'demo-quiet-mesa';
     expect(h.reg(id, 'wrapper')).toBe('claude-b');
     expect([h.reg(id, 'class'), h.reg(id, 'effort'), h.reg(id, 'subagent'), h.reg(id, 'workflow')])
-      .toEqual(['fable', 'ultracode', 'sonnet', 'on']);
-    expect(h.reg(id, 'degraded')).toBe('opus');
+      .toEqual(['opus', 'ultracode', 'sonnet', 'on']);
+    expect(h.reg(id, 'degraded')).toBeNull();
     const rows = eventsOf(h.home, 'route');
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(4);
     expect(decOf(rows[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
-    expect(rows[4]!['detail']).toBe('degraded: ∅ -> opus');
     // FOUR log lines, one per field of the row — the writer the journal
-    // assertions above cannot see. The degrade's own line is `degrade <id>:`
-    // and is deliberately outside this filter.
+    // assertions above cannot see. A degrade's own line is `degrade <id>:`
+    // and is deliberately outside this filter, so its ABSENCE from the
+    // journal count above is what says no rung was taken.
     expect(routeLog(id)).toEqual([
-      `route ${id}: class ∅ -> fable [actor=spawn] (coordinator row (default))`,
+      `route ${id}: class ∅ -> opus [actor=spawn] (coordinator row (default))`,
       `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
       `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
       `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,

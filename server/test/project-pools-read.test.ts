@@ -14,12 +14,14 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import {
-  POOLS_DIR_NAME, poolFor, poolsEnforcement, poolsWire, readProjectPools,
-  readProjectPoolsWithRoot,
+  POOLS_DIR_NAME, accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry,
+  readProjectPools, readProjectPoolsWithRoot,
 } from '../src/pools.js';
+import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { plantPoolEpoch } from './ccdWsHelpers.js';
 import { bootAgent, connectToAgent, makeFixture } from './remoteHelpers.js';
 
 let home: string;
@@ -611,6 +613,23 @@ describe('poolsEnforcement — the three-state shape lifecycleState uses', () =>
   });
 });
 
+// F2 (pre-merge gate): `accountPools` was declared on `ProjectPoolsWire`
+// (spec §5.9) with no producer anywhere in `server/src`. `accountPoolsEnforcement`
+// is that producer — same three-state shape as `poolsEnforcement` above, off a
+// different token: the `account-pools` CAPABILITY token Task 2 added to
+// `cmd_caps` (`ccd/ccd`), never a dispatchable verb (ruling R2 removed the one
+// the design assumed).
+describe('accountPoolsEnforcement — the same three-state shape, off the account-pools capability token', () => {
+  it('null caps is unknown, never unavailable', () => {
+    expect(accountPoolsEnforcement(null)).toBe('unknown');
+  });
+
+  it('the token present is enforced, the token absent is unavailable', () => {
+    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, 'swap'])).toBe('enforced');
+    expect(accountPoolsEnforcement(['swap', 'start'])).toBe('unavailable');
+  });
+});
+
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
@@ -619,6 +638,125 @@ describe('poolsWire', () => {
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced',
     });
     expect(poolsWire({ listed: false }, 'unknown')).toEqual({ listed: false, enforcement: 'unknown' });
+  });
+
+  // T9-R2: the epoch/observedEpoch producer. THREE-VALUED for observedEpoch —
+  // absent (no argument passed, e.g. no FleetState at all), `null` (a real
+  // "never synced" fact) and a number must never fold into one another, and
+  // `poolsWire` must not invent a claim its two optional parameters did not
+  // carry.
+  it('omits epoch and observedEpoch entirely when neither argument is passed — absence, not a fabricated null', () => {
+    const wire = poolsWire({ listed: false }, 'unknown');
+    expect(Object.hasOwn(wire, 'epoch')).toBe(false);
+    expect(Object.hasOwn(wire, 'observedEpoch')).toBe(false);
+  });
+
+  it('carries a real epoch and observedEpoch through on both the listed and unlisted arms', () => {
+    expect(poolsWire({ listed: false }, 'unknown', 5, 5)).toEqual({
+      listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5,
+    });
+    expect(poolsWire({ listed: true, tags: new Map() }, 'enforced', 5, 5)).toEqual({
+      listed: true, byProject: {}, enforcement: 'enforced', epoch: 5, observedEpoch: 5,
+    });
+  });
+
+  it('keeps observedEpoch:null distinct from an absent observedEpoch, even with a real epoch present', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 3, null);
+    expect(Object.hasOwn(wire, 'epoch')).toBe(true);
+    expect((wire as { epoch?: number }).epoch).toBe(3);
+    expect(Object.hasOwn(wire, 'observedEpoch')).toBe(true);
+    expect((wire as { observedEpoch?: number | null }).observedEpoch).toBeNull();
+  });
+
+  it('treats epoch 0 and observedEpoch 0 as real values, never as absence', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 0, 0);
+    expect((wire as { epoch?: number }).epoch).toBe(0);
+    expect((wire as { observedEpoch?: number | null }).observedEpoch).toBe(0);
+  });
+
+  it('carries epoch without observedEpoch, and observedEpoch without epoch — the two are independent facts', () => {
+    const epochOnly = poolsWire({ listed: false }, 'unknown', 7, undefined);
+    expect((epochOnly as { epoch?: number }).epoch).toBe(7);
+    expect(Object.hasOwn(epochOnly, 'observedEpoch')).toBe(false);
+
+    const observedOnly = poolsWire({ listed: false }, 'unknown', undefined, 4);
+    expect(Object.hasOwn(observedOnly, 'epoch')).toBe(false);
+    expect((observedOnly as { observedEpoch?: number | null }).observedEpoch).toBe(4);
+  });
+
+  // F2 (pre-merge gate): `accountPools` rides the same omitted-when-undefined
+  // shape as `epoch`/`observedEpoch` — absent when the caller passes nothing,
+  // never a fabricated 'unknown'.
+  it('omits accountPools when no argument is passed, and carries it through on both wire arms when given', () => {
+    const bare = poolsWire({ listed: false }, 'unknown');
+    expect(Object.hasOwn(bare, 'accountPools')).toBe(false);
+
+    expect(poolsWire({ listed: false }, 'unknown', undefined, undefined, 'enforced')).toEqual({
+      listed: false, enforcement: 'unknown', accountPools: 'enforced',
+    });
+    expect(poolsWire({ listed: true, tags: new Map() }, 'enforced', undefined, undefined, 'unavailable')).toEqual({
+      listed: true, byProject: {}, enforcement: 'enforced', accountPools: 'unavailable',
+    });
+  });
+
+  it('carries accountPools independently of epoch/observedEpoch — the three facts do not interfere', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 5, 5, 'enforced');
+    expect(wire).toEqual({
+      listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5, accountPools: 'enforced',
+    });
+  });
+});
+
+// Item 1 (wave-1 fix round A, C1): `$REG/pool-epoch` is `$REG/pools/`'s
+// sibling in the same registry root, read the SAME way (`FleetIO.readFileMeasured`),
+// so this function lives beside `readProjectPools` above and is tested the
+// same way — real bytes through real `localIO`, `plantPoolEpoch` for the
+// document grammar.
+describe('readObservedEpochFromRegistry', () => {
+  it('THE REGRESSION THIS ITEM FIXES: reports the NEW value on a SECOND read after the file changed, not the first-read-forever value the handshake used to freeze', async () => {
+    plantPoolEpoch(home, {}, { epoch: 1 });
+    const first = await readObservedEpochFromRegistry(localIO, cfg(), 1_000);
+    expect(first).toBe(1);
+
+    // `ccd-pool-sync` rewrites this file roughly every 60s; nothing about
+    // this reader may cache or memoize a prior answer — it must re-read the
+    // file from scratch on every call, the same way `emitPools`/`GET
+    // /api/fleet` call it once per tick / once per request.
+    plantPoolEpoch(home, {}, { epoch: 2 });
+    const second = await readObservedEpochFromRegistry(localIO, cfg(), 1_000);
+    expect(second).toBe(2);
+    expect(second).not.toBe(first);
+  });
+
+  it('reports null — never synced — when $REG/pool-epoch is a proven absence', async () => {
+    expect(await readObservedEpochFromRegistry(localIO, cfg(), 1_000)).toBeNull();
+  });
+
+  it('reports undefined — no evidence — never null, when the file cannot be READ (no overloaded null at a seam)', async () => {
+    plantPoolEpoch(home, {}, { epoch: 9 });   // present and well-formed…
+    const io = degradedReadIO((p) => p.endsWith('pool-epoch'));   // …but unreadable this read
+    expect(await readObservedEpochFromRegistry(io, cfg(), 1_000)).toBeUndefined();
+  });
+
+  it('reports undefined, not a fabricated 0, when the read races the deadline and loses', async () => {
+    plantPoolEpoch(home, {}, { epoch: 9 });
+    const stall: FleetIO = { ...localIO, readFileMeasured: () => new Promise(() => {}) };   // never resolves
+    expect(await readObservedEpochFromRegistry(stall, cfg(), 10)).toBeUndefined();
+  });
+
+  it('reports null for a torn/malformed document, matching what a co-located agent read of the identical bytes would report', async () => {
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch not-a-number\nend\n', 'utf8');
+    expect(await readObservedEpochFromRegistry(localIO, cfg(), 1_000)).toBeNull();
+  });
+
+  it('is unaffected by a degraded $REG/pools/ marker sweep — the two reads are independent facts', async () => {
+    plantPoolEpoch(home, {}, { epoch: 4 });
+    tag('demo', 'pool-a');
+    const io = degradedReadIO((p) => p.endsWith(path.join('pools', 'demo')));
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
+    expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
+    expect(await readObservedEpochFromRegistry(io, cfg(), 1_000)).toBe(4);
   });
 });
 

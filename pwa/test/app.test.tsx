@@ -17,16 +17,16 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo', workdir: '/w',
   workspace: 'quiet-basin', name: null, status: 'dead', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: 1785300123,
+  branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: 1785300123,
   archivedBytes: 1_200_000_000, hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
 });
 
 afterEach(() => {
   cleanup();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
 });
 
 describe('App /archive route', () => {
@@ -119,6 +119,57 @@ describe('App /runs route', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+describe('App /settings route', () => {
+  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', () => {
+    // Spec §13 names this pin, and this file's /archive warning is why it has
+    // two halves: a route left out of the data-view chain still renders on a
+    // desktop (.shell-detail is always shown there) and is HIDDEN behind the
+    // fleet sidebar on a phone. The heading catches a missing ternary rung;
+    // the attribute catches a missing `|| settings`.
+    navigate('/settings');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+// T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
+// `epoch`/`observedEpoch` props were fully tested but had no real producer —
+// app.tsx is the ONLY place `<FleetScreen>` is rendered, and it passed
+// neither. This proves the wiring off the fleet store's `pools` frame (the
+// one carrier — no second poll), not the indicator's own render logic
+// (fleet-screen.test.tsx already covers that).
+describe('App wires the pools frame\'s epoch/observedEpoch into FleetScreen (T9-R2)', () => {
+  it('renders the staleness chip once the store has a pools frame naming both, and they differ', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
+  });
+
+  it('renders nothing before any pools frame has arrived — pools stays null', () => {
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
+  });
+
+  it('renders "never synced" for observedEpoch:null, never a fabricated number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: null },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed never synced');
+  });
+
+  it('renders nothing when epoch is absent, even though observedEpoch is a real number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', observedEpoch: 9 },
+    }));
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
   });
 });
 

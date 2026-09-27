@@ -8,9 +8,13 @@
 // (three spellings — TypeScript, `ccd/ccd`, `ccrc-doctor-checks`), the
 // DIRECTORY NAME (three as well, and the third of those was pinned by nothing
 // until the fourth describe below was written; see its own header), the
-// PROJECT-NAME grammar the doctor filters its printed command by, and — fix
-// round 7 — the READ CAP, which is two spellings of one number and was pinned
-// by nothing at all: `ccrc-doctor.test.ts` can only bound it to a range.
+// PROJECT-NAME grammar the doctor filters its printed command by, the READ CAP
+// (fix round 7, two spellings of one number, pinned by nothing at all until
+// this file's last describe — `ccrc-doctor.test.ts` can only bound it to a
+// range), and — item 17, final fix round — the PROJECTION FILENAME
+// (`pool-epoch`, `POOL_EPOCH_FILE_NAME`), five spellings across three
+// languages and the two TypeScript readers that were the last of them to gain
+// one, pinned in the describes below the DIRECTORY NAME ones.
 //
 // The precedent this improves on is `ccd/ccrc-wrapper-shape:67`, which holds a
 // hand-written bash copy of `shared/roster.ts`'s `ID_RE` and discloses that
@@ -26,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POOL_NAME_RE } from '../../shared/roster.js';
+import { POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
 import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -131,14 +136,36 @@ describe('the pools directory has a THIRD spelling, and it is pinned too', () =>
   // the directory that constant names, which no text scan can show.
   const checks = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
 
-  it('ccd/ccrc-doctor-checks names .cc-sessions/<dir> exactly once, and <dir> is POOLS_DIR_NAME', () => {
+  it('ccd/ccrc-doctor-checks names .cc-sessions/<dir> exactly twice, and the two are POOLS_DIR_NAME and POOL_EPOCH_FILE_NAME, nothing else', () => {
     // Comment lines are excluded: this file's prose names the path in its own
-    // header, and a comment cannot make the check read anywhere.
+    // header, and a comment cannot make either check read anywhere.
+    //
+    // Item 17 (final fix round): `_check_pool-sync` (added earlier in this
+    // same fix round) opens with its own literal `$HOME/.cc-sessions/pool-epoch`
+    // — a SECOND `.cc-sessions/<segment>` literal this describe's original
+    // "exactly one" count did not anticipate. Widening the count to "exactly
+    // two" without checking WHICH two would be the exact relaxation the brief
+    // that wrote this describe forbids (a bare count re-accepts an unpinned
+    // literal), so this reworked version keeps the same shape the DIRECTORY
+    // NAME pin above already uses: every hit must be one of the two
+    // individually-pinned constants, both must appear, and a third —
+    // whatever segment it names — still reds here, as does either of the two
+    // known ones being spelled wrong or duplicated in place of the other.
     const hits = checks.split('\n')
       .filter((l) => !/^\s*#/.test(l))
       .flatMap((l) => [...l.matchAll(/\.cc-sessions\/([A-Za-z0-9._-]+)/g)].map((m) => m[1]!));
-    expect(hits.length, `expected exactly one .cc-sessions/<dir> literal, found ${hits.length}: ${hits.join(', ')}`).toBe(1);
-    expect(hits[0]).toBe(POOLS_DIR_NAME);
+    expect(hits.length, `expected exactly two .cc-sessions/<dir> literals, found ${hits.length}: ${hits.join(', ')}`).toBe(2);
+    const known = new Set([POOLS_DIR_NAME, POOL_EPOCH_FILE_NAME]);
+    // Guards the guard: if the two constants ever collided, the set-equality
+    // check below would pass on a single repeated hit instead of one of each.
+    expect(known.size, 'POOLS_DIR_NAME and POOL_EPOCH_FILE_NAME must not be the same string').toBe(2);
+    for (const h of hits) {
+      expect(known.has(h),
+        `${h} is not one of the two individually-pinned names (POOLS_DIR_NAME=${POOLS_DIR_NAME}, POOL_EPOCH_FILE_NAME=${POOL_EPOCH_FILE_NAME})`,
+      ).toBe(true);
+    }
+    // Both must be present — not the same one twice standing in for the other.
+    expect(new Set(hits)).toEqual(known);
   });
 
   it('the doctor check READS the directory POOLS_DIR_NAME names', () => {
@@ -162,6 +189,67 @@ describe('the pools directory has a THIRD spelling, and it is pinned too', () =>
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+// ── the FOURTH value this file holds equal: the pool-epoch FILENAME ────────
+// Item 17 (final fix round). The doctor's own literal is pinned above, as one
+// of the two names the previous describe enumerates; this describe pins the
+// other two files the brief names — the WRITER (`ccd/ccd-pool-sync`, bash and
+// python) and the placement READER (`ccd/ccd`, `_acct_pool_state`) — the same
+// way the NAME GRAMMAR and DIRECTORY NAME describes above pin theirs.
+//
+// THE WRITER MATTERS MOST. A rename at the publish site alone leaves every
+// reader — `ccd`, the doctor, both TypeScript sides — looking for the OLD
+// name forever: `_acct_pool_state` answers `unreadable` for every account,
+// which routes to undecidable -> refuse for every tagged project, silently,
+// with no red anywhere else. Fail-shut, so not dangerous, but the whole
+// feature stops. So the WRITER's own pin checks two things, not one: that its
+// several literal spellings of the filename agree with EACH OTHER (an
+// internal split — the publish call renamed, the pre-write guard not — would
+// be its own silent defect, invisible to a pin that only checked the publish
+// call against the constant), and that they agree with `POOL_EPOCH_FILE_NAME`.
+describe('the pool-epoch projection filename is one name across the writer, the placement reader, and the doctor', () => {
+  const CCD_POOL_SYNC = path.join(ccrcRoot, 'ccd', 'ccd-pool-sync');
+  const poolSyncSrc = readFileSync(CCD_POOL_SYNC, 'utf8');
+
+  it('ccd/ccd-pool-sync (the WRITER, bash + python) spells the filename the same way everywhere, and it is POOL_EPOCH_FILE_NAME', () => {
+    // Every literal reference to the projection's filename in this file — the
+    // tmp-file basename (`.pool-epoch.$$.tmp`), the pre-write directory guard
+    // (`-L`/`-d` on `$REG/pool-epoch`), its own error string, and the
+    // `os.rename()` target that actually publishes it — is matched here.
+    // This file holds no bash variable for the name the way `ccd/ccd` does
+    // for `POOLS_DIR`, so a rename touching fewer than all of these sites is
+    // possible and would be silent without this scan.
+    const hits = [...poolSyncSrc.matchAll(/\$REG\/\.?([A-Za-z][A-Za-z0-9-]*)(?:\.\$\$\.tmp)?"/g)].map((m) => m[1]!);
+    expect(hits.length, `expected 5 pool-epoch filename literals in ccd-pool-sync, found ${hits.length}: ${hits.join(', ')}`).toBe(5);
+    expect(new Set(hits).size,
+      `ccd-pool-sync spells the projection filename more than one way: ${[...new Set(hits)].join(', ')}`,
+    ).toBe(1);
+    expect(hits[0]).toBe(POOL_EPOCH_FILE_NAME);
+    // The publish call itself, matched explicitly rather than trusted to be
+    // among the five above: this `os.rename()` line is the one that actually
+    // determines the file's real name on disk, so it is the site the brief
+    // calls out as mattering most, pinned on its own rather than folded into
+    // the broader scan by coincidence of shape.
+    const target = /os\.rename\(sys\.argv\[1\], sys\.argv\[2\]\)'\s+"\$tmp"\s+"\$REG\/([A-Za-z0-9._-]+)"/.exec(poolSyncSrc)?.[1];
+    expect(target, 'could not find the os.rename() publish call in ccd/ccd-pool-sync').toBeTruthy();
+    expect(target).toBe(POOL_EPOCH_FILE_NAME);
+  });
+
+  it('ccd/ccd holds exactly one placement-reader spelling (f="$REG/<name>"), byte-equal to POOL_EPOCH_FILE_NAME', () => {
+    // `_acct_pool_state` binds its read path once, `f="$REG/pool-epoch"`
+    // (unlike `POOLS_DIR`, this is not a top-level `NAME=` assignment but one
+    // field of a multi-variable `local` line, so `exactlyOne`'s NAME=-shaped
+    // helper does not apply — this scan is narrower on purpose). The pattern
+    // requires the segment right after `$REG/` to run straight to a closing
+    // quote with no further `/` or `$` in it, which is what naturally excludes
+    // every OTHER `f="$REG/...` assignment in this file (`$1`-suffixed ids,
+    // `.reaped/$1.json`, `usage/sweep/latest.json` — none of them match this
+    // shape), rather than needing a hand-maintained exclude list.
+    const hits = [...ccdSrc.matchAll(/\bf="\$REG\/([A-Za-z0-9._-]+)"/g)].map((m) => m[1]!);
+    expect(hits.length, `expected exactly one f="$REG/<name>" literal in ccd/ccd, found ${hits.length}: ${hits.join(', ')}`).toBe(1);
+    expect(hits[0]).toBe(POOL_EPOCH_FILE_NAME);
   });
 });
 

@@ -1026,9 +1026,10 @@ const DOCTOR_FINDINGS = ['credential-declared-absent', 'settings-env-drift'];
 function effectiveBaseUrl(exec) {
   if (typeof exec.baseUrl === 'string' && exec.baseUrl !== '') return exec.baseUrl;
   // §4.1's absence-permitting rule, the same one `lane` reads: an account that
-  // names no provider is anthropic, EXCEPT an external one, whose provider is
-  // genuinely undeclared.
-  const p = exec.provider ?? (exec.kind === 'external' ? null : 'anthropic');
+  // names no provider is anthropic, except external or codex. Provider-less
+  // codex is an invalid raw hand-edit; calling it anthropic would present a
+  // guess as fact.
+  const p = exec.provider ?? (exec.kind === 'external' || exec.kind === 'codex' ? null : 'anthropic');
   if (p === null) return null;
   return PROVIDER_DEPLOY[p]?.defaultBaseUrl ?? null;
 }
@@ -1989,9 +1990,9 @@ function main(argv) {
     }
     const e = (acct['exec'] !== null && typeof acct['exec'] === 'object') ? acct['exec'] : {};
     // §4.1's absence-permitting rule: an account that names no provider is
-    // anthropic, EXCEPT an `external` one, whose provider is genuinely
-    // undeclared and whose credential is therefore nobody's business here.
-    const provider = e['provider'] ?? (e['kind'] === 'external' ? null : 'anthropic');
+    // anthropic, except external or codex. Provider-less codex is an invalid
+    // raw hand-edit, so calling it anthropic would present a guess as fact.
+    const provider = e['provider'] ?? (e['kind'] === 'external' || e['kind'] === 'codex' ? null : 'anthropic');
     // `PROVIDER_DEPLOY` is the deploy-side mirror this file already carries and
     // the `providers` op already proves against `shared/providers.ts` in both
     // directions (Task 20). A provider the table does not know answers '' and

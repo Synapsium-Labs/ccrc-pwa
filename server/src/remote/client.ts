@@ -11,6 +11,7 @@ import type {
   TailReset,
 } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
+import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
@@ -72,6 +73,26 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * THE ONE VALIDATOR of `AgentReady.ops` (design 2026-09-20 §8, §10), called
+ * once per `ready` by `onReady`. The peer may be older, newer or broken, so
+ * the list is validated, not trusted: absent, not an array, or refused by
+ * `validCapWords` (a word off `CAP_WORD`, a non-string, more than
+ * `MAX_CAP_WORDS` words — one bad word drops the whole list, §8) → `[]`.
+ *
+ * `[]` folds "an agent too old to say" with "an agent that said something
+ * unusable", and that fold is deliberate rather than a narrowing: every
+ * consumer treats both the same — the dispatcher never sends an op the link
+ * did not validly name. The distinction that DOES survive is the one
+ * decision 11 names: this reader never answers `undefined`/`null`, which are
+ * "no ready yet" and "no agent at all", so a connected fleet row stores `''`
+ * and the server row `NULL`, and the two never meet.
+ */
+export function readReadyOps(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return validCapWords(raw) ?? [];
+}
+
+/**
  * Owns exactly one logical connection to the agent — a fresh `WebSocket` per
  * attempt, hello/ready handshake, a request table keyed by numeric id
  * (ids are never reused across reconnects; not required to be — every
@@ -84,6 +105,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export class FleetClient {
   readonly state: FleetState = {
     connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
+    observedEpoch: undefined, agentOps: undefined,
   };
 
   private readonly cfg: ResolvedConfig;
@@ -325,6 +347,66 @@ export class FleetClient {
     // digest of the roster it used to have.
     this.state.rosterFp = typeof frame.rosterFp === 'string' && frame.rosterFp.length > 0
       ? frame.rosterFp : null;
+    // THE SINGLE READER of `frame.observedEpoch` — still literally true
+    // (nothing else touches this wire FRAME field) after item 1 (wave-1 fix
+    // round A), but no longer the whole story: this handler populates
+    // `FleetState.observedEpoch` from the HANDSHAKE, and that value is NOT
+    // this server's account of "which pool-membership epoch the fleet host
+    // actually has" any more — it was sampled once when the WS connected and
+    // never refreshes for a link that can live for days. `pools.ts`'s
+    // `readObservedEpochFromRegistry` measures `$REG/pool-epoch` fresh on
+    // every watcher tick / every `GET /api/fleet` request and is what feeds
+    // the `pools` wire's `observedEpoch` now; `FleetState.observedEpoch` as
+    // set below has no reader of its own today (additive-only forbids the
+    // agent from dropping the field, so this parse stays, but nothing
+    // downstream of `FleetClient.state` currently consumes this member —
+    // grep before assuming otherwise, since that is exactly the kind of claim
+    // this wave measured wrong more than once). THREE
+    // conditions, and unlike `rosterFp`/`build` just below, absence is NOT
+    // collapsed into the "no evidence" value the other two use (`null`):
+    // `null` here is itself a MEANING this agent build sends on purpose — "I
+    // have synced never" — so folding it with "the field is missing" would
+    // report a downgraded/older agent as if it were a fleet host still
+    // catching up. `=== undefined`, never `== null`: the latter is true of
+    // both and is exactly the fold `readObservedEpoch`'s own contract (and
+    // this task) forbids.
+    //
+    // VALIDATED, not merely type-checked (review T8-R1, F4) — `build`'s own
+    // comment three lines below states the doctrine this reader follows too:
+    // "the peer may be older, newer, or broken", so a JSON *number* is not
+    // automatically a well-formed epoch. `Number.isSafeInteger(...) && … >= 0`
+    // rejects a negative value and a non-integer — `ccd-pool-sync`'s own
+    // writer rejects both before ever rendering a document
+    // (`ccd-pool-sync:163`, `:186`) — as well as `NaN`/`±Infinity`, though
+    // JSON itself cannot carry those (`JSON.stringify` turns them into `null`
+    // before this code ever sees them, so a real peer can only reach this
+    // branch with a string/boolean/array/object, or a finite non-integer or
+    // negative number).
+    //
+    // Reset on every ready, same reason as `rosterFp`/`build`: a reconnect to
+    // an agent that no longer reports the field (a downgrade) must not keep
+    // answering with a number the box used to have.
+    if (frame.observedEpoch === undefined) {
+      this.state.observedEpoch = undefined;
+    } else if (frame.observedEpoch === null) {
+      this.state.observedEpoch = null;
+    } else if (
+      typeof frame.observedEpoch === 'number'
+      && Number.isSafeInteger(frame.observedEpoch)
+      && frame.observedEpoch >= 0
+    ) {
+      this.state.observedEpoch = frame.observedEpoch;
+    } else {
+      // Off-contract value from a broken or adversarial peer — wrong JS type
+      // entirely, or a number off the epoch grammar (negative, non-integer).
+      // No evidence, not a fabricated one.
+      this.state.observedEpoch = undefined;
+    }
+    // THE SINGLE READER of the ready frame's `ops` (design 2026-09-20 §8) —
+    // `readReadyOps` above is its one validator. Reset on EVERY ready, the
+    // `rosterFp`/`build` reason: a reconnect to a downgraded agent must not
+    // keep advertising an op the new process no longer answers.
+    this.state.agentOps = readReadyOps(frame.ops);
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
     // `buildAgreement` compares against this box's. Reset on every ready for
     // the same reason as `rosterFp`: a stamp kept from the previous connection

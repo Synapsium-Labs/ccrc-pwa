@@ -1,5 +1,5 @@
 import { buildServer, type Deps } from './server.js';
-import { loadConfig } from './config.js';
+import { derivedRoleNote, loadConfig } from './config.js';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
@@ -8,7 +8,7 @@ import { cachedHostStat, localHostStat, remoteHostStat } from './hoststat.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
-import { connectFleet } from './remote/client.js';
+import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
@@ -17,7 +17,10 @@ import { KeyedQueue } from './inject/queue.js';
 import { readMailToken } from './coord/token.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
+import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
+import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
 import { readLocalCcdCaps } from './localcaps.js';
+import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -66,12 +69,50 @@ if (mailToken === null) {
 // three-second crash loop.
 const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
 
+// The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
+// `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
+// INSIDE its transaction, so every caller needs to share this one instance
+// rather than each route constructing its own.
+const poolEdgeLog = new PoolEdgeLog(defaultPoolEdgeLogPath(cfg.home));
+
+// The process's ONE catalogue poller (design 2026-09-20 §7), beside `coord`
+// because its only write is `coord.applyReleaseListing`. Its state and ETag
+// are memory (D-3182). A box whose release source
+// could not be read (Task 9, D-3175) still builds one: every poll
+// then answers `no-release-source` and sends nothing — said once, here.
+const catalogue = createCataloguePoller({ source: cfg.releaseSource, apiUrl: cfg.releaseApiUrl, store: coord });
+if (cfg.releaseSource.ok === false) {
+  // `env-malformed` carries `path: null` (Task 9): the fault is the env pair, not a file.
+  const where = cfg.releaseSource.why === 'env-malformed'
+    ? 'CCRC_RELEASE_OWNER/CCRC_RELEASE_REPO are both set and one is not a plain GitHub name'
+    : cfg.releaseSource.path;
+  console.warn(`ccrc-server: no release source (${cfg.releaseSource.why}: ${where}) — the update ` +
+    'catalogue will not poll. Set BOTH CCRC_RELEASE_OWNER and CCRC_RELEASE_REPO in ~/.ccrc/ccrc.env, or run the ' +
+    'server from an installed tree whose ccd/ccrc carries its release-source lines.');
+}
+
+// D-3209: validated once, beside the release-source check above — a bad
+// `apiUrl` is just as fatal to the catalogue lane as a missing owner/repo.
+const releaseApiUrlProblem = apiBaseProblem(cfg.releaseApiUrl);
+if (releaseApiUrlProblem !== null) {
+  console.warn(`ccrc-server: ${releaseApiUrlProblem} — the update catalogue will not poll.`);
+}
+
+// The process's ONE `UpdateIntentLog`, beside `poolEdgeLog` and for its reason:
+// `CoordStore.setIntent` appends to it INSIDE its transaction, so the intent
+// route must share this instance rather than construct its own (design
+// 2026-09-20 §6).
+const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
 // call only against itself.
 const queue = new KeyedQueue();
 
+// The one agent connection, hoisted out of the remote arm so the `ready`
+// hook below can reach it once the watcher exists. Null in local mode.
+let fleetClient: FleetClient | null = null;
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
   if (!cfg.agentUrl || !cfg.agentToken) {
@@ -79,12 +120,16 @@ if (cfg.fleetMode === 'remote') {
     process.exit(1);
   }
   const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
+  fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
     cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
+    poolEdgeLog,
+    catalogue,
+    updateIntentLog,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
     // The FLEET box's load, asked of the agent — never this box's. In remote
     // mode this process runs somewhere the sessions do not, and its own
@@ -121,6 +166,18 @@ if (cfg.fleetMode === 'remote') {
     // compare it with itself and answer `'agreed'` — a green tick for a check
     // that never ran, and the one answer worse than saying nothing.
     build: null as BuildInfo | null,
+    // `observedEpoch` is OMITTED entirely (review T8-R1, F6), not set to an
+    // explicit `null` the way `rosterFp`/`build` are just above — and this is
+    // a DIFFERENT reason, not the same one restated. Those two are
+    // cross-box COMPARISONS with no second box to compare against in local
+    // mode, so `null` there is a considered "not applicable". `observedEpoch`
+    // is not a comparison — it is a fact about what pool epoch THIS box
+    // holds, which this box, running its own `ccd` locally, could in
+    // principle answer. Nothing here reads `~/.cc-sessions/pool-epoch` to
+    // populate it, so the omission is an honest gap (no evidence gathered),
+    // not a decided absence — `fleetstate.ts`'s own comment on this field
+    // says the same. `FleetState` declares the field OPTIONAL, so the
+    // omitted key reads as `undefined` on access either way.
   };
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;
@@ -128,6 +185,9 @@ if (cfg.fleetMode === 'remote') {
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    poolEdgeLog,
+    catalogue,
+    updateIntentLog,
     // Local mode drives ccd on this same box, so the sessions run here and
     // this box's own /proc IS the answer — the same sampler, a different
     // reader.
@@ -151,7 +211,21 @@ await notifyLog.load();
 const bus = new Bus();
 const watcher = new FleetWatcher(deps, bus);
 
+// Design 2026-09-20 §8: a `ready` frame measures the fleet node at once. The
+// handshake is when an agent that just restarted — a self-update among the
+// reasons — becomes measurable, and a minute is too long to show the old
+// build. A `ready` that fired before this line (the client connects while
+// `notifyLog.load()` is awaited above) is covered by the first tick: the
+// inventory lane's clock starts at 0.
+fleetClient?.onConnected(() => watcher.triggerInventory());
+
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 await app.listen({ host: cfg.host, port: cfg.port });
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
+
+// Said once at boot, beside the line above: a role DERIVED because CCRC_ROLE
+// is absent or invalid (D-3174) is visible nowhere else — the
+// inventory's server row carries the role, never where it came from.
+const roleNote = derivedRoleNote(cfg);
+if (roleNote !== null) console.warn(roleNote);

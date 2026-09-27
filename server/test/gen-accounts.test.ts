@@ -35,7 +35,7 @@
 // roster `parseRoster` genuinely throws on, asserted here rather than assumed,
 // so a case that stops being invalid on the TypeScript side cannot quietly
 // stop testing anything.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -54,6 +54,30 @@ import { mkTmp } from './tmpHelpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
+
+const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
+
+/** This deliberately drives `rosterFromJson`, not the TypeScript parser. */
+const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+  version: 1,
+  accounts: [
+    {
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: kind === 'codex'
+        ? {
+          kind, provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: `.local/share/ccrc/codex/${id}`,
+        }
+        : { kind },
+      homeAble: true, hue: 'cyan', telemetry: kind === 'codex' ? 'codex' : 'anthropic',
+    },
+    ...(kind === 'upstream' ? [] : [{
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    }]),
+  ],
+});
 
 /** Runs the CLI exactly as `deploy.sh` does: a bare `node`, one path argv,
  *  output on stdout. No tsx, no loader, no build — if this ever needs one,
@@ -257,6 +281,155 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
     expect(r.upstreamId).toBe('claude');
   });
 
+  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
+    'rosterFromJson refuses the %s GPT-lane toolchain id for every execution kind',
+    (id) => {
+      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+        expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, kind)))
+          .toThrow(`account id "${id}" collides with`);
+      }
+    },
+  );
+
+  it.each(['ccd', 'ccrc', 'ccd-worker'])('rosterFromJson keeps historical id %s valid', (id) => {
+    expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, 'upstream'))).not.toThrow();
+  });
+
+  it('accepts and faithfully projects a codex lane with a .ccrc-codex sibling authDir without adding topology to other kinds', async () => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const r = rosterFromJson({
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+            authDir: '.ccrc-codex/auth',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    });
+    const byId = new Map(r.accounts.map((a) => [a.id, a]));
+    expect(byId.get('codex-a')).toMatchObject({
+      execKind: 'codex',
+      proxyPort: 45010,
+      litellmPort: 45011,
+      authDir: '.ccrc-codex/auth',
+    });
+    expect(Object.hasOwn(byId.get('up')!, 'proxyPort')).toBe(false);
+    expect(Object.hasOwn(byId.get('up')!, 'litellmPort')).toBe(false);
+    expect(Object.hasOwn(byId.get('up')!, 'authDir')).toBe(false);
+  });
+
+  it('accepts a codex lane with an invalid generic-only baseUrl on both sides', () => {
+    const spec = {
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+            authDir: '.local/share/ccrc/codex/codex-a', baseUrl: 'not-a-url',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(() => parseRoster(spec)).not.toThrow();
+    } finally {
+      warn.mockRestore();
+    }
+    expect(() => rosterFromJsonSync(spec)).not.toThrow();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['non-string', 7],
+  ])('gives the intended authDir diagnostic for a %s value', async (_label, authDir) => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const spec = {
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir,
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    };
+    expect(() => rosterFromJson(spec)).toThrow('missing or non-string exec.authDir');
+  });
+
+  it('accepts two codex lanes with four disjoint ports', async () => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const r = rosterFromJson({
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+            authDir: '.local/share/ccrc/codex/codex-a',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+        {
+          id: 'codex-b', label: 'Codex B', configDirSuffix: '.claude-codex-b',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45012, litellmPort: 45013,
+            authDir: '.local/share/ccrc/codex/codex-b',
+          },
+          homeAble: false, hue: 'blue', telemetry: 'codex',
+        },
+      ],
+    });
+    expect(r.accounts.filter((a) => a.execKind === 'codex')).toHaveLength(2);
+  });
+
+  it('accepts both inclusive Codex port endpoints in their distinct fields', () => {
+    const r = rosterFromJsonSync({
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 1024, litellmPort: 65535,
+            authDir: '.local/share/ccrc/codex/codex-a',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    });
+    expect(r.accounts.find((a) => a.id === 'codex-a')).toMatchObject({
+      proxyPort: 1024, litellmPort: 65535,
+    });
+  });
+
   it('importing it does NOT run a CLI', async () => {
     // deploy/gen-accounts.mjs sets process.exitCode on import by design. The
     // extracted module must not, or every consumer inherits its exit status.
@@ -363,6 +536,26 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic', ...over,
   });
   const roster = (...accounts: unknown[]): unknown => ({ version: 1, accounts });
+  const codexAcct = (
+    id: string,
+    configDirSuffix: string,
+    exec: Record<string, unknown> = {},
+  ): Record<string, unknown> => acct({
+    id,
+    label: `Codex ${id}`,
+    configDirSuffix,
+    exec: {
+      kind: 'codex',
+      provider: 'openai',
+      proxyPort: 45010,
+      litellmPort: 45011,
+      authDir: `.local/share/ccrc/codex/${id}`,
+      ...exec,
+    },
+    homeAble: false,
+    hue: 'violet',
+    telemetry: 'codex',
+  });
 
   const CASES: [string, unknown][] = [
     ['not an object at all', [1, 2, 3]],
@@ -379,6 +572,35 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
     ['a configDirSuffix carrying a shell metacharacter', roster(acct({ configDirSuffix: '.a$(id)' }))],
     ['no exec at all', roster(acct({ exec: undefined }))],
     ['an unknown exec.kind', roster(acct({ exec: { kind: 'wrapper' } }))],
+
+    // ── codex: topology is explicit, safe and unique ───────────────────────
+    // These rows deliberately use valid, distinct accounts around the malformed
+    // codex lane. Before the bare-Node mirror learns the kind they are
+    // green-but-not-yet-specific: the CLI refuses `codex` as unknown while the
+    // TypeScript parser reaches the named guard. Once the kind is admitted, the
+    // rows prove the CLI reaches every matching codex refusal instead.
+    ['a codex lane with no ports', roster(codexAcct('codex-a', '.claude-codex-a', { proxyPort: undefined, litellmPort: undefined }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a non-integer proxyPort', roster(codexAcct('codex-a', '.claude-codex-a', { proxyPort: 45010.5 }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an out-of-range litellmPort', roster(codexAcct('codex-a', '.claude-codex-a', { litellmPort: 1023 }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane whose two ports are equal', roster(codexAcct('codex-a', '.claude-codex-a', { litellmPort: 45010 }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a missing authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: undefined }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a non-string authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: 7 }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an empty authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an absolute authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '/var/lib/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a trailing-slash authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.local/share/ccrc/codex-a/' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an escaping authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.local/share/../codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an unsafe-character authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.local/share/ccrc/codex-a$' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with authDir "."', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with a leading-./ authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: './.local/share/ccrc/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an interior-/./ authDir', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.local/./share/ccrc/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane with an authDir under .ccrc', roster(codexAcct('codex-a', '.claude-codex-a', { authDir: '.ccrc/codex/codex-a' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['a codex lane whose provider is not openai', roster(codexAcct('codex-a', '.claude-codex-a', { provider: 'anthropic' }), acct({ id: 'up', configDirSuffix: '.up' }))],
+    ['two codex lanes whose shim and LiteLLM ports collide', roster(
+      codexAcct('codex-a', '.claude-codex-a', { proxyPort: 45010, litellmPort: 45011 }),
+      codexAcct('codex-b', '.claude-codex-b', { proxyPort: 45011, litellmPort: 45013 }),
+      acct({ id: 'up', configDirSuffix: '.up' }),
+    )],
+
     ['a non-string exec.secretsFile', roster(acct({ exec: { kind: 'generated', secretsFile: 7 } }), acct({ id: 'up' }))],
     // exec.secretsFile is embedded inside a double-quoted bash string in the
     // generated wrapper (`[ -r "$HOME/<path>" ] && . "$HOME/<path>"`), so it

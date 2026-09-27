@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -690,7 +690,21 @@ function pathWithout(home: string, missing: string): string {
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
     // "linux", and this list is where that PATH gets built.
-    ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname'] : [])]) {
+    //
+    // `uuidgen` and `tr` join the darwin arm for the same trap the entries
+    // above document, in the one shape this list had not yet seen: a new
+    // dependency that is INVISIBLE ON LINUX. `_inst_node_id` (the W1 part B
+    // seed-once identity, `ccd/ccrc:9506`) calls `_plat_uuid`, whose linux arm
+    // is `cat /proc/sys/kernel/random/uuid` — a read, no binary at all — and
+    // whose darwin arm is `uuidgen | tr 'A-F' 'a-f'`, two of them. So the
+    // fixture stayed green on every linux leg while the macos leg died at the
+    // new step with `uuidgen: command not found` / `tr: command not found` and
+    // then `ccrc: could not mint a node id`, before either test's own subject
+    // was reached: measured on run 35598474369, where `says GIT IS ABSENT when
+    // git is absent` lost its stamp line and `refuses without rsync` never got
+    // to print its refusal. The verb itself is correct there — it names its
+    // cause and changes nothing — so the gap is this PATH, not the spine.
+    ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname', 'uuidgen', 'tr'] : [])]) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
@@ -860,6 +874,26 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.stderr, 'the default role must not be refused for a unit it never installs')
       .not.toMatch(/no agent build at/);
     expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('--role server skips every per-account step — no config dir, hooks, skills, wrappers or session files are written on a box that hosts no sessions', () => {
+    // 2026-09-19, measured on the live server box: the spine converged 17
+    // accounts there — dirs, settings.json hooks (the operator's own ~/.claude
+    // included), skills, wrappers, and their statusline moved aside — while
+    // doctor's `skills` check SKIPs that role as "hosts no sessions". The
+    // installer now says the same thing the doctor says.
+    const home = freshBox('ccrc-install-server-skips-accounts-');
+    gitInit(treeRoot(home));   // a readable stamp, so the record can name a sha
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const step of ['files', 'dirs', 'hooks', 'skills', 'wrappers']) {
+      expect(r.stdout).toMatch(new RegExp(`^install: ${step}: skipped — a server-role box hosts no sessions`, 'm'));
+    }
+    expect(existsSync(join(home, '.claude', 'skills', 'ccrc-worker')), 'a skill was placed on a server-role box').toBe(false);
+    expect(existsSync(join(home, '.claude', 'settings.json')), 'hooks were registered on a server-role box').toBe(false);
+    expect(existsSync(join(home, '.cc-sessions', 'session-hook.sh')), 'session files were placed on a server-role box').toBe(false);
+    // …and the record is still written LAST, so `update --check` reads a completed install.
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(true);
   });
 
   it('does NOT demand an agent build for --role server (D-1159)', () => {
@@ -1043,6 +1077,31 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(existsSync(placed(home)), 'a half-made $HOME/ccrc was left behind').toBe(false);
   });
 
+  it('replaces a file whose size and mtime are unchanged but whose content is not', () => {
+    // The release tarball is reproducible (`build-release.sh`: `--mtime=@0`),
+    // so every file `ccrc update` extracts — and therefore every file it placed
+    // last time — has mtime 0. rsync's default quick check compares size and
+    // mtime only, so a changed file that kept its size was SKIPPED. v0.0.11 hit
+    // exactly that: dist-pwa/index.html and sw.js are fixed-size templates
+    // around equal-length content hashes, so the new bundle landed, --delete
+    // removed the old one, and the old index.html kept pointing at it — a
+    // black screen on any load the service worker did not answer.
+    const home = freshBox('ccrc-install-same-size-');
+    expect(runInstall(home).code).toBe(0);
+    const rel = 'server/dist-pwa/index.html';
+    const before = read(placed(home, ...rel.split('/')));
+    const after = before.replace(/./, c => (c === 'X' ? 'Y' : 'X'));
+    expect(after.length).toBe(before.length);
+    expect(after).not.toBe(before);
+    writeFileSync(treeFile(home, rel), after);
+    utimesSync(treeFile(home, rel), 0, 0);
+    utimesSync(placed(home, ...rel.split('/')), 0, 0);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(placed(home, ...rel.split('/')))).toBe(after);
+    expect(read(join(home, 'rsync-argv'))).toContain('--checksum');
+  });
+
   it('a second run keeps the runtime deps the first one installed', () => {
     // `--delete` with `--exclude node_modules` protects the excluded path on
     // the RECEIVER (rsync does not delete what it was told to ignore, absent
@@ -1078,6 +1137,23 @@ describe('ccrc install: the fixture tree', () => {
     const home = freshBox('ccrc-install-tree-copy-');
     writeFileSync(treeFile(home, 'deploy/accounts.default.json'), 'clobbered');
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
+  });
+
+  it('the fixture tree carries the two GPT-lane executables that ship today', () => {
+    // The two `.py` files only. `ccgpt` and `ccgpt-runtime` are not in the
+    // repository until Plan 2b-2, and the fixture no longer stubs them: a stub
+    // is what let a placement of them pass here while a real tree would die.
+    const home = mkTmp('ccrc-tree-ccgpt-');
+    const root = installFixtureTree(home);
+    for (const rel of ['ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
+      const p = join(root, rel);
+      expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
+      // 0o111 — both are placed 755 by `_inst_bins`, and copied at the repo's mode.
+      expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
+    }
+    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime']) {
+      expect(existsSync(join(root, rel)), `${rel} is in the fixture tree, and the repository has no such file`).toBe(false);
+    }
   });
 });
 
@@ -1651,6 +1727,84 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
+  it('places the two GPT-lane executables that exist today on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
+    // Unlike the three darwin-gated cases above, these are NOT platform-gated:
+    // the two `.py` files are NOT timer-only tools reserved to the systemd
+    // arm. `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py`
+    // is placed here so an operator can run it by hand (no installer places
+    // its timer yet). They ARE role-gated, `!= server` (spec §11, final
+    // review F-2): this install is role `both`, the fleet describe pins
+    // `fleet`, and the `--role server` case pins their absence.
+    //
+    // Fix round 1, Finding 1: `ccgpt` and `ccgpt-runtime` are NOT placed by
+    // `_inst_bins` yet — they don't exist in the tree (`git ls-files ccd/`
+    // has no such names) until Plan 2b-2 writes them, and `_inst_atomic`
+    // dies on a missing source by design. This test covers only the two
+    // names that exist; Plan 2b-2 extends it to four in the same commit
+    // that adds the real files.
+    const { home } = installed;
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      const bin = join(home, '.local', 'bin', name);
+      expect(readFileSync(bin), `${name} was not placed`).toEqual(readFileSync(placed(home, 'ccd', name)));
+      expect(mode(bin), `${name} mode`).toBe(0o755);
+    }
+  });
+
+  itLinux('the DARWIN arm of _inst_bins, forced on Linux (OSTYPE=darwin23): the two .py on both and fleet, neither on server', () => {
+    // Final review F-8 (DAR-1): the two-arm placement and the Darwin closing
+    // line were pinned only by `itDarwin`/`process.platform` branches, and no
+    // CI leg runs those. `ccd/ccrc` takes its arm from `$OSTYPE` first
+    // (ccd/ccrc's platform block), and bash keeps an OSTYPE it inherits, so
+    // the child runs the Darwin arm here — `install: units:` naming
+    // `$HOME/Library/LaunchAgents` is the control that it did.
+    //
+    // FORCED THROUGH `_inst_bins`, NOT THROUGH THE VERB. A later step of a
+    // `both`/`fleet` install (the wrapper converger's `stat`) speaks BSD
+    // userland on that arm, which a Linux box does not have, so the run exits
+    // nonzero AFTER this function's work is done (measured: `stat answered for
+    // 85 of the 17 id-shaped files`). The exit code is therefore not asserted:
+    // what is asserted is everything `_inst_bins` did, which a step failing
+    // later cannot undo.
+    for (const role of ['both', 'fleet', 'server'] as const) {
+      const home = freshBox(`ccrc-install-darwin-arm-${role}-`);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'agent.env'),
+        'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+      const r = runInstall(home, ['install', '--role', role], { OSTYPE: 'darwin23' });
+      expect(r.stdout, `--role ${role}: the Darwin arm was not taken\n${r.stderr}`)
+        .toMatch(/^install: units: .* in \$HOME\/Library\/LaunchAgents \(launchd\)$/m);
+      const lane = role === 'server' ? [] : ['ccgpt-proxy.py', 'ccgpt-usage.py'];
+      const bins = readdirSync(join(home, '.local', 'bin'))
+        .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify').sort();
+      expect(bins, `--role ${role}: what the Darwin arm of _inst_bins placed`)
+        .toEqual(['ccd', 'ccd-account-auth', ...lane, 'ccrc'].sort());
+      for (const name of lane) {
+        const bin = join(home, '.local', 'bin', name);
+        expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+        expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+      }
+      const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+      expect(line, `--role ${role}: no \`install: bins:\` line`).toBeDefined();
+      expect(line!, `--role ${role}: not the Darwin closing line`).toContain('macOS has none');
+      if (role === 'server') {
+        expect(line!, 'the server-role Darwin closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
+      } else {
+        expect(line!).toMatch(/(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/);
+      }
+    }
+  });
+
+  itLinux('ccd-tmp-sweep lands beside it too (the temp-dir reaper) — every role, but not Darwin', () => {
+    // Mirrors the `ccd-graph-sweep` case above: `_inst_bins` ships it on every
+    // role, on the same darwin carve-out (its only runner is a systemd timer
+    // and it reads /proc). Its UNIT and ENABLE are additionally role-gated
+    // (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-tmp-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tmp-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
   it('the launcher is BYTE FOR BYTE what deploy.sh generates', () => {
     // THE AGREEMENT PIN. The launcher now has two generators — `deploy.sh`'s
     // `install_ccrc_shim` for a box reached over ssh, and `_inst_shim` for a
@@ -1864,10 +2018,14 @@ describe('ccrc install: the order is stated in one place', () => {
       // is a grouping rather than a dependency — the three files an operator
       // owns are seeded together, and the transcript reads that way too.
       '_inst_rc',
+      // design 2026-09-20 §3: seed-once identity, with the other seed-once files
+      '_inst_node_id',
       '_inst_tree',
       '_inst_bins',
       '_inst_files',
       '_inst_stamp',
+      // §9: what THIS install can do, beside the stamp that says what it is
+      '_inst_caps',
       // Task 8. Three orderings in this half are load-bearing and each one is
       // measured by a test of its own below: the units land before anything
       // enables them, the account config dirs exist before the hooks installer
@@ -1918,11 +2076,22 @@ describe('ccrc install: the order is stated in one place', () => {
       // No later step reads what this one writes, so the position is the
       // brief's own placement rather than a measured dependency.
       '_inst_graph_excludes',
+      // Workspace-cleanup fix. Right after `_inst_graph_excludes`, same walk
+      // and same reason: `ws-add` writes the `node_modules`/`cdk.out` exclude
+      // pair into every NEW workspace, and this is the backfill for a
+      // project or workspace `ws-add` never touched, or touched before the
+      // pair existed. Position is a grouping (both converge the same
+      // per-project info/exclude), not a measured dependency.
+      '_inst_ws_build_excludes',
       // graphify Task 10 (O3/O6b). Right after `_inst_graph_excludes`, per
       // the task brief: no later step reads what it does, so the position is
       // the brief's own placement rather than a measured dependency.
       '_inst_graph_hooks_off',
       '_inst_wrappers',
+      // Release/rollout design §5, Task 3. LAST, deliberately: this is the
+      // completed-install record, so it must run only once every step above
+      // has already converged or died.
+      '_inst_installed',
     ]);
   });
 
@@ -1937,6 +2106,94 @@ describe('ccrc install: the order is stated in one place', () => {
     const lines = body![1]!.split('\n').map((l) => l.trim())
       .filter((l) => l !== '' && !l.startsWith('#'));
     expect(lines[lines.length - 1]).toBe('cmd_doctor');
+  });
+});
+
+describe('ccrc install: workspace build-artifact excludes (_inst_ws_build_excludes)', () => {
+  it('converges node_modules/cdk.out into a project AND its worktree, ignoring a node_modules SYMLINK there', () => {
+    const home = freshBox('ccrc-install-ws-excl-');
+    const repoA = join(home, 'projects', 'repoA');
+    mkdirSync(repoA, { recursive: true });
+    writeFileSync(join(repoA, 'a.txt'), 'x\n');
+    gitInit(repoA);
+    const ws1 = join(home, 'worktrees', 'repoA', 'ws1');
+    mkdirSync(join(home, 'worktrees', 'repoA'), { recursive: true });
+    const wtAdd = spawnSync('git', ['-C', repoA, 'worktree', 'add', ws1, '-b', 'ws1'], { encoding: 'utf8' });
+    expect(wtAdd.status, wtAdd.stderr).toBe(0);
+
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: workspace: build-artifact excludes converged \(node_modules, cdk\.out; \d+ new\)$/m);
+
+    // EXACT LINES, for the reason ccd-workspaces.test.ts states beside its own
+    // copy: a substring assertion is satisfied by the trailing-slash spelling,
+    // which IS the bug. The absence pin is the half that reds on a regression.
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    const excl = readFileSync(excludeFile, 'utf8').split('\n');
+    expect(excl).toContain('node_modules');
+    expect(excl).toContain('cdk.out');
+    expect(excl).not.toContain('node_modules/');
+    expect(excl).not.toContain('cdk.out/');
+
+    // The real defect (measured live on the fleet): a workspace whose
+    // node_modules is a SYMLINK to a shared cache, which a trailing-slash
+    // pattern does not match. This backfill's lines carry no trailing slash.
+    mkdirSync(join(home, 'shared-cache'));
+    symlinkSync(join(home, 'shared-cache'), join(ws1, 'node_modules'), 'dir');
+    const checkIgnore = spawnSync('git', ['-C', ws1, 'check-ignore', '-q', 'node_modules'], { encoding: 'utf8' });
+    expect(checkIgnore.status).toBe(0);
+    const status = spawnSync('git', ['-C', ws1, 'status', '--porcelain'], { encoding: 'utf8' });
+    expect(status.stdout).toBe('');
+
+    // A second run converges the same lines, not a second copy of them.
+    const first = readFileSync(excludeFile, 'utf8');
+    const r2 = runInstall(home, ['install']);
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(readFileSync(excludeFile, 'utf8')).toBe(first);
+  });
+
+  it('retrofits a repository reachable only through $HOME/worktrees', () => {
+    const home = freshBox('ccrc-install-ws-excl-worktree-only-');
+    const externalRepo = join(home, 'external', 'repoB');
+    mkdirSync(externalRepo, { recursive: true });
+    writeFileSync(join(externalRepo, 'b.txt'), 'x\n');
+    gitInit(externalRepo);
+
+    const wsOnly = join(home, 'worktrees', 'repoB', 'ws-only');
+    mkdirSync(join(home, 'worktrees', 'repoB'), { recursive: true });
+    const wtAdd = spawnSync(
+      'git', ['-C', externalRepo, 'worktree', 'add', wsOnly, '-b', 'ws-only'],
+      { encoding: 'utf8' },
+    );
+    expect(wtAdd.status, wtAdd.stderr).toBe(0);
+
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+
+    // The main checkout is deliberately outside $HOME/projects. Only the
+    // linked worktree makes this repository discoverable, so deleting the
+    // $HOME/worktrees scan root leaves this assertion red.
+    const excludeFile = join(externalRepo, '.git', 'info', 'exclude');
+    const excl = readFileSync(excludeFile, 'utf8').split('\n');
+    expect(excl).toContain('node_modules');
+    expect(excl).toContain('cdk.out');
+    expect(excl).not.toContain('node_modules/');
+    expect(excl).not.toContain('cdk.out/');
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-install-ws-excl-server-');
+    const repoA = join(home, 'projects', 'repoA');
+    mkdirSync(repoA, { recursive: true });
+    writeFileSync(join(repoA, 'a.txt'), 'x\n');
+    gitInit(repoA);
+
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    expect(existsSync(excludeFile) && readFileSync(excludeFile, 'utf8').includes('node_modules'))
+      .toBe(false);
   });
 });
 
@@ -2191,6 +2448,12 @@ const UNIT_FILES: Array<[string, string]> = [
   // that is supposed to run them hourly.
   ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
   ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
+  // NOT the GPT-usage publisher's `ccgpt-usage@.{service,timer}`: no role
+  // places that pair (the dedicated case below says why, and pins it).
+  // The temp-dir reaper: ROLE-GATED on the same terms — a server box runs no
+  // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
+  ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
+  ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2228,7 +2491,19 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs ten unit files and two drop-ins, byte for byte, at 644', () => {
+  // The count is DERIVED from `UNIT_FILES` itself, not hand-written: fix
+  // round 1 (Finding 4) measured the title stuck at "ten" while the census
+  // had grown to fourteen, the exact staleness this avoids repeating.
+  //
+  // Split by SUFFIX, not by position. `UNIT_FILES.length - 2` was the first
+  // spelling and it is a hand-maintained constant wearing a derivation's
+  // clothes: it is correct only while the two drop-ins are the last two rows,
+  // so appending a unit file below them silently makes the title wrong by one
+  // — the same defect, one wave later and harder to see. Every drop-in is a
+  // `.conf`; no unit file is.
+  const dropIns = UNIT_FILES.filter(([dest]) => dest.endsWith('.conf'));
+  const unitFiles = UNIT_FILES.filter(([dest]) => !dest.endsWith('.conf'));
+  it(`installs ${unitFiles.length} unit files and ${dropIns.length} drop-ins, byte for byte, at 644`, () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
@@ -2243,6 +2518,69 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
         .toEqual(readFileSync(placed(home, ...src.split('/'))));
       expect(statSync(p).mode & 0o777, `${dest} has the wrong mode`).toBe(0o644);
     }
+  });
+
+  itLinux('places NO ccgpt-usage@ unit file on any role — the pair ships in the tree and waits for Plan 3\'s cutover', () => {
+    // Final review F-1 (SEC-1 = FID-1). On a live fleet box
+    // `~/.config/systemd/user/ccgpt-usage@.service` and `@.timer` ALREADY
+    // EXIST, owned by another repository, with an instance enabled. Placing
+    // ours at those two names replaces a running timer's definition, so it
+    // is the cutover, and Plan 3 owns that (spec §15 step 3). This case pins
+    // `both` (the shared install above) and `fleet` (the role a Codex lane
+    // runs under); the `--role server` describe pins the third role. The
+    // files still SHIP: `_inst_tree` lands them in the placed tree.
+    const home = freshBox('ccrc-install-ccgpt-usage-fleet-');
+    // `--role fleet` reads the agent's URL and token from a tty when
+    // `~/.ccrc/agent.env` is absent; a box that already carries one (every
+    // re-install) skips that prompt.
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const [role, h] of [['both', units.home], ['fleet', home]] as const) {
+      for (const u of ['ccgpt-usage@.service', 'ccgpt-usage@.timer']) {
+        expect(existsSync(unitDir(h, u)), `--role ${role} placed ${u}`).toBe(false);
+        expect(existsSync(placed(h, 'deploy', 'systemd', u)), `--role ${role}: ${u} did not ship in the placed tree`)
+          .toBe(true);
+      }
+      expect(systemctlCalls(h).map((c) => c.argv).join('\n'), `--role ${role}`).not.toContain('ccgpt-usage');
+    }
+  });
+
+  itLinux('a FOREIGN ccgpt-usage@ unit pair and its enabled instance survive install --role fleet and uninstall, byte for byte', () => {
+    // The live fleet box's shape (F-1), in a fixture HOME: another
+    // repository's template pair at the two names, and an ENABLED instance of
+    // it (the `timers.target.wants/` link `systemctl enable` makes). Every
+    // fixture HOME before this case was empty there, so nothing could see an
+    // install overwrite that pair or an uninstall delete it.
+    const home = freshBox('ccrc-install-foreign-ccgpt-usage-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const svc = unitDir(home, 'ccgpt-usage@.service');
+    const timer = unitDir(home, 'ccgpt-usage@.timer');
+    const wants = unitDir(home, 'timers.target.wants', 'ccgpt-usage@x.timer');
+    mkdirSync(unitDir(home, 'timers.target.wants'), { recursive: true });
+    const foreignSvc = '# FOREIGN-FIXTURE-7f3a: another repository owns this template\n[Service]\nType=oneshot\nExecStart=/bin/true %i\n';
+    const foreignTimer = '# FOREIGN-FIXTURE-7f3a: another repository owns this template\n[Timer]\nOnCalendar=*:0/7\n';
+    writeFileSync(svc, foreignSvc, { mode: 0o644 });
+    writeFileSync(timer, foreignTimer, { mode: 0o644 });
+    symlinkSync(timer, wants);
+    const untouched = (stage: string): void => {
+      expect(read(svc), `${stage}: the foreign ccgpt-usage@.service changed`).toBe(foreignSvc);
+      expect(read(timer), `${stage}: the foreign ccgpt-usage@.timer changed`).toBe(foreignTimer);
+      expect(lstatSync(wants).isSymbolicLink(), `${stage}: the enabled instance's wants link is gone`).toBe(true);
+      expect(readlinkSync(wants), `${stage}: the wants link was repointed`).toBe(timer);
+    };
+    const inst = runInstall(home, ['install', '--role', 'fleet']);
+    expect(inst.code, inst.stderr).toBe(0);
+    untouched('after install --role fleet');
+    const un = runInstall(home, ['uninstall']);
+    expect(un.code, `stderr: ${un.stderr}\nstdout: ${un.stdout}`).toBe(0);
+    untouched('after uninstall');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n'), 'a systemctl verb named the foreign unit')
+      .not.toContain('ccgpt-usage');
   });
 
   it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
@@ -2309,6 +2647,15 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4 fix round 2 (ruling T4-R1):
+      // `ccd-pool-sync.timer` is ABSENT here, and its absence is the
+      // assertion. This describe's install is the default role, `both`, and
+      // `both` is not `fleet` — so it gets no `~/.ccrc/agent.env`, which is
+      // the one file `ccd-pool-sync` refuses without. Arming the timer here
+      // would enable a oneshot that exits 1 every 60 seconds forever while
+      // the TIMER (which is what `_check_services` measures) stays active, so
+      // `ccrc doctor` would print PASS on a box the sync has never worked on.
+      // The fleet-role describe below is where this enable is pinned present.
       // graphify Task 10 (O3/O6b): a THIRD enable, beside cap-scopes', for the
       // role-gated sweep timer — the default install here is role `both`, so
       // it fires. Degrades rather than dies on failure (`_inst_linger`'s own
@@ -2318,6 +2665,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // Routing slice 0 Task 7: another degrade-rather-than-die enable, on the
       // graph-sweep's own terms, for the usage-accounting sweep's timer.
       '--user enable --now ccd-usage-sweep.timer',
+      // The temp-dir reaper's timer, on the same gate and the same
+      // degrade-rather-than-die idiom as the two sweeps above it.
+      '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -2721,7 +3071,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // agree, which is what doctor judges two steps later.
     const { home, r } = converged;
     expect(r.stdout).toMatch(
-      /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
+      /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external, 0 codex \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
     // Nothing but the five executables `_inst_bins` installs (graphify Task 10
     // adds `ccd-graph-sweep`) and R3's one SYMLINK — no wrapper, no temp file,
@@ -2737,10 +3087,82 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b)).sort())
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
-        // and the three timer-bound ones, macOS is a supported box for it.
-        ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
+        // and the three timer-bound ones, macOS is a supported box for it. The
+        // two GPT-lane files that exist today (Plan 2b-1 Task 2) join it here
+        // for the same reason: `ccgpt-proxy.py` is the engine `ccgpt` execs
+        // and `ccgpt-usage.py` is placed for hand-running, neither timer-bound
+        // to this arm. `ccgpt`/`ccgpt-runtime` are NOT here — they don't
+        // exist in the tree until Plan 2b-2 (fix round 1, Finding 1).
+        ? ['ccd', 'ccd-account-auth', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']
+        // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
+        // joins the non-Darwin list on the timer-bound names' own terms. THIS
+        // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
+        // an exact set, so deleting the install reds here rather than leaving
+        // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py', 'ccrc', 'graphify']);
+           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
+           'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']);
+  });
+
+  it('_inst_bins\' own closing line names every executable it placed', () => {
+    // account-pool-membership wave 1, Task 4 fix round 2 (B6). That echo is a
+    // SECOND, hand-kept census of the same set the assertion above measures,
+    // and it shipped one wave behind it: `ccd-pool-sync` landed in
+    // `_inst_bins` in fix round 1 and the sentence that tells the operator
+    // what arrived never gained the name. Nothing could see it, because the
+    // only pin on that line was `/^install: bins: /`.
+    //
+    // DERIVED FROM THE BIN DIRECTORY, so the next executable added is caught
+    // by the same mechanism rather than by someone remembering this line —
+    // `macos-platform.test.ts:184-189`'s rule under D-1250. `graphify` is
+    // excluded because `_inst_graphify_engine`'s symlink into the pinned venv
+    // is not one of `_inst_bins`' copies.
+    //
+    // Plan 2b-1 Task 2: the blanket `!b.endsWith('.py')` this line used to
+    // carry is gone. A `.py` file is exempt only when a non-`.py` SIBLING
+    // execs it and that sibling's own name in the echo covers it — named
+    // explicitly, not by suffix, so a `.py` with no such sibling is caught
+    // rather than silently waved through. Fix round 1, Finding 4: the
+    // reviewer mutated this list both ways — dropping `ccd-usage-sweep.py`
+    // reds, dropping `ccgpt-proxy.py` stayed GREEN, because the echo names
+    // `ccgpt-proxy.py` explicitly regardless (it is not a timer-only
+    // artifact), so it bound nothing and is gone. One entry survives:
+    const PY_SIDECARS_COVERED_BY_SIBLING = [
+      'ccd-usage-sweep.py', // engine carried by ccd-usage-sweep's own name
+    ];
+    // `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
+    // each must be named explicitly in the echo below on its own.
+    const { home, r } = converged;
+    const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+    expect(line, 'no `install: bins:` line in the transcript at all').toBeDefined();
+    const placed = readdirSync(join(home, '.local', 'bin'))
+      .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify'
+        && !PY_SIDECARS_COVERED_BY_SIBLING.includes(b))
+      .sort();
+    // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum (`ccd`,
+    // `ccd-account-auth`, `ccgpt-proxy.py`, `ccgpt-usage.py`, `ccrc`) — the
+    // smaller of the two platforms, so it holds on both. Like
+    // `gen-wrappers.test.ts`'s `TOOLCHAIN_EXECUTABLES` floor, this is a
+    // RATCHET: it only ever needs to rise as names are added, never fall,
+    // and a fall here means the derivation lost members rather than that
+    // fewer names shipped.
+    expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
+      .toBeGreaterThanOrEqual(5);
+    // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
+    // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
+    // PREFIX of another name this same census carries (`ccd-account-auth`,
+    // `ccd-cap-scopes`, … and `ccd-usage-sweep.py` respectively), so deleting
+    // either bare name from the real echo would leave this pin GREEN as long
+    // as its longer sibling still printed. PLAIN `\b` does not close this —
+    // a hyphen is a NON-word character, so `\bccd\b` still matches the `ccd`
+    // inside `ccd-account-auth` (the boundary fires on the hyphen itself,
+    // measured). The name must not be immediately flanked by a word
+    // character OR a hyphen on either side.
+    for (const b of placed) {
+      const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(line, `${b} is in $HOME/.local/bin and the install transcript never says it arrived`)
+        .toMatch(new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`));
+    }
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3005,6 +3427,41 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+  });
+
+  it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
+    // The completed-install record (spec §5). It cannot ride in build.json:
+    // `_inst_stamp` sits mid-spine because the server restarted by
+    // `_inst_enable` reads the stamp at boot, so a stamp-only signal would
+    // read "installed" on a box whose skills never landed.
+    const home = freshBox('ccrc-install-installed-');
+    const sha = gitInit(treeRoot(home));
+    const ok = runInstall(home);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+    // Line 2 (design §5, D-3117): `unsigned` unless the
+    // updater asserted it verified the bundle — a plain `ccrc install` from
+    // a checkout verified nothing.
+    const verified = freshBox('ccrc-install-installed-verified-');
+    const vsha = gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\n`);
+    expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
+    // Ordering: the line is printed AFTER the wrappers step's own line.
+    const lines = ok.stdout.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('install: installed:')))
+      .toBeGreaterThan(lines.findIndex((l) => l.startsWith('install: wrappers:')));
+
+    // A fault INSIDE the spine, after the stamp: the reviewer skill's
+    // installer refuses when its SKILL.md is missing, which kills
+    // `_inst_skills` — the exact shape of the 2026-09-17 incident.
+    const broken = freshBox('ccrc-install-installed-fault-');
+    gitInit(treeRoot(broken));
+    rmSync(treeFile(broken, 'ccd/reviewer-skill/SKILL.md'));
+    const r = runInstall(broken);
+    expect(r.code).toBe(1);
+    expect(existsSync(join(broken, '.ccrc', 'build.json')), 'the stamp is written mid-spine, as designed').toBe(true);
+    expect(existsSync(join(broken, '.ccrc', 'installed')), 'a spine that died must leave NO completed-install record').toBe(false);
   });
 
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {
@@ -3354,6 +3811,20 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=fleet$/m);
   });
 
+  it('places the two GPT-lane executables, and the closing line names them — the role a lane runs under', async () => {
+    // Final review F-2 (spec §11): `_inst_bins` gates them `!= server`, on
+    // both platform arms, so a fleet box gets both. The server-role case in
+    // the next describe pins the other side of that gate.
+    const { home, r } = await fleet();
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      const bin = join(home, '.local', 'bin', name);
+      expect(existsSync(bin), `--role fleet did not place ${name}`).toBe(true);
+      expect(readFileSync(bin), `${name} is not the placed tree's copy`).toEqual(readFileSync(placed(home, 'ccd', name)));
+      expect(statSync(bin).mode & 0o777, `${name} mode`).toBe(0o755);
+    }
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccgpt-proxy\.py, ccgpt-usage\.py(?![\w-])/m);
+  });
+
   itLinux('installs ccrc-agent.service — byte for byte — and NOT ccrc.service', async () => {
     const { home } = await fleet();
     const agent = unitDir(home, 'ccrc-agent.service');
@@ -3366,6 +3837,13 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
       if (dest === 'ccrc.service') continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
+    // Ruling T4-R1: the pool-sync pair lands HERE AND ONLY HERE. It is not in
+    // `UNIT_FILES` — that list is what a role-`both` install places, and this
+    // pair deliberately is not — so it takes its own two lines. This is the
+    // role that gets `~/.ccrc/agent.env` (asserted three tests up), which is
+    // the only precondition under which `ccd-pool-sync` can ever exit 0.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(true);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(true);
   });
 
   itLinux('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
@@ -3378,6 +3856,14 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
     // C5: fleet is not server, so the models timer enables here too.
     expect(argv).toContain('--user enable --now ccrc-models.timer');
+    // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
+    expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
+    // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
+    // — the role whose install wrote the `~/.ccrc/agent.env` the binary
+    // refuses without. `--role both` and `--role server` below assert the
+    // matching absence, so the pair of claims cannot both be satisfied by a
+    // gate that is simply always true or always false.
+    expect(argv).toContain('--user enable --now ccd-pool-sync.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3433,6 +3919,11 @@ describe('ccrc install --role: the refusals and the default', () => {
     }
     expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // Ruling T4-R1, the unit-file half: `_inst_units` gates the pool-sync
+    // pair on `fleet` too, so a `both` box is never given a unit file for the
+    // timer it is not supposed to arm.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=both$/m);
     const calls = systemctlCalls(home)
       // Reads dropped, mutations kept — see the sibling assertion above for why
@@ -3444,8 +3935,14 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // Ruling T4-R1: `ccd-pool-sync.timer` is absent from BOTH lists, which
+      // is what keeps "byte-identical to a plain install" true — and `both`
+      // is precisely the role the old unconditional enable got wrong, because
+      // it is the DEFAULT and it is the role the `existsSync(agent.env)` line
+      // above proves gets no agent.env.
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
+      '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -3465,10 +3962,13 @@ describe('ccrc install --role: the refusals and the default', () => {
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged. C5: the models pair joins the
-    // same gate — a server box has no lanes to refresh.
+    // same gate — a server box has no lanes to refresh. The ccgpt-usage@
+    // pair is placed on NO role (F-1), and its absence is asserted here too,
+    // for the third role.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
-        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')) continue;
+        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
+        || dest.startsWith('ccd-tmp-sweep.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -3479,10 +3979,35 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.timer'))).toBe(false);
+    // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
+    expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
+    // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
+    // NARROWER gate than the four pairs above it. Those are `!= server`;
+    // this one is `= fleet`, because `both` gets no agent.env either. A
+    // server box failing this assertion under the sibling gate would look
+    // identical, which is why `--role both` above asserts the same absence.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-pool-sync');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    // Final review F-2 (spec §11): the two GPT-lane executables are gated
+    // `!= server` — the lane needs a converged per-account launcher, and a
+    // server-role box converges nothing per account (D-3111) — and the
+    // closing line must not claim what the gate skipped.
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(home, '.local', 'bin', name)), `--role server placed ${name}`).toBe(false);
+    }
+    const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+    expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
+    expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt/);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -3582,5 +4107,273 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const execLog = read(join(home, 'ccrc-exec-log')).trim().split('\n');
     expect(execLog[0]).toBe('argv:install');
     expect(execLog[1]).toBe(`path:${join(root, 'ccd', 'ccrc')}`);
+  });
+});
+
+describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', () => {
+  const tagFixture = (home: string, tag: string): void => {
+    const r = spawnSync('git', ['-C', treeRoot(home), 'tag', tag],
+      { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`fixture git tag failed: ${r.stderr}`);
+  };
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
+
+  it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
+    const home = freshBox('ccrc-install-nodeid-');
+    gitInit(treeRoot(home));
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    const id = readFileSync(join(home, '.ccrc', 'node-id'), 'utf8');
+    expect(id).toMatch(UUID);
+    expect(a.stdout).toMatch(/^install: node-id: minted [0-9a-f-]{36} /m);
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe(id);
+    expect(b.stdout).toMatch(/^install: node-id: kept /m);
+  });
+
+  it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
+    const home = freshBox('ccrc-install-nodeid-bad-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'node-id'), 'not-a-uuid\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/node-id exists but is not a uuid/);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
+  });
+
+  it('ccrc-caps: line 1 is the os, then W1\'s three words, nothing else (§18 "_inst_caps writes each wave\'s words")', () => {
+    const home = freshBox('ccrc-install-caps-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+    expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
+  });
+
+  it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
+    const home = freshBox('ccrc-install-floor-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v1.0.0\n');
+    expect(a.stdout).toMatch(/^install: floor: v1\.0\.0 \(none before/m);
+    // The floor line prints AFTER the installed line — it is part of the last step.
+    const lines = a.stdout.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('install: floor:')))
+      .toBeGreaterThan(lines.findIndex((l) => l.startsWith('install: installed:')));
+    // A higher floor already on the box is KEPT by a lower install (a restore).
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v9.9.9\n');
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v9.9.9\n');
+    expect(b.stdout).toMatch(/^install: floor: kept at v9\.9\.9 \(v1\.0\.0 is not above it/m);
+    // A stamp with no version raises nothing.
+    const untagged = freshBox('ccrc-install-floor-untagged-');
+    gitInit(treeRoot(untagged));
+    const c = runInstall(untagged);
+    expect(c.code, c.stderr).toBe(0);
+    expect(existsSync(join(untagged, '.ccrc', 'floor'))).toBe(false);
+    expect(c.stdout).toMatch(/^install: floor: not raised — this stamp carries no version/m);
+  });
+
+  it('_ver_newer agrees with sort -V on a fixture list, and the v is stripped nowhere else', () => {
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_ver_newer\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _ver_newer').not.toBeNull();
+    const list = ['v0.0.1', 'v0.0.10', 'v0.0.9', 'v0.1.0', 'v1.0.0', 'v1.9.9', 'v1.9.10', 'v2.0.0', 'v10.0.0'];
+    const sorted = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list], { encoding: 'utf8' }).stdout.trim().split('\n');
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = 0; j < sorted.length; j += 1) {
+        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8' });
+        expect(r.status, `${sorted[i]} newer than ${sorted[j]}?`).toBe(i > j ? 0 : 1);
+      }
+    }
+    // "the v is stripped nowhere else" (D-3136 minor 4) — MEASURED, not just
+    // claimed by the title: exactly one line of ccd/ccrc performs `#v}`
+    // stripping, and it is this function's own `local a=…/b=…` line.
+    const stripLines = src.split('\n').filter((l) => l.includes('#v}'));
+    expect(stripLines, 'a second `#v}` strip site appeared in ccd/ccrc').toEqual([
+      '  local a="${1#v}" b="${2#v}" i',
+    ]);
+  });
+
+  it('ccrc version says when the install was placed unsigned', () => {
+    const home = freshBox('ccrc-install-version-unsigned-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const r = runInstall(home, ['version']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
+    const verified = freshBox('ccrc-install-version-verified-');
+    gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete$/m);
+  });
+
+  it('ccrc version: the incomplete arm carries no provenance suffix — the record names a different, stale install (D-3136 minor 5)', () => {
+    const home = freshBox('ccrc-install-version-incomplete-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    // The box moved on: the completed-install record still names an OLDER
+    // sha, itself unsigned — but that label describes the stale install,
+    // not the box's current (incomplete) state, so it must not be said.
+    writeFileSync(join(home, '.ccrc', 'installed'), 'stalesha00000000000000000000000000000000\nunsigned\n');
+    const r = runInstall(home, ['version']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: incomplete — stamp [0-9a-f]{40}, completed-install record names stalesha00000000000000000000000000000000$/m);
+  });
+
+  it('ccrc-caps: rewritten on every install — a stale file is replaced with current content, not merged (D-3136 minor 6)', () => {
+    const home = freshBox('ccrc-install-caps-rewrite-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os plan9\nverify\n');
+    expect(runInstall(home).code).toBe(0);
+    const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+  });
+
+  it('floor: a malformed ~/.ccrc/floor is left untouched, never treated as absent (D-3136)', () => {
+    const home = freshBox('ccrc-install-floor-malformed-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'three\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('three\n');
+    expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is malformed \(got: 'three'\) — left untouched; fix it by hand$/m);
+  });
+
+  // D-3146: `_inst_installed`'s floor block used to guard its read with `-f`
+  // alone, so a PRESENT-but-UNREADABLE floor read as `cur=""`, fell through
+  // every branch, and was silently REPLACED by the `mv -f` (which needs
+  // write permission on ~/.ccrc, not read permission on the file) —
+  // possibly with a LOWER version. Mirrors `_upd_floor_check`'s own `-r`
+  // test (Task 11, D-3136) and the idiom of the update-side unreadable-floor
+  // pin: root bypasses permission bits, so this is not measurable running
+  // as root — skipped there, and said so.
+  it.skipIf(process.getuid?.() === 0)('floor: an UNREADABLE ~/.ccrc/floor is left untouched and named by its own sentence, distinct from "malformed" (D-3146)', () => {
+    const home = freshBox('ccrc-install-floor-unreadable-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const floorFile = join(home, '.ccrc', 'floor');
+    writeFileSync(floorFile, 'v9.9.9\n');
+    chmodSync(floorFile, 0o000);
+    let r: Result;
+    try {
+      r = runInstall(home);
+    } finally {
+      chmodSync(floorFile, 0o644);   // restore so the assertion below can read it back
+    }
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is unreadable — left untouched; fix its permissions by hand$/m);
+    expect(r.stdout).not.toMatch(/malformed/);
+    expect(readFileSync(floorFile, 'utf8')).toBe('v9.9.9\n');
+  });
+
+  it('_inst_installed: the marker write is ONE checked group — no printf sits before an unchecked chmod (D-3135, structural)', () => {
+    // The two behavioural cases below prove exit 1 / one die line / no
+    // leftover file under two REAL failure conditions (mv blocked, open()
+    // denied) — but neither actually distinguishes the fixed code from the
+    // bug D-3135 describes: a write that CREATES the temp file and then
+    // fails partway through it (ENOSPC is the finding's own example).
+    // Reproducing that deterministically needs a size-constrained
+    // filesystem (a tiny tmpfs/loop mount), which needs a privileged mount
+    // in this harness — skipped per the finding's own "skip a shape only if
+    // root would be needed" allowance. What proves the fix instead is this
+    // structural pin: the printf(s) now sit INSIDE the group the `> "$tmp"`
+    // redirect opens, and that group is the FIRST link of the && chain —
+    // never a printf whose own exit status is discarded before a later,
+    // separately-checked `chmod`.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_inst_installed\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _inst_installed').not.toBeNull();
+    expect(fn![0]).toMatch(/\}\s*>\s*"\$tmp"\s*&&\s*chmod 644 "\$tmp" && mv -f "\$tmp" "\$dest"/);
+  });
+
+  it('_inst_installed: a directory at ~/.ccrc/installed blocks the mv, dies loudly, and leaves no half-record (D-3135)', () => {
+    const home = freshBox('ccrc-install-installed-mvfail-');
+    gitInit(treeRoot(home));
+    // A pre-existing DIRECTORY at the record's own path, made non-writable:
+    // the redirect that creates installed.tmp.$$ (a SIBLING path, inside
+    // ~/.ccrc itself) still succeeds, and chmod on that temp file succeeds —
+    // only the final `mv -f "$tmp" "$dest"` fails, because mv cannot add an
+    // entry to a directory it has no write permission on. This isolates the
+    // PLACEMENT half of D-3135's fix (nothing else in the spine touches
+    // BOX_INSTALLED_FILE, so no earlier step is affected).
+    mkdirSync(join(home, '.ccrc', 'installed'), { recursive: true });
+    chmodSync(join(home, '.ccrc', 'installed'), 0o555);
+    let r: Result;
+    try {
+      r = runInstall(home);
+    } finally {
+      chmodSync(join(home, '.ccrc', 'installed'), 0o755);
+    }
+    expect(r.code).toBe(1);
+    const dieLines = (r.stderr.match(/writing .*installed failed/g) ?? []).length;
+    expect(dieLines, r.stderr).toBe(1);
+    // The directory survives, empty: mv never replaced it, and the cleanup
+    // removed the temp file mv left orphaned at its original location.
+    expect(statSync(join(home, '.ccrc', 'installed')).isDirectory()).toBe(true);
+    expect(readdirSync(join(home, '.ccrc', 'installed'))).toEqual([]);
+    expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('installed.tmp.'))).toEqual([]);
+  });
+
+  it('_inst_installed: a write that fails right after creating the temp file never places a record — one redirect, not two printfs each on its own (D-3135)', () => {
+    // The "redirect denied outright" shape, measured in isolation from the
+    // rest of the spine: this harness extracts `_inst_installed` (plus the
+    // real `_ccrc_die`/`PROG` it calls) out of ccd/ccrc, exactly as the
+    // `_ver_newer` case above extracts that function, and runs it directly
+    // against a `~/.ccrc` this process cannot write into — so the failure
+    // is scoped to the function under test, not to whichever earlier
+    // `cmd_install` step would hit the same wall first in a full spine run
+    // (`_inst_accounts_sh` regenerates its file on every install and would
+    // fail before `_inst_installed` is ever reached). NOTE (measured): this
+    // shape passes against the PRE-FIX code too — when open() itself is
+    // denied, no temp file is ever created, so the OLD code's separately-
+    // checked `chmod 644 "$tmp"` fails on its own and still dies correctly.
+    // It is kept because it is the finding's own suggested shape and a real
+    // regression guard on that path; the structural case above is what
+    // actually pins the fix (D-3135's bug needs a write that CREATES the
+    // temp file and fails partway through it, which needs a size-
+    // constrained filesystem to reproduce and is skipped for that reason).
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const progLine = /^PROG=.*$/m.exec(src);
+    expect(progLine, 'ccd/ccrc has no PROG=').not.toBeNull();
+    const dieLine = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
+    expect(dieLine, 'ccd/ccrc has no _ccrc_die').not.toBeNull();
+    const fn = /^_inst_installed\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _inst_installed').not.toBeNull();
+
+    const home = mkTmp('ccrc-inst-installed-redirect-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    chmodSync(join(home, '.ccrc'), 0o555);
+    const harness = [
+      'set -uo pipefail',
+      progLine![0],
+      dieLine![0],
+      '_box_build_fields() { BOX_BUILD=(deadbeefdeadbeefdeadbeefdeadbeefdeadbeef main 2026-01-01T00:00:00Z false ""); return 0; }',
+      `BOX_INSTALLED_FILE="${join(home, '.ccrc', 'installed')}"`,
+      fn![0],
+      '_inst_installed',
+    ].join('\n');
+    let r: Result;
+    try {
+      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8' });
+      r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    } finally {
+      chmodSync(join(home, '.ccrc'), 0o755);
+    }
+    expect(r.code).toBe(1);
+    const dieLines = (r.stderr.match(/writing .*installed failed/g) ?? []).length;
+    expect(dieLines, r.stderr).toBe(1);
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    // No orphaned temp file either — the redirect itself never created one.
+    expect(readdirSync(join(home, '.ccrc'))).toEqual([]);
   });
 });

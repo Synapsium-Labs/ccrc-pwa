@@ -33,6 +33,83 @@ const CLI = path.join(ccrcRoot, 'deploy', 'gen-wrappers.mjs');
 
 const fixtureJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
   DEFAULT_TEST_ROSTER;
+
+const codexFixtureJson = {
+  ...fixtureJson,
+  accounts: [
+    ...fixtureJson.accounts,
+    {
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.codex-a',
+      exec: {
+        kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+        authDir: '.local/share/ccrc/codex/codex-a',
+      },
+      homeAble: true, hue: 'amber', telemetry: 'codex',
+    },
+  ],
+};
+
+/**
+ * `gen-wrappers.mjs`'s own `TOOLCHAIN_EXECUTABLES`, DERIVED FROM ITS SOURCE
+ * (ruling T4-R3), never retyped.
+ *
+ * Two reasons, and the second is the one that made this a fix rather than a
+ * tidy-up. (1) `single-definition.test.ts` text-scans for a second copy of an
+ * enumerated set, and nine names typed out here would be exactly that.
+ * (2) MEASURED: the literal this replaces named six, against a Set of nine —
+ * `ccd-account-auth`, `ccd-usage-sweep` and `ccd-pool-sync` were in the
+ * shipped Set and in no assertion anywhere, so dropping any of the three from
+ * the Set was a GREEN mutation (task-4-report.md's mutation 2, and its
+ * control 2c proves the suite CAN red on a Set entry: dropping `ccd`, which
+ * carries a real marker, reds at this test). Deriving makes all three
+ * testable at once and changes no shipped file — the alternative on the table
+ * was stamping `ccd/ccd-pool-sync` to buy testability, which would have moved
+ * its provenance semantics and `ownership.test.ts`'s `ccrc-unmodified`
+ * contract to make a test green.
+ *
+ * TEXT, not an import: the Set is module-private in a CLI that is driven here
+ * as a subprocess, and exporting it would be a change to a shipped file for a
+ * test's convenience.
+ */
+const TOOLCHAIN_EXECUTABLES: readonly string[] = (() => {
+  const src = readFileSync(CLI, 'utf8');
+  const m = /const TOOLCHAIN_EXECUTABLES = new Set\(\[([\s\S]*?)\]\);/.exec(src);
+  if (m === null) {
+    throw new Error(
+      'gen-wrappers.test.ts: could not find `const TOOLCHAIN_EXECUTABLES = new Set([...]);` in '
+      + `${CLI}. Re-point this derivation at wherever that set now lives — do NOT retype the names `
+      + 'here, or this suite goes back to testing six of nine entries and saying nothing.',
+    );
+  }
+  return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+})();
+
+/**
+ * What `_inst_bins` ACTUALLY places in `$HOME/.local/bin`, read out of
+ * `ccd/ccrc` — a SECOND derivation, from the other side of the claim.
+ *
+ * It exists because deriving the plant list from the Set alone would make
+ * this suite tautological in the one direction that matters: a name deleted
+ * from the Set is then also absent from the plant, so the scan is never asked
+ * about it and the deletion is green. MEASURED — that is exactly what
+ * happened when the six-name literal was first replaced by the derivation,
+ * and it is a coverage REGRESSION against the literal, which did red for the
+ * six names it happened to carry.
+ *
+ * `_inst_bins` is the right second source rather than `deploy.sh`'s agent
+ * lane because it is the source the Set's own header argues from, entry by
+ * entry ("`ccd-graph-sweep` is `_inst_bins`' fourth executable", and so on).
+ * Names carrying a DOT are dropped: `gen-wrappers.mjs`'s `ID_RE` can never
+ * match one, so the orphan scan settles `ccd-usage-sweep.py` before this Set
+ * is consulted — which that file's own comment already states. Dropped by
+ * spelling the reason rather than by mirroring `ID_RE` a fifth time.
+ */
+const INST_BINS_NAMES: readonly string[] = (() => {
+  const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+  return [...src.matchAll(/_inst_atomic\s+"[^"]*"\s+"\$bin\/([^"]+)"/g)]
+    .map((m) => m[1]!)
+    .filter((n) => !n.includes('.'));
+})();
 const UPSTREAM_ID = 'claude';
 const GENERATED_IDS = ['claude-a', 'claude-b', 'claude-d'];
 
@@ -72,7 +149,7 @@ describe('gen-wrappers.mjs', () => {
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
 
     const lines = r.stdout.trim().split('\n');
-    expect(lines[0]).toBe('summary\t5\t3\t1\t1');
+    expect(lines[0]).toBe('summary\t5\t3\t1\t1\t0');
     const wrapperLines = lines.filter((l) => l.startsWith('wrapper\t'));
     const orphanLines = lines.filter((l) => l.startsWith('orphan\t'));
     expect(wrapperLines).toHaveLength(3);
@@ -102,6 +179,30 @@ describe('gen-wrappers.mjs', () => {
       const [, , classify, equal] = line.split('\t');
       expect(classify).toBe('ccrc-unmodified');
       expect(equal).toBe('yes');
+    }
+  });
+
+  it('a codex account gets a wrapper record and is NOT protected', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(codexFixtureJson);
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines.filter((l) => l.startsWith('wrapper\tcodex-a'))).toHaveLength(1);
+    expect(lines.filter((l) => l.startsWith('protected\tcodex-a'))).toHaveLength(0);
+  });
+
+  it('the summary carries a fifth count, and it counts codex lanes', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(codexFixtureJson);
+    const [summary = ''] = run([rosterFile, binDir, stagingDir]).stdout.split('\n');
+    const fields = summary.split('\t');
+    expect(fields[0]).toBe('summary');
+    expect(fields).toHaveLength(6);
+    expect(Number(fields[5])).toBe(1);
+  });
+
+  it('TOOLCHAIN_EXECUTABLES names the GPT-lane binaries, so they are never orphan wrappers', () => {
+    for (const name of ['ccgpt', 'ccgpt-runtime']) {
+      expect(TOOLCHAIN_EXECUTABLES).toContain(name);
     }
   });
 
@@ -266,24 +367,60 @@ describe('gen-wrappers.mjs', () => {
     // CCRC MARKER. The marker is deliberate provenance (41bdf60, gated by
     // ownership.test.ts:139-153, so that ccrc's own shipped `ccd` reads
     // `ccrc-unmodified` and the installer may replace it on a box), so the fix
-    // cannot be to remove it: the scan has to know these six are ccrc's own
-    // toolchain rather than candidate account wrappers.
+    // cannot be to remove it: the scan has to know this whole toolchain is
+    // ccrc's own rather than candidate account wrappers.
     //
     // What the operator saw without this: `ORPHAN ccd: … remedy: … or remove
     // $HOME/.local/bin/ccd by hand` — printed by every install, four lines
     // above that same transcript's "next: add your first session with: ccd
     // menu".
+    //
+    // THE SUBJECT IS THE WHOLE SET (ruling T4-R3) — see
+    // `TOOLCHAIN_EXECUTABLES` above for why it is derived and what it was
+    // silently missing before.
     const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    // ANTI-VACUITY: a derivation that matched an empty Set would make both
+    // loops below iterate nothing and report green. The floor is what the
+    // hand-written literal carried, so it is a ratchet nobody bumps for a new
+    // toolchain name; `ccd` is named because it is the one entry whose
+    // exclusion is load-bearing TODAY (every other name is currently unmarked
+    // and would be skipped by the marker clause anyway), so a derivation that
+    // lost it would lose the only case that can red on its own.
+    expect(TOOLCHAIN_EXECUTABLES.length,
+      'the derivation found fewer names than the literal it replaced — re-read it before trusting this suite')
+      .toBeGreaterThanOrEqual(6);
+    expect(TOOLCHAIN_EXECUTABLES, 'the derived toolchain set lost `ccd`, its one marked member')
+      .toContain('ccd');
+    // THE SECOND DIRECTION, and the reason `INST_BINS_NAMES` exists: the loop
+    // below can only ask the scan about names the Set already carries, so on
+    // its own it can never notice one being DELETED from the Set. This is the
+    // assertion that does — every executable `_inst_bins` places in
+    // `$HOME/.local/bin` must be named here, measured from `ccd/ccrc` rather
+    // than from the Set it is checking.
+    expect(INST_BINS_NAMES.length,
+      'the _inst_bins derivation found nothing — re-read it before trusting the coverage claim below')
+      .toBeGreaterThanOrEqual(6);
+    for (const name of INST_BINS_NAMES) {
+      expect(TOOLCHAIN_EXECUTABLES,
+        `_inst_bins places ${name} in $HOME/.local/bin, where this scan walks, but `
+        + 'TOOLCHAIN_EXECUTABLES does not name it — the day it gains a provenance marker '
+        + 'every install will print it as an orphan account wrapper (D-93)')
+        .toContain(name);
+    }
     // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
     // any marked script is the same five-for-five shape as far as this scan is
     // concerned, and using the real 570 KB `ccd` here would test file size.
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
+    // MARKING EVERY ENTRY is what makes the unmarked ones testable at all:
+    // planted unmarked, `verifyMarker` answers `foreign` and the scan skips
+    // them for a reason that has nothing to do with this Set, which is exactly
+    // how three entries came to be in the shipped Set and in no assertion.
+    for (const name of TOOLCHAIN_EXECUTABLES) {
       writeFileSync(path.join(binDir, name),
         markGenerated(`#!/usr/bin/env bash\n# ccrc's own ${name}, installed by ccrc install\nexit 0\n`));
     }
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
+    for (const name of TOOLCHAIN_EXECUTABLES) {
       expect(r.stdout, `${name} was reported as an account wrapper nobody claims`)
         .not.toMatch(new RegExp(`^orphan\\t${name}$`, 'm'));
     }
@@ -382,7 +519,7 @@ describe('gen-wrappers.mjs', () => {
     expect(r.stdout).not.toMatch(/^orphan\tnoshebang$/m);
   });
 
-  it('names every non-generated account in a `protected` record (D-80)', () => {
+  it('names every upstream and external account in a `protected` record (D-80)', () => {
     // The record exists so that "this id is an account ccrc must not touch" and
     // "this id is not in the roster at all" stop being the same thing on the
     // wire — see this file's header and `cmd_wrappers`'s. Walked out of
@@ -396,8 +533,8 @@ describe('gen-wrappers.mjs', () => {
     // And the count the bash reader asserts against holds: upstream + external.
     const summary = (r.stdout.split('\n')[0] ?? '').split('\t');
     expect(protectedLines).toHaveLength(Number(summary[3]) + Number(summary[4]));
-    // No generated account is ever in that list — the two are disjoint, and an
-    // overlap is what `ccrc wrappers` refuses the whole run over.
+    // No ccrc-owned wrapper account is ever in that list — the two are disjoint,
+    // and an overlap is what `ccrc wrappers` refuses the whole run over.
     for (const id of GENERATED_IDS) expect(r.stdout).not.toContain(`protected\t${id}`);
   });
 
@@ -480,13 +617,13 @@ describe('gen-wrappers.mjs', () => {
 // THE MANIFEST'S ARITY, which the non-empty-field test above does not cover.
 // The grammar is `deploy/gen-wrappers.mjs`'s own header — the four record
 // lines are :43-46, under the `THE MANIFEST GRAMMAR (plan D6)` banner at :40:
-//   summary\t<total>\t<generated>\t<upstream>\t<external>
+//   summary\t<total>\t<generated>\t<upstream>\t<external>\t<codex>
 //   wrapper\t<id>\t<classify>\t<equal>
 //   protected\t<id>
 //   orphan\t<id>
 describe('the manifest grammar cannot grow a column in silence', () => {
   const ARITY: Readonly<Record<string, number>> = {
-    summary: 5, wrapper: 4, protected: 2, orphan: 2,
+    summary: 6, wrapper: 4, protected: 2, orphan: 2,
   };
 
   it('every record has exactly the field count its grammar declares', () => {
@@ -523,14 +660,14 @@ describe('the manifest grammar cannot grow a column in silence', () => {
 
   it('the reader in ccd/ccrc takes at least as many variables as the widest record', () => {
     // Producer and consumer, in one assertion. `ccd/ccrc`'s manifest loop reads
-    // `local kind a b c d` — five names for a five-field `summary` — and its own
-    // comment (`ccd/ccrc:2386-2389`) says why five and not four.
+    // `local kind a b c d e` — six names for a six-field `summary` — and its own
+    // comment says why six and not five.
     //
     // A field with no variable left to hold it is NOT discarded — `IFS=$'\t'
     // read` never drops a field. It is CONCATENATED onto the last variable,
-    // tab included: measured, `IFS=$'\t' read -r kind a b c d` over
-    // `summary\t5\t3\t1\t1\tSIXTH` leaves `d` holding `1<TAB>SIXTH`, not `1`.
-    // That is exactly the corruption `ccd/ccrc:2386-2389` itself names ("the
+    // tab included: measured, `IFS=$'\t' read -r kind a b c d e` over
+    // `summary\t5\t3\t1\t1\t0\tSEVENTH` leaves `e` holding `0<TAB>SEVENTH`, not `0`.
+    // That is exactly the corruption `ccd/ccrc` itself names ("the
     // record-count assertion below would then be comparing against a string
     // that is not a number") — restated here from a real `bash -c` run, not
     // copied off the comment. "Discards" IS the right word for a narrower
@@ -540,8 +677,8 @@ describe('the manifest grammar cannot grow a column in silence', () => {
     // worse than either: it corrupts its neighbour instead of vanishing.
     //
     // This guard checks agreement between TWO lines, not just that a
-    // declaration exists: `ccd/ccrc:2390`'s `local kind a b c d` and
-    // `ccd/ccrc:2393`'s `while IFS=$'\t' read -r kind a b c d; do` are
+    // declaration exists: `ccd/ccrc`'s `local kind a b c d e` and
+    // `while IFS=$'\t' read -r kind a b c d e; do` are
     // independent pieces of bash syntax that happen to list the same names
     // today — nothing enforces that they stay in sync. Narrowing the READ
     // list alone (`read -r kind a b c` while the `local` line still says
@@ -559,10 +696,10 @@ describe('the manifest grammar cannot grow a column in silence', () => {
     const READ_RE = /^\s*while IFS=\$'\\t' read -r kind ([A-Za-z0-9_ ]+?);\s*do\s*$/m;
 
     const declMatches = [...ccrc.matchAll(new RegExp(DECL_RE.source, 'gm'))];
-    expect(declMatches, 'ccd/ccrc must declare the manifest reader exactly once, as `local kind a b c d`')
+    expect(declMatches, 'ccd/ccrc must declare the manifest reader exactly once, as `local kind a b c d e`')
       .toHaveLength(1);
     const readMatches = [...ccrc.matchAll(new RegExp(READ_RE.source, 'gm'))];
-    expect(readMatches, "ccd/ccrc must read the manifest exactly once, as `while IFS=$'\\t' read -r kind a b c d; do`")
+    expect(readMatches, "ccd/ccrc must read the manifest exactly once, as `while IFS=$'\\t' read -r kind a b c d e; do`")
       .toHaveLength(1);
 
     const declVars = declMatches[0]![1]!.trim().split(/\s+/);

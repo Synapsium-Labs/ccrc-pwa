@@ -118,7 +118,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.sh(
       '_reg_set myid wrapper claude;'
       + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
-      + ' _pane_for_keystroke(){ KS_PANE="▓ ctx ████ 88%"; return 0; };'
+      + ' _pane_for_keystroke(){ KS_PANE="  👤 acct-a │ ▓ ctx ████ 88%"; return 0; };'
       + ' _idle_for_keystroke(){ KS_WHY=not-idle; KS_DETAIL=x; return 1; };'
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactfield'))).toBe(false);
@@ -174,6 +174,36 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
       ' SWAP_JITTER=\'REG[$(touch "$HOME/PWNED-jitter")]\';'
       + ' _dispatch_swap myid claude2 || :');
     expect(existsSync(path.join(h.home, 'PWNED-jitter'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_compact_no_turns does not evaluate a payload planted in lastcompact', () => {
+    const h = makeCcdHarness('arith-noturns');
+    // D-3103. The guard reads `lastcompact` — `_auto_compact_check`'s own
+    // field, one writer, from `$(date +%s)` — into an arithmetic comparison
+    // against a timestamp it parsed out of the transcript. The transcript
+    // reader is stubbed to a plain number so the payload is the ONLY hostile
+    // operand on the line and the case cannot pass for an unrelated reason.
+    h.sh(
+      " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-noturns\")]';"
+      + ' _transcript_path(){ echo "$HOME/t.jsonl"; }; _transcript_last_turn_ts(){ echo 1789000000; };'
+      + ' _compact_no_turns myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-noturns'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_compact_no_turns does not evaluate a payload arriving from the transcript reader', () => {
+    const h = makeCcdHarness('arith-noturns-ts');
+    // The SECOND operand, and the reason this line carries two guards. The
+    // reader's stdout is a pipeline's bytes, not a registry field — a different
+    // writer from every other row in this file, and one nothing downstream
+    // sanitises.
+    h.sh(
+      ' _reg_set myid lastcompact 1789000000;'
+      + ' _transcript_path(){ echo "$HOME/t.jsonl"; };'
+      + ' _transcript_last_turn_ts(){ echo \'REG[$(touch "$HOME/PWNED-turnts")]\'; };'
+      + ' _compact_no_turns myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-turnts'))).toBe(false);
     h.cleanup();
   });
 
@@ -283,6 +313,14 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     // (measured when `_pane_narrow_note` landed). Distinct operand, distinct
     // row, and the population stays exactly enumerated.
     { fn: '_pane_narrow_note (narrownote floor)',   anchors: ['$((now - said))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // D-3103's no-turn guard, and the ONE row here whose line needs TWO digit
+    // tests rather than one: `last` is a registry field (`lastcompact`, the
+    // threat model every row above shares) and `ts` is this box's own python
+    // stdout — a pipeline, which is exactly the kind of operand a future
+    // replacement could make answer anything at all. Both sit before the `-le`
+    // inside the same `[[ ]]`; the `$((last - ts))` on the NEXT line is reached
+    // only past them, which is why the population below still names one line.
+    { fn: '_compact_no_turns (turn vs lastcompact)', anchors: ['-le "$last"', '"$ts" =~'],           arith: '-le' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all
@@ -319,8 +357,12 @@ describe('_pane_ctx_pct is the one sanitiser the compact arithmetic depends on (
     // single point that keeps a payload out of that arithmetic. Do NOT add a
     // second guard downstream — one authoritative sanitiser is the right shape;
     // an unnamed dependency on it is not, which is why this test names it.
-    const out = h.sh('_pane_ctx_pct \'ctx REG[$(touch "$HOME/PWNED-pane")] 45%\'');
-    expect(out).toMatch(/^[0-9]*$/);
+    // Inside a real statusline row's `▓` segment — the only text the reader
+    // takes a number from — so the payload reaches the digit extraction.
+    const out = h.sh('_pane_ctx_pct \'  👤 acct-a │ ▓ ctx REG[$(touch "$HOME/PWNED-pane")] 45%\'');
+    // Exactly the digits — an EMPTY answer would also be digits-only, and would
+    // mean the payload never reached the extraction this test is about.
+    expect(out).toBe('45');
     expect(existsSync(path.join(h.home, 'PWNED-pane'))).toBe(false);
     h.cleanup();
   });

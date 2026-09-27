@@ -24,6 +24,7 @@ import { FleetScreen } from './screens/FleetScreen';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { useFleetStore } from './stores/fleet';
 import './styles/shell.css';
 
@@ -38,6 +39,16 @@ export function App(): ReactNode {
     useFleetStore.getState().connect();
   }, []);
   const sessions = useFleetStore((s) => s.sessions);
+  // T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
+  // `epoch`/`observedEpoch` props were fully tested but had no producer — this
+  // was the ONE place `<FleetScreen>` renders, and it passed neither, so a
+  // tested component could never actually render in production. The `pools`
+  // frame is the existing carrier (no second poll, no new route call): `?.`
+  // preserves THE THREE-VALUED RULE at this hop too — `pools === null` (no
+  // frame has arrived yet) and a `pools` object simply missing the key both
+  // read as `undefined`, exactly like an absent key on the wire itself, and
+  // `pools.observedEpoch === null` (never synced) passes through unchanged.
+  const pools = useFleetStore((s) => s.pools);
   // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
   // store on an incompatible `hello`, cleared by a later compatible one.
   // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a
@@ -58,6 +69,7 @@ export function App(): ReactNode {
   const accounts = /^\/accounts\/?$/.test(path);
   const mail = /^\/mail\/?$/.test(path);
   const runs = /^\/runs\/?$/.test(path);
+  const settings = /^\/settings\/?$/.test(path);
   // On desktop the accounts strip is a full-width top bar (rendered here, once);
   // on mobile it stays inside the fleet screen. useMediaQuery keeps it a single
   // instance either way — no duplication, no double polling.
@@ -104,7 +116,7 @@ export function App(): ReactNode {
     <>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs ? 'session' : 'fleet'}>
+      <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs || settings ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
             {/* TWO COLUMNS, and the host gauge owns the right one outright
@@ -123,7 +135,12 @@ export function App(): ReactNode {
           {/* Always mounted so it's the desktop sidebar; hidden on mobile when a
               session is open. selectedId marks the active card in the sidebar;
               showAccounts is false on desktop (they're in the top bar instead). */}
-          <FleetScreen selectedId={sessionId} showAccounts={!desktop} />
+          <FleetScreen
+            selectedId={sessionId}
+            showAccounts={!desktop}
+            epoch={pools?.epoch}
+            observedEpoch={pools?.observedEpoch}
+          />
         </aside>
         <section className="shell-detail" ref={detail}>
           {sessionId ? (
@@ -138,6 +155,8 @@ export function App(): ReactNode {
             <MailScreen />
           ) : runs ? (
             <RunsScreen />
+          ) : settings ? (
+            <SettingsScreen />
           ) : (
             <div className="shell-placeholder">
               <p className="shell-placeholder-mark" aria-hidden="true">

@@ -10,6 +10,9 @@ import path from 'node:path';
 import type { AccountsResponse, AccountUsage } from '../../shared/api.js';
 import { loadConfig } from '../src/config.js';
 import { buildServer } from '../src/server.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { PoolEdgeLog } from '../src/coord/pooledgelog.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -188,12 +191,17 @@ describe('GET /api/accounts', () => {
     // account. A handler that forgot to copy it would ship a wire on which
     // every entry looks like an account — exactly the silent loss this file
     // exists to catch.
+    // `resolvedPool` (T7-R2): with no `coord` configured (`testDeps`'s
+    // default), there are no central `pool_edges` to read, so it falls back
+    // to the declared field, adapted — `{ state: 'untagged', origin:
+    // 'declared' }` for every one of these untagged accounts.
+    const untaggedDeclared = { state: 'untagged' as const, origin: 'declared' as const };
     expect(roster).toEqual([
-      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null },
-      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null },
-      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null },
-      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null },
+      { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
+      { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
+      { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, resolvedPool: untaggedDeclared },
+      { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null, resolvedPool: untaggedDeclared },
     ]);
   });
 
@@ -211,7 +219,8 @@ describe('GET /api/accounts', () => {
     // fact about the fixture and not a guess about the handler.
     expect(roster).toHaveLength(5);
     for (const entry of roster) {
-      expect(Object.keys(entry).sort()).toEqual(['hidden', 'homeAble', 'hue', 'id', 'label', 'pool']);
+      expect(Object.keys(entry).sort()).toEqual(
+        ['hidden', 'homeAble', 'hue', 'id', 'label', 'pool', 'resolvedPool']);
     }
   });
 
@@ -231,6 +240,76 @@ describe('GET /api/accounts', () => {
       ['gpt', null],
       ['claude-d', null],
     ]);
+    // `resolvedPool` (T7-R2), no `coord` configured here either: it mirrors
+    // the declared `pool` field exactly, adapted to the wire shape.
+    expect(roster.map((a) => [a.id, a.resolvedPool])).toEqual([
+      ['claude', { state: 'tagged', pools: ['pool-a'], origin: 'declared' }],
+      ['claude-a', { state: 'tagged', pools: ['pool-a'], origin: 'declared' }],
+      ['claude-b', { state: 'tagged', pools: ['pool-b'], origin: 'declared' }],
+      ['gpt', { state: 'untagged', origin: 'declared' }],
+      ['claude-d', { state: 'untagged', origin: 'declared' }],
+    ]);
+  });
+
+  // T7-R2: the RESOLVED field must follow the CENTRAL edge, not the declared
+  // roster field, the moment a `pool_edges` row exists for an account —
+  // `NewSessionSheet.tsx:186-188` computing its crossing warning from the
+  // declared `pool` alone (before this field existed) is the live defect
+  // this closes: a PWA reading `pool` would contradict the server the moment
+  // an operator uses account pools for real.
+  it('resolvedPool follows the CENTRAL edge over the declared roster field', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    seedRoster(home, POOLED_TEST_ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const poolEdgeLog = new PoolEdgeLog(path.join(home, '.ccrc', 'pool-edges.log'));
+    // `claude` is declared `pool-a`; centrally re-tag it `pool-b`.
+    coord.setAccountPools({ accountId: 'claude', pools: ['pool-b'], addedBy: null }, poolEdgeLog);
+    const base = testDeps(home);
+    const app = await buildServer({ ...base, cfg, coord, poolEdgeLog });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+      expect(res.statusCode).toBe(200);
+      const { roster } = res.json() as AccountsResponse;
+      const claude = roster.find((a) => a.id === 'claude');
+      expect(claude?.pool).toBe('pool-a'); // the declared field is UNCHANGED
+      expect(claude?.resolvedPool).toEqual({ state: 'tagged', pools: ['pool-b'], origin: 'central' });
+      // An account with no central edge still falls back to declared.
+      const claudeB = roster.find((a) => a.id === 'claude-b');
+      expect(claudeB?.resolvedPool).toEqual({ state: 'tagged', pools: ['pool-b'], origin: 'declared' });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  // Minor 1 (review round 2): ONE hoisted `accountPoolEdges()` read for the
+  // whole request, not one per account — this proves the degrade-on-throw
+  // side of that hoist: the WHOLE response falls back to the declared-only
+  // shape rather than 500ing, and it does so consistently across every
+  // account (not just the ones a per-account try/catch happened to guard).
+  it('a throwing accountPoolEdges() degrades the WHOLE response to declared-only, never a 500', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    seedRoster(home, POOLED_TEST_ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
+    const base = testDeps(home);
+    const app = await buildServer({ ...base, cfg, coord });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+      expect(res.statusCode).toBe(200);
+      const { roster } = res.json() as AccountsResponse;
+      // Every entry falls back to its DECLARED pool, adapted — none 500s and
+      // none silently drops the field.
+      expect(roster.find((a) => a.id === 'claude')?.resolvedPool)
+        .toEqual({ state: 'tagged', pools: ['pool-a'], origin: 'declared' });
+      expect(roster.find((a) => a.id === 'gpt')?.resolvedPool)
+        .toEqual({ state: 'untagged', origin: 'declared' });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
   });
 
   // The handler rebuilds each AccountUsage field by field, so a field it forgets

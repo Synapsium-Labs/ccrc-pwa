@@ -61,6 +61,83 @@ export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROST
   fs.writeFileSync(path.join(home, '.ccrc', 'accounts.sh'), generateAccountsSh(parseRoster(roster)));
 }
 
+/** The CENTRAL projection `_acct_pool_state` reads — `$HOME/.cc-sessions/pool-epoch`
+ *  — written in the wire grammar `ccd-pool-sync` emits: `epoch`, `issued`,
+ *  `lease`, zero or more `acct <id> <pool>` rows, and the literal `end`
+ *  terminator the reader refuses a document without.
+ *
+ *  IT LIVES HERE, BESIDE `seedAccountsSh`, BECAUSE IT IS A GRAMMAR AND NOT
+ *  DATA. Five test files grew their own copy of these six lines in wave 1
+ *  Task 2, each justified as "matching how `POOLED_TEST_ROSTER`/`tagPool` are
+ *  already duplicated per file". That argument does not carry: those are
+ *  FIXTURE DATA, where a per-file copy says what that file is about, while
+ *  this is the reader's wire format with exactly one real writer
+ *  (`ccd/ccd-pool-sync`). A per-file copy of a grammar fails the wrong way
+ *  round — change the terminator or add a required field and ONE fixture
+ *  reds while the other four keep asserting the old format and stay GREEN,
+ *  which is the shape `single-definition.test.ts` exists to refuse.
+ *
+ *  `tags` UNDEFINED MEANS NO DOCUMENT AT ALL — removed, never written empty,
+ *  because those are two different answers: no document is the cold node that
+ *  has never synced (`unreadable` -> undecidable -> refuse into a tagged
+ *  project) ON A FLEET BOX — item 5 (I3, wave-1 fix round A) split this:
+ *  absence on a box with NO `ccd-pool-sync.timer` installed (this harness's
+ *  own default — nothing here plants one) now falls back to the DECLARED
+ *  tag instead, exactly as `main` did before this feature existed. A test
+ *  that means "this is a fleet node that has never synced" must call
+ *  {@link plantPoolSyncTimer} first, or its absence measures the OTHER
+ *  condition. A document with an `epoch` and no `acct` rows is SYNCED,
+ *  NOTHING TAGGED, on either kind of box. `ccd-pool-sync`'s own header
+ *  states that pair; a helper that folded them would make the fail-shut
+ *  untestable.
+ *
+ *  `lease` DEFAULTS FAR IN THE FUTURE so a planted document is CURRENT; pass
+ *  a past one to plant the `stale` state without a second copy of the
+ *  grammar, which is the whole reason the parameter exists. */
+export function plantPoolEpoch(
+  home: string,
+  tags: Readonly<Record<string, string | undefined>> | undefined,
+  opts: { epoch?: number; issued?: number; lease?: number } = {},
+): void {
+  const dir = path.join(home, '.cc-sessions');
+  const f = path.join(dir, 'pool-epoch');
+  fs.rmSync(f, { force: true });
+  if (!tags) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = [
+    `epoch ${opts.epoch ?? 1}`,
+    `issued ${opts.issued ?? 1}`,
+    `lease ${opts.lease ?? 9_999_999_999}`,
+    ...Object.entries(tags)
+      .filter((e): e is [string, string] => e[1] !== undefined)
+      .map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', '',
+  ];
+  fs.writeFileSync(f, lines.join('\n'));
+}
+
+/** Marks a `makeCcdHarness`/plain fixture HOME as a FLEET box — the ONLY
+ *  probe item 5 (I3, wave-1 fix round A) trusts for "does this box have a
+ *  control plane BY CONFIGURATION": `ccd-pool-sync.timer`'s unit file,
+ *  installed on disk, never `$REG/pool-epoch`'s own presence or absence
+ *  (`ccd/ccd`'s `_pool_sync_installed`). Content is irrelevant — only the
+ *  path is read — so an empty file is planted, the same "existence is the
+ *  fact" idiom `plantPoolEpoch`'s own tags use for a marker row.
+ *
+ *  LINUX PATH ONLY: this suite's `CcdHarness.sh` always runs under
+ *  `CCD_OS=linux` (`ccd/ccd`'s own `uname`-based detection, computed once at
+ *  source time — measured, not assumed: this repo's test boxes are Linux,
+ *  and nothing here overrides `CCD_OS`), matching `ccrc-doctor-checks`'
+ *  `CCRC_UNIT_DIR` for the identical reason. A harness that needed the
+ *  darwin arm would target `~/Library/LaunchAgents/app.ccrc.ccd-pool-sync.timer.plist`
+ *  instead — `macos-platform.test.ts` is where that arm is actually
+ *  exercised, not here. */
+export function plantPoolSyncTimer(home: string): void {
+  const dir = path.join(home, '.config', 'systemd', 'user');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ccd-pool-sync.timer'), '');
+}
+
 /** ws-add spawns a session; tmux is not available under test, so stub the spawn
  *  and the systemd calls. Everything else runs for real. `tmux` is shadowed
  *  too, unconditionally: nothing in ws-add reaches it today, and this is what

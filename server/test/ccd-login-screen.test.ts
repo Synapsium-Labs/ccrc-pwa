@@ -429,3 +429,135 @@ describe('_accept_first_run_prompts: rc 5, the hard block', () => {
     expect(h.calls().some((c) => c.includes('/effort'))).toBe(false);
   });
 });
+
+// ── D-3107 / D-3108 / D-3109 — the external-CLAUDE.md-import gate ──────────
+//
+// THE DIALOG, read off the shipped bundle (Claude Code 2.1.278) rather than
+// remembered: title `Allow external CLAUDE.md file imports?`, body "This
+// project's CLAUDE.md imports files outside the current working directory.
+// Never allow this for third-party repositories.", options
+// `Yes, allow external imports` / `No, disable external imports`, rendered with
+// `cancelFirst: true, focus: "cancel"` — THE CURSOR STARTS ON NO.
+//
+// WHY IT IS AN ACCOUNT-SWITCH PROBLEM. The answer lands as
+// `hasClaudeMdExternalIncludesApproved` on the PROJECT entry inside
+// `$CLAUDE_CONFIG_DIR/.claude.json` — one file per lane. `cmd_swap` carries the
+// transcript, the sidecars and `tasks/<uuid>`; it does not carry this, and it
+// must not (that file is Claude Code's, and a ccrc integration lives in
+// artifacts ccrc owns). So every lane a session lands on for the first time
+// raises the dialog and the session sits on it until a human arrives. Measured
+// on the fleet 2026-09-19: the lanes whose config dir carries a user `CLAUDE.md`
+// with an `@` import hold ZERO approvals across 11-14 projects each, while two
+// lanes that answered it long ago hold 56.
+describe('_pane_external_import_gate (D-3108): the LIVE selector, never the sentence', () => {
+  /** The dialog as it renders: title, body, and the two options with the cursor
+   *  where Claude Code puts it — on CANCEL. */
+  const DIALOG = (cursorOn: 'yes' | 'no' = 'no'): string =>
+    'Allow external CLAUDE.md file imports?\n'
+    + "This project's CLAUDE.md imports files outside the current working directory.\n"
+    + 'External imports:\n  ~/.claude/fable-orchestration-policy.md\n'
+    + (cursorOn === 'no'
+      ? '  Yes, allow external imports\n❯ No, disable external imports\n'
+      : '❯ Yes, allow external imports\n  No, disable external imports\n');
+
+  it('matches the live dialog', () => {
+    expect(matches('_pane_external_import_gate', DIALOG())).toBe(true);
+    expect(matches('_pane_external_import_gate', DIALOG('yes'))).toBe(true);
+  });
+
+  it('does NOT match the title quoted in scrollback with no selector — the hazard this file already books', () => {
+    // The 2.1.198 gates pair their title with `Enter to confirm` so a RESTORED
+    // TRANSCRIPT cannot synthesize a keystroke. This title is worse than
+    // theirs: a session working on `ccd` has the paragraph that documents it on
+    // screen. Nothing but a live cursor on one of the dialog's OWN options may
+    // fire it.
+    const quoted =
+      '● Read ccd/ccd\n'
+      + '  # title `Allow external CLAUDE.md file imports?`, options\n'
+      + '  # `Yes, allow external imports` / `No, disable external imports`\n'
+      + '❯ what should we do about that dialog?\n';
+    expect(matches('_pane_external_import_gate', quoted)).toBe(false);
+  });
+
+  it('does NOT match the title with a cursor sitting on somebody else’s option', () => {
+    const other = 'Allow external CLAUDE.md file imports?\n❯ 1. Yes, I accept\n  2. No, exit\n';
+    expect(matches('_pane_external_import_gate', other)).toBe(false);
+  });
+
+  it('does NOT match the options without the title', () => {
+    expect(matches('_pane_external_import_gate', '❯ Yes, allow external imports\n')).toBe(false);
+  });
+
+  it('does not match a normal TUI pane, or an empty one', () => {
+    expect(matches('_pane_external_import_gate', '? for shortcuts')).toBe(false);
+    expect(matches('_pane_external_import_gate', '')).toBe(false);
+  });
+
+  it('reads a bare `>` cursor too, for a terminal that renders the glyph differently', () => {
+    const ascii = 'Allow external CLAUDE.md file imports?\n> No, disable external imports\n';
+    expect(matches('_pane_external_import_gate', ascii)).toBe(true);
+  });
+});
+
+describe('the settle ANSWERS it, and answers YES (D-3107, D-3109)', () => {
+  /** capture-pane hands back the gate ONCE, then a healthy pane — the idiom the
+   *  Bypass-Permissions case above uses, so the loop takes its branch and then
+   *  returns 0 instead of spinning the full window. */
+  //  THE FIXTURE TRAVELS BY ENV, NOT BY INTERPOLATION, and that is not a
+  //  detail: a multi-line pane spliced into the snippet as a `printf '%s'`
+  //  argument arrives as ONE line carrying literal `\n` bytes, so the cursor
+  //  read finds a single line holding BOTH option labels and the affirmative
+  //  substring matches whatever the cursor was really on. Measured — the
+  //  cursor-on-NO case answered Enter. `PANE_TEXT` is the idiom the rest of
+  //  this file already uses for exactly this reason (see its header).
+  const GATE_THEN_READY = `sleep() { :; };
+    tmux() { ${WIDE_PANE} case "$1" in
+      capture-pane) n=$(cat "$HOME/n" 2>/dev/null || echo 0); echo $((n+1)) > "$HOME/n"
+                    if [[ "$n" -lt 1 ]]; then printf '%s' "$PANE_TEXT"; else printf '%s' '? for shortcuts'; fi ;;
+      *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
+    esac; };`;
+  const run = (gate: string): string[] => {
+    h.sh(`${GATE_THEN_READY} _accept_first_run_prompts cc-test 1; :`, { PANE_TEXT: gate });
+    return h.calls().filter((c) => c.includes('send-keys'));
+  };
+  const CURSOR_ON_NO =
+    'Allow external CLAUDE.md file imports?\n  Yes, allow external imports\n❯ No, disable external imports\n';
+  const CURSOR_ON_YES =
+    'Allow external CLAUDE.md file imports?\n❯ Yes, allow external imports\n  No, disable external imports\n';
+
+  it('cursor on NO (the shipped default): Down, THEN Enter — a bare Enter would disable the operator’s own imports', () => {
+    // This is the whole point of routing through `_answer_two_option_dialog`.
+    // The dialog ships `cancelFirst: true, focus: "cancel"`, so a bare Enter
+    // answers "No, disable external imports" — silently, permanently, for that
+    // project on that lane.
+    expect(run(CURSOR_ON_NO)).toEqual([
+      'tmux send-keys -t cc-test Down',
+      'tmux send-keys -t cc-test Enter',
+    ]);
+  });
+
+  it('cursor already on YES: a single Enter', () => {
+    expect(run(CURSOR_ON_YES)).toEqual(['tmux send-keys -t cc-test Enter']);
+  });
+
+  it('it is asked ABOVE the ready markers, so a pane carrying BOTH is still answered', () => {
+    // D-3107, and the reason this arm is not beside the others. Every gate
+    // below the marker check is a full-screen dialog that hides the footer;
+    // this one is raised while CLAUDE.md is loading and a pane can carry it
+    // together with chrome the marker regex matches. Below the markers it would
+    // be unreachable exactly when it fires, and the settle would report a ready
+    // TUI over a modal nobody answered.
+    const withFooter = CURSOR_ON_NO + '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n';
+    expect(run(withFooter)).toEqual([
+      'tmux send-keys -t cc-test Down',
+      'tmux send-keys -t cc-test Enter',
+    ]);
+  });
+
+  it('control: a healthy pane quoting the dialog in scrollback is READY, and gets no keystroke', () => {
+    const quoted =
+      '● Read ccd/ccd\n  # `Allow external CLAUDE.md file imports?` and its two options\n? for shortcuts\n';
+    expect(acceptRc(quoted)).toBe(0);
+    expect(h.calls().some((c) => c.includes('send-keys'))).toBe(false);
+  });
+});

@@ -22,6 +22,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
 import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS } from '../../shared/api.js';
+import type { BuildInfo } from '../../shared/buildinfo.js';
+import type { NodeMeasurement } from '../src/coord/store.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -47,10 +49,10 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 /** The digest the SERVER computes for its own roster — derived through the
@@ -70,17 +72,24 @@ describe('GET /api/fleet/health', () => {
     await app.close();
   });
 
+  it('never emits `builds` in local mode — there is no second box to show', async () => {
+    const app = await buildServer(testDeps());
+    const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    expect('builds' in body).toBe(false);
+    await app.close();
+  });
+
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 
@@ -142,6 +151,55 @@ describe('GET /api/fleet/health', () => {
     }
   });});
 
+describe('GET /api/fleet/health — the inventory-derived `builds` degrades, never 500s (design 2026-09-20 §14)', () => {
+  const STAMP: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
+  const serverRow = (role: 'server' | 'both'): NodeMeasurement => ({
+    nodeId: 'server', role, label: 'server',
+    currentVersion: STAMP.version ?? null, currentSha: STAMP.sha, currentRef: STAMP.ref,
+    currentBuiltAt: STAMP.builtAt, currentDirty: STAMP.dirty,
+    stampRead: 'ok', installState: 'unknown', provenance: 'unknown', caps: [], agentOps: null,
+    highestVersion: null, previousVersion: null, floorRead: 'absent', previousRead: 'absent',
+    os: 'linux', measuredAt: 1_758_000_000_000, report: null,
+  });
+
+  it('an inventory that cannot be read answers builds null per side and build unknown — the route stays up', async () => {
+    // `nodes()` is a synchronous sqlite read; a corrupt or locked coord.db throws. Before W2 nothing in this arm
+    // touched coord.db, so a throw here would be a NEW way for the banner route to 500. It degrades the way
+    // `readPoolEpoch` degrades — and it does NOT fall back to the handshake stamp planted below (spec §8).
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: STAMP });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    const broken = Object.assign(Object.create(coord) as CoordStore, {
+      nodes: (): never => { throw new Error('planted: the inventory cannot be read'); },
+    });
+    const app = await buildServer({ ...deps, build: STAMP, coord: broken });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown', builds: { own: null, fleet: null } });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('local mode never emits `builds`, even over an inventory holding this box\'s row', async () => {
+    // The derivation is the remote arm's alone: there is still no second box to show.
+    const home = mkTmp('ccrc-fh-builds-');
+    const deps = testDeps(home);
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('both'))).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect('builds' in body).toBe(false);
+      expect(body['build']).toBe('unknown');
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+});
+
 describe('GET /api/fleet — degraded mode', () => {
   it('serves the cached snapshot with stale:true + downSince when disconnected', async () => {
     const dir = mkTmp('ccrc-cache-');
@@ -168,8 +226,11 @@ describe('GET /api/fleet — degraded mode', () => {
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home, a real ENOENT `readObservedEpochFromRegistry`
+    // measures and reports honestly, independent of the root listing above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -222,8 +283,10 @@ describe('GET /api/fleet — degraded mode', () => {
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
+    // `observedEpoch: null` (item 1, wave-1 fix round A) — see the sibling
+    // case above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -383,8 +446,11 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'pools', 'demo'), 'pool-a');
     const app = await buildServer(testDeps(home));
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home.
     expect(res.json().pools).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+      observedEpoch: null, accountPools: 'unknown',
     });
     await app.close();
   });

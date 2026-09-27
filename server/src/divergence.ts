@@ -170,7 +170,7 @@ const key = (project: string, name: string): string => `${project}/${name}`;
  * with no ccd id cannot have a ccd registry claim, which is a reason to keep
  * looking at the row half, never a reason to fall silent.
  */
-function ccdIdForWorktree(project: string, wtPath: string): string | null {
+export function ccdIdForWorktree(project: string, wtPath: string): string | null {
   // Empty segments dropped so a trailing or doubled `/` cannot shift which
   // segment is read as which. git writes an absolute POSIX path here.
   const seg = wtPath.split('/').filter((s) => s !== '');

@@ -121,7 +121,7 @@ const menu = (over: Partial<Dialog> = {}): Dialog => ({
   selectedIndex: 1, parsed: true, raw: 'pane', ...over,
 });
 
-const NONE: DialogSeen = { id: null, ask: null };
+const NONE: DialogSeen = { id: null, ask: null, raw: null };
 
 describe('dialog frame gate', () => {
   it('sends a menu the first time it is seen, and not again unchanged', () => {
@@ -153,7 +153,22 @@ describe('dialog frame gate', () => {
     const rich = nextDialogFrame(NONE, menu({ ask: ASK }));
     const next = nextDialogFrame(rich.seen, menu({ id: 'def456' }));
     expect((next.msg as { dialog: Dialog }).dialog.ask).toBeUndefined();
-    expect(next.seen).toEqual({ id: 'def456', ask: null });
+    expect(next.seen).toEqual({ id: 'def456', ask: null, raw: null });
+  });
+
+  it('re-sends an UNPARSED dialog that repaints under the same id — its raw pane is all the phone shows', () => {
+    // A 2.1.280 multi-select keeps one id while its boxes are ticked at the
+    // terminal; without this the phone's well kept its first capture.
+    const unticked = menu({ id: 'multi', parsed: false, options: [], raw: '❯ 1. [ ] Logging' });
+    const first = nextDialogFrame(NONE, unticked);
+    expect(first.msg).toEqual({ type: 'dialog', dialog: unticked });
+    const ticked = { ...unticked, raw: '❯ 1. [✔] Logging' };
+    expect(nextDialogFrame(first.seen, ticked).msg).toEqual({ type: 'dialog', dialog: ticked });
+    expect(nextDialogFrame(nextDialogFrame(first.seen, ticked).seen, ticked).msg).toBeNull();
+    // A PARSED dialog's raw is not what the phone shows, so a repaint alone
+    // (a cursor move) sends nothing, as before.
+    const parsed = nextDialogFrame(NONE, menu());
+    expect(nextDialogFrame(parsed.seen, menu({ raw: 'pane, cursor moved' })).msg).toBeNull();
   });
 
   it('clears once when the menu vanishes, and stays quiet after', () => {

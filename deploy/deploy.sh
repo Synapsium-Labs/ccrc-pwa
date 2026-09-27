@@ -656,6 +656,11 @@ if [ "$TARGET" = "agent" ]; then
   # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
   # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  # account-pool-membership wave 1, Task 4: the leased-projection puller,
+  # unconditional here on the same terms as its sibling above — the agent
+  # lane only ever ships to a fleet host, so there is no server-role branch
+  # to gate it against.
+  install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755
   # graphify Task 10 (O3/O6b): the per-tree AST sweep executable, unconditional
   # here exactly as its sibling above — the agent lane only ever ships to a
   # fleet host, so there is no server-role branch to gate it against the way
@@ -708,6 +713,11 @@ if [ "$TARGET" = "agent" ]; then
   # `ccrc-models-probe` already spends one of them.
   install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
   install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
+  # The per-uid temp-dir reaper (Claude Code's /tmp/claude-<uid>, 138G on the
+  # fleet host on 2026-09-22), unconditional here exactly as its siblings above
+  # and placed below the noise list for the same D-2600 reason the usage sweep
+  # gives: `graph-noise-ship.test.ts` has no slack left beside ccd-graph-sweep.
+  install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -758,7 +768,7 @@ if [ "$TARGET" = "agent" ]; then
   # the fix is the box-side idiom `ccrc install` has always used for these same
   # unit files (`ccd/ccrc`'s `_inst_atomic`: temp, chmod, `mv -f` = rename(2)) —
   # one ssh, no extra round trips, and the two lanes stop disagreeing about the
-  # same thirteen files. A stray `<unit>.incoming.<pid>` from a dead run is
+  # same unit files. A stray `<unit>.incoming.<pid>` from a dead run is
   # inert to systemd (it ends in neither a unit suffix nor `.conf`) and the next
   # successful copy of that file sweeps it, exactly as `install_atomic`'s own
   # trailing `rm -f` does. The mode is stated (644) rather than inherited: `cp`
@@ -789,6 +799,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service \
@@ -798,8 +810,36 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+  # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
+  # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
+  # edit cites this file's lines by number above this point, and an insert
+  # above them would move what they cite.
+  #
+  # The chain above places NO `ccgpt-usage@.{service,timer}`, and neither does
+  # `ccd/ccrc`'s `_inst_units`: a live fleet box already has a unit pair at those
+  # names, owned by another repository and with an instance enabled, so placing
+  # ours is the cutover, which is Plan 3's. The files ship in the tree only.
+  #
+  # The two executables, on this agent lane only: `ccd/ccrc`'s `_inst_bins`
+  # places them on every role but server. The rsync above already lands them at
+  # ~/ccrc/ccd/; without these two lines a fallback deploy never put them on
+  # PATH. After the build and before the stamp, so a failed copy aborts the
+  # lane before this box's build record can claim it. Only the two that exist
+  # in the tree today: `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE
+  # SAME COMMIT that writes them, because this helper on a missing source
+  # aborts the lane mid-chain, and every commit on `main` must deploy.
+  #
+  # `server/test/install-census.test.ts` reds when a binary or unit file
+  # `ccrc install` places is placed by NEITHER lane of this file (it reads the
+  # union of the two, so a name placed only in the wrong lane passes there),
+  # when anything in this file enables a template or an instance of one, and
+  # when a source either helper here copies is not tracked in the repository.
+  install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
+  install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
   # now) let a failed remote `npm ci && npm run build` — a registry hiccup,
@@ -897,11 +937,13 @@ cd ~/ccrc/agent && npm ci && npm run build \
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
+    && systemctl --user enable --now ccd-pool-sync.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user enable --now ccrc-models.timer \
     && systemctl --user enable --now ccd-usage-sweep.timer \
+    && systemctl --user enable --now ccd-tmp-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

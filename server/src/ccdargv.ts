@@ -133,6 +133,22 @@ const routeFlags = (r: RouteFields | null): string[] =>
   r === null ? [] : ROUTE_WRITABLE_FIELDS.flatMap((f) => (r[f] === undefined ? [] : ['--route', `${f}=${r[f]}`]));
 
 /**
+ * The `--child <runId>` pair for a dispatched spawn (child-workspace
+ * reclamation, spec §5.1). `null` contributes NOTHING — `routeFlags`' own
+ * contract, for the same reason: a box that does not advertise `child-argv-v1`
+ * must receive the argv it always did, byte for byte.
+ *
+ * A HELPER RATHER THAN AN INLINE TERNARY, and that is measured, not taste:
+ * `ccdargv-dec-parity.test.ts` derives which verbs carry a dec by walking each
+ * `argv([…])` literal in `CCD_ARGV` up to its first `])`, and an inline
+ * `[...(child === null ? [] : ['--child', String(child)]), …]` closes a `])`
+ * INSIDE the literal — so the walk stops short of `decFlags(`, `ws-add` drops
+ * out of the derived set, and that suite reds on a builder that still declares.
+ */
+const childFlags = (child: number | null): string[] =>
+  child === null ? [] : ['--child', String(child)];
+
+/**
  * The session's own device label as an `--actor` value.
  *
  * TWO CONDITIONS, TWO WORDS, TWO NAMESPACES. `null` means the gate measured no
@@ -348,8 +364,21 @@ export const CCD_ARGV = {
    * this builder shipped before this slice, token for token — the residual
    * `dispatch.ts`'s own call site states is which capability gates it.
    */
-  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null) =>
-                 argv(['ws-add', '--no-rc', ...routeFlags(route), p, ...decFlags(dec)]),
+  /**
+   * `child`, the minting run's id (child-workspace reclamation, spec §5.1): the
+   * BOX half of the two authorities that make a workspace a child. It goes
+   * IMMEDIATELY AFTER `--no-rc`, in the leading-flag group `cmd_ws_add`'s strip
+   * loop parses — never trailing after `decFlags`, for `route`'s reason above —
+   * and ahead of `--route`, so the two declarations the dispatch path makes
+   * about WHAT this spawn is (`--no-rc`, `--child`) sit together and the one
+   * about how it RUNS follows them. `null` — the default, and what dispatch
+   * passes to a box without `child-argv-v1` — composes this builder's previous
+   * argv token for token. A NUMBER, not a string: the run id is a SQLite rowid
+   * everywhere in the coordination store, and stringifying it here, once, means
+   * no caller can hand ccd a padded or signed spelling its grammar would refuse.
+   */
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
@@ -573,6 +602,26 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  their composed contract now that both stages are present. */
 export const POOLS_CAP = 'pools-v1';
 
+/** The `ccd caps` token that says this box honours ACCOUNT-side pool
+ *  membership — `_pool_ok` (`ccd/ccd`) now consults `_acct_pool_state`'s
+ *  five-word projection rather than merely the declared roster name, so an
+ *  account-side `unreadable`/`stale`/`malformed` refuses into a tagged
+ *  project instead of silently serving it. Spelled ONCE in `server/src`, for
+ *  `ACTOR_FLAGS_CAP`'s reason: a capability token copied into two files is
+ *  the drift shape `single-definition.test.ts` exists for. ccd's own `echo
+ *  account-pools` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and that test's `toContain` assertion is what
+ *  keeps THIS one equal to them.
+ *
+ *  Spec §5.9 originally sourced `PoolsEnforcement`'s `accountPools` field
+ *  from "the verb's presence in `ccd caps`", but ruling R2 removed the verb
+ *  the design assumed — there is no `ccd account-pools` to dispatch, only a
+ *  decision `_pool_ok` already makes on every call. Same channel, same
+ *  argument, as `POOLS_CAP` above: a CAPABILITY token, not a dispatchable
+ *  verb, so `accountPoolsEnforcement` (`pools.ts`) can answer `enforced`
+ *  only against a box that actually took this deploy. */
+export const ACCOUNT_POOLS_CAP = 'account-pools';
+
 /** The `ccd caps` token that says this box implements `ccd route` and reads
  *  the routing record at settle (routing spec 2026-09-14 §5.3). Spelled ONCE
  *  in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-v1` and
@@ -594,6 +643,29 @@ export const ROUTE_CAP = 'route-v1';
  *  other: `_route_argv_check` (this token) and `cmd_route` (`ROUTE_CAP`) are
  *  different parse paths in `ccd/ccd`, landed in separate commits. */
 export const ROUTE_ARGV_CAP = 'route-argv-v1';
+
+/** The `ccd caps` token that says this box parses `--child <runId>` on
+ *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
+ *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
+ *  §5.1–§5.2, wave 1). One token for both halves, because they ship in one ccd
+ *  inode. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's
+ *  own `echo child-argv-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` line holds this one equal to them.
+ *
+ *  IT GATES THE D-410 HAZARD, ONE FLAG TO THE LEFT. An older `cmd_ws_add` has
+ *  no `--child` arm, so its strip loop hands the flag to the positionals: the
+ *  argv `wsAddWorker` composes would bind `--child` as the PROJECT and every
+ *  dispatched spawn on that box would refuse before a worktree existed. So the
+ *  flag is OMITTED, and the omission journalled on the run
+ *  (`child-omitted:no-child-argv-cap`), unless this token is advertised — and
+ *  read with `capSupported` (null → REFUSE), never `verbSupported`, whose
+ *  null → PERMIT is the right default for a verb that always existed and the
+ *  wrong one for a flag that never did. What an omission costs is stated
+ *  rather than hidden: the workspace is minted WITHOUT the marker and is
+ *  therefore simply not a child — the same thing every workspace minted before
+ *  this token existed already is (spec §6, "Deploy"). */
+export const CHILD_ARGV_CAP = 'child-argv-v1';
 
 /** The `ccd caps` token that says this box takes `--apply` on `ccd route` and
  *  re-applies a pending routing record from its supervise tick, with the
