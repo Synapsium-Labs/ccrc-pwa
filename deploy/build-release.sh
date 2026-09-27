@@ -2,9 +2,10 @@
 # build-release.sh — the release pipeline's testable core (stage 4, spec §2).
 #
 # Builds ONE tarball, `ccrc-<version>.tar.gz`, holding the matched set a box
-# installs from — prebuilt dists, the three package.json+lock pairs (for
-# `npm ci --omit=dev` on the box), `shared/`, `ccd/`, `deploy/`'s units and
-# helpers, `install.sh` — plus a MANIFEST (per-file sha256, verified by
+# installs from — prebuilt dists, the three package.json+lock pairs and each
+# package's tracked `scripts/` (for `npm ci --omit=dev` on the box, whose
+# install-time hooks name them — D-3105), `shared/`, `ccd/`, `deploy/`'s units
+# and helpers, `install.sh` — plus a MANIFEST (per-file sha256, verified by
 # `ccrc update` after extraction) inside it and `SHA256SUMS` (sha256sum -c
 # compatible, guards transport) beside it. CI (`release.yml`) merely invokes
 # this script: no logic lives in YAML that the script doesn't own, and every
@@ -100,16 +101,46 @@ mkdir -p "$TOP"
 # Tracked content only (see header). The pathspec is spec §2's layout: a path
 # missing from HEAD makes git archive fail loudly, which is an incomplete
 # checkout refusing rather than a thinner tarball shipping.
-git -C "$ROOT" archive --format=tar HEAD -- \
-  install.sh shared ccd deploy \
-  server/package.json server/package-lock.json \
-  agent/package.json agent/package-lock.json \
-  pwa/package.json pwa/package-lock.json \
-  | tar -x -C "$TOP"
+PATHSPEC=(install.sh shared ccd deploy
+  server/package.json server/package-lock.json
+  agent/package.json agent/package-lock.json
+  pwa/package.json pwa/package-lock.json)
+# A package's tracked scripts/ rides beside its package.json (D-3105): the
+# box's `npm ci --omit=dev` runs every install-time hook that file declares,
+# and v0.0.2 shipped server's `postinstall` (node scripts/fix-node-pty-helper.mjs)
+# WITHOUT the file — so the staged install died on every box and every
+# contributor HOME, after the new tree was already placed. Tracked content
+# only, like everything else here; a package with no scripts/ adds nothing.
+for pkg in server agent pwa; do
+  if [ -n "$(git -C "$ROOT" ls-tree -d HEAD -- "$pkg/scripts")" ]; then PATHSPEC+=("$pkg/scripts"); fi
+done
+git -C "$ROOT" archive --format=tar HEAD -- "${PATHSPEC[@]}" | tar -x -C "$TOP"
 
 cp -a "$ROOT/server/dist"     "$TOP/server/dist"
 cp -a "$ROOT/server/dist-pwa" "$TOP/server/dist-pwa"
 cp -a "$ROOT/agent/dist"      "$TOP/agent/dist"
+
+# ── Every install-time hook must find what it names (D-3105) ─────────────
+# The other half of the same defect: a hook that names a file the release set
+# does not hold is a refusal HERE, on the release machine, never an npm error
+# on a box. Tokens shaped like a path (a `/`; not a flag, not a URL) resolve
+# inside the packed package. `node` is on PATH because npm just ran.
+for pkg in server agent pwa; do
+  while IFS=$'\t' read -r hook cmd; do
+    [ -n "$hook" ] || continue
+    for tok in $cmd; do
+      case "$tok" in
+        -*|*://*) ;;
+        */*) [ -e "$TOP/$pkg/$tok" ] \
+          || die "$pkg/package.json's $hook runs '$cmd', but $pkg/$tok is not in the release set — npm ci on a box would fail after the tree is placed; ship it (a tracked $pkg/scripts/ rides the tarball) or drop the hook" ;;
+      esac
+    done
+  done < <(node -e '
+    const s = require(process.argv[1]).scripts || {};
+    for (const h of ["preinstall", "install", "postinstall", "prepare", "prepublish"])
+      if (s[h]) process.stdout.write(h + "\t" + s[h] + "\n");
+  ' "$TOP/$pkg/package.json")
+done
 
 # ── build.json: the artifact carries its own identity (stage 4, Task 6) ───
 # An extracted release tree is not a git repository, so the box-side stamper

@@ -62,7 +62,22 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
   ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
-   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
+   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks',
+   'GET /api/pools/epoch', 'GET /api/updates/intent/:nodeId']);
+
+/** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
+ *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
+ *  /api/pools/epoch` — joined `gate.ts`'s table without this file's own
+ *  hand-kept copy being updated to match, which is exactly why the
+ *  session-cookie arm of its dual credential went unmeasured by the property
+ *  sweep below (it fell into the plain `EXEMPT` branch instead of the
+ *  stronger `EXEMPT_BUT_AUTHENTICATED` one). Pinning the two together here
+ *  means the NEXT entry cannot repeat that silently — either this set is
+ *  updated in the same change, or this test reds and says so by name. */
+const EXEMPT_BUT_AUTHENTICATED_DERIVED = new Set(
+  [...EXEMPT.entries()]
+    .filter(([, reason]) => reason.includes('EXEMPT-BUT-AUTHENTICATED'))
+    .map(([k]) => k));
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -77,7 +92,13 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-const ROUTES: ScannedRoute[] = [...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts')];
+/** THREE files register routes since update-management W2 (design 2026-09-20
+ *  §12, D-3179): `server/src/update/routes.ts` joined the two.
+ *  The COMPLETE describe below is what says so — it reds the moment a route
+ *  registers from a file this list does not read. */
+const ROUTES: ScannedRoute[] = [
+  ...scanRoutes('server.ts'), ...scanRoutes('coord/routes.ts'), ...scanRoutes('update/routes.ts'),
+];
 
 /** The three websocket upgrades — the same registrations, told apart by their
  *  `{ websocket: true }` option. They are swept through `injectWS`, not
@@ -184,7 +205,7 @@ describe('the scanner is looking at something', () => {
   // A scanner that matched zero registrations would make every `it.each` in this
   // file iterate an empty array and report green — the exact failure mode that
   // makes a source-scanning suite worse than no suite. This one fails first.
-  it('found both files, and EXACTLY the route count the surface has', () => {
+  it('found all three files, and EXACTLY the route count the surface has', () => {
     // EXACT, not a floor (review fold-in). A `toBeGreaterThanOrEqual` catches a
     // scanner that broke outright but not one that quietly stops matching SOME
     // registrations — a changed quote style in one file, a verb the regex does
@@ -192,7 +213,7 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(49);
+    expect(scanRoutes('server.ts').length).toBe(51);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -216,6 +237,11 @@ describe('the scanner is looking at something', () => {
     // slice 5, Task 2) — the coordinator's door onto the escalation/demotion
     // ladders, box-token gated like its dispatch/close/advance/items siblings.
     expect(scanRoutes('coord/routes.ts').length).toBe(30);
+    // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
+    // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
+    // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
+    // projection read `GET /api/updates/intent/:nodeId`, EXEMPT-BUT-AUTHENTICATED.
+    expect(scanRoutes('update/routes.ts').length).toBe(5);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -256,7 +282,17 @@ describe('the scanner is looking at something', () => {
     // the merged tree, not taken from a side — 49 + 29 = 78, and routing
     // slice 5's own `POST /api/runs/:id/route` took `coord/routes.ts` 29 -> 30,
     // so the merged tree now reads 49 + 30 = 79.
-    expect(ROUTES.length).toBe(79);
+    //
+    // 51 since account-pool-membership wave 1 task 7 added TWO to `server.ts`:
+    // `POST /api/pools/accounts/:id`, NOT EXEMPT and carrying no box token —
+    // the same "fleet control, not a coordination write" stance as
+    // `POST /api/projects/:project/pool` above — and `GET /api/pools/epoch`,
+    // EXEMPT-BUT-AUTHENTICATED (the `GET /api/feed` shape: a session for the
+    // PWA, the box token for `ccd-pool-sync.timer`). `coord/routes.ts` is
+    // untouched by this task, so 49 -> 51 and 79 -> 81.
+    // 86 since update-management W2 put the third file's five beside the two
+    // files' 51 + 30: 81 -> 86.
+    expect(ROUTES.length).toBe(86);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -290,6 +326,10 @@ describe('the scanner is looking at something', () => {
       // server, which is exactly why `scanRoutes`' regex has always matched all
       // five shorthands rather than the two in use.
       'GET /api/auth/passkeys', 'DELETE /api/auth/passkey/:id',
+      // The third file's five (update-management W2): a scanner that stopped
+      // reading `update/routes.ts` would lose all of them at once.
+      'GET /api/updates', 'POST /api/updates/intent', 'POST /api/updates/refresh',
+      'POST /api/updates/ack', 'GET /api/updates/intent/:nodeId',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
     // Both a GET and a POST on the same path, which is the case a path-only
     // exempt table would get wrong (the POST is a box-token machine lane, the
@@ -387,7 +427,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 79 scanned + the static wildcard when the bundle is built.
+    // 86 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -452,6 +492,20 @@ describe('EXEMPT is complete in both directions', () => {
     // the list against, so it being wrong is worse than it being absent.
     // 31 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
     // slice 5, Task 2) joined the plain box-token lanes.
+    // 32 since `GET /api/pools/epoch` (account-pool-membership wave 1 task 7)
+    // joined the exempt-but-authenticated class, the ninth member — the same
+    // dual-credential shape as `GET /api/feed`: `ccd-pool-sync.timer` reads it
+    // cookieless from the fleet host, the PWA reads it with a session.
+    // `POST /api/pools/accounts/:id`, task 7's other new route, is
+    // DELIBERATELY NOT here — same stance as `POST /api/projects/:project/pool`
+    // above: session-gated when armed, no box token, fleet control rather
+    // than a coordination write.
+    // 33 since `GET /api/updates/intent/:nodeId` (update-management W2, design
+    // 2026-09-20 §12) joined the exempt-but-authenticated class, the tenth
+    // member and the `GET /api/pools/epoch` shape again: from W4 a fleet node's
+    // `ccd-update-sync.timer` pulls it cookieless, the PWA reads it with a
+    // session. The four other update routes are DELIBERATELY NOT here —
+    // session-gated when armed, no box token at all (decision 15).
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/asks',
@@ -463,9 +517,11 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/peers',
+      'GET /api/pools/epoch',
       'GET /api/runs',
       'GET /api/runs/:id/items',
       'GET /api/runs/:id/signals',
+      'GET /api/updates/intent/:nodeId',
       'GET /health',
       'POST /api/asks/:id/answer',
       'POST /api/asks/:id/release',
@@ -498,7 +554,19 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-five with notify', () => {
+  it('EXEMPT_BUT_AUTHENTICATED (the property sweep\'s hand-kept set) equals what gate.ts actually declares', () => {
+    // Review round 1, I3+I4: `gate.ts` grew a NINTH exempt-but-authenticated
+    // entry (`GET /api/pools/epoch`) and this file's own hand-kept set stayed
+    // at eight — nothing pinned the two together, so the property sweep below
+    // silently fell back to treating the new route as a PLAIN exempt route
+    // (dark-vs-anonymous only) instead of the stronger class (anonymous MUST
+    // be 401), and the session-cookie arm of its dual credential went
+    // untested. Comparing SETS, not sizes: a size-only check would pass if
+    // one name were swapped for another.
+    expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
+  });
+
+  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-seven with notify, pools/epoch and updates/intent', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -570,6 +638,12 @@ describe('EXEMPT is complete in both directions', () => {
     // twenty-four).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
+    // …and the update projection read, which lives in `update/routes.ts` — the
+    // third file this sweep reads since update-management W2: session first, the
+    // box token as the fallback, exactly the `GET /api/pools/epoch` shape.
+    const update = readFileSync(path.join(srcRoot, 'update/routes.ts'), 'utf8');
+    expect(update).toContain('checkMailToken(deps.mailToken');
+    expect(EXEMPT.has('GET /api/updates/intent/:nodeId')).toBe(true);
   });
 });
 
@@ -803,7 +877,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 76 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 83 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -867,7 +941,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 76 HTTP routes, not the 30 exempt.
+          //    is not itself flag-aware — the assertion that covers all 83 HTTP routes, not the 32 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

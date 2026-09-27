@@ -14,6 +14,7 @@ import {
   holdReasonVerdict,
   queueSystemMail,
   releaseIsSafe,
+  survivorOf,
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { transitionsFor, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
@@ -131,12 +132,8 @@ export async function closeRun(
    *  "nothing else claims this workspace" gets asserted about a workspace
    *  something else claims. */
   const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, id);
-  /** The claim that survives this close: the MOST RECENTLY opened run, because
-   *  the coordinator protocol opens wave N+1 before closing wave N. With the
-   *  ordinary one-sibling case this is a distinction without a difference; it
-   *  is written down so two siblings produce a DETERMINISTIC reason rather
-   *  than a coin toss (`openRunsForSession` is `ORDER BY id`). */
-  const survivorOf = (s: readonly OpenSibling[]): OpenSibling | null => s[s.length - 1] ?? null;
+  // `survivorOf` is `rundefs.ts`'s (F13): the same rule `dispatch.ts`'s
+  // `refuseSpentChild` uses, hoisted so the two doors can never drift apart.
 
   // The body is read HERE, above every precondition, because the abandon arm
   // below branches on it — and the ordinary path's own validation is left

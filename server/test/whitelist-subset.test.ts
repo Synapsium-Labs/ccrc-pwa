@@ -48,7 +48,10 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // did, for a whole commit, while real ccd refused it as an invalid slug.
   // `ccdargv-dec-parity.test.ts` runs the real binary; this layer only says the
   // tokens reach it.
-  wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }],
+  // AND IT CARRIES A CHILD (child-workspace reclamation wave 1), for the dec's
+  // reason: the shape the dispatch path sends to a box advertising
+  // `child-argv-v1` is the one layer 2 must prove crosses the bare grant.
+  wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prOpen: ['demo-quiet-basin', 'the work', 'Ym9keQ==', 'false'],
@@ -425,7 +428,10 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // SLUG whatever it looked like — `cmd_ws_add` bound `slug="${2:-}"` with no
     // flag loop at all; it has one now, and `ccd-lifecycle-sites.test.ts` runs
     // every one of these four forms through the real binary.
-    wsAddWorker: ['ws-add', '--no-rc', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // `--child <runId>` IMMEDIATELY after `--no-rc`: both are declarations of
+    // what this spawn IS, both are parsed by the same strip loop, and neither
+    // may trail the dec, where an old ccd's positional binding would eat it.
+    wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     // SAMPLES.prOpen's fourth element is the STRING 'false' (SAMPLES is typed
@@ -457,6 +463,18 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
     const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
     expect(build(...(SAMPLES[key] as unknown[]))).toEqual(EXPECTED[key]);
+  });
+
+  // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no
+  // route (its sample's route is `null`), so it cannot see the ORDER of the two
+  // leading groups. This can: `--child` first, then `--route`, both before the
+  // project — and a `null` child adds nothing at all.
+  it('wsAddWorker leads with --child, then --route, both before the project — and null adds nothing', () => {
+    expect(CCD_ARGV.wsAddWorker('demo', null, { class: 'opus' }, 7))
+      .toEqual(['ws-add', '--no-rc', '--child', '7', '--route', 'class=opus', 'demo']);
+    expect(CCD_ARGV.wsAddWorker('demo', null, { class: 'opus' }, null))
+      .toEqual(['ws-add', '--no-rc', '--route', 'class=opus', 'demo']);
+    expect(CCD_ARGV.wsAddWorker('demo', null, null, null)).toEqual(CCD_ARGV.wsAddWorker('demo', null));
   });
 
   it('prOpen maps a real boolean draft to --draft true/false unambiguously', () => {

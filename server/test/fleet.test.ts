@@ -285,6 +285,71 @@ describe('branch precedence', () => {
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
   });
 
+  // The worktree's own HEAD, as the divergence sweep measured it, comes between
+  // the two: a narrow pane cuts the `⎇` segment (so the statusline gives no
+  // branch), and the registry's `.branch` still names the branch ws-add
+  // created, whatever was checked out since. Measured 2026-09-23 on three of
+  // the four narrow rows: registry `ws/…`, HEAD `docs/…`/`feat/…`.
+  const headOnly = (branch: string | null) =>
+    new Map<string, string | null>([['demo-quiet-mesa', branch]]);
+  const withHead = (run: Runner, home: string, heads: Map<string, string | null>, sl?: Map<string, Statusline>) =>
+    assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
+      undefined, sl, undefined, undefined, undefined, undefined, undefined, undefined, heads);
+
+  it('uses the worktree\'s measured HEAD when the pane gave no full branch', async () => {
+    const { home, run } = setup();
+    // The pane measured identity (model) but no branch — a cut `⎇` segment.
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/checked-out-by-hand'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-by-hand');
+  });
+
+  it('still lets a full statusline branch outrank the measured HEAD — the pane is the fresher read', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/actually-here', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/older-sweep'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
+  });
+
+  // A pane branch the watcher KEPT across a tick that measured nothing (an
+  // overlay, or a row cut inside its 🤖 segment) is not a live reading: it
+  // loses to the HEAD measured since, and still beats the registry.
+  it('ships THIS tick\'s prompt-box width as paneCols, and null when the tick saw no box', async () => {
+    const { home, run } = setup();
+    const sl = (boxCols: number | undefined) => new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false, boxCols }],
+    ]);
+    const assemble = (m?: Map<string, Statusline>) =>
+      assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, m);
+    const row = async (m?: Map<string, Statusline>) => (await assemble(m)).find((s) => s.id === 'demo-quiet-mesa')!;
+    expect((await row(sl(150))).paneCols).toBe(150);
+    expect((await row(sl(60))).paneCols).toBe(60);
+    // Unmeasured is null — never a guessed width, never 0.
+    expect((await row(sl(undefined))).paneCols).toBeNull();
+    expect((await row(undefined)).paneCols).toBeNull();
+  });
+
+  it('ranks a RETAINED pane branch below the measured HEAD, and above the registry', async () => {
+    const { home, run } = setup();
+    const kept = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/before-the-checkout', ultracode: false, workflowActive: false, retained: true }],
+    ]);
+    const withNewerHead = await withHead(run, home, headOnly('docs/checked-out-since'), kept);
+    expect(withNewerHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-since');
+    const noHead = await withHead(run, home, new Map(), kept);
+    expect(noHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/before-the-checkout');
+  });
+
+  it('falls through a detached or unreadable HEAD (null) to the registry', async () => {
+    const { home, run } = setup();
+    const fleet = await withHead(run, home, headOnly(null));
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('ws/quiet-mesa');
+  });
+
   it('is null when neither source has one', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -347,6 +412,40 @@ describe('ctxPct on the wire (D-2011)', () => {
     expect(withUsage.find((s) => s.id === 'demo-quiet-mesa')?.usage).toEqual(reading);
     const without = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
     expect(without.find((s) => s.id === 'demo-quiet-mesa')?.usage).toBeNull();
+  });
+});
+
+// fleet.ts: a running Workflow leaves the orchestrator's pid.json `idle` while
+// it waits on subagents, so the pane's Workflow row is what keeps the card
+// `busy`. Nothing pinned that line: deleting it left every suite green.
+describe('a running Workflow reads busy over an idle pid.json', () => {
+  const assemble = async (workflowActive: boolean) => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.claude-a', 'sessions', '40613.json'),
+      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle' }),
+    );
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const sl = new Map<string, Statusline>([
+      ['claude-a-MekWarLive', { model: 'Opus 5.5', ultracode: false, workflowActive }],
+    ]);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), undefined, undefined, sl);
+    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!.status;
+  };
+
+  it('an idle session with a Workflow row on screen is busy', async () => {
+    expect(await assemble(true)).toBe('busy');
+  });
+
+  it('control: the same session without one is idle', async () => {
+    expect(await assemble(false)).toBe('idle');
   });
 });
 

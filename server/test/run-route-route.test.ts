@@ -388,18 +388,49 @@ describe('POST /api/runs/:id/route', () => {
   });
 
   it('kind: ceiling on a degraded session answers 409 ceiling — the record already intends the served class', async () => {
+    // THE PAIR IS `opus` OVER `sonnet`, NOT THE TOP CLASS OVER OPUS. This case
+    // used to seed the top class degraded to opus, and it reached this arm
+    // because the ladder first computed opus -> the top class. Operator
+    // instruction 2026-09-22 stops that rung (`MAIN_CLASS_CEILING`), so that
+    // seed now ceilings inside `escalate()` and never gets here — the `it`
+    // below measures it there. The arm itself is untouched and still live for
+    // every rung BELOW the ceiling, which is what this case now seeds: a
+    // record intending opus, served sonnet, escalated back onto its own
+    // intent.
     const home = mkTmp('ccrc-route-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-w2'] });
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
     const { id, sid } = await dispatchedRun(w.app, 'demo-w2');
-    seed(home, sid, { class: 'fable', effort: 'high', degraded: 'opus' });
+    seed(home, sid, { class: 'opus', effort: 'high', degraded: 'sonnet' });
 
     const res = await postRoute(w.app, id, { target: 'worker', why: 'ceiling reached', kind: 'ceiling' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       ok: false, error: 'ceiling',
-      detail: 'the record already intends fable; the lane serves opus (degraded)',
+      detail: 'the record already intends opus; the lane serves sonnet (degraded)',
     });
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('kind: ceiling on a session SERVED opus answers the main-loop ceiling — the ladder refuses before the door has a move to check', async () => {
+    // The other side of the case above, and the door's half of the 2026-09-22
+    // instruction: whatever the record intends, the class the session is
+    // ACTUALLY on is what the ladder is asked about, and from opus on a main
+    // loop there is no rung. The coordinator gets a 409 naming why, and the
+    // class above is left to a human — no run event, no argv, nothing typed.
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w2c'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w2c');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'a design flaw it could not see', kind: 'ceiling' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'ceiling',
+      detail: 'a main-loop ladder ends at opus — nothing past it is ever reached by escalation, only by an explicit human choice',
+    });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
     expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
   });
 

@@ -11,6 +11,10 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { BuildLine } from '../fleet/BuildLine';
+import { useFleetHealth } from '../fleet/useFleetHealth';
+import { UpdateBanner } from '../fleet/UpdateBanner';
+import { useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
@@ -97,12 +101,46 @@ export function FleetScreen({
   onNewSession,
   selectedId = null,
   showAccounts = true,
+  epoch,
+  observedEpoch,
 }: {
   store?: FleetStore; // injectable for tests
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
+  /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
+   *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
+   *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
+   *  `poolsWire`). Commit 18454187 (T9-R2) wired the real producer, so
+   *  `undefined` here now means what the field's own three-valued contract
+   *  says it means: this server has no coordination db wired (local mode),
+   *  never "nothing polls it yet". */
+  epoch?: number;
+  /** The fleet host's own observed pool-projection epoch, off the SAME
+   *  `pools` frame's `observedEpoch` field. Through commit 18454187 (T9-R2)
+   *  this was the agent's handshake report (`AgentReady.observedEpoch`)
+   *  forwarded unchanged; since item 1 (wave-1 fix round A) it is the
+   *  SERVER's own fresh measurement of `$REG/pool-epoch`
+   *  (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, on every
+   *  watcher tick / `GET /api/fleet` request) — the handshake value was
+   *  sampled once per WS connection and never refreshed for a link that can
+   *  live for days, so it read "in sync" forever after one real sync. This
+   *  prop's own SHAPE is unchanged (the wire field's name and three-value
+   *  contract did not move), only what feeds it. THREE answers, not two:
+   *  absent means "this server cannot tell you" (render nothing — the reader
+   *  has no evidence either way), `null` means "the node has never synced"
+   *  (a real, renderable fact), a number is what it actually has. Never read
+   *  as a health tick: a node whose projection is past its lease still
+   *  reports a number while `ccd` refuses every tagged placement, so
+   *  `observedEpoch === epoch` means only "not stale", never "this node is
+   *  placing" — and, separately (disclosed, not fixed, here): `epoch` counts
+   *  CENTRAL writes only, while the pool document an operator sees also
+   *  derives from the declared roster since T7-R4, so a declared-only pool
+   *  change can alter that document while `epoch` — and therefore this
+   *  comparison — stands still. `observedEpoch === epoch` has only ever meant
+   *  "not stale"; it still never means "agrees". */
+  observedEpoch?: number | null;
 }): ReactNode {
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
@@ -403,6 +441,13 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
+  // One poll of /api/fleet/health feeds both the banner and BuildLine below
+  // (spec §6) — the screen owns it so the two never issue their own requests.
+  // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
+  // view handed down to every reader of the inventory on this screen, none of
+  // which polls on its own.
+  const fleetHealth = useFleetHealth();
+  const updates = useUpdatesView();
   // One sheet for the whole screen, fed by whichever line was tapped. Only
   // the id is the source of truth (Finding 5 of the whole-branch review):
   // `actionsSession` is refreshed from the live `sessions` list below rather
@@ -462,6 +507,21 @@ export function FleetScreen({
   const feed = useStore((s) => s.feed);
   const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
 
+  // The account-pool epoch/observed lag — a STALENESS signal, not a health
+  // one (see the prop docs above). Rendered ONLY when both numbers are known
+  // AND they actually differ: `epoch === undefined` or `observedEpoch ===
+  // undefined` both mean "nothing to compare", and an equal pair means "not
+  // stale", not "placing" — the one thing this text must never read as.
+  // Before item 1 (wave-1 fix round A) `observedEpoch` was frozen at
+  // handshake, so a node that synced once and then stopped kept comparing
+  // equal here forever — a false "in sync". `observedEpoch` now refreshes on
+  // the server's own watcher tick, so an equal pair here is a genuinely
+  // current fact, not a stale first impression.
+  const poolLag =
+    epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
+      ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
+      : null;
+
   // R5 (D-3010): the card set is seeded from the known-project list once it
   // lands. Before it lands — `legacy`, `pending`, `failed` — the cards are
   // session-derived exactly as before, and the set only ever GROWS when the
@@ -481,6 +541,11 @@ export function FleetScreen({
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          {poolLag !== null && (
+            <span className="pool-epoch-lag" data-testid="pool-epoch-lag" title="account-pool projection lag">
+              {poolLag}
+            </span>
+          )}
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
               accessible name is "account usage — open accounts": a full-width
@@ -506,12 +571,35 @@ export function FleetScreen({
             <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
             Account
           </button>
+          {/* THE DOOR TO /settings (centralised update management §13) — the
+              `.accounts-door` pattern directly above, for the argument its
+              comment makes: a glyph AND a short text label, because an
+              icon-only gear would be exactly as undiscoverable as the
+              AccountsStrip tap target that D-161 found was the only door to
+              /accounts. The accessible name says what is behind it — updates
+              and notifications — because "Settings" alone names no content;
+              it begins with the visible word, so a voice user saying what
+              they see still reaches it. Rendered unconditionally: a first-run
+              fleet with no sessions needs the screen as much as any. A fifth
+              item does not fit this group's measured width budget on a
+              phone, so the group now wraps rather than overflowing
+              (fleet.css, D-3303). */}
+          <button
+            type="button"
+            className="settings-door"
+            aria-label="Settings — updates and notifications"
+            onClick={() => navigate('/settings')}
+          >
+            <span className="settings-door-glyph" aria-hidden="true">⚙</span>
+            Settings
+          </button>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>
       </header>
 
-      <FleetHostBanner />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      <UpdateBanner updates={updates.view} health={fleetHealth} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can
@@ -869,6 +957,8 @@ export function FleetScreen({
         onClose={() => setReapId(null)}
         onReaped={() => setReapId(null)}
       />
+
+      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} />
     </main>
   );
 }

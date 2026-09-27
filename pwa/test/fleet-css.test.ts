@@ -409,7 +409,7 @@ describe('selection is polarity, status is hue', () => {
     expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
     const scrubbed = stripComments(css);
     const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
-    for (const variant of ['expired', 'unrecognised']) {
+    for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
       const sel = `.sess-spawn[data-spawn=${variant}]`;
       // The variant really does paint a colour of its own — without that there
       // is nothing to beat and everything below would be vacuous.
@@ -425,6 +425,35 @@ describe('selection is polarity, status is hue', () => {
         `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
         .toBeGreaterThan(spec(sel));
     }
+  });
+
+  it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
+    // rc 6 does not heal on its own: the window stays narrow after the client
+    // that narrowed it leaves, the startup gates it skipped are never revisited,
+    // and the stamp changes only on the next spawn. So it takes `.sess-spawn`'s
+    // default --status-dead-text, like blocked/login/vanished — which it gets by
+    // having NO variant rule of its own.
+    expect(declValue(ruleFor('.sess-spawn'), 'color')).toBe('var(--status-dead-text)');
+    // Every rule that names a `data-spawn` VALUE and sets a colour, however its
+    // selector is spelled (`[data-spawn=narrow].sess-spawn`, `:is(…)`, a second
+    // rule further down) — `narrow` must be in none of them.
+    const painted: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      if (!/data-spawn/.test(selector!) || !/(^|;)\s*color\s*:/.test(body!)) continue;
+      for (const v of selector!.matchAll(/data-spawn\s*=\s*['"]?([\w-]+)/g)) painted.push(v[1]!);
+    }
+    // The control: the scan does find the two quiet variants, so an empty
+    // result below is a finding, not a scan that saw nothing.
+    expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
+    expect(painted).not.toContain('narrow');
+  });
+
+  it('paints a narrow spawn whose pane is measured wide again (`narrow-widened`) in the QUIET ink', () => {
+    // History, not a fault: the pane is wide with its prompt up, and ccd's
+    // readers are back on (spawnWords.ts's `narrowSinceWidened`). What stays
+    // loud is a narrow spawn still unmeasured or narrow — the case above.
+    expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
   it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
@@ -918,6 +947,51 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     for (const state of ['malformed', 'unreadable', 'unrecognised']) {
       expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
     }
+  });
+
+  // Review round 1, C1. The account-pool chip (AccountsScreen) carries BOTH
+  // `.proj-card-pool` and `.acct-pool-chip`, so the shared untagged-attention
+  // rule proven above ALSO matches it — but an untagged ACCOUNT is the
+  // default, unconstrained state, not the worklist fault an untagged PROJECT
+  // is. `.acct-pool-chip[data-pool='untagged']` must win that colour back.
+  // Same shape as the spawn-chip / ctx-pressure cascade-tie tests above this
+  // file's `selection is polarity` describe: membership is necessary and not
+  // sufficient — a render test cannot see this at all (jsdom applies no
+  // stylesheet), so only reading the text can prove the override actually
+  // wins the tie rather than merely existing.
+  it("wins the untagged account chip's colour back from .proj-card-pool by SOURCE ORDER — both tie at (0,2,0)", () => {
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const sharedSel = ".proj-card-pool[data-pool='untagged']";
+    const acctSel = ".acct-pool-chip[data-pool='untagged']";
+    // The shared rule really does paint attention ink — without that there is
+    // nothing to beat and everything below would be vacuous.
+    expect(declValue(ruleFor(sharedSel), 'color'), `${sharedSel} no longer sets its own colour`)
+      .toBe('var(--status-attention-text)');
+    // …and the account chip's own rule really does win the quiet ink back.
+    expect(declValue(ruleFor(acctSel), 'color'), `${acctSel} no longer sets its own colour`)
+      .toBe('var(--ink-tertiary)');
+    // Equal specificity is why source order is load-bearing here at all — if
+    // one side already out-specified the other, this test would prove nothing
+    // about ORDER.
+    expect(spec(acctSel), 'the two selectors no longer tie at (0,2,0) — this test may be moot')
+      .toBe(spec(sharedSel));
+    const scrubbed = stripComments(css);
+    const sharedAt = scrubbed.indexOf(sharedSel);
+    const acctAt = scrubbed.indexOf(acctSel);
+    expect(sharedAt, `${sharedSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} now precedes the shared rule — this test no longer proves anything`)
+      .toBeGreaterThan(sharedAt);
+  });
+
+  // `stale` is account-only (AccountPoolWire has no project-side counterpart,
+  // design §5.7), so it is absent from `.proj-card-pool`'s shared list and
+  // would otherwise fall through to the base `--ink-tertiary` instead of the
+  // attention ink `poolRule` treats it the same as malformed/unreadable for.
+  it('gives the stale account chip the same attention ink as malformed/unreadable', () => {
+    expect(declValue(ruleFor(".acct-pool-chip[data-pool='stale']"), 'color'))
+      .toBe('var(--status-attention-text)');
   });
 
   it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {

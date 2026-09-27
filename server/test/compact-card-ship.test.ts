@@ -149,8 +149,10 @@ describe('compact-card.mjs ships', () => {
   it('the release tarball carries it, because the pathspec names a directory', () => {
     // `git archive … ccd` is why `build-release.sh` needs no edit for this
     // file. Pinned rather than trusted: narrowing that pathspec to a file list
-    // would leave a tarball whose `ccrc install` dies on a missing source.
-    expect(code(read('deploy/build-release.sh'))).toContain('install.sh shared ccd deploy \\');
+    // would leave a tarball whose `ccrc install` dies on a missing source. The
+    // pathspec is an array since D-3105 (each package's tracked scripts/ joins
+    // it at run time); its literal head still names `ccd` as a directory.
+    expect(code(read('deploy/build-release.sh'))).toContain('PATHSPEC=(install.sh shared ccd deploy');
   });
 
   it('the helper\'s TYPES never reach a box', () => {

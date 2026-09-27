@@ -22,9 +22,16 @@ afterEach(() => { h.cleanup(); });
 const ID = 'demo-quiet-mesa';
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
 
-const IDLE_PANE = '│ 🤖 Opus 5 · xhigh │ ▓ ctx ▁▁▁ 20% │\n❯ \n';
+/** Claude Code's real bottom: top rule, the empty `❯` box, bottom rule, then the
+ *  `👤`-led statusline row — the only line ccd's ctx reader takes a number from. */
+const RULE = '─'.repeat(40);
+const BOTTOM = (effort = 'xhigh'): string => `${RULE}\n❯ \n${RULE}\n  👤 acct-a │ 🤖 Opus 5 · ${effort} │ ▓ ctx ▁▁▁ 20% │ 💲 1.0\n`;
+const IDLE_PANE = BOTTOM();
 const MID_TURN_PANE = 'Working… (esc to interrupt)\n';
-const ACK_EFFORT = (level: string): string => `${IDLE_PANE}Set effort level to ${level} (this session only): …\n`;
+/** The ack as Claude Code prints it: a `⎿` line above the prompt box, with the
+ *  statusline row already showing the level (ultracode shows as `xhigh`). */
+const ACK_EFFORT = (level: string): string =>
+  `❯ /effort\n  ⎿  Set effort level to ${level} (this session only): …\n${BOTTOM(level === 'ultracode' ? 'xhigh' : level)}`;
 
 const TMUX_STUB = `tmux() {
   echo "tmux $*" >> "$HOME/tmux-calls"
@@ -395,7 +402,7 @@ describe('the compactor and the applier share a pane, and only one of them types
   // send-keys, so it also holds between processes: `ccd route --apply` is the
   // operator's process, not the supervisor's.
   const QUIET = Number(constOf('ROUTE_COMPACT_QUIET'));
-  const HOT_PANE = '│ 🤖 Opus 5 · xhigh │ ▓ ctx ▁▁▁ 95% │\n❯ \n';
+  const HOT_PANE = `${RULE}\n❯ \n${RULE}\n  👤 acct-a │ 🤖 Opus 5 · xhigh │ ▓ ctx ▁▁▁ 95% │ 💲 1.0\n`;
 
   beforeEach(() => {
     seed(ID); plantIdle();

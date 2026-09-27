@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, sendErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, MOVE_DISABLED_TEXT, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -1037,6 +1038,227 @@ describe('account pools', () => {
       expect(uploadErrorText(code), code).toBe(code);
       expect(kickoffErrorText(code), code).toBe(code);
       expect(sendErrorText(code), code).toBe(code);
+    }
+  });
+});
+
+// ── Centralised update management W3, Task 5: the update plane's client ─────
+// Design 2026-09-20 §12/§13. Four methods over W2's four session-only routes,
+// and each one's helper is a DECISION (lib/api.ts says why at each call): the
+// two WRITES degrade an unparseable 2xx to `unreadable`, because the write may
+// have landed (D-1150); the refresh does not, because it writes nothing the
+// operator could be unconfirmed about. No method exists for the two move routes
+// W3 leaves disabled — pinned below by the route literals the file spells.
+describe('the update plane client (W3 Task 5)', () => {
+  const INTENT: UpdateIntentWire = {
+    scope: FLEET_SCOPE, channel: 'dev', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 5_000, setBy: 'operator',
+  };
+  const CATALOGUE: CatalogueState = { lastOkAt: 4_000, lastError: null };
+  const NODE: NodeWire = {
+    nodeId: '0f0e0d0c-0b0a-4908-8706-050403020100', role: 'fleet', label: 'fleet', os: 'linux',
+    current: { sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-22T00:00:00Z', dirty: false, version: 'v0.0.9' },
+    stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: ['verify', 'node-id', 'floor'], agentOps: [], highestVersion: 'v0.0.9', previousVersion: null,
+    measuredAt: 1_000, reachable: true, unreachableSince: null,
+    channel: 'dev', desiredTag: 'v0.0.9', resolveDetail: null, request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  };
+  /** A 2xx whose body stops mid-object — the exchange completed, the answer did not. */
+  const truncated = (): Response => new Response('{"ok":true,"inte', {
+    status: 200, headers: { 'content-type': 'application/json' },
+  });
+
+  it('updates() is a bare GET of /api/updates — no init at all, the fleetHealth shape', async () => {
+    const body = { catalogue: CATALOGUE, releases: [], nodes: [NODE], intent: [INTENT] };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, body));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.updates()).resolves.toEqual(body);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe('/api/updates');
+    expect(init).toBeUndefined();
+  });
+
+  it('setUpdateIntent POSTs the partial as JSON, asks for JSON back, and resolves the answer', async () => {
+    const answer: IntentWriteAnswer = { ok: true, intent: INTENT, epoch: 7 };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.setUpdateIntent({ scope: FLEET_SCOPE, channel: 'dev' })).resolves.toEqual(answer);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/intent');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    // EXACTLY the two keys given — W2's parseIntentBody refuses an unknown key,
+    // and an omitted one keeps its stored value (a partial, not a snapshot).
+    expect(JSON.parse(init.body as string)).toEqual({ scope: '*', channel: 'dev' });
+    // Session-gated only (W2 Task 13): no box token rides an operator write.
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
+
+  it('setUpdateIntent resolves `unreadable` on a 2xx it cannot parse — the write may have landed (D-1150)', async () => {
+    const api = createApi(async () => truncated());
+    await expect(api.setUpdateIntent({ scope: FLEET_SCOPE, notify: 'off' })).resolves.toBe('unreadable');
+    const emptied = createApi(async () => new Response('', { status: 200 }));
+    await expect(emptied.setUpdateIntent({ scope: FLEET_SCOPE, notify: 'off' })).resolves.toBe('unreadable');
+  });
+
+  it('setUpdateIntent still rejects a request that never completed, and a refusal keeps its body', async () => {
+    const offline = createApi(async () => { throw new TypeError('Failed to fetch'); });
+    await expect(offline.setUpdateIntent({ scope: FLEET_SCOPE, auto: 'stable' })).rejects.toThrow(/failed to fetch/i);
+
+    const refusal = { ok: false, error: 'auto-needs-rollback-gate', nodes: ['fleet', 'server'] };
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, refusal)) as unknown as typeof fetch);
+    const err = await refused.setUpdateIntent({ scope: FLEET_SCOPE, auto: 'stable' }).then(
+      () => { throw new Error('expected setUpdateIntent to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual(refusal);
+  });
+
+  it('refreshUpdates POSTs nothing, asks for JSON, and resolves the catalogue line', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, CATALOGUE));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.refreshUpdates()).resolves.toEqual(CATALOGUE);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/refresh');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+    expect(init.body).toBeUndefined();
+  });
+
+  it('refreshUpdates REJECTS an unparseable 2xx — it wrote nothing to be unconfirmed about', async () => {
+    const api = createApi(async () => truncated());
+    const r = await api.refreshUpdates().then(() => 'resolved', (e: unknown) => e);
+    expect(r, 'a check whose answer is unreadable is a failed check, not a catalogue line').not.toBe('resolved');
+    expect(r).not.toBe('unreadable');
+    expect(r).not.toBeInstanceOf(ApiError);
+  });
+
+  it('refreshUpdates rejects a 429 with the ApiError the screen reads retryAfterS off', async () => {
+    const body = { ok: false, error: 'rate-limited', retryAfterS: 42 };
+    const api = createApi(vi.fn().mockResolvedValue(jsonResponse(429, body)) as unknown as typeof fetch);
+    const err = await api.refreshUpdates().then(
+      () => { throw new Error('expected refreshUpdates to reject'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(429);
+    expect((err as ApiError).body).toEqual(body);
+  });
+
+  it('ackUpdateNode POSTs {nodeId} and resolves `unreadable` on an unparseable 2xx', async () => {
+    const answer: AckAnswer = { ok: true, node: NODE };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, answer));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await expect(api.ackUpdateNode(NODE.nodeId)).resolves.toEqual(answer);
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/ack');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(new Headers(init.headers).get('accept')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ nodeId: NODE.nodeId });
+
+    const unreadable = createApi(async () => truncated());
+    await expect(unreadable.ackUpdateNode(NODE.nodeId)).resolves.toBe('unreadable');
+  });
+
+  it('spells exactly the four W2 update routes — no apply, no rollback (spec §18: the move controls are disabled in W3)', () => {
+    // The route LITERALS, not a method-name guess: a method named anything at
+    // all that reaches either move route has to spell its path, and this is the
+    // census of every quoted `/api/updates…` path the client holds.
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
+    const routes = [...new Set(src.match(/'\/api\/updates[^']*'/g) ?? [])].sort();
+    expect(routes).toEqual(["'/api/updates'", "'/api/updates/ack'", "'/api/updates/intent'", "'/api/updates/refresh'"]);
+    expect(src).not.toContain('/api/updates/apply');
+    expect(src).not.toContain('/api/updates/rollback');
+  });
+
+  it('MOVE_DISABLED_TEXT is the one literal every disabled move control carries', () => {
+    expect(MOVE_DISABLED_TEXT).toBe('lands with the next release (W4)');
+  });
+});
+
+// D-3302. `updateErrorText` reads `body.error`
+// against its OWN table before anything else, because two of its words already
+// have owners — `not-configured` is `API_ERROR_TEXT`'s kickoff sentence ("does
+// not run coordination … a kickoff"), false on this surface, and `bad-request`
+// is the upload and kickoff tables' — and it falls to `apiErrorText` only for a
+// code it does not own. It consumes no translator's output and none consumes
+// its output, so the composition hazard the describe above guards does not
+// arise; what can still go wrong is the other direction, a word of its own
+// leaking into another table, and the last case here pins that.
+describe('updateErrorText — the update routes\' refusals, read code-first (W3 Task 5)', () => {
+  // Typed by W2's union: a word W2 adds, or one this list drops, is a compile
+  // error in this file as well as in lib/api.ts — the runtime census and the
+  // type census are the same object.
+  const SENTENCES: Record<Exclude<UpdateRouteError, 'unauthenticated'>, string> = {
+    'not-configured': 'This box has no update control plane — it runs without a coordination database.',
+    'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',
+    'bad-request': 'The server refused the shape of that request — reload the screen and try again.',
+    'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
+    'unknown-node': 'That node is no longer in the inventory.',
+    superseded: 'That node was reinstalled under a new identity — reload to see it.',
+    busy: 'That node is mid-update — wait for it to settle, then acknowledge.',
+    'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
+    'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
+    'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
+    'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
+    'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+  };
+
+  it('has its sentence for every UpdateRouteError but unauthenticated', () => {
+    const entries = Object.entries(SENTENCES);
+    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(12);
+    for (const [code, sentence] of entries) {
+      expect(updateErrorText(asError(409, { ok: false, error: code })), code).toBe(sentence);
+    }
+  });
+
+  it('not-configured on an update route is the update sentence, not the kickoff one', () => {
+    const err = asError(501, { ok: false, error: 'not-configured' });
+    expect(updateErrorText(err)).toBe(SENTENCES['not-configured']);
+    expect(updateErrorText(err)).not.toBe(apiErrorText(err));
+    expect(apiErrorText(err), 'the kickoff sentence is untouched').toMatch(/does not run coordination/i);
+  });
+
+  it('bad-request is the update sentence, not the upload or kickoff one', () => {
+    const err = asError(400, { ok: false, error: 'bad-request', field: 'channel' });
+    expect(updateErrorText(err)).toBe(SENTENCES['bad-request']);
+    expect(updateErrorText(err)).not.toBe(uploadErrorText('bad-request'));
+    expect(updateErrorText(err)).not.toBe(kickoffErrorText('bad-request'));
+  });
+
+  it('falls to apiErrorText for anything it does not own', () => {
+    expect(updateErrorText(asError(501, { ok: false, error: 'unsupported' }))).toBe(UNSUPPORTED_VERB_TEXT);
+    expect(updateErrorText(asError(401, { ok: false, error: 'unauthenticated' }))).toBe('unauthenticated');
+    expect(updateErrorText(asError(500, 'plain text body'))).toBe('request failed (500)');
+    expect(updateErrorText(new TypeError('Failed to fetch'))).toBe('Failed to fetch');
+  });
+
+  it('the five existing translators pass every update-only code through unchanged', () => {
+    // The ten words no other table owns. `not-configured` and `bad-request`
+    // are excluded because they HAVE other owners — which is exactly why the
+    // update table is read first rather than composed after apiErrorText.
+    const updateOnly = Object.keys(SENTENCES).filter((c) => c !== 'not-configured' && c !== 'bad-request');
+    expect(updateOnly, 'guards the guard').toHaveLength(10);
+    for (const code of updateOnly) {
+      expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
+      expect(sendErrorText(code), code).toBe(code);
+      expect(submitErrorText(code), code).toBe(code);
+      expect(uploadErrorText(code), code).toBe(code);
+      expect(kickoffErrorText(code), code).toBe(code);
     }
   });
 });
