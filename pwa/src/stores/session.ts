@@ -60,6 +60,18 @@ export interface PendingSend {
   /** Staged images sent alongside text. Object-URL ownership lives here from
    *  send() until this pending is confirmed or explicitly abandoned (discard). */
   attachments?: PendingAttachment[];
+  /** The API accepted this send and the session has not echoed it back yet —
+   *  which is the ordinary fate of a message typed while the session is busy:
+   *  the pane QUEUES it ("Press up to edit queued messages") and echoes it only
+   *  when it gets to it.
+   *
+   *  A FLAG, NOT A STATE, deliberately. `ChatList`'s `PendingBubble` branches
+   *  `state === 'sending'` against everything else, and everything else renders
+   *  as the red "not sent" failure — so a third state token would paint a
+   *  perfectly healthy queued message as an error. The renderer needs no change
+   *  to stay correct today, and showing "queued" instead of "sending" is one
+   *  line in it whenever that file is next open. */
+  queued?: boolean;
 }
 
 export interface SessionState {
@@ -301,10 +313,16 @@ const revoke = (p: PendingSend | undefined): void => {
 
 /** Drop 'sending' pendings whose composed text just arrived back as a real
  *  user event. The server injects composePrompt(text, paths), so matching on
- *  p.text alone would never fire for an attachment send. */
-function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingSend[] {
-  if (msg.type !== 'events' && msg.type !== 'backlog') return pending;
+ *  p.text alone would never fire for an attachment send. Returns the KEYS it
+ *  dropped alongside the next list — this function is pure and outside the
+ *  store closure, so it cannot cancel a pending's own timer itself; the call
+ *  site does that with `cleared`. */
+function clearConfirmed(
+  pending: PendingSend[], msg: SessionStreamMsg,
+): { pending: PendingSend[]; cleared: string[] } {
+  if (msg.type !== 'events' && msg.type !== 'backlog') return { pending, cleared: [] };
   let next = pending;
+  const cleared: string[] = [];
   for (const e of msg.events) {
     if (e.kind !== 'user') continue;
     const i = next.findIndex(
@@ -312,10 +330,11 @@ function clearConfirmed(pending: PendingSend[], msg: SessionStreamMsg): PendingS
     );
     if (i >= 0) {
       revoke(next[i]);
+      cleared.push(next[i]!.key);
       next = [...next.slice(0, i), ...next.slice(i + 1)];
     }
   }
-  return next;
+  return { pending: next, cleared };
 }
 
 const failureOf = (e: unknown): { error: string; code?: string; draft?: string; submittable?: boolean } => {
@@ -359,8 +378,17 @@ const failureOf = (e: unknown): { error: string; code?: string; draft?: string; 
 export interface SessionStoreDeps {
   api?: Pick<Api, 'prompt'>;
   makeSocket?: (url: string) => WebSocket;
-  /** How long a confirmed-by-api pending lingers waiting for its echo event. */
+  /** How long a confirmed-by-api pending lingers waiting for its echo event
+   *  before it is marked QUEUED (stage one — see `queuedTimeoutMs` below). */
   confirmTimeoutMs?: number;
+  /** How long a QUEUED pending survives before it is retired. The five-second
+   *  `confirmTimeoutMs` used to delete it, which is the defect: a busy session
+   *  cannot echo inside five seconds, so the operator watched their own message
+   *  vanish. The deletion is not removed — a slash command's echo parses as a
+   *  `system` event and `clearConfirmed` matches only `user`, so this timer is
+   *  the ONLY terminal condition those bubbles have — it is moved to a horizon
+   *  where a bubble quietly retiring is no longer a surprise. */
+  queuedTimeoutMs?: number;
 }
 
 export type SessionStore = UseBoundStore<StoreApi<SessionState>>;
@@ -368,26 +396,54 @@ export type SessionStore = UseBoundStore<StoreApi<SessionState>>;
 export function createSessionStore(id: string, deps: SessionStoreDeps = {}): SessionStore {
   const apiImpl = deps.api ?? api;
   const confirmTimeoutMs = deps.confirmTimeoutMs ?? 5_000;
+  const queuedTimeoutMs = deps.queuedTimeoutMs ?? 10 * 60_000;
   let socket: ReconnectingSocket | null = null;
   /** The presence heartbeat's timer — see `beat` below. */
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** Arm a deadline for `key`, disarming whatever this key had before.
+   *
+   *  A bare `timers.set` replaces the MAP ENTRY and leaves the old
+   *  `setTimeout` running — and that stray timer still holds this key, so when
+   *  it fires it deletes a pending that a re-send has since put back in
+   *  flight. That is the "my message vanished while waiting" defect arriving
+   *  through the rescue path, which is why both arming sites go through here
+   *  rather than remembering to clear first. */
+  const arm = (key: string, ms: number, fn: () => void): void => {
+    const prev = timers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    timers.set(key, setTimeout(fn, ms));
+  };
+
   const store = create<SessionState>()((set, get) => {
-    // Api accepted the prompt but no echo event arrived: clear after a grace
-    // period so a text-mismatched echo can't strand the pending bubble.
+    // Api accepted the prompt but no echo event arrived, even after the long
+    // QUEUED horizon: retire it. Abandoning the pending abandons its object
+    // URLs with it — the same rule clearConfirmed and discard follow.
     const expireConfirmed = (key: string): void => {
       timers.delete(key);
       set((s) => {
         const p = s.pending.find((x) => x.key === key);
         if (!p || p.state !== 'sending') return {};
-        // Abandoning the pending abandons its object URLs with it — the same
-        // rule clearConfirmed and discard follow. Without this the echo-mismatch
-        // fallback leaked up to four full-size images every time it fired.
         revoke(p);
         return { pending: s.pending.filter((x) => x.key !== key) };
       });
+    };
+
+    // Api accepted the prompt and the echo has not arrived. STAGE ONE: say so
+    // — mark the pending queued rather than deleting it (a busy session cannot
+    // possibly echo inside `confirmTimeoutMs`) — then arm STAGE TWO, the long
+    // retirement deadline above.
+    const markQueued = (key: string): void => {
+      set((s) => {
+        const p = s.pending.find((x) => x.key === key);
+        if (!p || p.state !== 'sending') return {};
+        return { pending: s.pending.map((x) => (x.key === key ? { ...x, queued: true } : x)) };
+      });
+      if (get().pending.some((x) => x.key === key && x.state === 'sending')) {
+        arm(key, queuedTimeoutMs, () => expireConfirmed(key));
+      }
     };
 
     const dispatch = async (
@@ -397,7 +453,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
     ): Promise<void> => {
       try {
         await apiImpl.prompt(id, text, opts);
-        timers.set(key, setTimeout(() => expireConfirmed(key), confirmTimeoutMs));
+        arm(key, confirmTimeoutMs, () => markQueued(key));
       } catch (e) {
         const { error, code, draft, submittable } = failureOf(e);
         set((s) => ({
@@ -465,10 +521,17 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       conn: 'connecting',
 
       apply(msg) {
-        set((s) => ({
-          ...applySessionMsg(snapshotOf(s), msg),
-          pending: clearConfirmed(s.pending, msg),
-        }));
+        set((s) => {
+          const confirmed = clearConfirmed(s.pending, msg);
+          for (const key of confirmed.cleared) {
+            const t = timers.get(key);
+            if (t !== undefined) { clearTimeout(t); timers.delete(key); }
+          }
+          return {
+            ...applySessionMsg(snapshotOf(s), msg),
+            pending: confirmed.pending,
+          };
+        });
       },
 
       connect() {
@@ -597,7 +660,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                              submittable: undefined } : x),
+                              submittable: undefined, queued: undefined } : x),
         }));
         void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
       },
@@ -612,7 +675,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           pending: s.pending.map((x) =>
             x.key === key
               ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                  submittable: undefined, replaceDraft: opts.replaceDraft }
+                  submittable: undefined, queued: undefined, replaceDraft: opts.replaceDraft }
               : x),
         }));
         void dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(p) });

@@ -2738,28 +2738,80 @@ GRAPH_NUDGE_PRE_RE="${GRAPH_NUDGE_READ_RE%\$}\""
 GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(rg|grep|egrep|fgrep|ugrep|ag|ack|find|fd|git[[:space:]]+grep)([[:space:]]|$)'
 
 payload=$(cat 2>/dev/null) || exit 0
-[[ -n "${TMUX_PANE:-}" ]] || exit 0
-# BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
-# D-2791): this question is asked once per HOOK EVENT inside every live session on the
-# box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
-# over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
-# and never returns — so an unbounded call here hangs the hook, and the hook is on the
-# hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
-# pane's.
+# TWO SOURCES FOR ONE QUESTION: which ccd session is this?
 #
-# THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
-# macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
-# not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
-# writes nothing at all. That is the honest degrade for a file whose header makes exit 0
-# on every path absolute: a hook that cannot bound its own tmux call must not make it.
-hooktmo=""
-for hooktmo_bin in timeout gtimeout; do
-  if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
-done
-tname=""
-[[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
-[[ "$tname" == cc-?* ]] || exit 0
-id="${tname#cc-}"
+# The pane is the ordinary answer and stays first. It is not the only one: a
+# session that Claude Code has FORKED into a daemon-hosted background PTY has
+# no TMUX and no TMUX_PANE at all (measured via /proc/<pid>/environ), so this
+# hook exited at once for exactly the sessions whose ask card, subagent list
+# and compaction card matter most — a real session wrote its last hookstate
+# two minutes before its fork and then nothing for three hours of active work.
+#
+# The fallback is the session's OWN id, matched against the registry. That
+# keeps the guard's whole purpose intact: attribution stays POSITIVE and
+# measured — this hook writes for a session only when the registry itself names
+# that uuid as its own — so a stranger's Claude session on this box exits 0
+# exactly as it does today. What it must never become is the registry's WRITER.
+# `ccd` decides the uuid (`_sync_uuid`); this only reports against it.
+id=""
+if [[ -n "${TMUX_PANE:-}" ]]; then
+  # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
+  # D-2791): this question is asked once per HOOK EVENT inside every live session on the
+  # box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
+  # over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
+  # and never returns — so an unbounded call here hangs the hook, and the hook is on the
+  # hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
+  # pane's.
+  #
+  # THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
+  # macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
+  # not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
+  # writes nothing at all. That is the honest degrade for a file whose header makes exit 0
+  # on every path absolute: a hook that cannot bound its own tmux call must not make it.
+  hooktmo=""
+  for hooktmo_bin in timeout gtimeout; do
+    if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
+  done
+  tname=""
+  [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
+  [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
+fi
+# THE FALLBACK PATH ONLY: no pane named a session, so ask the registry instead
+# of the tmux server. `ccd`'s `_sync_uuid` is the ONLY writer of `$REG/*.uuid`;
+# this loop only reads it — ~20 small files, and only on the path with no pane,
+# so the hot (paned) path above pays nothing new.
+#
+# BUILTINS, NOT `cat`/`basename` (whole-branch review, F8). The first draft
+# forked `cat` once per registry row plus a `basename` on the match — about 21
+# forks per hook event — and this path is the hot path of exactly the FORKED
+# sessions this change exists to serve: a fork has no TMUX_PANE, so every one
+# of its tool calls arrives here. `ccrc-doctor-checks` argues the identical
+# substitution at length for its own registry walk ("`${u##*/}` / `${id%.uuid}`
+# is `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
+# with no fork and no subshell"), and the same reasoning applies twice over
+# here, because a doctor run happens when an operator asks and this happens on
+# every tool call in every forked session on the box.
+#
+# `read` returns non-zero on a file with no trailing newline while still
+# assigning what it read, which is why its status is deliberately not tested:
+# `$ruuid` is COMPARED, and an unreadable or empty file compares unequal and
+# is skipped exactly as before. This file runs under `set -uo pipefail` and
+# NOT `set -e`, so that non-zero status ends nothing.
+if [[ -z "$id" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
+  ruuid=""
+  for u in "$REG"/*.uuid; do
+    [[ -e "$u" ]] || continue
+    ruuid=""; IFS= read -r ruuid < "$u" 2>/dev/null
+    [[ "$ruuid" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
+    id="${u##*/}"; id="${id%.uuid}"
+    break
+  done
+fi
+# NOT A GUARD: the regex on the next line already rejects the empty string
+# (`+` requires at least one character), so this line can never be the one
+# that reds a mutation — dropping it changes nothing measurable. Kept anyway,
+# for a reader who should not have to derive "no id" from a character class.
+[[ -n "$id" ]] || exit 0
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0

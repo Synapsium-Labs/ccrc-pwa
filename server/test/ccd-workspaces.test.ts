@@ -1525,7 +1525,7 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
       what: 'a comment naming the three globs that share the dot-leading second pass' },
-    { file: 'session-hook.test.ts', grammar: 'residue', count: 4,
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 5,
       what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair (a comment '
         + 'stating the pair rule, and the assertion itself) — plus TWO prose mentions added when the deferred '
         + 'citation census landed on the merged tree (account-pool-membership wave 1): both name '
@@ -1533,7 +1533,11 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
         + 'that a `**Files:**` anchor shifted rather than broke. They are census EVIDENCE, not assertions about '
         + 'slug residue, and they are counted here for the same reason the brace-template entry below counts its '
         + 'own retracting comments: this grammar deliberately sees prose, so the honest move is to name what the '
-        + 'prose is rather than reword a citation proof to duck an unrelated census' },
+        + 'prose is rather than reword a citation proof to duck an unrelated census — plus a THIRD such '
+        + 'mention, of exactly the same shape, added by the forked-session-transcript branch: its `+17` at '
+        + '`ccd/ccd:4921` moved two citation anchors, and the re-measured joined-row set names `_ws_slug_residue` '
+        + 'at `:6313` -> `:6331` as the proof that neither anchor named its referent at EITHER tree. Same '
+        + 'class, same disposition, counted rather than reworded' },
     { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
       what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
   ];

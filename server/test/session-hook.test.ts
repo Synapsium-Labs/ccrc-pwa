@@ -661,6 +661,79 @@ describe('the fleet gate and failure polarity', () => {
   });
 });
 
+// ── The fork fallback: attribution with no pane at all ─────────────────────
+// Claude Code can fork a live session into a daemon-hosted background PTY with
+// no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
+// the second source, read only when the first has nothing to ask.
+describe('a session with no pane', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hookstate = (id: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
+  const planted = (id: string, uuid: string): void =>
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), uuid);
+
+  it('writes hookstate when the registry names its session id as its own', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  // The guard, stated in the other direction. This is what the TMUX_PANE check
+  // was protecting: a Claude session on this box that ccd does not own must
+  // still be attributed to nobody.
+  it('writes nothing when no registry row names its session id', () => {
+    planted('demo-quiet-basin', 'uuid-someone-else');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    // NOT just the named row: attribute-on-CLAUDE_CODE_SESSION_ID-alone (drop
+    // the registry match) would leave `demo-quiet-basin.hookstate.json`
+    // absent while still writing SOME row's state file, named after the raw
+    // session id itself — a stranger attributed to a wrong row instead of to
+    // nobody. Scanning the whole registry for any `.hookstate.json` at all is
+    // what actually pins "attribution stays POSITIVE and measured" rather
+    // than merely "this one row stays untouched".
+    const wroteAnyHookstate = fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json'));
+    expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
+  });
+
+  it('matches a registry uuid file that carries a trailing newline — which every real one does', () => {
+    // Whole-branch review, F8: this loop now reads each row with `read -r var
+    // < file` instead of `$(cat file)`, to stop forking ~21 times per hook
+    // event on the hot path of exactly the forked sessions it serves. The one
+    // real behavioural risk of that substitution is the newline: a command
+    // substitution strips trailing newlines, and `ccd`'s own writers end every
+    // registry field with one, so a reader that kept the newline would match
+    // NOTHING on a real box while this suite — whose `planted` writes no
+    // newline — stayed green. `read -r` strips it too, and this pins that.
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.uuid'), 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  it('writes nothing when it has no session id to be attributed by', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '', CLAUDE_CODE_SESSION_ID: '' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(false);
+  });
+
+  it('still prefers the pane when there is one', () => {
+    // Two rows: the pane names one, the session id matches the OTHER. The pane
+    // wins, so the fallback can never quietly re-attribute a live session.
+    planted('demo-quiet-basin', 'uuid-pane');
+    planted('other-row', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(true);
+    expect(fs.existsSync(path.join(REG(), 'other-row.hookstate.json'))).toBe(false);
+  });
+
+  it('is silent on both streams, and exits 0, with no pane and no match', () => {
+    // The file's own header contract. `runFull` is this suite's stdout+stderr
+    // runner, which asserts exit 0 once (see its own comment) rather than the
+    // implicit throw-on-nonzero-exit `run` relies on.
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' }))
+      .toMatchObject({ stdout: '', stderr: '' });
+  });
+});
+
 // ── R4: the read side, MEASURED ───────────────────────────────────────────
 // D-1243 shipped an instruction and no number. The whole argument for retiring
 // the account-wide block is that its effect measured zero, and the only way
@@ -8182,7 +8255,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
-      'ccd/ccd': 147,
+      // RE-MEASURED ON THE MERGE THAT CARRIES `dcac4691` INTO THIS BRANCH,
+      // 147 -> 146, and DOWN again for the reason the paragraphs above give:
+      // neither corpus document changed on this branch, so no citation was
+      // re-pointed and nothing here is a repair. `ccd/ccd` grew on both sides
+      // of this merge, and one more reference stopped failing because a
+      // different line slid under its anchor. A coincidental pass is not a
+      // green anchor; the debt is unchanged and Task 11 still owns it.
+      // Same standing rule, no ruling id (S6-R11).
+      'ccd/ccd': 146,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8440,7 +8521,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // 195 -> 194 on the `dcac4691` merge: the per-file census above lost one
+    // on `ccd/ccd` and nothing moved elsewhere, so the headline follows it
+    // down. Derived from the census, never set beside it (S6-R11).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8598,7 +8682,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
         'ccd/ccd:6478',
-        'ccd/ccd:13020',
+        // `ccd/ccd:13020` LEFT this set on the `dcac4691` merge — the same
+        // coincidence class: the merge moved `ccd/ccd` under a stale anchor
+        // and a line carrying a token the clause quotes now stands there. The
+        // citation still does not name its referent. Re-measured, not picked
+        // (S6-R11).
         'ccd/ccd:19131',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
         // census entry that left: at `origin/main` this range opened on
@@ -9056,16 +9144,58 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
+        // RE-MEASURED AGAIN on the forked-session-transcript branch, under the
+        // SAME standing rule (S6-R11): the set is measured against the tree and
+        // never adjusted to keep a number green, and re-anchoring the citations
+        // themselves is still Task 11's. No ruling id of its own, because
+        // nothing about the rule changed. This branch's one hunk above these
+        // anchors — `+17` lines at `ccd/ccd:4921`, `_ws_status`'s new arm — moves
+        // the joined-row stale set by a SWAP, not a count: 55 -> 55. Both movers
+        // are COINCIDENCES in the class this comment already records, and each
+        // was MEASURED at both trees by byte-equality rather than inferred:
+        //   `ccd/ccd:5725` DEPARTS. Tip `:5725` is byte-identical to base
+        //     `:5708` — a comment line carrying a token its row quotes — where
+        //     base `:5725` was the bare `    #`, which carried none.
+        //   `ccd/ccd:5353-5362` ARRIVES. Tip `:5353-5362` is byte-identical to
+        //     base `:5336-5345`, the body of `_gh_rows_ok` (`:5346`), where base
+        //     `:5353-5362` was the `python3 /dev/fd/3 "$@" 3<<PY` heredoc whose
+        //     comment happened to carry one.
+        // NEITHER row was edited by this branch, and — the point — NEITHER
+        // citation named its referent at EITHER tree: `_ws_slug_residue` stands
+        // at `:6313` -> `:6331` and `cmd_ws_add`'s usage line at `:6701` ->
+        // `:6719`, so both anchors were already stale on the base and pass or
+        // fail on whatever unrelated line stands underneath them. Same class as
+        // the `:6838` repair round 3 recorded and round 4 lost again.
+        // RE-MEASURED ON THE MERGE THAT CARRIES `dcac4691` INTO THIS BRANCH,
+        // under the same standing rule (S6-R11): measured with the instrument,
+        // never adjusted to keep a number green, and re-anchoring is still
+        // Task 11's. No ruling id; nothing about the rule changed.
+        //
+        // 53 -> 53, a SWAP OF EIGHT. The exact multiset change, measured rather
+        // than read off a truncated diff — OUT: `ccd/ccd:3050` (x2), `:5353-5362`,
+        // `:5385-5388`, `:7568`, `:11665-11670`, `:11669`, `:13650-13652`; IN:
+        // `ccd/ccd:3070` (x3), `:13573-13575` (x2), `:3037-3089`, `:5828-5830`,
+        // `:6771`.
+        //
+        // WHAT THIS ROUND DOES NOT CLAIM, and the omission is deliberate. The
+        // round above attributed each of its two movers by byte-equality at both
+        // trees. This one does not: BOTH inputs moved at once — `main` advanced
+        // 24 commits and this branch re-anchored citations in both corpus
+        // documents as Tasks 6-8's own work — so a per-mover coincidence-versus-
+        // repair verdict would be inferred, not measured, and this file's whole
+        // discipline is that the difference between those two is the point. What
+        // IS measured is the set itself and the delta above. Task 11 still owns
+        // closing the debt, and closing it is what makes this census shrink for a
+        // reason rather than by coincidence.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
+        'ccd/ccd:3037-3089',
         'ccd/ccd:5797',
-        'ccd/ccd:7568',
         'ccd/ccd:11025',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
         'ccd/ccd:13567',
@@ -9077,7 +9207,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -9097,18 +9226,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/session-hook.sh:993',
-        'ccd/ccd:3050',
-        'ccd/ccd:3050',
+        'ccd/ccd:3070',
+        'ccd/ccd:3070',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
+        'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
-        'ccd/ccd:5385-5388',
+        'ccd/ccd:6771',
         'ccd/ccd:4642-4653',
+        'ccd/ccd:5828-5830',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9194,11 +9325,30 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+        // `spec:2222 ccd/ccd:5725` LEAVES this overlap list for the one reason
+        // the `|`-row set above records in full: this branch's `+17` at
+        // `ccd/ccd:4921` slid base `:5708` — a comment line carrying a token the
+        // row quotes — under the `:5725` anchor, so the row stopped failing. A
+        // coincidence, not a re-anchor; the citation still does not name
+        // `cmd_ws_add`'s usage line, which stands at `:6719`. The arriving
+        // `ccd/ccd:5353-5362` does NOT appear here, because it is reachable by
+        // no other pass. Same standing rule, no ruling id (S6-R11).
+        // RE-MEASURED ON THE `dcac4691` MERGE, 34 -> 36, and the movement is
+        // the SAME eight the `|`-row set above records, seen from the site
+        // side. JOINED: `spec:2220 ccd/ccd:3070` (x3), `spec:2123` and
+        // `spec:2210` on `ccd/ccd:13573-13575`, `spec:2124 ccd/ccd:3037-3089`.
+        // LEFT: `spec:2220 ccd/ccd:3050` (x2), `spec:2125 ccd/ccd:7568`,
+        // `spec:2222 ccd/ccd:5385-5388`. Measured with the instrument, not read
+        // off a diff, and carrying the same non-claim the set above states: with
+        // `main` 24 commits on and this branch's own re-anchors in both corpus
+        // documents, a per-mover coincidence-versus-repair verdict would be
+        // inferred rather than measured, so none is offered. S6-R11, no ruling id.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
+        'spec:2124 ccd/ccd:3037-3089',
         'spec:2125 ccd/ccd:5797',
-        'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
@@ -9224,11 +9374,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2220 ccd/ccd:3050',
-        'spec:2220 ccd/ccd:3050',
-        'spec:2222 ccd/ccd:5725',
-        'spec:2222 ccd/ccd:5385-5388',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
       ]);
   });
 

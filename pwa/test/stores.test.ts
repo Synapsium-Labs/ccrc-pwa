@@ -390,7 +390,11 @@ describe('session store optimistic send', () => {
     expect(store.getState().events).toEqual([user('a', 'ship it')]);
   });
 
-  it('clears a confirmed-by-api pending after the 5 s fallback when no event matches', async () => {
+  // Was "clears ... after the 5 s fallback" — that was the defect (task 5):
+  // a busy session cannot echo inside 5s, so the operator's own bubble
+  // vanished. The 5s mark now flips `queued`, not deletion; see the "a queued
+  // send" describe below for the retirement stage.
+  it('marks a confirmed-by-api pending queued after the 5 s fallback when no event matches', async () => {
     vi.useFakeTimers();
     const prompt = vi.fn().mockResolvedValue(undefined);
     const store = createSessionStore('s1', { api: { prompt } });
@@ -399,9 +403,10 @@ describe('session store optimistic send', () => {
     expect(store.getState().pending).toHaveLength(1);
 
     vi.advanceTimersByTime(4_999);
-    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]?.state).toBe('sending');
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
     vi.advanceTimersByTime(1);
-    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
   });
 
   it('a 409 draft-present rejection marks the pending failed and captures the draft', async () => {
@@ -582,11 +587,148 @@ describe('session store optimistic send', () => {
   it('revokes the object URLs when a confirmed send expires without its echo', async () => {
     vi.mocked(URL.revokeObjectURL).mockClear();
     const prompt = vi.fn().mockResolvedValue(undefined);
-    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5 });
+    // Both stages shortened to real-timer-friendly durations: the 5s stage
+    // that used to do this alone now only flips `queued`, so the retirement
+    // (and the URL revoke that rides with it) needs the second deadline too.
+    const store = createSessionStore(ID, { api: { prompt }, confirmTimeoutMs: 5, queuedTimeoutMs: 5 });
     await store.getState().send('hi', { attachments: [CLIP] });
 
     await vi.waitFor(() => expect(store.getState().pending).toHaveLength(0));
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(CLIP.previewUrl);
+  });
+});
+
+// — session store: queued sends —
+
+describe('a queued send', () => {
+  it('marks the pending queued instead of deleting it', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s1', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    expect(store.getState().pending).toHaveLength(1);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+  });
+
+  it('still retires the bubble at the long deadline, revoking its object URLs', async () => {
+    vi.useFakeTimers();
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s2', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hi', { attachments: [{ path: '/tmp/a.png', previewUrl: 'blob:a' }] });
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending).toHaveLength(1);
+
+    vi.advanceTimersByTime(5_000);
+    expect(store.getState().pending).toHaveLength(0);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a');
+  });
+
+  it('clears a queued pending when its echo arrives in a fresh backlog', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s3', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({
+      type: 'backlog', uuid: 'u1', events: [user('a', 'hello')], offset: 40,
+      file: '/t/u1.jsonl', missing: false,
+    });
+    expect(store.getState().pending).toHaveLength(0);
+  });
+
+  it('cancels the long deadline when the echo lands', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s4', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', events: [user('a', 'hello')], offset: 40 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // Review Focus 5. `resolve()` is the reachable route: it is the one re-send
+  // with no state guard, so it can act on a pending that is still `sending`.
+  // `retry()` guards `state !== 'failed'` and a queued pending is `sending`, so
+  // it is reached only after a re-send has failed — see the next test, and its
+  // own comment, for what that route actually measures.
+  it('clears the queued flag when the pending is re-sent', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s5', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+  });
+
+  it('a failed pending never carries the queued flag', async () => {
+    // WHY THIS EXISTS INSTEAD OF A MUTATION ROW. `retry` resets `queued`
+    // alongside the failure fields, and that reset is UNREACHABLE: `resolve`
+    // clears the flag synchronously before its dispatch can fail, and `send`
+    // arms no timer until the api has accepted, so nothing produces a pending
+    // that is both `failed` and `queued`. Measured: deleting the reset reds
+    // nothing. So the invariant that makes the reset unnecessary is pinned
+    // here instead — if a later change makes `failed` + `queued` reachable,
+    // this goes red and the reset earns its place back.
+    vi.useFakeTimers();
+    const prompt = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'tmux-error' }));
+    const store = createSessionStore('s6', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+
+    // Arrange: send, advance past confirmTimeoutMs so the pending is queued,
+    // then resolve() it against an api call that rejects.
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    expect(store.getState().pending[0]?.queued).toBe(true);
+
+    store.getState().resolve(key, 'hello', { replaceDraft: true }); // this one fails
+    // `vi.waitFor`'s own internal polling assumes real timers, which this test
+    // cannot use once `vi.useFakeTimers()` is active — flush the rejection's
+    // microtask instead.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(store.getState().pending[0]).toMatchObject({ state: 'failed' });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+    expect(store.getState().pending.every((p) => !(p.state === 'failed' && p.queued === true))).toBe(true);
+  });
+
+  // Review finding (Critical, reproduced): a bare `timers.set` replaces the
+  // MAP ENTRY but leaves the previous cycle's `setTimeout` running. A re-send
+  // through `resolve()`/`retry()` used to arm a fresh deadline without
+  // disarming the superseded one — so the OLD deadline still fired, found the
+  // freshly re-sent pending back in `state: 'sending'`, and deleted it. The
+  // operator's message vanishes while waiting — the defect this task exists
+  // to remove, arriving through the rescue path. `arm()` fixes it by clearing
+  // whatever timer a key already held before installing the new one.
+  it('a re-send disarms the deadline its previous attempt left behind', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s8', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 100 });
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);                    // queued; the long deadline is armed
+    const key = store.getState().pending[0]!.key;
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    await Promise.resolve();                       // let the re-dispatch settle
+    vi.advanceTimersByTime(120);                   // past the SUPERSEDED deadline
+    // The old cycle's timer must not delete a pending that is legitimately in
+    // flight again — that is the very defect this task exists to remove,
+    // arriving through the rescue path.
+    expect(store.getState().pending).toHaveLength(1);
   });
 });
 

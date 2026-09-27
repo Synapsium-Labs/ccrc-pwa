@@ -39,6 +39,15 @@ const userLine = (uuid: string, text: string): string =>
     message: { role: 'user', content: text },
   }) + '\n';
 
+/** Task 4 (§5.3 supersession): a `continued-in` marker and a plain turn — the
+ *  shape a live fork produces. `transcript-ladder.test.ts` owns the identical
+ *  two literals; a shared fixture module for two lines would be the heavier
+ *  thing, so they're copied here rather than imported. */
+const marker = (from: string, to: string): string =>
+  `${JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to })}\n`;
+const turn = (text: string): string =>
+  `${JSON.stringify({ type: 'user', uuid: text, message: { role: 'user', content: text } })}\n`;
+
 /** Registry entry + live state + transcript A with two user messages. */
 const seed = (home: string): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -185,8 +194,12 @@ describe('dialog frame gate', () => {
 // `nextDialogFrame` and `parseSince` are — the io-bound half (does the tailed
 // file still exist?) is the ONE fact the caller measures and passes in.
 describe('shouldRepoint (spec §5.3)', () => {
-  const found = (rung: TranscriptRung, p: string): TranscriptResolution =>
-    ({ kind: 'found', path: p, rung, account: null });
+  // `uuid` defaults so every PRE-EXISTING call below (which never passed one)
+  // keeps comparing two SAME-uuid answers — the shape the original three
+  // clauses were written against. Supersession tests pass distinct uuids
+  // explicitly rather than this file growing a second `found`-shaped helper.
+  const found = (rung: TranscriptRung, p: string, uuid: string = 'u'.repeat(36)): TranscriptResolution =>
+    ({ kind: 'found', path: p, rung, account: null, uuid });
 
   it('re-points to a strictly better rung even while the tailed file still exists', () => {
     // THE case the uuid-only gate could never see: a swap lands, the exact
@@ -231,6 +244,34 @@ describe('shouldRepoint (spec §5.3)', () => {
     const fb = (complete: boolean): TranscriptResolution => ({ kind: 'fallback', path: '/a', complete });
     expect(shouldRepoint(fb(true), found('uuid-glob', '/b'), true)).toBe(true);
     expect(shouldRepoint(fb(true), fb(false), true)).toBe(false);
+  });
+
+  it('re-points to a successor at the same rung while the old file still exists', () => {
+    // The shape a fork actually produces: `continued-in` resolves at the SAME
+    // rung as the transcript it superseded, to a DIFFERENT path, while the old
+    // file sits frozen (not deleted) on disk. All three of the original
+    // clauses decline this — same path? no. worse rung? no, same rung. file
+    // gone? no, it's still there — so without the uuid clause this is the one
+    // shape that leaves a stream tailing a dead file forever.
+    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), found('registry-raw', '/b.jsonl', UUID_B), true))
+      .toBe(true);
+  });
+
+  it('still declines a same-rung, same-uuid, same-path answer', () => {
+    // Pins the uuid clause against a mutant that inverts it (`===` for `!==`):
+    // that mutant would re-point the ordinary healthy-tick case above, and
+    // this case alone catches it since the fallthrough clauses also answer
+    // `false` here for their own reasons.
+    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), found('registry-raw', '/a.jsonl', UUID_A), true))
+      .toBe(false);
+  });
+
+  it('declines a worse rung for the same uuid', () => {
+    // The uuid clause must not fire just because two `found` answers differ —
+    // only a DIFFERENT uuid earns it. Same uuid, worse rung, file present:
+    // the pre-existing rule still governs, exactly as it did before this task.
+    expect(shouldRepoint(found('live-raw', '/a.jsonl', UUID_A), found('foreign-glob', '/c.jsonl', UUID_A), true))
+      .toBe(false);
   });
 });
 
@@ -512,12 +553,17 @@ describe('dialog enrichment', () => {
   it('reads the transcript for a menu once, not once per poll', async () => {
     // The enrichment is a latch: a 256 KB tail read every 2 s for an answer that
     // cannot change the frame (nextDialogFrame would suppress it) is pure cost.
+    // +1 (Task 2): `resolveTranscript`'s own continuation check reads this same
+    // file's tail once, at the single full ladder run `TranscriptResolver`
+    // performs for the life of this stream — a second, distinct reason to call
+    // `readFileFrom` on `file`, which this harness's `askReads` counter (by
+    // design) cannot tell apart from an ask read.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('ask-2col-chat-about.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('stops re-reading the transcript for a menu it cannot explain', async () => {
@@ -525,12 +571,14 @@ describe('dialog enrichment', () => {
     // /model, trust-folder — and they sit on screen until a human answers. An
     // unchanged transcript cannot start explaining one, so re-reading its 256 KB
     // tail every 2 s (over the agent RPC, in remote-fleet mode) buys nothing.
+    // +1 (Task 2): see the previous test — the resolver's own one-time
+    // continuation check.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('model-confirm.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('re-enriches a menu that flapped off-screen and came back', async () => {
@@ -559,7 +607,8 @@ describe('dialog enrichment', () => {
     const dialogs = frames.filter((f) => f.type === 'dialog');
     expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
     // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('re-enriches a menu that came back through an unparsed capture', async () => {
@@ -581,7 +630,8 @@ describe('dialog enrichment', () => {
     expect(dialogs[1]!.dialog.parsed).toBe(false); // the half-drawn capture itself
     expect(dialogs[2]!.dialog.ask?.options).toHaveLength(3);
     // Two parsed appearances, two reads — the unparsed one is never read for.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('leaves a /model-style confirm unenriched', async () => {
@@ -591,7 +641,8 @@ describe('dialog enrichment', () => {
     const d = frames.find((f) => f.type === 'dialog')!.dialog;
     // It looked and alignAsk declined — not "never looked". Without the read the
     // assertion below holds for any build, enrichment ripped out included.
-    expect(askReads).toBe(1);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(2);
     expect(d.ask).toBeUndefined();
     expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });
@@ -970,6 +1021,130 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       expect(second.file).toBe(globB);                      // it followed
       expect(second.events.map((e: { uuid: string }) => e.uuid)).toEqual(['b1']);
       expect(frames.filter((f) => f.type === 'rotated')).toEqual([]);  // still not a rotation
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('sends a fresh backlog and never `rotated` when it follows a fork', async () => {
+    // Task 4: the shape a LIVE fork produces, distinct from the two cases
+    // above — same rung, DIFFERENT path, and the OLD file still on disk
+    // (Claude Code freezes a superseded transcript, it never deletes it).
+    // Same setup as "follows a SAME-RUNG answer to a different path" above,
+    // with one change: append the marker instead of deleting the tailed file.
+    const home = mkTmp('ccrc-repoint-fork-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
+      frames.length = 0;
+
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      // The memoized resolver follows a fork on the SECOND poll after it
+      // happens, not the first (resolve.ts's `TranscriptResolver.resolve`,
+      // its own comment): a file still being written cannot carry a terminal
+      // marker, so the poll that SEES the growth only records it, and the
+      // poll after that — seeing the file unchanged since — re-ladders. So
+      // this first poll must send neither `backlog` nor `rotated`.
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      await pollOnce(stream);
+
+      const types = frames.map((f) => f.type);
+      expect(types).toContain('backlog');
+      // `rotated` paints "Session context reset" in the operator's chat, and
+      // nothing was reset — the conversation continued in another file — the
+      // tick's own repoint branch refuses that frame for exactly this reason.
+      expect(types).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry catching up with a fork it already followed sends a backlog and NEVER `rotated` ' +
+     '(whole-branch review, F2)', async () => {
+    // THE SECOND HALF OF THE FORK, and the half the fixture above cannot
+    // see. `tick`'s first branch compares the REGISTRY uuid, not the resolved
+    // one — and `ccd`'s `_sync_uuid` advances the registry ONE HOP PER
+    // QUIESCENCE, so every hop of a chain lands in that branch, seconds after
+    // the resolver already followed it. Each landing used to send `rotated`,
+    // which mints a "Session context reset" divider the following backlog
+    // keeps on top: one to three false reset dividers over a two-hop chain,
+    // printed at exactly the moment the operator's conversation was
+    // recovered.
+    //
+    // The fixture above never moves the registry, which is why this was
+    // missed. Here the registry moves AFTER the follow has already landed —
+    // the production order once the `ccd` lane ships.
+    const home = mkTmp('ccrc-repoint-caughtup-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
+
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'));
+      await pollOnce(stream);   // sees the growth, records it
+      await pollOnce(stream);   // the file stood still: re-ladders and follows
+      expect(frames.find((f) => f.type === 'backlog' && f.file === successor)).toBeDefined();
+      expect(streamUuid(stream)).toBe(UUID_A);   // the REGISTRY has not moved yet
+      frames.length = 0;
+
+      // `ccd` finally walks the same pointer into the registry.
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+
+      expect(streamUuid(stream)).toBe(UUID_B);
+      const types = frames.map((f) => f.type);
+      expect(types).toContain('backlog');
+      expect(types).not.toContain('rotated');   // nothing was reset — no divider
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a registry uuid that moves to a DIFFERENT file is still a rotation — the suppression is scoped to the ' +
+     'transcript, not to the uuid', async () => {
+    // The other side of F2's mutation. A blanket suppression would swallow
+    // the `/clear` rotation this branch has always reported, so the
+    // discriminator is asserted from both directions: same file, no frame;
+    // different file, `rotated`.
+    const home = mkTmp('ccrc-repoint-rotation-');
+    seedRoster(home);
+    seed(home);
+    const fresh = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    writeFileSync(fresh, userLine('c1', 'cleared'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      frames.length = 0;
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_B }]);
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: fresh, uuid: UUID_B });
     } finally {
       stream.stop();
       rmSync(home, { recursive: true, force: true });

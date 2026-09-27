@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1116476a32a510a3ac4996dbc5c3522f5f53ddf5fe02b34a4228d192fec2dd75
+# ccrc:generated 1 sha256=50c2bf9058930a1921dfd39ff0c5e3359ee2371fd5d643955fd656ff693f870b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2885,10 +2885,18 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 156
-# invocations across 132 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 158
+# invocations across 134 non-comment lines.
 #
-# THE LAST MOVE WAS `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
+# THE LAST MOVE WAS THIS MERGE, and it is worth saying why the count above is
+# not either side's: the forked-session-transcript branch read `_ws_status`'s
+# new arm while `main` carried CCR-15's, each one call site over the shared
+# base, so BOTH sentences were correct on their own tree and neither was
+# correct on the merged one. A merge that keeps either side's wording ships a
+# false census. RE-MEASURED with the census test's own scanner on the merged
+# tree (S4-R14's standing rule), never picked from a side — and stated once,
+# above, because the pin beside this one forbids restating it here. Before this
+# merge it was `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
 # `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -4918,6 +4926,23 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   echo idle
 }
 
+_munge_wd() {   # workdir -> the project directory name Claude Code writes under
+  # The same munge `server/src/munge.ts` applies, spelled once. `_transcript_path`
+  # and `_follow_continued_in` both ask this question and must not answer it
+  # twice: a session whose transcript is looked up under one spelling and
+  # followed under another is a session this fix cannot see.
+  #
+  # PURE BASH (F3, review round: `_follow_continued_in` costs 83% of the
+  # `_transcript_path` call it exists to avoid, measured at +12.8 ms/tick
+  # across ~20 sessions). A `tr` pipeline forks and execs twice per call; this
+  # substitution forks nothing. Both `.` and `/` must be BACKSLASH-ESCAPED
+  # inside the bracket expression — measured: `${1//[./_]/-}` (unescaped)
+  # matches nothing at all on this bash, `_` alone needs no escape, but a
+  # bracket expression opening on an unescaped `.` or containing an unescaped
+  # `/` is parsed differently and the substitution silently no-ops.
+  printf '%s' "${1//[.\/_]/-}"
+}
+
 _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # <cfg>/projects/<workdir with / . _ all mapped to ->/<uuid>.jsonl — the same
   # munge server/src/munge.ts applies. Recorded so a reap never has to be
@@ -4949,9 +4974,9 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   cfg=$(_cfg_dir "$wrapper")
   [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
-  raw=$(printf '%s' "$workdir" | tr './_' '---')
+  raw=$(_munge_wd "$workdir")
   workdir=$(_ws_realpath "$workdir")
-  munged=$(printf '%s' "$workdir" | tr './_' '---')
+  munged=$(_munge_wd "$workdir")
   if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
     printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"; return 0
   fi
@@ -5786,9 +5811,10 @@ if mode == 'state':
     #
     # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches to
     # an open file description (an INODE), and `_reg_set "$id" uuid` is written from
-    # three call sites — `cmd_ws_add`, `_sync_uuid`, `cmd_start`. The write on the
-    # ORDINARY SUPERVISE PATH is `_sync_uuid`, which `cmd_supervise`'s loop calls
-    # every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
+    # four call sites — `cmd_ws_add`, `_sync_uuid`, `_follow_continued_in`, `cmd_start`
+    # (Task 6 added the third). The writes on the ORDINARY SUPERVISE PATH are
+    # `_sync_uuid` and `_follow_continued_in`, both of which `cmd_supervise`'s loop
+    # calls every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
     # such write RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling
     # that rewrite would take LOCK_EX on two different inodes and both enter the
     # compare-and-set below: the duplicate append and lost update this lock prevents.
@@ -15519,18 +15545,426 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # call sites moving to `_ccrc_cfg_dir` directly: `_cfg_dir` is ccd's own name
 # for the question, and one seam is easier to re-point than six.
 
+# The tail window every reader of the marker uses. Held equal to the server's
+# CONTINUATION_TAIL_BYTES (`server/src/transcript/parse.ts`) by
+# `server/test/continued-in-parity.test.ts` — three readers, one window, or the
+# three disagree about what the last line even is.
+CONTINUED_IN_TAIL_BYTES=8192
+
+# Memos, per session id, for the read budget below. `ccd supervise` is one
+# long-lived process per session, so these are already per-session state and
+# need no registry file; a supervisor restart forgets them and costs one extra
+# read, never a wrong answer.
+#
+# REVIEW ROUND (F1/F2): keyed by the STAMP ALONE, the original pair collapsed
+# two different questions onto one string and both failures were measured,
+# not argued. A->B->C where A's and B's transcripts share a byte size and an
+# mtime second: after the hop to B, B's stamp equals the one just recorded
+# for A, the old `_CI_READ[stamp]` already said "read", and B's own tail was
+# never examined — the walk pinned itself on a dead intermediate transcript
+# forever. A->B->A with distinct sizes: the registry uuid FLAPPED forever,
+# one `_reg_set` every two ticks, because nothing recognised "A" the second
+# time around as the same file already examined the first time.
+#
+# SECOND REVIEW ROUND: the first fix closed both by making `_CI_READ` a
+# global SET keyed on `"$uuid:$st"` — correct, but unbounded, and measured to
+# grow without limit: a stamp changing every two ticks (a session that keeps
+# rotating, not merely forking once) produced ~100 entries per 200 ticks,
+# roughly 8,640/day at the 5s tick, on a box with an OOM history
+# (`ccd-graph-sweep`). Neither F1 nor F2 ever required a GLOBAL set — a
+# per-session record bounded by CHAIN LENGTH, not by TICK COUNT, closes both
+# just as well:
+#   - `_CI_LAST[id]` holds `"$uuid:$st"` observed on the PREVIOUS tick — a hop
+#     changes the uuid half, so the new file's quiescence is judged on its
+#     OWN two ticks, never inherited from the file the walk just left (F1).
+#   - `_CI_DONE[id]` holds the LAST "$uuid:$st" this id actually EXAMINED —
+#     enough to stop re-reading a file whose content has not changed since
+#     the last read; it does not need history, because cycle detection is
+#     `_CI_WALK`/`_CI_ORIGIN`'s job, not this one's.
+#   - `_CI_WALK[id]` is the uuids visited on the CURRENT walk, newest last,
+#     capped at the last `_CI_WALK_CAP` — a fixed ~600 bytes per session
+#     forever, not a growing log.
+#
+# THIRD REVIEW ROUND (M1): the cap traded away an unconditional guarantee.
+# Measured: a continued-in cycle LONGER than the cap never terminates on the
+# cap alone — a 20-node cycle kept flapping at the pre-memo rate (one write,
+# one 8 KiB tail, every two ticks) because by the time the walk returns to
+# its first node, the cap has already evicted it. Round 2's unbounded set
+# caught every cycle, of any length, after one lap; the bounded walk alone
+# does not. Closed with ONE more O(1) entry, not a bigger cap:
+#   - `_CI_ORIGIN[id]` is the uuid the CURRENT walk began from. Before
+#     hopping to a candidate, it is checked FIRST: a candidate equal to the
+#     origin ends the walk right there, WHATEVER the walk's length — the
+#     origin is never evicted, so this catches a return of any length.
+#   - `_CI_WALK`'s capped membership check still runs too, and is what
+#     catches a SHORTER repeat that does not return all the way to the
+#     origin (a local sub-cycle inside a longer walk).
+#   - `_CI_EXPECT[id]` is what makes "the current walk" a well-defined
+#     thing at all: the uuid this function itself last considered its own
+#     position — either a walk's first uuid, or the destination of its own
+#     last hop. A registry uuid that does not match it arrived from OUTSIDE
+#     this function (first sight, or the pane read after a `/clear`), which
+#     starts a NEW walk: origin and walk both reset to it. Without this, an
+#     old walk's origin could silently keep gating a new, unrelated chain.
+#
+# THE HONEST LIMIT, stated rather than implied (the previous wording here
+# claimed a worst case the measurement above contradicted): a cycle LONGER
+# than the cap that does not pass back through its own origin is still not
+# caught — pathological disk data twice over, both longer than
+# `_CI_WALK_CAP` and never returning to where it started. Termination is
+# UNCONDITIONAL for any cycle that returns to the walk's origin, whatever
+# its length, and for any local repeat up to the cap; nothing stronger is
+# claimed.
+declare -A _CI_LAST=()    # id -> "$uuid:$st" observed on the PREVIOUS tick
+declare -A _CI_DONE=()    # id -> the LAST "$uuid:$st" actually examined
+declare -A _CI_WALK=()    # id -> uuids visited on the current walk, space-joined, newest last
+declare -A _CI_ORIGIN=()  # id -> the uuid the CURRENT walk began from
+declare -A _CI_EXPECT=()  # id -> the uuid this function itself last placed there
+_CI_WALK_CAP=16
+
+_ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
+  local id="$1" cand="$2" w
+  for w in ${_CI_WALK[$id]:-}; do [[ "$w" == "$cand" ]] && return 0; done
+  return 1
+}
+
+_ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI_WALK_CAP
+  # THE DEDUP IS LOAD-BEARING (M2, review round). This is called every time a
+  # fresh (uuid, stamp) pair is examined, including a CURRENT uuid whose file
+  # keeps churning (repeatedly growing then going quiescent again) without
+  # ever actually hopping — measured without this check: sixteen duplicates
+  # of that one uuid fill the walk, evicting an earlier DISTINCT uuid the
+  # cap was relying on, and flapping resumes for a short cycle the walk
+  # would otherwise have caught (4 writes over 120 ticks, against 1 write
+  # and silence with the guard in place).
+  local id="$1" u="$2"
+  _ci_walk_has "$id" "$u" && return 0
+  local -a words=(${_CI_WALK[$id]:-} "$u")
+  local n=${#words[@]}
+  (( n > _CI_WALK_CAP )) && words=("${words[@]: -$_CI_WALK_CAP}")
+  _CI_WALK["$id"]="${words[*]}"
+}
+
+# F3 (review round): resolving the transcript path costs a `_reg_get workdir`
+# fork, an `_ws_realpath` subshell-plus-stat and two munges — paid on EVERY
+# tick even though a live session's workdir and uuid do not change between
+# hops. Measured before this memo: `_follow_continued_in` added +12.8 ms per
+# session per tick (50-tick measurement, this box) against `_transcript_path`'s
+# own 15.5 ms — 83% of the cost this function exists to avoid paying every
+# five seconds. Keyed by "$cfg:$id:$uuid" so a hop (a new uuid) still resolves
+# for real exactly once, and every tick after that — for either uuid — is a
+# hash lookup plus the one `stat` the quiescence gate needs anyway. `cfg` is
+# in the key even though no writer of `wrapper` can flip it under a live
+# supervised session TODAY (`cmd_swap` stops the unit before the flip, which
+# kills this memo along with the process) — this function RECEIVES `cfg`
+# fresh every tick, and a memo that quietly drops a distinction its caller
+# handed it is the exact shape this codebase's "an adapter may not narrow a
+# distinction it received" rule exists to forbid, reachable or not today.
+#
+# M3 (third review round): the only one of these memos with NO eviction at
+# all — bounded by chain length like the others, which is within the second
+# round's own ruling, but nothing was ever dropped from it either. There is
+# no reason to keep a resolved path for a uuid the walk has already left, so
+# a hop drops the entry for the uuid it hops OFF in the same breath it adds
+# the one for the uuid it hops TO — O(1) per id ON THE HOP PATH, like
+# `_CI_LAST` and `_CI_DONE`.
+#
+# FOURTH REVIEW ROUND CORRECTION: that sentence used to claim O(1) per id
+# unconditionally, and the ROTATION path (a genuine external uuid change —
+# see the walk-start reset above) was measurably not: it left the prior
+# uuid's entry behind on every reset, 50 entries per id measured after 50
+# rotations. The reset now drops it too, in the same statement it clears
+# the walk, so both of this memo's writers — the hop and the reset — evict
+# what they leave behind; a memo-size check that both hops AND rotates is
+# what actually exercises this, not one that only does either alone.
+# FIFTH REVIEW ROUND (F7): what this memo HOLDS changed, and the reason is
+# that the old shape memoized SUCCESSES ONLY. A row whose transcript is at
+# neither spelling stored nothing, so every tick re-paid the whole
+# resolution — a `$( )` fork for the call itself, `_reg_get`'s own fork and
+# `_ws_realpath`'s subshell — which is exactly the per-tick cost the memo was
+# introduced to remove, re-entered through the one door it left open. A
+# frozen session with no transcript at either spelling is not rare: it is the
+# shape a box sits in between a `/clear` and Claude Code's first write, and
+# the shape a swapped-away session sits in permanently.
+#
+# A VERDICT MEMO IS REFUSED, and this is the whole design decision. "There is
+# no file here" is not a durable fact: the session writes its first line a
+# second later, and a memo that remembered the verdict would never look
+# again — the chain would stop being followed for every session started under
+# a running supervisor. So what is memoized is the part that really is stable
+# for a live session (the two ADDRESSES its transcript can occupy: the
+# `_ws_realpath`-resolved munge and the raw one), and the part that is not
+# stable — whether a file is THERE — is re-measured on every tick with a
+# `[[ -f ]]` builtin that forks nothing.
+#
+# ABSENT AND PRESENT STAY TWO ANSWERS, never one value. Three states are
+# distinguishable here, and no caller has to conflate any two: no entry at
+# all (never resolved — the workdir could not even be read), an entry whose
+# addresses hold no file (MEASURED absent, and re-measured every tick), and
+# an entry one of whose addresses is a file (present, and which one). That is
+# the same "no overloaded null at a seam" rule the server side of this fix
+# states for `TranscriptResolution`.
+declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the addresses uuid's transcript can occupy, best first, one per line
+
+_ci_addrs() {   # id cfg uuid -> the addresses uuid's transcript can occupy, best first, one per line
+  # F4 (review round): mirrors `_transcript_path`'s first two rungs ONLY — the
+  # resolved (realpath) munge, then the RAW munge, because the raw spelling is
+  # sometimes the one Claude Code actually wrote under, measured on this very
+  # box. `_transcript_path`'s third rung (newest-by-mtime scan across every
+  # project dir) is deliberately not repeated here: that rung is for a STOPPED
+  # session at archive/reap time, and a chain hop is either live at one of the
+  # two ordinary spellings or it has nothing to follow yet — a scan would cost
+  # exactly the fork-per-tick this memo exists to avoid.
+  #
+  # The two spellings are emitted as ONE line each, and the second only when
+  # it genuinely differs: a workdir with no symlink in it munges identically
+  # both ways, and a caller walking one address instead of two is the same
+  # four-to-two collapse the server's own ladder makes for a dead session.
+  local id="$1" cfg="$2" uuid="$3" wd raw munged
+  wd=$(_reg_get "$id" workdir); [[ -n "$wd" ]] || return 1
+  raw=$(_munge_wd "$wd")
+  wd=$(_ws_realpath "$wd")
+  munged=$(_munge_wd "$wd")
+  printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
+  [[ "$raw" == "$munged" ]] || printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$raw" "$uuid"
+}
+
+_CI_F=""   # `_ci_extant`'s out-parameter — see why it is not stdout, below
+
+_ci_extant() {   # addresses (one per line, on $1) -> rc 0 and _CI_F set to the first that is a regular file
+  # IT ANSWERS IN A VARIABLE, NOT ON STDOUT, and that is the entire point of
+  # F7's fix. A `$( )` capture is a FORK, so a helper that printed its answer
+  # would put back, once per tick, the very cost the memo above exists to
+  # remove — the memo would save the resolution and the reader would spend it
+  # again. `_CI_F` is the same out-parameter idiom this file already uses
+  # where a hot path cannot afford a subshell.
+  #
+  # A here-string, never a pipeline: a `while read` on the right of a `|` runs
+  # in a SUBSHELL, so nothing it assigned would survive the loop. `<<<` keeps
+  # the loop in this shell and forks nothing.
+  local a
+  _CI_F=""
+  while IFS= read -r a; do
+    [[ -n "$a" && -f "$a" ]] && { _CI_F="$a"; return 0; }
+  done <<< "$1"
+  return 1
+}
+
+_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
+  # The PRINTING form, for the two callers that are not on a per-tick path
+  # (the hop's successor lookup and `_ci_pane_superseded`) and that are
+  # already inside a `$( )` of their own.
+  local addrs
+  addrs=$(_ci_addrs "$1" "$2" "$3") || return 1
+  _ci_extant "$addrs" || return 1
+  printf '%s' "$_CI_F"
+}
+
+_continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line, or nothing
+  # Claude Code's own statement about itself, checked field by field because it
+  # is data off a disk other processes write. `sessionId` is checked when
+  # present and ignored when absent (absence-permits); a successor that is not
+  # a uuid, or is this file's own uuid, is refused.
+  # D-3563: the last-line pick below is done in bash rather than
+  # through a second `| tail -1` in the pipeline — that second call is what a
+  # stub-based count of "one tail per quiescence" would otherwise see, even
+  # though it never touches the disk a second time. One external `tail`, one
+  # 8 KiB read.
+  #
+  # COMPACT JSON ONLY, DELIBERATELY (review round). `*'"type":"continued-in"'*`
+  # would miss `{"type": "continued-in"}` (a space after the colon) — this is
+  # fail-CLOSED for ccd, not a defect: it just declines to follow, the same
+  # answer as no marker at all. The server's own reader (`continuationOf`,
+  # `shared`/TypeScript) does real `JSON.parse` and is the tolerant one of the
+  # three readers `continued-in-parity.test.ts` holds equal on the WINDOW, not
+  # on parse leniency. Claude Code writes compact JSON today; building a JSON
+  # parser in bash to hedge against a format it does not write is not this
+  # function's job.
+  local f="$1" uuid="$2" window lines last claims next
+  window=$(tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null) || return 0
+  lines=$(printf '%s' "$window" | grep -v '^[[:space:]]*$')
+  last="${lines##*$'\n'}"
+  [[ "$last" == *'"type":"continued-in"'* ]] || return 0
+  # ABSENCE permits; PRESENCE must be VALID. A `sessionId` field that is there
+  # but whose value is not 36 hex-or-dash characters used to extract as the
+  # same empty string a genuinely ABSENT field produces, and absence-permits
+  # then waved the marker through — the TypeScript reader refuses any author
+  # that is not this file's own uuid, so a malformed field must refuse here
+  # too, not fall back to "nobody claimed it" (review round finding).
+  if [[ "$last" == *'"sessionId":"'* ]]; then
+    claims=$(printf '%s' "$last" | grep -oE '"sessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+    [[ -n "$claims" && "$claims" == "$uuid" ]] || return 0
+  fi
+  next=$(printf '%s' "$last" | grep -oE '"continuedInSessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+  [[ -n "$next" && "$next" != "$uuid" ]] || return 0
+  printf '%s' "$next"
+}
+
+_follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
+  # WHY ONE HOP AND WHY GATED (D-3562). The marker can only be the
+  # final line of a file that will never be appended to again, so the tail
+  # read waits for the file to STOP changing: one stat per tick (once the path
+  # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
+  # busy session pays nothing; a frozen one pays once. A chain of forks
+  # therefore converges over a few ticks rather than in one call: `_CI_DONE`
+  # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
+  # cycle — unconditionally through the origin, or through the capped walk
+  # for a shorter local repeat (see the comment above `_CI_LAST`).
+  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt
+  uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
+  # WALK-START DETECTION (M1, third review round). A registry uuid that does
+  # not match what this function itself last placed there — a hop's
+  # destination, or a prior walk's very first uuid — arrived from OUTSIDE
+  # this function (first sight of this id, or the pane read after a
+  # `/clear`), so this is a NEW walk: start the origin over. Without this, an
+  # old walk's origin could keep gating hops on a chain it has nothing to do
+  # with.
+  if [[ "$uuid" != "${_CI_EXPECT[$id]:-}" ]]; then
+    # FOURTH REVIEW ROUND: this reset used to leave the PRIOR uuid's
+    # `_CI_PATH` entry behind forever — measured at 50 entries per id after
+    # 50 external rotations, the same class of "O(1) claimed, not measured"
+    # defect M1 was raised for. The hop path already drops its own old entry
+    # (below); this is the other place a uuid falls out of the walk.
+    [[ -n "${_CI_EXPECT[$id]:-}" ]] && unset "_CI_PATH[$cfg:$id:${_CI_EXPECT[$id]}]"
+    _CI_ORIGIN["$id"]="$uuid"
+    _CI_WALK["$id"]=""
+    _CI_EXPECT["$id"]="$uuid"
+  fi
+  pk="$cfg:$id:$uuid"
+  # F7 (fifth review round): the MISS is memoized too, as the addresses this
+  # uuid's transcript can occupy — see `_CI_PATH`'s own header. A row with no
+  # transcript at either spelling used to re-resolve from scratch on every
+  # tick, for ever; it now pays one resolution and then a `[[ -f ]]` builtin,
+  # and it still HEALS the moment the file appears, because what is
+  # remembered is where to look rather than what was found.
+  addrs="${_CI_PATH[$pk]:-}"
+  if [[ -z "$addrs" ]]; then
+    addrs=$(_ci_addrs "$id" "$cfg" "$uuid") || return 0
+    _CI_PATH["$pk"]="$addrs"
+  fi
+  _ci_extant "$addrs" || return 0
+  f="$_CI_F"
+  msz=$(_plat_size -- "$f" 2>/dev/null) && mmt=$(_plat_mtime -- "$f" 2>/dev/null) || return 0
+  st="$msz:$mmt"
+  key="$uuid:$st"
+  prev="${_CI_LAST[$id]:-}"
+  _CI_LAST["$id"]="$key"
+  [[ "$key" == "$prev" ]] || return 0                  # still growing, or just hopped — look again next tick
+  done_key="${_CI_DONE[$id]:-}"
+  [[ "$key" == "$done_key" ]] && return 0              # unchanged since the last read — nothing new to examine
+  _CI_DONE["$id"]="$key"
+  _ci_walk_add "$id" "$uuid"
+  next=$(_continued_in_of "$f" "$uuid")
+  [[ -n "$next" ]] || return 0
+  [[ "$next" == "${_CI_ORIGIN[$id]:-}" ]] && return 0   # back to the walk's origin — a cycle of ANY length, stop
+  _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
+  sf=$(_ci_transcript_path "$id" "$cfg" "$next") || return 0   # tried both spellings, same as the current file
+  [[ -s "$sf" ]] || return 0                                    # announced but not yet written
+  unset "_CI_PATH[$pk]"   # M3: drop the entry for the uuid we're hopping OFF
+  _CI_PATH["$cfg:$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
+  _CI_EXPECT["$id"]="$next"   # our own hop's destination — recognised as a continuation, not a new walk
+  _reg_set "$id" uuid "$next"
+  return 0
+}
+
+# F3 (whole-branch review): ONE entry per id, and it never grows. The pane
+# `sessionId` this function has MEASURED as naming a superseded transcript.
+#
+# THE VERDICT IS MONOTONE, which is why remembering it is sound where
+# remembering `_ci_transcript_path`'s miss is not: a `continued-in` marker is
+# the LAST line a transcript ever gets, so a file that carries one is a file
+# that will never be appended to again, and "superseded" can never become
+# false. Only the TRUE verdict is kept — a live transcript can gain a marker
+# at any moment, so a remembered FALSE would be a memo of something still
+# changing. Keyed by id and holding the uuid, so a pane that genuinely
+# rotates replaces the entry instead of adding one.
+declare -A _CI_PANE_DEAD=()   # id -> the pane sessionId last MEASURED as superseded
+
+_ci_pane_superseded() {   # id cfg sid -> 0 iff sid's OWN transcript ends in a continued-in marker
+  local id="$1" cfg="$2" sid="$3" f
+  [[ "${_CI_PANE_DEAD[$id]:-}" == "$sid" ]] && return 0
+  f=$(_ci_transcript_path "$id" "$cfg" "$sid") || return 1
+  [[ -n "$(_continued_in_of "$f" "$sid")" ]] || return 1
+  _CI_PANE_DEAD["$id"]="$sid"
+  return 0
+}
+
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
   # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
   # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
   # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
   # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
   # the registry in step means resurrection resumes where the session actually was.
+  #
+  # TWO SOURCES, IN THIS ORDER. The pane pid's sessions file is what catches a
+  # `/clear` rotation and stays first. The transcript's own `continued-in`
+  # pointer is what catches a FORK — Claude Code 2.1.278 forks a live session
+  # into a daemon-hosted bg PTY under a new sessionId and leaves the pane
+  # process publishing the old one, so the pane file cannot see it, and the
+  # registry then names a transcript nobody will ever write to again.
+  #
+  # FIFTH REVIEW ROUND: "the pane read is first and harmless" was argued, not
+  # measured, and the measurement broke it. On the production-shaped fixture
+  # — pane still publishing the pre-fork uuid A, A's transcript pointing to
+  # C, exactly what a fork IS — the chain writes C at tick 2, and at tick 3
+  # THIS block sees `sid`=A, compares it against the registry's C, finds them
+  # different, and writes A straight back. Forever: `_CI_DONE` already holds
+  # A's stamp, so A's marker is never read again and the registry never
+  # recovers. The pane read is a no-op only BEFORE the chain has moved; after
+  # that it is stale BY DEFINITION — that is what a fork is — and
+  # unconditional pane authority drags the registry back for ever.
+  #
+  # THE FIX: the pane's `sessionId` is authoritative only when it is NEW
+  # INFORMATION. A uuid this walk has already visited (`_ci_walk_has`) is not
+  # new information — it is the stale id the fork left behind — so it no
+  # longer overwrites the registry. A genuine `/clear` rotation mints a uuid
+  # that has never been walked, so it still wins immediately: the pane keeps
+  # its authority for the thing it is actually authoritative about.
+  #
+  # A RESTART NO LONGER COSTS A WRONG TICK (F3, whole-branch review — and this
+  # paragraph used to claim the opposite, "one wrong tick per restart, not
+  # forever", which was the argument and not the measurement). The walk lives
+  # in PROCESS memory, and `ccrc update`'s step-4 sweep restarts every
+  # supervisor on a fleet rollout, so the box lands in exactly this state: the
+  # pane still publishes the pre-fork uuid A while the registry holds C, and
+  # every memo is empty, so A reads as "never walked" and the first tick used
+  # to write A straight back. Re-convergence then cost about two ticks per hop
+  # — and in that window a `--resume` time-travels, which is the very defect
+  # this whole lane exists to remove, fired on every rollout.
+  #
+  # THE THIRD CONDITION IS A MEASUREMENT, NOT A MEMORY: a `sessionId` whose
+  # own transcript ends in a `continued-in` marker has been superseded by
+  # Claude Code's own statement about itself, and a superseded id is NEVER new
+  # information, whatever this process happens to remember. So it is refused
+  # on the disk's evidence rather than on the walk's. It is the LAST condition
+  # deliberately: `&&` short-circuits, so a healthy tick — the pane agreeing
+  # with the registry, which is every tick of every unforked session — never
+  # reaches it and pays nothing at all.
+  #
+  # AND THE WALK'S ORIGIN IS REFUSED TOO (F5). `_ci_walk_has` reads a list
+  # capped at `_CI_WALK_CAP`, so on a chain LONGER than the cap the walk's own
+  # first uuid is the first thing evicted — and that is precisely the uuid a
+  # permanently stale pane keeps publishing. Measured on a 22-hop chain: 37
+  # registry writes in 70 ticks, the walk restarting from the top each time
+  # the pane dragged it back. `_CI_ORIGIN` is never evicted, so naming it here
+  # restores the unconditional guarantee the comment above already claimed.
+  # It is not redundant with the marker test either: the two answer different
+  # questions, and the marker test needs the old transcript to still be
+  # READABLE — a chain head that has since been archived or reaped away has no
+  # marker to read, and then the origin is the only thing left refusing it.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
   pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]] || return 0
-  sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
-  [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
+  if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
+    sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
+       && [[ "$sid" != "${_CI_ORIGIN[$id]:-}" ]] \
+       && ! _ci_walk_has "$id" "$sid" \
+       && ! _ci_pane_superseded "$id" "$cfg" "$sid"; then
+      _reg_set "$id" uuid "$sid"
+    fi
+  fi
+  _follow_continued_in "$id" "$cfg"
   return 0
 }
 

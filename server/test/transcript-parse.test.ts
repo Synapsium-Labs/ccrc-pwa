@@ -57,7 +57,7 @@ describe('resolveTranscript — the symlink-munge mismatch it was born fixing', 
       const real = transcriptPath(cfg, realDir, 'u-1');
       plant(real);
       expect(await at(cfg, linkDir, 'u-1')).toEqual(
-        { kind: 'found', path: real, rung: 'live-resolved', account: null });
+        { kind: 'found', path: real, rung: 'live-resolved', account: null, uuid: 'u-1' });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -531,5 +531,49 @@ describe('a harness-written user record is not the operator speaking', () => {
   it('an empty record still produces nothing', () => {
     expect(parseTranscriptLine(rec('   ', { isMeta: true }))).toEqual([]);
     expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
+  });
+});
+import { continuationOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
+
+const OLD = 'a'.repeat(36);
+const NEW = 'b'.repeat(36);
+
+describe('continuationOf', () => {
+  const marker = (from: string, to: string): string =>
+    JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to });
+
+  it('answers the successor uuid for the session that wrote the line', () => {
+    expect(continuationOf(marker(OLD, NEW), OLD)).toBe(NEW);
+  });
+
+  it('answers null for every other record type', () => {
+    expect(continuationOf(JSON.stringify({ type: 'user', message: {} }), OLD)).toBeNull();
+  });
+
+  // Review Focus 1: a line caught mid-write is not a marker and is not a throw.
+  it('answers null for a half-written line rather than throwing', () => {
+    expect(continuationOf(marker(OLD, NEW).slice(0, 40), OLD)).toBeNull();
+    expect(continuationOf('', OLD)).toBeNull();
+    expect(continuationOf('{', OLD)).toBeNull();
+  });
+
+  it('refuses a marker another session wrote', () => {
+    expect(continuationOf(marker('c'.repeat(36), NEW), OLD)).toBeNull();
+  });
+
+  // absence-permits: a record with no sessionId is still that file's marker.
+  it('accepts a marker that names no sessionId', () => {
+    expect(continuationOf(JSON.stringify({ type: 'continued-in', continuedInSessionId: NEW }), OLD))
+      .toBe(NEW);
+  });
+
+  it('refuses a successor that is not a uuid, and refuses itself', () => {
+    expect(continuationOf(marker(OLD, 'nope'), OLD)).toBeNull();
+    expect(continuationOf(marker(OLD, OLD), OLD)).toBeNull();
+  });
+
+  // Review Focus 4: the window is the contract, so the constant is the contract.
+  it('declares a tail window big enough for a marker line', () => {
+    expect(CONTINUATION_TAIL_BYTES).toBeGreaterThanOrEqual(marker(OLD, NEW).length * 4);
   });
 });

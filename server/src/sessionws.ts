@@ -661,8 +661,38 @@ export class SessionStream {
       const data = r.data;
       if (data.uuid !== this.uuid) {
         const appeared = this.uuid === null; // record was unknown/unmeasurable at start
+        // THE REGISTRY CATCHING UP IS NOT A RESET (whole-branch review, F2).
+        // This branch fires on the REGISTRY uuid, and the registry is not
+        // where a fork is first seen: `resolveTranscript` followed the
+        // `continued-in` pointer the moment the successor had a byte in it,
+        // so this stream may already be tailing that successor's file while
+        // `$REG/<id>.uuid` still names the transcript it was forked from
+        // (`resolveTranscript`'s own docstring states that asymmetry). `ccd`
+        // then walks the same pointer at ONE HOP PER QUIESCENCE — so a
+        // two-hop chain A->B->C moves the registry twice over ~20 seconds,
+        // and each move lands here.
+        //
+        // Without this test each of those moves sends `rotated`, and
+        // `rotated`'s only PWA-side effect beyond uuid/offset bookkeeping is
+        // minting a "Session context reset" divider that the following
+        // backlog deliberately keeps on top (pwa/src/stores/session.ts) — so
+        // the operator's just-recovered conversation collects one to three
+        // false reset dividers, seconds after the follow correctly healed it.
+        // The spec calls that the most alarming false sentence this build
+        // could print, and the re-point branch below already refuses it for
+        // the same reason.
+        //
+        // The discriminator is the TRANSCRIPT, not the uuid: when the newly
+        // resolved path is the one already being tailed, nothing moved and
+        // nothing was reset — the registry merely agreed with a supersession
+        // this stream had already followed. Send the backlog alone, exactly
+        // as the re-point branch does; it carries `uuid`, `file` and `offset`
+        // and is self-describing. A registry uuid that moves to a DIFFERENT
+        // file is still a real rotation (a `/clear`, a compaction, a swap
+        // onto a fresh uuid) and still says so.
+        const caughtUp = this.tailed !== null && this.tailed.path === data.resolution.path;
         this.uuid = data.uuid;
-        if (!appeared) this.send({ type: 'rotated', uuid: data.uuid });
+        if (!appeared && !caughtUp) this.send({ type: 'rotated', uuid: data.uuid });
         await this.sendBacklogAndTail(data);
       } else if (await this.repointNeeded(data.resolution)) {
         // §5.3: the uuid did not move but the ANSWER did — a swap landed, or
@@ -755,16 +785,26 @@ export function nextDialogFrame(
 
 /**
  * §5.3's re-point decision, pure: re-point when the answer CHANGED and either
- * the new rung is strictly better or the file being tailed is gone.
+ * it names a different transcript session, the new rung is strictly better, or
+ * the file being tailed is gone.
  *
  * "Better" is §5.1's rung order, which is why the rung travels in the union
  * rather than being recomputed here. A same-rung, same-path answer changes
- * nothing — the common case every tick — and a worse rung never drags a healthy
- * stream off an exact-address transcript that still exists.
+ * nothing — the common case every tick.
+ *
+ * THE UUID CLAUSE IS NOT A RUNG QUESTION. A transcript that Claude Code
+ * superseded (`continued-in`) resolves at the SAME rung, to a DIFFERENT path,
+ * while the old file is still on disk — frozen, not deleted — so all three of
+ * the original clauses decline it and the stream would tail a dead file for
+ * ever. Supersession is not a better ADDRESS for the same thing; it is a
+ * different thing, and rung order was never asked to rank it. A fallback
+ * carries no uuid and needs none: it always ranks last, so a fallback on
+ * either side is already decided by rank.
  */
 export function shouldRepoint(
   cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
 ): boolean {
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid) return true;
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;

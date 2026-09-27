@@ -266,3 +266,47 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
   }
   return out;
 }
+
+/** How many bytes of a transcript's tail a reader needs to see its last line.
+ *  Every reader of the marker uses this one window — the server here, `ccd`'s
+ *  `_sync_uuid` and `ccrc doctor`'s `transcripts` check, whose bash copies are
+ *  held equal to this number by `server/test/continued-in-parity.test.ts`. */
+export const CONTINUATION_TAIL_BYTES = 8192;
+
+const UUID_RE = /^[0-9a-f-]{36}$/;
+
+/**
+ * The session this transcript CONTINUES IN, or null.
+ *
+ * Claude Code 2.1.278 forks a live session into a daemon-hosted background PTY
+ * under a new sessionId and writes, as the last line of the file it abandons:
+ *
+ *     {"type":"continued-in","sessionId":"<old>","continuedInSessionId":"<new>"}
+ *
+ * This is the harness's own statement about itself, so it is read rather than
+ * inferred — but it is also data off a disk other processes write, so every
+ * field is checked before it is believed.
+ *
+ * `ofUuid` is the uuid of the file the line came from. A marker naming a
+ * DIFFERENT `sessionId` is not this file's marker and is refused; a marker
+ * naming no `sessionId` at all is accepted (absence-permits — an older or
+ * newer harness may not write the field, and the line's position at the end of
+ * this file is already evidence enough). A successor that is not a uuid, or is
+ * this file's own uuid, is refused: the first is unusable and the second is a
+ * one-element cycle.
+ *
+ * Never throws. A caller reading a file's tail can land on a half-written line,
+ * and a parse failure there means "not a marker", not "the session is broken".
+ */
+export function continuationOf(line: string, ofUuid: string): string | null {
+  let raw: unknown;
+  try { raw = JSON.parse(line); } catch { return null; }
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r['type'] !== 'continued-in') return null;
+  const from = r['sessionId'];
+  if (typeof from === 'string' && from !== ofUuid) return null;
+  const to = r['continuedInSessionId'];
+  if (typeof to !== 'string' || !UUID_RE.test(to) || to === ofUuid) return null;
+  return to;
+}

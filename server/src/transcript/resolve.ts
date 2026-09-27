@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { mungePath } from '../munge.js';
+import { continuationOf, CONTINUATION_TAIL_BYTES } from './parse.js';
 
 /**
  * Transcript file for a session: `<configDir>/projects/<munge(dir)>/<uuid>.jsonl`.
@@ -63,7 +64,40 @@ export const RUNG_ORDER: readonly TranscriptRung[] = [
  */
 export type TranscriptResolution =
   | { readonly kind: 'found'; readonly path: string; readonly rung: TranscriptRung;
-      readonly account: string | null }
+      readonly account: string | null;
+      /** The uuid the answered PATH holds — equal to the requested uuid unless
+       *  a `continued-in` pointer was followed. It travels in the outcome
+       *  because a caller parsing it back out of the path's basename would be
+       *  an adapter re-deriving a distinction it was already handed, and
+       *  because `shouldRepoint` needs it: supersession is not a better
+       *  address for the same thing, it is a different thing. */
+      readonly uuid: string;
+      /**
+       * This file CARRIES a `continued-in` marker the walk saw and did NOT
+       * follow — the successor is absent, zero-byte, unresolvable, or already
+       * on this walk. OPTIONAL, and absence-permits: every answer that
+       * followed to the end of its chain, and every answer with no marker at
+       * all, simply omits it, so no existing reader changes.
+       *
+       * IT EXISTS FOR THE MEMO, and for one failure it alone can see.
+       * `TranscriptResolver` revalidates a `found` answer on the STAMP of the
+       * file it answered — and a file carrying a terminal marker is a file
+       * that will never change again, so the stamp check serves the pre-fork
+       * answer on every poll FOR EVER. The common shape is not exotic: the
+       * fork announces itself before writing its first line, the stream
+       * re-ladders four seconds later while the successor is still zero
+       * bytes, and the declined answer is memoized frozen for the life of the
+       * socket — and, for `watch.ts`'s name sweep, whose resolver is never
+       * rebuilt, for the life of the server process. That is the exact freeze
+       * the follow exists to heal, moved one layer in.
+       *
+       * So a declined follow is a "keep looking" answer, like a `fallback`
+       * and like a `foreign-glob` hit, and `staleByBackoff` reads it as one.
+       * It is a FACT ABOUT THE ANSWER, not a request to the memo: rule (b) —
+       * two conditions a caller handles differently must not collapse — is
+       * why it is a third field rather than a rung or a `fallback`.
+       */
+      readonly followDeclined?: true }
   | { readonly kind: 'fallback'; readonly path: string; readonly complete: boolean };
 
 /** Ladder position, for §5.3's "strictly better" comparison. A fallback ranks
@@ -261,7 +295,7 @@ async function globByUuid(
  * `checkPath`'s `.claude*` glob already permits, so the uuid search works
  * remotely with NO widening of the agent read whitelist.
  */
-export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
   const exact: { rung: TranscriptRung; path: string }[] = [];
   const add = (rung: TranscriptRung, p: string): void => {
     // Dedupe keeps the FIRST rung to claim a path, which is what makes a dead
@@ -288,13 +322,13 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
 
   for (const c of exact) {
     if ((await io.stat(c.path)) !== null) {
-      return { kind: 'found', path: c.path, rung: c.rung, account: null };
+      return { kind: 'found', path: c.path, rung: c.rung, account: null, uuid: o.uuid };
     }
   }
 
   const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null);
   const bestOwn = pickNewest(own.hits);
-  if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null };
+  if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null, uuid: o.uuid };
 
   // RULING (review round 1, Important #2; cost claim corrected in round 2,
   // item 1): rung 6 requires rung 5 to have actually RUN, not merely to have
@@ -349,10 +383,101 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
   }
   const bestForeign = pickNewest(pooled);
   if (bestForeign !== null) {
-    return { kind: 'found', path: bestForeign.path, rung: 'foreign-glob', account: bestForeign.account };
+    return {
+      kind: 'found', path: bestForeign.path, rung: 'foreign-glob', account: bestForeign.account, uuid: o.uuid,
+    };
   }
 
   return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete };
+}
+
+/** How many `continued-in` hops one resolution may walk. A fork of a fork is
+ *  real; a chain this long is a disk telling a story, and the walk stops
+ *  rather than believing it. */
+export const MAX_CONTINUATION_HOPS = 4;
+
+/** The successor named by the last line of `file`, or null. */
+async function continuationAt(io: FleetIO, file: string, uuid: string): Promise<string | null> {
+  const st = await io.statMeasured(file);
+  if (!st.ok || st.size === 0) return null;
+  const start = Math.max(0, st.size - CONTINUATION_TAIL_BYTES);
+  const res = await io.readFileFrom(file, start);
+  if (res === null) return null;
+  const lines = res.data.split('\n').filter((l) => l.trim() !== '');
+  // A window that starts mid-file starts mid-line, and its FIRST line is the
+  // only one that can be partial; the marker is the LAST line, so a truncated
+  // head costs nothing. A last line longer than the window parses as garbage
+  // and answers null, which is the honest "no marker" rather than a uuid
+  // assembled from half a record.
+  const last = lines[lines.length - 1];
+  return last === undefined ? null : continuationOf(last, uuid);
+}
+
+/**
+ * The transcript a reader should open, following Claude Code's own
+ * `continued-in` pointer to the end of the chain.
+ *
+ * THE FOLLOW LIVES HERE, not in the stream. `SessionStream`'s two-second tick
+ * compares the registry's uuid against the one it is tailing; a stream that
+ * switched uuid on its own would be flapped back by the next tick. Resolution
+ * is the one place that answers "which file", so it is the one place that can
+ * answer it with the fork included.
+ *
+ * FOLLOWING MAY ONLY EVER IMPROVE THE ANSWER. A successor that does not
+ * resolve, or resolves to an empty file (the fork announced itself before
+ * writing anything), is not followed: swapping a full conversation for an
+ * empty one is worse than the staleness this fixes. A visited set and a hop
+ * bound stop a chain that loops or that goes on too long, and the walk keeps
+ * the last GOOD answer rather than unwinding to a fallback.
+ *
+ * A DECLINED FOLLOW SAYS SO (`followDeclined`, see the type). Three of the
+ * four ways this walk stops short are conditions that HEAL ON DISK — the
+ * successor appears, stops being zero bytes, becomes resolvable — and the
+ * answer they produce is a file that will never change again, so a memo that
+ * revalidates on that file's stamp would pin the pre-fork answer for ever.
+ * Saying "I declined" is what lets `TranscriptResolver` treat it as a "keep
+ * looking" answer and re-run the whole ladder on its back-off.
+ *
+ * THE HOP BOUND IS DELIBERATELY NOT ONE OF THE THREE. It is not a condition
+ * that heals: re-running this walk from the same uuid over the same disk
+ * lands on the same file every time, so flagging it would buy a full ladder
+ * run every back-off and change no answer. It also never READ a marker on
+ * the file it stops at — the bound expires before that question is asked —
+ * so `followDeclined` would be claiming a measurement nobody made. A chain
+ * that long converges the other way instead: `ccd` advances the registry one
+ * hop per quiescence, and a moved registry uuid changes the memo's KEY.
+ *
+ * WHAT TRAVELS AND WHAT DOES NOT (the asymmetry `SessionStream` leans on):
+ * the answer's `uuid` and `path` are the SUCCESSOR's once a hop is taken,
+ * while the caller's own `o.uuid` — the REGISTRY's — is unchanged. The stream
+ * keeps sending the registry uuid on its `backlog`/`events` frames while
+ * `file` names the successor, so the two describe different sessions for as
+ * long as it takes `ccd` to walk the same pointer into the registry. That
+ * window is not a defect and the stream must not "fix" it by announcing a
+ * rotation when the registry finally catches up: nothing was reset, the
+ * stream was already reading the successor (`sessionws.ts`'s `tick`).
+ */
+export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+  // A `found` answer restated as one the walk stopped short of following.
+  // `fallback` passes through untouched: there is no file to have read a
+  // marker from, which is the arm above this loop's own early return.
+  const declined = (r: TranscriptResolution): TranscriptResolution =>
+    (r.kind === 'found' ? { ...r, followDeclined: true } : r);
+  let best = await ladder(io, o);
+  const visited = new Set<string>([o.uuid]);
+  for (let hop = 0; hop < MAX_CONTINUATION_HOPS; hop += 1) {
+    if (best.kind !== 'found') return best;
+    const next = await continuationAt(io, best.path, best.uuid);
+    if (next === null) return best;              // no marker at all: nothing was declined
+    if (visited.has(next)) return declined(best);
+    visited.add(next);
+    const onward = await ladder(io, { ...o, uuid: next });
+    if (onward.kind !== 'found') return declined(best);
+    const st = await io.stat(onward.path);
+    if (st === null || st.size === 0) return declined(best);
+    best = onward;
+  }
+  return best;
 }
 
 /** How long a "keep looking" answer — a fallback, or a foreign-account hit —
@@ -364,6 +489,12 @@ export const RESOLVER_BACKOFF_MS = 30_000;
  *  accumulate for the life of a process that runs for weeks. Insertion-ordered
  *  eviction past this cap keeps that a bounded cost. */
 export const MEMO_MAX = 256;
+
+/** A file's identity for "has this changed since I read it". `FleetIO.stat`
+ *  carries no inode on this seam, and `collapseHits` already treats
+ *  `(size, mtimeMs)` as identity for the same reason. */
+const stampOf = (st: { size: number; mtimeMs: number } | null): string | null =>
+  st === null ? null : `${st.size}:${st.mtimeMs}`;
 
 /**
  * The ladder, memoized (§5.4). One instance per `SessionStream` and one for the
@@ -395,7 +526,9 @@ export const MEMO_MAX = 256;
  * is the ring boundary this repo already draws between deciding and acting.
  */
 export class TranscriptResolver {
-  private readonly memo = new Map<string, { answer: TranscriptResolution; at: number }>();
+  private readonly memo = new Map<
+    string, { answer: TranscriptResolution; at: number; readonly stamp: string | null; seen: string | null }
+  >();
   private readonly backoffMs: number;
   private readonly now: () => number;
 
@@ -423,24 +556,68 @@ export class TranscriptResolver {
     const held = this.memo.get(key);
     if (held !== undefined && !this.staleByBackoff(held)) {
       const st = await this.io.stat(held.answer.path);
-      // A `found` stays true while its file exists; a `fallback` stays true
-      // while its path still does NOT.
-      const stillTrue = held.answer.kind === 'found' ? st !== null : st === null;
-      if (stillTrue) return held.answer;
+      // THREE STATES, NOT TWO — and the third is what keeps this class cheap.
+      //
+      // Existence alone was never the question: a transcript that gains a
+      // `continued-in` marker still exists, and a memo that asked only about
+      // existence served the pre-fork answer for the life of the stream, which
+      // is the freeze this work is for moved one layer in.
+      //
+      // But "changed" is not the question either. A transcript that is being
+      // WRITTEN cannot carry a terminal marker — the marker is the last line a
+      // file ever gets — so re-laddering a growing file buys a tail read that
+      // can learn nothing. It is not free: `watch.ts`'s name sweep already pays
+      // its own read for a grown transcript through `claimTitleRead`, so this
+      // class re-reading the same file doubles that bill on every tick of every
+      // busy session. Measured: it broke `name-sweep.test.ts`'s own stat-gate
+      // tests, 4 reads where the invariant pins 3.
+      //
+      // So: unchanged since the answer -> serve it (the quiet case, one stat).
+      // Changed and still changing -> serve it and remember what was seen (the
+      // busy case, one stat). Changed and now STILL -> re-ladder, because a
+      // file that stopped is a file that may have been superseded. A fork is
+      // therefore followed on the second poll after it happens, not the first;
+      // four seconds against a chat that used to freeze for ever.
+      //
+      // A `fallback` is unchanged: it stays true while its path still does NOT
+      // exist.
+      if (held.answer.kind === 'fallback') {
+        if (st === null) return held.answer;
+      } else if (st !== null) {
+        const cur = stampOf(st);
+        if (cur === held.stamp) return held.answer;
+        if (cur !== held.seen) { held.seen = cur; return held.answer; }
+      }
     }
     const answer = await resolveTranscript(this.io, o);
-    this.remember(key, answer);
+    const st = answer.kind === 'found' ? await this.io.stat(answer.path) : null;
+    const stamp = stampOf(st);
+    this.remember(key, answer, stamp);
     return answer;
   }
 
-  private staleByBackoff(e: { answer: TranscriptResolution; at: number }): boolean {
-    const keepsLooking = e.answer.kind === 'fallback' || e.answer.rung === 'foreign-glob';
+  private staleByBackoff(e: { answer: TranscriptResolution; at: number; readonly stamp: string | null; seen: string | null }): boolean {
+    // THREE "keep looking" answers, not two. The third is the one the stamp
+    // gate above cannot rescue: a `found` at an exact rung whose file carries
+    // a `continued-in` marker the walk DECLINED to follow. That file is
+    // terminal — it will never change again — so its stamp matches for ever
+    // and the gate hands back the pre-fork answer on every poll for the life
+    // of the stream, and for the life of the process in `watch.ts`'s name
+    // sweep, whose resolver is never rebuilt. The conditions that make the
+    // walk decline are the transient ones (the successor has not been written
+    // yet, is still zero bytes, is not resolvable yet), so re-running the
+    // ladder on the back-off is exactly the retry they need.
+    const keepsLooking = e.answer.kind === 'fallback'
+      || e.answer.rung === 'foreign-glob'
+      || e.answer.followDeclined === true;
     return keepsLooking && this.now() - e.at >= this.backoffMs;
   }
 
-  private remember(key: string, answer: TranscriptResolution): void {
+  private remember(
+    key: string, answer: TranscriptResolution, stamp: string | null,
+  ): void {
     this.memo.delete(key);                       // re-insert so Map order is recency
-    this.memo.set(key, { answer, at: this.now() });
+    this.memo.set(key, { answer, at: this.now(), stamp, seen: stamp });
     while (this.memo.size > MEMO_MAX) {
       const oldest = this.memo.keys().next();
       if (oldest.done === true) break;
