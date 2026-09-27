@@ -11,10 +11,13 @@
 // The roster. Ruling 280 (2026-09-08): the class registry is its own
 // per-account file, `~/.ccrc/models/<id>.classes.json`, and `exec.models` is
 // the account-connections spec's — a branch that is not on `main`. The roster
-// is READ for exactly three facts and never written: does this id exist, what
-// is its `configDirSuffix`, and is it an Anthropic lane
+// is READ and never written, for three facts on every lane: does this id
+// exist, what is its `configDirSuffix`, and is it an Anthropic lane
 // (`telemetry === 'anthropic'` — `origin/main`'s `ExecSpec` has no provider
-// field to ask, deviation B-3).
+// field to ask, deviation B-3). And for a fourth on ONE kind only: an
+// `exec.kind: 'codex'` row's topology (`authDir`, `proxyPort`, `litellmPort`),
+// which `laneManifest` copies verbatim into `lane.json` and nothing here
+// interprets.
 //
 // ── THE THREE RULES EVERY OP OBEYS ───────────────────────────────────────
 //  1. ONE JSON OBJECT ON STDOUT, always, including on a refusal. The caller
@@ -26,13 +29,22 @@
 //     file the server refuses to read.
 //  3. MATERIALISE ON SUCCESS. `mergeSettingsEnv`, `<id>.classes.tsv` and
 //     `<id>.effort.json` are rewritten after every accepted mutation, so no
-//     surface can read a registry the lane's own settings do not match.
+//     surface can read a registry the lane's own settings do not match — and,
+//     on a codex-kind lane, `~/.ccrc/codex/<id>/lane.json` (spec §5.4) with
+//     them, so its `probeModel` follows every reclassification.
 //
 // `rm` (spec §4.1 Lifecycle, §10, §11) is a DELIBERATE exception to rules 2 and
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
 // registry it is about to delete would be pointless — worse, it would refuse to
 // reap a registry that no longer parses, which is exactly the file this verb
-// exists to clean up. It still obeys rule 1.
+// exists to clean up. It still obeys rule 1. It reaps the four MODEL files —
+// registry, catalogue, TSV, effort map — and DELIBERATELY not `lane.json`,
+// though this file generates that too: the manifest carries the roster's lane
+// topology (auth dir, ports), which belongs to the ACCOUNT, not the registry.
+// Its owner is the codex arm of account removal (`_acct_remove`, spec §9,
+// Plan 2b-2) — and that owner must reap it, because an id removed and later
+// re-added would otherwise inherit the old lane's authDir and ports until its
+// next mutation: one lane spending another account's OAuth.
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
@@ -58,9 +70,9 @@ const SELF = 'models-op';
 
 /** The account-id shape (C6), spelled once, here — the same shape as
  *  `ccd/ccrc`'s `WRAPPER_ID_RE` (`shared/roster.ts`'s ID_RE, in bash). An
- *  account id becomes a path segment below, in FOUR places (`registryPath`,
- *  `cataloguePath`, `classesTsvPath`, `effortPath`), so this file validates
- *  its own `--id` at op entry rather than depending on `ccd/ccrc`'s
+ *  account id becomes a path segment below, in FIVE places (`registryPath`,
+ *  `cataloguePath`, `classesTsvPath`, `effortPath`, `laneJsonPath`), so this
+ *  file validates its own `--id` at op entry rather than depending on `ccd/ccrc`'s
  *  `_models_id_ok` — a usage-level gate one layer up, not this file's own —
  *  to have run first. */
 export const ACCOUNT_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -104,6 +116,8 @@ const registryPath = (id) => path.join(modelsDir(), `${id}.classes.json`);
 // an `account`, which an ORPHAN id has none of.
 const classesTsvPath = (id) => path.join(modelsDir(), `${id}.classes.tsv`);
 const effortPath = (id) => path.join(modelsDir(), `${id}.effort.json`);
+/** Spec §4.3's "lane manifest" row, and §5.4's first line. */
+const laneJsonPath = (id) => path.join(HOME, '.ccrc', 'codex', id, 'lane.json');
 
 function out(o) { process.stdout.write(`${JSON.stringify(o)}\n`); }
 
@@ -250,17 +264,84 @@ function writeRegistry(id, registry) {
   }
 }
 
-/** §6.1 + §6.4 + §7's TSV, from a lane's registry and its catalogue. Returns
- *  the three paths, `settings` NULL when the registry is unseeded — such a lane
+/** Spec §5.4's lane manifest — "id, config dir, ports, auth dir, unit names,
+ *  probe model", and no credential — or null when this account is not a lane
+ *  ccrc owns end to end.
+ *
+ *  GATED ON `exec.kind === 'codex'`, the one kind that carries `authDir` and
+ *  the two ports (`shared/roster.ts`'s codex `ExecSpec` arm; `readRoster`
+ *  above ran `rosterFromJson`, which refuses such a row without all three). An
+ *  `external` row — how a Codex lane is spelled on a box that has not cut
+ *  over — has none of them, and §5.4 forbids re-deriving them from a naming
+ *  convention, so it gets no manifest rather than a guessed one.
+ *
+ *  `configDir` and `authDir` are copied VERBATIM, both HOME-relative, because
+ *  the roster validated them that way and the one shipped reader
+ *  (`ccd/ccgpt-usage.py`'s `_token_dir`) joins `authDir` onto `~` itself: a
+ *  manifest mixing relative and absolute path fields invites a reader to join
+ *  the wrong one.
+ *
+ *  `units` are §4.3's tier unit names, DERIVED HERE from the id and nowhere
+ *  else — this file is the one place that derivation lives, and `lane.json`
+ *  exists so the launcher, the shim and the publisher read the answer rather
+ *  than re-deriving it.
+ *
+ *  `probeModel` is the registry's HAIKU class (D-3158: the key is spelled
+ *  exactly as `ccd/ccgpt-usage.py`'s `_probe_model` reads it): a usage probe
+ *  should cost the least the lane can charge, and it is the REGISTRY's value —
+ *  the one this call materialises — never `SEEDS`, which `init` plants once and
+ *  an operator may reclassify afterwards. Not `registry.probe`, either: that is
+ *  the probe KIND (`'codex'`), and the publisher puts `probeModel` in its
+ *  request's `body.model`. With haiku unassigned the key is OMITTED rather than
+ *  filled from another class, because choosing a fallback here would be a
+ *  second model policy (spec §10: "derived from that lane's own catalogue and
+ *  class registry"). What that costs, stated rather than hidden: such a lane
+ *  publishes no usage — the publisher refuses a manifest with no `probeModel`
+ *  — and no RE-RENDER cures it, since every re-render reads the same null.
+ *  Only assigning haiku does, which is why the publisher's refusal names
+ *  `set-class haiku`, and why a mutation that leaves haiku null on such a lane
+ *  answers with that remedy too (`HAIKU_UNASSIGNED_REMEDY`). */
+function laneManifest(account, registry) {
+  if (!isObj(account.exec) || account.exec.kind !== 'codex') return null;
+  const { id } = account;
+  const probeModel = registry.classes.haiku;
+  return {
+    id,
+    configDir: account.configDirSuffix,
+    authDir: account.exec.authDir,
+    proxyPort: account.exec.proxyPort,
+    litellmPort: account.exec.litellmPort,
+    ...(probeModel === null ? {} : { probeModel }),
+    units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
+  };
+}
+
+/** The answer a MUTATION gives when it leaves a codex-kind lane's haiku class
+ *  null — `set-class haiku none`, or `set-class <other> <haiku's model>` under
+ *  one-model-one-class, which moves haiku to null with nothing but
+ *  `moved: ['haiku']` to show for it — or haiku was null already. Either way
+ *  the lane publishes no usage while it stays so (`laneManifest` above), and
+ *  a bare `ok` would let the operator find out from a stale limits row. */
+const HAIKU_UNASSIGNED_REMEDY = (id) =>
+  `account "${id}" routes haiku to nothing, so its lane.json carries no probeModel and its `
+  + 'usage publisher refuses to publish until haiku is assigned. Run '
+  + `'ccrc models ${id} set-class haiku <modelId>'.`;
+
+/** §6.1 + §6.4 + §7's TSV, from a lane's registry and its catalogue — and, on
+ *  a codex-kind lane, §5.4's `lane.json` (`laneManifest` above). Returns the
+ *  four paths, `settings` NULL when the registry is unseeded — such a lane
  *  has no env block to write ("a lane needs at least one class") but still gets
  *  its TSV, because ccd reads that file on every spawn and an ABSENT file is a
- *  different question from a lane with nothing assigned. `wrote` is null only
- *  when there is no registry at all. */
+ *  different question from a lane with nothing assigned — and `lane` NULL when
+ *  the account is not `exec.kind: 'codex'`, the same "legitimately not
+ *  written" idiom. `wrote` is null only when there is no registry at all. */
 function materialise(account, registry, catalogue) {
   if (registry === null) return { wrote: null };
   const settings = path.join(HOME, account.configDirSuffix, 'settings.json');
   const classes = path.join(modelsDir(), `${account.id}.classes.tsv`);
   const effort = path.join(modelsDir(), `${account.id}.effort.json`);
+  const manifest = laneManifest(account, registry);
+  const lane = manifest === null ? null : laneJsonPath(account.id);
   let block = null;
   try {
     // `catalogue` is the SAME parsed value the caller already loaded to
@@ -299,7 +380,7 @@ function materialise(account, registry, catalogue) {
   }
   // Every tmp name this call creates, so the catch below can unlink whichever
   // ones are still around — `writeRegistry`'s own catch does the same for its
-  // one tmp; this function has up to two.
+  // one tmp; this function has up to three.
   const tmps = [];
   try {
     mkdirSync(modelsDir(), { recursive: true });
@@ -307,12 +388,22 @@ function materialise(account, registry, catalogue) {
       mkdirSync(path.dirname(settings), { recursive: true });
       mergeSettingsEnv(settings, block);
     }
-    // Both generated files land tmp + rename: ccd reads the TSV on every spawn
-    // (Plan 2) and `ccgpt-proxy` re-reads the effort file whenever its mtime
-    // moves, so a half-written one is a live wrong answer rather than a
-    // transient.
-    for (const [p, text] of [[classes, classesTsv(registry, catalogue)],
-      [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]]) {
+    // 0700, and at CREATION, because this writer is the only thing that makes
+    // `~/.ccrc/codex/<id>/` and a later `mkdirSync` with a mode never tightens
+    // a directory that already exists: Plan 2b-2 puts the lane's gateway key
+    // (`runtime.env`, spec §5.4) in this same directory and could not fix its
+    // mode by creating it again.
+    if (lane !== null) mkdirSync(path.dirname(lane), { recursive: true, mode: 0o700 });
+    // Every generated file lands tmp + rename: ccd reads the TSV on every spawn
+    // (Plan 2), `ccgpt-proxy` re-reads the effort file whenever its mtime
+    // moves, and the usage publisher reads `lane.json` on every poll, so a
+    // half-written one is a live wrong answer rather than a transient.
+    // `lane.json` is 2-space JSON with a trailing newline — the hand-readable
+    // shape `writeRegistry` gives the registry — and 0600 like its siblings.
+    const files = [[classes, classesTsv(registry, catalogue)],
+      [effort, `${JSON.stringify(effortFile(registry, catalogue))}\n`]];
+    if (lane !== null) files.push([lane, `${JSON.stringify(manifest, null, 2)}\n`]);
+    for (const [p, text] of files) {
       const tmp = `${p}.${process.pid}.tmp`;
       tmps.push(tmp);
       writeFileSync(tmp, text, { mode: 0o600 });
@@ -329,7 +420,7 @@ function materialise(account, registry, catalogue) {
     if (e instanceof ModelEnvInvalid) return { err: ['settings-unwritable', e.message] };
     return { err: ['materialise-failed', `${e.message}`] };
   }
-  return { wrote: { settings: block === null ? null : settings, classes, effort } };
+  return { wrote: { settings: block === null ? null : settings, classes, effort, lane } };
 }
 
 /** §11's last bullet: which of the materialiser's (up to) eight keys the
@@ -528,7 +619,7 @@ function main(argv) {
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
 
-  // C6: at op entry, before any of the four per-account paths are built and
+  // C6: at op entry, before any of the five per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
   // no-such-account gate (an orphan is the expected case there), which used
   // to mean it ran before ANY id validation. A `..`-bearing id built a path
@@ -585,8 +676,10 @@ function main(argv) {
 
   if (opName === 'rm') {
     // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the four
-    // generated files this design owns and clears exactly the eight settings
-    // keys `modelEnvBlock` can write — nothing else in that file. It runs BEFORE
+    // model-registry files this design owns and clears exactly the eight settings
+    // keys `modelEnvBlock` can write — nothing else in that file. NOT
+    // `lane.json`, which `materialise` also writes: it is the account's, and the
+    // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
     // registry or catalogue through their validators: `rm -f` semantics apply
     // to each of the four files on its own, so a broken (unparseable)
@@ -997,7 +1090,14 @@ function main(argv) {
   if (w !== null) return refuse(1, w[0], w[1]);
   const mat = materialise(account, validated, catalogue);
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
-  out({ ok: true, op: opName, ...extra, ...describe(account, validated, catalogue) });
+  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue) };
+  // Keyed on the manifest having been WRITTEN — the same gate `laneManifest`
+  // applies — so a lane with no lane.json, whose haiku nothing publishes from,
+  // is never told its publication stopped.
+  if (mat.wrote.lane !== null && validated.classes.haiku === null) {
+    answer.remedy = HAIKU_UNASSIGNED_REMEDY(a.id);
+  }
+  out(answer);
   return 0;
 }
 

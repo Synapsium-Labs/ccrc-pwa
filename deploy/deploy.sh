@@ -505,6 +505,15 @@ if [ "$TARGET" = "agent" ]; then
   node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
   echo "roster fingerprint on $BOX: $(roster_fp "$ACCOUNTS_SH")"
+  # The banner this lane is about to raise, said out loud so it is not reported
+  # as a fault. `rosterAgreement` compares the fleet host's INSTALLED accounts.sh
+  # against the projection the running server generates from its OWN roster at
+  # boot, so an emitter change and a one-box roster edit both land here. The
+  # server lane clears it by restarting the server on this build against this
+  # box's own accounts.json — it never OVERWRITES a roster, so a pool added on
+  # one box only must be added on the other by hand (`ship_roster` runs in both
+  # lanes and scps accounts.json only when the box has none).
+  echo "  until the server lane restarts the server on this build, /api/fleet/health reports roster: divergent and the PWA shows the amber banner — expected between the two lanes; 'bash deploy/deploy.sh' clears an emitter skew, but a roster edit must be made on BOTH boxes"
   # ── THE SECOND SEED-ONCE FACT, AND WHY IT HAS TO BE HERE ─────────────────
   # `~/.ccrc/remote-control` is what the ccd installed further down asks, on
   # EVERY spawn, to decide whether a session comes up with `--remote-control`
@@ -558,6 +567,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: the token lives at `deploy/ccrc-mail.token`
@@ -651,6 +661,19 @@ if [ "$TARGET" = "agent" ]; then
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
   install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  # The compaction card's helper (compaction-card spec §2): plain node, no npm,
+  # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
+  # 644 — `node` runs it; nothing executes it directly.
+  #
+  # BEFORE the hook, not after. The hook's guard for this file is SILENT and
+  # total, so the window between the two installs decides which way a partial
+  # deploy fails: helper-then-hook leaves a file no old hook calls, hook-then-
+  # helper leaves every live session on the box compacting with no set, no card
+  # and no journal line, and saying nothing about it. This comment deliberately
+  # does NOT spell the install line itself — the ship test locates that call by
+  # scanning for it, and a comment carrying the same spelling shadows the real
+  # invocation, the trap this file's other notes record springing twice.
+  install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs 644
   # session-hook.sh + its installer ship every deploy too — the installer is
   # idempotent (it backs up settings.json itself before touching it) and
   # safe to re-run against homes it already converged.
@@ -661,6 +684,11 @@ if [ "$TARGET" = "agent" ]; then
   # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
   # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  # account-pool-membership wave 1, Task 4: the leased-projection puller,
+  # unconditional here on the same terms as its sibling above — the agent
+  # lane only ever ships to a fleet host, so there is no server-role branch
+  # to gate it against.
+  install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755
   # graphify Task 10 (O3/O6b): the per-tree AST sweep executable, unconditional
   # here exactly as its sibling above — the agent lane only ever ships to a
   # fleet host, so there is no server-role branch to gate it against the way
@@ -705,6 +733,19 @@ if [ "$TARGET" = "agent" ]; then
   # there is no server-role branch to gate it against the way `ccd/ccrc`'s own
   # `_inst_bins` has to.
   install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755
+  # Routing slice 0 (spec 2026-09-14 §6): the usage accounting sweep and its
+  # scanner, unconditional here exactly as its siblings above. PLACED BELOW THE
+  # NOISE LIST, NOT BESIDE ccd-graph-sweep, for the same D-2600 reason
+  # ccd-account-auth gives above: `graph-noise-ship.test.ts` pins the sweep and
+  # the noise list as neighbours with three code lines of slack, and
+  # `ccrc-models-probe` already spends one of them.
+  install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
+  install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
+  # The per-uid temp-dir reaper (Claude Code's /tmp/claude-<uid>, 138G on the
+  # fleet host on 2026-09-22), unconditional here exactly as its siblings above
+  # and placed below the noise list for the same D-2600 reason the usage sweep
+  # gives: `graph-noise-ship.test.ts` has no slack left beside ccd-graph-sweep.
+  install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -755,7 +796,7 @@ if [ "$TARGET" = "agent" ]; then
   # the fix is the box-side idiom `ccrc install` has always used for these same
   # unit files (`ccd/ccrc`'s `_inst_atomic`: temp, chmod, `mv -f` = rename(2)) —
   # one ssh, no extra round trips, and the two lanes stop disagreeing about the
-  # same thirteen files. A stray `<unit>.incoming.<pid>` from a dead run is
+  # same unit files. A stray `<unit>.incoming.<pid>` from a dead run is
   # inert to systemd (it ends in neither a unit suffix nor `.conf`) and the next
   # successful copy of that file sweeps it, exactly as `install_atomic`'s own
   # trailing `rm -f` does. The mode is stated (644) rather than inherited: `cp`
@@ -786,6 +827,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service \
@@ -793,8 +836,38 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
+  # Plan 2b-1 Task 7: the GPT-lane files. They sit HERE, not beside the
+  # ccd-usage-sweep pair they belong with: a citation corpus this plan may not
+  # edit cites this file's lines by number above this point, and an insert
+  # above them would move what they cite.
+  #
+  # The chain above places NO `ccgpt-usage@.{service,timer}`, and neither does
+  # `ccd/ccrc`'s `_inst_units`: a live fleet box already has a unit pair at those
+  # names, owned by another repository and with an instance enabled, so placing
+  # ours is the cutover, which is Plan 3's. The files ship in the tree only.
+  #
+  # The two executables, on this agent lane only: `ccd/ccrc`'s `_inst_bins`
+  # places them on every role but server. The rsync above already lands them at
+  # ~/ccrc/ccd/; without these two lines a fallback deploy never put them on
+  # PATH. After the build and before the stamp, so a failed copy aborts the
+  # lane before this box's build record can claim it. Only the two that exist
+  # in the tree today: `ccgpt` and `ccgpt-runtime` join in Plan 2b-2, IN THE
+  # SAME COMMIT that writes them, because this helper on a missing source
+  # aborts the lane mid-chain, and every commit on `main` must deploy.
+  #
+  # `server/test/install-census.test.ts` reds when a binary or unit file
+  # `ccrc install` places is placed by NEITHER lane of this file (it reads the
+  # union of the two, so a name placed only in the wrong lane passes there),
+  # when anything in this file enables a template or an instance of one, and
+  # when a source either helper here copies is not tracked in the repository.
+  install_atomic ccd/ccgpt-proxy.py .local/bin/ccgpt-proxy.py 755
+  install_atomic ccd/ccgpt-usage.py .local/bin/ccgpt-usage.py 755
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
   # now) let a failed remote `npm ci && npm run build` — a registry hiccup,
@@ -810,16 +883,16 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # means this line is never reached if the build failed.
   stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
-  # The two SKILLS are the FIFTH and SIXTH artifacts ccrc ships to the fleet
-  # host (ccd, notify.sh, session-hook.sh + its installer, and now these two).
-  # Each rides the same four lines for the same reasons. The TREE rides rsync
-  # --delete so a reference file deleted in git is deleted on the box too — a
-  # stale reference is prose a model will still follow, and prose is read whole
-  # on the next open, so tree-level atomicity is not load-bearing for it. The
-  # INSTALLER is different: it gets EXECUTED, which is exactly the class
-  # install_atomic exists for — a deploy dying between scp and chmod must not
-  # leave a half-written script that the next deploy (or a curious operator)
-  # runs.
+  # The three SKILLS are the FIFTH, SIXTH and SEVENTH artifacts ccrc ships to
+  # the fleet host (ccd, notify.sh, session-hook.sh + its installer, and now
+  # these three). Each rides the same four lines for the same reasons. The
+  # TREE rides rsync --delete so a reference file deleted in git is deleted
+  # on the box too — a stale reference is prose a model will still follow,
+  # and prose is read whole on the next open, so tree-level atomicity is not
+  # load-bearing for it. The INSTALLER is different: it gets EXECUTED, which
+  # is exactly the class install_atomic exists for — a deploy dying between
+  # scp and chmod must not leave a half-written script that the next deploy
+  # (or a curious operator) runs.
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
   rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
   install_atomic ccd/install-coordinator-skill.sh .cc-sessions/install-coordinator-skill.sh 755
@@ -843,11 +916,26 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/worker-skill/ "$BOX":.cc-sessions/worker-skill/
   install_atomic ccd/install-worker-skill.sh .cc-sessions/install-worker-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-worker-skill.sh'
-  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER both
-  # roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # THE REVIEWER SKILL SHIPS THIRD (design 2026-09-14 §8). Like the worker's,
+  # its SKILL.md carries no references of its own and points a live reviewer at
+  # the coordinator's installed tree by relative path, so it lands after that
+  # lane for the worker's reason. server/test/install-reviewer-skill.test.ts
+  # pins the order against both run lines above.
+  #
+  # Like the notes above, this comment deliberately does NOT spell this
+  # skill's directory name with a trailing slash:
+  # `server/test/install-reviewer-skill.test.ts` locates the rsync by the
+  # FIRST line in the arm containing that spelling, and a comment that did
+  # would shadow the real invocation.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/reviewer-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/reviewer-skill/ "$BOX":.cc-sessions/reviewer-skill/
+  install_atomic ccd/install-reviewer-skill.sh .cc-sessions/install-reviewer-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-reviewer-skill.sh'
+  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
+  # three roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its two neighbours
-  # need).
+  # remote run rather than the rsync-a-tree-then-run shape its three
+  # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —
   # `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine
@@ -877,10 +965,13 @@ cd ~/ccrc/agent && npm ci && npm run build \
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
+    && systemctl --user enable --now ccd-pool-sync.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user enable --now ccrc-models.timer \
+    && systemctl --user enable --now ccd-usage-sweep.timer \
+    && systemctl --user enable --now ccd-tmp-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

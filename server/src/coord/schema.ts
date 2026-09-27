@@ -867,6 +867,268 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN homeProject TEXT;
   ALTER TABLE feed_events ADD COLUMN runId INTEGER;
   `,
+
+  // ── 11: user_version 10 -> 11 ─────────────────────────────────────────────
+  // Review runs (design 2026-09-14 §5.1): a reviewer is a RUN of a new KIND,
+  // reusing dispatch, mail, hold, slot and close rather than inventing a
+  // lighter carrier. MIGRATIONS[0..9] ARE FROZEN, for the reason every entry
+  // above states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION;
+  // v++)`, so an amendment to an applied entry never runs again.
+  //
+  // `runs.kind` — 'work' | 'review'. NOT NULL DEFAULT 'work' on purpose, and
+  // this is the ONE column in this file whose default is an assertion rather
+  // than an overloaded null: every row that exists today IS a work run, with
+  // no change of meaning, and a NULL here would say "kind unknown" about rows
+  // whose kind is perfectly known. The revive path (`hydrateRun`) reads an
+  // out-of-vocabulary token as `'unknown'`, the `RunState` idiom (D-2795).
+  //
+  // `runs.reviews` — the work run this review run reads; NULL on a work run.
+  // Set at open, never updated. NULLABLE, NO DEFAULT: NULL means "this run
+  // reviews nothing" — true of every work run — never "the reviewed run could
+  // not be read". `REFERENCES runs(id)` with a NULL default is the one shape
+  // SQLite's ALTER TABLE ADD COLUMN accepts for a foreign key.
+  //
+  // The index serves `reviewInFlightFor` — "is a non-terminal review run
+  // already naming this work run" — which `POST /api/runs` asks on every
+  // review open and `POST /api/runs/:id/advance` on every send-back.
+  `
+  ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'work';
+  ALTER TABLE runs ADD COLUMN reviews INTEGER REFERENCES runs(id);
+  CREATE INDEX runs_by_reviews ON runs(reviews);
+  `,
+
+  // ── 12: user_version 11 -> 12 ───────────────────────────────────────────
+  // The coordinator's project, stamped on the run AT OPEN TIME.
+  //
+  // Why stamped and not derived: the board places a coordinated workspace on
+  // its coordinator's card, and deriving that placement from a LIVE read of
+  // the coordinator's registry record means the workers scatter the moment
+  // that record is archived, removed or unreadable. Stamping makes the
+  // placement a fact the run carries for its whole life.
+  //
+  // NULLABLE, and null is a real answer with two producers: a run opened
+  // before this column existed, and an open where the coordinator's registry
+  // record could not be read. Both mean "not stamped", and the placement
+  // policy treats both the same way — the session's own project.
+  //
+  // MIGRATIONS[0..10] are frozen: `db.ts:182` iterates `for (let v = current;
+  // v < COORD_SCHEMA_VERSION; v++)`, so an edit to an applied entry never
+  // runs against the live `~/.ccrc/coord.db`.
+  //
+  // THIS ENTRY WAS SLOT 11 WHEN IT WAS WRITTEN. #108 (review runs) merged
+  // first and took `user_version 10 -> 11`, so this one moved down a slot at
+  // merge time rather than sharing an index: two entries at one `user_version`
+  // is a migration that never runs on a db that has already passed that
+  // version. Nothing else about it changed. Re-verified against origin/main at
+  // 2f9deae2 that `runs` carries no `coordProject` today.
+  `
+  ALTER TABLE runs ADD COLUMN coordProject TEXT;
+  `,
+
+  // ── 13: user_version 12 -> 13 ───────────────────────────────────────────
+  // Account-pool membership: the authoritative store (design 2026-09-18 §5.2).
+  //
+  // ROW PER EDGE, not a column on an account (operator ruling 2). `subjectKind`
+  // exists from day one though wave 1 writes only 'account' rows: the project
+  // half may migrate in later, and the org edition's `user -> pinned account` is
+  // a DIFFERENT EDGE, not a wider column. Wave 1's "one pool per account" is a
+  // PARTIAL UNIQUE INDEX, so relaxing it to multi-pool later drops an index and
+  // rewrites no rows and changes no wire shape — where widening a column would
+  // change the rule in three languages at once.
+  //
+  // `addedBy` is NULLABLE and null is a real answer: a row written by a path
+  // that had no session identity. It is attribution, never authentication.
+  //
+  // `pool_epoch` takes the single-row idiom from `coordinator_state` above
+  // (`id INTEGER PRIMARY KEY CHECK (id = 1)`) and is SEEDED here, so every
+  // reader after this migration finds a row and none has to handle its absence.
+  // Epoch 0 means "nothing has ever been tagged", which is a measurement.
+  //
+  // MIGRATIONS[0..11] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY IS SLOT 13 AS WRITTEN. PR #40 (automation-runner) carries a
+  // migration spelled slot 11 — already taken on main — so it must move up when
+  // rebased and may take 13 first. Migration 12's own comment records the last
+  // branch that lost this race. RE-MEASURE against origin/main before merge.
+  `
+  CREATE TABLE pool_edges (
+    id          INTEGER PRIMARY KEY,
+    subjectKind TEXT    NOT NULL,
+    subjectId   TEXT    NOT NULL,
+    pool        TEXT    NOT NULL,
+    addedAt     INTEGER NOT NULL,
+    addedBy     TEXT
+  );
+  CREATE UNIQUE INDEX pool_edges_one_per_account
+    ON pool_edges(subjectId) WHERE subjectKind = 'account';
+
+  CREATE TABLE pool_epoch (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    epoch    INTEGER NOT NULL,
+    issuedAt INTEGER NOT NULL,
+    digest   TEXT    NOT NULL
+  );
+  INSERT INTO pool_epoch (id, epoch, issuedAt, digest) VALUES (1, 0, 0, '');
+  `,
+
+  // ── 14: user_version 13 -> 14 ───────────────────────────────────────────
+  // The update control plane (design 2026-09-20 §6): the release CATALOGUE,
+  // each node's verdict on a release, the node INVENTORY, the DESIRED STATE
+  // per scope, and the projection's epoch. Every column the whole design
+  // needs — `notify`, which W3 reads; the lease and request columns, which
+  // W4's dispatcher writes — ships in THIS ONE slot, so no later wave of that
+  // design claims a second.
+  //
+  // ONE WRITER PER COLUMN GROUP. Each group's comment below names the METHOD
+  // that writes it, because `update-writer-groups.test.ts` scans `store.ts`'s
+  // SQL and binds method names to these column lists; a comment naming
+  // something other than the method would be a second, unpinned claim. The
+  // spec's per-row `upsertRelease` does not appear: the yank mark is a
+  // statement about a whole listing, so the ONE catalogue writer is
+  // `applyReleaseListing` (D-3180). `nodes.role` and
+  // `nodes.label` sit on the key line but belong to the measurement group;
+  // `nodes.nodeId` is the row KEY — the measurement writers' INSERT creates a
+  // row under it and only `rekeyNode` changes it. `update_intent` and
+  // `update_epoch` are one group each, and their one writer is `setIntent`.
+  //
+  // Enumerated columns are TEXT with no SQL CHECK — this file's header idiom:
+  // each vocabulary lives ONCE in `shared/api.ts` (union + runtime array +
+  // guard) and its store reader maps an out-of-vocabulary token to a stated
+  // fallback, never a cast. The ones whose fallback is NOT a we-do-not-know
+  // member (D-3181): `releases.channel` and `nodes.role`
+  // read NULL, as `nodes.channel` and `nodes.requestedKind` do;
+  // `nodes.stampRead` reads `unreadable`; `update_intent.auto`
+  // reads `off` (nothing unattended); `update_intent.notify` reads `channel`
+  // (the operator hears of more, never of nothing). An out-of-vocabulary
+  // `update_intent.channel` resolves the node's `nodes.channel` to NULL with
+  // the reason in `resolveDetail` — never the fleet default, which would be
+  // fail-open.
+  //
+  // Every version-bearing column holds the TAG form (`vX.Y.Z`, decision 2).
+  // Every time column is epoch MS — `reportedStartedAt`/`reportedUpdatedAt`
+  // included: the report file carries unix SECONDS and the inventory sweep
+  // converts them at its one validator, so no reader here ever sees seconds.
+  //
+  // `releases` is NEVER DELETED FROM. A draft, or a release absent from a
+  // later listing, is `yanked = 1` (§7); the row stays, so a node running a
+  // yanked tag still has a catalogue row that says so.
+  //
+  // `nodes.updateState` is `NOT NULL DEFAULT 'idle'`
+  // (D-3186): a never-dispatched node IS idle, and the
+  // measurement writer's first INSERT must be able to name only identity,
+  // measurement and report columns — without a default it would have to name
+  // the lease column the writer-group scan forbids it. Like `runs.kind`'s
+  // default (entry 11), this asserts something true of every row; it is not
+  // an overloaded null.
+  //
+  // The NULLs are real answers, one meaning each (§6 "Null discipline"):
+  // `commitSha NULL` = `target_commitish` was a branch name; `notifiedAt NULL`
+  // = no release push sent; `currentVersion NULL` with `stampRead = 'ok'` = an
+  // unversioned build; `measuredAt NULL` = never measured; `highestVersion
+  // NULL` = UNCONSTRAINED only when `floorRead = 'absent'` (measured, this
+  // sweep OR CARRIED FORWARD from an earlier one, that there is no floor
+  // file, or a garbled one) — a NULL beside `floorRead = 'unmeasured'` means
+  // NOTHING WAS EVER MEASURED for this row, and the resolver refuses to
+  // treat that as unconstrained (D-3213, corrected by fix round 1's own
+  // review, I-1: the STATE carries forward with the value, so a
+  // previously-absent floor never relabels itself `unmeasured` just because
+  // one later sweep's own read failed); `previousVersion NULL` = nothing to
+  // roll back to, by the same `previousRead` distinction; `agentOps NULL` = no agent by construction (a server-role
+  // row) while `''` = an agent too old to say; `unreachableSince NULL` iff
+  // reachable; `reportedPhase NULL` = no report file, distinct from
+  // `'unknown'`, a phase outside the vocabulary; `desiredTag NULL` carries
+  // its reason in `resolveDetail`; `requestedTag NULL` = no operator request
+  // outstanding; `supersededBy NULL` = live.
+  //
+  // `update_intent` is SEEDED with the fleet default (`scope = '*'`) and
+  // `update_epoch` with epoch 0, so no reader handles either's absence.
+  // `update_epoch` takes `pool_epoch`'s single-row idiom (entry 13) but NOT
+  // its `digest` column: `pool_epoch.digest` is provenance that nothing
+  // reads (`poolEdgeDigest`'s docstring in `store.ts`), and the projection's
+  // torn-write detectors are its `end` terminator and its 65536-byte cap
+  // (§9) — a digest here would be a column with no reader.
+  //
+  // MIGRATIONS[0..12] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY IS SLOT 14 AS WRITTEN. PR #40 (automation-runner) is open and
+  // stale: its tree predates entries 12 and 13 and still spells its own
+  // migration slot 11, so its next rebase renumbers it into THIS slot. Two
+  // entries at one `user_version` is a migration that never runs on a db
+  // already past it (entry 12's paragraph records the last branch that lost
+  // this race); whichever merges second moves up. RE-MEASURE against
+  // origin/main immediately before the PR and again before merge — the
+  // banner count on main must still be 13:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  // `coord-db.test.ts`'s banner-sequence case reds a textual double slot left
+  // in THIS tree; a slot another branch holds is visible only to that
+  // measurement.
+  `
+  CREATE TABLE releases (
+    -- catalogue columns: writer = the poller (§7), method applyReleaseListing
+    -- tag: NOT NULL PRIMARY KEY (D-3212) — SQLite's rowid-table rule admits a
+    -- NULL TEXT primary key otherwise; the writer's own guard (isReleaseTag)
+    -- was the only thing standing between a NULL key and more than one row.
+    tag TEXT NOT NULL PRIMARY KEY, version TEXT NOT NULL, channel TEXT NOT NULL, publishedAt INTEGER NOT NULL,
+    commitSha TEXT, tarballUrl TEXT NOT NULL, bundleListed INTEGER NOT NULL, notes TEXT,
+    yanked INTEGER NOT NULL DEFAULT 0, observedAt INTEGER NOT NULL,
+    -- notification columns: writer = the notifier (W3), method markReleaseNotified
+    notifiedAt INTEGER
+  );
+  CREATE TABLE node_release_refusals (
+    -- writer = the inventory sweep, method refuseRelease; cleared by clearRefusals / ackNode; re-keyed by rekeyNode
+    nodeId TEXT NOT NULL, tag TEXT NOT NULL, at INTEGER NOT NULL, detail TEXT NOT NULL,
+    PRIMARY KEY (nodeId, tag)
+  );
+  CREATE TABLE nodes (
+    -- nodeId: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap as
+    -- releases.tag; the guard was NODE_ID_RE, not the column.
+    nodeId TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, label TEXT NOT NULL,
+    -- measurement columns: upsertNodeMeasurement, markUnreachable
+    currentVersion TEXT, currentSha TEXT, currentRef TEXT, currentBuiltAt TEXT, currentDirty INTEGER,
+    stampRead TEXT NOT NULL, installState TEXT NOT NULL, provenance TEXT NOT NULL, caps TEXT NOT NULL,
+    agentOps TEXT, highestVersion TEXT, previousVersion TEXT,
+    -- floorRead / previousRead: fix round 1, D-3213 (re-review N-1) -- the
+    -- STORED read-STATE beside each tag column ('measured' | 'absent' |
+    -- 'unmeasured'), a fact about the ROW: 'unmeasured' means NEVER
+    -- measured (no sweep, this one or an earlier one, has read this file).
+    -- applyMeasurement carries the PAIR (value AND state) forward from the
+    -- row when a sweep's own raw read is 'unmeasured' and the row already
+    -- held something better, rather than overwrite it with NULL, so
+    -- highestVersion alone can no longer tell "no floor file" (unconstrained,
+    -- section 9) apart from "never measured" (never unconstrained -- resolve.ts
+    -- checks the state, not just the value, and refuses to resolve instead).
+    -- This slot is still UNMERGED (entry 14 as written), so the two columns
+    -- join the measurement group's DDL directly rather than a later
+    -- migration.
+    floorRead TEXT NOT NULL, previousRead TEXT NOT NULL,
+    os TEXT NOT NULL, measuredAt INTEGER,
+    reachable INTEGER NOT NULL, unreachableSince INTEGER,
+    -- report columns: upsertNodeMeasurement
+    reportedPhase TEXT, reportedTarget TEXT, reportedStartedAt INTEGER, reportedUpdatedAt INTEGER, reportedDetail TEXT,
+    -- lease columns: dispatchNode (W4), releaseLease, settleNode, ackNode
+    updateState TEXT NOT NULL DEFAULT 'idle', updateTarget TEXT, updateStartedAt INTEGER, updateDetail TEXT,
+    -- resolved columns: resolveNode
+    channel TEXT, desiredTag TEXT, resolveDetail TEXT,
+    -- request columns: requestNode (W4) sets; settleNode and ackNode clear
+    requestedTag TEXT, requestedKind TEXT, requestedAt INTEGER,
+    -- identity column: rekeyNode
+    supersededBy TEXT
+  );
+  CREATE TABLE update_intent (
+    -- writer = the intent route (§12), method setIntent
+    -- scope: NOT NULL PRIMARY KEY (D-3212) — same rowid-table gap; the guard
+    -- was FLEET_SCOPE / a live nodeId, not the column.
+    scope TEXT NOT NULL PRIMARY KEY, channel TEXT NOT NULL, pinnedTag TEXT, auto TEXT NOT NULL, notify TEXT NOT NULL,
+    setAt INTEGER NOT NULL, setBy TEXT NOT NULL
+  );
+  INSERT INTO update_intent VALUES ('*', 'stable', NULL, 'off', 'channel', 0, 'migration');
+  -- writer = setIntent, in the same transaction as the intent row and the journal append
+  CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
+  INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

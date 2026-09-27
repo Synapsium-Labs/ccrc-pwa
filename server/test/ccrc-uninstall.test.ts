@@ -27,7 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import {
   mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync,
-  symlinkSync, rmSync, lstatSync,
+  symlinkSync, rmSync, lstatSync, readlinkSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,19 +118,36 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
-  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  // graphify Task 10/fix-round F2: another `_inst_bins` executable. NO
+  // ORDINALS here either — the sweep's two names below landed in the middle of
+  // this list and made every number after them wrong, which is the same defect
+  // `_uninst_tree_bins`' own census just retired. What matters is that every
+  // name `_inst_bins` writes is planted here, so the uninstall can be measured
+  // removing it.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
+  // Routing slice 0 Task 7: the usage-accounting sweep's runner and scanner,
+  // on the sweep's exact terms — a bash driver plus its Python engine.
+  writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
-  // spec 2026-09-07 §C: the sixth `_inst_bins` executable (account-health,
-  // just above, already took the fifth).
+  // The per-uid temp-dir reaper, placed by `_inst_bins` on the non-Darwin arm.
+  writeFileSync(join(bin, 'ccd-tmp-sweep'), '#!/bin/sh\n# tmp sweep\n', { mode: 0o755 });
+  // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
+  // projection puller. `_inst_bins` places it on the non-Darwin arm for every
+  // role, so an installed Linux box has it and `_uninst_tree_bins` must take
+  // it away — planted here so that removal can be MEASURED rather than read.
+  writeFileSync(join(bin, 'ccd-pool-sync'), '#!/bin/sh\n# pool sync\n', { mode: 0o755 });
+  // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
-  // The account wave's SEVENTH, and UNMARKED exactly as the six above are:
+  // The account wave's own, and UNMARKED exactly as every name above is:
   // `_inst_atomic` copies and chmods, it never stamps, so a real box's copy
   // carries no marker either. It is also the only one `_inst_bins` places on
   // BOTH platform arms.
   writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
-  // ── the EIGHTH name in ~/.local/bin, and the only one that is not a ccrc
-  // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
+  // ── the one name in ~/.local/bin that is not a ccrc binary (it read
+  // "the EIGHTH" while the list above had grown to nine; `_uninst_tree_bins`
+  // retired its own ordinals for the same reason, routing slice 0)
+  // (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
   // pinned venv's own engine. The venv is planted too, because the proof this
   // link is ccrc's is its TARGET — the uninstall reads it with a one-hop
   // `readlink` and compares it against the exact literal the install writes.
@@ -152,8 +169,17 @@ function plantInstalledBox(home: string): void {
   mkdirSync(join(units, 'app-claude\\x2dsession.slice.d'), { recursive: true });
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
     'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+    // account-pool-membership wave 1, Task 4: the pool-sync pair. UNLIKE
+    // every role-gated pair below it, `_inst_units` ships this one on every
+    // non-Darwin role — so it is on the box under test whatever role it had.
+    'ccd-pool-sync.service', 'ccd-pool-sync.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+    // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
+    // terms as the graph sweep above it.
+    'ccd-usage-sweep.service', 'ccd-usage-sweep.timer',
+    // The temp-dir reaper's pair, on the same role-gated terms.
+    'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -181,6 +207,10 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'build.json'),
     '{"sha":"fixturesha000000000000000000000000000000","ref":"main",'
     + '"builtAt":"2026-08-21T00:00:00Z","dirty":false}\n');
+  writeFileSync(join(home, '.ccrc', 'installed'), 'fixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
+  writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
+  writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -198,16 +228,22 @@ function plantInstalledBox(home: string): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(join(reg, 'coordinator-skill'), { recursive: true });
   mkdirSync(join(reg, 'worker-skill'), { recursive: true });
+  mkdirSync(join(reg, 'reviewer-skill'), { recursive: true });
+  // The compaction card's helper (compaction-card spec §2): `_inst_files`
+  // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
+  writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
   writeFileSync(join(reg, 'session-hook.sh'), '#!/bin/sh\n# hook\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-session-hooks.sh'), '#!/bin/sh\n# old installed copy\n', { mode: 0o755 });
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  writeFileSync(join(reg, 'install-reviewer-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
+  writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
   // Two account homes. claude2: one managed entry per event shape the
   // installer writes, one unmanaged entry, a CUSTOM statusLine. claude3:
   // no managed entry at all, hand-formatted.
@@ -327,8 +363,13 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const units = join(home, '.config', 'systemd', 'user');
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
       'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4: the pool-sync pair, which
+      // `_uninst_units` had never heard of — `ccrc uninstall` removed the
+      // binary's siblings and left this timer ENABLED and orphaned.
+      'ccd-pool-sync.service', 'ccd-pool-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+      'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
       'ccd-account-health.service', 'ccd-account-health.timer',
       'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
       // C5: the models pair, mirroring the three role-gated siblings above.
@@ -342,7 +383,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc.service');
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
+    // The half a file-absence assertion cannot see: a unit file deleted under
+    // a still-enabled unit leaves systemd holding a dangling enablement.
+    expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -440,9 +486,10 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     writeFileSync(join(home, '.cc-sessions', 'mail-disabled'), 'operator switch\n');
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
-    for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh',
-      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
-      'coordinator-skill', 'worker-skill']) {
+    for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
+      'install-graphify-skill.sh',
+      'coordinator-skill', 'worker-skill', 'reviewer-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled']) {
@@ -494,12 +541,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'graphify']) {
+    // account-pool-membership wave 1, Task 4 fix round 1 (F4): `ccd-pool-sync`
+    // joins the set on `ccd-graph-sweep`'s own terms — its units go above and
+    // the binary would otherwise stay on PATH for ever.
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
     // The preserve set, whole.
+    // The completed-install record is NOT config: a box with no tree has no
+    // completed install, and leaving it would let a later `ccrc update` skip.
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    // The node's three files are install-state, not config (design 2026-09-20
+    // §3, §9): an uninstalled box has no identity to the console, no
+    // capabilities and no floor.
+    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+      expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
+    }
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
@@ -528,6 +588,77 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-account-auth/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-account-auth.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  it('a STAMPED ccd-pool-sync is the bin arm\'s subject too — the uninstall twin of its TOOLCHAIN_EXECUTABLES entry', () => {
+    // account-pool-membership wave 1, Task 4 fix round 2 (B1). The sibling
+    // above states the mechanism; this is the same claim for the name that
+    // shipped into `_inst_bins`, `_uninst_tree_bins` and
+    // `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` in fix round 1
+    // while `_uninst_wrappers`' exclusion case was left without it — the one
+    // place in the five-path census that got no entry.
+    //
+    // INERT ON A REAL BOX TODAY, and pinned anyway for the reason the case's
+    // own comment gives: `_inst_atomic` does not stamp, so the installed copy
+    // is unmarked and `verifyMarker` answers `foreign` whether or not the
+    // case names it. A marked fixture is the only thing that can tell the two
+    // worlds apart, which is why it is the fixture rather than a text scan.
+    const home = mkTmp('ccrc-uninst-poolsync-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-pool-sync'),
+      markGenerated('#!/bin/sh\n# pool sync\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-pool-sync')),
+      'the puller survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
+  // `_inst_bins` to these — the lane's launcher and runtime binaries are not
+  // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
+  // places them and this census names none of them either). The usage-window
+  // publisher's `ccgpt-usage@.{service,timer}` pair is the other half of this
+  // case since the final review's F-1: no installer places it, because on a
+  // live fleet box those two names hold ANOTHER repository's pair with an
+  // instance enabled, so an uninstall that removed them would delete a live
+  // unit ccrc never wrote. They must survive byte for byte, their enabled
+  // instance's wants link too, and no systemctl verb may name them. `itLinux`,
+  // as every other systemd-argv assertion in this file.
+  itLinux('uninstall removes the two GPT-lane executables and leaves a ccgpt-usage@ unit pair it never placed alone', () => {
+    const home = mkTmp('ccrc-uninst-ccgpt-');
+    plantInstalledBox(home);
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
+    const units = join(home, '.config', 'systemd', 'user');
+    const foreignSvc = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.service, not ccrc\'s\n';
+    const foreignTimer = '[Unit]\nDescription=FOREIGN-FIXTURE ccgpt-usage@.timer, not ccrc\'s\n';
+    writeFileSync(join(units, 'ccgpt-usage@.service'), foreignSvc);
+    writeFileSync(join(units, 'ccgpt-usage@.timer'), foreignTimer);
+    mkdirSync(join(units, 'timers.target.wants'), { recursive: true });
+    const wants = join(units, 'timers.target.wants', 'ccgpt-usage@codex-a.timer');
+    symlinkSync(join(units, 'ccgpt-usage@.timer'), wants);
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
+    }
+    expect(readFileSync(join(units, 'ccgpt-usage@.service'), 'utf8'), 'the foreign .service was removed or changed')
+      .toBe(foreignSvc);
+    expect(readFileSync(join(units, 'ccgpt-usage@.timer'), 'utf8'), 'the foreign .timer was removed or changed')
+      .toBe(foreignTimer);
+    expect(lstatSync(wants).isSymbolicLink(), 'the enabled instance\'s wants link was removed').toBe(true);
+    expect(readlinkSync(wants)).toBe(join(units, 'ccgpt-usage@.timer'));
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls, 'a systemctl verb named a ccgpt-usage unit, template or instance').not.toContain('ccgpt-usage');
+    expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
+      .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
+    expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
+      .toMatch(/uninstall: tree: .*ccgpt-usage\.py.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the

@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+# ccd-tmp-sweep — reap Claude Code's per-uid temp dir. Serialized oneshot driven
+# by ccd-tmp-sweep.timer, owned the way ccd-graph-sweep is: one flock, one pause
+# file, every knob env-overridable for the test harness.
+#
+# WHY THIS EXISTS. Claude Code keeps every session's scratchpad and its
+# background-task output under `${TMPDIR:-/tmp}/claude-<uid>/`, laid out as
+# `<project-slug>/<session-uuid>/{scratchpad,tasks}/...` — the project slug is
+# the session's cwd with `/` turned into `-`, so every one of them starts with a
+# dash (`-home-<user>-worktrees-<repo>-<name>`). Agents also write
+# straight into the root: the fleet host carried ~1800 loose top-level files and
+# dirs beside the project dirs. NOTHING EVER CLEANS ANY OF IT. Claude Code does
+# not, tmpfiles.d does not (the dir is not on tmpfs and the box is rebooted
+# rarely), and a single task `.output` file reaches 1-4G. On 2026-09-22
+# `/tmp/claude-1000` on the fleet host had reached 138G and pushed `/` to 94%.
+# A one-off manual cleanup under the rules below removed 2002 stale session dirs
+# (18G); this script is that cleanup, made standing. The artifact-lifecycle
+# policy (docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md, row
+# #9) had already named this root as "declared to agents in their own system
+# prompt and then never collected"; `shared/lifecycle.ts` now names this script
+# as its collector.
+#
+# WHAT A PASS REMOVES. The unit of removal is either a SESSION DIR (depth 2,
+# `<project>/<entry>`) or a LOOSE ENTRY (depth 1, anything in the root that is
+# not a project dir). A top-level entry is a PROJECT DIR when it is a real
+# directory (not a symlink) with at least one child directory whose name is
+# session-uuid-shaped; everything else at the top level is loose. The rule is
+# deliberately about CHILDREN rather than the leading dash: a loose dir an agent
+# happened to name `-foo` is still loose, and a project dir whose sessions have
+# all been reaped reads as loose (and, being empty and old, goes as one unit).
+# Misclassifying either way changes only the GRANULARITY of removal, never
+# whether the three safety checks run — every unit, whatever its kind, is held
+# to all of them. Non-uuid entries inside a project dir are units too, on the
+# same terms; they are rare, and leaving them would make the project dir
+# unremovable for ever.
+#
+# A unit is removed ONLY if ALL of these hold:
+#   (a) NOT LIVE. No live session's id appears in its path. Live ids come from
+#       every Claude config dir's `sessions/<pid>.json` (`sessionId`; the file
+#       name is the pid) whose /proc/<pid> exists. The config dirs are the
+#       roster's (`~/.ccrc/accounts.sh`'s `_ccrc_cfg_dir`, exactly as
+#       ccd-usage-sweep reads them), UNIONED with a `~/.claude*/` glob and with
+#       the CLAUDE_CONFIG_DIR (or $HOME/.claude) of every running claude
+#       process — three sources because a missed config dir silently turns its
+#       live sessions into "dead" ones. Belt and braces on top: every
+#       uuid-shaped argument on a running claude's command line
+#       (`--resume <uuid>`) is live too. FAIL CLOSED: if claude processes are
+#       running and NOT ONE sessions dir can be read, the whole pass refuses
+#       rather than treating every session as dead.
+#   (b) NOT IN USE. No process has its cwd, or an open fd, at or under it
+#       (`/proc/*/cwd` and `/proc/*/fd/*` link targets — every session runs as
+#       this user, so no privilege is needed to see them).
+#   (c) NOT RECENT. Nothing at or under it — every file, dir and link, the unit
+#       itself included — has an mtime newer than the max age. EVERY entry, not
+#       the dir's own mtime: on the fleet host that was measured to be badly
+#       misleading (an old dir with a task `.output` still being appended to).
+#       A unit find cannot fully read is skipped as `unreadable`, never assumed
+#       old.
+# (a), (b) and (c) are ALL RE-CHECKED immediately before each `rm -rf`: the
+# scan over hundreds of thousands of files takes minutes, and a session can
+# resume, or a task start writing, inside that window.
+#
+# SAFETY OF THE PATHS THEMSELVES. Every path handed to a tool is `./`-prefixed
+# and every tool that takes one gets `--`: project slugs START WITH `-`, and a
+# manual run of these very rules was bitten by grep/du reading a slug as an
+# option. The pass `cd`s into the resolved root first so `./` means the root.
+# It never follows a symlink out of the root (find runs -P, a symlink is
+# removed as itself), never crosses a filesystem (`-xdev`, `du -x`,
+# `rm --one-file-system`), and refuses a root that does not resolve strictly
+# inside /tmp or $TMPDIR or is not owned by the running uid.
+#
+# OUTPUT. One summary line on stdout per pass (the journal is the record);
+# `--dry-run` also prints one `would-remove` line per unit and removes nothing.
+# Refusals go to stderr with a named reason and exit 1. A unit whose `rm`
+# fails is counted in the summary and the pass carries on; the pass still
+# exits 0, because a single unremovable file must not turn every hourly run
+# into a failed unit.
+#
+# PORTABILITY. Linux-only by product shape — its only runner is a systemd
+# timer, which `_inst_units`' Darwin arm never installs, and it reads /proc —
+# the same carve-out ccd-graph-sweep has. It is written to pass
+# macos-platform.test.ts's GNU-spelling scan anyway (no `stat -c`, `du -b`,
+# `date -d`, bare `timeout` or template-less `mktemp`).
+set -uo pipefail
+
+PAUSE="$HOME/.ccrc/tmp-sweep-paused"
+LOCK="$HOME/.ccrc/tmp-sweep.lock"
+ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+: "${CCD_TMP_SWEEP_MAX_AGE_DAYS:=7}"
+# What makes a process "claude", matched against both argv[0] and comm. The
+# native installer runs `~/.local/share/claude/versions/<v>` — whose comm is the
+# bare version string, measured on the fleet host — and an npm install sets its
+# process title to `claude`. Overridable so the harness can name its own fake
+# claude and never be confused by a real one on the box running the suite.
+: "${CCD_TMP_SWEEP_CLAUDE_RE:=(^|/)claude\$|/claude/versions/[^/]+\$}"
+ROOT="${CCD_TMP_SWEEP_ROOT:-${TMPDIR:-/tmp}/claude-$(id -u)}"
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+UUID_ANY='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+
+DRY=0
+case "${1:-}" in
+  --dry-run) DRY=1 ;;
+  '') ;;
+  *) echo "usage: ccd-tmp-sweep [--dry-run]" >&2; exit 2 ;;
+esac
+
+_ts_die() { echo "tmp-sweep: $*" >&2; exit 1; }
+
+[[ "$CCD_TMP_SWEEP_MAX_AGE_DAYS" =~ ^[1-9][0-9]{0,4}$ ]] \
+  || _ts_die "invalid-max-age: CCD_TMP_SWEEP_MAX_AGE_DAYS='$CCD_TMP_SWEEP_MAX_AGE_DAYS' is not a positive integer of days — refusing to guess a horizon"
+MAX_MIN=$((CCD_TMP_SWEEP_MAX_AGE_DAYS * 1440))
+
+[ -e "$PAUSE" ] && { echo "tmp-sweep: paused ($PAUSE exists)"; exit 0; }
+
+# An absent root is the normal state of a box no session has run on since boot:
+# nothing to do, and nothing worth a journal line.
+[ -e "$ROOT" ] || [ -L "$ROOT" ] || exit 0
+
+# ── the root: resolved, inside a temp dir, ours ────────────────────────────
+REAL="$(realpath -e -- "$ROOT" 2>/dev/null)" \
+  || _ts_die "root-unresolvable: $ROOT does not resolve"
+[ -d "$REAL" ] || _ts_die "root-not-dir: $ROOT resolves to $REAL, which is not a directory"
+allowed_ok=0
+for base in /tmp "${TMPDIR:-}"; do
+  [ -n "$base" ] || continue
+  b="$(realpath -e -- "$base" 2>/dev/null)" || continue
+  # `/` as a temp dir would make every path "inside" it; never an allowance.
+  [ "$b" = / ] && continue
+  [[ "$REAL" == "$b"/?* ]] && allowed_ok=1
+done
+[ "$allowed_ok" -eq 1 ] \
+  || _ts_die "root-outside-tmp: $ROOT resolves to $REAL, which is not strictly inside /tmp or \$TMPDIR"
+[ -O "$REAL" ] || _ts_die "root-not-owned: $REAL is not owned by uid $(id -u)"
+ROOT="$REAL"
+
+# /proc is what checks (a) and (b) read. Without it both would answer "nothing
+# live, nothing in use" — the one answer this script must never reach by
+# accident.
+[ -r /proc/self/fd ] && [ -e "/proc/$$/cwd" ] \
+  || _ts_die "no-proc: /proc is not readable here, so live sessions and open files cannot be seen"
+
+mkdir -p "$(dirname "$LOCK")"
+exec 9>"$LOCK"
+flock -n 9 || { echo "tmp-sweep: another pass holds $LOCK"; exit 0; }
+
+cd -- "$ROOT" || _ts_die "root-unenterable: cannot cd into $ROOT"
+shopt -s nullglob dotglob
+
+# ── (a) live sessions ───────────────────────────────────────────────────────
+# The roster's config dirs, read ONCE: sourcing the projection is the same act
+# ccd-usage-sweep performs, and it cannot change under a pass in a way that
+# matters — a config dir it would add is also caught by the glob and by the
+# running process's own environment below.
+declare -A CFG_SEEN=()
+CFGS=()
+_ts_add_cfg() { [ -n "$1" ] && [ -z "${CFG_SEEN[$1]+x}" ] && { CFG_SEEN[$1]=1; CFGS+=("$1"); }; return 0; }
+# shellcheck source=/dev/null
+if [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
+  for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do _ts_add_cfg "$(_ccrc_cfg_dir "$a")"; done
+fi
+for d in "$HOME"/.claude*/; do _ts_add_cfg "${d%/}"; done
+
+declare -A LIVE=()
+CLAUDE_N=0
+READABLE=0
+REFUSE=""
+# Fork-free on purpose (mapfile, $(<file), =~): it runs again before EVERY
+# removal, and a first pass on a neglected box removes thousands of units.
+_ts_collect_live() {
+  local p a0 comm f pid body arg v cfg home
+  local -a argv envv
+  LIVE=(); CLAUDE_N=0; READABLE=0; REFUSE=""
+  for p in /proc/[0-9]*; do
+    [ -O "$p" ] || continue
+    argv=(); { mapfile -d '' -t argv < "$p/cmdline"; } 2>/dev/null || continue
+    a0="${argv[0]:-}"; comm=""; { read -r comm < "$p/comm"; } 2>/dev/null
+    [[ "$a0" =~ $CCD_TMP_SWEEP_CLAUDE_RE || "$comm" =~ $CCD_TMP_SWEEP_CLAUDE_RE ]] || continue
+    CLAUDE_N=$((CLAUDE_N + 1))
+    for arg in "${argv[@]}"; do
+      while [[ "$arg" =~ $UUID_ANY ]]; do
+        LIVE[${BASH_REMATCH[0]}]=1; arg="${arg/${BASH_REMATCH[0]}/}"
+      done
+    done
+    envv=(); { mapfile -d '' -t envv < "$p/environ"; } 2>/dev/null
+    cfg=""; home=""
+    for v in ${envv[@]+"${envv[@]}"}; do
+      case "$v" in CLAUDE_CONFIG_DIR=*) cfg="${v#*=}" ;; HOME=*) home="${v#*=}" ;; esac
+    done
+    [ -z "$cfg" ] && [ -n "$home" ] && cfg="$home/.claude"
+    _ts_add_cfg "$cfg"
+  done
+  for cfg in "${CFGS[@]}"; do
+    [ -d "$cfg/sessions" ] && [ -r "$cfg/sessions" ] && [ -x "$cfg/sessions" ] || continue
+    READABLE=$((READABLE + 1))
+    for f in "$cfg/sessions"/*.json; do
+      pid="${f##*/}"; pid="${pid%.json}"
+      [[ "$pid" =~ ^[0-9]+$ ]] && [ -d "/proc/$pid" ] || continue
+      # Gone since the glob is a session that ended: nothing to protect. Present
+      # but unreadable is a live session this pass cannot see, and that refuses.
+      [ -e "$f" ] || continue
+      if [ ! -r "$f" ]; then
+        REFUSE="sessions-unreadable: $f belongs to live pid $pid and cannot be read, so its session cannot be protected"
+        return 1
+      fi
+      { body="$(<"$f")"; } 2>/dev/null || continue
+      [[ "$body" =~ \"sessionId\"[[:space:]]*:[[:space:]]*\"($UUID_ANY)\" ]] && LIVE[${BASH_REMATCH[1]}]=1
+    done
+  done
+  if [ "$CLAUDE_N" -gt 0 ] && [ "$READABLE" -eq 0 ]; then
+    REFUSE="no-sessions-dir: $CLAUDE_N claude process(es) running but not one sessions dir is readable (tried ${#CFGS[@]} config dir(s)) — refusing rather than treat every session as dead"
+    return 1
+  fi
+  return 0
+}
+_ts_is_live() {   # rel
+  local id
+  for id in "${!LIVE[@]}"; do [[ "$1" == *"$id"* ]] && return 0; done
+  return 1
+}
+
+# ── (b) in use ──────────────────────────────────────────────────────────────
+# find's -lname is fnmatch without FNM_PATHNAME, so `*` spans `/`; a name
+# carrying a glob metacharacter is escaped so it matches only itself.
+_ts_glob_escape() { local s="$1"; s="${s//\\/\\\\}"; s="${s//\*/\\*}"; s="${s//\?/\\?}"; s="${s//\[/\\[}"; printf '%s' "$s"; }
+ROOT_G="$(_ts_glob_escape "$ROOT")"
+_ts_holder() {    # rel -> prints the first /proc link that points at or under it
+  local g; g="$(_ts_glob_escape "$ROOT/$1")"
+  find /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 \
+    \( -lname "$g" -o -lname "$g/*" -o -lname "$g (deleted)" \) -print -quit 2>/dev/null
+}
+
+# ── (c) recent ──────────────────────────────────────────────────────────────
+_ts_age() {       # rel -> recent | unreadable | stale
+  local out rc
+  out="$(find "./$1" -xdev -mmin "-$MAX_MIN" -print -quit 2>/dev/null)"; rc=$?
+  if [ -n "$out" ]; then echo recent
+  elif [ "$rc" -ne 0 ]; then echo unreadable
+  else echo stale
+  fi
+}
+
+# ── the scan ────────────────────────────────────────────────────────────────
+_ts_collect_live || _ts_die "$REFUSE"
+
+UNITS=(); KINDS=(); PROJECTS=()
+for e in ./*; do
+  name="${e#./}"
+  is_proj=0
+  if [ -d "$e" ] && [ ! -L "$e" ]; then
+    for c in "$e"/*; do
+      [[ "${c##*/}" =~ $UUID_RE ]] && [ -d "$c" ] && [ ! -L "$c" ] && { is_proj=1; break; }
+    done
+  fi
+  if [ "$is_proj" -eq 1 ]; then
+    PROJECTS+=("$name")
+    for c in "$e"/*; do
+      UNITS+=("$name/${c##*/}")
+      if [[ "${c##*/}" =~ $UUID_RE ]]; then KINDS+=(session); else KINDS+=(loose); fi
+    done
+  else
+    UNITS+=("$name"); KINDS+=(loose)
+  fi
+done
+
+# Every process link into the root, taken once for the first cut; the
+# per-unit re-check before removal asks /proc again.
+declare -A INUSE=()
+while IFS= read -r t; do
+  rel="${t#"$ROOT"/}"; rel="${rel% (deleted)}"
+  first="${rel%%/*}"; INUSE[$first]=1
+  [[ "$rel" == */* ]] && { rest="${rel#*/}"; INUSE[$first/${rest%%/*}]=1; }
+done < <(find /proc/[0-9]*/cwd /proc/[0-9]*/fd -maxdepth 1 -lname "$ROOT_G/*" -printf '%l\n' 2>/dev/null)
+
+removed=0; rm_sessions=0; rm_loose=0; freed_kb=0
+sk_live=0; sk_inuse=0; sk_recent=0; sk_unreadable=0; failed=0; aborted=""
+declare -A TOUCHED=()
+for i in "${!UNITS[@]}"; do
+  rel="${UNITS[$i]}"; kind="${KINDS[$i]}"
+  [ -e "./$rel" ] || [ -L "./$rel" ] || continue
+  if _ts_is_live "$rel"; then sk_live=$((sk_live + 1)); continue; fi
+  if [ -n "${INUSE[$rel]+x}" ]; then sk_inuse=$((sk_inuse + 1)); continue; fi
+  case "$(_ts_age "$rel")" in
+    recent) sk_recent=$((sk_recent + 1)); continue ;;
+    unreadable) sk_unreadable=$((sk_unreadable + 1)); continue ;;
+  esac
+  kb=0; read -r kb _ < <(du -skx -- "./$rel" 2>/dev/null); [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
+  if [ "$DRY" -eq 1 ]; then
+    echo "would-remove $kind ./$rel ${kb}K"
+  else
+    # THE RE-CHECK, all three, as late as they can be asked.
+    _ts_collect_live || { aborted="$REFUSE"; break; }
+    if _ts_is_live "$rel"; then sk_live=$((sk_live + 1)); continue; fi
+    if [ -n "$(_ts_holder "$rel")" ]; then sk_inuse=$((sk_inuse + 1)); continue; fi
+    case "$(_ts_age "$rel")" in
+      recent) sk_recent=$((sk_recent + 1)); continue ;;
+      unreadable) sk_unreadable=$((sk_unreadable + 1)); continue ;;
+    esac
+    if ! rm -rf --one-file-system -- "./$rel" 2>/dev/null; then
+      failed=$((failed + 1)); continue
+    fi
+    [[ "$rel" == */* ]] && TOUCHED[${rel%%/*}]=1
+  fi
+  removed=$((removed + 1)); freed_kb=$((freed_kb + kb))
+  if [ "$kind" = session ]; then rm_sessions=$((rm_sessions + 1)); else rm_loose=$((rm_loose + 1)); fi
+done
+
+# Project dirs this pass emptied. Only those it removed something from: an
+# empty project dir it did not touch is either brand new (a session about to
+# create its uuid child) or already a loose unit judged on its own mtime above.
+rmdirs=0
+if [ "$DRY" -eq 0 ]; then
+  for p in "${!TOUCHED[@]}"; do
+    rmdir -- "./$p" 2>/dev/null && rmdirs=$((rmdirs + 1))
+  done
+fi
+
+verb="removed"; [ "$DRY" -eq 1 ] && verb="dry run: would remove"
+echo "tmp-sweep: $verb $removed unit(s) ($rm_sessions session dir(s), $rm_loose loose), freed $((freed_kb / 1024)) MB; skipped $sk_live live, $sk_inuse in-use, $sk_recent recent, $sk_unreadable unreadable; $rmdirs empty project dir(s) removed; $failed failed; max age ${CCD_TMP_SWEEP_MAX_AGE_DAYS}d; root $ROOT"
+if [ -n "$aborted" ]; then
+  _ts_die "pass aborted mid-way — $aborted"
+fi
+exit 0

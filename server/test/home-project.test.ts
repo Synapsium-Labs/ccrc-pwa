@@ -1,8 +1,8 @@
 // The home-project decision, as a pure function, driven over every branch —
-// including the one the shipped constant does not currently take. `POST
-// /api/runs`'s route test (run-routes.test.ts) proves the LIVE branch; this file
-// proves the RULE, and it is the only place the legacy flip can be measured
-// before it happens.
+// including the one the shipped constant no longer takes.
+// `home-project-required.test.ts` proves the LIVE branch at the route (the 400
+// and its `detail`); this file proves the RULE, and after the flip it is the
+// only place the legacy branch is exercised at all.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -47,10 +47,19 @@ describe('homeProjectVerdict', () => {
       .toEqual({ kind: 'legacy' });
   });
 
+  it('an absent home is refused once the constant is false, even for a programme already known and homed', () => {
+    // The flip case above already covers the brand-new programme; this is the
+    // combination the route's callers actually meet after the flip — a known,
+    // homed programme whose open omits the field — and it is refused the same
+    // way, because the verdict reads the constant and nothing else.
+    expect(homeProjectVerdict({ body: undefined, known: true, stored: 'demo', legacyAccepted: false }))
+      .toEqual({ kind: 'required' });
+  });
+
   it("the route's `required` arm answers with a detail — a bare bad-request would be the body-shape guard's own answer", () => {
     // A scan, not a request, because the constant cannot be flipped from here
-    // (D-2056) and this branch is dormant until wave 3 flips it: the day it
-    // goes live, the one refusal the flip exists to produce must not reach the
+    // (D-2056). The branch went LIVE when the flip set the constant to `false`
+    // (D-2867): the one refusal the flip exists to produce must not reach the
     // caller as the same bytes a malformed body gets (CLAUDE.md, "no overloaded
     // null at a seam"). PR #75 review round 1, F3.
     const here = path.dirname(fileURLToPath(import.meta.url));
@@ -59,8 +68,8 @@ describe('homeProjectVerdict', () => {
     expect(arm, "the `required` arm sends no `detail`").not.toBeNull();
   });
 
-  it('is shipped in the legacy generation — and this is the line wave 3 changes', () => {
-    expect(HOME_PROJECT_LEGACY_ACCEPTED).toBe(true);
+  it('is shipped with the legacy generation OVER — and this is the line wave 3 changed', () => {
+    expect(HOME_PROJECT_LEGACY_ACCEPTED).toBe(false);
   });
 });
 

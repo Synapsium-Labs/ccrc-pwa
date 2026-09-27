@@ -17,6 +17,7 @@ export interface PushPayload {
   body: string;
   sessionId?: string; // deep-link target; the SW opens /s/<id>
   tag?: string; // collapse key so repeats of the same event replace, not stack
+  url?: string; // a same-origin path the SW opens on tap, ahead of /s/<sessionId>
   /** Up to TWO — the platform ceiling on Android, and the reason the ask push
    *  sends the first two option labels and deep-links for the rest. Ignored by
    *  an older service worker, which simply shows the notification. */

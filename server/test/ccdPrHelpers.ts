@@ -23,7 +23,7 @@ gh() {
   local rc=0; [[ -f "$HOME/gh-rc" ]] && rc=$(cat "$HOME/gh-rc")
   return "$rc"
 };
-timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
+timeout() { case "$1" in -*) return 125 ;; esac; printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 `;
 
 export interface PrHarness extends CcdHarness {

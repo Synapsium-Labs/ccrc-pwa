@@ -1,11 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { configDirFor, loadConfig } from '../src/config.js';
+import { fileURLToPath } from 'node:url';
+import {
+  configDirFor, deriveRole, derivedRoleNote, loadConfig, parseReleaseSource, readReleaseSource,
+  DEFAULT_RELEASE_API_URL, DEFAULT_UPDATE_DEADLINE_MS,
+} from '../src/config.js';
 import { mungePath } from '../src/munge.js';
 import { RosterError } from '../../shared/roster.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
+
+const REPO = fileURLToPath(new URL('../..', import.meta.url));
 
 // Several tests below exercise `CCRC_HOME` as a bare, never-created string
 // (`/fake/home`, `/h`) — `loadConfig` never touches most of what it derives
@@ -398,5 +404,207 @@ describe('mungePath', () => {
     expect(mungePath('/data/projects/demo-app-ts')).toBe('-data-projects-demo-app-ts');
     expect(mungePath('/data/projects/foo/.claude/worktrees/ui')).toBe('-data-projects-foo--claude-worktrees-ui');
     expect(mungePath('/a/b_c.d')).toBe('-a-b-c-d');
+  });
+});
+
+// ── design 2026-09-20 (W2): what the update control plane reads from config ──
+
+/** A fixture INSTALLED tree — `<home>/ccrc/ccd/ccrc`, the path `ccrc.service`'s
+ *  ExecStart runs from — carrying the two release-source lines the real one
+ *  carries, with an INVENTED owner/repo: no TS root may name the real org, and
+ *  this suite only needs the shape. */
+function plantTree(home: string, body: string): string {
+  const p = path.join(home, 'ccrc', 'ccd', 'ccrc');
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, body);
+  return p;
+}
+const TREE_BODY = [
+  '#!/usr/bin/env bash',
+  '# a fixture ccrc — the release source, as ccd/ccrc spells it',
+  'CCRC_RELEASE_OWNER="example-owner"',
+  'CCRC_RELEASE_REPO="example-repo"',
+  'base="https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases"',
+  '',
+].join('\n');
+
+describe('deriveRole — the server\'s own role (D-3174)', () => {
+  // `ccrc.service` reads `~/.ccrc/ccrc.env` as its first EnvironmentFile, and
+  // `_inst_env` writes `CCRC_ROLE=<role>` into that file's first write — so a
+  // recorded role is already in process.env. A box `deploy.sh` seeded (the
+  // example file's bare `CCRC_ROLE=` line) records none, and derives.
+  it.each(['server', 'fleet', 'both'] as const)('a recorded %s wins in either fleet mode', (r) => {
+    expect(deriveRole({ CCRC_ROLE: r }, 'remote')).toEqual({ role: r, roleSource: 'recorded' });
+    expect(deriveRole({ CCRC_ROLE: r }, 'local')).toEqual({ role: r, roleSource: 'recorded' });
+  });
+
+  it('absent: remote mode is the server box, local mode is the single box', () => {
+    expect(deriveRole({}, 'remote')).toEqual({ role: 'server', roleSource: 'derived-absent' });
+    expect(deriveRole({}, 'local')).toEqual({ role: 'both', roleSource: 'derived-absent' });
+  });
+
+  it('a BARE `CCRC_ROLE=` line is absent, not a role named the empty string', () => {
+    expect(deriveRole({ CCRC_ROLE: '' }, 'remote')).toEqual({ role: 'server', roleSource: 'derived-absent' });
+  });
+
+  it.each(['SERVER', 'server ', 'agent', 'both,server'])('an out-of-vocabulary %j derives — and says INVALID, never absent', (raw) => {
+    // The two are different remedies: absent = record a role; invalid = fix a typo.
+    expect(deriveRole({ CCRC_ROLE: raw }, 'remote')).toEqual({ role: 'server', roleSource: 'derived-invalid' });
+    expect(deriveRole({ CCRC_ROLE: raw }, 'local')).toEqual({ role: 'both', roleSource: 'derived-invalid' });
+  });
+
+  it('loadConfig carries both, from CCRC_ROLE and CCRC_FLEET', () => {
+    const derived = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_FLEET: 'remote' });
+    expect([derived.role, derived.roleSource]).toEqual(['server', 'derived-absent']);
+    const recorded = loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_FLEET: 'remote', CCRC_ROLE: 'both' });
+    expect([recorded.role, recorded.roleSource]).toEqual(['both', 'recorded']);
+    expect(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH }).role).toBe('both');
+  });
+
+  // `roleSource`'s one reader: without it a derived role is visible nowhere —
+  // `NodeWire` carries the role, never where it came from.
+  it('derivedRoleNote: a recorded role says nothing; a derived one names absent or invalid, the role and the mode', () => {
+    expect(derivedRoleNote({ role: 'fleet', roleSource: 'recorded', fleetMode: 'remote' })).toBeNull();
+    expect(derivedRoleNote({ role: 'server', roleSource: 'derived-absent', fleetMode: 'remote' })).toBe(
+      'ccrc-server: CCRC_ROLE is absent in the environment — this box\'s role reads server (derived from CCRC_FLEET=remote)');
+    expect(derivedRoleNote({ role: 'both', roleSource: 'derived-invalid', fleetMode: 'local' })).toBe(
+      'ccrc-server: CCRC_ROLE is invalid in the environment — this box\'s role reads both (derived from CCRC_FLEET=local)');
+    expect(derivedRoleNote(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_ROLE: 'both' }))).toBeNull();
+    expect(derivedRoleNote(loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_ROLE: 'agent' })))
+      .toBe('ccrc-server: CCRC_ROLE is invalid in the environment — this box\'s role reads both (derived from CCRC_FLEET=local)');
+  });
+
+  it('index.ts says it once at boot, on the booted config — the note has a reader', () => {
+    const src = readFileSync(path.join(REPO, 'server', 'src', 'index.ts'), 'utf8');
+    expect(src).toMatch(/^import \{ derivedRoleNote, loadConfig \} from '\.\/config\.js';$/m);
+    expect(src.match(/\bderivedRoleNote\(/g) ?? [], 'called exactly once').toHaveLength(1);
+    expect(src).toMatch(/^const roleNote = derivedRoleNote\(cfg\);\nif \(roleNote !== null\) console\.warn\(roleNote\);$/m);
+  });
+});
+
+describe('the release source — read from the INSTALLED tree, env override when both are set (D-3175)', () => {
+  it('parses the two lines, each exactly once', () => {
+    expect(parseReleaseSource(TREE_BODY)).toEqual({ owner: 'example-owner', repo: 'example-repo' });
+    expect(parseReleaseSource(TREE_BODY.replace('example-repo', 'my.repo_2'))).toEqual({ owner: 'example-owner', repo: 'my.repo_2' });
+  });
+
+  it.each([
+    ['no repo line', TREE_BODY.replace(/^CCRC_RELEASE_REPO=.*$/m, '')],
+    ['no owner line', TREE_BODY.replace(/^CCRC_RELEASE_OWNER=.*$/m, '')],
+    ['the owner twice', `${TREE_BODY}CCRC_RELEASE_OWNER="other-owner"\n`],
+    ['an indented assignment only', TREE_BODY.replace(/^CCRC_RELEASE_OWNER=/m, '  CCRC_RELEASE_OWNER=')],
+    ['an unquoted value', TREE_BODY.replace('"example-owner"', 'example-owner')],
+    ['a slash in a value', TREE_BODY.replace('example-repo', 'a/b')],
+    ['a value of two dots', TREE_BODY.replace('example-repo', '..')],
+    ['a value of one dot', TREE_BODY.replace('example-owner', '.')],
+    ['a 101-character value', TREE_BODY.replace('example-repo', 'r'.repeat(101))],
+    ['a CRLF line', TREE_BODY.replace('"example-owner"\n', '"example-owner"\r\n')],
+    ['an empty file', ''],
+  ])('refuses %s — null, never a guess', (_label, body) => {
+    expect(parseReleaseSource(body)).toBeNull();
+  });
+
+  it('the REAL ccd/ccrc parses, and agrees with install.sh — without this file spelling the org', () => {
+    const real = parseReleaseSource(readFileSync(path.join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    expect(real, 'ccd/ccrc no longer carries exactly one release-source pair this parser accepts').not.toBeNull();
+    expect(real).toEqual(parseReleaseSource(readFileSync(path.join(REPO, 'install.sh'), 'utf8')));
+  });
+
+  it('reads the installed tree by default', () => {
+    const home = mkTmp('cfg-release-');
+    const p = plantTree(home, TREE_BODY);
+    expect(readReleaseSource({}, p)).toEqual({ ok: true, owner: 'example-owner', repo: 'example-repo', from: 'tree' });
+  });
+
+  it('BOTH env keys override the tree — and need no tree at all', () => {
+    const home = mkTmp('cfg-release-');
+    const p = plantTree(home, TREE_BODY);
+    const env = { CCRC_RELEASE_OWNER: 'fork-owner', CCRC_RELEASE_REPO: 'fork-repo' };
+    expect(readReleaseSource(env, p)).toEqual({ ok: true, owner: 'fork-owner', repo: 'fork-repo', from: 'env' });
+    expect(readReleaseSource(env, path.join(home, 'nope', 'ccrc'))).toEqual({ ok: true, owner: 'fork-owner', repo: 'fork-repo', from: 'env' });
+  });
+
+  it('ONE env key set is ignored — the tree decides, including its failure', () => {
+    const home = mkTmp('cfg-release-');
+    const p = plantTree(home, TREE_BODY);
+    expect(readReleaseSource({ CCRC_RELEASE_OWNER: 'fork-owner' }, p))
+      .toEqual({ ok: true, owner: 'example-owner', repo: 'example-repo', from: 'tree' });
+    expect(readReleaseSource({ CCRC_RELEASE_REPO: 'fork-repo', CCRC_RELEASE_OWNER: '' }, p))
+      .toEqual({ ok: true, owner: 'example-owner', repo: 'example-repo', from: 'tree' });
+    const missing = path.join(home, 'nope', 'ccrc');
+    expect(readReleaseSource({ CCRC_RELEASE_OWNER: 'fork-owner' }, missing)).toEqual({ ok: false, why: 'tree-absent', path: missing });
+  });
+
+  it('both env keys set with a value that is not a plain name REFUSES — never silently falls back to the tree', () => {
+    const home = mkTmp('cfg-release-');
+    const p = plantTree(home, TREE_BODY);
+    expect(readReleaseSource({ CCRC_RELEASE_OWNER: 'fork-owner', CCRC_RELEASE_REPO: '../x' }, p))
+      .toEqual({ ok: false, why: 'env-malformed', path: null });
+    expect(readReleaseSource({ CCRC_RELEASE_OWNER: '..', CCRC_RELEASE_REPO: 'fork-repo' }, p))
+      .toEqual({ ok: false, why: 'env-malformed', path: null });
+  });
+
+  it('keeps ABSENT, UNREADABLE and MALFORMED apart — three remedies, three words', () => {
+    const home = mkTmp('cfg-release-');
+    const missing = path.join(home, 'ccrc', 'ccd', 'ccrc');
+    expect(readReleaseSource({}, missing)).toEqual({ ok: false, why: 'tree-absent', path: missing });
+    const dir = path.join(home, 'as-a-dir');
+    mkdirSync(dir, { recursive: true });
+    expect(readReleaseSource({}, dir)).toEqual({ ok: false, why: 'tree-unreadable', path: dir });
+    const p = plantTree(home, '#!/usr/bin/env bash\necho no release source here\n');
+    expect(readReleaseSource({}, p)).toEqual({ ok: false, why: 'tree-malformed', path: p });
+  });
+
+  // Root reads through any mode bit — `accounts.json`'s identical guard above.
+  it.skipIf(process.getuid?.() === 0)('a tree that exists but cannot be read is UNREADABLE, never absent', () => {
+    const home = mkTmp('cfg-release-');
+    const p = plantTree(home, TREE_BODY);
+    chmodSync(p, 0o000);
+    try {
+      expect(readReleaseSource({}, p)).toEqual({ ok: false, why: 'tree-unreadable', path: p });
+    } finally {
+      chmodSync(p, 0o644);
+    }
+  });
+
+  it('loadConfig reads <home>/ccrc/ccd/ccrc, and a box with no tree still boots', () => {
+    const home = mkTmp('cfg-release-');
+    seedRoster(home);
+    plantTree(home, TREE_BODY);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    expect(cfg.installedCcrcPath).toBe(path.join(home, 'ccrc', 'ccd', 'ccrc'));
+    expect(cfg.releaseSource).toEqual({ ok: true, owner: 'example-owner', repo: 'example-repo', from: 'tree' });
+    expect(loadConfig({ CCRC_HOME: '/fake/home', CCRC_ACCOUNTS: ROSTER_PATH }).releaseSource)
+      .toEqual({ ok: false, why: 'tree-absent', path: '/fake/home/ccrc/ccd/ccrc' });
+  });
+});
+
+describe('ccrcDir and the two update knobs', () => {
+  it('derive from CCRC_HOME, with the documented defaults', () => {
+    const cfg = loadConfig({ CCRC_HOME: '/fake/home', CCRC_ACCOUNTS: ROSTER_PATH });
+    expect(cfg.ccrcDir).toBe('/fake/home/.ccrc');
+    expect(cfg.releaseApiUrl).toBe(DEFAULT_RELEASE_API_URL);
+    expect(DEFAULT_RELEASE_API_URL).toBe('https://api.github.com');
+    expect(cfg.updateDeadlineMs).toBe(DEFAULT_UPDATE_DEADLINE_MS);
+    expect(DEFAULT_UPDATE_DEADLINE_MS).toBe(15 * 60_000);
+  });
+
+  it('CCRC_RELEASE_API_URL overrides, a trailing slash trimmed; a bare line or bare slashes is unset', () => {
+    const at = (v: string): string =>
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_RELEASE_API_URL: v }).releaseApiUrl;
+    expect(at('http://127.0.0.1:9999')).toBe('http://127.0.0.1:9999');
+    expect(at('http://127.0.0.1:9999/')).toBe('http://127.0.0.1:9999');
+    expect(at('https://mirror.example.com/api//')).toBe('https://mirror.example.com/api');
+    expect(at('')).toBe(DEFAULT_RELEASE_API_URL);
+    expect(at('///')).toBe(DEFAULT_RELEASE_API_URL);
+  });
+
+  it('CCRC_UPDATE_DEADLINE_MS takes a positive integer; anything else is the default', () => {
+    const at = (v: string): number =>
+      loadConfig({ CCRC_HOME: '/h', CCRC_ACCOUNTS: ROSTER_PATH, CCRC_UPDATE_DEADLINE_MS: v }).updateDeadlineMs;
+    expect(at('60000')).toBe(60_000);
+    for (const bad of ['', 'abc', '0', '-1', '1.5', 'Infinity']) {
+      expect(at(bad), JSON.stringify(bad)).toBe(DEFAULT_UPDATE_DEADLINE_MS);
+    }
   });
 });

@@ -154,8 +154,24 @@ const PROBES: Record<string, Probe> = {
     // the control got PAST the slug binding: exactly one registry row, named
     // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit
     // status is NOT the witness — this fixture cannot finish a spawn, so both
-    // arms answer rc 3 with no output at all, which is byte-identical and says
-    // nothing about how far either got.
+    // arms answer the SAME non-zero code with no output at all, which is
+    // byte-identical and says nothing about how far either got.
+    //
+    // WHICH CODE, AND WHY IT IS NOT 6. Re-measured 2026-09-16 through this
+    // file's own harness and runCcd: rc 3, stdout+stderr empty. The paragraph
+    // that stood here said rc 6, "because the harness's contained `tmux`
+    // refuses every verb, so the width query is unanswerable and
+    // `_accept_first_run_prompts` stands down BEFORE the `has-session` probe
+    // that used to produce the 3". Both halves are false against this tree:
+    // the §6.3 guard sits AFTER the debounced `has-session` probe, not before
+    // it (`ccd/ccd`, and the "a session that NEVER CAME UP still earns 3"
+    // case in `ccd-reader-standdown.test.ts` is its mechanism), so a tmux that
+    // refuses `has-session` answers 3 and never queries the width at all.
+    // rc 6 requires a LIVE session with a NARROW pane, a pair this fixture
+    // cannot make. Either way the code reaches this file through
+    // `cmd_ws_add`'s failure enumeration, which is why neither arm prints a
+    // success line — and the equality above is what this probe measures, not
+    // the number.
     reached: () => {
       const rows = uuidRows();
       expect(rows, 'the control ws-add created no workspace — it refused before the slug bound')
@@ -289,5 +305,42 @@ describe('ws-add was this file\'s negative control, and D-410\'s remedy turned i
     const created = eventsOf(h.home, 'create');
     expect(created, 'ws-add wrote no create line').toHaveLength(1);
     expect(decOf(created[0]!)).toEqual({ surface: 'none' });
+  });
+});
+
+describe('the child the server composes is the child real ccd records (child-workspace reclamation wave 1)', () => {
+  it('wsAddWorker with a run id: the marker holds exactly that id, beside the declared dec', () => {
+    // THE SAME CROSSING as the describe above, for the flag that makes a
+    // workspace a CHILD. `whitelist-subset.test.ts` proves the tokens cross the
+    // agent's bare `['ws-add']` grant, which they would whatever ccd made of
+    // them; this proves the binary on the fleet box READS them — as the marker,
+    // and not as a slug or a project (D-410, one flag to the left).
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+    const rows = uuidRows();
+    expect(rows, 'the child-marked ws-add created no workspace — the flag was bound as a positional')
+      .toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.child`), 'utf8')).toBe('7');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    // And the first spawn already made its root: `_spawn_start` ran before the
+    // fixture's contained tmux refused, and the root is made before the pane.
+    const root = path.join(h.home, '.cc-tmp', id);
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(fs.statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {
+    h.makeRepo(PROJECT);
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC));
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null));
+    const rows = uuidRows();
+    expect(rows).toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.child`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp'))).toBe(false);
   });
 });

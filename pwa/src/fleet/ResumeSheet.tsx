@@ -19,7 +19,7 @@
 // operator has to read before retrying.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isReclaimRefuseCode, type RunSummary } from '../../../shared/api';
+import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
@@ -29,10 +29,17 @@ import './fleet.css';
  *  cell" discipline `ABANDON_COPY` and `RUN_WORD.unknown` already hold. Keyed
  *  on the conditions THIS route can reach (the door's own status map), not on
  *  every `RunRefuseCode`: copying a vocabulary this route can never speak is
- *  what `ABANDON_COPY`'s own docstring argues against, one file over. */
+ *  what `ABANDON_COPY`'s own docstring argues against, one file over.
+ *  AND THE DOOR'S HALF OF THAT KEY IS DERIVED, never re-spelled: the refusal
+ *  codes enter as `ReclaimRefuseCode` itself, so the day that union gains a
+ *  member this map lacks, the `Record` is a COMPILE ERROR here — never a
+ *  silent fall-through to `unknown`, which is what a hand-written list of the
+ *  three literals would degrade to. Only the arms this sheet adds ON TOP of
+ *  the door's vocabulary are spelled out beside it. That derivation is pinned
+ *  against a hand-written respelling by `server/test/resume-reclaim-l0.test.ts`. */
 export const RECLAIM_COPY: Record<
-  'unknown-run' | 'unknown-session' | 'no-claimant' | 'claimant-alive'
-  | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
+  ReclaimRefuseCode
+  | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
   'unknown-run': 'that run is gone — the board will catch up',
@@ -42,6 +49,25 @@ export const RECLAIM_COPY: Record<
   'unknown-session': 'this box has no registry row for that id — type one it knows',
   'no-claimant': 'nobody claims this run, so there is nothing to hand over',
   'claimant-alive': 'the coordinator is not dead',
+  // spec §12 / D-3011, fix round 1: the door refuses an heir that is a live
+  // worker elsewhere — `heir-is-a-worker` carries `by` and nothing else (no
+  // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
+  // and `by` is appended the same way `claimant-alive`'s evidence is.
+  // "ANOTHER COORDINATOR'S OPEN RUN", never "another programme" (final fix
+  // round): the server measured a RUN and its claimants — `openClaimantsOf`
+  // reads every open claimant off the runs table, and nothing in that read is a programme — and since
+  // D-3028 the refused case is precisely somebody ELSE's open run, because an
+  // heir all of whose open coordinators are the claimant being replaced is now admitted.
+  // A sentence naming a programme would have the operator looking for the
+  // wrong thing on the board.
+  // THE TRAILING CLAUSE IS CONDITIONAL, second fix round: a flat "a worker may
+  // not inherit a programme" is false since D-3028 — the dying coordinator's
+  // own worker inherits — and it was ALSO more than the door could prove while
+  // the read was newest-only. Both halves are now true of the shipped
+  // predicate: every open run naming the heir is read, and the refusal is
+  // exactly "some OTHER coordinator's open run still binds it".
+  'heir-is-a-worker': 'that session is the worker of another coordinator\'s open run right now '
+    + '— a worker may not inherit a programme while another coordinator\'s run still binds it',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',
@@ -81,6 +107,30 @@ function reclaimErrorText(err: unknown): string {
       const who = by === null ? RECLAIM_COPY['claimant-alive'] : `${by} is not dead`;
       return detail === null ? who : `${who} — ${detail}`;
     }
+    if (code === 'heir-is-a-worker') {
+      // Mirrors `claimant-alive` immediately above: a base sentence naming
+      // the CONDITION, and the evidence this refusal carries — here just
+      // `by`, since `heir-is-a-worker` has no `detail` — appended the same
+      // way. An adapter may not narrow a distinction it received (fix round
+      // 1, finding 3): `by` must reach the operator, not fall through to
+      // `RECLAIM_COPY.unknown`.
+      const by = typeof body.by === 'string' && body.by !== '' ? body.by : null;
+      const who = RECLAIM_COPY['heir-is-a-worker'];
+      return by === null ? who : `${who} — ${by}`;
+    }
+    // THE DOOR'S OWN VOCABULARY, REACHED GENERICALLY. `RECLAIM_COPY` keys on
+    // `ReclaimRefuseCode` itself, so every member of that union is guaranteed a
+    // sentence by the `Record` — and `isReclaimRefuseCode` above has already
+    // proved `code` is one. The day the union gains a fourth member, this line
+    // renders ITS sentence instead of "a reason this build does not recognise";
+    // without it the new member would reach the operator as the fallback even
+    // though its sentence exists two screens up, which is the same narrowing
+    // D-3026 fixed for `heir-is-a-worker` one member ago. The three branches
+    // above stay because they add EVIDENCE (`by`, `detail`) this line cannot;
+    // today they exhaust the union, so `code` is `never` here by construction —
+    // which is the point: the line is dead until the union grows, and alive the
+    // moment it does.
+    if (code !== null) return RECLAIM_COPY[code];
     return RECLAIM_COPY.unknown;
   }
   if (err.status === 502) {

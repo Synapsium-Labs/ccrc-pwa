@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
@@ -217,5 +217,121 @@ describe('measured() — the rank ccd derives too', () => {
       const wrapper = c.file.slice(0, -'.json'.length);
       expect(measured(l[wrapper]), `${c.file}: ${c.why}`).toBe(c.score);
     }
+  });
+});
+
+/** THE THIRD BODY OF THE `_authdead` CONTRACT (review 78, F2).
+ *
+ *  `ccd/ccd`'s `_authdead` and `ccd/ccd-telemetry-keepalive`'s both refuse a
+ *  SYMLINKED marker (`[[ -f "$f" && ! -L "$f" ]]`); before this wave all three
+ *  bodies followed the link and were consistently wrong, and closing the two
+ *  bash ones alone would have left this one condemning an account the fleet's
+ *  own gate calls healthy — `limits.ts`'s own docstring forbids exactly that,
+ *  in exactly that direction.
+ *
+ *  EVERY CASE HERE HAS A CONTROL, because a guard is only pinned by a pair: the
+ *  refusal, and a case proving the SAME path with the SAME bytes still condemns
+ *  when the type gate is satisfied. Delete `if (!kind.ok || kind.kind !==
+ *  'regular') return null;` and the refusals red while the controls stay green,
+ *  which is the only shape that says the guard is what decided it. */
+describe('readLimits — the marker\'s TYPE, not just its content (the third `_authdead` body)', () => {
+  const MARKER = '1757203200 auth-401';
+
+  /** A registry holding one well-formed marker for `claude-a`, at
+   *  `<home>/.cc-sessions/claude-a-authdead`, plus the target the symlink cases
+   *  point at. Returns the home and the marker path. */
+  const seedHome = (prefix: string) => {
+    const home = mkTmp(prefix);
+    seedRoster(home);
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    // TELEMETRY SEEDED ON PURPOSE, so the lane has a row whatever the verdict.
+    // Without it a healthy lane is simply ABSENT from the map — the backfill
+    // mints a row for a condemned lane precisely because it may have none —
+    // and then `authDead: false` and `authDead: true` would differ in the
+    // presence of the whole object, not in the field under test. The control
+    // has to differ in ONE thing.
+    writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'),
+      JSON.stringify({ five: 10, seven: 20, ts: Math.floor(Date.now() / 1000) }));
+    return { home, marker: path.join(home, '.cc-sessions', 'claude-a-authdead') };
+  };
+
+  it('a LIVE symlink to a well-formed marker does NOT condemn the account', async () => {
+    const { home, marker } = seedHome('ccrc-limits-authdead-symlink-');
+    const target = path.join(home, '.cc-sessions', 'real-marker');
+    writeFileSync(target, MARKER);
+    symlinkSync(target, marker);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    // Not "absent from the map" — the lane is still a roster account and still
+    // gets a row; what it must not get is the verdict.
+    expect(l['claude-a']).toMatchObject({ authDead: false });
+  });
+
+  it('CONTROL: a REAL file with those exact bytes at that exact path DOES condemn', async () => {
+    const { home, marker } = seedHome('ccrc-limits-authdead-control-');
+    writeFileSync(marker, MARKER);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['claude-a']).toMatchObject({ authDead: true });
+  });
+
+  it('a DANGLING symlink does not condemn either — and here the TYPE gate is what refuses it', async () => {
+    // Worth its own case because the two bash bodies get this one for free:
+    // `-f` already refuses a broken link, so their `-L` rung never decides it.
+    // On this side `readFile` would throw ENOENT and fold to null, so the
+    // content gate would also refuse it — the case is recorded as a CONTROL on
+    // the type gate's reach, not as a defect it closes.
+    const { home, marker } = seedHome('ccrc-limits-authdead-dangling-');
+    symlinkSync(path.join(home, '.cc-sessions', 'no-such-target'), marker);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['claude-a']).toMatchObject({ authDead: false });
+  });
+
+  it('a symlink REPLACED BY a regular file at the same path condemns — the gate reads the tree, not a memory of it', async () => {
+    const { home, marker } = seedHome('ccrc-limits-authdead-replaced-');
+    const target = path.join(home, '.cc-sessions', 'real-marker');
+    writeFileSync(target, MARKER);
+    symlinkSync(target, marker);
+    rmSync(marker, { force: true });
+    writeFileSync(marker, MARKER);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['claude-a']).toMatchObject({ authDead: true });
+  });
+
+  /** THE OLDER-AGENT ARM. A remote fleet whose agent predates the `lstat` op
+   *  rejects the request, and `remote/io.ts` reports `unmeasured` — not
+   *  `unreadable`, and above all not a kind. This box then knows nothing about
+   *  the path's type, and the only safe fold is healthy: a wrong `true` costs
+   *  an account its place in the preferred fallback tier, a wrong `false` costs
+   *  only the scoring penalty. */
+  it('an io that cannot measure the path type does not condemn, and its CONTROL does', async () => {
+    const { home, marker } = seedHome('ccrc-limits-authdead-unmeasured-');
+    writeFileSync(marker, MARKER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+
+    const unmeasured = { ...localIO, lstatMeasured: async () => ({ ok: false as const, reason: 'unmeasured' as const }) };
+    expect((await readLimits(unmeasured, cfg))['claude-a']).toMatchObject({ authDead: false });
+
+    // CONTROL on the same fixture and the same io shape: the ONLY difference is
+    // the answer the port gives, so nothing but the port's answer can explain
+    // the two verdicts.
+    const measuredRegular = { ...localIO, lstatMeasured: async () => ({ ok: true as const, kind: 'regular' as const }) };
+    expect((await readLimits(measuredRegular, cfg))['claude-a']).toMatchObject({ authDead: true });
+  });
+
+  it('`other` — a DIRECTORY named like a marker — does not condemn', async () => {
+    // A CONTROL ON REACH, like the dangling case and for the same reason: with
+    // the type gate deleted this stays GREEN, because `readFile` on a directory
+    // is EISDIR and folds to null, so the CONTENT gate refuses it anyway.
+    // Recorded as a row the type-gate mutants do not move, rather than left to
+    // read as a pin it is not. The two rows that ARE pins are the live symlink
+    // and the unmeasured io, and each dies to its own rung:
+    //   whole gate deleted            -> both RED
+    //   `kind === 'symlink'` only     -> unmeasured RED, symlink green
+    //   `!kind.ok` only               -> symlink RED, unmeasured green
+    // Controls green under all three.
+    const { home, marker } = seedHome('ccrc-limits-authdead-dir-');
+    mkdirSync(marker, { recursive: true });
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }));
+    expect(l['claude-a']).toMatchObject({ authDead: false });
   });
 });

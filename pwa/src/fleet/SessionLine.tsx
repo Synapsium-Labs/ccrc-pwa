@@ -145,6 +145,7 @@ export function SessionLine({
   roster = [],
   projectPool = null,
   onOpenRun = null,
+  repo = null,
 }: {
   session: FleetSession;
   onOpen: (id: string) => void;
@@ -172,6 +173,14 @@ export function SessionLine({
    *  deliberately does not. That division is also what keeps the hold string
    *  DISPLAY-ONLY — see the note at the cell itself. */
   onOpenRun?: (() => void) | null;
+  /** The repository this row works in, when the CARD it renders on would
+   *  otherwise imply another (spec §6, R3) — decided by `ProjectCard`, never
+   *  here: this row does not know which card it is on. Rendered INSIDE the
+   *  row button so it is part of the accessible name: workspace slugs are
+   *  unique per project only, and `still-river` is live on two projects
+   *  today — two rows on one card would otherwise be two identical buttons
+   *  in a screen-reader rotor. `null` renders nothing. */
+  repo?: string | null;
 }): ReactNode {
   const dead = session.status === 'dead';
   // THE authority: no local re-derivation of attention/busy/state survives
@@ -442,6 +451,7 @@ export function SessionLine({
           onClick={open}
         >
           <TypedLabel className="sess-label" text={label} />
+          {repo !== null && <span className="sess-repo">{repo}</span>}
         </button>
 
         {/* Second line: a quiet flex row, not a grid track — a missing cell

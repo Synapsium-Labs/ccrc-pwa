@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -141,6 +141,15 @@ export interface FleetState {
    *  when the value actually changes (`watch.ts`'s byte-equality guard), so
    *  holding the last value between emits is what makes it correct to read. */
   pools: ProjectPoolsWire | null;
+  /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
+   *  lifted here so the session view can label a repo (R3) without a second
+   *  agent round trip per project on every mount. `null` = no read yet on
+   *  this store instance. DELIBERATELY NOT HYDRATED and not written by
+   *  `saveFleetSnapshot`, for `pools`' own reason: a stale repo slug is a
+   *  claim about a checkout this device cannot stand behind. `FleetSnapshot`
+   *  has no field for it (D-3013). */
+  projects: readonly ProjectRow[] | null;
+  setProjects(rows: readonly ProjectRow[]): void;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -193,14 +202,47 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     // this keeps the neighboring envelope-narrowing idiom explicit. Unlike it,
     // the byProject array guard is load-bearing (stores.test.ts:1087).
     if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
-    const outer = pools as { listed?: unknown; enforcement?: unknown; byProject?: unknown };
+    const outer = pools as {
+      listed?: unknown; enforcement?: unknown; byProject?: unknown;
+      epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown;
+    };
     const validEnforcement = outer.enforcement === 'enforced'
       || outer.enforcement === 'unavailable'
       || outer.enforcement === 'unknown';
+    // Item 3 (I1, wave-1 fix round A): `accountPools` rides the SAME
+    // `PoolsEnforcement` domain as `enforcement` above and gets the identical
+    // envelope-level gate — it was produced by `poolsWire` (T9-R2/F2) and
+    // shipped on the wire type, but nothing here named it, so a malformed
+    // value would have slipped through unrejected into the first real
+    // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
+    // `epoch`/`observedEpoch`: an older server simply omits it.
+    const validAccountPools = outer.accountPools === undefined
+      || outer.accountPools === 'enforced'
+      || outer.accountPools === 'unavailable'
+      || outer.accountPools === 'unknown';
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
-    if (validEnforcement && (outer.listed === false || (outer.listed === true && validByProject))) {
+    // T9-R2: `epoch`/`observedEpoch` are FLEET-LEVEL scalars, siblings of
+    // `enforcement` above (not per-project `byProject` members), so they get
+    // the same envelope-level type gate rather than a downstream reader's
+    // tolerance. THIS GATE MUST NOT RECONSTRUCT THE VALUE — the frame is
+    // returned as `m as FleetMsg` below exactly as it arrived, so a key this
+    // gate accepts (including a missing key) reaches the store completely
+    // unchanged. That is what keeps THE THREE-VALUED RULE intact end to end:
+    // absent stays absent, `null` stays `null`, and `0` — a real epoch and a
+    // real observed epoch alike — is accepted here (`typeof === 'number'`),
+    // never treated as falsy-absent. `epoch` has no `null` rung (the control
+    // plane's epoch is a plain number once a coordinator exists); a present
+    // `null` there is rejected, same as any other wrong-typed value.
+    const validEpoch = outer.epoch === undefined || typeof outer.epoch === 'number';
+    const validObservedEpoch = outer.observedEpoch === undefined
+      || outer.observedEpoch === null
+      || typeof outer.observedEpoch === 'number';
+    if (
+      validEnforcement && validEpoch && validObservedEpoch && validAccountPools
+      && (outer.listed === false || (outer.listed === true && validByProject))
+    ) {
       return m as FleetMsg;
     }
   }
@@ -271,6 +313,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // NOT `snapshot?.pools` — there is no such field, and there must not be
       // one. See the field's own docstring.
       pools: null,
+      projects: null,
       roster: snapshot?.roster ?? [],
 
       connect() {
@@ -448,6 +491,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       dismissNotice(id) {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+      },
+
+      setProjects(rows) {
+        set({ projects: rows });
       },
 
       mergeFeed(events, dropped) {

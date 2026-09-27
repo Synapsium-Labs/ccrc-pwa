@@ -8,9 +8,12 @@
 // this package cannot import `server/test/fixtures`, so it pins the six shapes
 // that reach a phone.
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../shared/api';
 import { accountPool, homeAbleLabelList } from '../src/lib/accounts';
 import { poolLabelList, poolOptions, poolSide, projectPoolOf, splitByPool } from '../src/lib/pools';
+import { declaredAccountPool, type AccountPoolWire } from '../../shared/poolrule';
 import { TEST_ROSTER } from './rosterFixture';
 
 /** `TEST_ROSTER` with pools hung on it by id — never a second hand-typed
@@ -62,36 +65,52 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
 
 describe('poolSide — the rule, composed and never restated', () => {
   it('serves when the project is untagged', () => {
-    expect(poolSide('pool-a', { state: 'untagged' })).toBe('eligible');
+    expect(poolSide(declaredAccountPool('pool-a'), { state: 'untagged' })).toBe('eligible');
   });
 
   it('serves when the account is untagged', () => {
-    expect(poolSide(null, tagged('pool-a'))).toBe('eligible');
+    expect(poolSide(declaredAccountPool(null), tagged('pool-a'))).toBe('eligible');
   });
 
   it('serves when the two names agree', () => {
-    expect(poolSide('pool-a', tagged('pool-a'))).toBe('eligible');
+    expect(poolSide(declaredAccountPool('pool-a'), tagged('pool-a'))).toBe('eligible');
   });
 
   it('crosses when the two names differ', () => {
-    expect(poolSide('pool-b', tagged('pool-a'))).toBe('crossing');
+    expect(poolSide(declaredAccountPool('pool-b'), tagged('pool-a'))).toBe('crossing');
   });
 
-  it('is unknown on an unreadable or malformed tag, for a TAGGED account too', () => {
+  it('is unknown on an unreadable or malformed PROJECT tag, for a TAGGED account too', () => {
     // Undecidable is decided FIRST — nobody decides, not even for an account
     // whose own pool is known. Folding either state into `crossing` would hide
     // a row on a tag nobody could read; folding it into `eligible` would claim
     // a rule the fleet never stated.
-    expect(poolSide('pool-b', { state: 'unreadable' })).toBe('unknown');
-    expect(poolSide('pool-b', { state: 'malformed' })).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), { state: 'unreadable' })).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), { state: 'malformed' })).toBe('unknown');
   });
 
   it('is unknown when there is no project pool at all', () => {
-    expect(poolSide('pool-b', null)).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), null)).toBe('unknown');
   });
 
   it('is unknown for a future project-pool state', () => {
-    expect(poolSide('pool-b', archived)).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), archived)).toBe('unknown');
+  });
+
+  // Item 6 (I4, wave-1 fix round A): `poolSide` now takes the account's full
+  // `AccountPoolWire`, so its OWN undecidable states — not producible by
+  // today's server, but real the wire's own union — must read `unknown`
+  // against a perfectly readable, TAGGED project too, the exact mirror of
+  // the project-side case above. Before this round these three states could
+  // only reach `poolSide` already narrowed to `null` by `accountPool`, which
+  // reads identically to a genuinely untagged account and answers
+  // `eligible` — the overloaded null this item exists to close.
+  it.each([
+    ['unreadable', { state: 'unreadable' } as AccountPoolWire],
+    ['malformed', { state: 'malformed' } as AccountPoolWire],
+    ['stale', { state: 'stale' } as AccountPoolWire],
+  ] as const)('is unknown on an %s ACCOUNT tag, never eligible, against a tagged project', (_label, account) => {
+    expect(poolSide(account, tagged('pool-a'))).toBe('unknown');
   });
 });
 
@@ -235,5 +254,41 @@ describe('poolLabelList', () => {
       claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a',
     });
     expect(poolLabelList(emptyPoolRoster, tagged('pool-c'))).toBe('');
+  });
+});
+
+// Task 9 (wave 1, account-pool-membership): `accountPoolState` is the ONE
+// place that reads `RosterWire.pool` AND `RosterWire.resolvedPool` off a
+// looked-up entry — `accountPool` above is just a one-line derivation over it
+// (spec §5.9). Per ruling T9-R1 (2026-09-18), it does NOT fold a
+// central/declared precedence itself any more — only the server can, since
+// only the server holds the central `pool_edges` rows — so "the single
+// reader" now means: nowhere else in `pwa/src` reaches for either field
+// directly. A second copy of that read (someone reaching for
+// `entryFor(roster, wrapper)?.pool` — or the not-yet-shipped `resolvedPool`
+// — a second time, rather than importing `accountPoolState`) would let a
+// surface render an answer that disagrees with the one the server actually
+// measured — exactly the drift `single-definition.test.ts` exists to catch
+// on the server side. This is the same idiom, scoped to `pwa/src`, since this
+// package cannot import that server-only suite. Text-scan, deliberately
+// (that file's own docstring says why): it catches the copy that looks like
+// the original, not every possible evasion.
+describe('accountPoolState — the single reader (mutation guard)', () => {
+  it('is the only place in pwa/src that reads RosterWire.pool/resolvedPool off a looked-up entry', () => {
+    const root = path.join(import.meta.dirname, '..', 'src');
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const p = path.join(dir, entry);
+        if (statSync(p).isDirectory()) { walk(p); continue; }
+        if (/\.tsx?$/.test(p)) files.push(p);
+      }
+    };
+    walk(root);
+    const reads = (src: string): boolean => src.includes(')?.pool') || src.includes(')?.resolvedPool');
+    const holders = files
+      .filter((f) => reads(readFileSync(f, 'utf8')))
+      .map((f) => path.relative(root, f).split(path.sep).join('/'));
+    expect(holders).toEqual(['lib/accounts.ts']);
   });
 });

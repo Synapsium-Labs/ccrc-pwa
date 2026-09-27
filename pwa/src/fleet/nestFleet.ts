@@ -22,7 +22,8 @@
 // dispatched.
 // Neither is inferred here: both ride on the `runs` frame, which is ACTIVE-ONLY
 // by construction (`watch.ts`'s `emitRuns` calls `coord.runs()` with no
-// options, and that defaults to `state NOT IN ('done','failed')`). So the tree
+// options, and that defaults to excluding `TERMINAL_RUN_STATES`,
+// `shared/api.ts`'s `done`/`failed` pair). So the tree
 // shows the programme structure that is LIVE RIGHT NOW and forgets it when the
 // programme closes — which is the honest lifetime for a bracket the operator
 // reads as "this is happening".
@@ -49,13 +50,35 @@ export type FleetRow =
   | { kind: 'session'; depth: RowDepth; session: FleetSession }
   | { kind: 'pending'; depth: RowDepth; run: RunSummary };
 
-/** PROGRAMME ORDER, and the only comparator in this file: wave ascending, then
- *  run id ascending. Deliberately NOT the top-level session sort — a child's
+/** PROGRAMME ORDER, the base comparator — `attentionFirst` below puts ONE key
+ *  ahead of it (spec §6, wave 2; D-3008): wave ascending, then run id
+ *  ascending. Deliberately NOT the top-level session sort — a child's
  *  position is a fact about the programme (wave 1 came before wave 2), not
  *  about how recently anyone touched it, so a worker does not climb the tree
  *  by being busy. The id tiebreak makes two runs opened in the same wave read
  *  in the order they were opened. */
 const programOrder = (a: RunSummary, b: RunSummary): number => a.wave - b.wave || a.id - b.id;
+
+/** ATTENTION FIRST, then programme order — the one key ahead of
+ *  {@link programOrder}, and scoped to siblings by construction: `settled` is
+ *  sorted once and handed out per parent in that order, and the top level is
+ *  never re-sorted, so a waiting child rises among its siblings and never
+ *  above its parent. `attention` means blocked on the operator, which is the
+ *  one thing this screen exists to surface (`groupFleet.ts`'s own principle);
+ *  `programOrder`'s "a worker does not climb the tree by being busy" is about
+ *  busy-ness, and this is not that. A pending spawn has no session and so no
+ *  bucket; it keeps programme order (rule 5). The `r.sessionId !== null` and
+ *  `?.` guards below are type-driven, not a defensive scope widener: `settled`
+ *  is pre-filtered by `onList` before this ever runs, so on that list they
+ *  never fire — they are not a licence to call this comparator on an
+ *  unfiltered one. */
+const attentionFirst =
+  (byId: ReadonlyMap<string, FleetSession>) =>
+  (a: RunSummary, b: RunSummary): number => {
+    const waiting = (r: RunSummary): 0 | 1 =>
+      r.sessionId !== null && byId.get(r.sessionId)?.bucket === 'attention' ? 0 : 1;
+    return waiting(a) - waiting(b) || programOrder(a, b);
+  };
 
 /**
  * The display order of one project's card body, with a depth per row.
@@ -72,8 +95,9 @@ const programOrder = (a: RunSummary, b: RunSummary): number => a.wave - b.wave |
  *  1. A run whose owner AND worker are both on this list brackets the worker
  *     under the owner, exactly once — the child is REMOVED from the top level,
  *     never rendered in both places.
- *  2. Children read in programme order ({@link programOrder}), never in the
- *     list's own.
+ *  2. Children read attention-first, then in programme order
+ *     ({@link programOrder}), never in the list's own — and the attention key
+ *     never crosses a parent (D-3008).
  *  3. An orphan is never bracketed. A child whose parent is absent from this
  *     list — a coordinator on another project, archived, or simply not
  *     measured this pass — stays exactly where it is, at depth 0. Absence
@@ -101,12 +125,13 @@ export function nestFleet(
   const onList = (id: string | null): boolean => id !== null && byId.has(id);
 
   // The edges that can actually be DRAWN — both ends on this list, and never a
-  // session pointing at itself. Sorted once, in programme order; every list
-  // built below inherits it by construction rather than re-sorting.
+  // session pointing at itself. Sorted once, attention-first then in programme
+  // order (`attentionFirst`); every list built below inherits it by
+  // construction rather than re-sorting.
   const settled = runs
     .filter((r) => onList(r.sessionId) && onList(r.claimedBy) && r.claimedBy !== r.sessionId)
     .slice()
-    .sort(programOrder);
+    .sort(attentionFirst(byId));
   // Rule 5's runs, minus the ones whose session row already exists: `dispatch.ts`
   // binds the session (`coord.setSession`) as soon as the registry diff names
   // it and only advances the state much later, so a hold or an advance failing

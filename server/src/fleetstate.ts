@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { reviveFleetSessions, type BuildAgreement, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole } from '../../shared/api.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 
 // One vocabulary for "the two boxes' builds", declared in `shared/api.ts`
@@ -58,8 +58,90 @@ export interface FleetState {
    *  honestly; the sites with nothing to say answer `null`, by measurement
    *  rather than by omission. This is what `rosterFp` did before it, and it is
    *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
-   *  build) is part of the enumeration rather than collateral damage. */
+   *  build) is part of the enumeration rather than collateral damage.
+   *
+   *  NO LONGER `FleetHealth.builds`' SOURCE when a coordination database is
+   *  wired (design 2026-09-20 §14): a handshake-cadence sample cannot stand in
+   *  for a per-minute fact — the `observedEpoch` lesson below — so the route
+   *  derives both sides from the inventory rows through `derivedBuilds`. This
+   *  field is still populated on every `ready`, and still feeds the route when
+   *  `Deps.coord` is absent (tests and scripts that build `Deps` by hand). */
   build: BuildInfo | null;
+  /** The epoch of the pool projection the fleet host reported it actually has
+   *  (`AgentReady.observedEpoch`), or `undefined` when we have no evidence —
+   *  local mode, an older agent that predates the field, or a link that has
+   *  never gone ready. THREE conditions, not two, and unlike `rosterFp`/
+   *  `build` the absent case is NOT collapsed into `null`: `null` here means
+   *  the fleet host has synced never (a fact about the node), `undefined`
+   *  means this build cannot tell us (a fact about the wire) — folding them
+   *  would report a downgraded fleet host as "still catching up" instead of
+   *  "no longer answering".
+   *
+   *  NO LONGER THE `pools` WIRE'S SOURCE (item 1, wave-1 fix round A): this
+   *  member is still populated by `remote/client.ts`'s `onReady` on every
+   *  handshake, but a handshake-cadence sample cannot stand in for a 60s
+   *  fact, so `server/src/pools.ts`'s `readObservedEpochFromRegistry` — a
+   *  fresh `$REG/pool-epoch` read on every watcher tick / request — feeds the
+   *  wire instead. This field has no consumer of its own today.
+   *
+   *  OPTIONAL here, deliberately unlike `rosterFp`/`build`'s "REQUIRED, not
+   *  optional" stance above — measured before choosing: making this field
+   *  required breaks ~20 pre-existing `FleetState`/`Deps` fixtures across
+   *  server/test/ with no relation to pool membership (`typecheck-tests.test.ts`
+   *  catches every one). Task 8's own scope is the agent's ready handshake,
+   *  not a fleet-wide fixture sweep that belongs to whichever task actually
+   *  consumes this field; an omitted key here reads as `undefined` on access,
+   *  which is the correct, honest answer for every one of those untouched
+   *  fixtures — they truly have no evidence about pool epochs.
+   *
+   *  WHAT THIS GIVES UP (review T8-R1, F6): `build`'s own comment above calls
+   *  being required "the whole mechanism" — turning a new construction site
+   *  that forgets this field into a COMPILE error. This field has no such
+   *  mechanism; the substitute is a RUNTIME one, `remote-connect.test.ts`'s
+   *  whole-object `toEqual` assertion in "reaches connected:true with
+   *  downSince:null after a good handshake" (`connectFleet — connection
+   *  lifecycle` describe block), which fails on any key `onReady` populates
+   *  that the expected literal there omits. That covers the one construction
+   *  site that actually matters — `FleetClient.state`, the object `onReady`
+   *  mutates — but it is a test that can be deleted or narrowed without a
+   *  compiler noticing, unlike a required field. Naming it here so a future
+   *  editor does not delete it without knowing it was carrying that load.
+   *
+   *  `server/src/index.ts`'s local-mode `fleetState` literal (not typed
+   *  against `FleetState` directly, so nothing there forces the question
+   *  either) OMITS this key too — unlike `rosterFp`/`build`, which it sets to
+   *  an explicit `null` "BY MEASUREMENT, not by omission" because in local
+   *  mode there is no second box, so comparing this box against itself would
+   *  be the one answer the banner must not show. `observedEpoch` is not a
+   *  cross-box COMPARISON — it is a fact about what epoch THIS node holds —
+   *  so that argument does not transfer, and nothing in local mode today
+   *  reads this box's own `~/.cc-sessions/pool-epoch` to populate it. The
+   *  omission there is honest (no evidence gathered), but it is an honest gap,
+   *  not a considered "not applicable" the way `rosterFp`/`build`'s explicit
+   *  `null` is — worth knowing before treating local mode's silence here as
+   *  a decision. */
+  observedEpoch?: number | null;
+  /** The ops the fleet host's agent says it answers (`AgentReady.ops`, design
+   *  2026-09-20 §8/§10), validated by `remote/client.ts`'s `readReadyOps` —
+   *  the one reader. THREE answers, and the inventory keeps two of them apart:
+   *  `undefined` = no evidence gathered (local mode, or no `ready` yet — the
+   *  server row's `NULL` is the sweep's decision, never read from here); `[]`
+   *  = a `ready` arrived and named no op this server may send (an older agent
+   *  that omits the field — every agent before W4 — or a list `validCapWords`
+   *  refused whole), stored as `''`; a non-empty list = the words.
+   *
+   *  Handshake cadence is correct for THIS field, unlike `build` and
+   *  `observedEpoch` above: the ops a process answers cannot change without
+   *  that process restarting, which produces a new `ready` (spec §8). It keeps
+   *  the last `ready`'s answer across a drop, so read it only while
+   *  `connected`.
+   *
+   *  OPTIONAL for `observedEpoch`'s measured reason: required would break every
+   *  `FleetState` fixture in server/test with no relation to ops, and an
+   *  omitted key reads `undefined` — the honest "no evidence" for each of them.
+   *  The runtime substitute for the compile error is the same whole-object
+   *  `toEqual` in `remote-connect.test.ts`. */
+  agentOps?: readonly string[];
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
@@ -158,6 +240,35 @@ export function buildAgreement(
   if (!fleet || !own) return 'unknown';
   if (fleet.dirty || own.dirty) return 'skewed';
   return fleet.sha === own.sha ? 'agreed' : 'skewed';
+}
+
+/** One inventory row's evidence for `derivedBuilds`: the row's role (`null` =
+ *  a token outside `NodeRole`, which names neither box) and its stamp as a
+ *  full `BuildInfo` (`null` = no readable stamp — `buildInfoOfRow` answers
+ *  `null` unless `stampRead` is `'ok'`). */
+export interface BuildSource { role: NodeRole | null; build: BuildInfo | null }
+
+/**
+ * `FleetHealth.builds` as a VIEW of the node inventory (design 2026-09-20
+ * §14), so a PWA that reads `{own, fleet}` keeps its answer while the console
+ * learns to read `NodeWire[]` (W3), after which the field is unread by any
+ * shipped reader and retires under wire discipline.
+ *
+ * `own` is the first source whose role is `server` or `both` — THIS box, in
+ * either install shape; `fleet` is the first whose role is `fleet`. FIRST, and
+ * a later row never backfills a null: the first live fleet-role row IS the
+ * fleet node, and a second one would be a second connection this build has no
+ * label for. Sources arrive in `nodes()`' order with superseded rows already
+ * excluded; excluding them is the store's job, and deciding which row is which
+ * side is this function's — the route composes the two and decides nothing.
+ *
+ * `buildAgreement` above is unchanged: three words, sha + dirty, now fed from
+ * here.
+ */
+export function derivedBuilds(sources: readonly BuildSource[]): { own: BuildInfo | null; fleet: BuildInfo | null } {
+  const own = sources.find((s) => s.role === 'server' || s.role === 'both');
+  const fleet = sources.find((s) => s.role === 'fleet');
+  return { own: own?.build ?? null, fleet: fleet?.build ?? null };
 }
 
 /**

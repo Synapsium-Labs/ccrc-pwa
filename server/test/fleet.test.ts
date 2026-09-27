@@ -285,6 +285,71 @@ describe('branch precedence', () => {
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
   });
 
+  // The worktree's own HEAD, as the divergence sweep measured it, comes between
+  // the two: a narrow pane cuts the `⎇` segment (so the statusline gives no
+  // branch), and the registry's `.branch` still names the branch ws-add
+  // created, whatever was checked out since. Measured 2026-09-23 on three of
+  // the four narrow rows: registry `ws/…`, HEAD `docs/…`/`feat/…`.
+  const headOnly = (branch: string | null) =>
+    new Map<string, string | null>([['demo-quiet-mesa', branch]]);
+  const withHead = (run: Runner, home: string, heads: Map<string, string | null>, sl?: Map<string, Statusline>) =>
+    assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000,
+      undefined, sl, undefined, undefined, undefined, undefined, undefined, undefined, heads);
+
+  it('uses the worktree\'s measured HEAD when the pane gave no full branch', async () => {
+    const { home, run } = setup();
+    // The pane measured identity (model) but no branch — a cut `⎇` segment.
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/checked-out-by-hand'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-by-hand');
+  });
+
+  it('still lets a full statusline branch outrank the measured HEAD — the pane is the fresher read', async () => {
+    const { home, run } = setup();
+    const sl = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/actually-here', ultracode: false, workflowActive: false }],
+    ]);
+    const fleet = await withHead(run, home, headOnly('docs/older-sweep'), sl);
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
+  });
+
+  // A pane branch the watcher KEPT across a tick that measured nothing (an
+  // overlay, or a row cut inside its 🤖 segment) is not a live reading: it
+  // loses to the HEAD measured since, and still beats the registry.
+  it('ships THIS tick\'s prompt-box width as paneCols, and null when the tick saw no box', async () => {
+    const { home, run } = setup();
+    const sl = (boxCols: number | undefined) => new Map<string, Statusline>([
+      ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false, boxCols }],
+    ]);
+    const assemble = (m?: Map<string, Statusline>) =>
+      assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, m);
+    const row = async (m?: Map<string, Statusline>) => (await assemble(m)).find((s) => s.id === 'demo-quiet-mesa')!;
+    expect((await row(sl(150))).paneCols).toBe(150);
+    expect((await row(sl(60))).paneCols).toBe(60);
+    // Unmeasured is null — never a guessed width, never 0.
+    expect((await row(sl(undefined))).paneCols).toBeNull();
+    expect((await row(undefined)).paneCols).toBeNull();
+  });
+
+  it('ranks a RETAINED pane branch below the measured HEAD, and above the registry', async () => {
+    const { home, run } = setup();
+    const kept = new Map<string, Statusline>([
+      ['demo-quiet-mesa', { branch: 'feat/before-the-checkout', ultracode: false, workflowActive: false, retained: true }],
+    ]);
+    const withNewerHead = await withHead(run, home, headOnly('docs/checked-out-since'), kept);
+    expect(withNewerHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('docs/checked-out-since');
+    const noHead = await withHead(run, home, new Map(), kept);
+    expect(noHead.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/before-the-checkout');
+  });
+
+  it('falls through a detached or unreadable HEAD (null) to the registry', async () => {
+    const { home, run } = setup();
+    const fleet = await withHead(run, home, headOnly(null));
+    expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('ws/quiet-mesa');
+  });
+
   it('is null when neither source has one', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
@@ -337,6 +402,50 @@ describe('ctxPct on the wire (D-2011)', () => {
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(0);
+  });
+
+  it('carries the usage sidecar reading onto the session, and null when none was read (routing slice 0)', async () => {
+    const { home, run } = setup();
+    const reading = { ts: 1_800_000_000, model: 'claude-opus-5', class: 'opus' as const, effort: 'high', ctxPct: 12, cost: 1.25, stale: false };
+    const withUsage = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new Map([['demo-quiet-mesa', reading]]));
+    expect(withUsage.find((s) => s.id === 'demo-quiet-mesa')?.usage).toEqual(reading);
+    const without = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(without.find((s) => s.id === 'demo-quiet-mesa')?.usage).toBeNull();
+  });
+});
+
+// fleet.ts: a running Workflow leaves the orchestrator's pid.json `idle` while
+// it waits on subagents, so the pane's Workflow row is what keeps the card
+// `busy`. Nothing pinned that line: deleting it left every suite green.
+describe('a running Workflow reads busy over an idle pid.json', () => {
+  const assemble = async (workflowActive: boolean) => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-a-MekWarLive', 'claude-a');
+    mkdirSync(path.join(home, '.claude-a', 'sessions'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.claude-a', 'sessions', '40613.json'),
+      JSON.stringify({ pid: 40613, sessionId: '1'.repeat(36), cwd: '/d', status: 'idle' }),
+    );
+    const run: Runner = async (_cmd, args) => {
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const sl = new Map<string, Statusline>([
+      ['claude-a-MekWarLive', { model: 'Opus 5.5', ultracode: false, workflowActive }],
+    ]);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), undefined, undefined, sl);
+    return fleet.find((s) => s.id === 'claude-a-MekWarLive')!.status;
+  };
+
+  it('an idle session with a Workflow row on screen is busy', async () => {
+    expect(await assemble(true)).toBe('busy');
+  });
+
+  it('control: the same session without one is idle', async () => {
+    expect(await assemble(false)).toBe('idle');
   });
 });
 
@@ -1090,6 +1199,345 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.every((x) => x.ask === null)).toBe(true);
     expect(warnSpy.mock.calls.filter(([line]) => String(line).includes('currentAsksFor')).length).toBe(1);
     warnSpy.mockRestore();
+  });
+});
+
+// Task 3, fix round 1 (Important 1): the central computation this task
+// exists for — `boardProject`, as `assembleFleet` actually computes it off a
+// real `CoordStore` — had ZERO coverage. This file never named the token, so
+// no deep-equal caught it incidentally, and all three of these mutations to
+// `fleet.ts`'s row literal shipped GREEN before this block existed:
+//   - `stamped: bySession.get(r.id) ?? null` -> `stamped: null`
+//   - `stamped: bySession.get(r.id) ?? null` -> `stamped: byProject.get(r.id) ?? null`
+//   - `held: r.held !== null` -> `held: true`
+// Each test below names the mutation it kills. D-2921 replaced the two ports
+// with one SESSION-keyed `stampOf`, so the second mutation's modern spelling is
+// `sessionId: r.id` -> `sessionId: r.project` and the first's is the port
+// returning null — both still killed here, by the same fixtures.
+describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const NOW_S = 1784600000;
+
+  it('a stamped, held session boards on its COORDINATOR project, not its own — kills `stamped` forced to a constant', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:1/2' });
+    const coord = mkCoord();
+    const opened = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'intake-platform',
+    }) as { id: number };
+    coord.bindSession(opened.id, 'demo-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('intake-platform');
+  });
+
+  it('newest wins when two runs stamp the same session with different coordinators', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:2/2' });
+    const coord = mkCoord();
+    const first = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'old-coordinator',
+    }) as { id: number };
+    coord.bindSession(first.id, 'demo-worker');
+    // Wave 2's run is opened before wave 1 closes (the coordinator protocol's
+    // own shape) — its higher autoincrement id is what "newest" means here.
+    const second = coord.openRun({
+      program: 'agent-evals', title: 'wave 2', project: 'demo-worker',
+      wave: 2, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'new-coordinator',
+    }) as { id: number };
+    coord.bindSession(second.id, 'demo-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('new-coordinator');
+  });
+
+  it('the lookup is keyed on the SESSION id, never the project — kills `sessionId: r.project`', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // The session's OWN project is deliberately NOT its id — every OTHER
+    // fixture in this file leaves `project` defaulted to the session id, which
+    // would let a lookup keyed on the PROJECT accidentally answer a lookup
+    // keyed on the session's id and hide exactly the bug this test exists to
+    // catch.
+    seedSession(home, 'demo-worker3', 'claude', {
+      project: 'demo-worker3-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    // A run whose WORK is in this session's own project and which is bound to
+    // a DIFFERENT session. Pre-D-2921 it was the `byProject` entry that shadowed
+    // the right answer; now it is simply another session's stamp, and the only
+    // way it can reach this row is a lookup keyed on the wrong thing.
+    const foreign = coord.openRun({
+      program: 'other-programme', title: 'unrelated', project: 'demo-worker3-project',
+      wave: 1, waveOf: 1, claimedBy: 'other-coordinator', coordProject: 'byproject-answer',
+    }) as { id: number };
+    coord.bindSession(foreign.id, 'demo-worker3-project');
+    // This session's OWN stamp, via a run whose `project` is unrelated.
+    const sessionRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'bysession-answer',
+    }) as { id: number };
+    coord.bindSession(sessionRun.id, 'demo-worker3');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // The CORRECT key is `r.id`. Handing `boardPlacement` `sessionId: r.project`
+    // instead would find the foreign session's stamp — which is deliberately
+    // keyed under this project's NAME — and place the row on
+    // 'byproject-answer'.
+    expect(fleet.find((x) => x.id === 'demo-worker3')!.boardProject).toBe('bysession-answer');
+  });
+
+  it('an unheld-but-stamped session reads its own project — kills `held: r.held !== null` forced to `true`', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // No `hold:` extra — this workspace is NOT held.
+    seedSession(home, 'demo-worker4', 'claude', { project: 'demo-worker4-project' });
+    const coord = mkCoord();
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'should-be-ignored',
+    }) as { id: number };
+    coord.bindSession(run.id, 'demo-worker4');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker4')!.boardProject).toBe('demo-worker4-project');
+  });
+
+  it('a held-but-unstamped session reads its own project too', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker5', 'claude', {
+      project: 'demo-worker5-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    // A run exists and is stamped, but names a DIFFERENT session —
+    // 'demo-worker5' is never `bindSession`-ed, so the stamp table has no
+    // entry for it at all.
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'other-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'not-this-one',
+    }) as { id: number };
+    coord.bindSession(run.id, 'someone-else');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBe('demo-worker5-project');
+  });
+
+  // The whole reason `coordPlacementStamps`/`readCoordPlacements` pass
+  // `includeClosed: true` rather than the active-only shape: a placement
+  // keyed on open runs alone would bounce a worker off its coordinator's
+  // card the instant the wave that stamped it closes, until the NEXT wave's
+  // run opens. The hold file (not the run's own state) is what says this
+  // workspace is still claimed.
+  it('a CLOSED run stamp still places the session — the wave-boundary guarantee `includeClosed:true` exists for', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker6', 'claude', {
+      project: 'demo-worker6-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker6',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'closed-wave-coordinator',
+    }) as { id: number };
+    coord.bindSession(run.id, 'demo-worker6');
+    expect(coord.advance(run.id, 'failed', 'test-close').ok).toBe(true);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBe('closed-wave-coordinator');
+  });
+
+  // Task 3 fix round 2 (Important 1, upgraded from Minor — Global Constraints:
+  // "every new guard ships WITH a test that goes RED when the guard is
+  // deleted or mutated"). `coordPlacementStamps`'s `WHERE coordProject IS NOT
+  // NULL` was executed by every test above but pinned by none of them: delete
+  // it and this whole file stays green, because every OTHER test's newer run
+  // (if any) either has no coordProject either (both null, no divergence) or
+  // IS the stamped one. This is the one shape that tells them apart — a
+  // SESSION with an OLDER stamped run and a NEWER unstamped one. Without the
+  // WHERE clause, the newer row's `coordProject` reads as SQL NULL cast
+  // straight through the unsafe `as unknown as {...coordProject: string}[]`
+  // (`store.ts`'s `as unknown as`) into `foldCoordPlacements`'s max-id fold,
+  // which has no reason to distrust its own type and overwrites the session's
+  // stamp with that `null` — reintroducing the wave-boundary bounce `includeClosed:
+  // true` exists to prevent, just from the opposite direction (a stamp
+  // disappearing forward in time instead of backward).
+  it('an older STAMPED run is not shadowed by a newer UNSTAMPED one on the same session — pins `WHERE coordProject IS NOT NULL`', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker8', 'claude', {
+      project: 'demo-worker8-project', hold: 'program:agent-evals wave:2/2',
+    });
+    const coord = mkCoord();
+    const stampedRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker8',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'real-coordinator',
+    }) as { id: number };
+    coord.bindSession(stampedRun.id, 'demo-worker8');
+    // Opened AFTER (higher id — "newer"), but no coordProject given at all.
+    const unstampedRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 2', project: 'demo-worker8',
+      wave: 2, waveOf: 2, claimedBy: 'demo-coordinator',
+    }) as { id: number };
+    coord.bindSession(unstampedRun.id, 'demo-worker8');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker8')!.boardProject).toBe('real-coordinator');
+  });
+
+  // ------------------------------------------------------------------
+  // FINAL WHOLE-BRANCH REVIEW, Critical 1 (D-2921). The two fixtures the
+  // reviewer measured, and the one shape every fixture above deliberately
+  // cannot express: the stamped COORDINATOR's project is ALSO a project that
+  // hosts an ordinary same-repo programme, so a project-keyed hop table has an
+  // entry under it. Every other case in this block keeps the two disjoint.
+  // ------------------------------------------------------------------
+
+  it('a cross-repo worker still boards on its coordinator when that coordinator project ALSO hosts an ordinary programme', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'ct-worker', 'claude', {
+      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+    });
+    const coord = mkCoord();
+    // The cross-repo worker: work in custom-tools, coordinator in ccrc-pwa.
+    const crossRepo = coord.openRun({
+      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
+      wave: 10, waveOf: 10, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(crossRepo.id, 'ct-worker');
+    // ANY ordinary ccrc-pwa programme — a worker in ccrc-pwa coordinated from
+    // ccrc-pwa. Under a PROJECT-keyed hop this makes coordOf('ccrc-pwa') ===
+    // 'ccrc-pwa', which trips the `seen` guard and scatters the row home.
+    const sameRepo = coord.openRun({
+      program: 'board-placement', title: 'wave 1', project: 'ccrc-pwa',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-swift-mesa-coordinator', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(sameRepo.id, 'ccrc-pwa-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'ct-worker')!.boardProject).toBe('ccrc-pwa');
+  });
+
+  // The end-to-end pin on `claimedBy`'s carriage from the SQL to the walk: a
+  // chain is the only shape whose answer depends on the second hop, so nulling
+  // `claimedBy` anywhere between `coordPlacementStamps`' SELECT and
+  // `foldCoordPlacements`' entry reds here. Without it that column is pinned
+  // only at the store seam and in the fold's own unit test.
+  it('walks a chain through a coordinator that is ITSELF a worker, to the root', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'chain-worker', 'claude', {
+      project: 'leaf-project', hold: 'program:leaf wave:1/1',
+    });
+    const coord = mkCoord();
+    // W is coordinated by `mid-session`, whose own project is `mid-project`.
+    const leaf = coord.openRun({
+      program: 'leaf', title: 'wave 1', project: 'leaf-project',
+      wave: 1, waveOf: 1, claimedBy: 'mid-session', coordProject: 'mid-project',
+    }) as { id: number };
+    coord.bindSession(leaf.id, 'chain-worker');
+    // …and `mid-session` is itself a worker, coordinated from `root-project`.
+    const mid = coord.openRun({
+      program: 'trunk', title: 'wave 1', project: 'mid-project',
+      wave: 1, waveOf: 1, claimedBy: 'root-session', coordProject: 'root-project',
+    }) as { id: number };
+    coord.bindSession(mid.id, 'mid-session');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // 'mid-project' if `claimedBy` is lost anywhere on the way to the walk.
+    expect(fleet.find((x) => x.id === 'chain-worker')!.boardProject).toBe('root-project');
+  });
+
+  it('a worker is never lifted onto a card that never coordinated it', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'ct-worker2', 'claude', {
+      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+    });
+    const coord = mkCoord();
+    // This worker's coordinator lives in intake-platform.
+    const mine = coord.openRun({
+      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
+      wave: 10, waveOf: 10, claimedBy: 'intake-platform-keen-meadow', coordProject: 'intake-platform',
+    }) as { id: number };
+    coord.bindSession(mine.id, 'ct-worker2');
+    // An UNRELATED programme whose WORK happens in intake-platform, coordinated
+    // from ccrc-pwa. A project-keyed hop reads this as "ccrc-pwa coordinates
+    // intake-platform" and walks the row one card too far.
+    const unrelated = coord.openRun({
+      program: 'intake-thing', title: 'wave 1', project: 'intake-platform',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(unrelated.id, 'intake-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('intake-platform');
+  });
+
+  it('a REFUSED placement read emits null on every row — never a non-null that reads as "placed at home" (D-2875)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:agent-evals wave:1/1' });
+    const coord = mkCoord();
+    vi.spyOn(coord, 'coordPlacementStamps').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'closed for the test' });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBeNull();
+  });
+
+  it('a THROWING placement read emits null too, and the tick still resolves', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker6', 'claude');
+    const coord = mkCoord();
+    vi.spyOn(coord, 'coordPlacementStamps').mockImplementation(() => { throw new Error('lock race'); });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBeNull();
+  });
+
+  it('CONTROL: a readable store with nothing stamped still answers the OWN project, not null', async () => {
+    // "Nothing stamped" is a measurement; "could not read" is not. The two
+    // must not fold — this is the case the null must NOT reach.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker7', 'claude', { project: 'demo-worker7-project' });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker7')!.boardProject).toBe('demo-worker7-project');
   });
 });
 

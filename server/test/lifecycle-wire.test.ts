@@ -35,7 +35,7 @@ const MEAS: LifecycleMeas = {
   workdir: '/home/you/worktrees/ccrc-pwa/still-river', base: 'main', old: null,
   rc: 0, mode: 'resume', inUnit: 1, from: null, dropped: null, registered: 0,
   state: null, bytes: null, resumed: null, tombstone: null,
-  home: null, pool: null, reason: null,
+  home: null, pool: null, reason: null, unremoved: null,
 };
 const EVENT: LifecycleEvent = {
   uid: '1755000000123456789.4242.1', at: 1_755_000_000_123,
@@ -95,12 +95,17 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // shipped writing these three `meas.` keys with no member here — see
     // `shared/api.ts`'s `LifecycleMeas` docstring for the full account of
     // why nothing caught it until the coordinator's review did.
+    //
+    // `unremoved` — ADDED, D-2605 fix round 2 (D-2782): the three post-action
+    // purge callers' `purge-incomplete` failures name what an `rm -f` would
+    // not take. The SAME defect shape as the three above, caught the same way
+    // — by a scan rather than by the commit that emitted it.
     expect(Object.keys(MEAS).sort()).toEqual(
       ['archivedAt', 'archivedReason', 'attic', 'atticsrc', 'base', 'branch',
        'bytes', 'dropped', 'from', 'held', 'home', 'inUnit', 'manifestBytes',
        'mode', 'old', 'pool', 'project', 'rc', 'reason', 'registered',
-       'resumed', 'state', 'tip', 'tombstone', 'uuid', 'workdir', 'workspace',
-       'wrapper'].sort());
+       'resumed', 'state', 'tip', 'tombstone', 'unremoved', 'uuid', 'workdir',
+       'workspace', 'wrapper'].sort());
   });
 
   it('every field is nullable — null means NOT MEASURED, never zero or empty', () => {
@@ -111,6 +116,7 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
       workdir: null, base: null, old: null, rc: null, mode: null, inUnit: null,
       from: null, dropped: null, registered: null, state: null, bytes: null,
       resumed: null, tombstone: null, home: null, pool: null, reason: null,
+      unremoved: null,
     };
     expect(Object.values(nothing).every((v) => v === null)).toBe(true);
     // `attic: 0` is "the pin ran and created no refs"; `attic: null` is "no
@@ -118,7 +124,7 @@ describe('LifecycleMeas — measured about the SUBJECT, before any destruction',
     // null is a row that was never archived. Different facts, different values.
   });
 
-  it('is a NAMED twenty-eight, not an index signature — a 29th key is a compile error', () => {
+  it('is a NAMED twenty-nine, not an index signature — a 30th key is a compile error', () => {
     // Task 21's ruling, replacing the wave-1 "closed ten, the rest lives in
     // raw" draft: `reviveMeas` (wave 4) reads `meas.*` through THIS
     // interface's own key list, so a key not modelled here is not merely

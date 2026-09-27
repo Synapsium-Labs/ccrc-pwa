@@ -133,6 +133,18 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'fleet.css .wordmark',
   'fleet.css .wordmark::before',
   'fleet.css .fleet-count',
+  // `.pool-epoch-lag` (Task 9) is REGISTERED in INHERITED_GROUNDS
+  // (design/audit.mjs), not grandfathered here — review round 1, C2: an
+  // earlier version of this file admitted it here on the mistaken claim that
+  // nothing at the fleet-head level paints a background. `.mail-chip`/
+  // `.mail-group-head` already ground three rules in this same stylesheet
+  // against --bg-page (body's own background, styles/base.css:111) for
+  // exactly this shape, and --ink-tertiary over --bg-page measures 6.23
+  // dark / 5.25 light — a real, passing measurement was available, so this
+  // entry does not belong in a set whose own header says "an added identity
+  // must be measured or explicitly registered before it ships." `.fleet-count`
+  // itself stays grandfathered as pre-existing debt, not a licence to add a
+  // second one beside it.
   'fleet.css .notice-x',
   'fleet.css .notice-x:active',
   'fleet.css .status-line--busy',
@@ -1657,6 +1669,35 @@ describe('the account-pool picker colours are measured, not left in the blind sp
   });
 });
 
+// Review round 1, C2. `.pool-new-label` was registered correctly the first
+// time (INHERITED_GROUNDS, --bg-sheet — same ground as .pool-note/
+// .acct-disclosure above); `.pool-epoch-lag` was NOT — it first shipped in
+// GRANDFATHERED_UNCOVERED, which only ADMITS an identity, never measures it,
+// even though --bg-page (body's own background) was a real, computable, and
+// passing ground the same way .mail-chip already proves for this file. Both
+// now go through the same "measured, not left in the blind spot" shape as
+// every other pool cell above, so a future regression on either — dropping
+// the registration, or re-grandfathering — reds here rather than silently
+// leaving a rule unmeasured.
+describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
+    ['fleet.css .pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
+    ["fleet.css .acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
+    ["fleet.css .acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
+  ])('%s is grounded, not grandfathered', (key, ink, ground) => {
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    expect(GRANDFATHERED_UNCOVERED, key).not.toContain(key);
+    expect(INHERITED_GROUNDS[key]?.under).toEqual([ground]);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
 // ── account-pool session-row cells ──────────────────────────────────────────
 describe('the pool session cells are measured, not left in the blind spot', () => {
   it.each(['.sess-stranded', '.sess-offpool'])('%s clears both themes on the ordinary row', (selector) => {
@@ -1693,12 +1734,13 @@ describe('the spawn chip is measured, not left in the blind spot', () => {
   });
 
   it('measures the ink-tertiary VARIANTS too — half a grounded cell is a blind spot', () => {
-    // The chip has two inks, not one: `unconfirmed`/`unknown` drop to
+    // The chip has two inks, not one: `unconfirmed`/`unknown` — and a narrow
+    // spawn whose pane is measured wide again, `was narrow` — drop to
     // --ink-tertiary. An attribute variant recovers no ground from its selector
     // either, so without its own entry that half stays in the census while the
     // base half is measured — the worst of both, because the report then LOOKS
     // like the cell is covered.
-    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']";
+    const key = "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised'], .sess-spawn[data-spawn='narrow-widened']";
     expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
     const rows = report.measured.filter((m) => m.label.endsWith(key));
     expect(rows).toHaveLength(2);
@@ -1797,6 +1839,87 @@ describe('the resume door is measured, not left in the blind spot', () => {
     for (const row of rows) {
       expect(row.detail, row.label).toContain('on var(--bg-surface)');
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── centralised update management W3, Task 6: the /settings shell and its door ──
+// D-2689 froze the uncovered census, so every colour rule this task adds is
+// REGISTERED (design/audit.mjs) rather than left to join it. The shell's three
+// sit on .shell-detail, which paints nothing: one ground, --bg-page. The door
+// has two — the page on a phone, .shell-nav's --bg-surface in the desktop
+// sidebar — and a registration is one layer stack, so it is registered on the
+// page (the .pool-epoch-lag entry's ground, same header) and the SECOND ground
+// is measured here off the rule's own declared ink, so a retint re-measures
+// both. `.accounts-door` beside it stays in the census as pre-existing debt,
+// pinned above; this is not a licence to move it and not a copy of its choice.
+describe('the /settings shell and its door are measured, not left in the blind spot', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .settings-back'],
+    ['fleet.css .settings-back:active'],
+    ['fleet.css .settings-title'],
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s is registered on the page and measured in both themes', (key) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
+    expect(report.uncovered).not.toContain(key);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);                    // dark and light
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it.each([
+    ['fleet.css .settings-door'],
+    ['fleet.css .settings-door:active'],
+  ])('%s also clears AA on the desktop sidebar it sits on', (key) => {
+    // Measured at d759c914 with this task's rules: --ink-secondary 8.67 dark /
+    // 7.41 light, --ink-primary 15.68 / 16.58 on --bg-surface.
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-surface)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── fix round 1 (F15) / fix round 2 (review of d5aefc4a, item 8) ────────────
+// `.build-line`/`.build-line-side--warn`/`.build-line-next` are registered
+// against --bg-surface — the ground .shell-nav (styles/shell.css:131-155)
+// actually paints on desktop, corrected from the false "--bg-page, no
+// ancestor paints a background" claim (F15). Mirrors D-3304's
+// `.settings-door` precedent above, the OTHER direction: at the mobile
+// breakpoint .shell-nav sets no background of its own and falls through to
+// the app shell's --bg-page instead, so this checks THAT ground clears AA
+// too, off the rule's own declared ink (a retint re-measures both).
+describe('.build-line/.build-line-side--warn/.build-line-next also clear AA on the mobile ground they fall through to', () => {
+  const fleetRules = rulesOf(ROOT, 'src/fleet/fleet.css');
+  const inkOf = (key: string): string => {
+    const rule = fleetRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it.each([
+    ['fleet.css .build-line'],
+    ['fleet.css .build-line-side--warn'],
+    ['fleet.css .build-line-next'],
+  ])('%s also clears AA on the mobile ground (--bg-page)', (key) => {
+    // Measured: --ink-tertiary 6.23 dark / 5.25 light (.build-line);
+    // --status-attention-text 10.89 dark / 5.45 light (the other two).
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-page)'], theme), key).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

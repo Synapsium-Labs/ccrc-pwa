@@ -6,6 +6,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
+import { spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { TEST_ROSTER } from './rosterFixture';
@@ -21,9 +22,9 @@ const session = (id: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */
@@ -281,6 +282,36 @@ describe('fleet store hydration + persistence', () => {
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
     store.getState().disconnect();
   });
+
+  // Task 7 (board-placement wave 2): `projects` is the LAST successful
+  // `/api/projects` read, lifted into the store so the session view can
+  // label a repo without a second agent round trip. It is deliberately NOT
+  // part of the persisted snapshot — same reason as `pools`.
+  //
+  // Fix round 1, finding 1: `loadFleetSnapshot` REBUILDS its return literal
+  // (`{ savedAt, sessions, roster }`, offline.ts's own `loadFleetSnapshot`)
+  // on every read, so a `"projects"` key can never survive a round trip
+  // through it — asserting over `loadFleetSnapshot()`'s OUTPUT can never red,
+  // whatever was actually stored. This pins the RAW stored string after a
+  // REAL save instead.
+  it('projects start null and are NOT part of the persisted snapshot (Task 7)', () => {
+    const store = createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket });
+    expect(store.getState().projects).toBeNull();
+    store.getState().setProjects([{ name: 'demo', workdir: '/w/demo', repo: { state: 'named', slug: 'o/demo' } }]);
+    expect(store.getState().projects?.[0]?.name).toBe('demo');
+
+    // `saveFleetSnapshot` returns early on an empty sessions list (Task 2) —
+    // seed one non-degraded session so the save actually writes.
+    store.setState({ sessions: [session('claude:OpenClawHetzner')] });
+    saveFleetSnapshot(store.getState().sessions, store.getState().roster);
+
+    // `KEY` (offline.ts, `'ccrc.fleet-snapshot.v1'`) is module-private, not
+    // exported — the literal is the only way to read the raw stored string.
+    const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+    expect(raw).not.toBeNull();
+    expect(raw).toContain('"sessions"'); // control: proves a save actually happened
+    expect(raw).not.toContain('"projects"');
+  });
 });
 
 /**
@@ -394,6 +425,28 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     expect(pr?.phase).toBe('unchecked');
     expect(pr?.reason).toBeNull();
     expect(pr?.number).toBe(12);
+  });
+
+  it('keeps a snapshot holding a spawnState word this bundle cannot name — the word itself, as the live chip showed it', () => {
+    // #174's `narrow` was exactly such a word to every older bundle, and one
+    // narrow row used to cost the whole offline fleet. The live frame is CAST,
+    // so spawnWords.ts shows an unnameable word as itself, loud; the offline
+    // copy keeps the same word so the chip does not turn quiet `unknown`.
+    putRaw([
+      { ...v1Session('claude:OpenClawHetzner'), spawnState: 'some-future-word' },
+      v1Session('claude:rp-llm'),
+    ]);
+    const snap = loadFleetSnapshot();
+    expect(snap?.sessions.map((s) => s.spawnState)).toEqual(['some-future-word', null]);
+    expect(spawnVerdictChip(snap!.sessions[0]!)).toEqual({ word: '? some-future-word', data: 'some-future-word' });
+  });
+
+  it('never revives a pane width — offline is not THIS tick', () => {
+    putRaw([{ ...v1Session('claude:OpenClawHetzner'), spawnState: 'narrow', paneCols: 220 }]);
+    const row = loadFleetSnapshot()?.sessions[0];
+    expect(row?.paneCols).toBeNull();
+    // …so a narrow spawn stays LOUD offline rather than claiming it was widened.
+    expect(spawnVerdictChip(row!)?.word).toBe('narrow');
   });
 
   it('rejects the whole snapshot rather than launder a malformed session', () => {
