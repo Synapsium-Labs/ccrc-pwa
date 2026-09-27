@@ -1,9 +1,12 @@
 # Workspace lifecycle — released, archived, expired — design
 
-**Status:** the operator ruled every decision in dialogue on 2026-09-24 (§2).
+**Status:** the operator ruled every decision in dialogue on 2026-09-24 (§2), and **approved this spec on 2026-09-26**,
+confirming both consequences in §11. Wave 1 is planned
+(`docs/superpowers/plans/2026-09-26-workspace-lifecycle-wave1-released-fold.md`); the programme ledger is
+`docs/superpowers/programs/workspace-lifecycle.md`.
 - **Rev 2** applies a four-lens adversarial review: 51 findings, 43 confirmed, 7 partly confirmed, 1 refuted. Every
   surviving finding is applied here.
-- **Two consequences** of the rulings are stated for the operator to confirm (§11).
+- **Two consequences** of the rulings were stated for the operator to confirm (§11), and confirmed on 2026-09-26.
 - **Citations.** The code was mapped read-only at `147557fb` (`origin/main` `b501698a` plus docs) and re-read at
   `28271ace`. Line numbers are hints; each citation names its function, so the text can be found after `main`
   moves.
@@ -116,7 +119,8 @@ The wire field is named for what it carries: `released` is already a member of `
     closedAt: number; child: boolean }
   ```
 
-  `child` is true when the registry's CCR-15 child reading is `marked` or `unreadable`. The PWA needs no second
+  `child` is true when the registry's CCR-15 child reading (`FleetSession.child`, a `ChildMark`) is `child` or
+  `unreadable`. The PWA needs no second
   read of the marker to skip children (below), and an unreadable marker reads as a child, the direction that
   defers.
   - It is written once, in `assembleFleet`'s literal (`server/src/fleet.ts`).
@@ -139,7 +143,8 @@ The wire field is named for what it carries: `released` is already a member of `
   An unreadable store answers `null`: doubt leaves the row where it is today.
 - **One batched read per tick.** `coordPlacementStamps` cannot answer this: it filters to
   `coordProject IS NOT NULL` and carries no state. `openRunsForSession` is per-session and reserved for destructive
-  decision points. So the store gains one grouped statement, `lastRunBySession()`. It returns, per `sessionId`, the
+  decision points. So the store gains one grouped read, `lastRunBySession(sessionIds)`, scoped to the assembly's
+  session ids (`currentAsksFor`'s shape). It returns, per `sessionId`, the
   newest run's id, state, program, title, claimant and `closedAt`, and whether any non-terminal run names the
   session, together with the set of claimants of non-terminal runs. It is called once per assembly beside
   `readCoordPlacements`, under the same failure contract: a throw or `ok:false` makes every row's `releasedFrom`
@@ -477,8 +482,9 @@ agent frame in remote mode.
 
 ## 9. Measurement, targets and the kill rule
 
-Committed with the plan: `deploy/measure-workspace-lifecycle.py`, read-only, run on the fleet box and the server
-box. Its rows:
+Committed with the wave-1 plan: `deploy/measure-workspace-lifecycle.py`, read-only, run on the server box, which holds
+both inputs — `coord.db` (the runs, and the lifecycle journal the server mirrors from ccd) and `state-cache.json` (the
+registry facts, as the board last saw them). Its rows:
 
 | Row | Baseline (2026-09-24) | Target |
 |---|---|---|
@@ -503,9 +509,10 @@ workspace's commits in the meantime.
    return-delay row has been measured.
 5. **Wave 4** lands after wave 3 (the same lane file), and after wave 2 (the serialiser and the L5 door).
 
-## 11. For the operator to confirm
+## 11. Confirmed by the operator (2026-09-26)
 
-The rulings stand as given. Two consequences of them surfaced in review:
+The rulings stand as given. Two consequences of them surfaced in review, and the operator confirmed both on
+2026-09-26:
 
 1. **L5's "No" is "Cancel", not "archive anyway".** A delivery to an archived recipient backs off and parks
    (D-1066), so an archived coordinator cannot keep its programme running. Its workers' reports would park unread.
