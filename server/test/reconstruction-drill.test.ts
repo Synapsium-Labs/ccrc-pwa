@@ -314,13 +314,15 @@ describe('the reconstruction drill', () => {
     const RUN_SUMMARY_KEYS: Record<keyof RunSummary, true> = {
       id: true, program: true, programTitle: true, wave: true, waveOf: true,
       project: true, homeProject: true, sessionId: true, workspace: true, branch: true, state: true,
+      kind: true, reviews: true,
       claimedBy: true,
       resumed: true, clearedAt: true, openedAt: true, dispatchStartedAt: true,
       dispatchedAt: true,
       closedAt: true, handoffCommit: true, items: true, unreadMail: true,
       health: true,
     };
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(22);
+    // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(24);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {

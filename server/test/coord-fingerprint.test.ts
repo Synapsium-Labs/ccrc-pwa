@@ -824,3 +824,53 @@ describe('verifyDone — the run.branch fallback is reached by more than "sessio
     expect((res as { detail: string }).detail).not.toContain('bytes did not come back');
   });
 });
+
+import { verifyReviewDone, type ReviewClaim } from '../src/coord/fingerprint.js';
+import { writeFileSync as writeReport } from 'node:fs';
+
+describe('verifyReviewDone — a report and its tip are one pair (design 2026-09-14 §5.3)', () => {
+  const reportAt = (dir: string, body = '# review\n'): string => {
+    const p = path.join(dir, 'review-report.md'); writeReport(p, body); return p;
+  };
+  const claimFor = (tip: string, report: string): ReviewClaim => ({ reviewedTip: tip, report });
+
+  it('answers done when the reviewed branch is still at reviewedTip and the report is readable', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res).toEqual({ ok: true, measured: { tip: TIP } });
+  });
+
+  it('refuses stale-review when the branch has moved since the reviewer measured it', async () => {
+    const root = project(OTHER, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('stale-review');
+    expect((res as { detail: string }).detail).toContain(OTHER);
+  });
+
+  it('refuses report-unreadable for an absent report, and names the path', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const missing = path.join(root, 'nope.md');
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, missing));
+    expect(res).toMatchObject({ ok: false, code: 'report-unreadable' });
+    expect((res as { detail: string }).detail).toContain(missing);
+  });
+
+  it('refuses tip-unmeasurable when the reviewed branch has no readable ref (the work run was abandoned)', async () => {
+    const root = project(null, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+  });
+
+  it('never runs pr-state — a review run has no PR to measure', async () => {
+    const calls: string[][] = [];
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; }, root);
+    await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
+  });
+});

@@ -11,8 +11,11 @@
 //
 // `roster` is consumed structurally (a plain object with `accounts`,
 // `homeAble`, `byIdLengthDesc`, `upstreamId`), never imported as a type —
-// there is no build step here, so there is nothing to import against at
-// runtime.
+// there is no build step here, so there is nothing to import a TYPE
+// against at runtime. This file does import ONE sibling, `./models.mjs`,
+// for its `SUBAGENT_CLASSES` value — the constraint that survives is no
+// dependency OUTSIDE `shared/*.mjs`, because `deploy/gen-accounts.mjs`
+// runs this generator with a bare `node` from the checkout.
 //
 // Two different embedding contexts, two different escaping rules:
 //
@@ -57,6 +60,8 @@
 //    `Roster`-shaped object by hand, the way
 //    `server/test/roster-generate.test.ts`'s hostile-payload case
 //    deliberately does. Two independent locks on one door, on purpose.
+
+import { SUBAGENT_CLASSES } from './models.mjs';
 
 /**
  * Backslash-escapes the characters that are still live inside a
@@ -275,12 +280,18 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
     .join('\n');
 
+  // `CCRC_SUBAGENT_CLASSES` — the two classes a session's `subagent` routing
+  // field may name (routing spec 2026-09-14 §5.1), PROJECTED from
+  // `shared/models.mjs`'s `SUBAGENT_CLASSES` so ccd validates against the one
+  // definition instead of holding a third spelling (`single-definition.test.ts`
+  // pins exactly two: the node list and ccrc's usage-text copy).
   return `#!/usr/bin/env bash
 # Generated from ~/.ccrc/accounts.json. Do not edit — \`ccrc install\` rewrites it.
 CCRC_ACCOUNTS=${idArray(ids)}
 CCRC_HOME_ABLE=${idArray(homeAbleIds)}
 CCRC_MEASURED=${idArray(measuredIds)}
 CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
+CCRC_SUBAGENT_CLASSES=${idArray(SUBAGENT_CLASSES)}
 CCRC_CODEX_BACKEND=${idArray(codexIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {

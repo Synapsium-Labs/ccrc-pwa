@@ -178,6 +178,23 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     expect(turns().some((l) => l.startsWith('turn claude-a '))).toBe(false);
   });
 
+  it('does NOT skip on a LIVE SYMLINK marker — a fabricated verdict may not cost a turn', () => {
+    // D-2989, the SECOND BODY of the `_authdead` contract. This file's own
+    // header says the two bodies hold the marker's FORMAT equal rather than the
+    // function's text, so a class closed in `ccd/ccd` alone is closed nowhere.
+    // `-f` follows the chain: a link at `$REG/<account>-authdead` pointing at
+    // any readable file whose first word is digits passed, and the `cat`
+    // returned that file's epoch — skipping a LIVE account's keepalive turn on
+    // a verdict sourced from outside `$REG`.
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 41, 9999);
+    const foreign = j('outside-the-registry');
+    fs.writeFileSync(foreign, `${Math.floor(Date.now() / 1000)} auth-401\n`);
+    fs.symlinkSync(foreign, j('.cc-sessions', 'claude-a-authdead'));
+    run();
+    expect(row('claude-a').outcome).toBe('refreshed');
+  });
+
   it('does NOT skip on a marker whose first field is not digits', () => {
     // `ccd`'s swapblocked rule (ccd/ccd:11909): the epoch is VALIDATED, not
     // trusted. A hand-edited or half-written marker must not decide a spend.

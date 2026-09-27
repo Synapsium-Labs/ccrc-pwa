@@ -345,7 +345,10 @@ const failureOf = (e: unknown): { error: string; code?: string; draft?: string; 
     // failure arms and this is the only thing that tells the one the rescue
     // may act on from the one it must not.
     return {
-      error: sendErrorText(e.message), code: e.message,
+      // The flag is read BEFORE the sentence, because `verify-failed` has two
+      // outcomes under one code and only the flag separates them.
+      error: sendErrorText(e.message, typeof b.submittable === 'boolean' ? b.submittable : undefined),
+      code: e.message,
       ...(typeof b.draft === 'string' ? { draft: b.draft } : {}),
       ...(typeof b.submittable === 'boolean' ? { submittable: b.submittable } : {}),
     };

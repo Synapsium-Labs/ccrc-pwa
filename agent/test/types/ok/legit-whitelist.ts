@@ -69,6 +69,13 @@ export const lawful: LawfulGrants<typeof lawfulTable> = lawfulTable;
  *  silently re-permit a token-free reap, and it breaks this build. */
 export type ReapNeedsExpect = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-reap'], '--expect'>>;
 export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-rename'], '--session'>>;
+/** The terminal drawer's un-pin (wave 2). Deleting this ENROLMENT is what turns
+ *  `['win-size','--session']` into a bare `['win-size']` with every subset test
+ *  still green — so the enrolment is asserted here, where losing it stops this
+ *  project compiling and `whitelist-structural.test.ts` reads that as a failure
+ *  of the positive control. `g12-win-size-without-session.ts` is the same
+ *  mechanism from the other side. */
+export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win-size'], '--session'>>;
 export type WsRmIsUngrantable = Assert<'ws-rm' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 export type WsGcIsUngrantable = Assert<'ws-gc' extends (typeof UNGRANTABLE_VERBS)[number] ? true : false>;
 

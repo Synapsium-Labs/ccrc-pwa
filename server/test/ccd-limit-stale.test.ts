@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-limit-stale-'); });
@@ -9,7 +9,7 @@ afterEach(() => { h.cleanup(); });
 
 const ID = 'myid';
 const STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
 /** The bundle's own sentence for `phase:"stale"` (2.1.267, `mu(l)`): what the

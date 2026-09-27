@@ -2,7 +2,7 @@
 // render. Each one below fixes a defect MEASURED on the live page; reading the
 // stylesheet as text is what stops them regressing silently.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
@@ -409,7 +409,7 @@ describe('selection is polarity, status is hue', () => {
     expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
     const scrubbed = stripComments(css);
     const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
-    for (const variant of ['expired', 'unrecognised']) {
+    for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
       const sel = `.sess-spawn[data-spawn=${variant}]`;
       // The variant really does paint a colour of its own — without that there
       // is nothing to beat and everything below would be vacuous.
@@ -425,6 +425,35 @@ describe('selection is polarity, status is hue', () => {
         `no member of the achromatic group out-specifies ${sel}, so the selected row loses the tie to it`)
         .toBeGreaterThan(spec(sel));
     }
+  });
+
+  it('paints a `narrow` spawn in the chip\'s LOUD default ink, never the quiet "we do not know" one', () => {
+    // rc 6 does not heal on its own: the window stays narrow after the client
+    // that narrowed it leaves, the startup gates it skipped are never revisited,
+    // and the stamp changes only on the next spawn. So it takes `.sess-spawn`'s
+    // default --status-dead-text, like blocked/login/vanished — which it gets by
+    // having NO variant rule of its own.
+    expect(declValue(ruleFor('.sess-spawn'), 'color')).toBe('var(--status-dead-text)');
+    // Every rule that names a `data-spawn` VALUE and sets a colour, however its
+    // selector is spelled (`[data-spawn=narrow].sess-spawn`, `:is(…)`, a second
+    // rule further down) — `narrow` must be in none of them.
+    const painted: string[] = [];
+    for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const [, selector, body] = m;
+      if (!/data-spawn/.test(selector!) || !/(^|;)\s*color\s*:/.test(body!)) continue;
+      for (const v of selector!.matchAll(/data-spawn\s*=\s*['"]?([\w-]+)/g)) painted.push(v[1]!);
+    }
+    // The control: the scan does find the two quiet variants, so an empty
+    // result below is a finding, not a scan that saw nothing.
+    expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
+    expect(painted).not.toContain('narrow');
+  });
+
+  it('paints a narrow spawn whose pane is measured wide again (`narrow-widened`) in the QUIET ink', () => {
+    // History, not a fault: the pane is wide with its prompt up, and ccd's
+    // readers are back on (spawnWords.ts's `narrowSinceWidened`). What stays
+    // loud is a narrow spawn still unmeasured or narrow — the case above.
+    expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
   it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {
@@ -920,6 +949,51 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     }
   });
 
+  // Review round 1, C1. The account-pool chip (AccountsScreen) carries BOTH
+  // `.proj-card-pool` and `.acct-pool-chip`, so the shared untagged-attention
+  // rule proven above ALSO matches it — but an untagged ACCOUNT is the
+  // default, unconstrained state, not the worklist fault an untagged PROJECT
+  // is. `.acct-pool-chip[data-pool='untagged']` must win that colour back.
+  // Same shape as the spawn-chip / ctx-pressure cascade-tie tests above this
+  // file's `selection is polarity` describe: membership is necessary and not
+  // sufficient — a render test cannot see this at all (jsdom applies no
+  // stylesheet), so only reading the text can prove the override actually
+  // wins the tie rather than merely existing.
+  it("wins the untagged account chip's colour back from .proj-card-pool by SOURCE ORDER — both tie at (0,2,0)", () => {
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const sharedSel = ".proj-card-pool[data-pool='untagged']";
+    const acctSel = ".acct-pool-chip[data-pool='untagged']";
+    // The shared rule really does paint attention ink — without that there is
+    // nothing to beat and everything below would be vacuous.
+    expect(declValue(ruleFor(sharedSel), 'color'), `${sharedSel} no longer sets its own colour`)
+      .toBe('var(--status-attention-text)');
+    // …and the account chip's own rule really does win the quiet ink back.
+    expect(declValue(ruleFor(acctSel), 'color'), `${acctSel} no longer sets its own colour`)
+      .toBe('var(--ink-tertiary)');
+    // Equal specificity is why source order is load-bearing here at all — if
+    // one side already out-specified the other, this test would prove nothing
+    // about ORDER.
+    expect(spec(acctSel), 'the two selectors no longer tie at (0,2,0) — this test may be moot')
+      .toBe(spec(sharedSel));
+    const scrubbed = stripComments(css);
+    const sharedAt = scrubbed.indexOf(sharedSel);
+    const acctAt = scrubbed.indexOf(acctSel);
+    expect(sharedAt, `${sharedSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} now precedes the shared rule — this test no longer proves anything`)
+      .toBeGreaterThan(sharedAt);
+  });
+
+  // `stale` is account-only (AccountPoolWire has no project-side counterpart,
+  // design §5.7), so it is absent from `.proj-card-pool`'s shared list and
+  // would otherwise fall through to the base `--ink-tertiary` instead of the
+  // attention ink `poolRule` treats it the same as malformed/unreadable for.
+  it('gives the stale account chip the same attention ink as malformed/unreadable', () => {
+    expect(declValue(ruleFor(".acct-pool-chip[data-pool='stale']"), 'color'))
+      .toBe('var(--status-attention-text)');
+  });
+
   it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
     expect(css).not.toMatch(/\.proj-card-pool\[data-dim\][^}]*opacity\s*:/s);
   });
@@ -986,5 +1060,181 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     expect(declValue(rule, 'white-space')).toBe('nowrap');
     expect(declValue(ruleFor('.acct-gauges'), 'flex')).toBe('none');
     expect(declValue(ruleFor('.acct-gauges'), 'width')).toBe('148px');
+  });
+});
+
+describe('the fleet head holds one row, and the class chooser is not on it', () => {
+  // Measured in Chromium against the rendered component (the real markup, not
+  // a reconstruction) at 320/360/390/430/700/1440px, before this fix:
+  //
+  //   viewport   320   360   390   430   700   1440
+  //   overflow  +280  +240  +225  +225  +219    ok
+  //
+  // Two independent faults produced that, and both are pinned below.
+
+  /** Specificity as a (0,x,0) count — classes, attributes and pseudo-classes.
+   *  Enough here for the same reason it is enough at the spawn chip above:
+   *  there is no id and no element name anywhere near these two selectors. */
+  const spec = (sel: string): number =>
+    (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+
+  it('wins the width override by SPECIFICITY, the only way it can win it', () => {
+    // FAULT 1. The chooser reuses `.route-select`'s chrome and must reject its
+    // `width: 100%`, which is right for a grid cell and wrong for a control
+    // sized to its own option list. The rule that shipped said so as
+    // `.fleet-class-select { width: auto }` — one class, (0,1,0), declared
+    // ~650 lines ABOVE `.route-select`, which is also (0,1,0). Equal
+    // specificity, so the tie went to source order and the override never
+    // applied ONCE: the control rendered at 286px at 390px and 528px at 700px
+    // instead of the 167px its options ask for. A comment, not a mechanism.
+    const scrubbed = stripComments(css);
+    const baseAt = scrubbed.search(/\.route-select\s*\{/);
+    const overrideAt = scrubbed.search(/\.route-select\.fleet-class-select\s*\{/);
+
+    expect(overrideAt, 'the compound override is gone — the chooser is back on source order')
+      .toBeGreaterThan(-1);
+    expect(baseAt, '.route-select is gone; this pair no longer describes the stylesheet')
+      .toBeGreaterThan(-1);
+
+    // Without BOTH of these the assertion below is vacuous: there has to be a
+    // `width` to beat, and it has to be declared later, or source order alone
+    // would already have settled it and specificity would prove nothing.
+    expect(declValue(ruleFor('.route-select'), 'width'),
+      '.route-select no longer claims the full width, so there is nothing to override')
+      .toBe('100%');
+    expect(baseAt,
+      '.route-select now PRECEDES the override, so this test no longer proves anything')
+      .toBeGreaterThan(overrideAt);
+
+    expect(spec('.route-select.fleet-class-select'),
+      'the override no longer out-specifies .route-select, so it loses the tie to source order')
+      .toBeGreaterThan(spec('.route-select'));
+    expect(declValue(ruleFor('.route-select.fleet-class-select'), 'width')).toBe('auto');
+
+    // …and no single-class restatement may creep back in beside it: that is
+    // the exact shape that was dead code for the whole of #116's life, and it
+    // reads as a fix while doing nothing.
+    expect(scrubbed, 'a single-class .fleet-class-select rule is back — it cannot win the cascade')
+      .not.toMatch(/(^|[\s,}])\.fleet-class-select\s*\{/);
+  });
+
+  it('seats the chooser on the runs line, beside the one door that always renders', () => {
+    // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
+    // four other items — count, accounts door, mail badge, bell — need 244px
+    // of min-content, and the group has 294px at 390px; the chooser's widest
+    // option, "Coordinator row", measures 167px against the ~38px left once
+    // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
+    // shrink factor, so the control leaves the head. Those figures are browser
+    // measurements and deliberately are NOT recomputed here — an arithmetic
+    // gate over constants this file cannot measure would agree with itself
+    // forever. What IS checkable is the structure that keeps them true.
+    const line = ruleFor('.fleet-runs-line');
+    expect(declValue(line, 'display')).toBe('flex');
+
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const head = screen.slice(screen.indexOf('<header className="fleet-head">'),
+                              screen.indexOf('</header>'));
+    expect(head, 'the chooser is back inside <header>, where it never fit')
+      .not.toContain('fleet-class-select');
+    expect(screen).toContain('<div className="fleet-runs-line">');
+  });
+
+  it("makes the runs door yield the row, by specificity — it declares width: 100% too", () => {
+    // The same cascade trap as the chooser's own override, one row over, and
+    // worth its own assertion because it is the trap this codebase has now
+    // walked into twice. `.fleet-runs-row` is a full-width button; inside the
+    // flex line it must become a flex item that yields. A single-class
+    // restatement could not do it — `.fleet-runs-row` is declared LATER in
+    // this file than the line rule — so the override is the descendant form,
+    // (0,2,0) against (0,1,0), which wins from any position.
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const scrubbed = stripComments(css);
+    const baseAt = scrubbed.search(/\.fleet-runs-row\s*\{/);
+    const overrideAt = scrubbed.search(/\.fleet-runs-line\s+\.fleet-runs-row\s*\{/);
+
+    expect(overrideAt, 'the descendant override is gone — the runs door claims the whole row again')
+      .toBeGreaterThan(-1);
+    // Non-vacuity, both directions: there must be a `width` to beat, and it
+    // must be declared later, or source order alone would already settle it.
+    expect(declValue(ruleFor('.fleet-runs-row'), 'width'),
+      '.fleet-runs-row no longer claims the full width, so there is nothing to override')
+      .toBe('100%');
+    expect(baseAt,
+      '.fleet-runs-row now PRECEDES the override, so this test no longer proves anything')
+      .toBeGreaterThan(overrideAt);
+
+    expect(spec('.fleet-runs-line .fleet-runs-row'))
+      .toBeGreaterThan(spec('.fleet-runs-row'));
+    const override = ruleFor('.fleet-runs-line .fleet-runs-row');
+    expect(declValue(override, 'flex')).toBe('1 1 0');
+    expect(declValue(override, 'min-width')).toBe('0');
+    expect(declValue(override, 'width')).toBe('auto');
+  });
+
+  it('pairs the chooser with the runs door and NOT with the hot-files strip', () => {
+    // This pins the REASON, not just the arrangement. `HotFilesStrip` was the
+    // other candidate partner and is the wrong one because it renders itself
+    // or nothing: paired with it, the chooser would sit side by side only
+    // while somebody held a hot file and be orphaned again the moment the last
+    // claim expired. If that guard ever goes away the argument in
+    // `.fleet-runs-line`'s comment stops being true, and this is what says so.
+    const strip = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'HotFilesStrip.tsx'), 'utf8');
+    expect(stripComments(strip),
+      'HotFilesStrip no longer renders nothing when idle — re-argue the chooser\'s partner')
+      .toMatch(/liveClaims\.length === 0\)\s*return null/);
+
+    // …and the chooser really is beside the runs door rather than the strip.
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const lineEnd = screen.indexOf('<HotFilesStrip />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(lineEnd).toBeGreaterThan(lineStart);
+    const row = screen.slice(lineStart, lineEnd);
+    expect(row, 'the runs door left the line the chooser was seated on')
+      .toContain('className="fleet-runs-row"');
+    expect(row, 'the chooser left the runs line').toContain('fleet-class-select');
+    expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
+      .not.toContain('<HotFilesStrip');
+  });
+
+  it("lets the sheet's routing row shrink below its three selects", () => {
+    // The same bug class as `.proj-card`'s `min-width: 0` above: a grid item's
+    // automatic minimum size is its min-content, so a bare `1fr` track cannot
+    // go narrower than the widest option of the `<select>` inside it and the
+    // row pushes the sheet sideways instead of the options scrolling. Every
+    // other multi-track grid in this file already spells it `minmax(0, 1fr)`;
+    // `.route-row` was the one that did not.
+    const cols = declValue(ruleFor('.route-row'), 'grid-template-columns');
+    // Compared THROUGH `norm`, which is the reader's documented contract:
+    // whitespace next to a comma or paren is never significant, so a
+    // formatter reflowing this value must not red the suite.
+    expect(cols).toBe(norm('repeat(3, minmax(0, 1fr))'));
+  });
+
+  it('leaves no bare repeat(n, 1fr) track anywhere in pwa/src', () => {
+    // The instance above is one of a CLASS, so the guard is written against
+    // the class: a bare `1fr` inside `repeat()` is unbounded below by its
+    // items' min-content and pushes its container sideways. This is not a
+    // vacuous 0-of-0 census — nine multi-track grids exist across these
+    // stylesheets and every one of them already spells it `minmax(0, 1fr)`,
+    // so the population is real and `.route-row` was the single exception.
+    const dir = path.join(import.meta.dirname, '..', 'src');
+    const sheets = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.css'));
+    expect(sheets.length, 'no stylesheets found — this walk stopped seeing the tree')
+      .toBeGreaterThan(3);
+
+    const offenders: string[] = [];
+    for (const sheet of sheets) {
+      const text = stripComments(readFileSync(path.join(dir, sheet), 'utf8'));
+      for (const m of text.matchAll(/repeat\(\s*[0-9]+\s*,\s*1fr\s*\)/g)) {
+        offenders.push(`${sheet}: ${m[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

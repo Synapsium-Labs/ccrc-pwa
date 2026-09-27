@@ -216,6 +216,19 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
   });
 
+  it('409 heir-is-a-worker names the heir\'s own coordinator', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const { run } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const id = openWave(w.coord, 1);
+    seed(home, DEAD); seed(home, HEIR);
+    const other = w.coord.openRun({ program: 'other', title: 'w', project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    w.coord.bindSession(other.id, HEIR);
+    const res = await post(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+  });
+
   it('501 not-configured on a box that does no coordination at all', async () => {
     // The FIRST arm, and `auth-gate.test.ts`'s three-probe sweep leans on it:
     // that harness wires no `coord`, so dark and authenticated both land here.

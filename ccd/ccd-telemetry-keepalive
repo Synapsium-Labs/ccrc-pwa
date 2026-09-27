@@ -375,7 +375,12 @@ _ka_backoff_window() {   # <consecutive-failures> -> seconds
 # plan's suite, not the text of the function.
 _authdead() {   # <wrapper> -> rc 0 iff a valid marker is there; prints the epoch
   local f="$REG/$1-authdead" txt ts
+  # `-L` REFUSED BEFORE THE READ (D-2989). `-f` follows the chain, so a symlink
+  # here returns another file's epoch and skips a live account's keepalive turn.
+  # Spelled as its own rung rather than folded into the `-f` test, matching
+  # `_reg_read`'s shape in `ccd/ccd`.
   [ -f "$f" ] || return 1
+  [ -L "$f" ] && return 1
   txt="$(cat "$f" 2>/dev/null)" || return 1
   ts="${txt%% *}"
   [[ "$ts" =~ ^[0-9]+$ ]] || return 1

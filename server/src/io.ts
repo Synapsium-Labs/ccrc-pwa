@@ -1,5 +1,5 @@
 import { createReadStream, watch, type FSWatcher } from 'node:fs';
-import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 
@@ -57,6 +57,21 @@ export type MeasuredStat =
   | { ok: true; mtimeMs: number; size: number }
   | { ok: false; reason: ReadFailure };
 
+/** A PATH's OWN type, which `MeasuredStat` structurally cannot carry because
+ *  `stat` follows the link and answers about the target. Three positive kinds,
+ *  so `other` never borrows one of the two that decide anything.
+ *
+ *  `unmeasured` IS A FOURTH FAILURE REASON HERE AND NOT ON THE WIRE, and the
+ *  asymmetry is the point: it means this io cannot answer the question at all
+ *  — an agent too old to implement the `lstat` op, which rejects the request
+ *  rather than guessing. Folding it into `unreadable` would be an adapter
+ *  narrowing a distinction it received, and the narrowing would be the
+ *  dangerous direction: a caller that may act only on `regular` must be able
+ *  to tell "this box says not a plain file" from "nobody asked". */
+export type MeasuredPathKind =
+  | { ok: true; kind: 'regular' | 'symlink' | 'other' }
+  | { ok: false; reason: ReadFailure | 'unmeasured' };
+
 /** A binary read that distinguishes its THREE failure modes. `too-large` is
  *  not a fault and not an absence: the file is there and this transport
  *  cannot carry it (the agent's `MAX_READ_B64_BYTES`, a property of the WS
@@ -111,6 +126,13 @@ export interface FleetIO {
    *  own absence marker could not be trusted before this existed. */
   statMeasured(path: string): Promise<MeasuredStat>;
   stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;   // null on ANY failure — absent and unreadable both collapse here; use statMeasured to tell them apart
+  /** The path's own type, NOT its target's — the question every other read
+   *  on this interface answers about the resolved file. Declared here because
+   *  a CONSUMER needs it (`limits.ts`'s `authDead` gate, which must agree with
+   *  two bash bodies that refuse a symlinked marker), and it has no
+   *  collapsing convenience sibling on purpose: the whole value of this member
+   *  is the distinction a `| null` would destroy. */
+  lstatMeasured(path: string): Promise<MeasuredPathKind>;
   /** Physical path for `path`, or null when it cannot be resolved (missing
    *  path, permission, or an implementation with no resolver — the remote io
    *  answers null unconditionally, so callers degrade to the unresolved
@@ -205,6 +227,15 @@ export const localIO: FleetIO = {
   async stat(p) {
     const r = await this.statMeasured(p);
     return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
+  },
+
+  async lstatMeasured(p) {
+    try {
+      const s = await lstat(p);
+      return { ok: true, kind: s.isSymbolicLink() ? 'symlink' : s.isFile() ? 'regular' : 'other' };
+    } catch (err) {
+      return { ok: false, reason: failureFor(err) };
+    }
   },
 
   async realpath(p) {

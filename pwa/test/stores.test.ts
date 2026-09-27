@@ -44,9 +44,9 @@ const fleetSession = (id: string, wrapper: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 const emptySnap = (): SessionSnapshot => ({
@@ -442,6 +442,38 @@ describe('session store optimistic send', () => {
     // box the server has not re-measured.
     store.getState().retry(p.key);
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // THE SENTENCE FOLLOWS THE FLAG, not the code. A `verify-failed` the server
+  // marked submittable is the paste-chip collapse — the session DID take the
+  // text — so the pending must not carry the table's "never echoed it back"
+  // above a button that sends it.
+  it('a submittable verify-failed gets the collapsed sentence, not the table entry', async () => {
+    const chip = '[Pasted text #1]';
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: chip, submittable: true,
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('a long paragraph the box folded up');
+    const p = store.getState().pending[0]!;
+    expect(p.code).toBe('verify-failed');
+    expect(p.submittable).toBe(true);
+    expect(p.draft).toBe(chip);
+    expect(p.error).not.toMatch(/never echoed/);
+    expect(p.error).toMatch(/chip/);
+  });
+
+  it('and the same code WITHOUT the flag keeps the table entry', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: 'somebody else was typing',
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('my message');
+    const p = store.getState().pending[0]!;
+    expect(p.submittable).toBeUndefined();
+    expect(p.error).toMatch(/never echoed/);
   });
 
   it('resolve() clears the flag too — the same box, re-measured or not', async () => {
@@ -1088,6 +1120,123 @@ describe('fleet store', () => {
         { listed: true, enforcement: 'enforced', byProject: 'projects' },
         { listed: true, enforcement: 'enforced', byProject: 1 },
       ]) expectPriorWireToSurvive(pools);
+    });
+
+    // T9-R2: the epoch/observedEpoch producer's PWA half. Both are
+    // FLEET-LEVEL scalars, siblings of `enforcement` above (not per-project
+    // `byProject` members), so they get the same envelope-level type gate.
+    // `observedEpoch` is THREE-VALUED and every case below is a value the
+    // gate must accept unmodified — absent, `null` ("never synced") and a
+    // number all have to survive the round trip exactly as they arrived,
+    // never folded into one another.
+    describe('the epoch/observedEpoch staleness fields (T9-R2)', () => {
+      it('carries a real epoch and observedEpoch straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: 3 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('keeps observedEpoch:null distinct from an absent key — never synced is a real answer', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: null };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(true);
+        expect((got as typeof pools | null)?.observedEpoch).toBeNull();
+        store.getState().disconnect();
+      });
+
+      it('leaves observedEpoch absent as a MISSING key, not coerced to null, when the frame omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('leaves epoch absent as a missing key when the producer has no coordinator wired', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', observedEpoch: 4 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'epoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('treats epoch 0 and observedEpoch 0 as real values, never as absence', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 0, observedEpoch: 0 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed epoch or observedEpoch', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', epoch: 'seven' },
+          { listed: false, enforcement: 'unknown', epoch: null },
+          { listed: false, enforcement: 'unknown', epoch: true },
+          { listed: false, enforcement: 'unknown', observedEpoch: 'seven' },
+          { listed: false, enforcement: 'unknown', observedEpoch: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
+    // Item 3 (I1, wave-1 fix round A): `accountPools` shares `enforcement`'s
+    // own `PoolsEnforcement` domain and, before this round, the ONLY gate on
+    // it anywhere was `poolsWire`'s producer-side type — nothing at this
+    // envelope named it, so a malformed value from a broken or adversarial
+    // peer would have reached the first real consumer (`AccountsScreen`'s
+    // account-pool chip) unrejected. Same shape as the `enforcement` cases
+    // just above, one level down.
+    describe('the accountPools field (item 1, corrected item 3)', () => {
+      it('carries every valid accountPools value straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPools of ['enforced', 'unavailable', 'unknown']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        store.getState().disconnect();
+      });
+
+      it('leaves accountPools absent as a missing key when an older server omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'accountPools')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPools', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: null },
+          { listed: false, enforcement: 'unknown', accountPools: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
     });
 
     it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {

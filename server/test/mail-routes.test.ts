@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -630,6 +630,7 @@ describe('the rejection table is total, in both directions', () => {
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
+      'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
@@ -699,6 +700,26 @@ describe('the rejection table is total, in both directions', () => {
                                   // exactly like its two siblings above — no
                                   // `refused`/`reject.code` ever carries it, nothing
                                   // switches on it over the wire.
+      'reverse-demotion',        // routing slice 5, Task 2 — one of `RouteMode`'s own
+                                  // words (`shared/routing-ladder.ts`'s `RungTarget.mode`),
+                                  // compared here only against a run_events.detail token
+                                  // parsed back off `coord.runEvents(id)` to derive
+                                  // `lastDemotion` — same forensic-history family as
+                                  // `session-rebound` above, never a `refused`/`error` code.
+      'newest-page',             // design 2026-09-20 §7 (W2 Task 4) — one of
+                                  // `ListingCoverage`'s two words (store.ts): what a
+                                  // release listing COVERS, passed by the catalogue
+                                  // poller to `applyReleaseListing`. A description of
+                                  // an input, never a refusal: nothing answers it,
+                                  // nothing switches on it over the wire. Its sibling
+                                  // `complete` is one word and never reaches this scan.
+      'no-label-row',            // design 2026-09-20 §8 (W2 Task 5) — one of
+                                  // `RekeyNodeResult`'s three `how` words (store.ts):
+                                  // an ANSWER, not a refusal — the sweep's re-key found
+                                  // no label-keyed row, which is the ordinary case on
+                                  // every sweep after the first. Nothing is declined,
+                                  // nothing switches on it over the wire. Its siblings
+                                  // `rekeyed` and `superseded` are one word each.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -745,8 +766,36 @@ describe('the rejection table is total, in both directions', () => {
         // from the whole-branch review) as literals in server/src/coord,
         // alongside `answerAsk`'s own ten — same refusal family, one union,
         // admitted through its own exported guard rather than NOT_CODES.
-        || isAskRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
+        || isAskRefuseCode(tok)
+        // ROUTING SLICE 5, TASK 2 — the EIGHTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` states above.
+        // `POST /api/runs/:id/route` (coord/routes.ts) spells its own
+        // refusals as literals — a run-scoped write like `RunRefuseCode`'s
+        // four routes, but that union's docstring scopes itself to those
+        // four by name, so this fifth route gets its own vocabulary and its
+        // own exported guard rather than silently widening one whose
+        // docstring would then under-state its own membership.
+        || isRunRouteRefuseCode(tok)
+        // ACCOUNT-POOL MEMBERSHIP, TASK 6 FIX ROUND 2 (C1) — the NINTH union,
+        // checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `CoordStore.setAccountPools`
+        // (server/src/coord/store.ts) refuses synchronously to its caller —
+        // nothing is recorded, nothing replays — so its one member is
+        // neither a mail rejection nor a run refusal, the same family as
+        // `ClaimRefuseCode`/`AskRefuseCode` above. Admitted through its own
+        // exported guard rather than NOT_CODES, for the reason every union
+        // above gives: an allowlist entry accepts one spelling for ever, a
+        // guard accepts a member added later and still rejects a typo'd one.
+        || isSetAccountPoolsRefuseCode(tok)
+        // DESIGN 2026-09-20 §6 (W2) — the TENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states. The
+        // update control plane's `CoordStore` writers refuse synchronously to
+        // an in-process caller (the catalogue poller, the inventory sweep, a
+        // route) — nothing is recorded, nothing replays — so their words are
+        // neither mail rejections nor run refusals. Admitted through their own
+        // exported guard, for the reason every union above gives.
+        || isUpdateStoreRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode or UpdateStoreRefuseCode`).toBe(true);
     }
   });
 });

@@ -15,8 +15,9 @@ describe('dispatch places the hold before it clears the pane', () => {
     // ahead of the call it explains — so the guard passed on the comment's
     // position and only worked because the comment happens to travel with the
     // block. Matching the assignment makes the measured thing the shipped
-    // thing: `unattended-actor.test.ts` already pins this file to exactly one
-    // `CCD_ARGV.wsHold` occurrence, so this spelling cannot become ambiguous.
+    // thing: `const holdArgv =` names the step-5 hold and nothing else — the
+    // spent-child hand-over in `refuseSpentChild` is `const argv` — so this
+    // spelling cannot become ambiguous.
     const hold = src.indexOf('const holdArgv = CCD_ARGV.wsHold(');
     const clear = src.indexOf("'/clear'");
     expect(hold, 'no CCD_ARGV.wsHold call site found').toBeGreaterThan(-1);

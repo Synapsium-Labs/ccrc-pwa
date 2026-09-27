@@ -1,6 +1,20 @@
-import type { FleetSession } from '../../../shared/api';
+import { boardHome, type FleetSession } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
+
+/** The account a card's members call home — or why there is no one answer.
+ *  `shared` when every member (live ones; all of them when every member is
+ *  archived) carries the same `home`. `mixed` when they DISAGREE — a header
+ *  asserting one account while two lines show two different ones would be a
+ *  lie, and divergent pins across one project is worth noticing. `empty` when
+ *  the card has NO member at all: a durable card (R5, D-3010) rendered from the
+ *  project list rather than from its sessions. The third state exists because
+ *  the old `string | null` had no honest value for it — `null` meant
+ *  disagreement, and "nobody is here" is not a disagreement. */
+export type FleetPin =
+  | { state: 'shared'; home: string }
+  | { state: 'mixed' }
+  | { state: 'empty' };
 
 export interface FleetGroup {
   project: string;
@@ -41,19 +55,23 @@ export interface FleetGroup {
    *  bucket (seen.ts's `BADGED`), so a per-project badge that skipped it
    *  would undercount against the bucket bar's own Cleanup chip. */
   unseen: number;
-  /** The account every session in this project calls home, or null when they
-   *  disagree. Pinning is per session (`ccd prefer <id> <wrapper>`), so a
-   *  project-level pin only exists where its sessions happen to share one.
-   *  Null means DISAGREEMENT, not "unknown": a group always holds at least one
-   *  session and `home` is non-nullable on the wire, so there is always at
-   *  least one value to compare. */
-  pin: string | null;
+  pin: FleetPin;
   /** How many LIVE members carry a strand marker — ccd's `$REG/<id>.stranded`,
    *  written when a hard-blocked session's pool (or the whole roster) has
    *  nothing that can take it (spec §5.8). This is the LOUD count: ruling 6
    *  turned a silence that retried every five seconds forever into a marker, a
    *  log line and a banner, and this is the number the card wears so a fold
    *  cannot hide it.
+   *
+   *  Counted as `(m.stranded ?? null) !== null`, never a truthiness test and
+   *  never a read of `m.stranded.at`. TWO reasons, both producible: the live
+   *  `fleet` frame is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg`
+   *  validates only `Array.isArray(sessions)`), so a row from a server
+   *  predating this field has no key at runtime whatever the type says; and
+   *  the registry's fail-shut arm answers `{at: 0, reason:
+   *  STRANDED_UNREADABLE}` for a marker it could see and not read — a REAL
+   *  strand whose date is unknown, which `at`-truthiness would drop in
+   *  exactly the direction that hides a stuck session.
    *
    *  Scoped to `sessions` for the reason `attention`/`busy` are, and for one
    *  more: an archived session is stopped, so a marker it still carries
@@ -82,38 +100,71 @@ export interface FleetGroup {
    *  is the disk fact — which is why it no longer says the bare word
    *  "Archived". */
   archived: FleetSession[];
+  /** Where this project's OWN workspaces render when it is not here — one
+   *  entry per destination card, live rows only, most first. Spec §6: "an
+   *  emptied card says where its work went", as PLAIN TEXT, never a link — a
+   *  tappable route would be the second access path R2 excludes. Empty on a
+   *  card that has lost nothing. */
+  elsewhere: readonly { project: string; count: number }[];
 }
 
 /**
- * Group the fleet by project, preserving the flat list's urgency ordering:
- * groups sort by their most urgent member, members sort by the fleet rule.
- * `acks` defaults to `{}` (nothing acknowledged) so callers that don't care
- * about the unseen count — most existing ones — don't have to pass it. Pure —
- * returns new arrays.
+ * Group the fleet by CARD, preserving the flat list's urgency ordering: the
+ * populated groups sort by their most urgent member (members sort by the
+ * fleet rule), and every KNOWN project renders a card whether or not
+ * anything is on it (R5) — those follow, in the list's own order, because a
+ * card with nothing on it has no urgency to sort by. The card set is the
+ * union of `projects`, every session's rendered card and every session's own
+ * project, so a card can never be destroyed by a workspace leaving it and a
+ * project the list does not know (a workspace-only checkout — `listProjects`
+ * skips linked worktrees) still renders under its own name. Deduped by name:
+ * `listProjects` keys rows by workdir and can emit two rows with one name.
+ * `acks` defaults to `{}` so callers that don't care about the unseen count
+ * don't have to pass it. Pure — returns new arrays.
  */
-export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGroup[] {
+export function groupFleet(
+  sessions: FleetSession[], projects: readonly string[], acks: Acks = {},
+): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   for (const s of sortFleet(sessions)) {
-    const list = byProject.get(s.project);
+    const card = boardHome(s);
+    const list = byProject.get(card);
     if (list) list.push(s);
-    else byProject.set(s.project, [s]);
+    else byProject.set(card, [s]);
   }
+  // Durable cards AFTER the populated ones: Map insertion order is the group
+  // order, and the first session of each populated group IS its most urgent
+  // member, so the populated cards keep their order with no second comparator
+  // to drift. A known project nobody is on, and a session's OWN project that
+  // it no longer renders on (Task 4), each get an empty group here.
+  for (const s of sessions) if (!byProject.has(s.project)) byProject.set(s.project, []);
+  for (const p of projects) if (!byProject.has(p)) byProject.set(p, []);
 
-  // sortFleet already ordered the flat list, and Map preserves insertion
-  // order — so the first session of each group IS its most urgent member, and
-  // group order follows from it with no second comparator to drift.
   const groups: FleetGroup[] = [];
   for (const [project, members] of byProject) {
-    // members is never empty (a Map entry is only created alongside its first
-    // push), so the non-null assertions are safe under noUncheckedIndexedAccess.
     // See the `archived` field's doc: the split is on the BUCKET, so a
     // `cleanup` member stays in the live list its own chip counts it in.
     const live = members.filter((m) => m.bucket !== 'archived');
     const archived = members.filter((m) => m.bucket === 'archived');
     // `live` can be empty (every workspace of a project archived), so the pin
-    // falls back to the whole membership rather than indexing an empty array.
+    // falls back to the whole membership; and the whole membership can be
+    // empty (a durable card), which is the union's third state — never an
+    // indexed read of an empty array.
     const forPin = live.length > 0 ? live : members;
-    const pin = forPin.every((m) => m.home === forPin[0]!.home) ? forPin[0]!.home : null;
+    const first = forPin[0];
+    const pin: FleetPin =
+      first === undefined ? { state: 'empty' }
+      : forPin.every((m) => m.home === first.home) ? { state: 'shared', home: first.home }
+      : { state: 'mixed' };
+    const away = new Map<string, number>();
+    for (const s of sessions) {
+      if (s.project !== project || s.bucket === 'archived') continue;
+      const dest = boardHome(s);
+      if (dest === project) continue;
+      away.set(dest, (away.get(dest) ?? 0) + 1);
+    }
+    const elsewhere = [...away.entries()].map(([dest, count]) => ({ project: dest, count }))
+      .sort((a, b) => b.count - a.count || a.project.localeCompare(b.project));
     groups.push({
       project,
       sessions: live,
@@ -123,16 +174,12 @@ export function groupFleet(sessions: FleetSession[], acks: Acks = {}): FleetGrou
       unseen: live.filter((m) => isUnseen(m, acks)).length,
       pin,
       // `(m.stranded ?? null) !== null`, never a truthiness test and never a
-      // read of `m.stranded.at`. TWO reasons, both producible: the live `fleet`
-      // frame is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg`), so a row
-      // from a server predating this field has no key at runtime whatever the
-      // type says; and the registry's fail-shut arm answers `{at: 0, reason:
-      // STRANDED_UNREADABLE}` for a marker it could see and not read — a REAL
-      // strand whose date is unknown, which `at`-truthiness would drop in
-      // exactly the direction that hides a stuck session.
+      // read of `m.stranded.at` — see this field's own docstring for the two
+      // producible reasons.
       stranded: live.filter(
         (m) => m.status !== 'dead' && (m.stranded ?? null) !== null,
       ).length,
+      elsewhere,
     });
   }
   return groups;

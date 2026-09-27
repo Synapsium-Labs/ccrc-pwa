@@ -1,0 +1,516 @@
+// GET /api/sessions/:id/pane/history — the terminal drawer's scrollback.
+//
+// The drawer attaches with `tmux attach`, which puts the CLIENT on the
+// alternate screen; xterm has no scrollback there and turns the wheel into
+// arrow keys aimed at the pane. The pane is NOT in alt mode and tmux holds its
+// history, so the drawer reads that history instead of driving the pane.
+//
+// Everything pinned here is about the READ staying a read, and about the three
+// answers staying three: content, gone, and could-not-look.
+import { describe, it, expect } from 'vitest';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from '../src/server.js';
+import { loadConfig } from '../src/config.js';
+import { Tmux, PANE_PROBE_FORMAT, type ExecResult, type Runner } from '../src/exec.js';
+import { localIO } from '../src/io.js';
+import { ccdRunner } from '../src/lifecycle.js';
+import { Bus } from '../src/bus.js';
+import { mkTmp } from './tmpHelpers.js';
+import { seedRoster } from './helpers.js';
+import { KeyedQueue } from '../src/inject/queue.js';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+
+const ID = 'claude-a-MekWarLive';
+
+async function makeApp(
+  capture: ExecResult,
+  listPanes: ExecResult = { code: 0, stdout: '1 1953 2000 220 50 0\n', stderr: '' },
+): Promise<{ app: FastifyInstance; calls: string[][] }> {
+  const home = mkTmp('ccrc-pane-history-');
+  seedRoster(home);
+  const calls: string[][] = [];
+  const run: Runner = async (cmd, args) => {
+    calls.push([cmd, ...args]);
+    if (args[0] === 'capture-pane') return capture;
+    if (args[0] === 'list-panes') return listPanes;
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const cfg = loadConfig({ CCRC_HOME: home });
+  const app = await buildServer(
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() },
+    new Bus(),
+  );
+  return { app, calls };
+}
+
+const HISTORY = 'older output\nolder still\n';
+
+describe('GET /api/sessions/:id/pane/history', () => {
+  it('reads the pane history with capture-pane and answers it verbatim', async () => {
+    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 1953, scrollback: 1953, alternate: false, width: 220,
+    });
+    // THE ARGV IS THE GUARD. `-p` to stdout, `-e` so the history keeps the
+    // colours it was written in, `-S -<history>` to start above the screen, and
+    // `-J` so a line wrapped at the PANE's width arrives as the one logical
+    // line it was, for the reader to wrap at THEIRS. All four are reachable
+    // under the agent's existing `['capture-pane']` grant — flags are not
+    // checked, only the verb — so nothing here widens the closed exec surface
+    // and this never has to ship to the fleet host ahead of the server.
+    //
+    // WHY `-J` EARNS ITS PLACE, measured on a private socket against a real
+    // 200-column transcript: 1882 captured lines become 1113 (-41%) for +0.05%
+    // of bytes, and a 43-column phone renders 5861 rows instead of 6130 —
+    // which also puts the read back inside the drawer's own `lines * 3`
+    // scrollback budget, over which today's capture silently spills. Without
+    // it the phone wraps text that tmux already wrapped, and a word breaks
+    // twice.
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-1953'],
+    ]);
+    await app.close();
+  });
+
+  it('mutates nothing on the pane — no copy-mode, no send-keys, no resize', async () => {
+    // The alternative fixes all put the PANE in copy mode, which is shared with
+    // every other attached client and, measured against tmux 3.4, makes
+    // `send-keys -l` hang for as long as it lasts. This route must stay a read.
+    //
+    // The list is EXACT, not a filter, and that is the guard: both verbs here
+    // are reads, and the day a mutating one is added to this route — copy-mode,
+    // send-keys, resize-window — this line is what refuses it. Growing the list
+    // is a deliberate act with this comment in front of it.
+    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(calls.map((c) => c[1])).toEqual(['list-panes', 'capture-pane']);
+    await app.close();
+  });
+
+  it('tells a dead pane (404) apart from a tmux that could not answer (502)', async () => {
+    // tmux 3.4's own message for a session that is not there, measured.
+    const gone = await makeApp({ code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
+    const goneRes = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(goneRes.statusCode).toBe(404);
+    expect(goneRes.json()).toEqual({ ok: false, error: 'gone' });
+    await gone.app.close();
+
+    // Anything else is UNKNOWN, never death: an unrecognised future tmux error
+    // must read as "we could not look", with the reason carried out to the
+    // reader rather than collapsed into the same 404.
+    const down = await makeApp({ code: 1, stdout: '', stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)\n' });
+    const downRes = await down.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(downRes.statusCode).toBe(502);
+    expect(downRes.json()).toEqual({
+      ok: false,
+      error: 'unmeasured',
+      detail: 'error connecting to /tmp/tmux-1000/default (No such file or directory)',
+    });
+    await down.app.close();
+  });
+
+  it('a failure with nothing to say still says something', async () => {
+    const { app } = await makeApp({ code: 3, stdout: '', stderr: '' });
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ ok: false, error: 'unmeasured', detail: 'tmux exited 3 with no message' });
+    await app.close();
+  });
+
+  it('refuses a session id that is not one, before tmux is reached at all', async () => {
+    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const res = await app.inject({ method: 'GET', url: '/api/sessions/..%2Fetc/pane/history' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
+    expect(calls).toEqual([]);
+    await app.close();
+  });
+
+  // — how much is actually up there —
+  //
+  // `capture-pane` answers with the VISIBLE SCREEN even when nothing has ever
+  // scrolled off, so a 200 alone cannot tell a history from a second copy of
+  // what the reader is already looking at. The drawer needs the difference to
+  // say something true rather than open a view with an empty scrollbar in it,
+  // and this route is where the difference is measured.
+  it('carries the scrollback measurement beside the text, off the verb that was already allowed', async () => {
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 1979 2000 220 50 0\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 1979, scrollback: 1979, alternate: false, width: 220,
+    });
+    // `list-panes`, not a new verb: the whitelist entry `panePid` already uses,
+    // so this widens nothing in the exec surface.
+    expect(calls).toContainEqual(
+      ['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', PANE_PROBE_FORMAT]);
+  });
+
+  it('reports the alternate screen as CONTEXT, beside the count that decides', async () => {
+    // Not as the reason: measured on a private tmux 3.4 socket, a pane keeps
+    // the scrollback it already had when it enters the alternate screen (453
+    // lines still captured at `alternate_on=1`). The flag says only that
+    // nothing new will scroll off while the full-screen app is up — so the
+    // route carries both facts and lets the reader's own words be chosen from
+    // the pair.
+    const { app } = await makeApp(
+      { code: 0, stdout: 'a full screen\n', stderr: '' },
+      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toMatchObject({ ok: true, scrollback: 0, alternate: true });
+  });
+
+  it('an unmeasurable probe OMITS all three measured fields — absence is not zero', async () => {
+    // The whole point of the pair. A tmux that cannot answer must leave a
+    // reader with the behaviour the drawer shipped with; reporting zero here
+    // would make every unreachable pane claim it has no history.
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 1, stderr: "can't find pane: cc-nope", stdout: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
+  });
+});
+
+// F1 FALSIFIED THE CLAIM THESE COMMENTS CARRIED, and a comment is not a
+// mechanism — so this is the mechanism. Measured on a private tmux 3.4 socket:
+// `resize-window -x 43` on a 220-column pane holding 1853 stored lines reflows
+// `history_size` to 9460; at `history-limit 2000` the next output sheds ~600
+// lines and restoring 220 leaves 1746 logical lines of 1903, oldest gone. tmux
+// REFLOWS. What `-J` actually buys is that a LOGICAL line survives that reflow
+// and the reader wraps it once, at its own width.
+describe('the shipped comments say what F1 measured', () => {
+  const root = path.resolve(__dirname, '../..');
+  const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
+
+  /** The comment body, as a scanner should see it: every comment continuation
+   *  marker dropped and all runs of whitespace flattened, so a claim does not
+   *  escape by being wrapped. At 80 columns "tmux never\n// reflows" is the
+   *  NORMAL shape in this tree, and a raw-byte scan reads that as two unrelated
+   *  fragments.
+   *
+   *  JSDOC IS THAT SAME HOLE IN A SECOND SYNTAX, and the earlier version of this
+   *  helper stripped only `//`. A ` * ` leader is left sitting mid-sentence by a
+   *  whitespace flatten, so the wrapped claim survives as `tmux never * reflows`
+   *  and the scan reads past it — measured, and the file it mattered for is
+   *  `TerminalDrawer.tsx`, which carries F1's correction in exactly that block.
+   *  Both syntaxes are pinned below against FIXTURES rather than against a
+   *  shipped file, because a scanner proved only by the files it currently
+   *  passes is a scanner proved by nothing. */
+  const flatten = (text: string): string =>
+    text.replace(/^[ \t]*(?:\/\/|\/\*\*?|\*\/|\*) ?/gm, ' ').replace(/\s+/g, ' ');
+  const prose = (rel: string): string => flatten(read(rel));
+
+  /** The claim F1 falsified, in the voices a comment can carry it in. */
+  const FALSIFIED = /tmux (never|does not) reflow/i;
+
+  /** F1's measurement in its OWN TERMS — the operation, the width it resized
+   *  to, the stored count before, the quantity that moved, and the count after.
+   *
+   *  THE NUMBERS ALONE ARE NOT THE DEMAND, and that is the whole point of this
+   *  regex. The previous version asked for `1853 ... 9460` and nothing else;
+   *  measured, deleting the correction outright and leaving `See F1 (1853 ->
+   *  9460).` behind passed all eighteen tests — which is the exact failure mode
+   *  F1 was written to close, one token-size larger. The third case below
+   *  applies that pointer and asserts it does NOT satisfy this demand.
+   *
+   *  WHAT THIS GUARD CATCHES, stated flatly, because three rounds have each
+   *  found this block claiming more than it does — and the third round's
+   *  instance landed inside the comment written to fix the second's. It catches
+   *  the two literal historical spellings of the claim (`FALSIFIED`) and the
+   *  pointer-instead-of-measurement shape (`MEASUREMENT`, which is a token-ORDER
+   *  check: it needs no sentence and reads no grammar). Every TOKEN of both is
+   *  pinned by a fixture below, one fixture per token, and those fixtures are
+   *  the whole of what the pair is worth. The character BUDGETS between the
+   *  tokens are NOT pinned — widening one leaves every fixture's verdict
+   *  unchanged — so that is the part of this regex a change can loosen without
+   *  reding anything, and it is said here rather than left to be found.
+   *
+   *  WHAT IT DOES NOT CATCH is a paraphrase, and cannot. Seven escape today,
+   *  including "tmux 3.4 never reflows a stored line" — this tree writes
+   *  "tmux 3.4" in two of the scanned files, so that spelling is inviting — and
+   *  "tmux leaves a stored line at the width it was written at", which is this
+   *  branch's own paraphrase of the claim it refutes. A regex over prose cannot
+   *  be made complete, and a fourth widening would buy a fifth instance of this
+   *  comment being wrong. So: no widening. A reviewer reading a new reflow claim
+   *  is still the only thing that catches a new way of saying it. */
+  const MEASUREMENT =
+    /resize-window[\s\S]{0,80}\b43\b[\s\S]{0,160}\b1853\b[\s\S]{0,200}\bhistory_size\b[\s\S]{0,60}\b9460\b/i;
+
+  // DERIVED, NOT ENUMERATED — this repo's own single-source-of-truth rule
+  // (`PR_REASONS = Object.keys(PR_REASON_MAP)`, never a second hand-kept copy).
+  // The literal that stood here held two files, then three, and still could not
+  // see `shared/api.ts` — which reasons about reflow at length, is L0 and
+  // bundled into the PWA, and which this branch went on to edit twice
+  // (`2e14ffbb`, `0d1728bf`) with the widened literal, landed one commit
+  // earlier in `ff924f7e`, never reaching it. Fixing the instance and leaving
+  // the rule is how a scan goes stale the next time somebody writes the word.
+  // A file is in scope the moment it starts reasoning about reflow, and nobody
+  // has to remember to add it.
+  const ROOTS = ['server/src', 'pwa/src', 'shared', 'agent/src'];
+  const SKIP = new Set(['node_modules', 'dist', 'coverage']);
+  const walk = (rel: string): string[] =>
+    readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory()
+        ? (SKIP.has(e.name) ? [] : walk(`${rel}/${e.name}`))
+        : (/\.(ts|tsx|js|jsx|mjs|css)$/.test(e.name) ? [`${rel}/${e.name}`] : []));
+  // NAMED ONE BY ONE because the walk filters on extension and `ccd` has none.
+  // It is the tmux driver — the likeliest future home of a claim about what a
+  // resize does to stored history — and a scan of every file that reasons about
+  // tmux, minus the file that DRIVES tmux, is the shape of an oversight.
+  const EXTRA = ['ccd/ccd'];
+  const SCANNED = [...ROOTS.flatMap(walk), ...EXTRA]
+    .filter((rel) => /reflow/i.test(read(rel)));
+
+  // The files that are supposed to CARRY the measurement, as opposed to merely
+  // saying the word. This stays a short explicit list on purpose: a stylesheet
+  // that mentions layout reflow owes nobody F1's numbers.
+  const MEASURED = [
+    'server/src/exec.ts',
+    'server/src/server.ts',
+    'pwa/src/session/TerminalDrawer.tsx',
+  ] as const;
+
+  it('no shipped comment claims tmux never reflows a stored line (F1)', () => {
+    expect(SCANNED.filter((rel) => FALSIFIED.test(prose(rel))),
+      'a shipped comment still asserts what F1 falsified').toEqual([]);
+  });
+
+  it('the scan reaches every file that reasons about reflow, not a list somebody kept', () => {
+    // Guards the derivation itself. A broken walk — a renamed root, a filter
+    // that drops an extension — would leave the scan above green and blind,
+    // and green is exactly how a blind scan looks. `shared/api.ts` is named
+    // here as a POSITIVE CONTROL, not as the census: it is the file the frozen
+    // literal missed, it lives under a root none of the measured three do, and
+    // if the walk stops reaching it this reds.
+    for (const rel of [...MEASURED, 'shared/api.ts']) {
+      expect(SCANNED, `${rel} reasons about reflow and the scan cannot see it`).toContain(rel);
+    }
+    expect(SCANNED.length, 'the walk found nothing — it is not looking at this tree')
+      .toBeGreaterThan(MEASURED.length);
+  });
+
+  it('every shipped source root stays in scope — including the ones with nothing to find yet', () => {
+    // THE CLAIM THIS REPLACES WAS FALSE. The round that derived `SOURCES` said
+    // "dropping a root reds"; measured, removing `agent/src` was GREEN, because
+    // nothing under it matches /reflow/i and the reach test above is satisfied
+    // by files under the other three. A root with nothing to find is exactly
+    // the one a later narrowing takes out unnoticed, so the list is asserted
+    // whole — and each entry is asserted to be a real directory with sources in
+    // it, so a rename reds too rather than silently scanning nothing.
+    expect(ROOTS, 'a source root left the scan').toEqual([
+      'server/src', 'pwa/src', 'shared', 'agent/src',
+    ]);
+    expect(EXTRA, 'the tmux driver left the scan').toEqual(['ccd/ccd']);
+    for (const rel of ROOTS) {
+      expect(walk(rel).length, `${rel} is not a source root this tree has`).toBeGreaterThan(0);
+    }
+    for (const rel of EXTRA) {
+      expect(read(rel).length, `${rel} is not a file this tree has`).toBeGreaterThan(0);
+    }
+  });
+
+  it('the flatten sees through BOTH comment syntaxes — `//` and JSDoc', () => {
+    // Fixtures, not shipped files: the point is what the helper can see, and a
+    // shipped file that happens not to carry the claim proves nothing about it.
+    const lineWrapped = '  // a note about how tmux never\n  // reflows a stored line\n';
+    const jsdocWrapped = '  /**\n   * a note about how tmux never\n   * reflows a stored line\n   */\n';
+    const blockNoLeader = '  /*\n  a note about how tmux never\n  reflows a stored line\n  */\n';
+    // BOTH VOICES. Every fixture above says "never", so deleting the `does not`
+    // half of FALSIFIED's alternation left all 21 tests green — measured. An
+    // unpinned clause is a clause somebody can drop.
+    const otherVoice = '  // a note about how tmux does not\n  // reflow a stored line\n';
+    for (const [name, text] of Object.entries({
+      lineWrapped, jsdocWrapped, blockNoLeader, otherVoice })) {
+      expect(FALSIFIED.test(flatten(text)), `${name}: the claim escaped the flatten`).toBe(true);
+    }
+    // ...and the control, so the matcher is not simply matching everything.
+    expect(FALSIFIED.test(flatten('  /**\n   * tmux reflows stored lines on a\n   * resize.\n   */\n')),
+      'the offender regex matches a comment that says the opposite').toBe(false);
+  });
+
+  it('each file that carries F1 states the MEASUREMENT, not a pointer to it', () => {
+    // SUBSTANCE, NOT THE WORD, and the difference is not academic: the PWA-side
+    // correction was deleted wholesale by a later task, leaving one dangling
+    // cross-reference to a note that no longer existed — and the single word
+    // `reflow` inside that broken pointer was all it took to keep this
+    // assertion green while the fact it guards was gone.
+    //
+    // ALL THREE IN ONE RUN. The loop used to bail on the first miss, so a round
+    // that broke two files learned about one of them.
+    const missing = MEASURED.filter((rel) => !MEASUREMENT.test(prose(rel)));
+    expect(missing,
+      "these files no longer state F1's measurement in its own terms " +
+      '(`resize-window -x 43` ... 1853 ... `history_size` ... 9460). If F1 was ' +
+      're-measured, update this expectation and the comments together.')
+      .toEqual([]);
+    for (const rel of MEASURED) {
+      expect(read(rel).length, `${rel} is empty or missing`).toBeGreaterThan(1000);
+    }
+  });
+
+  it('a pointer standing in for the measurement does NOT satisfy the demand', () => {
+    // The case the previous demand had no proof against, written out. Both
+    // halves matter: the real sentence passes, and the pointer that replaced it
+    // in the measured failure does not. Without this pair the stronger regex
+    // would be one more assertion about itself.
+    const stated =
+      ' AND THE WIDTH THIS DIVIDES BY IS THE READER OWN. That is FALSE and F1 measured it' +
+      ' false on a private tmux 3.4 socket: `resize-window -x 43` on a 220-column pane' +
+      ' holding 1853 stored lines took `history_size` to 9460, and at `history-limit 2000`' +
+      ' the next output shed the overflow permanently. ';
+    const pointed =
+      ' AND THE WIDTH THIS DIVIDES BY IS THE READER OWN. A resize reflows stored history;' +
+      ' See F1 (1853 -> 9460). ';
+    expect(MEASUREMENT.test(flatten(stated)), 'the stated measurement no longer satisfies its own demand')
+      .toBe(true);
+    expect(MEASUREMENT.test(flatten(pointed)), 'a pointer carrying both numbers still passes')
+      .toBe(false);
+
+    // AND EVERY TOKEN OF THE DEMAND IS EXERCISED, one fixture each. Loosening
+    // the regex to /resize-window[\s\S]{0,2000}9460/i left all 21 tests green,
+    // and so did dropping the `1853` clause alone — the pair above rejects both
+    // loosened forms for the WRONG reason (no `resize-window` at all), which is
+    // how four clauses came to be carried by nothing. Each fixture below states
+    // the measurement with exactly one token missing, so the mutant that drops
+    // that token is the mutant it reds.
+    const missingOne: Record<string, string> = {
+      'the operation': ' The pin narrows to 43 columns: 1853 stored lines took `history_size` to 9460, per F1. ',
+      'the width it resized to': ' `resize-window` ran; 1853 stored lines took `history_size` to 9460. ',
+      'the count before': ' `resize-window -x 43` on a 220-column pane took `history_size` to 9460. ',
+      'the quantity measured': ' `resize-window -x 43` on a pane holding 1853 lines: 9460 after. ',
+      'the count after': ' `resize-window -x 43` on a pane holding 1853 lines took `history_size` up. ',
+    };
+    for (const [what, text] of Object.entries(missingOne)) {
+      expect(MEASUREMENT.test(flatten(text)),
+        `${what} dropped out of the demand — the regex stopped reading it`).toBe(false);
+    }
+  });
+
+  it('the -J note counts rows DOWN, not up — joining cannot render more rows', () => {
+    const src = read('server/test/pane-history-route.test.ts');
+    const m = /renders (\d+) rows instead of (\d+)/.exec(src);
+    expect(m, 'the -J row measurement went missing from this file').not.toBeNull();
+    const withJ = Number(m![1]);
+    const without = Number(m![2]);
+    expect(withJ, 'the numbers are inverted: -J joins lines, so it renders FEWER rows')
+      .toBeLessThan(without);
+  });
+});
+
+describe('the probe is taken FIRST and sizes the capture (§5.2)', () => {
+  it('captures `-S -<history>` when the pane was measured, not the constant', async () => {
+    // PR #96 captured 2000 lines and then asked how many there were. A pane
+    // holding 47 lines paid for 2000 and a pane holding 1953 got a window
+    // sized by a guess that happened to be right. The order flips so the read
+    // is sized by the measurement.
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+    );
+    await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(calls.map((c) => c[1]), 'the capture ran before the measurement that sizes it')
+      .toEqual(['list-panes', 'capture-pane']);
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-47'],
+    ]);
+    await app.close();
+  });
+
+  it('falls back to PANE_HISTORY_LINES when the pane could not be measured', async () => {
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 1, stdout: '', stderr: 'no server running\n' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+    ]);
+    // ABSENT, NOT ZERO: an unmeasurable probe omits all three fields, and a
+    // reader that finds them absent behaves exactly as it did before they
+    // existed. The capture itself succeeded, so this is a 200.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, text: HISTORY, lines: 2000 });
+    await app.close();
+  });
+
+  it('carries scrollback, alternate AND width when the probe was ok', async () => {
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 1953 2000 220 50 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+
+    // `width` is what lets the drawer size its OWN scrollback as
+    // history x ceil(paneWidth / readerCols) + rows (§5.4). Without it the
+    // reader is back to a constant multiplier over a width it cannot see.
+    expect(res.json()).toEqual({
+      ok: true, text: HISTORY, lines: 1953, scrollback: 1953, alternate: true, width: 220,
+    });
+    await app.close();
+  });
+
+  it('echoes the SIZE IT ASKED FOR as `lines`, so the two sides cannot disagree', async () => {
+    const { app } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 47 2000 220 50 0\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(res.json()).toMatchObject({ lines: 47, scrollback: 47 });
+    await app.close();
+  });
+
+  it('a measured ZERO history still asks for the constant — tmux returns what it has', async () => {
+    // `-S -0` would start at the screen's own top and return nothing above it,
+    // which is indistinguishable from a failed read to the layer above. The
+    // measured zero travels as `scrollback: 0` instead, which is exactly the
+    // fact the drawer refuses to open a layer on.
+    const { app, calls } = await makeApp(
+      { code: 0, stdout: HISTORY, stderr: '' },
+      { code: 0, stdout: '1 0 2000 220 50 1\n', stderr: '' },
+    );
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(calls.filter((c) => c[1] === 'capture-pane')).toEqual([
+      ['tmux', 'capture-pane', '-t', `cc-${ID}`, '-p', '-e', '-J', '-S', '-2000'],
+    ]);
+    expect(res.json()).toMatchObject({ scrollback: 0, alternate: true, width: 220 });
+    await app.close();
+  });
+
+  it('still refuses an unsafe id before either verb runs', async () => {
+    const { app, calls } = await makeApp({ code: 0, stdout: HISTORY, stderr: '' });
+    const res = await app.inject({ method: 'GET', url: '/api/sessions/..%2Fetc/pane/history' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session-id' });
+    expect(calls, 'a rejected id still reached tmux').toEqual([]);
+    await app.close();
+  });
+
+  it('the capture still decides the status: gone -> 404, anything else -> 502 with its detail', async () => {
+    const gone = await makeApp({ code: 1, stdout: '', stderr: "can't find pane: cc-nope\n" });
+    const g = await gone.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(g.statusCode).toBe(404);
+    expect(g.json()).toEqual({ ok: false, error: 'gone' });
+    await gone.app.close();
+
+    const bad = await makeApp({ code: 1, stdout: '', stderr: 'server exited unexpectedly\n' });
+    const b = await bad.app.inject({ method: 'GET', url: `/api/sessions/${ID}/pane/history` });
+    expect(b.statusCode).toBe(502);
+    expect(b.json()).toEqual({ ok: false, error: 'unmeasured', detail: 'server exited unexpectedly' });
+    await bad.app.close();
+  });
+});

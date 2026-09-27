@@ -18,7 +18,8 @@
 import { describe, it, expect } from 'vitest';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import {
-  MAIL_ENVELOPE_FENCE, parseFetchedMailEnvelope, parseMailEnvelope,
+  MAIL_ENVELOPE_FENCE, WAVE_DONE_SUBJECT, parseFetchedMailEnvelope, parseMailEnvelope,
+  parseWaveDoneSignals,
   type MailEnvelope, type MailEnvelopeParse,
 } from '../../shared/api.js';
 
@@ -400,5 +401,29 @@ describe('parseFetchedMailEnvelope: the envelope as a fetch returns it', () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.why).toBe('not-mail');
+  });
+});
+
+// Routing spec 2026-09-14 §5.5 / §8 row 16 — the signal lines are BODY, never
+// header. The mutation this reds on: a `suite:` line emitted by `renderEnvelope`
+// above the `--` terminator (or read by `parseMailEnvelope` as a header).
+describe('body-line signals never touch the envelope (routing slice 2)', () => {
+  const body = 'suite: red\nfailure: ceiling\n{"branchTip":"a","prNumber":null,"prPhase":"none","handoffCommit":"a"}';
+  const input: EnvelopeInput = { ...BASE, kind: 'status', subject: WAVE_DONE_SUBJECT, body };
+
+  it('the header above `--` carries no suite:/failure: line', () => {
+    const text = renderEnvelope(input);
+    const cut = text.indexOf('\n--\n');
+    expect(cut).toBeGreaterThan(0);
+    expect(text.slice(0, cut)).not.toMatch(/^(suite|failure): /m);
+  });
+
+  it('the lines round-trip inside `body`, verbatim, and parse from there', () => {
+    const parsed = parseMailEnvelope(renderEnvelope(input));
+    expect(parsed).toEqual({ ok: true, envelope: expectedFrom(input) });
+    if (!parsed.ok) throw new Error('unreachable');
+    expect(parsed.envelope.body.startsWith('suite: red\nfailure: ceiling\n')).toBe(true);
+    expect(parseWaveDoneSignals(parsed.envelope.body))
+      .toEqual({ suite: { ok: true, value: 'red' }, failure: { ok: true, value: 'ceiling' } });
   });
 });

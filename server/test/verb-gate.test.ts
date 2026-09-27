@@ -59,11 +59,58 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
   'start', 'enable', 'ensure', 'ws-add', 'stop', 'swap',
 ]);
 
+/**
+ * Verbs whose skew question is answered by a CAPABILITY token rather than by
+ * `verbSupported` at all (fix round 1, finding #2). `route` is the first:
+ * `routing spec 2026-09-14 §5.3`'s `POST /api/sessions/:id/route` handler
+ * gates on `capSupported(deps.fleetState, ROUTE_APPLY_CAP)` alone, the same
+ * pattern this file's sibling `ROUTE_ARGV_CAP`/`POOLS_CAP` call sites already
+ * use and already document (`server.ts`'s "REFUSE ON NO EVIDENCE —
+ * `capSupported`, never `verbSupported`" comment beside the `POOLS_CAP`
+ * cross-pool gate) — a literal `verbSupported(argv)` call there would be dead
+ * weight, not a second guarantee: `capSupported(ROUTE_APPLY_CAP)` can only
+ * read true when the deployed `cmd_caps` echoed `route-apply-v1`, and a box
+ * that echoes a FLAG capability for a verb necessarily emits the bare verb
+ * name in the same breath, so the base verb's presence is already implied.
+ * `verbSupported`'s permit-on-no-evidence default would in fact be WEAKER
+ * here than the `capSupported` refuse-on-no-evidence gate already sitting at
+ * that call site, so adding it would read as a second check while providing
+ * none.
+ *
+ * Scoped to exactly this verb, not accepted blanket for every call site
+ * (`'ignores a bare capSupported for a verb outside the set'` below pins the
+ * boundary) — a verb whose skew is genuinely about ccd not knowing the VERB
+ * AT ALL (this branch's own `NEW_GENERATION` list) still needs a real
+ * `verbSupported` call, and widening this past named verbs would let a
+ * missing one hide behind an unrelated `capSupported` in the same function.
+ */
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route']);
+
+/**
+ * Args that make each `CCD_ARGV` entry build without throwing, keyed by
+ * `CCD_ARGV` key — `VERB_OF` only needs `built[0]`, the literal verb string,
+ * so any well-shaped input works. The bare four-string probe below covers
+ * every entry except `routeSet`, whose SECOND parameter is a `RouteFields`
+ * object (`ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined)`,
+ * `src/ccdargv.ts`): a bare string `'x'` indexes to `undefined` for every
+ * field name, `pairs.length` comes out 0, and `routeSet` throws by design
+ * (`ccd route` refuses an argv with no `--set` pair) — at MODULE LOAD, before
+ * a single test in this file runs, which is why this suite's own redness was
+ * indistinguishable from the branch's routing changes until measured
+ * (fix round 1, finding #2). This is a TEST-HARNESS fix only: `routeSet`'s
+ * throw is correct production behaviour for a real empty-fields caller, and
+ * nothing about it changes here.
+ */
+const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
+  routeSet: ['x', { effort: 'x' }, null],
+};
+
 /** `CCD_ARGV` key -> the verb it emits, taken from the table itself rather
  *  than from a second copy of the mapping that could disagree with it. */
 const VERB_OF: Record<string, string> = Object.fromEntries(
   Object.entries(CCD_ARGV).map(([k, fn]) => {
-    const built = (fn as (...a: unknown[]) => readonly string[])('x', 'x', 'x', 'x');
+    const args = PROBE_ARGS[k] ?? ['x', 'x', 'x', 'x'];
+    const built = (fn as (...a: unknown[]) => readonly string[])(...args);
     return [k, built[0] ?? ''];
   }),
 );
@@ -183,9 +230,12 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       if (code[i] === '{') depth++;
       else if (code[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
     }
+    const verb = VERB_OF[key] ?? key;
+    const scopeText = code.slice(open, end);
     sites.push({
-      file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key,
-      gated: /verbSupported\s*\(/.test(code.slice(open, end)),
+      file, line: lineOf(m.index), key, verb,
+      gated: /verbSupported\s*\(/.test(scopeText)
+        || (CAP_GATED_VERBS.has(verb) && /capSupported\s*\(/.test(scopeText)),
       scope: text.slice(text.lastIndexOf('\n', open) + 1, open + 1).trim(),
     });
   }
@@ -221,6 +271,26 @@ describe('the scanner itself', () => {
   it('sees a gated call site', () => {
     const [s] = scanCcdCallSites(wrap(`  app.post('/x', async (req, reply) => {\n    const argv = CCD_ARGV.wsArchive(id);\n    if (!verbSupported(deps.fleetState, argv)) return reply.code(501).send({});\n    return run(reply, argv);\n  });`), 'f.ts');
     expect(s!.gated).toBe(true);
+  });
+
+  it('counts a bare capSupported( as the gate for a CAP_GATED_VERBS verb (fix round 1, finding #2)', () => {
+    const [s] = scanCcdCallSites(wrap(
+      `  app.post('/x', async (req, reply) => {\n    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({});\n    return run(reply, CCD_ARGV.routeApply(id, f, v, dec));\n  });`,
+    ), 'f.ts');
+    expect(s!.key).toBe('routeApply');
+    expect(s!.verb).toBe('route');
+    expect(s!.gated).toBe(true);
+  });
+
+  it('does NOT count a bare capSupported( as a gate for a verb outside CAP_GATED_VERBS', () => {
+    // The concession is scoped to named verbs, not blanket — otherwise an
+    // unrelated `capSupported` call anywhere in a handler could silence a
+    // genuinely missing `verbSupported` check on a brand-new verb.
+    const [s] = scanCcdCallSites(wrap(
+      `  app.post('/x', async (req, reply) => {\n    if (!capSupported(deps.fleetState, POOLS_CAP)) return reply.code(501).send({});\n    return run(reply, CCD_ARGV.wsArchive(id));\n  });`,
+    ), 'f.ts');
+    expect(s!.verb).toBe('ws-archive');
+    expect(s!.gated).toBe(false);
   });
 
   it('does not count a NEIGHBOURING route\'s gate as this route\'s gate', () => {

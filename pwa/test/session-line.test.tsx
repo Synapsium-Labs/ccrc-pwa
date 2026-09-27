@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ASK_OPERATOR_PRINCIPAL, graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
+import { ASK_OPERATOR_PRINCIPAL, graphGateCount, READER_MIN_COLS, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -18,10 +18,10 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
 });
 
 describe('label', () => {
@@ -964,12 +964,35 @@ describe('the spawn chip (§1.6b)', () => {
 
   it.each([
     ['blocked', 'blocked'], ['login', 'login'], ['vanished', 'vanished'],
-    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'],
+    ['expired', 'unconfirmed'], ['unrecognised', 'unknown'], ['narrow', 'narrow'],
   ] as const)('renders %s as %s', (state, word) => {
     render(<SessionLine session={s({ spawnState: state, started: true })}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(chip()?.textContent).toBe(word);
     expect(chip()?.getAttribute('data-spawn')).toBe(state);
+  });
+
+  // A `narrow` spawn's pane can be widened afterwards; the spawn fact cannot
+  // change until the next spawn. `paneCols` is THIS tick's prompt-box width,
+  // so once it reads at least READER_MIN_COLS the chip quiets to history.
+  it.each([
+    [220, 'was narrow', 'narrow-widened'],
+    [READER_MIN_COLS, 'was narrow', 'narrow-widened'],
+    // One column short is still narrow to ccd's readers.
+    [READER_MIN_COLS - 1, 'narrow', 'narrow'],
+    // Unmeasured (an overlay, an older server) is never read as wide.
+    [null, 'narrow', 'narrow'],
+  ] as const)('a narrow spawn whose pane now measures %s cols reads %s', (paneCols, word, data) => {
+    render(<SessionLine session={s({ spawnState: 'narrow', started: true, paneCols })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe(word);
+    expect(chip()?.getAttribute('data-spawn')).toBe(data);
+  });
+
+  it('a wide pane quiets ONLY a narrow spawn — every other verdict keeps its word', () => {
+    render(<SessionLine session={s({ spawnState: 'blocked', started: true, paneCols: 220 })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(chip()?.textContent).toBe('blocked');
   });
 
   // §1.7. THE VERDICT THIS BUILD HAS NO ROW FOR. `stores/fleet.ts`'s `asFleetMsg`
@@ -1458,5 +1481,18 @@ describe('the off-pool marker', () => {
     const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
     expect(acct).toHaveAttribute('data-away', 'true');
     expect(acct).toHaveAttribute('data-offpool', 'true');
+  });
+});
+
+describe('the repo label (board-placement wave 2, Task 6)', () => {
+  it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
+    render(<SessionLine session={s()} repo="Synapsium-Labs/custom-tools" onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/custom-tools/ })).toBeInTheDocument();
+    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/custom-tools');
+  });
+  it('renders nothing when the card already implies the repo', () => {
+    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
   });
 });

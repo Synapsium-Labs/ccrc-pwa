@@ -154,10 +154,17 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly one import line, and it is a type', () => {
+  it('shared/api.ts has exactly three import lines, and all are types (D-3021)', () => {
+    // Account-pool membership and release rollout each added an L0 sibling
+    // shape. Keeping both here avoids duplicate wire types while preserving
+    // the rule this pin defends: shared/api.ts imports nothing at runtime.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
-    expect(imports).toEqual(["import type { Hue } from './roster.js';"]);
+    expect(imports).toEqual([
+      "import type { Hue } from './roster.js';",
+      "import type { AccountPoolWire } from './poolrule.js';",
+      "import type { BuildInfo } from './buildinfo.js';",
+    ]);
   });
 });
 

@@ -19,6 +19,7 @@ import type {
   ReaddirReq,
   ResErr,
   ResOk,
+  LstatReq,
   StatReq,
   TailCloseReq,
   TailData,
@@ -26,24 +27,32 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
-import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import {
+  CCRC_DIR_NAME,
+  NODE_FILE_BASENAMES,
+  parseCcdCaps,
+  parseObservedEpochDoc,
+  POOL_EPOCH_FILE_NAME,
+} from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
   readB64Measured,
   readFromMeasured,
   listDir,
+  lstatMeasured,
   readWhole,
   statMeasured,
   writeB64,
   type ReadB64Result,
   type ReadFromResult,
   type ReadResult,
+  type PathKindResult,
   type StatResult,
 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
-import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
+import { canonicalize, checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
  * ccrc-agent: a small authenticated WS service exposing a whitelisted
@@ -150,11 +159,22 @@ export function resolveProjectsRoot(
  *
  *  Written as a restatement first, and that was the defect: a hand-copied
  *  member list is a claim about another file with nothing enforcing it. This
- *  frame carries three synchronised fields now (`ccdVerbs`, `rosterFp`,
- *  `build`) and the next task adds to `AgentReady` again — a required field
- *  gained over there is now a compile error here until this send site answers
- *  it, instead of a field the agent silently never sends. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs'> & { ccdVerbs: string[] };
+ *  frame carries four synchronised fields now (`ccdVerbs`, `rosterFp`,
+ *  `build`, `observedEpoch`) and the next task adds to `AgentReady` again — a
+ *  required field gained over there is now a compile error here until this
+ *  send site answers it, instead of a field the agent silently never sends.
+ *
+ *  `observedEpoch` is narrowed the same way `ccdVerbs` is, and for the same
+ *  reason: `readObservedEpoch` never throws uncaught and always answers a
+ *  `number | null` — THIS agent always has evidence (a real epoch, or `null`
+ *  for "never synced"). The wire declares it optional only so a READER can
+ *  tolerate an OLDER agent that predates the field entirely; this build is
+ *  never that agent, so its own frame type says so and the send site cannot
+ *  compile while silently omitting it. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch'> & {
+  ccdVerbs: string[];
+  observedEpoch: number | null;
+};
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
 
@@ -191,6 +211,17 @@ function readPayload(r: ReadResult): { data: string | null; absent?: true } {
  *  fail SHUT instead of masquerading as proof the path is gone (D-114). */
 function statPayload(r: StatResult): { mtimeMs: number; size: number } | { missing: true; absent?: true } {
   if (r.ok) return { mtimeMs: r.mtimeMs, size: r.size };
+  return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
+}
+
+/** Builds the `lstat` op's payload. `kind` is a POSITIVE answer in all three
+ *  arms, and its absence is therefore never an answer: an agent too old to
+ *  implement this op rejects the request outright with `not-implemented`, which
+ *  is what lets the server tell UNMEASURED from `regular` instead of reading an
+ *  older peer's silence as proof the path is a plain file. That direction is the
+ *  load-bearing one — `regular` is the only kind any caller may condemn on. */
+function lstatPayload(r: PathKindResult): { kind: 'regular' | 'symlink' | 'other' } | { missing: true; absent?: true } {
+  if (r.ok) return { kind: r.kind };
   return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
 }
 
@@ -325,6 +356,71 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, statPayload(await statMeasured(p))));
       return;
     }
+    case 'lstat': {
+      // THE WHITELIST DECISION IS UNCHANGED and still made on the FULLY
+      // RESOLVED path: a link escaping the whitelist is refused here exactly as
+      // it is for every other op.
+      const p = await checkPath(req.path, ctx.cfg, 'read');
+      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
+      // BUT NOT `p` ITSELF AS THE SUBJECT. `checkPath` canonicalizes, and
+      // canonicalization destroys precisely the fact this op exists to report
+      // — `lstat(p)` follows nothing because there is nothing left to follow,
+      // so a symlinked marker could only ever come back `regular`. That is a
+      // fix that looks like one and is not, and it was caught by an end-to-end
+      // case, not by reading: the local adapter answered `symlink` and this
+      // wire answered `regular` on the same fixture.
+      //
+      // So the subject is the path whose PARENT is canonical and whose last
+      // component is literal. The parent is whitelist-checked in its own right
+      // and exactly one component is appended, so this can only ever name an
+      // entry of a directory the connection may already `readdir` — which
+      // lists this very name. Strictly less disclosure than `readdir`, and
+      // `lstat` reads no content and follows no final link.
+      //
+      // `parent === null` is the whitelist ROOT itself (`.cc-sessions`, whose
+      // parent is $HOME and is not whitelisted): fall back to the canonical
+      // path, which for a directory is the same answer.
+      //
+      // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C).
+      // `~/.ccrc` is not itself independently whitelisted in the common case
+      // (only its eight literal node-file paths are), so `parent === null`
+      // usually fires for a node-file request, and the fallback subject would
+      // then be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
+      // answer. That is correct when the node file is admitted through
+      // `isCcrcNodeFile` (that grant requires canonical === `<ccrc>/<literal
+      // basename>`, so canonical already equals the literal path). But a node
+      // file can ALSO be admitted through a DIFFERENT whitelist arm: a live
+      // symlink whose FULLY RESOLVED target lies in another admitted prefix
+      // (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
+      // that target is a regular file the OTHER prefix's own arm admits on
+      // its own — and then `p` names that other file, not the link. Scoped
+      // narrowly so every other request's answer stays byte-for-byte
+      // unchanged, whether or not `~/.ccrc` itself happens to be
+      // independently admitted (e.g. `~/.ccrc` itself under another prefix):
+      // only when the request literally names `<canonical
+      // ~/.ccrc>/<one of the eight basenames>` does the subject become that
+      // literal path directly, never the parent-probe fallback. The basename
+      // check runs FIRST — a cheap array lookup — so the two `canonicalize`
+      // calls (realpath walks) below run only when it can possibly matter,
+      // never on every `lstat`.
+      const literalBasename = path.basename(req.path);
+      const viaParentProbe = async (): Promise<string> => {
+        const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
+        return parent === null ? p : path.join(parent, path.basename(req.path));
+      };
+      let subject: string;
+      if (NODE_FILE_BASENAMES.includes(literalBasename)) {
+        const canonicalCcrc = await canonicalize(path.join(ctx.cfg.home, CCRC_DIR_NAME));
+        const literalParent = await canonicalize(path.dirname(req.path));
+        subject = literalParent === canonicalCcrc
+          ? path.join(canonicalCcrc, literalBasename)
+          : await viaParentProbe();
+      } else {
+        subject = await viaParentProbe();
+      }
+      send(ws, ok(req.id, lstatPayload(await lstatMeasured(subject))));
+      return;
+    }
     case 'writeB64': {
       const p = await checkPath(req.path, ctx.cfg, 'write');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
@@ -437,6 +533,10 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
       if (typeof msg.path !== 'string') return null;
       return { t: 'req', id, op: 'stat', path: msg.path } satisfies StatReq;
     }
+    case 'lstat': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'lstat', path: msg.path } satisfies LstatReq;
+    }
     case 'writeB64': {
       if (typeof msg.path !== 'string') return null;
       if (typeof msg.dataB64 !== 'string') return null;
@@ -512,6 +612,54 @@ function readRosterFp(home: string): string | undefined {
     return bodyDigest(readFileSync(path.join(home, '.ccrc', 'accounts.sh'), 'utf8'));
   } catch {
     return undefined;
+  }
+}
+
+/** Re-exported so `pool-epoch-numeric-parity.test.ts`'s existing import
+ *  keeps resolving unchanged. The grammar itself, and the document parser
+ *  below, moved to `shared/agent-protocol.ts` (D-3086,
+ *  item 1, wave-1 fix round A): the SERVER now has its own reader of this
+ *  same file (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, via
+ *  `FleetIO.readFileMeasured` rather than this file's `readFileSync`), and
+ *  the brief that ordered it forbids a second hand-typed copy of one
+ *  grammar — see `parseObservedEpochDoc`'s own docstring for the full
+ *  three-check explanation this file used to carry locally. */
+export { OBSERVED_EPOCH_NUM } from '../../shared/agent-protocol.js';
+
+/**
+ * The epoch of the pool-membership projection THIS node actually has —
+ * `~/.cc-sessions/pool-epoch`, the leased projection `ccd-pool-sync` (Task 3)
+ * writes and `_acct_pool_state` (`ccd/ccd`) reads for placement decisions.
+ *
+ * `null` means this node has never synced — no file, an unreadable one, or a
+ * document `parseObservedEpochDoc` cannot prove a usable epoch out of. That
+ * is NOT the same as epoch 0 (the control plane has issued nothing yet, but
+ * this node has a real, if trivial, projection) and NOT the same as the
+ * field being absent from the `ready` frame (an older agent build that
+ * cannot even ASK the question) — `AgentReady.observedEpoch` and
+ * `FleetState.observedEpoch` both keep those three apart; `undefined` is
+ * what an ABSENT reader sees, never what this function returns.
+ *
+ * The read-and-fold-to-`null` is this function's own remaining job; the
+ * CONTENT grammar (terminator, exactly-one `epoch` line, that line's own
+ * numeric precision) is `parseObservedEpochDoc`'s (`shared/agent-protocol.ts`)
+ * — shared with the server's own reader of the identical file so the two
+ * cannot drift on what counts as a usable epoch.
+ *
+ * Read fresh on every `ready`, synchronously, for the same reason
+ * `readRosterFp`/`readBuildStamp` are: one small file read, at most once per
+ * WS connection, bought against a staleness question that would otherwise
+ * need its own cache-invalidation story. (This per-handshake cadence is
+ * exactly why the SERVER no longer treats the value this produces as its
+ * `pools` wire's `observedEpoch` authority — see the doc on
+ * `AgentReady.observedEpoch` in `shared/agent-protocol.ts`.)
+ */
+export function readObservedEpoch(home: string): number | null {
+  try {
+    const text = readFileSync(path.join(home, '.cc-sessions', POOL_EPOCH_FILE_NAME), 'utf8');
+    return parseObservedEpochDoc(text);
+  } catch {
+    return null;
   }
 }
 
@@ -636,11 +784,21 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // stamp — `AgentReady` declares both optional and the server's readers
       // treat absence as "no evidence", the same contract `ccdVerbs` has.
       //
-      // Assembled field by field rather than by the ternary this used to be:
-      // with two optional fields that ternary becomes four spellings of one
-      // frame, and a third field eight. The contract is unchanged — a key is
-      // written only when there is something to write.
-      const frame: ReadyFrame = { t: 'ready', v: 1, ccdVerbs: verbCache.verbs };
+      // `observedEpoch` is DIFFERENT and is never omitted by this build: it is
+      // in the initial literal, not assembled after like the two above,
+      // because `ReadyFrame` narrows it to required (same move as `ccdVerbs`)
+      // — `readObservedEpoch` always has an answer, a real epoch or `null` for
+      // "never synced", and only an agent build old enough to lack this
+      // field's code at all may omit it. This build is never that agent.
+      //
+      // `rosterFp`/`build` are still assembled field by field rather than by
+      // the ternary this used to be: with two optional fields that ternary
+      // becomes four spellings of one frame, and a third field eight. The
+      // contract is unchanged — a key is written only when there is
+      // something to write.
+      const frame: ReadyFrame = {
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home),
+      };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);

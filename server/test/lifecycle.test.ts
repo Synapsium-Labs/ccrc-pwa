@@ -67,7 +67,12 @@ async function makeApp(
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
   const watcher = (opts.readiness !== undefined || opts.unswept)
-    ? ({ currentReadiness: () => opts.readiness, stop: () => {} } as never)
+    // Task 4 (board placement wave 1): `currentProjectRepos()` rides beside
+    // `currentReadiness()` on the same double — the route calls both
+    // unconditionally, so a watcher stub missing either throws inside the
+    // route rather than answering `unmeasured`. Empty map: no test in this
+    // file measures a repo, only that the key is present and defaulted.
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -577,6 +582,11 @@ describe('listProjects', () => {
         readiness: null,
         pool: { state: 'untagged' },
         placement: { kind: 'projected', wrapper: 'claude', score: 0 },
+        // Task 4 (board placement wave 1): this app has no watcher at all, so
+        // `currentProjectRepos()` is never called — every row reads the
+        // sweep-never-reached default, same reasoning as `readiness: null`
+        // just above.
+        repo: { state: 'unmeasured' },
       })));
     await app.close();
   });
@@ -836,7 +846,14 @@ describe('GET /api/projects — the program-ready readiness', () => {
   it('carries a per-project readiness once the watcher has swept', async () => {
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }) },
+      // Item 15 (fix wave B): a stub missing `accountPoolEdges` entirely
+      // makes `readAccountPoolEdges()`'s try/catch swallow a `TypeError`
+      // instead of the `DatabaseSync`-shaped hazard it exists to catch — this
+      // test then quietly measures the DEGRADED path, not the ledger-floor
+      // behaviour its name claims. `projects-route-placement.test.ts`'s "a
+      // throwing accountPoolEdges() degrades placement to declared-only"
+      // already covers that hazard on purpose; this stub just needs to work.
+      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }), accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -852,7 +869,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // THE CASE THE FEATURE EXISTS FOR. `CoordStore.runs()` joins `programs`,
     // so a runs-shaped seam has no row at all here; this one does.
     const { app } = await makeApp({
-      readiness: SWEPT, coord: { ledgerFloor: () => null },
+      readiness: SWEPT, coord: { ledgerFloor: () => null, accountPoolEdges: () => new Map() },
     });
     const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
     expect(row.readiness.floor).toBe('not-seeded');
@@ -874,7 +891,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // would send an operator to seed a floor that may already exist.
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); } },
+      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); }, accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -895,6 +912,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
           if (project === 'alpha') throw new Error('SQLITE_BUSY');
           return { floor: 1, evidence: 'x', updatedAt: 1 };
         },
+        accountPoolEdges: () => new Map(),
       },
     });
     const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
@@ -973,6 +991,16 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
+  });
+  it('declares the Claude Code temp dir as a session-bound class collected by ccd-tmp-sweep', () => {
+    // Policy row #9 named /tmp/claude-<uid> "a root we declare to agents in
+    // their own system prompt and then never collect"; it reached 138G on the
+    // fleet host before it had a collector.
+    const c = LIFECYCLE.find((x) => x.name === 'claude-tmp-session-dirs');
+    expect(c, 'shared/lifecycle.ts declares no claude-tmp-session-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.collector).toContain('ccd-tmp-sweep');
+    expect(c!.root).toContain('claude-<uid>');
   });
   it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
     // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2

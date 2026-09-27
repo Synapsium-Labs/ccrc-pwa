@@ -33,5 +33,21 @@ export declare function availableFor(
   reg: Registry | null, catalogue: Catalogue | null, anthropic: boolean,
 ): ModelClass[];
 export declare function familyClassOf(anthropicModelId: string): ModelClass | null;
+// The ONE model-id → class table `familyClassOf` matches against — see
+// `shared/models.mjs` for the ordering rule. Exported for the usage sweep's
+// runner, which hands it to the python scanner as `--class-tokens`.
+//
+// A DEPARTURE FROM THE PLAN (routing slice 0, Task 6, ruled accepted): the
+// brief added `FAMILY_TOKENS` to `shared/models.mjs` alone, and
+// `typecheck-tests` reds without this ambient declaration beside it — the
+// suite imports the table from the `.mjs`, and a runtime export this
+// hand-written twin does not declare is invisible to a TypeScript caller.
+// Declaring it here is this file's whole job ("the names and the shape are
+// `shared/models.ts`'s exactly", above), so the departure is in WHICH FILE the
+// wave touched, never in the rule.
+//
+// D-2787 (2026-09-14): the departure is recorded in the routing slice 0 plan's
+// Deviations section (docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md).
+export declare const FAMILY_TOKENS: readonly (readonly [string, ModelClass])[];
 export declare function classOfModel(reg: Registry, modelId: string): ModelClass | null;
 export declare const UNAVAILABLE_PREFIX: string;

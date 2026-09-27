@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness, DEAD_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 import { describeLinux, describeDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -40,6 +40,7 @@ const UNIT = `sleep() { :; };
   };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${WIDE_PANE_IF_UP}
     case "$1" in
       new-session)  : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;
@@ -62,6 +63,7 @@ const NO_PANE = `sleep() { :; };
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${DEAD_PANE}
     case "$1" in
       has-session)  echo "can't find session: $3" >&2; return 1 ;;
       capture-pane) printf '' ;;
@@ -306,7 +308,7 @@ describeLinux('ccd ensure revives a live-but-unsupervised session', () => {
     seedLive('myid');
     const NOUNIT = `sleep() { :; };
       systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 1; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) [[ -e "$HOME/pane-up" ]] ;; esac; };`;
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE_IF_UP} case "$1" in has-session) [[ -e "$HOME/pane-up" ]] ;; esac; };`;
     // Captured through a file, not through a thrown exec: `cmd_ensure` returns
     // 0 on this path (the pane really is alive), so the warning would be
     // invisible to a helper that only reads stderr on a non-zero exit.
@@ -368,7 +370,7 @@ describeLinux('the start waits on observables', () => {
         case "$*" in "--user enable --now "*) echo "$(date +%s) 3" > "$REG/myid.spawn" ;; esac
         return 0
       };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
       cmd_ensure myid`);
     expect(r.code).toBe(3);
     expect(r.stdout).not.toContain('ensured');
@@ -418,7 +420,7 @@ describeLinux('the start waits on observables', () => {
         case "$*" in "--user enable --now "*) echo "$(date +%s) 3" > "$REG/myid.spawn" ;; esac
         return 0
       };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
       cmd_ensure myid`);
     expect(h.reg('myid', 'started')).toBe('1');
   });
@@ -470,6 +472,7 @@ describeLinux('when systemd is not there, the start still happens and says so', 
       systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; case "$2" in enable) return 1 ;; esac; return 0; };
       tmux() {
         echo "tmux $*" >> "$HOME/ccd-calls"
+        ${WIDE_PANE_IF_UP}
         case "$1" in
           new-session) : > "$HOME/pane-up" ;;
           has-session) [[ -e "$HOME/pane-up" ]] ;;
