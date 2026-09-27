@@ -580,7 +580,14 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
   it('and does NOT type it again on the next pane creation', () => {
     conf('CCRC_SESSION_EFFORT=high\n');
     inject();
-    expect(inject(), 'a skip must report that it typed nothing').toContain('rc=1');
+    // THE RC PIN IS RETIRED, not weakened. This suite used to assert rc=1 on
+    // every silent exit. Measured against `main`: `ccdWsHelpers`' `sh` is
+    // `execFileSync`, which THROWS on a non-zero exit, and
+    // `ccd-route-settle.test.ts` calls `_inject_spawn_effort cc-myid` bare in
+    // nine cases — so a guard answering 1 makes MAIN's cases throw before they
+    // can assert. The status is uniform 0 there and here. What this case is
+    // actually about survives untouched below: nothing typed, nothing recorded.
+    expect(inject()).toContain('rc=0');
     expect(typed()).toHaveLength(1);
   });
 
@@ -607,8 +614,15 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
       tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls";
         case "\${1:-}" in capture-pane) echo "Usage limit reached · continuing automatically at 11:50am" ;; esac; return 0; };
       _pane_box_draft() { printf '%s' ""; };`;
+    // THE RC PIN IS RETIRED, not weakened. This suite used to assert rc=1 on
+    // every silent exit. Measured against `main`: `ccdWsHelpers`' `sh` is
+    // `execFileSync`, which THROWS on a non-zero exit, and
+    // `ccd-route-settle.test.ts` calls `_inject_spawn_effort cc-myid` bare in
+    // nine cases — so a guard answering 1 makes MAIN's cases throw before they
+    // can assert. The status is uniform 0 there and here. What this case is
+    // actually about survives untouched below: nothing typed, nothing recorded.
     expect(h.sh(`${ARMED_PANE} _inject_spawn_effort cc-claude-demo; echo "rc=$?"`))
-      .toContain('rc=1');
+      .toContain('rc=0');
     expect(typed()).toEqual([]);
     expect(h.reg(SID, 'effortset'), 'a skip recorded a level it never typed').toBeNull();
     expect(inject()).toContain('rc=0');
@@ -794,8 +808,15 @@ describe('the effort marker is written only where something was typed', () => {
       tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls";
         case "\${1:-}" in capture-pane) printf '%s\\n' "? for shortcuts\\n❯ " ;; esac; return 0; };
       _pane_box_draft() { printf '%s' "half a sentence"; };`;
+    // THE RC PIN IS RETIRED, not weakened. This suite used to assert rc=1 on
+    // every silent exit. Measured against `main`: `ccdWsHelpers`' `sh` is
+    // `execFileSync`, which THROWS on a non-zero exit, and
+    // `ccd-route-settle.test.ts` calls `_inject_spawn_effort cc-myid` bare in
+    // nine cases — so a guard answering 1 makes MAIN's cases throw before they
+    // can assert. The status is uniform 0 there and here. What this case is
+    // actually about survives untouched below: nothing typed, nothing recorded.
     expect(h.sh(`${DRAFT_PANE} _inject_spawn_effort cc-claude-demo; echo "rc=$?"`))
-      .toContain('rc=1');
+      .toContain('rc=0');
     expect(typed()).toEqual([]);
     expect(h.reg(SID, 'effortset')).toBeNull();
   });
