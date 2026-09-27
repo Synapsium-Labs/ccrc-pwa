@@ -1052,7 +1052,7 @@ The registry uuid is the authority — it is what `--resume` reads after a resta
 - Consumes: `_cfg_dir`, `_reg_get`, `_reg_set`, `_ws_realpath` (all existing in `ccd/ccd`).
 - Produces: `_continued_in_of <file> <uuid>` printing a successor uuid or nothing; `_sync_uuid` unchanged in signature.
 
-**Refinement of the spec, recorded as `D-3164`:** the spec says `ccd` walks the chain with a hop bound and a visited set. `ccd` follows **one hop per supervise tick** instead. The read budget below is what forces it — each hop's quiescence has to be observed before its file may be read — and the effect is the same: the chain converges over a few ticks, the per-stamp memo IS the visited set, and a cycle cannot be re-read because its stamps are already in it. The ledger allocator (`POST /api/ledger/deviations`) answered 401 from this box, which holds no box token, so this carries a `D-TBD-` slug and must be reported rather than guessed at.
+**Refinement of the spec, recorded as `D-3562`:** the spec says `ccd` walks the chain with a hop bound and a visited set. `ccd` follows **one hop per supervise tick** instead. The read budget below is what forces it — each hop's quiescence has to be observed before its file may be read — and the effect is the same: the chain converges over a few ticks, the per-stamp memo IS the visited set, and a cycle cannot be re-read because its stamps are already in it. The ledger allocator (`POST /api/ledger/deviations`) answered 401 from this box, which holds no box token, so this carries a `D-TBD-` slug and must be reported rather than guessed at.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1286,7 +1286,7 @@ _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-3164). `_transcript_path` costs
+  # WHY ONE HOP AND WHY GATED (D-3562). `_transcript_path` costs
   # ~36 ms — D-2444 measured it at ~14x the pane classifier and stopped paying
   # it every five seconds across the fleet — so this stats the direct address
   # instead and reads nothing at all in the common case. The marker can only be
@@ -1733,15 +1733,31 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Deviations found
 
-(Numbers are ISSUED by the allocator and defined here in the same act — the block `D-3164`…`D-3168` was minted for this project on 2026-09-20. Bullets, not a table: `deviation-refs.test.ts`'s high-water reads a definition line, and a table cell is not one.)
+(Numbers are ISSUED by the allocator and defined here in the same act — the block `D-3562`…`D-3566` was minted for this project on 2026-09-27. Bullets, not a table: `deviation-refs.test.ts`'s high-water reads a definition line, and a table cell is not one.)
 
-- **D-3164** — The spec has `ccd` walk the continuation chain with a hop bound and a visited set within one call; Task 6 follows **one hop per supervise tick** instead, because each hop's quiescence must be observed before its file may be read. Same end state, and the per-stamp memo is the visited set.
-- **D-3165** — The brief's own `_continued_in_of` piped `tail -c` into `grep` into a second `tail -1`, which invokes `tail` TWICE per examination and so fails the read-budget test the same task ships. The last non-empty line is taken with bash parameter expansion instead — one `tail` per quiescence, which is what the budget actually promises. Found by the Task 6 implementer while measuring.
-- **D-3166** — The mutation "move `_follow_continued_in` above the pane read" went red nowhere, because no fixture combined a live pane-pid answer with a live continuation chain. It is not cosmetic: with the chain first, a pane still publishing the OLD id overwrites the successor the chain just wrote, every tick, and the registry never converges. Pinned by a fixture where the pane's sessions file still names the pre-fork uuid.
-- **D-3167** — Pre-existing, found by Task 5's review and reproduced empirically: `dispatch` replaces the `timers` MAP ENTRY without clearing the old `setTimeout`, so a re-send through `resolve`/`retry` leaves the superseded cycle's deadline armed and it later deletes a pending that is legitimately back in flight — the "message vanishes while waiting" defect through the rescue path. The five-second horizon made it rare, not absent. Fixed by one `arm()` helper both arming sites go through.
-- **D-3168** — Pre-existing: `clearConfirmed` drops a pending without cancelling its timer. Harmless at five seconds, a real per-message leak at the ten-minute horizon Task 5 introduces, and the timer is now the thing that ends the bubble — so Task 5 makes `clearConfirmed` report the keys it dropped and cancels them.
+- **D-3562** — The spec has `ccd` walk the continuation chain with a hop bound and a visited set within one call; Task 6 follows **one hop per supervise tick** instead, because each hop's quiescence must be observed before its file may be read. Same end state, and the per-stamp memo is the visited set.
+- **D-3563** — The brief's own `_continued_in_of` piped `tail -c` into `grep` into a second `tail -1`, which invokes `tail` TWICE per examination and so fails the read-budget test the same task ships. The last non-empty line is taken with bash parameter expansion instead — one `tail` per quiescence, which is what the budget actually promises. Found by the Task 6 implementer while measuring.
+- **D-3564** — The mutation "move `_follow_continued_in` above the pane read" went red nowhere, because no fixture combined a live pane-pid answer with a live continuation chain. It is not cosmetic: with the chain first, a pane still publishing the OLD id overwrites the successor the chain just wrote, every tick, and the registry never converges. Pinned by a fixture where the pane's sessions file still names the pre-fork uuid.
+- **D-3565** — Pre-existing, found by Task 5's review and reproduced empirically: `dispatch` replaces the `timers` MAP ENTRY without clearing the old `setTimeout`, so a re-send through `resolve`/`retry` leaves the superseded cycle's deadline armed and it later deletes a pending that is legitimately back in flight — the "message vanishes while waiting" defect through the rescue path. The five-second horizon made it rare, not absent. Fixed by one `arm()` helper both arming sites go through.
+- **D-3566** — Pre-existing: `clearConfirmed` drops a pending without cancelling its timer. Harmless at five seconds, a real per-message leak at the ten-minute horizon Task 5 introduces, and the timer is now the thing that ends the bubble — so Task 5 makes `clearConfirmed` report the keys it dropped and cancels them.
 
-**All five were ISSUED, never guessed at.** `POST /api/ledger/deviations` minted the contiguous block `D-3164`…`D-3168` for this project on 2026-09-20, and the table above DEFINES each in the same act — allocate-and-define, as D13 requires.
+**All five were ISSUED, never guessed at.** `POST /api/ledger/deviations` minted the contiguous block `D-3562`…`D-3566` for this project on 2026-09-27, and the bullets above DEFINE each in the same act — allocate-and-define, as D13 requires.
+
+**THIS IS THE SECOND BLOCK. THE FIRST COLLIDED, AND THE COLLISION IS THE POINT.** On 2026-09-20 this plan was
+issued `D-3164`…`D-3168`. On 2026-09-22 `docs/superpowers/plans/2026-09-22-gpt-lane-ownership-2b1-placement.md`
+DEFINED the same five numbers, from a different contributor's registry. Neither side did anything wrong by the
+documented rule: each was ISSUED its block by an allocator, and both allocators seed their floor from the same
+merged tree, so both minted the same next block. `deviation-refs.test.ts` caught it on the merge with `main` —
+BEFORE the merge, which is the whole reason that scan compares against `origin/main` without merging — and this
+plan renumbered, because the other block was already on `main` and this one was not. The first five are burned:
+they were allocated, never landed, and the floor they raised never comes back down.
+
+**Renumbering is not a fix, and this note exists so the next reader does not mistake it for one.** The two
+registries are still seeded from one tree and will still agree on the next free number. What the maintainer said
+when this was put to him (2026-09-20) was that `CLAUDE.md` needs amending so the ids are not used this way; that
+amendment has not landed, and the paragraph above it still claims ONE global namespace. Until it does, a branch
+that holds numbers for more than a few days should expect to renumber, and the cheap guard is to allocate LATE
+and merge PROMPTLY.
 
 The route had answered 401 until then, and the reason is worth keeping, because the next box to hit it will read the same 401 and reach the same wrong conclusion this plan did. **Nothing was missing from another box.** The box token is minted LOCALLY (`openssl rand -hex 32`), one per box, and none existed here: the server reads `~/.ccrc/mail.token`, `ccrc-api` reads `~/.cc-secrets/ccrc-mail.token`, and on a `--role both` box those two paths must hold the SAME secret. `ccrc-api` also refuses rather than guessing a host, so `~/.ccrc/agent.env` has to name `CCRC_SERVER_URL`. The server reads the token once at boot, so it takes a restart to see one.
 

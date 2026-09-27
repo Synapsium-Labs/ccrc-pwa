@@ -3615,7 +3615,7 @@ _check_pool-sync() {
 # PTY under a new sessionId and writes `{"type":"continued-in", …}` as the
 # last line of the transcript it abandons. `ccd`'s `_follow_continued_in`
 # walks that pointer into the registry, but the walk is gated on the file
-# going quiescent first (one hop per supervise tick — D-3164), so a
+# going quiescent first (one hop per supervise tick — D-3562), so a
 # box whose `ccd` predates that fix, or whose supervisor has not ticked yet,
 # can sit with a registry uuid naming a transcript nobody will ever write to
 # again — the chat freezes, silently, because there is nothing to say: the
@@ -3655,7 +3655,7 @@ _dr_continued_in() {   # file uuid -> 0 when the file's last line supersedes it
   #
   # ONE DELIBERATE DIFFERENCE FROM `_continued_in_of`: that reader still
   # shells external `grep` (once, for the blank-line filter — the second
-  # `tail` is what D-3165 removed, not the first) because it is
+  # `tail` is what D-3563 removed, not the first) because it is
   # written for `ccd/ccd`'s own test harness, which inherits the real PATH.
   # This file is exercised by `ccrc-doctor.test.ts`'s HERMETIC harness
   # instead — PATH holds nothing but explicitly-fixtured binaries, by design
