@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e58e7f6e703ec8f04586156fda41e56f82faacc67431f5af3b5b3926c426b52a
+# ccrc:generated 1 sha256=c718170ac624284db6ee4d40fc6c2996e65fef4d7e59f84ed7fa474eee767b21
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2888,14 +2888,15 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # and the reason is a count rather than a preference: this file makes 158
 # invocations across 134 non-comment lines.
 #
-# THE LAST MOVE WAS THIS MERGE, and it is worth saying why the number is not
-# either side's: the forked-session-transcript branch read `_ws_status`'s new
-# arm (+1 over its base) while `main` carried CCR-15's (+1 over the same base),
-# so the branch's sentence said 157 and main's said 156 and the merged tree is
-# 158 — a count neither side could have stated. RE-MEASURED with the census
-# test's own scanner on the merged tree (S4-R14's standing rule), never picked
-# from a side. Before this merge it was `_child_tmpdir`'s `.child` read
-# (CCR-15), the +1; before it
+# THE LAST MOVE WAS THIS MERGE, and it is worth saying why the count above is
+# not either side's: the forked-session-transcript branch read `_ws_status`'s
+# new arm while `main` carried CCR-15's, each one call site over the shared
+# base, so BOTH sentences were correct on their own tree and neither was
+# correct on the merged one. A merge that keeps either side's wording ships a
+# false census. RE-MEASURED with the census test's own scanner on the merged
+# tree (S4-R14's standing rule), never picked from a side — and stated once,
+# above, because the pin beside this one forbids restating it here. Before this
+# merge it was `_child_tmpdir`'s `.child` read (CCR-15), the +1; before it
 # `_spawn_start`'s archive check (CCR-10), two archive-field reads, the +2.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
