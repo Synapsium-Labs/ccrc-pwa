@@ -8255,7 +8255,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
-      'ccd/ccd': 147,
+      // RE-MEASURED ON THE MERGE THAT CARRIES `dcac4691` INTO THIS BRANCH,
+      // 147 -> 146, and DOWN again for the reason the paragraphs above give:
+      // neither corpus document changed on this branch, so no citation was
+      // re-pointed and nothing here is a repair. `ccd/ccd` grew on both sides
+      // of this merge, and one more reference stopped failing because a
+      // different line slid under its anchor. A coincidental pass is not a
+      // green anchor; the debt is unchanged and Task 11 still owns it.
+      // Same standing rule, no ruling id (S6-R11).
+      'ccd/ccd': 146,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8513,7 +8521,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // 195 -> 194 on the `dcac4691` merge: the per-file census above lost one
+    // on `ccd/ccd` and nothing moved elsewhere, so the headline follows it
+    // down. Derived from the census, never set beside it (S6-R11).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8671,7 +8682,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
         'ccd/ccd:6478',
-        'ccd/ccd:13020',
+        // `ccd/ccd:13020` LEFT this set on the `dcac4691` merge — the same
+        // coincidence class: the merge moved `ccd/ccd` under a stale anchor
+        // and a line carrying a token the clause quotes now stands there. The
+        // citation still does not name its referent. Re-measured, not picked
+        // (S6-R11).
         'ccd/ccd:19131',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
         // census entry that left: at `origin/main` this range opened on
@@ -9129,58 +9144,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
-        'ccd/ccd:203',
-        'server/test/single-definition.test.ts:1274',
-        'server/test/single-definition.test.ts:1319-1320',
-        'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:3038',
-        'ccd/ccd:5797',
-        'ccd/ccd:7568',
-        'ccd/ccd:11025',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:11669',
-        'ccd/ccd:11670',
-        'ccd/ccd:13561',
-        'ccd/ccd:13567',
-        'ccd/ccd:13673',
-        'ccd/ccd:13560-13562',
-        'ccd/ccd:19109',
-        'ccd/ccd:19098',
-        'ccd/ccd:19120',
-        'ccd/ccd:19131',
-        'ccd/ccd:11669',
-        'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
-        'ccd/ccd:12032-12034',
-        'ccd/ccd:5810-5811',
-        'ccd/ccd:12032-12034',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
-        'ccd/ccd:13809',
-        'ccd/ccd:13812',
-        'ccd/ccd:6425',
-        'ccd/ccd:1223',
-        'ccd/ccd:6547',
-        'ccd/ccd:3390-3402',
-        'ccd/ccd:3401',
-        'ccd/ccd:4029',
-        'ccd/ccd:4046',
-        'ccd/ccd:3038',
-        'ccd/ccd:2972-2973',
-        'ccd/ccd:8609',
-        'ccd/ccd:8654',
-        'ccd/ccd:8673',
-        'ccd/ccd:11665-11670',
-        'ccd/session-hook.sh:795',
-        'ccd/session-hook.sh:796',
-        'ccd/session-hook.sh:993',
-        'ccd/ccd:3050',
-        'ccd/ccd:3050',
-        'ccd/ccd:2455',
-        'ccd/ccd:2793',
-        'ccd/session-hook.sh:802',
-        'ccd/ccd:5385-5388',
-        'ccd/ccd:4642-4653',
         // RE-MEASURED AGAIN on the forked-session-transcript branch, under the
         // SAME standing rule (S6-R11): the set is measured against the tree and
         // never adjusted to keep a number green, and re-anchoring the citations
@@ -9203,7 +9166,80 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `:6719`, so both anchors were already stale on the base and pass or
         // fail on whatever unrelated line stands underneath them. Same class as
         // the `:6838` repair round 3 recorded and round 4 lost again.
-        'ccd/ccd:5353-5362',
+        // RE-MEASURED ON THE MERGE THAT CARRIES `dcac4691` INTO THIS BRANCH,
+        // under the same standing rule (S6-R11): measured with the instrument,
+        // never adjusted to keep a number green, and re-anchoring is still
+        // Task 11's. No ruling id; nothing about the rule changed.
+        //
+        // 53 -> 53, a SWAP OF EIGHT. The exact multiset change, measured rather
+        // than read off a truncated diff — OUT: `ccd/ccd:3050` (x2), `:5353-5362`,
+        // `:5385-5388`, `:7568`, `:11665-11670`, `:11669`, `:13650-13652`; IN:
+        // `ccd/ccd:3070` (x3), `:13573-13575` (x2), `:3037-3089`, `:5828-5830`,
+        // `:6771`.
+        //
+        // WHAT THIS ROUND DOES NOT CLAIM, and the omission is deliberate. The
+        // round above attributed each of its two movers by byte-equality at both
+        // trees. This one does not: BOTH inputs moved at once — `main` advanced
+        // 24 commits and this branch re-anchored citations in both corpus
+        // documents as Tasks 6-8's own work — so a per-mover coincidence-versus-
+        // repair verdict would be inferred, not measured, and this file's whole
+        // discipline is that the difference between those two is the point. What
+        // IS measured is the set itself and the delta above. Task 11 still owns
+        // closing the debt, and closing it is what makes this census shrink for a
+        // reason rather than by coincidence.
+        'ccd/ccd:203',
+        'server/test/single-definition.test.ts:1274',
+        'server/test/single-definition.test.ts:1319-1320',
+        'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd:13573-13575',
+        'ccd/ccd:3038',
+        'ccd/ccd:3037-3089',
+        'ccd/ccd:5797',
+        'ccd/ccd:11025',
+        'ccd/ccd:11670',
+        'ccd/ccd:13561',
+        'ccd/ccd:13567',
+        'ccd/ccd:13673',
+        'ccd/ccd:13560-13562',
+        'ccd/ccd:19109',
+        'ccd/ccd:19098',
+        'ccd/ccd:19120',
+        'ccd/ccd:19131',
+        'ccd/ccd:11669',
+        'ccd/ccd:11670',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:5810-5811',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:11665-11670',
+        'ccd/ccd:12594-12659',
+        'ccd/ccd:13809',
+        'ccd/ccd:13812',
+        'ccd/ccd:6425',
+        'ccd/ccd:1223',
+        'ccd/ccd:6547',
+        'ccd/ccd:3390-3402',
+        'ccd/ccd:3401',
+        'ccd/ccd:4029',
+        'ccd/ccd:4046',
+        'ccd/ccd:3038',
+        'ccd/ccd:2972-2973',
+        'ccd/ccd:8609',
+        'ccd/ccd:8654',
+        'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
+        'ccd/ccd:11665-11670',
+        'ccd/session-hook.sh:795',
+        'ccd/session-hook.sh:796',
+        'ccd/session-hook.sh:993',
+        'ccd/ccd:3070',
+        'ccd/ccd:3070',
+        'ccd/ccd:2455',
+        'ccd/ccd:2793',
+        'ccd/ccd:3070',
+        'ccd/session-hook.sh:802',
+        'ccd/ccd:6771',
+        'ccd/ccd:4642-4653',
+        'ccd/ccd:5828-5830',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9289,11 +9325,30 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+        // `spec:2222 ccd/ccd:5725` LEAVES this overlap list for the one reason
+        // the `|`-row set above records in full: this branch's `+17` at
+        // `ccd/ccd:4921` slid base `:5708` — a comment line carrying a token the
+        // row quotes — under the `:5725` anchor, so the row stopped failing. A
+        // coincidence, not a re-anchor; the citation still does not name
+        // `cmd_ws_add`'s usage line, which stands at `:6719`. The arriving
+        // `ccd/ccd:5353-5362` does NOT appear here, because it is reachable by
+        // no other pass. Same standing rule, no ruling id (S6-R11).
+        // RE-MEASURED ON THE `dcac4691` MERGE, 34 -> 36, and the movement is
+        // the SAME eight the `|`-row set above records, seen from the site
+        // side. JOINED: `spec:2220 ccd/ccd:3070` (x3), `spec:2123` and
+        // `spec:2210` on `ccd/ccd:13573-13575`, `spec:2124 ccd/ccd:3037-3089`.
+        // LEFT: `spec:2220 ccd/ccd:3050` (x2), `spec:2125 ccd/ccd:7568`,
+        // `spec:2222 ccd/ccd:5385-5388`. Measured with the instrument, not read
+        // off a diff, and carrying the same non-claim the set above states: with
+        // `main` 24 commits on and this branch's own re-anchors in both corpus
+        // documents, a per-mover coincidence-versus-repair verdict would be
+        // inferred rather than measured, so none is offered. S6-R11, no ruling id.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
+        'spec:2124 ccd/ccd:3037-3089',
         'spec:2125 ccd/ccd:5797',
-        'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
         'spec:2125 ccd/ccd:13567',
@@ -9319,18 +9374,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2220 ccd/ccd:3050',
-        'spec:2220 ccd/ccd:3050',
-        // `spec:2222 ccd/ccd:5725` LEAVES this overlap list for the one reason
-        // the `|`-row set above records in full: this branch's `+17` at
-        // `ccd/ccd:4921` slid base `:5708` — a comment line carrying a token the
-        // row quotes — under the `:5725` anchor, so the row stopped failing. A
-        // coincidence, not a re-anchor; the citation still does not name
-        // `cmd_ws_add`'s usage line, which stands at `:6719`. The arriving
-        // `ccd/ccd:5353-5362` does NOT appear here, because it is reachable by
-        // no other pass. Same standing rule, no ruling id (S6-R11).
-        'spec:2222 ccd/ccd:5385-5388',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
       ]);
   });
 
