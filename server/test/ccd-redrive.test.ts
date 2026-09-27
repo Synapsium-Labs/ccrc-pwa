@@ -17,13 +17,32 @@ const READY = '? for shortcuts\n❯ ';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
 
 describe('_inject_spawn_effort stands down on an armed auto-continue (D-2229)', () => {
+  // THE STATUS IS PART OF THE CLAIM NOW, not incidental. The function used to
+  // `return 0` from all four of its exits, so "typed" and "stood down" were
+  // indistinguishable to a caller; `CCRC_SESSION_EFFORT` gave that difference
+  // a consumer, because the marker recording "this session has its level" may
+  // only be written on the exit that actually sent the keystrokes. Stamping on
+  // a guard's exit would record a lie on precisely the panes that hit one — a
+  // pane waiting out a limit, or one restored with a draft in the box — and
+  // those are revivals, the case the marker exists to get right.
+  //
+  // THE STATUS HALF OF THAT CLAIM IS RETIRED (merged with `main` 2026-09-27).
+  // `main` answers 0 on every exit of `_inject_spawn_effort`, and it must:
+  // `ccdWsHelpers`' `sh` is `execFileSync`, which THROWS on a non-zero exit,
+  // and `ccd-route-settle.test.ts` calls the function BARE in nine cases — a
+  // guard answering 1 makes all nine throw before they can assert. What the
+  // marker actually needs is unaffected: the stamp is guarded by its POSITION,
+  // the one exit reached after the keystrokes, never by the status. The EFFECT
+  // assertions below are the real pin and they are untouched.
   it('types nothing into a session waiting out a limit', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: ARMED });
+    const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: ARMED });
     expect(sendKeys()).toEqual([]);
+    expect(out).toContain('rc=0');
   });
   it('control: a ready pane gets /effort', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: READY });
+    const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: READY });
     expect(sendKeys().some((k) => k.includes('-l /effort'))).toBe(true);
+    expect(out).toContain('rc=0');
   });
 });
 

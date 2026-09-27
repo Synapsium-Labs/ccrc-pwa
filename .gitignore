@@ -33,6 +33,12 @@ agent.env*
 ccrc-mail.token*
 exposure.env*
 .env*
+# The operator's own box preferences (deploy/ccrc.conf -> ~/.ccrc/ccrc.conf).
+# It carries no secrets today, and is ignored for the OTHER reason this family
+# exists: it is machine-local by definition — one operator's account ids and
+# effort choices are not a fact about the project. Same unanchored shape as its
+# neighbours (D-196), so a copy made anywhere in the tree is covered too.
+ccrc.conf*
 !*.example
 
 # The reference fleet's concrete values (addresses, user, key names) — the

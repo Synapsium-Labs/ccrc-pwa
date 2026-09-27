@@ -45,6 +45,13 @@ const SECRET_FILES = [
  *  and `deploy/sub/ccrc.env` were all NOT ignored. */
 const SECRET_NAMES_ANYWHERE = [
   'ccrc.env', 'ccrc-agent.env', 'agent.env', 'ccrc-mail.token', 'exposure.env',
+  // IN THE FAMILY FOR THE OTHER REASON. `ccrc.conf` carries no token — it is
+  // the operator's own box preferences — but it is machine-local by
+  // definition: one operator's account ids and effort choices are not a fact
+  // about the project. It earns the same unanchored glob and the same copy
+  // coverage, because the hands that edit it make the same `.bak` the token
+  // files' own rule was written for (D-170).
+  'ccrc.conf',
 ];
 const PLACES = ['', 'server/', 'agent/', 'pwa/', 'deploy/sub/', 'a/b/c/'];
 
@@ -77,11 +84,22 @@ describe('.gitignore: a token file and every copy of it', () => {
   // carry placeholders, no secrets, and MUST stay tracked. Boot refuses the
   // unedited mail-token placeholder BY NAME, so losing it from the repo is a
   // different failure, not a safer one.
-  it.each([
+  // ONE LIST, USED BY BOTH ASSERTIONS BELOW. They were two hand-kept copies,
+  // which is how `deploy/ccrc.conf.example` came to be added to a family whose
+  // placeholder guards did not know about it; a third copy would be the same
+  // bug waiting again.
+  const PLACEHOLDERS = [
     'deploy/ccrc.env.example',
     'deploy/ccrc-agent.env.example',
     'deploy/ccrc-mail.token.example',
-  ])('%s is NOT ignored — the glob must not swallow the placeholders', (f) => {
+    // Carries no secret at all — it is the documented template for the
+    // OPERATOR's own box preferences — but it lives behind the same unanchored
+    // `ccrc.conf*` glob as its neighbours, so it needs the same exemption and
+    // the same proof that the exemption still works.
+    'deploy/ccrc.conf.example',
+  ];
+
+  it.each(PLACEHOLDERS)('%s is NOT ignored — the glob must not swallow the placeholders', (f) => {
     expect(ignored(f), `${f} would stop being shipped`).toBe(false);
   });
 
@@ -90,8 +108,7 @@ describe('.gitignore: a token file and every copy of it', () => {
     // that let them be committed is worth nothing if they already are not.
     const tracked = spawnSync('git', ['-C', REPO, 'ls-files', 'deploy/'],
       { encoding: 'utf8' }).stdout.split('\n');
-    for (const f of ['deploy/ccrc.env.example', 'deploy/ccrc-agent.env.example',
-                     'deploy/ccrc-mail.token.example']) {
+    for (const f of PLACEHOLDERS) {
       expect(tracked, `${f} is not in the index`).toContain(f);
     }
   });

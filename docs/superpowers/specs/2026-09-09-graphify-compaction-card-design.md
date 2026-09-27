@@ -97,7 +97,7 @@ canonical pathname, the pre-mutation identity re-check is `_hook_lock_still_cano
 predicate is `JOURNAL_RECORD_PRED` with sixteen keys and no persisted ordinal (`:2596`), and the journal
 commits by `mv -f "$stage" "$journal"` under the reacquired lock (`:1983`). `ccd` carries the twinned
 `COMPACT_LOCK_WAIT` and the three-status `_reg_purge` (`ccd/ccd:2872`), and all four of its callers branch on
-that status rather than on a boolean — `_rm_prc` (`ccd/ccd:6478`), `_rt_prc` (`:13020`), `_pr_prc` (`:13602`)
+that status rather than on a boolean — `_rm_prc` (`ccd/ccd:8089`), `_rt_prc` (`:13020`), `_pr_prc` (`:13602`)
 and `_fg_prc` (`:19131`). §4's mechanism-absent row and §3.4's decline paragraph describe those arms as they
 stood BEFORE that build, and the ledger's D-2782 and D-2793 record the build itself. **Task 10** shipped the
 helper beside the hook through every door the hook goes through: `install_atomic ccd/compact-card.mjs` in the
@@ -1213,8 +1213,8 @@ The round-8 text bounded the cost to "the ENTIRE compaction lifecycle — card, 
 journal, and lifecycle purge cleanup alike", which composed with §3.4's own "`_reg_purge` acquires/validates
 the stable lock BEFORE any registry mutation" into something far larger than it stated: a permanent,
 fleet-wide failure of `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune`, each of which calls `_reg_purge`
-(`ccd/ccd:6478` in `cmd_ws_rm`, `:13020` in `_ws_reap_tail` under `_ws_reap_locked`, `:13602` in
-`_ws_gc_prune_row` under `ws-gc --prune`, `:19131` in `cmd_forget`) — three of them only AFTER irreversible
+(`ccd/ccd:8089` in `cmd_ws_rm`, `:15004` in `_ws_reap_tail` under `_ws_reap_locked`, `:15586` in
+`_ws_gc_prune_row` under `ws-gc --prune`, `:23866` in `cmd_forget`) — three of them only AFTER irreversible
 action. That is ccd's universal registry-destruction path, not the compaction lifecycle. The design does not
 accept that cost, and does not need to.
 
@@ -1885,7 +1885,7 @@ worth stating is "capture-then-emit-early, deletion follows," not "emit-after-su
 `_reg_purge`'s body, the same treatment round 6 correctly gave `session-hook.test.ts:2467`. **Its four
 callers must branch on the result — a CODE CHANGE Task 9 builds in all four, not a shipped property, and
 Task 9 HAS built it (re-measured this round):** each of the four reads the status into its own variable —
-`_rm_prc` in `cmd_ws_rm` (`ccd/ccd:6478`), `_rt_prc` in `_ws_reap_tail` (`:13020`), `_pr_prc` in
+`_rm_prc` in `cmd_ws_rm` (`ccd/ccd:8089`), `_rt_prc` in `_ws_reap_tail` (`:13020`), `_pr_prc` in
 `_ws_gc_prune_row` (`:13602`) and `_fg_prc` in `cmd_forget` (`:19131`) — and each renders the value through
 `_compact_lock_why_remedy` (`ccd/ccd:2554`) rather than falling straight through to an unconditional
 terminal fact. Before that build none of the four read the status and `_reg_purge` had no failing path to

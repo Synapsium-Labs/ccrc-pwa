@@ -1,0 +1,118 @@
+# ccrc box preferences — the OPERATOR's own settings for how this box behaves.
+# Installed at ~/.ccrc/ccrc.conf and read by `ccd`. Copy this file to
+# `deploy/ccrc.conf` locally (gitignored — the real one is never committed),
+# EDIT IT, and `bash deploy/deploy.sh agent <host>` ships it; or write
+# ~/.ccrc/ccrc.conf on the box by hand and keep it there. Nothing generates
+# this file and no lane seeds it: a deploy ships your local copy only if you
+# keep one, and a box whose operator never wrote either is never touched.
+#
+# PICK ONE OF THOSE TWO, because shipping REPLACES the box's copy wholesale.
+#
+# WHY EVERY KEY BELOW IS COMMENTED OUT, and why you should UNCOMMENT rather
+# than blank. The deploy refuses a shipment that would drop a key the box
+# currently sets — and it decides that by which key NAMES appear. A line that
+# is commented out is absent, so an unedited copy of this template takes
+# nothing away and the deploy says so if it would. A line left as a bare
+# `KEY=` is a name that IS present with no value: this file reads it as "no
+# preference", the deploy reads it as "still set", and between them a
+# preference disappears from the box with nobody saying a word. So: to set a
+# key, uncomment it and fill it in. To unset one, DELETE THE LINE or comment it
+# out again — never blank it.
+#
+# EVERY KEY IS OPTIONAL, AND ABSENCE IS NOT A VALUE. A key left blank or absent
+# means "decide as you always have" — the box behaves exactly as it did before
+# this file existed. That is the whole contract, and it is what makes the file
+# safe to ship to boxes whose operators never open it. Nothing here changes a
+# default; each key only takes a decision away from the machine and gives it to
+# you.
+#
+# NOT AN ENVIRONMENT FILE, despite the shape. `ccrc.env` is read by systemd and
+# exported into the server process; this file is read KEY BY KEY by `ccd` and
+# is never sourced and never exported. A line here can therefore never run a
+# command, however it is written — a `$(...)` in a value is returned as the
+# text you typed and nothing else.
+#
+# The shape is what a hand would write. Whitespace around a value is trimmed,
+# and one layer of surrounding quotes is stripped, so `claude-2`, ` claude-2 `
+# and `"claude-2"` are the same value. The one thing that is NOT stripped is a
+# trailing comment. `CCRC_SESSION_EFFORT=high  # my choice` sets the effort to
+# the whole of `high  # my choice`, which is not a level. PUT COMMENTS ON THEIR
+# OWN LINE, as this file does — this is the one mistake that can leave a key
+# reading as though it were never written. ccd warns about all three keys when
+# it cannot use a value, but the warning goes to its own stderr, so it is the
+# journal you would have to go looking in rather than something you are handed.
+#
+# This file is not a schema. Keys it does not recognise are ignored, so a
+# newer ccrc reading an older file, or the reverse, both work.
+
+
+# ── SESSIONS ────────────────────────────────────────────────────────────────
+#
+# Which account and which effort a session begins with, and whether ccrc may
+# move it afterwards.
+
+# The account every NEW session starts on, by its roster id (the `id` field in
+# ~/.ccrc/accounts.json — e.g. `claude`, `claude-2`). An existing session is
+# never moved by this key; it decides births only.
+#
+# Blank: the account is chosen as it is today — the home-able account with the
+# most headroom, among those the project's pool admits. Roster order only
+# breaks a tie, or decides when nothing could be measured.
+#
+# WHEN THE PREFERENCE IS NOT USED, ccd says so on stderr and places the session
+# by that same automatic choice. It never refuses to create a session over
+# this key. Five things discard it, each named in the message: the id is not in
+# the roster; its wrapper is missing on this box or its lane is switched off;
+# it is an account sessions are never placed on (the overflow lanes); the
+# project's pool excludes it; or that pool tag could not be read, in which case
+# nothing can be proved and the constraint stands.
+#CCRC_SESSION_ACCOUNT=
+
+# The effort level every NEW session starts at — the argument `/effort` takes
+# (`high`, `xhigh`, `ultracode`, …). Blank keeps ccrc's own default.
+#
+# THIS KEY ALSO STOPS THE RETYPING, and that is the half most worth having.
+# Without it, ccrc types its default effort into the pane on every pane
+# creation — not only when a session is born, but on every supervisor revival,
+# every account swap landing, and every restart after a refused swap. It never
+# reads the level that is already set, so an effort you chose by hand is
+# reverted the next time anything actually restarts the pane. (A fleet-wide
+# `ccrc update` sweep does NOT, because it leaves the pane alive and the
+# supervisor short-circuits — measured, not assumed.)
+#
+# With this key set, the level is typed ONCE, when the session is born. After
+# that it is yours: switch it whenever you like and it stays switched.
+#CCRC_SESSION_EFFORT=
+
+# Whether ccrc may move a running session to another account on its own.
+# `off` pins every session to the account it is on until YOU move it.
+# Blank or `on`: today's behaviour, described below so the choice is informed.
+#
+# WHAT AUTOMATIC SWITCHING DOES TODAY. A supervisor checks every session every
+# few seconds and moves it for one of two reasons. The first is rescue: the
+# account hit a rate limit, a spend cap or an auth failure, and the session is
+# moved to one that works. The second is affinity: a healthy, idle session is
+# relocated when its home account's usage crosses a ceiling, and pulled back
+# again as soon as the home has headroom — which is why a session can appear to
+# move back and forth while nothing is wrong with it.
+#
+# WHAT `off` COSTS, stated plainly rather than discovered later. It disables
+# BOTH, the rescue included. A session whose account hits a limit will sit
+# blocked until you move it yourself. That is the trade: predictability instead
+# of automatic recovery. Every move is still available by hand, from the PWA or
+# with `ccd swap`.
+#
+# Each move restarts the session's tmux pane, so the console's on-screen
+# history is lost even though the conversation itself is carried across and the
+# interrupted turn is re-driven.
+#
+# WHAT IT DOES NOT DO, so it is not a surprise later: ccrc goes on TRACKING
+# which account it would pull a session back to. That answer has to stay
+# current for the day you unset this key — it just never acts on it while this
+# says off, and no session moves.
+#
+# A move decided in the seconds before you wrote the line is caught too: it
+# waits out a short random delay in its own unit, and the ccd it wakes up into
+# refuses it then. So the pin takes effect on the box, not merely on the next
+# decision.
+#CCRC_SESSION_AUTOSWAP=
