@@ -8087,6 +8087,26 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
+        // RE-MEASURED ON `feat/box-conf` ITSELF, against `main` @dcac4691,
+        // under the standing rule (S6-R11). This branch adds 564 lines to
+        // `ccd/ccd` (23515 -> 24070), so every anchor past the first
+        // insertion moved and the census moved with them.
+        //
+        // THE DEBT FELL, and that is the only kind of drop this census
+        // should ever show. `ccd/ccd:6478` had become anchored by a SHORT
+        // TOKEN ALONE — the state the corpus pin forbids outright, because
+        // a citation passing for a reason having nothing to do with what it
+        // cites is invisible debt. All four `_reg_purge` call sites were
+        // re-pointed at their referents, measured one by one: `cmd_ws_rm`
+        // :8089, `_ws_reap_tail` :15004, `_ws_gc_prune_row` :15586 and
+        // `cmd_forget` :23866 — and the three other citations of the first
+        // followed it. Task 11 still owns closing the rest; this is a down
+        // payment on it, not a re-census of the remainder.
+        //
+        // NO PER-MOVER VERDICT IS OFFERED for anything else here. `main`
+        // moved 24 commits under this branch and the branch moved `ccd/ccd`,
+        // so coincidence-versus-repair would be inferred rather than
+        // measured — and that difference is this census's whole subject.
       // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
       // and DOWN is the direction that needs an argument rather than a shrug.
       // Neither corpus document changed: `specs/2026-09-09-…-design.md` and
@@ -8182,7 +8202,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // :13602` and `spec:2123 :13573-13575` leave — Task 3's eight lines above
       // them, measured by the plan's `cite-remeasure.py` against the pre-task
       // tree. An unchanged count is not an unchanged debt. S6-R11, no D-number.
-      'ccd/ccd': 147,
+      'ccd/ccd': 142,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8192,7 +8212,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   "the only survivor" among its `- Modify:` bullets — below its referent.
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
-      'deploy/deploy.sh': 2,
+      'deploy/deploy.sh': 3,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8440,7 +8460,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
     // of BRANCH x MAIN, so it can only be derived on the merged tree and only
     // stays true until main moves again. Derive it last, then merge.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // AND 195 -> 191 on `feat/box-conf` itself. Census arithmetic again, not
+    // a second measurement: `ccd/ccd` 147 -> 142 and `deploy/deploy.sh` 2 -> 3,
+    // nothing else moved. The fall is the four re-pointed `_reg_purge` call
+    // sites and the three other citations of the first; the single arrival is
+    // argued beside the map above. Both are stated there once.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(191);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8594,16 +8619,35 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // the D-2989 guards and their arguments), which shifts every anchor
         // below it — main's anchors going stale on this branch, not the other
         // way round. Whatever the instrument printed is what ships.
-        'ccd/compact-card.mjs:433-560',
-        'ccd/compact-card.mjs:726-728',
-        'ccd/compact-card.mjs:726',
-        'ccd/ccd:6478',
-        'ccd/ccd:13020',
-        'ccd/ccd:19131',
         // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
         // census entry that left: at `origin/main` this range opened on
         // `_auto_swap_check`'s reachability paragraph, and at this tree it opens
         // on `IT MINTS THE DIRECTORY ITSELF`. Same mechanism, opposite sign.
+        // RE-MEASURED ON `feat/box-conf` ITSELF, against `main` @dcac4691,
+        // under the standing rule (S6-R11). This branch adds 564 lines to
+        // `ccd/ccd` (23515 -> 24070), so every anchor past the first
+        // insertion moved and the census moved with them.
+        //
+        // THE DEBT FELL, and that is the only kind of drop this census
+        // should ever show. `ccd/ccd:6478` had become anchored by a SHORT
+        // TOKEN ALONE — the state the corpus pin forbids outright, because
+        // a citation passing for a reason having nothing to do with what it
+        // cites is invisible debt. All four `_reg_purge` call sites were
+        // re-pointed at their referents, measured one by one: `cmd_ws_rm`
+        // :8089, `_ws_reap_tail` :15004, `_ws_gc_prune_row` :15586 and
+        // `cmd_forget` :23866 — and the three other citations of the first
+        // followed it. Task 11 still owns closing the rest; this is a down
+        // payment on it, not a re-census of the remainder.
+        //
+        // NO PER-MOVER VERDICT IS OFFERED for anything else here. `main`
+        // moved 24 commits under this branch and the branch moved `ccd/ccd`,
+        // so coincidence-versus-repair would be inferred rather than
+        // measured — and that difference is this census's whole subject.
+        'ccd/compact-card.mjs:433-560',
+        'ccd/compact-card.mjs:726-728',
+        'ccd/compact-card.mjs:726',
+        'ccd/ccd:13020',
+        'ccd/ccd:19131',
         'ccd/ccd:4006-4035',
         'ccd/ccd:4045',
         'ccd/ccd:4029',
@@ -9056,11 +9100,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `origin/main` at this tree, so nothing was re-pointed and every move is
         // that shift. A coincidental pass is not a green anchor. S6-R11 covers
         // the re-measurement, so no D-number.
+        // RE-MEASURED ON `feat/box-conf` ITSELF, against `main` @dcac4691,
+        // under the standing rule (S6-R11). This branch adds 564 lines to
+        // `ccd/ccd` (23515 -> 24070), so every anchor past the first
+        // insertion moved and the census moved with them.
+        //
+        // THE DEBT FELL, and that is the only kind of drop this census
+        // should ever show. `ccd/ccd:6478` had become anchored by a SHORT
+        // TOKEN ALONE — the state the corpus pin forbids outright, because
+        // a citation passing for a reason having nothing to do with what it
+        // cites is invisible debt. All four `_reg_purge` call sites were
+        // re-pointed at their referents, measured one by one: `cmd_ws_rm`
+        // :8089, `_ws_reap_tail` :15004, `_ws_gc_prune_row` :15586 and
+        // `cmd_forget` :23866 — and the three other citations of the first
+        // followed it. Task 11 still owns closing the rest; this is a down
+        // payment on it, not a re-census of the remainder.
+        //
+        // NO PER-MOVER VERDICT IS OFFERED for anything else here. `main`
+        // moved 24 commits under this branch and the branch moved `ccd/ccd`,
+        // so coincidence-versus-repair would be inferred rather than
+        // measured — and that difference is this census's whole subject.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
+        'ccd/ccd:3037-3089',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
@@ -9097,18 +9163,25 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:11665-11670',
+        'ccd/ccd:13573-13575',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
+        'ccd/ccd:2874',
+        'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
+        'ccd/ccd:3070',
         'ccd/ccd:3050',
         'ccd/ccd:3050',
+        'ccd/ccd:3070',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
+        'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
         'ccd/ccd:5385-5388',
         'ccd/ccd:4642-4653',
+        'ccd/ccd:5353-5362',
+        'ccd/ccd:5828-5830',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9194,9 +9267,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `spec:2125 ccd/ccd:13567` enters; `spec:2123` and `spec:2210`
       // `ccd/ccd:13573-13575` leave. One cause — Task 3's eight lines above
       // them — and nothing re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED ON `feat/box-conf` (2026-09-27). This set is a VIEW of
+        // the row pass above — the rows another pass already reaches — so it
+        // moves whenever that one does, and it did: 35 -> 43. No separate
+        // argument is owed for it beyond the one recorded there.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
+        'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
+        'spec:2124 ccd/ccd:3037-3089',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
@@ -9224,9 +9303,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
+        'spec:2220 ccd/ccd:2874',
+        'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
+        'spec:2220 ccd/ccd:3070',
         'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3050',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
         'spec:2222 ccd/ccd:5385-5388',
       ]);

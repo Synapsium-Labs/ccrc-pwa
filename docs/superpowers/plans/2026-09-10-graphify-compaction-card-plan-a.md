@@ -2827,7 +2827,7 @@ defect in either direction, and round 14 re-anchored or era-marked each one it m
   optional member documents an input this code reads and never an output it writes.
 - Modify: `ccd/ccd` — row-generation initialization, `_spawn_start` primary/retry environments and FD
   boundaries, `_reg_purge`, exact cleanup, **the THREE post-action `_reg_purge` callers `cmd_ws_rm`
-  (`_rm_prc`, `ccd/ccd:6478`), `_ws_reap_tail` (`_rt_prc`, `:13020`) and `cmd_forget` (`_fg_prc`,
+  (`_rm_prc`, `ccd/ccd:8089`), `_ws_reap_tail` (`_rt_prc`, `:13020`) and `cmd_forget` (`_fg_prc`,
   `:19131`)** — round 12 named only the dead-reg arm's status branch as a change to BUILD, while these three
   were described in the present indicative; BEFORE Task 9 none of the four read `_reg_purge`'s status, each
   falling straight through to an unconditional `_lc_done`/success echo, so all four branches are code this
