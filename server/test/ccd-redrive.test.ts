@@ -24,15 +24,22 @@ describe('_inject_spawn_effort stands down on an armed auto-continue (D-2229)', 
   // only be written on the exit that actually sent the keystrokes. Stamping on
   // a guard's exit would record a lie on precisely the panes that hit one — a
   // pane waiting out a limit, or one restored with a draft in the box — and
-  // those are revivals, the case the marker exists to get right. So both cases
-  // below assert the status as well as the effect: without it, a change that
-  // re-flattened the exits would leave this file green.
-  it('types nothing into a session waiting out a limit, and reports that it typed nothing', () => {
+  // those are revivals, the case the marker exists to get right.
+  //
+  // THE STATUS HALF OF THAT CLAIM IS RETIRED (merged with `main` 2026-09-27).
+  // `main` answers 0 on every exit of `_inject_spawn_effort`, and it must:
+  // `ccdWsHelpers`' `sh` is `execFileSync`, which THROWS on a non-zero exit,
+  // and `ccd-route-settle.test.ts` calls the function BARE in nine cases — a
+  // guard answering 1 makes all nine throw before they can assert. What the
+  // marker actually needs is unaffected: the stamp is guarded by its POSITION,
+  // the one exit reached after the keystrokes, never by the status. The EFFECT
+  // assertions below are the real pin and they are untouched.
+  it('types nothing into a session waiting out a limit', () => {
     const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: ARMED });
     expect(sendKeys()).toEqual([]);
-    expect(out).toContain('rc=1');
+    expect(out).toContain('rc=0');
   });
-  it('control: a ready pane gets /effort, and reports that it typed', () => {
+  it('control: a ready pane gets /effort', () => {
     const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: READY });
     expect(sendKeys().some((k) => k.includes('-l /effort'))).toBe(true);
     expect(out).toContain('rc=0');
