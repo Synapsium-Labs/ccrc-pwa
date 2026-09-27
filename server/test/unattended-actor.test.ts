@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the nine pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the thirteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -112,6 +112,14 @@ describe('every unattended ccd call site names itself', () => {
     // scans for a site nobody told them to look for). `SITES.length` is the
     // single source of truth for how many are pinned; this assertion is
     // exact so the two can never drift apart without one of them going red.
+    // Nine became eleven when Task 7 (D-2796) gave `closeReviewRun` its own
+    // fleet act: `CCD_ARGV.wsHold(sessionId, handoff.reason, …)` (the
+    // hand-over arm, a surviving sibling claims the workspace) and
+    // `CCD_ARGV.wsRelease(sessionId, …)` (no survivor) — both in
+    // `coord/close.ts`, both new entries in `SITES` below. Eleven became
+    // thirteen with child-reclamation wave 2's `refuseSpentChild`
+    // (`coord/dispatch.ts`): a hand-over and a release, both spending
+    // `dispatchDec`.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
@@ -125,15 +133,21 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Nine sites, four distinct labels, each site identified by the code AROUND
+ * Thirteen sites — five distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
- * anchor. `close.ts`'s five sites share one identical label
+ * anchor. `close.ts`'s five `closeRun` sites share one identical label
  * (`` `run:${id} close` `` — `id` is `closeRun`'s own parameter at every one
  * of them, so there is no textual difference between "the right label" and
  * "the same label copied from a sibling site" to catch there); `watch.ts`'s
  * own two `sweepNames` sites share their identical label (`'sweep:names'`)
- * for the same reason. What a cross-FILE or cross-VERB swap WOULD change is
+ * for the same reason. `closeReviewRun`'s two sites (Task 7, D-2796) are the
+ * same shape again, one label shared between them
+ * (`` `run:${run.id} close` `` — `run` is `closeReviewRun`'s own parameter,
+ * not `closeRun`'s `id`, so the source text differs from the five
+ * `closeRun` sites even though both name the same run at runtime; that
+ * textual difference is exactly why this is a fifth label, not a sixth
+ * `closeRun` site). What a cross-FILE or cross-VERB swap WOULD change is
  * caught here because every anchor also carries the surrounding call, not
  * just the label — a foreign label pasted in changes the captured text and
  * reds against the hardcoded expectation below, exactly as the reviewer's
@@ -165,6 +179,19 @@ const SITES: readonly Site[] = [
   { file: 'coord/close.ts', what: 'ordinary close, non-final/sibling-survivor hold branch',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+run\.sessionId, nextHold\.reason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${id} close`' },
+  // Task 7 (D-2796): `closeReviewRun` gets its own fleet act — a review run
+  // closes on its own claim (design 2026-09-14 §5), one arm, one function,
+  // never routed through `closeRun`'s shared machinery — so its two sites
+  // use `closeReviewRun`'s own local `sessionId` (not `run.sessionId`) and
+  // its own parameter `run.id` (not `closeRun`'s `id`), which is why the
+  // label text differs from every `closeRun` site above despite meaning the
+  // same run at runtime.
+  { file: 'coord/close.ts', what: 'review close, hand-over arm (a surviving sibling claims the workspace)',
+    find: /CCD_ARGV\.wsHold\(sessionId, handoff\.reason, sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
+    label: '`run:${run.id} close`' },
+  { file: 'coord/close.ts', what: 'review close, release arm (no survivor)',
+    find: /: CCD_ARGV\.wsRelease\(sessionId, sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    label: '`run:${run.id} close`' },
   // Fix round 2 (final whole-branch review, F5b): the two `find`s below used
   // to be the bare `sweepDec(deps.fleetState, …)` pattern, unanchored to any
   // surrounding call — `RegExp.exec` returns the FIRST match in the whole
@@ -191,6 +218,17 @@ const SITES: readonly Site[] = [
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },
+  // child-reclamation wave 2: `refuseSpentChild`'s two arms — the hand-over to
+  // a surviving sibling and the release — spend the hoisted `dispatchDec`
+  // above rather than typing a label, so the capture is the VARIABLE: a
+  // second `sweepDec(…)` here would be a second clock for one act, which is
+  // what the hoist exists to prevent.
+  { file: 'coord/dispatch.ts', what: 'refuseSpentChild — hand a spent child\'s claim to a surviving sibling',
+    find: /\? CCD_ARGV\.wsHold\(run\.sessionId, handoff\.reason, (dispatchDec)\)/,
+    label: 'dispatchDec' },
+  { file: 'coord/dispatch.ts', what: 'refuseSpentChild — release a spent child nothing else claims',
+    find: /: CCD_ARGV\.wsRelease\(run\.sessionId, (dispatchDec)\);/,
+    label: 'dispatchDec' },
 ];
 
 describe('each unattended label is pinned to its own call site', () => {
@@ -298,5 +336,37 @@ describe('an interpolated label carries the RUN ID ACTUALLY IN SCOPE, not merely
     expect(addCall![addActorIdx + 1],
       'the spawn and the hold named DIFFERENT actors — one dispatch has become two lanes in the journal')
       .toBe(holdCall![actorIdx + 1]);
+  });
+});
+
+/**
+ * Fix round B, F2: the two `SITES` entries above (`refuseSpentChild — hand a
+ * spent child's claim…` / `…release a spent child…`) capture the PARAMETER
+ * named `dispatchDec` inside `refuseSpentChild`'s own body — which pins that
+ * the function reads its own parameter, not that the RESUME ARM'S CALL SITE
+ * (the `if (!childGate.ok) return refuseSpentChild(deps, { id: run.id,
+ * sessionId }, childGate, dispatchDec);` line, cited by its own text rather
+ * than a line number that moves) actually passes the hoisted `dispatchDec`
+ * rather than `null` or a second, freshly-minted `sweepDec`. Measured
+ * (review 144, F2): both those mutants of the call site's last argument left
+ * `unattended-actor.test.ts` fully green, because nothing here read that
+ * line. This is the missing pin, anchored on the call itself rather than on
+ * the parameter's name inside the callee. Round 2: a SHADOWING mutant —
+ * `{ const dispatchDec = null; return refuseSpentChild(…, dispatchDec); }`
+ * — still reads `dispatchDec` at this call site and stays green here, since
+ * this test only checks the TOKEN, not the runtime value; that gap is closed
+ * a different way, by asserting the ACTOR FLAGS on the recorded `ws-release`
+ * argv in `child-reclaim-refusals.test.ts` (F2, round 2), which cannot be
+ * fooled by a shadowed local of the same name.
+ */
+describe('refuseSpentChild is called with the hoisted dispatchDec, not a fresh actor (F2)', () => {
+  it('the resume arm\'s call site passes dispatchDec as the 4th argument, literally', () => {
+    const src = readFileSync(path.join(srcRoot, 'coord/dispatch.ts'), 'utf8');
+    const m = /return refuseSpentChild\(deps, \{ id: run\.id, sessionId \}, childGate, ([^)]*)\);/.exec(src);
+    expect(m, 'the refuseSpentChild call site was not found in coord/dispatch.ts — it moved or was '
+      + 'rewritten; update the anchor before trusting this guard again').not.toBeNull();
+    expect(m![1], 'the call site\'s 4th argument must be exactly the hoisted `dispatchDec` — a `null` '
+      + 'or a second, freshly-minted actor here would silently pass an unattended-actor review')
+      .toBe('dispatchDec');
   });
 });

@@ -11,7 +11,7 @@
 // WHY A TABLE AND NOT A UNION. `ProviderId` is `keyof typeof PROVIDERS`, so the
 // type cannot name a provider the table does not describe and the table cannot
 // hold a row no type admits. That is the `PR_REASON_MAP`/`PR_REASONS` shape
-// (`shared/api.ts:651`) applied here, and it is what lets `PROVIDER_IDS` and
+// (`shared/api.ts:707`) applied here, and it is what lets `PROVIDER_IDS` and
 // `GENERATABLE` be `Object.keys` and a `filter` rather than two more lists to
 // keep in step.
 //
@@ -68,8 +68,9 @@ export type ProbeKind = 'auth-status+inference' | 'inference';
  *  is decoration.
  *
  *  `envVar` is what the lane exports into its own `settings.json` `env` block
- *  (spec §4.3) — `null` for `openai`, whose launcher owns its own credential
- *  and takes nothing from ccrc.
+ *  (spec §4.3) — `null` for `openai`: its ccrc-written Codex launcher uses the
+ *  OAuth directory path in `exec.authDir`; ccrc records and passes that path
+ *  without reading its contents.
  *
  *  `baseUrl` is the DEFAULT endpoint, `null` when there is none, and
  *  `baseUrlRequired` says whether absence is a refusal rather than a fallback.
@@ -93,8 +94,10 @@ export interface ProviderRow {
   /** Whether an absent endpoint is a REFUSAL (`base-url-required`, spec §5)
    *  rather than a fall-through to `baseUrl`. */
   readonly baseUrlRequired: boolean;
-  /** Whether `ccrc account add` may create a lane for this provider at all.
-   *  `openai` is `declare`-only: the launcher is somebody else's program. */
+  /** Whether `ccrc account add` may create an `exec.kind: 'generated'` lane
+   *  for this provider. `openai` is the provider of `exec.kind: 'codex'`, whose
+   *  ccrc-written launcher receives the OAuth directory path in `exec.authDir`
+   *  without ccrc reading its contents. */
   readonly generatable: boolean;
   /** Whether `exec.models` is legal on a lane of this provider. The two
    *  api-key lanes carry a routing map and an allowlist; the two subscription
@@ -150,8 +153,8 @@ export const PROVIDERS = {
     catalogue: null,
   },
   openai: {
-    label: 'ChatGPT subscription (external launcher)',
-    credential: 'held by the launcher, never by ccrc',
+    label: 'ChatGPT subscription (Codex lane)',
+    credential: "the lane's own OAuth directory, named by exec.authDir — ccrc records the path and never reads what is in it",
     envVar: null,
     // §5:423 and §6:512's name for this method. §4.2's cell spells it
     // `pane:login`, which is not this name with a prefix — see `ConnectMethod`.
@@ -159,6 +162,13 @@ export const PROVIDERS = {
     probe: 'inference',
     baseUrl: null,
     baseUrlRequired: false,
+    // FALSE, and not an oversight. `generatable` is read by `shared/roster.ts`
+    // and means "this provider may be the provider of a `generated` account" —
+    // a wrapper in front of an API key. A Codex lane is `exec.kind: "codex"`,
+    // whose launcher ccrc writes through a different arm of the same emitter
+    // (`shared/wrapper.mjs`); nothing consults this column to decide that.
+    // Setting it true here would make `openai` legal on a `generated` account,
+    // which is the one thing this kind exists to stop being necessary.
     generatable: false,
     apiKeyModels: false,
     catalogue: null,
@@ -169,19 +179,21 @@ export const PROVIDERS = {
 export type ProviderId = keyof typeof PROVIDERS;
 
 /** The runtime list, in table order. `Object.keys`, exactly as
- *  `shared/api.ts:651`'s `PR_REASONS` is — a hand-written second list is the
+ *  `shared/api.ts:707`'s `PR_REASONS` is — a hand-written second list is the
  *  drift this file exists to prevent. */
 export const PROVIDER_IDS: readonly ProviderId[] = Object.keys(PROVIDERS) as ProviderId[];
 
-/** The providers `ccrc account add` may create a lane for. `openai` is not one:
- *  its launcher is a program ccrc records and never writes (spec §5, `declare`). */
+/** The providers `ccrc account add` may create as `exec.kind: 'generated'`
+ *  lanes. `openai` is excluded because it is the provider of `exec.kind: 'codex'`:
+ *  ccrc writes that launcher and passes its OAuth directory path from
+ *  `exec.authDir` without reading its contents. */
 export const GENERATABLE: readonly ProviderId[] =
   PROVIDER_IDS.filter((p) => PROVIDERS[p].generatable);
 
 /** The only way to narrow an untrusted value to a `ProviderId` — the CONSTANT
  *  is cast, never the input, so this is a real type guard rather than an
  *  assertion dressed as one. Same shape as `isHue` (`shared/roster.ts:39`) and
- *  `isPrReason` (`shared/api.ts:668`). */
+ *  `isPrReason` (`shared/api.ts:724`). */
 export function isProviderId(v: unknown): v is ProviderId {
   return typeof v === 'string' && (PROVIDER_IDS as readonly string[]).includes(v);
 }

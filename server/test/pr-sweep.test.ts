@@ -838,3 +838,155 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     w.stop();
   });
 });
+
+// Task 4 (board placement wave 1): the sweep RETAINS `(project → repo)` instead
+// of discarding it at `this.prStates.set(line.id, phaseFor(line))`. Every test
+// above already exercises that call without ever looking at the repo it drops,
+// so a regression there would be invisible to this file without these.
+describe('the sweep retains the measured repo, not just the PR phase', () => {
+  it('a full line carries its repo into currentProjectRepos() as a named cell', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+    w.stop();
+  });
+
+  it('a whole-repo failure of no-remote reads absent, never unmeasured', async () => {
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'no-remote' });
+    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'absent' }));
+    w.stop();
+  });
+
+  it('a whole-repo failure of any OTHER reason reads unmeasured, never absent', async () => {
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
+    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' }));
+    w.stop();
+  });
+
+  // Coordinator ruling, fix round 1 (Important 1): a failed read never
+  // overwrites a GOOD repo measurement — `backoffPr`'s own docstring states
+  // the identical principle for `prStates` ("A failed read never overwrites
+  // a good phase — only greys it"). Two ticks, one fixture, same idiom as
+  // "stays silent on an UNKNOWN phase, and speaks the moment the sweep reads
+  // merged" above: the SECOND tick is what proves it, not the first.
+  it('a failed read never downgrades a named repo to unmeasured', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(failure, calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    // Proves the SECOND sweep actually ran and actually failed, so the
+    // assertion below is about survival across a failure rather than a
+    // no-op second tick that never reached the runner.
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' });
+    w.stop();
+  });
+
+  // FINAL WHOLE-BRANCH REVIEW, Minor 3 (D-2922). Two one-line defects in the
+  // full-line retention arm, both about trusting a field the parser never
+  // validated. `parsePrLines` casts a full line through
+  // `v as unknown as CcdPrLine` (`prstate.ts`), so `line.project` and
+  // `line.repo` are whatever ccd wrote — and `line.project` had exactly one
+  // reader in the whole tree, this arm.
+  it('keys the retained cell on the LOOP\'s project, never the line\'s own', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    // ccd emits a line naming a project that is not the one this sweep asked
+    // about. The enclosing `for (const project of projects)` is authoritative
+    // — it is what `ccd pr-state --project` was CALLED with.
+    const lying = mergedLine('demo-quiet-basin').replace('"project":"demo"', '"project":"not-demo"');
+    expect(lying).toContain('not-demo');          // anti-vacuity: the fixture really lies
+    const w = new FleetWatcher(testDeps(home, runnerFor(lying, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+    // …and nothing was invented under the name the line made up.
+    expect(w.currentProjectRepos().has('not-demo')).toBe(false);
+    w.stop();
+  });
+
+  it('a full line with no repo never downgrades a named cell — the same keep-last rule as the failure arm', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+
+    // A full line — `rows` and `id` are both there, so it is not a failure —
+    // carrying an EMPTY repo. Today's ccd cannot emit this; the server is
+    // nonetheless trusting an unvalidated field to uphold a rule D-2884 made
+    // the other two arms enforce, so the rule is made structural rather than
+    // contingent on ccd's current behaviour.
+    const noRepo = mergedLine('demo-quiet-basin').replace('"repo":"o/r"', '"repo":""');
+    expect(noRepo).toContain('"repo":""');        // anti-vacuity
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(noRepo, calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    // The second sweep really ran and really parsed a full line — without this
+    // the assertion below could be a no-op tick.
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' });
+    w.stop();
+  });
+
+  // A project with NO cell yet still learns `unmeasured` from such a line —
+  // the `|| !this.projectRepos.has(project)` half of the rule, which a
+  // keep-last test alone cannot reach.
+  it('writes unmeasured for a repo-less line when the project has no cell at all', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const noRepo = mergedLine('demo-quiet-basin').replace('"repo":"o/r"', '"repo":""');
+    const w = new FleetWatcher(testDeps(home, runnerFor(noRepo, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' });
+    w.stop();
+  });
+
+  // Mutation-sweep shape, same reasoning as "the swept state reaches the
+  // wire, not just currentPrStates()" above: a route-level test that builds
+  // its OWN watcher double (as `projects-route-placement.test.ts` does for
+  // the named-cell case) never calls `sweepPr` at all, so it cannot catch a
+  // regression at the actual drop site. This one runs a real tick and reads
+  // the real route off it.
+  it('GET /api/projects carries the swept repo, not a stale or absent one', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
+    const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+    const app = await buildServer(deps, new Bus(), watcher);
+    try {
+      await watcher.tick();
+      await vi.waitFor(() => expect(watcher.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+      const res = await app.inject({ method: 'GET', url: '/api/projects' });
+      const body = res.json() as { projects: { name: string; repo?: { state: string } }[] };
+      expect(body.projects.find((p) => p.name === 'demo')?.repo).toEqual({ state: 'named', slug: 'o/r' });
+    } finally {
+      watcher.stop();
+      await app.close();
+    }
+  });
+});

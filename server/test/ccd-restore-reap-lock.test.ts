@@ -24,10 +24,13 @@ describe('ws-restore\'s supersede emit lives inside the reap flock region', () =
       .toBeGreaterThan(5000);
   });
 
-  it('emits AFTER the lock is taken and BEFORE the rm -f', () => {
+  it('emits AFTER the lock is taken and BEFORE the erase', () => {
     const lockAt = body.indexOf('flock -n "$lfd"');
     const emitAt = body.indexOf('_lc_done restore');
-    const rmAt = body.indexOf('rm -f "$REG/$id.archived"');
+    // THE ERASE, which is a helper call and no longer three open-coded
+    // `rm -f`s: `_ws_unarchive` owns what an archive consists of (CCR-10),
+    // and this landmark follows it so the ordering stays pinned.
+    const rmAt = body.indexOf('_ws_unarchive "$id"');
     const closeAt = body.indexOf('exec {lfd}>&-', rmAt);
     expect(lockAt).toBeGreaterThan(-1);
     expect(rmAt, 'the erase moved — re-measure before trusting this').toBeGreaterThan(-1);
@@ -41,7 +44,7 @@ describe('ws-restore\'s supersede emit lives inside the reap flock region', () =
     // Mutant: give the emit a `|| return 1` -> this fails, and the reap lock is
     // held for ever in the shell that sourced ccd.
     const lockAt = body.indexOf('flock -n "$lfd"');
-    const rmAt = body.indexOf('rm -f "$REG/$id.archived"');
+    const rmAt = body.indexOf('_ws_unarchive "$id"');
     const window = body.slice(lockAt, rmAt);
     expect(window).not.toMatch(/_lc_done restore[\s\S]{0,400}\|\|\s*return/);
     expect(window, 'a refusal inside the region would exit through die, not the close')
@@ -49,7 +52,7 @@ describe('ws-restore\'s supersede emit lives inside the reap flock region', () =
   });
 
   it('the spawn-failure emits are OUTSIDE the region — after the descriptor is closed', () => {
-    const closeAt = body.indexOf('exec {lfd}>&-', body.indexOf('rm -f "$REG/$id.archived"'));
+    const closeAt = body.indexOf('exec {lfd}>&-', body.indexOf('_ws_unarchive "$id"'));
     const failAt = body.indexOf('_lc_fail restore');
     expect(failAt, '_lc_fail restore not found').toBeGreaterThan(-1);
     expect(failAt, 'a spawn-failure emit inside the region would sit on a return path')

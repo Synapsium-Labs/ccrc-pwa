@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
@@ -210,6 +210,185 @@ describe('ccrc-agent file ops', () => {
     expect(typeof res1.mtimeMs).toBe('number');
     const res2 = await client!.req<Res>(nextId(), { op: 'stat', path: path.join(fixture!.home, '.cc-limits', 'nope') });
     expect(res2).toMatchObject({ ok: true, missing: true });
+  });
+
+  it('lstat answers about the PATH, not its target — the distinction `stat` structurally cannot carry', async () => {
+    await open();
+    const target = path.join(fixture!.home, '.cc-limits', 'target.json');
+    const link = path.join(fixture!.home, '.cc-limits', 'link.json');
+    writeFileSync(target, 'abcd');
+    symlinkSync(target, link);
+
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: target }))
+      .toMatchObject({ ok: true, kind: 'regular' });
+    // THE POINT OF THE OP, as one contrast on one fixture: `stat` follows and
+    // reports the target's four bytes for the very path `lstat` calls a link.
+    // Before this op existed, the server had no way to ask the question at all,
+    // which is why its `_authdead` gate condemned accounts both bash bodies
+    // call healthy.
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: link }))
+      .toMatchObject({ ok: true, size: 4 });
+  });
+
+  it('lstat is not defeated by `checkPath`\'s canonicalisation — the regression that shipped inert would say `regular` here', async () => {
+    // A guard on the implementation, not on the behaviour above: every other op
+    // operates on `checkPath`'s CANONICAL result, and lstat'ing that can only
+    // ever answer `regular` for a symlink, because canonicalisation already
+    // followed it. This case is what caught that, end to end, after the local
+    // adapter's own unit tests were green.
+    await open();
+    const target = path.join(fixture!.home, '.cc-sessions', 'canon-target');
+    const link = path.join(fixture!.home, '.cc-sessions', 'claude-a-authdead');
+    writeFileSync(target, '1757203200 auth-401');
+    symlinkSync(target, link);
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+  });
+
+  it('lstat reports a DANGLING link as `symlink` — the link exists though its target does not', async () => {
+    await open();
+    const link = path.join(fixture!.home, '.cc-limits', 'dangling');
+    symlinkSync(path.join(fixture!.home, '.cc-limits', 'no-such-target'), link);
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+    // The residual `StatResult`'s docstring names, on the same fixture: `stat`
+    // follows, the TARGET's ENOENT throws, and a name still in its directory
+    // listing reads as proven-absent.
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: link }))
+      .toMatchObject({ ok: true, missing: true, absent: true });
+  });
+
+  it('lstat reports a directory as `other`, and a genuinely missing path as missing/absent', async () => {
+    await open();
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: path.join(fixture!.home, '.cc-limits') }))
+      .toMatchObject({ ok: true, kind: 'other' });
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: path.join(fixture!.home, '.cc-limits', 'nope') }))
+      .toMatchObject({ ok: true, missing: true, absent: true });
+  });
+
+  it('lstat rejects a path outside the whitelist, and a link OUT of the whitelist too', async () => {
+    await open();
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: fixture!.outside }))
+      .toMatchObject({ ok: false, err: 'forbidden' });
+    // The escape the whitelist exists to stop. The decision is still made on
+    // the FULLY RESOLVED path, so answering about the literal last component
+    // widened nothing — and the refusal must not leak the kind it refused.
+    const escape = path.join(fixture!.home, '.cc-limits', 'escape-link');
+    symlinkSync(fixture!.outside, escape);
+    const res = await client!.req<Res>(nextId(), { op: 'lstat', path: escape });
+    expect(res).toMatchObject({ ok: false, err: 'forbidden' });
+    expect(res.kind).toBeUndefined();
+  });
+
+  // ── F12 (review run 134) / D-3195 — lstat of one of the eight ~/.ccrc node
+  // files must answer about that path's OWN directory entry, never about a
+  // target `checkPath` resolved into ANOTHER admitted prefix. Before the fix,
+  // `checkPath(dirname('~/.ccrc/…'))` refuses (`~/.ccrc` itself is not
+  // whitelisted), so the op fell back to the CANONICAL — already
+  // symlink-resolved — subject and reported the regular file at the other
+  // end of the link, not the link itself.
+  describe('lstat of a ~/.ccrc node file answers the literal entry, not a target resolved into another prefix', () => {
+    it('a node-file symlink into .cc-sessions still reports `symlink`', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.cc-sessions', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'installed');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under .cc-clips', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.cc-clips', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'floor');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under a .claude* dir', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.home, '.claude-personal', 'x');
+      const link = path.join(fixture!.home, '.ccrc', 'node-id');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('same for a target under the fleet projects root', async () => {
+      await open();
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const target = path.join(fixture!.projectsRoot, 'proj', 'x');
+      mkdirSync(path.dirname(target), { recursive: true });
+      const link = path.join(fixture!.home, '.ccrc', 'build.json');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    it('control: a REGULAR node file still answers `regular`', async () => {
+      await open();
+      const ccrc = path.join(fixture!.home, '.ccrc');
+      mkdirSync(ccrc, { recursive: true });
+      const p = path.join(ccrc, 'installed');
+      writeFileSync(p, 'abc\n');
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: p }))
+        .toMatchObject({ ok: true, kind: 'regular' });
+    });
+
+    it('control: a DANGLING node-file symlink still answers `symlink`', async () => {
+      await open();
+      const ccrc = path.join(fixture!.home, '.ccrc');
+      mkdirSync(ccrc, { recursive: true });
+      const link = path.join(ccrc, 'previous');
+      symlinkSync(path.join(ccrc, 'no-such-target'), link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'symlink' });
+    });
+
+    // Fix round 1 (I-1): each scoping condition on its own guard, so
+    // deleting either one reds a case here rather than leaving the suite
+    // green. Not "into another prefix" cases (those are above) — these are
+    // the two ways a request can look LIKE one of those cases without being
+    // one, which only a request satisfying BOTH conditions may become.
+    it('control: a REGULAR file with a node basename under ANOTHER prefix still answers `regular` — guards the literal-parent condition (I-1)', async () => {
+      await open();
+      // `~/.ccrc` exists but has no `build.json` of its own: if the
+      // literal-parent condition were dropped, the basename check alone
+      // would redirect this request's subject to `~/.ccrc/build.json`
+      // (absent) instead of the real file under `.cc-sessions`.
+      mkdirSync(path.join(fixture!.home, '.ccrc'), { recursive: true });
+      const p = path.join(fixture!.home, '.cc-sessions', 'build.json');
+      writeFileSync(p, 'regular\n');
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: p }))
+        .toMatchObject({ ok: true, kind: 'regular' });
+    });
+
+    it('control: a NON-node name in ~/.ccrc that is a live link elsewhere keeps its pre-existing answer, never discloses `symlink` — guards the basename condition (I-1)', async () => {
+      await open();
+      // `agent.env` is not one of the eight, so its kind must never be
+      // revealed through the node-file branch: if the basename condition
+      // were dropped, the literal-parent check alone would take this
+      // request's subject to the literal (symlink) entry and report
+      // `symlink` for a name the sweep's read grant does not cover at all.
+      const ccrc = path.join(fixture!.home, '.ccrc');
+      mkdirSync(ccrc, { recursive: true });
+      const target = path.join(fixture!.home, '.cc-sessions', 'x');
+      const link = path.join(ccrc, 'agent.env');
+      writeFileSync(target, 'regular\n');
+      symlinkSync(target, link);
+      expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+        .toMatchObject({ ok: true, kind: 'regular' });
+    });
   });
 
   it('stat rejects a path outside the whitelist', async () => {

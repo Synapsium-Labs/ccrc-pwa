@@ -16,10 +16,10 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   id: 'demo-quiet-basin', wrapper: 'claude', home: 'claude', project: 'demo',
   workdir: '/w', workspace: 'quiet-basin', name: null, status: 'idle', statusUpdatedAt: null,
   limits: null, dialogPending: false, version: null, model: null, effort: null,
-  ultracode: false, branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
+  ultracode: false, branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: pr(), archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
 });
 
 const view = (over: Partial<PrView> = {}): PrView => ({
@@ -68,7 +68,8 @@ const runFor = (sessionId: string, id: number, program: string,
                 wave: number, waveOf: number | null): RunSummary => ({
   id, program, programTitle: 'Fleet controls', wave, waveOf, project: 'demo', homeProject: null,
   sessionId, workspace: sessionId, branch: `ws/${sessionId}`,
-  state: 'working', claimedBy: 'demo-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'demo-coordinator', resumed: false, clearedAt: null,
   openedAt: 1785300000000, dispatchStartedAt: null,
   dispatchedAt: 1785300000000, closedAt: null,
   handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,

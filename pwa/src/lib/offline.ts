@@ -132,7 +132,9 @@ export function loadFleetSnapshot(): FleetSnapshot | null {
     if (typeof parsed !== 'object' || parsed === null) return null;
     const { savedAt, sessions, roster } = parsed as { savedAt?: unknown; sessions?: unknown; roster?: unknown };
     if (typeof savedAt !== 'number') return null;
-    const revived = reviveFleetSessions(sessions);
+    // `keep`: this snapshot holds what live frames carried, so a spawn word
+    // this bundle cannot name renders offline exactly as it did live.
+    const revived = reviveFleetSessions(sessions, 'keep');
     if (revived === null) return null;
     const revivedRoster = Array.isArray(roster) ? roster.filter(isRosterWireLike) : [];
     return { savedAt, sessions: revived, roster: revivedRoster };

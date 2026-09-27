@@ -185,13 +185,19 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 28', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 29', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
     // themselves shipped with, silently, until this assertion's own `all`
     // was widened to see them (see the fix-round note above).
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 28').toBe(28);
+    // 28 -> 29 (D-2605 fix round 2, D-2782): `meas.unremoved`, carried by the
+    // three post-action callers' `purge-incomplete` failures. THIS SCAN IS
+    // WHAT CAUGHT IT — the key shipped in a commit whose own gate did not run
+    // this suite, exactly the suite-list gap the note above records for
+    // `home`/`pool`/`reason`, and it would otherwise have been dropped
+    // silently at ingest by `reviveMeas`.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 29').toBe(29);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);

@@ -14,15 +14,31 @@ import fs from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readLimits, projectHome, projectPlacement, type AccountLimits } from '../src/limits.js';
+import { readSharesMeasured, type SharesRead } from '../src/shares.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
-import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
 
 let home: string;
+
+/** No central `pool_edges` — every case in this file drives the
+ *  DECLARED-roster path deliberately (ruling T7-R3, account-pool-membership
+ *  wave 1: `projectHome`/`projectPlacement` now take `edges` for real, and
+ *  the production callers in `server.ts` pass a live
+ *  `deps.coord.accountPoolEdges()` read — but THIS file pins the
+ *  pool-name/serviceability/scoring RULES against `_ws_least_loaded` in
+ *  isolation from any central-edge behaviour, exactly as its own header
+ *  says: "the bash side reads the central PROJECTION (`pool-epoch`) while
+ *  the TypeScript side... reads the DECLARED roster". `pools.test.ts`'s own
+ *  central-edge tests (`poolVerdict`/`poolEligible`) and
+ *  `pool-accounts-route.test.ts`'s closure test cover the central path;
+ *  this fixture stays a pure parity harness against bash's declared-only
+ *  callers. */
+const NO_EDGES = new Map<string, readonly string[]>();
 
 /** ccd reads the clock itself, so fixtures live against real now. */
 const now = (): number => Math.floor(Date.now() / 1000);
@@ -127,21 +143,82 @@ const seedPoolTag = (project: string, tag: string): void => {
   fs.writeFileSync(path.join(dir, project), tag);
 };
 
+/** The sweep's own report, `<HOME>/.cc-sessions/usage/sweep/latest.json` —
+ *  the server's `readSharesMeasured` and (Task 4) ccd's bash reader both read
+ *  it from there. Absent `sweep` means no file at all (removed, not written
+ *  empty), which both sides must read as unmeasured. */
+const seedSweep = (s: LeastLoadedCase['sweep']): void => {
+  const dir = path.join(home, '.cc-sessions', 'usage', 'sweep');
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (!s) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const finishedAt = new Date((now() - s.ageS) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({
+    finishedAt,
+    perAccount: Object.fromEntries(Object.entries(s.estimates).map(([a, e]) => [a, { fableShare: { estimate: e } }])),
+  }));
+};
+
 describe('projectHome agrees with ccd _ws_least_loaded', () => {
   it.each(leastLoadedCases(now()).map((c) => [c.name, c] as const))(
     '%s',
     async (_name, c) => {
-      // BOTH projections of the case's roster into the one fixture home, so the
-      // comparison below is of two RULES and not of two rosters. Re-seeded per
-      // case rather than only in `beforeEach`, because the pool dimension is
-      // the first thing in this fixture that changes the ROSTER itself.
+      // BOTH projections of the case's roster into the one fixture home.
+      // Re-seeded per case rather than only in `beforeEach`, because the pool
+      // dimension is the first thing in this fixture that changes the ROSTER
+      // itself.
+      //
+      // THE TWO SIDES READ DIFFERENT CARRIERS HERE, and the premise used to
+      // say otherwise — "so the comparison below is of two RULES and not of
+      // two rosters" (corrected, wave 1 Task 2 fix round 1, I4). Since
+      // `_pool_ok` gained its account arm, bash's `_ws_least_loaded` reads
+      // the CENTRAL PROJECTION (`_pool_ok` -> `_acct_pool_state` ->
+      // `$REG/pool-epoch`, `ccd/ccd:6426`/`:2104` — MEASURED: deleting this
+      // file's own `plantPoolEpoch(home, c.pools)` two lines below reds 2
+      // cases, so bash demonstrably reads what that line plants, not the
+      // roster) while this harness calls `projectHome` with `NO_EDGES`, i.e.
+      // the DECLARED roster ONLY. The two sides therefore read DIFFERENT
+      // carriers, and agree only because the fixture writes the SAME
+      // `c.pools` into BOTH — `rosterWithPools(c.pools)` into the declared
+      // side, `plantPoolEpoch(home, c.pools)` into the central one — so a
+      // value the fixture chose to duplicate across carriers cannot itself
+      // demonstrate carrier agreement. That is deliberately blind to a
+      // roster/projection SKEW, which is a real condition and belongs to
+      // neither side's rule. The bash half of that skew is pinned in
+      // `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours the projection
+      // over the declared roster) and in `ccd-crosspool.test.ts`.
+      //
+      // CORRECTED AGAIN (review round 4, P1): round 3's "M1" fix replaced one
+      // false premise ("the TypeScript half has no carrier to read yet",
+      // stale since ruling T7-R3) with another — it claimed this harness is
+      // parity against bash's "DECLARED-only positional... with no central
+      // read", which measurement above disproves: bash's positional DOES
+      // read the central projection, every time. The real reason `NO_EDGES`
+      // stays is spec §5.7: the server's own forecast, wired with real
+      // edges, reads coord.db DIRECTLY and never consults a projection file
+      // at all — so there is no shipped path this harness could feed a
+      // central value through even if it wanted to; `plantPoolEpoch`
+      // populates the FLEET's own carrier (`$REG/pool-epoch`, what `ccd`
+      // reads), which has no TypeScript-side counterpart to compare against.
+      // Only 2 of these 57 cases are even pool-sensitive at all — the other
+      // 55 pass an untagged project, where `poolRule` short-circuits before
+      // either side's account carrier is read — so this fixture table's
+      // silence on carrier agreement costs little: the central path is
+      // pinned for real in `pools.test.ts` (`poolVerdict`/`poolEligible`)
+      // and `pool-accounts-route.test.ts`'s W1/T7-R3 closure tests, which
+      // run it end to end. Do not read a green run here as evidence the two
+      // carriers agree in the field — it is evidence the fixture's declared
+      // and central copies of `c.pools` agree with each other, by
+      // construction.
       const roster = rosterWithPools(c.pools);
       seedRoster(home, roster);
       seedAccountsSh(home, roster);
+      plantPoolEpoch(home, c.pools);
       seed(c.files);
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
       const cfg = loadConfig({ CCRC_HOME: home });
       // The tag reaches the TS side through the real reader, not a literal —
@@ -151,11 +228,19 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
-      const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), pool);
+      const projected = projectHome(
+        cfg.roster, await readLimits(localIO, cfg), pool, NO_EDGES,
+        c.cls ?? 'default', await readSharesMeasured(localIO, cfg.registryDir), now(),
+      );
       // The bash positional stays OPTIONAL: a case with no `project` calls
       // `_ws_least_loaded` with no argument, exactly as every pre-pool case
-      // always has.
-      const bashPick = (): string => sh(`_ws_least_loaded ${c.project?.name ?? ''}`);
+      // always has. `JSON.stringify` on the (possibly empty) project name is
+      // the shell-quoting that keeps an absent project as its OWN positional
+      // rather than collapsing into the class argument that follows it — an
+      // unquoted empty interpolation vanishes under bash word-splitting and
+      // would shift `$2` (the class) into `$1` (the project).
+      const bashPick = (): string =>
+        sh(`_ws_least_loaded ${JSON.stringify(c.project?.name ?? '')} ${c.cls ?? ''}`);
 
       if (c.expect === null) {
         // Nothing is placeable. The fixture can't express one shared "empty"
@@ -170,9 +255,9 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // 1. The prediction is right in its own terms.
       expect(projected, c.why).toEqual(c.expect);
       // 2. …and bash, the authority, picks the same account.
-      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
       // 3. …and scores it the same, so the headroom the user reads is the
       //    headroom the account really has.
+      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
       expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
     },
   );
@@ -185,7 +270,7 @@ describe('projectHome edge cases', () => {
     // "cannot place", or a fresh install would be told no account can take a
     // workspace. Both sides fall back to the first home-able account at score
     // 0, which is exactly what ccd does with the same empty directory.
-    expect(projectHome(loadConfig({ CCRC_HOME: home }).roster, {}, { state: 'untagged' })).toEqual({ wrapper: 'claude', score: 0 });
+    expect(projectHome(loadConfig({ CCRC_HOME: home }).roster, {}, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'claude', score: 0 });
     expect(sh('_ws_least_loaded')).toBe('claude');
   });
 });
@@ -211,7 +296,7 @@ describe('projectHome ranks unmeasured below measured', () => {
     // ever looked" indistinguishable from "measured empty". Confirmed against
     // the live tree, where {claude:5, 'claude-a':6, claude-b:7} projected onto
     // claude-d at 0.
-    expect(projectHome(r, { a: L(5, 5) }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 5 });
+    expect(projectHome(r, { a: L(5, 5) }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 5 });
   });
 
   it('a telemetry:none account is never scored, even reporting a real measured zero', () => {
@@ -227,7 +312,7 @@ describe('projectHome ranks unmeasured below measured', () => {
     // that way regardless) and fully measured (not held out by `measured()`).
     // With the filter present the answer is `b`; delete the filter and `g` wins
     // at 0.
-    expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(0, 0) }, { state: 'untagged' })).toEqual({ wrapper: 'b', score: 80 });
+    expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(0, 0) }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'b', score: 80 });
   });
 
   it("a telemetry:none account is never scored on gpt's real half-null shape either", () => {
@@ -235,18 +320,18 @@ describe('projectHome ranks unmeasured below measured', () => {
     // `{"five": null, "seven": 0}`. Both exclusions apply here and this case
     // cannot tell them apart — which is exactly why the case above exists. It
     // pins the ANSWER for the shape that actually reaches disk today.
-    expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(null, 0) }, { state: 'untagged' })).toEqual({ wrapper: 'b', score: 80 });
+    expect(projectHome(r, { a: L(90, 90), b: L(80, 80), g: L(null, 0) }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'b', score: 80 });
   });
 
   it("a five:null account is unmeasured, not zero — gpt's real on-disk shape", () => {
     // `~/.cc-limits/gpt.json` really is `{"five": null, "seven": 0}`: gpt has no
     // 5h window at all. A row half-full of nulls scores nothing, exactly as an
     // absent row does.
-    expect(projectHome(r, { a: L(5, 5), b: L(null, 0) }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 5 });
+    expect(projectHome(r, { a: L(5, 5), b: L(null, 0) }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 5 });
   });
 
   it('falls back to the first home-able account when NOTHING is measured — a fresh install must still place work', () => {
-    expect(projectHome(r, {}, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 0 });
+    expect(projectHome(r, {}, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 0 });
   });
 
   it('the fallback steps over a condemned lane when a healthy one is behind it', () => {
@@ -255,7 +340,7 @@ describe('projectHome ranks unmeasured below measured', () => {
     // one fallback variable cannot say both "not preferred" and "still
     // eligible", so it said neither and placement landed on a credential the
     // probe had already measured dead.
-    expect(projectHome(r, { a: { ...L(null, null), authDead: true } }, { state: 'untagged' })).toEqual({ wrapper: 'b', score: 0 });
+    expect(projectHome(r, { a: { ...L(null, null), authDead: true } }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'b', score: 0 });
   });
 
   it('…and falls back to a condemned lane only when EVERY home-able lane is condemned', () => {
@@ -270,7 +355,7 @@ describe('projectHome ranks unmeasured below measured', () => {
       a: { ...L(null, null), authDead: true },
       b: { ...L(null, null), authDead: true },
       g: { ...L(null, null), authDead: true },
-    }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 0 });
+    }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 0 });
   });
 
   it('the fallback widens into `live` before dropping to a condemned `scorable` lane — the tier no fixture here could reach before', () => {
@@ -309,14 +394,14 @@ describe('projectHome ranks unmeasured below measured', () => {
     expect(projectHome(r, {
       a: { ...L(null, null), authDead: true },
       b: { ...L(null, null), authDead: true },
-    }, { state: 'untagged' })).toEqual({ wrapper: 'g', score: 0 });
+    }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'g', score: 0 });
   });
 
   it('a condemned lane never re-enters the PREFERRED tier by being measured', () => {
     // `a` is the only account anyone has measured, and it is condemned: the
     // scored set empties, and the fallback must still step over it rather than
     // read "the scored set is empty" as "nothing is measured, take the first".
-    expect(projectHome(r, { a: { ...L(5, 5), authDead: true } }, { state: 'untagged' })).toEqual({ wrapper: 'b', score: 0 });
+    expect(projectHome(r, { a: { ...L(5, 5), authDead: true } }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'b', score: 0 });
   });
 
   it('still returns null when every home-able lane is disabled', () => {
@@ -325,13 +410,13 @@ describe('projectHome ranks unmeasured below measured', () => {
       a: { ...L(1, 1), disabled: true },
       b: { ...L(1, 1), disabled: true },
       g: { ...L(1, 1), disabled: true },
-    }, { state: 'untagged' })).toBeNull();
+    }, { state: 'untagged' }, NO_EDGES)).toBeNull();
   });
 
   it('ties go to the earlier account in roster order', () => {
     // `<`, not `<=` — the same strictly-less-than bash compares with. ccd's own
     // `_ws_least_loaded` fixture (`tie`) pins the other side of this.
-    expect(projectHome(r, { a: L(50, 50), b: L(50, 50) }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 50 });
+    expect(projectHome(r, { a: L(50, 50), b: L(50, 50) }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 50 });
   });
 
   it('an INFERRED zero never beats a measured account — the placement magnet, third site', () => {
@@ -348,7 +433,7 @@ describe('projectHome ranks unmeasured below measured', () => {
     expect(projectHome(r, {
       a: L(5, 5),
       b: { ...L(0, 0), fiveRolledOver: true, sevenRolledOver: true },
-    }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 5 });
+    }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 5 });
   });
 
   it('ONE rolled window is enough to make the row unmeasured — the score is a maximum', () => {
@@ -371,7 +456,7 @@ describe('projectHome ranks unmeasured below measured', () => {
     expect(projectHome(r, {
       a: L(50, 50),
       b: { ...L(0, 40), fiveRolledOver: true },
-    }, { state: 'untagged' })).toEqual({ wrapper: 'a', score: 50 });
+    }, { state: 'untagged' }, NO_EDGES)).toEqual({ wrapper: 'a', score: 50 });
   });
 });
 
@@ -396,7 +481,7 @@ describe('every home-able lane condemned AND measured — both sides still place
     seedDisabled([]);
     seedAuthDead(['claude', 'claude-a', 'claude-b', 'claude-d']);
     const cfg = loadConfig({ CCRC_HOME: home });
-    const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' });
+    const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), { state: 'untagged' }, NO_EDGES);
     // NOT null, and not the cheapest lane: both sides widen to their CONDEMNED
     // fallback tier here — reached only because no lane escaped it — so a fleet
     // whose every lane is merely UNVERIFIED still places work, in roster
@@ -421,7 +506,7 @@ describe('every home-able lane condemned AND measured — both sides still place
     // used to claim.
     seedAuthDead(['claude', 'claude-a', 'claude-d']);
     const cfg2 = loadConfig({ CCRC_HOME: home });
-    expect((projectHome(cfg2.roster, await readLimits(localIO, cfg2), { state: 'untagged' }))?.wrapper).toBe('claude-b');
+    expect((projectHome(cfg2.roster, await readLimits(localIO, cfg2), { state: 'untagged' }, NO_EDGES))?.wrapper).toBe('claude-b');
     expect(sh('_ws_least_loaded'), 'ccd disagrees').toBe('claude-b');
   });
 });
@@ -438,7 +523,7 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
 
   it('forecasts the in-pool account for a tagged project', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
-    expect(projectPlacement(cfg.roster, { claude: L(5, 5), 'claude-a': L(9, 9) }, { state: 'untagged' }))
+    expect(projectPlacement(cfg.roster, { claude: L(5, 5), 'claude-a': L(9, 9) }, { state: 'untagged' }, NO_EDGES))
       .toEqual({ kind: 'projected', wrapper: 'claude', score: 5 });
   });
 
@@ -448,7 +533,7 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
     // §5.6, §7's "Unreadable tag" walkthrough).
     const cfg = loadConfig({ CCRC_HOME: home });
     for (const state of ['unreadable', 'malformed'] as const) {
-      expect(projectPlacement(cfg.roster, { claude: L(5, 5) }, { state }), state)
+      expect(projectPlacement(cfg.roster, { claude: L(5, 5) }, { state }, NO_EDGES), state)
         .toEqual({ kind: 'unmeasurable' });
     }
   });
@@ -458,9 +543,78 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
     const off = { ...L(1, 1), disabled: true };
     expect(projectPlacement(cfg.roster, { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off },
-      { state: 'tagged', name: 'pool-b' })).toEqual({ kind: 'none', pool: 'pool-b' });
+      { state: 'tagged', name: 'pool-b' }, NO_EDGES)).toEqual({ kind: 'none', pool: 'pool-b' });
     expect(projectPlacement(cfg.roster, { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off },
-      { state: 'untagged' })).toEqual({ kind: 'none', pool: null });
+      { state: 'untagged' }, NO_EDGES)).toEqual({ kind: 'none', pool: null });
+  });
+
+  it('the `none` arm carries `class` only when the caller named one AND that class is what emptied the pool (routing slice 4, Task 6, D-2854, S4-R12)', () => {
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const off = { ...L(1, 1), disabled: true };
+    const limits = { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off };
+    // No class asked (the pre-slice-4 default): the pre-existing shape, no
+    // `class` key at all — an older reader must see exactly what it always has.
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES))
+      .toEqual({ kind: 'none', pool: null });
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES), 'class')).toBe(false);
+    // A class asked, but every lane is DISABLED regardless of it — the
+    // class-blind re-call (`projectHome(roster, limits, pool)`, no class, no
+    // shares) is null too, so the class did not cause this emptiness. `none`
+    // stays plain, with NO `class` key — the defect S4-R12 fixed: a pool
+    // empty because every lane is disabled must not read "no lane can serve
+    // fable".
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'fable'))
+      .toEqual({ kind: 'none', pool: null });
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'fable'), 'class')).toBe(false);
+    // `default` asked EXPLICITLY is the same as no class at all — it is the
+    // class-blind path, not a fifth class.
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'default'), 'class')).toBe(false);
+  });
+
+  it('the `none` arm names the class when a class-blind placement WOULD have found a home (routing slice 4, Task 6, fix round 2, S4-R12)', () => {
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const nowS = now();
+    // Every lane servable class-blind — plain, non-disabled `L(5,5)` — but
+    // every one of them sits over the Fable share ceiling (40%), so the
+    // `cls: 'fable'` call empties the pool while the class-blind re-call
+    // (default class, no shares) finds a home. THIS emptiness IS the class's
+    // doing, so `none` names it.
+    const limits = { claude: L(5, 5), 'claude-a': L(5, 5), 'claude-b': L(5, 5), 'claude-d': L(5, 5) };
+    const overCeiling: SharesRead = {
+      kind: 'reading', finishedAtS: nowS,
+      byAccount: { claude: 50, 'claude-a': 50, 'claude-b': 50, 'claude-d': 50 },
+    };
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'fable', overCeiling, nowS))
+      .toEqual({ kind: 'none', pool: null, class: 'fable' });
+  });
+
+  // Review round 3, I1: `limits.ts`'s class-blind re-call
+  // (`projectHome(roster, limits, pool, edges)`, no class, no shares) must
+  // pass the SAME `edges` as the main call, or a central mismatch reads as a
+  // class-caused emptiness. Measured: reverting that one re-call to
+  // `new Map()` leaves 151 OTHER tests green — this is the only one that
+  // reds, because it is the only case where the declared and central pools
+  // for the SAME account disagree.
+  it('the class-blind re-call must use the SAME edges as the main call — a central mismatch is not the class\'s doing', () => {
+    // ONE account, declared `pool-a` (matches the project) but centrally
+    // `pool-b` (mismatches) — no other home-able account exists to stay
+    // eligible via the untagged-is-unconstrained rule and mask the defect.
+    seedRoster(home, {
+      version: 1,
+      accounts: [{
+        id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-a',
+      }],
+    });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const edges = new Map([['claude', ['pool-b']]]);
+    // Under the mutation (class-blind re-call passes `new Map()` instead of
+    // `edges`), that re-call would see `claude` as declared `pool-a` — a
+    // match — and find a home, wrongly naming `class: 'fable'` on the result
+    // below. With `edges` threaded through correctly, the central mismatch
+    // empties the pool on BOTH calls and `class` is correctly omitted.
+    expect(projectPlacement(cfg.roster, { claude: L(5, 5) }, { state: 'tagged', name: 'pool-a' }, edges, 'fable'))
+      .toEqual({ kind: 'none', pool: 'pool-a' });
   });
 });
 
@@ -540,7 +694,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     const projected = projectHome(cfg.roster, await readLimits(localIO, cfg),
       // UNTAGGED (D-2604), because the bash side of this pair is `_ws_least_loaded`
       // with no project argument — the two must be asked the same question.
-      { state: 'untagged' });
+      { state: 'untagged' }, NO_EDGES);
     expect(projected).toEqual({ wrapper: 'b', score: 80 });
     expect(shH('_ws_least_loaded'), 'ccd disagrees with projectHome').toBe(projected!.wrapper);
   });
@@ -565,7 +719,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     const projected = projectHome(cfg.roster, await readLimits(localIO, cfg),
       // UNTAGGED (D-2604), because the bash side of this pair is `_ws_least_loaded`
       // with no project argument — the two must be asked the same question.
-      { state: 'untagged' });
+      { state: 'untagged' }, NO_EDGES);
     expect(projected).toEqual({ wrapper: 'a', score: 0 });
     expect(shH('_ws_least_loaded'), 'ccd disagrees with projectHome').toBe('a');
   });
@@ -583,7 +737,7 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     const projected = projectHome(cfg.roster, await readLimits(localIO, cfg),
       // UNTAGGED (D-2604), because the bash side of this pair is `_ws_least_loaded`
       // with no project argument — the two must be asked the same question.
-      { state: 'untagged' });
+      { state: 'untagged' }, NO_EDGES);
     expect(projected).toEqual({ wrapper: 'a', score: 0 });
     expect(shH('_ws_least_loaded')).toBe('a');
   });

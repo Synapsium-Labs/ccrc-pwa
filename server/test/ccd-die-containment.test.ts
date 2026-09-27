@@ -336,9 +336,22 @@ describe('ccd/ccd', () => {
     // set and must not be — it answers in a RETURN CODE precisely so the one
     // caller that cannot afford a `die` (cmd_swap, past the teardown) can route
     // its refusal through `_swap_refuse` and restart the session instead.
+    // The three `_route_argv_*`/`_route_seed_*` helpers joined them at routing
+    // slice 4: `_route_argv_check` IS a refusal (a bad `--route` value on a verb
+    // that mints a session), `_route_argv_write` dies on a registry write it
+    // could not make, and `_route_seed_default` inherits the second by call.
+    // All three are called plainly by `cmd_ws_add` and `cmd_start` — never
+    // inside `$( )`, which is what the demotion scan above is for, and what
+    // makes "nothing was touched" true rather than merely printed.
+    // `_place_for_class` is deliberately NOT here: it is called inside a command
+    // substitution on both of its call sites, so it must answer on stdout and a
+    // `die` in it would be demoted to rc 1 — the D-297 shape.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
-      .toEqual(['_account_still_rostered', '_lc_refuse', '_spawn', '_spawn_start',
+      .toEqual(['_account_still_rostered', '_lc_refuse', '_route_argv_check',
+        '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
         '_supervised_start', '_swap_refuse']);
+    expect(fatal.has('_place_for_class'),
+      'placement started dying instead of answering on stdout — both its call sites are `$( )`').toBe(false);
     expect(fatal.has('_wrapper_rostered_now'),
       'the roster re-read started dying instead of answering').toBe(false);
     expect(fatal.has('cmd_ws_add')).toBe(true);

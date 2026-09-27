@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import { substrateFault, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -14,10 +14,10 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
 
 describe('fleetstate', () => {
@@ -368,7 +368,21 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
-  it('revives `spawnState` — absent is null, and an unknown token rejects rather than launders', async () => {
+  it('revives `paneCols` as null — a snapshot is never THIS tick — and a non-number still rejects', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.paneCols).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('paneCols');
+    // A persisted width is DISCARDED: served in degraded mode it would quiet a
+    // `narrow` chip over a pane nobody is measuring.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), paneCols: 150 }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.paneCols).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), paneCols: 'wide' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `spawnState` — absent is null, a word this build cannot name is `unrecognised`, a non-string rejects', async () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
     const absent = (await loadSnapshot(cachePath))?.sessions[0];
@@ -378,11 +392,16 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'blocked' }]);
     expect((await loadSnapshot(cachePath))?.sessions[0]?.spawnState).toBe('blocked');
 
-    // Unlike an unrecognised RC (which becomes `unrecognised` in L0), an
-    // unrecognised STRING off a cache an older-or-newer build wrote rejects the
-    // whole session — the same rule `lifecycle`/`bucket`/`hookState` already follow.
-    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'spawnstate' }]);
-    expect(await loadSnapshot(cachePath)).toBeNull();
+    // A word a NEWER build wrote — `narrow` was one, to every build before
+    // #174 — revives as the designated-ignorance member, so a rollback keeps
+    // the rest of the snapshot instead of discarding it whole.
+    writeRaw(cachePath, [
+      { ...v1Session('claude-quiet-basin'), spawnState: 'some-future-word' },
+      v1Session('claude-calm-cove'),
+    ]);
+    const revived = await loadSnapshot(cachePath);
+    expect(revived?.sessions.map((s) => s.spawnState)).toEqual(['unrecognised', null]);
+    // The wrong TYPE is still malformed, and still rejects.
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 3 }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
@@ -741,5 +760,61 @@ describe('substrateFault — the ONE tolerant reader both PWA surfaces use (spec
       .toEqual({ at: 0, text: 'kept verbatim' });
     expect(substrateFault({ substrate: { at: 5, text: '' } }))
       .toEqual({ at: 5, text: 'substrate fault (reason unreadable)' });
+  });
+});
+
+describe('reviveFleetSession carries usage (routing slice 0)', () => {
+  it('revives usage when present, tolerates its absence from an older peer, refuses a malformed one', () => {
+    const base = JSON.parse(JSON.stringify(session('demo-a'))) as Record<string, unknown>;
+    delete base['usage'];
+    expect(reviveFleetSession(base)?.usage).toBeNull();
+    const usage = { ts: 1, model: 'claude-sonnet-5', class: 'sonnet', effort: 'medium', ctxPct: null, cost: 0, stale: true };
+    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual(usage);
+    expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
+    expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
+  });
+});
+
+describe('reviveFleetSession carries boardProject (board-placement wave 1, Task 3)', () => {
+  it('a revived session with no boardProject reads null — absence permits', () => {
+    // Built by DELETING the key from a snapshot this file already revives, never
+    // by hand-writing a literal: a hand-written one goes stale the next time
+    // FleetSession gains a required field, and would then be testing nothing.
+    const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
+    delete raw.boardProject;
+    const revived = reviveFleetSession(raw);
+    expect(revived).not.toBeNull();
+    expect(revived!.boardProject).toBeNull();
+  });
+
+  it('a revived session WITH a boardProject keeps it', () => {
+    const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
+    raw.boardProject = 'intake-platform';
+    expect(reviveFleetSession(raw)!.boardProject).toBe('intake-platform');
+  });
+});
+
+describe('boardHome — the ONE reader of FleetSession.boardProject (board-placement wave 2, Task 1)', () => {
+  it('reads the placement when the server decided one', () => {
+    expect(boardHome({ project: 'custom-tools', boardProject: 'intake-platform' })).toBe('intake-platform');
+  });
+  it('falls back to the project on null — an older server, an older snapshot, or a failed read (D-2875)', () => {
+    expect(boardHome({ project: 'custom-tools', boardProject: null })).toBe('custom-tools');
+  });
+  it('falls back on an ABSENT key — the live frame is cast, not revived', () => {
+    // No `boardProject` key at all, the runtime shape of a row from a server
+    // that predates the field. `??` reads it as null; `=== null` would not.
+    expect(boardHome({ project: 'custom-tools' })).toBe('custom-tools');
+  });
+});
+
+describe('repoLabel — the ONE renderer decision for ProjectRepoWire (Task 1)', () => {
+  it('is the slug on `named`', () => {
+    expect(repoLabel({ state: 'named', slug: 'Synapsium-Labs/ccrc-pwa' })).toBe('Synapsium-Labs/ccrc-pwa');
+  });
+  it('is null on `absent`, on `unmeasured`, and on an absent key — three conditions, one render, stated', () => {
+    expect(repoLabel({ state: 'absent' })).toBeNull();
+    expect(repoLabel({ state: 'unmeasured' })).toBeNull();
+    expect(repoLabel(undefined)).toBeNull();
   });
 });

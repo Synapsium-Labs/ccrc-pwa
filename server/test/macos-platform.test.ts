@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -67,6 +67,15 @@ describe('the platform block is one definition, spelled in two files', () => {
     expect(ccd).toMatch(/^_SVC_REG="\$HOME\/\.cc-sessions"$/m);
     expect(ccd).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
   });
+
+  // NO EXEMPTION SET, and that is the point (controller ruling S3-R1). Routing
+  // slice 3 briefly shipped `_svc_gate` — the serviceability keep-or-take gate
+  // — outside the sentinels, and paid for it with a name-only entry here. An
+  // exemption set is a hole the width of whatever is in it: the guard exists
+  // to make a genuine platform helper appended below the END sentinel a red
+  // suite, and every name it is told to ignore is one that cannot red. The
+  // helper was renamed `_class_gate` instead, which is what it is named for
+  // anyway — the CLASS it gates, not launchd/systemd's "service".
 
   it('holds every _plat_/_svc_ definition INSIDE the sentinels, in both files', () => {
     // The pin above compares only the sliced region, so it is exactly as
@@ -396,6 +405,201 @@ describe('the start limit is one policy, not two', () => {
   });
 });
 
+// UNCONDITIONAL — runs on every box, including the Linux CI box that is the
+// only one that ever executes this suite. `CCD_OS` is computed ONCE, from
+// `$OSTYPE`, at the moment the platform block is sourced (ccd/ccd's own
+// comment above `_plat_mv_notdir`); an env var of that name handed to the
+// child process is overwritten before any function exists to read it, so it
+// does nothing. The only assignment that survives is one made AFTER the
+// source, in the SAME bash payload — exactly the rule
+// `ccd-account-auth.test.ts:794-796` states and `:806` uses
+// (`fn('CCD_OS=linux; _auth_script_argv …')`). That is how the Darwin arm of
+// `_plat_mv_notdir` (D-2187) gets driven here without a real Darwin
+// userland, rather than inside the `describe.skipIf(!IS_DARWIN)` block below,
+// which never executes on this box (D-2188).
+describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
+  function darwinBlock(expr: string): string {
+    const script = `${platformBlock(ccd)}\nCCD_OS=darwin\n${expr}\n`;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+  }
+
+  it('answers 0 only if src is now AT a dest that was a symlink to a directory', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-9d3f');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'the call must report an exit code').toBe('0');
+      // The postcondition, not just the exit status: <src> must now be AT
+      // <dest>. Before the fix, GNU `mv -f` (no `-T`) follows the symlink and
+      // moves `src` INSIDE the linked directory, leaving `dest` the same
+      // symlink it always was — rc 0 with the postcondition false.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must no longer be the symlink it was — the contract is 0 iff src is now AT dest').toBe(false);
+      expect(lstatSync(dst).isFile(), 'dest must now be a regular file').toBe(true);
+      expect(readFileSync(dst, 'utf8')).toBe('payload-9d3f');
+      expect(readdirSync(real), 'nothing may have been moved inside the linked directory').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a real directory destination and leaves it untouched', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-dir-'));
+    try {
+      const dst = path.join(d, 'dst');
+      mkdirSync(dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a real directory destination must be refused').toBe('1');
+      expect(lstatSync(dst).isDirectory()).toBe(true);
+      expect(readdirSync(dst), 'the destination directory must stay empty').toEqual([]);
+      expect(readdirSync(d)).toContain('src');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // R1 (fix round 2): the narrowed ccd-reg-set-atomic scan cannot prove the
+  // `rm` is CONTAINED in its guard — it only sees that the tokens exist
+  // somewhere in the body, and the pre-existing, untouched refusal guard
+  // supplies both of them unconditionally. These two cases are the
+  // behavioural replacement: neither dest shape below is a directory (the
+  // refusal guard never fires for them), so whether the `rm` actually ran —
+  // and whether it ran on a shape it was never meant to touch — is visible
+  // ONLY in whether the destination survives a `mv` that then fails.
+  it('refuses when src is missing and leaves a plain-file dest untouched, byte-for-byte', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-plainfile-'));
+    try {
+      const dst = path.join(d, 'dst');
+      writeFileSync(dst, 'original-bytes-7a2c');
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A plain file is neither `-L` nor `-d`, so the guarded `rm` must never
+      // fire here. An UNCONDITIONAL `rm` (the mutant the narrowed scan
+      // cannot see, because the untouched refusal guard supplies both
+      // `-L "$2"` and `-d "$2"` tokens elsewhere in the body) removes `dst`
+      // before the doomed `mv` runs, so this is the case that reds it.
+      expect(lstatSync(dst).isFile(), 'dest must still be a plain file').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'dest bytes must be exactly what they were').toBe('original-bytes-7a2c');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when src is missing and leaves a symlink-to-file dest resolvable', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-symfile-'));
+    try {
+      const real = path.join(d, 'real-file');
+      writeFileSync(real, 'target-bytes-4e1b');
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A symlink-to-FILE is `-L` but not `-d`, so a guard narrowed to `-L`
+      // alone (dropping the `-d` half) fires here where the real guard would
+      // not — that is exactly the mutation this case reds.
+      expect(existsSync(dst), 'the name must still be resolvable — nothing may unlink it out from under a failed mv').toBe(true);
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the same symlink').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'the link target must be unchanged').toBe('target-bytes-4e1b');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // Final-round item 4 — the two disclosed prices this wave's own fix and
+  // header carry, pinned so neither can silently change in either direction.
+  // `chmod` is what makes the unlink FAIL below, and root defeats chmod.
+  it.skipIf(process.getuid?.() === 0)(
+    'when the guarded rm FAILS, the function does not answer 0 — the rm-fails price', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmfail-'));
+    const parent = path.join(d, 'parent');
+    try {
+      mkdirSync(parent);
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(parent, 'dst');
+      symlinkSync(real, dst);
+      // No write permission on the PARENT: unlink(2) needs it on the
+      // directory that holds the name, not on the symlink itself, so this
+      // makes `rm -f -- "$2"` fail without touching the symlink at all.
+      chmodSync(parent, 0o555);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmfail-6c2a');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success — this is the fix for D-2187\'s recurrence').not.toBe('0');
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink — the rm never removed it').toBe(true);
+      expect(readdirSync(dst), 'nothing was moved into the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmfail-6c2a');
+    } finally {
+      chmodSync(parent, 0o755);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // F10 (review run 69): the case ABOVE is the only pin on MUST-FIX 1's
+  // `|| return 1`, and it is `skipIf(uid === 0)` — so on a root runner the
+  // thing this fix's own header calls "a mechanism rather than a comment" is
+  // held by nothing. A skipped case is not a pin. The conjunct is about a
+  // FAILING `rm`; chmod is merely one way to cause that, and it is the way
+  // root defeats. Shadowing the binary causes the same condition for every
+  // uid, so this case runs everywhere and the guarantee is never unheld.
+  it('when the guarded rm fails for a reason chmod cannot cause, the function still does not answer 0 — the rm-fails price, pinned at every uid', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmstub-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmstub-1f9e');
+      const stubDir = path.join(d, 'bin');
+      mkdirSync(stubDir);
+      writeFileSync(path.join(stubDir, 'rm'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const rc = darwinBlock(
+        `export PATH='${stubDir}':"$PATH"\n_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success, whoever is running').not.toBe('0');
+      // Without `|| return 1` the failing `rm` falls through to the unchanged
+      // `mv`, which moves `src` INSIDE the linked directory and answers 0 —
+      // D-2187's recurrence exactly. Both assertions below red on that mutant.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink').toBe(true);
+      expect(readdirSync(real), 'nothing may be moved INTO the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmstub-1f9e');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('when src is absent, a symlink-to-directory dest is left GONE — the destination-gone price, disclosed', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-gone-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // Unlike the symlink-to-FILE case above, which stays resolvable: the
+      // guarded `rm` fires for THIS shape (symlink-to-directory) whether or
+      // not `src` exists, so a missing `src` leaves `dest` gone rather than
+      // intact — the pre-fix code left the symlink alone here. Disclosed in
+      // the header above `_plat_mv_notdir`; pinned here so it cannot drift
+      // in either direction without this case moving.
+      expect(existsSync(dst), 'the destination is GONE — the guarded rm ran before the doomed mv').toBe(false);
+      expect(readdirSync(real), 'the linked directory itself is untouched').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── Everything below needs a real Darwin userland ────────────────────────
 describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
   /** Source just the platform block into a bash and run one expression
@@ -546,5 +750,77 @@ describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+// ── A PLATFORM CLAIM OWES THE OTHER PLATFORM AN ANSWER (D-2765) ───────────
+// A case written as `itDarwin('BSD: it still ends a child that IGNORES
+// SIGTERM')` red on macOS and was reported as a BSD fact. It was UNIVERSAL —
+// Linux behaved identically, and the control that would have said so was never
+// written.
+//
+// WHAT COULD NOT HAVE CAUGHT IT, and this is why the rule is shaped the way it
+// is: the file already carried `itLinux` cases, and so did the same `describe`.
+// Every coarser scan — "this file tests both platforms", "this describe tests
+// both" — passes that case. The claim had no control; the FILE did. So the
+// rule is per-CLAIM and it has exactly two satisfying forms:
+//
+//   • `platformContrast(subject, { darwin: […], linux: […] })`, where the two
+//     arms cannot be separated because TypeScript refuses a missing key; or
+//   • a bare `itDarwin`/`itLinux` carrying `PLATFORM-ONLY:` above it, naming
+//     why the other platform has no counterpart.
+//
+// The second escape is deliberate and is not a weakening. Some platform cases
+// are genuinely unpairable — an input only one kernel can produce, a binary
+// only one userland ships — and forcing those into a contrast would manufacture
+// a symmetry that is not there, which is its own kind of lie. What the rule
+// refuses is the SILENT single-platform claim: the author must either write the
+// other arm or say why there isn't one.
+describe('a platform-asserting test title owes the other platform an answer (D-2765)', () => {
+  const TEST_DIR = path.join(__dirname);
+  // A title that NAMES a userland is making a comparative claim. A title that
+  // merely happens to run on one platform is not, which is why this matches the
+  // name-then-punctuation shape ("BSD:", "GNU —") rather than any mention.
+  const ASSERTS_PLATFORM = /\b(BSD|macOS|darwin|GNU|util-linux|Linux|launchd|systemd)\b\s*[:—-]/i;
+  const CASE = /\b(itDarwin|itLinux|describeDarwin|describeLinux)\(\s*(['"`])([\s\S]*?)\2/g;
+  const MARKER = 'PLATFORM-ONLY:';
+
+  it('every one of them is a platformContrast, or says why it cannot be', () => {
+    const files = readdirSync(TEST_DIR).filter((f) => f.endsWith('.test.ts')).sort();
+    const offenders: string[] = [];
+
+    for (const f of files) {
+      const raw = readFileSync(path.join(TEST_DIR, f), 'utf8');
+      const lines = raw.split('\n');
+      // COMMENTS ARE BLANKED, not searched. This very scan's own prose quotes
+      // the case that taught D-2765, and without this it reports itself —
+      // measured, on the first run. Blanking rather than deleting keeps every
+      // line number pointing where the reader expects.
+      const src = lines
+        .map((l) => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l))
+        .join('\n');
+      for (const m of src.matchAll(CASE)) {
+        const title = m[3]!;
+        if (!ASSERTS_PLATFORM.test(title)) continue;
+        // The marker has to be NEAR the case, not anywhere in the file — a
+        // reason eight lines up is still about this case; one 300 lines up is
+        // about something else.
+        const lineNo = src.slice(0, m.index).split('\n').length;
+        const above = lines.slice(Math.max(0, lineNo - 9), lineNo).join('\n');
+        if (above.includes(MARKER)) continue;
+        offenders.push(`${f}:${lineNo}  ${m[1]}(${JSON.stringify(title.slice(0, 70))})`);
+      }
+    }
+
+    expect(
+      offenders,
+      'These name a platform in their title, so they assert that platform behaves a particular way — and\n'
+      + 'nothing here answers for the other one. That is D-2765: the case that taught this red on macOS and\n'
+      + 'was reported as a BSD fact when Linux did exactly the same thing.\n\n'
+      + 'Either make it a `platformContrast(subject, { darwin: [...], linux: [...] })` from\n'
+      + '`platformFixtures.ts`, which cannot be written with one arm — or, if the other platform genuinely\n'
+      + 'has no counterpart, put a `PLATFORM-ONLY: <why>` comment within 8 lines above it.\n\n'
+      + offenders.join('\n'),
+    ).toEqual([]);
   });
 });

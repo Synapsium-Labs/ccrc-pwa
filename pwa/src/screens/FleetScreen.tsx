@@ -11,16 +11,20 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { BuildLine } from '../fleet/BuildLine';
+import { useFleetHealth } from '../fleet/useFleetHealth';
+import { UpdateBanner } from '../fleet/UpdateBanner';
+import { useUpdatesView } from '../fleet/useUpdatesView';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectCard, type ProjectPlacementRead } from '../fleet/ProjectCard';
+import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { anyDispatchPending, isRunClosed, runHomeProject } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
@@ -30,7 +34,8 @@ import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscr
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import type { FleetSession, ProjectPoolsWire, ProjectRow } from '../../../shared/api';
+import { CLASSES, type ModelClass } from '../../../shared/models';
+import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire, type ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
@@ -96,12 +101,46 @@ export function FleetScreen({
   onNewSession,
   selectedId = null,
   showAccounts = true,
+  epoch,
+  observedEpoch,
 }: {
   store?: FleetStore; // injectable for tests
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
+  /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
+   *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
+   *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
+   *  `poolsWire`). Commit 18454187 (T9-R2) wired the real producer, so
+   *  `undefined` here now means what the field's own three-valued contract
+   *  says it means: this server has no coordination db wired (local mode),
+   *  never "nothing polls it yet". */
+  epoch?: number;
+  /** The fleet host's own observed pool-projection epoch, off the SAME
+   *  `pools` frame's `observedEpoch` field. Through commit 18454187 (T9-R2)
+   *  this was the agent's handshake report (`AgentReady.observedEpoch`)
+   *  forwarded unchanged; since item 1 (wave-1 fix round A) it is the
+   *  SERVER's own fresh measurement of `$REG/pool-epoch`
+   *  (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, on every
+   *  watcher tick / `GET /api/fleet` request) — the handshake value was
+   *  sampled once per WS connection and never refreshed for a link that can
+   *  live for days, so it read "in sync" forever after one real sync. This
+   *  prop's own SHAPE is unchanged (the wire field's name and three-value
+   *  contract did not move), only what feeds it. THREE answers, not two:
+   *  absent means "this server cannot tell you" (render nothing — the reader
+   *  has no evidence either way), `null` means "the node has never synced"
+   *  (a real, renderable fact), a number is what it actually has. Never read
+   *  as a health tick: a node whose projection is past its lease still
+   *  reports a number while `ccd` refuses every tagged placement, so
+   *  `observedEpoch === epoch` means only "not stale", never "this node is
+   *  placing" — and, separately (disclosed, not fixed, here): `epoch` counts
+   *  CENTRAL writes only, while the pool document an operator sees also
+   *  derives from the declared roster since T7-R4, so a declared-only pool
+   *  change can alter that document while `epoch` — and therefore this
+   *  comparison — stands still. `observedEpoch === epoch` has only ever meant
+   *  "not stale"; it still never means "agrees". */
+  observedEpoch?: number | null;
 }): ReactNode {
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
@@ -110,6 +149,7 @@ export function FleetScreen({
   const dismissNotice = useStore((s) => s.dismissNotice);
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
+  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -199,6 +239,16 @@ export function FleetScreen({
   // overwriting a newer measurement. The visibility token coalesces only an
   // equal reconnect frame while that visibility read remains unresolved; a
   // changed frame still starts its own request immediately (D-2702).
+  // The class chooser (routing spec, slice 5, Task 6): `''` is the unset
+  // "Coordinator row" — the class-blind fetch and route-less `+` every build
+  // before this task has always sent. A ref beside the state, not a
+  // `refreshProjects` dependency: that callback's identity is kept stable
+  // for the pools/visibility effects below, so the class it reads has to
+  // arrive through the same synchronously-updated-ref idiom `poolsFingerprintRef`
+  // already uses two lines down, rather than by giving it a changing identity.
+  const [classFilter, setClassFilter] = useState<'' | 'default' | ModelClass>('');
+  const classFilterRef = useRef<'' | 'default' | ModelClass>('');
+  classFilterRef.current = classFilter;
   const projectRequest = useRef(0);
   const visibilityRequest = useRef<{ token: number; pools: string } | null>(null);
   const writeRefresh = useRef<{ token: number; write: { project: string; pool: NonNullable<ProjectRow['pool']> } } | null>(null);
@@ -219,8 +269,12 @@ export function FleetScreen({
     if (write !== undefined) writeRefresh.current = { token: request, write };
     setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
     try {
-      const response = await api.projects();
-      if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
+      const cls = classFilterRef.current;
+      const response = await api.projects(cls === '' ? undefined : cls);
+      if (request === projectRequest.current) {
+        setProjectRows({ kind: 'ready', rows: response.projects });
+        useStore.getState().setProjects(response.projects);
+      }
     } catch {
       if (request === projectRequest.current) {
         setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'failed' });
@@ -264,6 +318,28 @@ export function FleetScreen({
       : { kind: 'legacy' };
   }, [projectRows]);
 
+  // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —
+  // its own. A row the key flip moved onto this card belongs to a DIFFERENT
+  // project by construction, so its off-pool judgment needs THAT project's
+  // tag, not this card's. The absence discipline itself is `poolOfPlacement`'s
+  // and is spelled once beside `ProjectPlacementRead` (final fix round): only
+  // a `measured` read yields a pool, everything else (`pending`/`failed`/
+  // `missing`/`legacy`) answers `null` — no account claim from an unmeasured
+  // or absent read. What THIS adds is the per-project lookup and the memo.
+  const poolFor = useCallback((project: string): ProjectPoolWire | null =>
+    poolOfPlacement(placementFor(project)), [placementFor]);
+
+  // Task 6: a displaced row's repo label needs ITS OWN project's repo, which
+  // is by construction a different project from the card it renders on — the
+  // same shape `poolFor` above threads for the same reason.
+  const repoFor = useCallback((project: string): ProjectRepoWire | undefined => {
+    if (projectRows.kind !== 'ready') return undefined;
+    const row = projectRows.rows.find((candidate) => candidate.name === project);
+    // `Object.hasOwn`: the key ABSENT is an older server and must read as
+    // "nothing measured", never as `{state:'unmeasured'}` (ProjectRow's doc).
+    return row !== undefined && Object.hasOwn(row, 'repo') ? row.repo : undefined;
+  }, [projectRows]);
+
   // D-2721: the selection is a snapshot taken when the card was tapped, and the
   // route remeasures underneath an open sheet — a pools frame, a visible-page
   // return and the write's own refresh each land a fresher `ProjectRow.pool` in
@@ -305,7 +381,12 @@ export function FleetScreen({
     if (adding.has(project)) return;
     setAdding((s) => new Set(s).add(project));
     try {
-      await api.workspaceAdd(project);
+      // Seeds the SAME class the chooser fetched with — the `+` starts a
+      // workspace on the lane the row above it just forecast, rather than
+      // asking the coordinator to re-decide from an unset row.
+      await (classFilter === ''
+        ? api.workspaceAdd(project)
+        : api.workspaceAdd(project, { class: classFilter }));
       void refreshProjects();
     } catch (err) {
       toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
@@ -360,6 +441,13 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
+  // One poll of /api/fleet/health feeds both the banner and BuildLine below
+  // (spec §6) — the screen owns it so the two never issue their own requests.
+  // The same for /api/updates (centralised-update §13): ONE 60 s poll, its
+  // view handed down to every reader of the inventory on this screen, none of
+  // which polls on its own.
+  const fleetHealth = useFleetHealth();
+  const updates = useUpdatesView();
   // One sheet for the whole screen, fed by whichever line was tapped. Only
   // the id is the source of truth (Finding 5 of the whole-branch review):
   // `actionsSession` is refreshed from the live `sessions` list below rather
@@ -419,12 +507,45 @@ export function FleetScreen({
   const feed = useStore((s) => s.feed);
   const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
 
+  // The account-pool epoch/observed lag — a STALENESS signal, not a health
+  // one (see the prop docs above). Rendered ONLY when both numbers are known
+  // AND they actually differ: `epoch === undefined` or `observedEpoch ===
+  // undefined` both mean "nothing to compare", and an equal pair means "not
+  // stale", not "placing" — the one thing this text must never read as.
+  // Before item 1 (wave-1 fix round A) `observedEpoch` was frozen at
+  // handshake, so a node that synced once and then stopped kept comparing
+  // equal here forever — a false "in sync". `observedEpoch` now refreshes on
+  // the server's own watcher tick, so an equal pair here is a genuinely
+  // current fact, not a stale first impression.
+  const poolLag =
+    epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
+      ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
+      : null;
+
+  // R5 (D-3010): the card set is seeded from the known-project list once it
+  // lands. Before it lands — `legacy`, `pending`, `failed` — the cards are
+  // session-derived exactly as before, and the set only ever GROWS when the
+  // read arrives: a card cannot be destroyed by a read this device has not
+  // made yet. Not hydrated and not persisted, for `pools`' own reason.
+  const knownProjects = projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [];
+
+  // Task 4: which card each run belongs on — the card its WORKER renders on.
+  // Built ONCE here from the whole session list, because a card sees only
+  // its own rows and cannot answer it (`runCard`'s docstring has the two
+  // fallbacks and why each is load-bearing).
+  const cardOf = new Map(sessions.map((s) => [s.id, boardHome(s)] as const));
+
   return (
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          {poolLag !== null && (
+            <span className="pool-epoch-lag" data-testid="pool-epoch-lag" title="account-pool projection lag">
+              {poolLag}
+            </span>
+          )}
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
               accessible name is "account usage — open accounts": a full-width
@@ -450,12 +571,35 @@ export function FleetScreen({
             <span className="accounts-door-glyph" aria-hidden="true">🔑</span>
             Account
           </button>
+          {/* THE DOOR TO /settings (centralised update management §13) — the
+              `.accounts-door` pattern directly above, for the argument its
+              comment makes: a glyph AND a short text label, because an
+              icon-only gear would be exactly as undiscoverable as the
+              AccountsStrip tap target that D-161 found was the only door to
+              /accounts. The accessible name says what is behind it — updates
+              and notifications — because "Settings" alone names no content;
+              it begins with the visible word, so a voice user saying what
+              they see still reaches it. Rendered unconditionally: a first-run
+              fleet with no sessions needs the screen as much as any. A fifth
+              item does not fit this group's measured width budget on a
+              phone, so the group now wraps rather than overflowing
+              (fleet.css, D-3303). */}
+          <button
+            type="button"
+            className="settings-door"
+            aria-label="Settings — updates and notifications"
+            onClick={() => navigate('/settings')}
+          >
+            <span className="settings-door-glyph" aria-hidden="true">⚙</span>
+            Settings
+          </button>
           <MailBadge unread={unreadMail} />
           <NotificationBell />
         </div>
       </header>
 
-      <FleetHostBanner />
+      <FleetHostBanner health={fleetHealth} nodes={updates.view?.nodes ?? null} />
+      <UpdateBanner updates={updates.view} health={fleetHealth} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can
@@ -519,14 +663,57 @@ export function FleetScreen({
           `readRegistry` failure still ships an honest `sessions: []` — had
           no door to the one surface that would show the operator their runs
           going stale. D-2's rule: the only door must never render nothing. */}
-      <button
-        type="button"
-        className="fleet-runs-row"
-        aria-label={`Runs · ${runsLabel}`}
-        onClick={() => navigate('/runs')}
-      >
-        Runs · {runsLabel}
-      </button>
+      {/* THE RUNS LINE — the runs door and the class chooser share one row.
+          The chooser had a row to itself and looked orphaned on it; this row
+          was already full-width, 44px tall and nearly empty, so pairing them
+          costs no height at all. The partner is the RUNS door and not
+          `HotFilesStrip` (the other candidate) for one measured reason: that
+          strip returns null when no claim is live and says so in its own
+          comment, so a chooser paired with it would be side-by-side only
+          while somebody held a hot file and alone again the moment the last
+          claim expired. The runs door is the opposite — its comment cites
+          D-2's rule that the only door must never render nothing, so it is
+          the one sibling on this screen guaranteed to be there. */}
+      <div className="fleet-runs-line">
+        <button
+          type="button"
+          className="fleet-runs-row"
+          aria-label={`Runs · ${runsLabel}`}
+          onClick={() => navigate('/runs')}
+        >
+          Runs · {runsLabel}
+        </button>
+        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
+            EVERY card's placement for one class at a time, the same
+            `GET /api/projects?class=` this build has carried since slice 4
+            but with no caller until now. "Coordinator row" (unset) is the
+            class-blind fetch every build before this task has always sent;
+            "Default" asks explicitly for the record's own "no override"
+            word — the projects handler (`server.ts`) treats it identically
+            to the unset fetch (no per-class shares read, byte-identical
+            answer), so choosing it changes nothing about what renders, only
+            what the `+` posts. The four classes are `CLASSES` reversed —
+            the same capability order `NewSessionSheet`'s own routing row
+            uses — never a hand-typed list, so a class this build adds or
+            drops shows up here for free. */}
+        <select
+          className="route-select fleet-class-select"
+          aria-label="Class"
+          value={classFilter}
+          onChange={(e) => {
+            const next = e.target.value as '' | 'default' | ModelClass;
+            setClassFilter(next);
+            classFilterRef.current = next;
+            void refreshProjects();
+          }}
+        >
+          <option value="">Coordinator row</option>
+          <option value="default">Default</option>
+          {[...CLASSES].reverse().map((c) => (
+            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
@@ -633,7 +820,7 @@ export function FleetScreen({
           <div className="sr-only" role="status">{ackNote}</div>
 
           <div className="fleet-list">
-            {groupFleet(sessions, acks).map((g) => (
+            {groupFleet(sessions, knownProjects, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
@@ -642,6 +829,8 @@ export function FleetScreen({
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
                 placement={placementFor(g.project)}
+                poolFor={poolFor}
+                repoFor={repoFor}
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
@@ -652,15 +841,11 @@ export function FleetScreen({
                   setPoolSelection(poolSelectionFor(p, placementFor(p), poolWrite.current));
                   setPoolOpen(true);
                 }}
-                /* Task 4: THIS card's own runs. Scoped here rather than inside
-                   the card because "which card does a run belong on" is a
-                   question about the run's `project`, and a card handed one
-                   session list cannot answer it — an all-archived project's
-                   list is empty and still has a spawn to show. A run whose
-                   coordinator lives on another project therefore reaches only
-                   the worker's card, where `nestFleet`'s rule 3 leaves it
-                   unbracketed: a `└─` never crosses two cards. */
-                runs={activeRuns.filter((r) => r.project === g.project)}
+                /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
+                   renders here — `runCard`, never `r.project`. A run kept on
+                   its worker's OWN project's card after the row moved would be
+                   spec §1's pure regression: one end on each card, no edge. */
+                runs={activeRuns.filter((r) => runCard(r, cardOf) === g.project)}
                 /* The SECOND list (spec §3 F4): the runs this project is the
                    HOME of, working somewhere else. NOT the exact complement of
                    the filter above (D-2582): a run homed on a third project
@@ -688,10 +873,20 @@ export function FleetScreen({
                    whose project is neither necessarily the run's work nor its
                    home. Named here so the next reader neither deletes it as a
                    duplicate of that decision nor forks it into a second copy
-                   of it. */
+                   of it. Since wave 2 it also SUBTRACTS a run whose worker now
+                   renders on this very card — that run is a bracketed row
+                   here, and a second line for it would state the same wave
+                   twice (spec §6). */
                 abroad={activeRuns.filter(
-                  (r) => runHomeProject(r) === g.project && r.project !== g.project)}
+                  (r) => runHomeProject(r) === g.project && r.project !== g.project
+                    && runCard(r, cardOf) !== g.project)}
                 nowMs={nowMs}
+                /* Fleet-wide, unlike every other lookup this card is handed —
+                   an orphan's coordinator is by construction NOT among this
+                   card's own sessions (D-3009), so a card-scoped read would
+                   always answer `null` for the one row that asks. */
+                coordOf={(id) => sessions.find((s) => s.id === id) ?? null}
+                frameSeen={fleetFrameSeen}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for
                    a project, wrong for an archive fold that must start
@@ -762,6 +957,8 @@ export function FleetScreen({
         onClose={() => setReapId(null)}
         onReaped={() => setReapId(null)}
       />
+
+      <BuildLine health={fleetHealth} nodes={updates.view?.nodes ?? null} />
     </main>
   );
 }

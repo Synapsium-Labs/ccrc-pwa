@@ -77,54 +77,14 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
   return 'ok';
 }
 
-/**
- * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
- * route decides; a verifier that also advanced would be a verifier nobody can
- * call twice.
- *
- * WHAT IS RE-MEASURED, AND WHAT IS NOT (deviation D-2, stated here because this
- * is where a future reader will look for the guarantee):
- *  - `branchTip` — measured, from git's own ref files (`gitref.ts`), against
- *    the branch the LIVE REGISTRY names for this session, not `run.branch`
- *    (see `DoneRun`'s own docstring — `run.branch` is a stale DB column on the
- *    ordinary path, once `sweepNames` has renamed the workspace).
- *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
- *    same verb and the same parser the PR lane already uses. Never `gh`: there
- *    is no `gh` key in the agent's whitelist and there must not be one
- *    (`agent/src/whitelist.ts:309-316`).
- *  - `handoffCommit` — CORRESPONDENCE ONLY. The server cannot read a commit
- *    object (no git, and `FleetIO` reads bytes), so it cannot tell whether the
- *    commit edits `docs/superpowers/programs/<slug>.md`. What it CAN prove is
- *    that the worker's own two facts agree and that the tip is real. Whether
- *    the commit is a real handoff is the coordinator's ordinary review of the
- *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
- *    not let a later reader mistake this token for the stronger claim.
- *
- * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
- * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
- * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
- * check, before either fact is re-measured — never trusted off the wire on
- * the strength of a TypeScript annotation the route's JSON parse cannot
- * enforce.
- */
-export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: DoneClaim): Promise<DoneVerdict> {
-  // Cheapest first, and it is also the one that needs no I/O: a claim whose own
-  // two facts disagree is rejected before the fleet is touched at all.
-  if (!SHA.test(claim.handoffCommit) || !SHA.test(claim.branchTip) ||
-      claim.handoffCommit !== claim.branchTip) {
-    return { ok: false, code: 'no-handoff-commit',
-      detail: 'handoffCommit must be the 40-hex sha this same claim reports as branchTip' };
-  }
-  // Still cheap, still no I/O: `prPhase`/`prNumber` are typed but never
-  // parsed anywhere between the HTTP body and here (no route exists yet in
-  // this PR, and Task 9's plan never names a parse step) — an omitted or
-  // out-of-vocabulary `prPhase`, or a non-number `prNumber`, must be refused
-  // here rather than fall through `prVerdict` unmatched and read as `ok`.
-  if (!isPrPhase(claim.prPhase) || (claim.prNumber !== null && typeof claim.prNumber !== 'number')) {
-    return { ok: false, code: 'pr-unmeasurable',
-      detail: 'prPhase must be a recognised PrPhase and prNumber must be a number or null' };
-  }
-
+/** Which branch a run's done-claim is about — the registry's answer first, the
+ *  frozen run-row column only when the registry has no row at all. EXTRACTED
+ *  from `verifyDone` so `verifyReviewDone` re-measures through the identical
+ *  read (design 2026-09-14 §5.3 — "the same gitref.ts read the work path
+ *  uses"; D-2796). Every comment that was inline here moved with the code. */
+export async function resolveDoneBranch(
+  deps: VerifyDoneDeps, run: DoneRun,
+): Promise<{ ok: true; branch: string; provenance: string } | { ok: false; code: DoneRejectCode; detail: string }> {
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
   // state after Wave 3 §3.2: the registry genuinely no longer carries a row
@@ -201,10 +161,66 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
   } else {
     branch = record.branch;
   }
-  /** Appended to every refusal below that NAMES `branch`, and only when the
-   *  name came from the frozen run row. Empty on the ordinary path, so the
-   *  coordinator is never told its measurement is stale when it is not. */
+  /** Appended to every refusal the CALLER makes that NAMES `branch` — the word
+   *  was "below" while this block lived inside `verifyDone`, and the refusals
+   *  it describes are now one function away — and only when the name came from
+   *  the frozen run row. Empty on the ordinary path, so the coordinator is
+   *  never told its measurement is stale when it is not. */
   const provenance = branchFromRunRow ? ' — from the run row, which predates any rename' : '';
+  return { ok: true, branch, provenance };
+}
+
+/**
+ * Re-measure a done claim. THE RUN IS NOT TOUCHED HERE — this answers, and the
+ * route decides; a verifier that also advanced would be a verifier nobody can
+ * call twice.
+ *
+ * WHAT IS RE-MEASURED, AND WHAT IS NOT (deviation D-2, stated here because this
+ * is where a future reader will look for the guarantee):
+ *  - `branchTip` — measured, from git's own ref files (`gitref.ts`), against
+ *    the branch the LIVE REGISTRY names for this session, not `run.branch`
+ *    (see `DoneRun`'s own docstring — `run.branch` is a stale DB column on the
+ *    ordinary path, once `sweepNames` has renamed the workspace).
+ *  - `prNumber`/`prPhase` — measured, through `ccd pr-state --session`, the
+ *    same verb and the same parser the PR lane already uses. Never `gh`: there
+ *    is no `gh` key in the agent's whitelist and there must not be one
+ *    (`agent/src/whitelist.ts:309-316`).
+ *  - `handoffCommit` — CORRESPONDENCE ONLY. The server cannot read a commit
+ *    object (no git, and `FleetIO` reads bytes), so it cannot tell whether the
+ *    commit edits `docs/superpowers/programs/<slug>.md`. What it CAN prove is
+ *    that the worker's own two facts agree and that the tip is real. Whether
+ *    the commit is a real handoff is the coordinator's ordinary review of the
+ *    diff — spec:246-252, "briefs are written prose reviewed like code". Do
+ *    not let a later reader mistake this token for the stronger claim.
+ *
+ * The claim is UNTRUSTED (`DoneClaim`'s own docstring): `branchTip` and
+ * `handoffCommit` are validated below by the same `SHA` regex; `prPhase` and
+ * `prNumber` are validated the same way, through `isPrPhase` and a `typeof`
+ * check, before either fact is re-measured — never trusted off the wire on
+ * the strength of a TypeScript annotation the route's JSON parse cannot
+ * enforce.
+ */
+export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: DoneClaim): Promise<DoneVerdict> {
+  // Cheapest first, and it is also the one that needs no I/O: a claim whose own
+  // two facts disagree is rejected before the fleet is touched at all.
+  if (!SHA.test(claim.handoffCommit) || !SHA.test(claim.branchTip) ||
+      claim.handoffCommit !== claim.branchTip) {
+    return { ok: false, code: 'no-handoff-commit',
+      detail: 'handoffCommit must be the 40-hex sha this same claim reports as branchTip' };
+  }
+  // Still cheap, still no I/O: `prPhase`/`prNumber` are typed but never
+  // parsed anywhere between the HTTP body and here (no route exists yet in
+  // this PR, and Task 9's plan never names a parse step) — an omitted or
+  // out-of-vocabulary `prPhase`, or a non-number `prNumber`, must be refused
+  // here rather than fall through `prVerdict` unmatched and read as `ok`.
+  if (!isPrPhase(claim.prPhase) || (claim.prNumber !== null && typeof claim.prNumber !== 'number')) {
+    return { ok: false, code: 'pr-unmeasurable',
+      detail: 'prPhase must be a recognised PrPhase and prNumber must be a number or null' };
+  }
+
+  const resolved = await resolveDoneBranch(deps, run);
+  if (!resolved.ok) return resolved;
+  const { branch, provenance } = resolved;
 
   const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, run.project, branch);
   if (tip === null) {
@@ -250,4 +266,54 @@ export async function verifyDone(deps: VerifyDoneDeps, run: DoneRun, claim: Done
       detail: `the claim names PR #${claim.prNumber}, the branch is bound to #${measured.number}` };
   }
   return { ok: true, measured: { branchTip: tip, prNumber: measured.number, prPhase: measured.phase } };
+}
+
+/** A review run's done-claim (design 2026-09-14 §5.3): the tip the reviewer
+ *  READ, and where it wrote what it found. Shape-checked by `closeReviewRun`
+ *  before this module sees it; re-validated here all the same. */
+export interface ReviewClaim { reviewedTip: string; report: string }
+
+export type ReviewVerdict =
+  | { ok: true; measured: { tip: string } }
+  | { ok: false; code: DoneRejectCode; detail: string };
+
+/**
+ * The parent's "never believe a done claim" (D-6) applied to a new kind of
+ * claim: the reviewer says "I read T", and the server confirms T is still
+ * what there is to read, and that the report it names can be opened. No PR
+ * check, no `.prhistory` — a review run has neither. `work` is the REVIEWED
+ * run (its session, project and frozen branch), never the review run's own.
+ *
+ * `statMeasured`, never `stat`: the convenience read folds absent and
+ * unreadable into one `null` (`io.ts`), and those are two conditions a
+ * reviewer handles differently — a path it typo'd versus a mode bit or a
+ * mount that went away. The detail names which, so the refusal is actionable
+ * rather than merely negative.
+ */
+export async function verifyReviewDone(
+  deps: VerifyDoneDeps, work: DoneRun, claim: ReviewClaim,
+): Promise<ReviewVerdict> {
+  // Defence only: closeReviewRun refuses a malformed reviewedTip as bad-request before this runs.
+  if (!SHA.test(claim.reviewedTip)) {
+    return { ok: false, code: 'stale-review', detail: 'reviewedTip must be a 40-hex sha' };
+  }
+  const resolved = await resolveDoneBranch(deps, work);
+  if (!resolved.ok) return resolved;
+  const { branch, provenance } = resolved;
+  const tip = await readBranchTip(deps.io, deps.cfg.projectsRoot, work.project, branch);
+  if (tip === null) {
+    return { ok: false, code: 'tip-unmeasurable',
+      detail: `no readable ref for ${branch} under ${work.project}${provenance} — the reviewed run may have been abandoned` };
+  }
+  if (tip !== claim.reviewedTip) {
+    return { ok: false, code: 'stale-review',
+      detail: `${branch}${provenance} is at ${tip}, the report describes ${claim.reviewedTip} — the worker ` +
+        'pushed after wave-done, or the report is about an older tip; open a fresh review run against the live tip' };
+  }
+  const st = await deps.io.statMeasured(claim.report);
+  if (!st.ok) {
+    return { ok: false, code: 'report-unreadable',
+      detail: `${claim.report}: ${st.reason === 'absent' ? 'no such file' : `could not be read (${st.reason})`}` };
+  }
+  return { ok: true, measured: { tip } };
 }

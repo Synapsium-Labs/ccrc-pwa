@@ -11,12 +11,15 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { readSharesMeasured } from './shares.js';
+import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
-  poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
+  accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
+  readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
-import { poolRostered, poolVerdict } from './poolrule.js';
-import { POOL_NAME_RE } from '../../shared/roster.js';
-import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
+import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
+import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
+import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -26,8 +29,8 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
-         type ActorFlags, type CcdArgv } from './ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+         stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -49,8 +52,13 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { registerUpdateRoutes } from './update/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
-import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
+import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
+import { buildInfoOfRow } from './update/inventory.js';
+import type { PoolEdgeLog } from './coord/pooledgelog.js';
+import type { CataloguePoller } from './update/catalogue.js';
+import type { UpdateIntentLog } from './coord/updateintentlog.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -63,15 +71,15 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
-  programKickoffVerdict,
+  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 
 /**
@@ -95,6 +103,55 @@ function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
 
 /** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
 const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
+
+const DEFAULT_POOL_LEASE_MS = 15 * 60 * 1000;
+
+/** How long a node may keep deciding from a projection it can no longer
+ *  refresh. THE WHOLE DIAL between "an outage stops tagged placement" and "a
+ *  stale node enforces yesterday's membership", and no value is right for both
+ *  (design §5.8, left open). 15 minutes is fifteen missed pulls at
+ *  `OnUnitActiveSec=60s`. Configurable because the right answer is a property
+ *  of a fleet, not of this file.
+ *
+ *  VALIDATED (review round 1, Minor 8) rather than a bare `Number(env)`: a
+ *  typo'd `CCRC_POOL_LEASE_MS` (`config.ts`'s `CCRC_PORT` bug, same shape)
+ *  used to yield `NaN`, and `Date.now() + NaN` is `NaN` — a `leaseUntil` of
+ *  `null` on the wire, which `ccd-pool-sync`'s renderer refuses outright
+ *  (`whole_num` demands an integer), silently stopping every node's sync with
+ *  no boot complaint anywhere. Falls back to the 15-minute default and warns
+ *  once, loudly, on anything that is not a positive finite number — the same
+ *  "quieter than the crash it replaces, so it must say so" rule `CCRC_PORT`
+ *  follows.
+ *
+ *  PURE AND EXPORTED (review round 1, Minor 8 follow-up): `POOL_LEASE_MS`
+ *  itself is a module-level constant resolved once at import time, which
+ *  `config.ts`'s `CCRC_PORT` validation (a per-call `loadConfig(env)`) is
+ *  not — so the DECISION is split out into this function precisely so a test
+ *  can drive it directly with different `env` objects, the way
+ *  `config.test.ts` drives `CCRC_PORT`, rather than only through the
+ *  module-load-time side effect. */
+export function resolvePoolLeaseMs(
+  env: NodeJS.ProcessEnv,
+): { value: number; warning: string | null } {
+  const num = Number(env.CCRC_POOL_LEASE_MS);
+  // >= 1000, NOT > 0 (item 9): every reader compares in whole SECONDS
+  // (`Math.floor(POOL_LEASE_MS / 1000)`, below, and `ccd/ccd`'s own
+  // `now=$(date +%s)`), so a sub-second value passed "positive finite" and
+  // then floored to `0` — `leaseUntil = now`, a lease that is stale the
+  // instant it is issued. Fail-SHUT, so never a live hazard, but a validator
+  // that accepts a value its own emitter cannot express is a bug on its own
+  // terms; refuse it here instead of letting the floor discover it silently.
+  if (Number.isFinite(num) && num >= 1000) return { value: num, warning: null };
+  const warning = env.CCRC_POOL_LEASE_MS !== undefined && env.CCRC_POOL_LEASE_MS !== ''
+    ? `ccrc-server: CCRC_POOL_LEASE_MS=${JSON.stringify(env.CCRC_POOL_LEASE_MS.slice(0, 40))} is not a ` +
+      `whole number of milliseconds >= 1000 (a value below one second floors to a lease that is already ` +
+      `expired); falling back to the ${DEFAULT_POOL_LEASE_MS}ms default.`
+    : null;
+  return { value: DEFAULT_POOL_LEASE_MS, warning };
+}
+const poolLease = resolvePoolLeaseMs(process.env);
+if (poolLease.warning !== null) console.warn(poolLease.warning);
+export const POOL_LEASE_MS = poolLease.value;
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -176,10 +233,12 @@ export interface Deps {
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
    *  `cfg.buildInfoPath`). `null` on a dev checkout or an unstamped box;
    *  absent has the same meaning — `/health` treats both as null, and so does
-   *  `/api/fleet/health`, where this is now also the OWN side of the two-box
-   *  skew comparison (`buildAgreement`, against `fleetState.build`). Which is
-   *  why an unstamped server answers `'unknown'` rather than manufacturing a
-   *  disagreement with the fleet host out of a stamp it never had. */
+   *  `/api/fleet/health` when no coordination database is wired, where this
+   *  is the OWN side of the two-box skew comparison (`buildAgreement`,
+   *  against `fleetState.build`); with one, the inventory's server row is
+   *  (design 2026-09-20 §14). Either way an unstamped server answers
+   *  `'unknown'` rather than manufacturing a disagreement with the fleet host
+   *  out of a stamp it never had. */
   build?: BuildInfo | null;
   /** The ONLY path to `ccd`. There is deliberately no raw `run` here: with one,
    *  "every ccd argv is built in ccdargv.ts" is enforceable only by scanning
@@ -232,6 +291,27 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
+   *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
+   *  `coord`, not inside a route: `CoordStore.setAccountPools` calls
+   *  `PoolEdgeLog.append` INSIDE its transaction, so the route needs the
+   *  process's one instance, not a fixture-homed one — same shape as `coord`
+   *  itself. Optional the same way `coord` is: a box with no coordination
+   *  configured serves no pool-membership routes either. */
+  poolEdgeLog?: PoolEdgeLog;
+  /** The release-catalogue poller (design 2026-09-20 §7, `update/catalogue.ts`).
+   *  Constructed in `index.ts` beside `coord`, whose one catalogue writer it
+   *  calls; `FleetWatcher` polls it on its own 30-minute clock and
+   *  `POST /api/updates/refresh` on demand. Optional the way `coord` is:
+   *  absent, the lane never runs and the update routes read "never checked". */
+  catalogue?: CataloguePoller;
+  /** The flat-file journal under `update_intent`/`update_epoch` (design
+   *  2026-09-20 §6), `poolEdgeLog`'s twin and for its reason:
+   *  `CoordStore.setIntent` appends to it INSIDE its transaction, so
+   *  `POST /api/updates/intent` needs the process's one instance, built in
+   *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
+   *  intent route answers `501 not-configured`. */
+  updateIntentLog?: UpdateIntentLog;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -248,6 +328,32 @@ function findPwaRoot(): string | null {
     dir = up;
   }
   return null;
+}
+
+/**
+ * `FleetHealth.builds`, derived from the inventory rows (design 2026-09-20
+ * §14): each live row's role and its five `current*` columns as one
+ * `BuildInfo` (`buildInfoOfRow`, update/inventory.ts), paired by
+ * `derivedBuilds`. Composition only — which row is which side is decided
+ * there.
+ *
+ * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
+ * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
+ * nothing in the health route's remote arm touched coord.db, and the banner
+ * route must not gain a new way to 500. It deliberately does NOT fall back to
+ * `fleetState.build` — spec §8: the handshake sample is never read as the
+ * current build where an inventory is wired. The fold of "unreadable" into
+ * "no rows yet" is honest for this field's readers, which render both as a
+ * dash; `GET /api/updates` is where the distinction is shown.
+ */
+function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
+  let rows: NodeRow[];
+  try {
+    rows = coord.nodes();
+  } catch {
+    return { own: null, fleet: null };
+  }
+  return derivedBuilds(rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) })));
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
@@ -1037,15 +1143,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // measured answer, off its own root listing. The request supplies its own
     // aggregate ten-second budget rather than inheriting watcher policy; the
     // race also bounds localIO, which ignores per-operation timeouts (D-2484).
-    const poolsRead = await readProjectPools(
-      deps.io,
-      deps.cfg,
-      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
-      PROJECT_POOLS_REQUEST_BUDGET_MS,
-    );
+    //
+    // `observedEpoch` (item 1, wave-1 fix round A) rides the SAME budget,
+    // read concurrently via `Promise.all` rather than serially after
+    // `poolsRead` — one more `readFileMeasured` alongside the marker sweep,
+    // not a second round trip. See `readObservedEpochFromRegistry`'s own
+    // docstring for why this replaced `deps.fleetState?.observedEpoch` here.
+    const [poolsRead, observedEpoch] = await Promise.all([
+      readProjectPools(
+        deps.io,
+        deps.cfg,
+        (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+        PROJECT_POOLS_REQUEST_BUDGET_MS,
+      ),
+      readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
+    ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord),
-      pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
+      pools: poolsWire(
+        poolsRead,
+        poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
+        // T9-R2: the epoch/observedEpoch producer. `readPoolEpoch` (pools.ts)
+        // leaves `epoch` off the wire entirely whether `deps.coord` is absent
+        // (no coordination db wired) OR `poolEpoch()` throws — degraded the
+        // same way `readAccountPoolEdges()` above degrades its own coord.db
+        // read (F1, pre-merge gate: a bare `?.` only short-circuited the
+        // absent case, so a broken coord.db used to 500 this whole route
+        // instead of just leaving this one freshness field off the wire).
+        // `observedEpoch` above is now THIS REQUEST's own `$REG/pool-epoch`
+        // measurement, not a forward of `deps.fleetState`'s handshake-sampled
+        // value — that value was sampled once per WS connection and never
+        // refreshed for a link that can live for days.
+        readPoolEpoch(deps.coord),
+        observedEpoch,
+        // F2 (pre-merge gate): `accountPools`, the same three-state shape as
+        // `enforcement` above, derived off the same `ccdVerbs` list — the
+        // `account-pools` capability token Task 2 added to `cmd_caps`, read
+        // the way `poolsEnforcement` already reads the project-pool verb.
+        accountPoolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
+      ),
     };
   });
 
@@ -1075,18 +1211,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // history.
     const lifecycle = watcher?.lifecycleHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
+      // The two stamps: with a coordination database, the inventory's rows —
+      // re-measured every minute by `sweepInventory`, superseded rows excluded
+      // (design 2026-09-20 §14); without one (tests and scripts that build
+      // `Deps` by hand), what this box read at boot (`deps.build`) and what the
+      // fleet host said on its last `ready` (`fleetState.build`). `?? null`
+      // because `Deps.build` is optional for such callers — an absent stamp
+      // and a null one are the same condition, exactly as `/health` treats
+      // them. `buildAgreement` decides from whichever pair this is.
+      const builds = deps.coord
+        ? inventoryBuilds(deps.coord)
+        : { own: deps.build ?? null, fleet: deps.fleetState.build ?? null };
       return {
         mode: 'remote',
         connected: deps.fleetState.connected,
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp),
-        // `deps.build` is what THIS box's deploy stamped, read once at boot
-        // (`index.ts`); `fleetState.build` is what the fleet host said about
-        // itself on the last `ready`. `?? null` because `Deps.build` is
-        // optional for callers that build `Deps` some other way (tests,
-        // scripts) — an absent stamp and a null one are the same condition,
-        // exactly as `/health` treats them.
-        build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        build: buildAgreement(builds.fleet, builds.own),
+        builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
       };
@@ -1173,6 +1315,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // respawns, and swaps. Ordered by the roster's declaration order.
   app.get('/api/accounts', async (): Promise<AccountsResponse> => {
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
+    // exactly the way `shares`/`limits` are each one read for every row below
+    // rather than one per account: `deps.coord?.accountPoolEdges()` inside
+    // the per-account `.map` used to run N synchronous sqlite reads on a
+    // route the PWA polls every 20s, AND risked a TORN VIEW — a
+    // `setAccountPools` landing mid-iteration could mix pre- and post-write
+    // membership across the same response. `readAccountPoolEdges()` (review
+    // round 3, M3) degrades the WHOLE response to the declared-only answer
+    // (the pre-account-pools shape) on a throw, never a 500 — this is a READ
+    // for display, not `refusePool`'s placement decision (Minor 9's guard,
+    // which DOES refuse and warn, because that call IS one).
+    const accountEdges = readAccountPoolEdges();
     // Rebuilt per request from `deps.cfg.roster`, not hoisted to module scope:
     // the roster is runtime data read at boot (`~/.ccrc/accounts.json`), so a
     // module-level rank table would be built before any roster exists.
@@ -1223,10 +1377,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // pool tag", which is what it has always meant and is now the only thing
       // it can mean. Per-project placement rides `ProjectRow.placement` on
       // `GET /api/projects`.
-      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }),
+      // `edges` threaded through (ruling T7-R3): the ranking forecast now
+      // agrees with `refusePool`'s refusal pre-check about which accounts a
+      // central tag has moved.
+      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
+        // T7-R2 (D-3076): the RESOLVED membership (central
+        // beats declared beats untagged, design §5.6) — `pool` above is the
+        // declared carrier alone, and a client that computed its own
+        // crossing warning from it would contradict what `POST
+        // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
+        // actually decides the moment a central `pool_edges` row exists
+        // (`NewSessionSheet.tsx:186-188`, measured live before this field
+        // existed). Reads the ONE `accountEdges` snapshot above, not a
+        // fresh per-account read.
+        resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
       })),
     };
   });
@@ -1262,7 +1429,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord).then((sessions) => {
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()).then((sessions) => {
       onFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
@@ -1434,6 +1601,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // no second place this wiring could come from.
   registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
 
+  // The update control plane (design 2026-09-20 §12, update-management W2),
+  // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
+  // and `box-token-census.test.ts`'s lane sources both read `update/routes.ts` by
+  // name. `sessionAuth` for its one dual-credential read; `watcher` so a read
+  // that finds no row for this box yet measures once instead of answering an
+  // empty node list.
+  registerUpdateRoutes(app, deps, sessionAuth, watcher);
+
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
@@ -1470,7 +1645,67 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
-    const p = spawnPty(id, dim(q.cols, 80), dim(q.rows, 24));
+    const cols = dim(q.cols, 80);
+    const rows = dim(q.rows, 24);
+    // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
+    //
+    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // tmux's own default is `latest` too — so the window follows whichever
+    // client most recently typed. A phone's pty client is a full tmux client
+    // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
+    // stored lines to the new width, and everything past `history-limit` is
+    // shed on the next scrolled line and never comes back. That reflow is
+    // measured, not assumed (F1, private tmux 3.4 socket): `resize-window -x 43`
+    // on a 220-column pane holding 1853 stored lines takes `history_size` to
+    // 9460, and at `history-limit 2000` the next output sheds the overflow for
+    // good.
+    //
+    // `resize-window` latches `window-size manual` (F3), so once it ARRIVES the
+    // attaching client cannot move the window. MEASURED end to end on one
+    // session (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column
+    // attach left 1046 logical of 1203 — 157 destroyed; pinned first, the window
+    // read `manual`, stayed 220 throughout, and the history was untouched.
+    //
+    // ISSUING IT FIRST IS A BIAS, NOT A BARRIER, and the difference is measured.
+    // An earlier version of this comment said the later client "cannot move the
+    // window at all"; that is too strong. Both commands are in flight at once —
+    // this one is merely started first — and a harness TIGHTER than shipped
+    // raced them 40 times and saw the attach win TWICE, with the window at 43
+    // for transients of 0.47 ms and 4.28 ms before the pin landed. It is not a
+    // data-loss defect: tmux 3.4 does not collect history during a reflow, and
+    // the narrow-then-wide round trip was measured LOSSLESS even at 3.7x the
+    // limit (1452 stored / 1502 logical at 220, out to 43 where `history_size`
+    // reads 7463, and back to 220 byte-identical).
+    //
+    // THAT ROUND TRIP WAS MEASURED WITH NO OUTPUT IN FLIGHT, and the condition
+    // is load-bearing: the first paragraph above is the counterexample. A line
+    // that lands WHILE the window sits at 43 is written into a history already
+    // reflowed past `history-limit`, and the overflow it sheds is gone. So what
+    // losing the race costs is bounded by what the pane emits during a transient
+    // measured at 0.47 ms and 4.28 ms — usually nothing, and never nothing by
+    // guarantee. The pin is what keeps that window from being the whole session,
+    // which is why it is issued here rather than dropped.
+    //
+    // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
+    // nothing, `resizeWindow` answers a boolean this route has no branch for,
+    // and a tmux that cannot be reached is a session the attach below will fail
+    // on anyway. Awaiting it would ALSO put a round trip to the fleet box in
+    // front of every drawer open in remote mode, to buy back a transient that
+    // costs no history. What it must not be is LATER than the attach.
+    //
+    // WHAT THE TEST CAN SEE is issue ORDER, and only that: `pty.test.ts` drives
+    // one ordered log shared by the Runner and the spawn stub, so it pins that
+    // the pin is issued before the attach. It cannot pin arrival, because a unit
+    // test has no tmux to arrive at. The claim above about arrival is a
+    // measurement on a private socket, not something this suite re-checks.
+    //
+    // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
+    // for every drawer, so a second drawer closing restores nothing anyone was
+    // depending on, and the close handler's own 220x50 becomes a no-op rather
+    // than the defect PR #96's handoff was built to cure. The deliberate
+    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    void deps.tmux.resizeWindow(id, 220, 50);
+    const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
@@ -1490,15 +1725,86 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
   });
 
+  /**
+   * The drawer's scrollback, and the whole of why it is a READ.
+   *
+   * `tmux attach` puts the CLIENT on the alternate screen (every attach begins
+   * ESC[?1049h — measured off a real pty), where xterm has no scrollback and
+   * turns a wheel notch into arrow keys aimed at the pane. tmux holds the
+   * pane's history regardless, so the fix is to read that history rather than
+   * to make the wheel drive the pane.
+   *
+   * The PANE's own alt flag is a SEPARATE layer and it is not always 0 — an
+   * earlier note here said `alternate_on=0` on every live session; measured
+   * across ten, two read 1. It does not matter, and that is worth stating so
+   * nobody "fixes" it: entering the alternate screen SAVES the normal-screen
+   * grid rather than dropping it, so `capture-pane` without `-a` still answers
+   * out of history. Measured on a private socket — 400 lines written, then
+   * ESC[?1049h: `alternate_on` flips to 1 and `capture-pane -S -400` still
+   * returns all 353 retained history lines.
+   *
+   * WHY NOT copy-mode, which is the other way to scroll a pane: copy mode is
+   * PANE state, not client state — a second attached client is dragged into the
+   * scrolled view too — and while a pane is in it `send-keys -l` does not
+   * deliver. Measured against tmux 3.4 with a client attached: the literal
+   * write HUNG (killed at 5 s), the Enter after it was eaten by the mode, and
+   * the text never reached the program — i.e. every prompt this server injects
+   * would wedge for as long as the mode lasted, and nothing in this tree can
+   * see or clear it. `capture-pane` mutates nothing: pane mode and attached
+   * clients measure identical either side of it.
+   *
+   * NO `knownId` GATE, deliberately (so it is absent from `routes.test.ts`'s
+   * census by construction, not by exemption): this route's own answer IS the
+   * measurement of whether the pane is there, taken against the pane rather
+   * than against a registry listing, and it tells `gone` from `unmeasured`
+   * where `knownId` folds both into 404.
+   */
+  app.get('/api/sessions/:id/pane/history', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    // THE MEASUREMENT COMES FIRST, AND IT SIZES THE READ (spec §5.2). PR #96
+    // captured 2000 lines and then asked how many there were, so a pane holding
+    // 47 paid for 2000 and the answer's own `lines` was a constant rather than
+    // a fact. One `list-panes -F` costs a single tmux round trip and turns the
+    // capture window into a measurement.
+    //
+    // A MEASURED ZERO KEEPS THE CONSTANT: `-S -0` starts at the screen's own
+    // top and returns nothing above it, which one layer up is indistinguishable
+    // from a failed read. The zero still travels as `scrollback: 0`, which is
+    // the fact the drawer refuses to open a layer on.
+    //
+    // AN UNMEASURABLE PROBE DOES NOT FAIL THE ROUTE. It falls back to the
+    // constant and OMITS the three measured fields — absence-permitting, and
+    // absent is not zero. The CAPTURE is what decides the status, because the
+    // capture is what the reader came for: `gone` -> 404, anything else -> 502
+    // carrying tmux's own message.
+    const probe = await deps.tmux.paneProbe(id);
+    const asked = probe.ok && probe.history > 0 ? probe.history : PANE_HISTORY_LINES;
+    const r = await deps.tmux.captureHistory(id, asked);
+    if (!r.ok) {
+      return r.reason === 'gone'
+        ? reply.code(404).send({ ok: false, error: 'gone' })
+        : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
+    }
+    // `width` rides along so the DRAWER can size its own scrollback against the
+    // pane's width rather than a constant multiplier: a stored line re-wrapped
+    // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
+    // the census holds a 302-column window, so the multiplier is measured
+    // rather than assumed (spec §5.4).
+    return probe.ok
+      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text: r.text, lines: asked };
+  });
+
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+  // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
@@ -1511,7 +1817,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (23 [registry-read-census:fields] field reads; identity failures follow
+  // (31 [registry-read-census:fields] field reads; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
@@ -1554,6 +1860,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * The PWA pickers' write, LIVE (routing spec 2026-09-14 §5.3, slice 4, Task
+   * 5). A tap on the model or effort sheet no longer types `/model <alias>`
+   * or `/effort <level>` into the pane directly — it writes ONE field of the
+   * routing record and asks ccd to apply it, session-only keystrokes, once
+   * the write itself has landed. `no-routing-keystroke-from-server.test.ts`
+   * is the census that keeps a slash command from creeping back into this
+   * file or `pwa/src`.
+   *
+   * Session-gated like `/prompt` directly above (NOT in `auth/gate.ts`'s
+   * `EXEMPT` table) — a picker tap is exactly as human-driven as a typed
+   * prompt, and `sessions-route-route.test.ts` pins the absence.
+   *
+   * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
+   * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
+   * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
+   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * single named field so its `Object.keys(...).length !== 1` arm can never
+   * see more than the one key this body can produce, defensive against the
+   * function's own general contract rather than reachable from this route.
+   *
+   * 501 `unsupported`, never a silent drop, when the box has not advertised
+   * `route-apply-v1` — the operator tapped a live control and would otherwise
+   * see `{ok:true}` for a write nobody applied (`parseOperatorRoute`'s own
+   * docstring makes the same argument for the spawn-time `--route`).
+   */
+  app.post('/api/sessions/:id/route', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
+    const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+    if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const [field, value] = Object.entries(parsed.route)[0] as [string, string];
+    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 
   /**
@@ -1882,6 +2227,37 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `deps.runCcd` is the call, and routes needing another shape (a 200 carrying
   // `phase:unknown`, a parsed WsAudit/ReapResult, a 501 hoisted out of a queued
   // fn) compose from `deps.runCcd` directly rather than reaching for a runner.
+
+  /**
+   * `accountPoolEdges()`, degraded to declared-only on a throw — the shape
+   * `GET /api/accounts` and `GET /api/projects` both want (review round 3,
+   * M3). This collapses the SILENT-degrade behaviour to one definition
+   * instead of two duplicated try/catch blocks, and `refusePool` below
+   * keeps its OWN inline version deliberately, which additionally
+   * `console.warn`s and REFUSES (503) rather than degrading — because that
+   * call is a placement DECISION and an operator needs a trace when coord.db
+   * is unreadable, while a display read (the PWA polls `GET /api/accounts`
+   * every 20s) would turn a warn into noise nobody could act on.
+   *
+   * NOT A COMPLETE CENSUS (review round 4, P4 — corrected): a round-3
+   * version of this comment claimed "the two distinct degrade behaviours in
+   * this file are now exactly two, not three." False — `GET /api/pools/epoch`
+   * calls `deps.coord.accountPoolEdges()` bare and uncaught (this file,
+   * below), a THIRD behaviour: fail-SHUT, a throw there 500s the request
+   * rather than degrading or warning-then-refusing. Unchanged by this round
+   * and not a new hazard — `ccd-pool-sync` on the fleet side treats a
+   * non-200 response as "unmeasured", logs it, and writes nothing, so a
+   * 500 there is no worse for the fleet than any other transient failure —
+   * but the sentence this replaces read as a complete inventory and was not.
+   */
+  const readAccountPoolEdges = (): ReadonlyMap<string, readonly string[]> => {
+    try {
+      return deps.coord?.accountPoolEdges() ?? new Map();
+    } catch {
+      return new Map();
+    }
+  };
+
   /**
    * The pool pre-check every placement route makes (account pools, spec §5.6).
    * Returns `null` when the caller may proceed, or a REPLY that has already
@@ -1891,11 +2267,40 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * 409 is "this account is wrong for this project", overridable with
    * `crossPool`. 503 is "nobody can decide", which is NOT overridable here:
    * the tag is unreadable or malformed, and `ccd` refuses it too.
+   *
+   * THE SERVER'S FORECAST READS coord.db DIRECTLY, NEVER THE PROJECTION (spec
+   * §5.7) — `deps.coord?.accountPoolEdges() ?? new Map()`, so every 409/503
+   * this issues is immediate and exact rather than as stale as the fleet's
+   * last pull. A box with no coordination database configured has no central
+   * edges to read, so it falls back to the declared roster tag alone —
+   * unchanged from before account pools existed.
+   *
+   * GUARDED (review round 1, Minor 9): `accountPoolEdges()` is a synchronous
+   * `node:sqlite` read on every call into this function — every session
+   * create, swap and prefer now touches coord.db, not only the four new pool
+   * routes — and a throwing `DatabaseSync` (a locked or corrupt file) would
+   * otherwise turn this 503-shaped condition ("nobody can decide") into an
+   * uncaught 500. Reads as `pool-undecidable`/`unreadable`, the same
+   * vocabulary `refusePool`'s other undecidable arms already use, rather than
+   * inventing a fifth word for a read that failed.
+   *
+   * NOT SILENT (review round 2, Minor): the 500 this replaces at least
+   * printed. A `console.warn` here is the operator's only trace that coord.db
+   * is unreadable — the 503 body alone cannot distinguish "the tag genuinely
+   * cannot be read" from "this box's own database is broken".
    */
   const refusePool = (
     reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
   ): FastifyReply | null => {
-    const v = poolVerdict(deps.cfg.roster, wrapper, pool);
+    let edges: ReadonlyMap<string, readonly string[]>;
+    try {
+      edges = deps.coord?.accountPoolEdges() ?? new Map();
+    } catch (err) {
+      console.warn('ccrc-server: accountPoolEdges() failed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — refusing ${wrapper} as pool-unreadable`);
+      return reply.code(503).send({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+    }
+    const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
     if (v.ok) return null;
     return v.reason === 'pool-mismatch'
       ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
@@ -1905,6 +2310,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const runCcdOr502 = async (reply: FastifyReply, argv: CcdArgv) => {
     const res = await deps.runCcd(argv);
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
+  };
+
+  /**
+   * `route?` on an OPERATOR's own body (`POST /api/sessions`, `POST
+   * /api/projects/:project/workspaces` — routing spec §5.3, slice 4).
+   * `refusePool`'s own shape just above: `reply: null` means the caller may
+   * proceed, with `.route` carrying the parsed value; anything else has
+   * ALREADY sent the reply.
+   *
+   * THIS DIFFERS FROM DISPATCH'S OWN RULE ON PURPOSE. `dispatch.ts`'s wave-1
+   * and wave-N≥2 arms OMIT a missing capability and JOURNAL it — an
+   * unattended coordinator wave must not fail outright on an old ccd. An
+   * operator who tapped a routing control and gets back today's plain argv,
+   * with no error and no journal a phone screen shows, has been silently
+   * downgraded and would never know it. So a bad shape is 400 and a box that
+   * cannot yet parse `--route` is 501 — never a quiet fallback to the argv
+   * `route === undefined` gets for free, which is `route === undefined`'s
+   * own case just below and the ONLY one that stays silent, because there was
+   * nothing asked for it to silently drop.
+   */
+  const parseOperatorRoute = (
+    reply: FastifyReply, route: unknown,
+  ): { reply: FastifyReply; route?: undefined } | { reply: null; route: RouteFields | null } => {
+    if (route === undefined) return { reply: null, route: null };
+    const parsed = parseRouteFields(route);
+    if (!parsed.ok) {
+      // `routeParseDetail` (`shared/api.ts`, fix round 2 finding #2): the
+      // refusal GRAMMAR is shared with `dispatch.ts`, which spelled the same
+      // template string out verbatim. The CURRENCY is not — a 400 reply here,
+      // a typed `DispatchOutcome` there — and that stays at each call site.
+      return { reply: reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: routeParseDetail(parsed) }) };
+    }
+    // An empty `{}` names no field — `wsAdd`/`wsAddWorker`'s reason for
+    // treating it as `routeFlags(null)` would anyway: there is nothing to gate
+    // the 501 on, so it is never spent asking whether the box can parse a flag
+    // this call was never going to send. `routeFieldsOrNull` is that collapse,
+    // shared with `dispatch.ts` for the same reason the grammar above is.
+    const fields = routeFieldsOrNull(parsed.route);
+    if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+    }
+    return { reply: null, route: fields };
   };
 
   // F3 — the program-ready readiness join (program-leverage wave 3). Read ONCE
@@ -1924,7 +2372,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
-  app.get('/api/projects', async () => {
+  app.get('/api/projects', async (req, reply) => {
+    // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
+    // class, so a caller can ask "who could take this project running that
+    // class of model today" rather than only the class-blind default.
+    // Validated BEFORE any read — a bad value is refused, never silently
+    // treated as `default` — and `default` (or an absent query) takes the
+    // pre-slice-4 path with no shares read at all, so the answer stays
+    // byte-identical to what this route has always sent.
+    const q = req.query as { class?: unknown };
+    let cls: ModelClass | 'default' = 'default';
+    // Absent entirely (no key at all) is the ONLY silent case — an empty
+    // `?class=` is present and outside the vocabulary just as much as a
+    // misspelled one, so it is refused rather than quietly read as `default`.
+    if (q.class !== undefined) {
+      if (typeof q.class === 'string' && (q.class === 'default' || (CLASSES as readonly string[]).includes(q.class))) {
+        cls = q.class as ModelClass | 'default';
+      } else {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
+      }
+    }
     const listed = await listProjects(deps.io, deps.cfg);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
@@ -1940,13 +2407,40 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE shares read for the whole request, exactly the way `limits` above
+    // is one `readLimits` for every row — and skipped entirely for the
+    // default class, so a caller that never asked for a class never pays for
+    // a read whose answer it could not use.
+    const shares = cls === 'default' ? { kind: 'absent' as const } : await readSharesMeasured(deps.io, deps.cfg.registryDir);
+    const nowS = Math.floor(Date.now() / 1000);
+    // ONE central-edges read for the whole request (ruling T7-R3, on
+    // `shares`'s exact precedent one line up): every project's forecast
+    // reads the SAME snapshot, so a `setAccountPools` landing mid-response
+    // cannot mix pre- and post-write membership across rows, and this
+    // now agrees with `refusePool`'s own per-request read about which
+    // accounts a central tag has moved. `readAccountPoolEdges()` (review
+    // round 3, M3) degrades to declared-only on a throwing coord.db (a READ
+    // for display, not `refusePool`'s placement decision — Minor 9's guard
+    // is the one that refuses and warns).
+    const projectEdges = readAccountPoolEdges();
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
-      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, projectEdges, cls, shares, nowS) };
     };
+    // A project the sweep has not reached reads `unmeasured`, NOT `absent`.
+    // That includes every project with no workspaces — the sweep enumerates
+    // workspaces — and saying `absent` there would claim a measurement that
+    // never happened about four projects on this fleet that genuinely have no
+    // origin, making the true answer and the unasked question the same value.
+    const repos = watcher?.currentProjectRepos() ?? new Map<string, ProjectRepoWire>();
+    const repoCell = (p: ProjectRow): Pick<ProjectRow, 'repo'> =>
+      ({ repo: repos.get(p.name) ?? { state: 'unmeasured' } });
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
-      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p) })) };
+      return {
+        ...listed,
+        projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+      };
     }
     const coord = deps.coord;
     return {
@@ -1964,17 +2458,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
       }),
     };
   });
 
   app.post('/api/sessions', async (req, reply) => {
-    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown };
+    const body = (req.body ?? {}) as {
+      wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown; route?: unknown;
+    };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // BEFORE `knownId`/the revival logic below (routing spec §5.3, slice 4):
+    // a bad `route` body must never reach ccd, on either the creation or the
+    // revival arm — see `parseOperatorRoute`'s own docstring for why an
+    // operator's ask is refused rather than silently dropped.
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     // ONE bounded registry listing, two questions: is this a revival, and, only
     // for an ordinary creation, what is this project's tag. The predicate keeps
@@ -2002,8 +2504,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           return reply.code(501).send({ ok: false, error: 'unsupported' });
         }
         return runCcdOr502(reply, body.enable === false
-          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
-          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir, routed.route)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir, routed.route));
       }
       const pool = poolFor(
         measured.poolsRead ? measured.pools : { listed: false },
@@ -2015,9 +2517,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // enable = start + systemd enable. The ternary picks the ENTRY rather than
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
+    //
+    // `routed.route` reaches EVERY arm below it — the crossPool branch just
+    // above (its own `startCross`/`enableCross` call), the creating arm and
+    // the revival arm (Task 2 made `start`/`enable` write the pairs whether
+    // the row is new or old) — so no arm this handler can take drops an
+    // operator's route (fix round 1, finding #1: the crossPool branch used to
+    // return before ever reaching `routed.route`, silently dropping it).
     return runCcdOr502(reply, body.enable === false
-      ? CCD_ARGV.start(body.wrapper, body.project, workdir)
-      : CCD_ARGV.enable(body.wrapper, body.project, workdir));
+      ? CCD_ARGV.start(body.wrapper, body.project, workdir, routed.route)
+      : CCD_ARGV.enable(body.wrapper, body.project, workdir, routed.route));
   });
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
@@ -2027,7 +2536,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+    const body = (req.body ?? {}) as { route?: unknown };
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route));
   });
 
   /**
@@ -2085,6 +2597,221 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // name" is a thing worth saying and not a thing worth blocking on.
     const warn = body.pool !== null && !poolRostered(deps.cfg.roster, body.pool);
     return { ok: true, pool: measured, ...(warn ? { warning: 'unknown-pool' as const } : {}) };
+  });
+
+  /**
+   * An account's pool membership (account pools, design 2026-09-18 §5.5).
+   * `{ pools: [] }` clears.
+   *
+   * THE STANCE IS THE PROJECT-POOL ROUTE'S, copied deliberately: NOT in
+   * `auth/gate.ts`'s EXEMPT table — session-gated when armed, open dark. NO BOX
+   * TOKEN: this is fleet control, not a coordination write.
+   *
+   * THE 200 IS MEASURED, NOT ECHOED — and here the measurement is cheap and
+   * exact, because the authority is this box's own coord.db, not a file on the
+   * fleet. The epoch returned is re-read from `pool_epoch` after the write.
+   *
+   * `:id` IS VALIDATED against {@link ACCOUNT_ID_RE}, 400 `bad-account-id` —
+   * NOT unvalidated the way `:project` is next door (review round 1, I5).
+   * `:project` is safe unvalidated because nothing downstream joins it into
+   * anything but a Map lookup; this `:id` becomes a KEY IN THE POOL-EPOCH
+   * DOCUMENT `ccd-pool-sync` renders, and that document's grammar refuses the
+   * WHOLE thing — not just the one bad row — on an id off-grammar (measured:
+   * `acct%20a` poisons the document, every node then reads `unmeasured`,
+   * keeps its stale projection and retries every 60s indefinitely). An id
+   * OFF THIS GRAMMAR is refused before it ever reaches the store; an id ON
+   * the grammar that no ROSTERED account carries is still a WARNING, not a
+   * refusal — this box's `accounts.json` is one of two hand-owned copies and
+   * can lag the fleet's, so "no such account here" may be about to become
+   * false.
+   *
+   * NO NUDGE. Convergence is owned by `ccd-pool-sync.timer`'s pull (ruling R2);
+   * the fleet honours this within `OnUnitActiveSec=60s`, and the PWA shows
+   * `epoch N / observed M` so the lag is visible rather than mysterious.
+   */
+  app.post('/api/pools/accounts/:id', async (req, reply) => {
+    // `notConfigured` is a LOCAL const inside `coord/routes.ts:448`, not an
+    // export — these routes live in `server.ts`, so the 501 is spelled here.
+    if (!deps.coord || !deps.poolEdgeLog) {
+      return reply.code(501).send({ ok: false, error: 'not-configured' });
+    }
+    const { id } = req.params as { id: string };
+    if (!ACCOUNT_ID_RE.test(id)) {
+      return reply.code(400).send({ ok: false, error: 'bad-account-id' });
+    }
+    const body = (req.body ?? {}) as { pools?: unknown };
+    if (!Array.isArray(body.pools) || body.pools.some((p) => typeof p !== 'string')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const pools = body.pools as string[];
+    // POOL_NAME_RE imported from shared/roster.ts, never re-spelled here.
+    if (pools.some((p) => !POOL_NAME_RE.test(p))) {
+      return reply.code(400).send({ ok: false, error: 'bad-pool-name' });
+    }
+    // NO length>1 PRE-CHECK HERE (review round 1, Minor 7 — dropped): it used
+    // to re-spell the store's own one-pool-per-account rule under a SECOND
+    // error token (`one-pool-per-account`), a second vocabulary for one
+    // condition, and it made `setAccountPools`'s real refusal branch below
+    // unreachable through this route, so the "never a silent 200" test could
+    // only prove the PRE-CHECK worked, not the discrimination. The store
+    // (`multi-pool-not-supported`, `SET_ACCOUNT_POOLS_REFUSE_CODES`) is the
+    // one place wave 1's one-pool-per-account rule is now spelled.
+    const written = deps.coord.setAccountPools(
+      // `addedBy` is NULL on this path and that is a real answer, not a gap:
+      // there is no session-id accessor on an armed request here, and identity
+      // on this fleet is ATTRIBUTION, never authentication. A later wave that
+      // wants a name must add a reader, not guess one.
+      { accountId: id, pools, addedBy: null }, deps.poolEdgeLog);
+    // THE OBLIGATION THE TYPE SYSTEM WILL NOT ENFORCE (store.ts:138-143,
+    // :172-177): `written` MUST be bound and its `.ok` discriminated before any
+    // effect is drawn from it — discarding the call outright compiles clean and
+    // silent, and a refusal would then read as a success.
+    if (!written.ok) {
+      return reply.code(400).send({ ok: false, error: written.error, pools: written.pools });
+    }
+    const measured = deps.coord.poolEpoch();
+    // `roster.byId`, not `.accounts.some(...)` (review round 1, Minor 11): the
+    // index this Map exists for, rather than a linear scan that reimplements it.
+    const warn = !deps.cfg.roster.byId.has(id);
+    return {
+      ok: true, epoch: measured.epoch,
+      ...(warn ? { warning: 'unknown-account' as const } : {}),
+    };
+  });
+
+  /**
+   * The projection `ccd-pool-sync` pulls. DUAL-CREDENTIAL, the `GET /api/feed`
+   * shape: a session for the PWA, the box token for the fleet's sync script.
+   *
+   * ALWAYS EMITTED, even when nothing is tagged. `accounts: {}` means SYNCED,
+   * NOTHING TAGGED; no document at all means NEVER SYNCED, which the node reads
+   * as `unreadable` and refuses into a tagged project. Folding those two would
+   * silently lift every constraint on a cold node — the EKS default path.
+   *
+   * EMITS THE RESOLVED POOL, central-if-present-else-declared, not central
+   * edges alone (review round 3, W1 — the fail-open the whole wave missed).
+   * MEASURED: `_acct_pool_state` (`ccd/ccd:2101`) reads ONLY `$REG/pool-epoch`
+   * — Task 2 deliberately stopped `_pool_ok` consulting the declared
+   * `accounts.sh` tag at placement — so an id this document omitted read
+   * `untagged` on the fleet. Emitting central edges alone meant a DECLARED-only
+   * account (no central row) vanished from the document entirely: `ccd`
+   * answered `untagged` and SERVED a project the server's own
+   * `resolvedAccountPool` would answer `tagged` and 409 — the declared
+   * constraint enforced by the server and NOT by the fleet, spec §5.6 rule 2's
+   * fail-open arriving through the new path instead of the old one it was
+   * written to close. The document GRAMMAR is unchanged (still `acct <id>
+   * <pool>` lines, one per tagged account) — only WHICH accounts and WHICH
+   * pool value are chosen, so `ccd-pool-sync`'s renderer and
+   * `_acct_pool_state`'s reader need no edit and neither of those closed
+   * tasks reopens.
+   *
+   * WHAT THIS CHANGES ABOUT `epoch` (review round 4, P5 — recorded, not a
+   * defect): before W1, `accounts` derived SOLELY from `pool_edges`, every
+   * mutation of which bumps `poolEpoch()` — so `epoch` changing was a
+   * reliable proxy for "this document's content changed". `accounts` now
+   * ALSO derives from `deps.cfg.roster` (read at boot from `accounts.json`,
+   * which carries no epoch of its own), so a DECLARED-pool edit changes this
+   * response while `epoch` stands still — a live document can now read
+   * `epoch 0` with a real `acct` row, which was structurally impossible
+   * before this round. Nothing downstream breaks: `ccd-pool-sync` pulls on
+   * a timer regardless of whether `epoch` moved, and `_acct_pool_state`
+   * parses only the `epoch`/`issued`/`lease` lines plus whichever `acct`
+   * rows are present, never diffing against a remembered epoch. But the
+   * PWA's `epoch N / observed M` staleness indicator (design §5.9) no
+   * longer implies "the fleet's document matches this response" — it now
+   * means "the fleet has pulled since the last CENTRAL change", and says
+   * nothing about a declared-only edit made since. That indicator was
+   * already ruled a staleness signal rather than a health one; this makes
+   * it weaker still, and a future reader of it should know that before
+   * trusting it further than "the timer is still running".
+   *
+   * AUTHENTICATE BEFORE `not-configured` (review round 1, I3+I4 — fixed;
+   * this route is EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, so its own check
+   * is the ONLY door on an armed box, and answering `501` to an anonymous
+   * caller before that check ran would be an information leak the route's own
+   * comment and EXEMPT reason both claimed did not exist). `GET /api/feed`
+   * does this for the identical reason — `coord/routes.ts:2533-2551`'s own
+   * comment: "Authenticate before `not-configured`, preserving the global
+   * gate's information boundary on an armed box."
+   *
+   * `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds (review round 1,
+   * C1 — CRITICAL, fixed). Every reader in the tree (`ccd/ccd:2366-2367`'s
+   * `now=$(date +%s)`) compares in seconds; emitting `Date.now()` (ms) made
+   * the `stale` arm unreachable for ~56,700 years, pinning
+   * `POOL_LEASE_MS`'s whole dial to "a dead control plane's last projection
+   * is enforced forever" — exactly the hazard spec §5.8 exists to bound.
+   * `pool-accounts-route.test.ts`'s cross-side test feeds this route's own
+   * output through `ccd-pool-sync`'s real python renderer to keep this from
+   * silently drifting back to milliseconds.
+   */
+  app.get('/api/pools/epoch', async (req, reply) => {
+    // The `GET /api/feed` guard, copied shape-for-shape (coord/routes.ts:2533-2551):
+    // session FIRST, box token as the fallback, 401 only when both fail —
+    // and BEFORE the `not-configured` check below, on that same route's
+    // reasoning.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: session.verdict });
+        }
+      }
+    }
+    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    const { epoch, issuedAt } = deps.coord.poolEpoch();
+    const edges = deps.coord.accountPoolEdges();
+    // THE UNION, not `edges.keys()` alone: a DECLARED-only account (roster
+    // `pool` set, no `pool_edges` row) must still appear here, or it silently
+    // reads `untagged` on the fleet (W1). A central edge can also name a
+    // wrapper this box's roster does not carry (spec §3.3, O4), which is why
+    // the roster side of the union is `.accounts`, not filtered to home-able.
+    const ids = new Set<string>([...deps.cfg.roster.accounts.map((a) => a.id), ...edges.keys()]);
+    const accounts: Record<string, { pools: string[] }> = {};
+    for (const id of ids) {
+      // `resolvedAccountPool` — the SAME function the ranking forecast
+      // (`GET /api/projects`, `GET /api/accounts`) uses — decides this
+      // document's central/declared choice. Omits exactly the accounts
+      // `resolvedAccountPool` calls `untagged` — no central row AND no
+      // declared `pool` — which is the one case this document has always
+      // left out.
+      //
+      // CORRECTED (review round 4, P2): this comment used to claim
+      // `refusePool` also calls `resolvedAccountPool`, "so this document's
+      // central/declared choice can never drift from what those two
+      // decide." False — `refusePool` calls `poolVerdict`, which re-spells
+      // the precedence INLINE rather than composing `resolvedAccountPool`
+      // (`poolrule.ts:96-102`'s own docstring gives the reason: a central
+      // edge must decide even for a wrapper this box's roster does not
+      // carry, which `resolvedAccountPool` cannot answer without an
+      // `AccountDef`-shaped id lookup `poolVerdict` does not want to do
+      // twice). So precedence is spelled TWICE, not once — this document
+      // and `GET /api/projects`/`GET /api/accounts` through
+      // `resolvedAccountPool`, `refusePool` through `poolVerdict` — kept
+      // equal by TEST COVERAGE (a flip in either spelling reds 3 tests
+      // across `pools.test.ts`/`pool-accounts-route.test.ts`), not by
+      // construction. There is no compiler-enforced guarantee here that the
+      // two can never drift.
+      const resolved = resolvedAccountPool(id, deps.cfg.roster.byId.get(id), edges);
+      if (resolved.state === 'tagged') accounts[id] = { pools: [...resolved.pools] };
+    }
+    // ABSOLUTE, ISSUED FROM THIS BOX'S CLOCK (item 10): `leaseUntil` is a
+    // UNIX-seconds timestamp, not a duration, and it travels the wire as one.
+    // `ccd/ccd`'s `_acct_pool_state` compares it against ITS OWN `date +%s`
+    // on the fleet box — nothing resynchronises the two clocks in between —
+    // so any clock skew between this server box and the fleet box shifts the
+    // whole staleness dial directly: a fleet box running fast reads `stale`
+    // early, one running slow serves a projection past this box's own idea
+    // of the lease. NTP-typical skew is noise against the 15-minute default,
+    // but a badly drifted box is a silent input to §5.8's dial that nothing
+    // here measures or reports.
+    const nowS = Math.floor(Date.now() / 1000);
+    return {
+      epoch,
+      issuedAt: Math.floor(issuedAt / 1000),
+      leaseUntil: nowS + Math.floor(POOL_LEASE_MS / 1000),
+      accounts,
+    };
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
