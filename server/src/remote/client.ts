@@ -11,6 +11,7 @@ import type {
   TailReset,
 } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
+import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
@@ -72,6 +73,26 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * THE ONE VALIDATOR of `AgentReady.ops` (design 2026-09-20 §8, §10), called
+ * once per `ready` by `onReady`. The peer may be older, newer or broken, so
+ * the list is validated, not trusted: absent, not an array, or refused by
+ * `validCapWords` (a word off `CAP_WORD`, a non-string, more than
+ * `MAX_CAP_WORDS` words — one bad word drops the whole list, §8) → `[]`.
+ *
+ * `[]` folds "an agent too old to say" with "an agent that said something
+ * unusable", and that fold is deliberate rather than a narrowing: every
+ * consumer treats both the same — the dispatcher never sends an op the link
+ * did not validly name. The distinction that DOES survive is the one
+ * decision 11 names: this reader never answers `undefined`/`null`, which are
+ * "no ready yet" and "no agent at all", so a connected fleet row stores `''`
+ * and the server row `NULL`, and the two never meet.
+ */
+export function readReadyOps(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return validCapWords(raw) ?? [];
+}
+
+/**
  * Owns exactly one logical connection to the agent — a fresh `WebSocket` per
  * attempt, hello/ready handshake, a request table keyed by numeric id
  * (ids are never reused across reconnects; not required to be — every
@@ -84,7 +105,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export class FleetClient {
   readonly state: FleetState = {
     connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
-    observedEpoch: undefined,
+    observedEpoch: undefined, agentOps: undefined,
   };
 
   private readonly cfg: ResolvedConfig;
@@ -381,6 +402,11 @@ export class FleetClient {
       // No evidence, not a fabricated one.
       this.state.observedEpoch = undefined;
     }
+    // THE SINGLE READER of the ready frame's `ops` (design 2026-09-20 §8) —
+    // `readReadyOps` above is its one validator. Reset on EVERY ready, the
+    // `rosterFp`/`build` reason: a reconnect to a downgraded agent must not
+    // keep advertising an op the new process no longer answers.
+    this.state.agentOps = readReadyOps(frame.ops);
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which
     // `buildAgreement` compares against this box's. Reset on every ready for
     // the same reason as `rosterFp`: a stamp kept from the previous connection

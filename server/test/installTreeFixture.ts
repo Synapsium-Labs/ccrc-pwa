@@ -43,6 +43,16 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // Plan 2b-1 Task 1: the two GPT-lane executables that ship today (Plan
+  // 2a), copied from the repository. `_inst_bins` places both, so a tree
+  // missing either makes a placement assertion fail for a fixture reason
+  // rather than a real one. `ccgpt` and `ccgpt-runtime` are NOT here, and
+  // not stubbed either: they are not in the repository until Plan 2b-2, so
+  // nothing may place them (D-3165), and a stub would hide a placement that
+  // dies on a real tree — the class `install-census.test.ts`'s tracked-source
+  // case now reds on.
+  'ccd/ccgpt-proxy.py',
+  'ccd/ccgpt-usage.py',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -120,6 +130,10 @@ export const TREE_FILES = [
   // engine Task 6 landed, and `_inst_bins` places both under this name each.
   'ccd/ccd-usage-sweep',
   'ccd/ccd-usage-sweep.py',
+  // The per-uid temp-dir reaper, shipped by `_inst_bins` on the same
+  // non-Darwin, every-ROLE arm; without it `_inst_atomic` dies naming a source
+  // the fixture tree does not carry.
+  'ccd/ccd-tmp-sweep',
   // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
   // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
   // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a

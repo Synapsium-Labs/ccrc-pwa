@@ -19,7 +19,7 @@ import {
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
-import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
+import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -52,9 +52,13 @@ import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
+import { registerUpdateRoutes } from './update/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
-import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
+import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
+import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
+import type { CataloguePoller } from './update/catalogue.js';
+import type { UpdateIntentLog } from './coord/updateintentlog.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -229,10 +233,12 @@ export interface Deps {
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
    *  `cfg.buildInfoPath`). `null` on a dev checkout or an unstamped box;
    *  absent has the same meaning — `/health` treats both as null, and so does
-   *  `/api/fleet/health`, where this is now also the OWN side of the two-box
-   *  skew comparison (`buildAgreement`, against `fleetState.build`). Which is
-   *  why an unstamped server answers `'unknown'` rather than manufacturing a
-   *  disagreement with the fleet host out of a stamp it never had. */
+   *  `/api/fleet/health` when no coordination database is wired, where this
+   *  is the OWN side of the two-box skew comparison (`buildAgreement`,
+   *  against `fleetState.build`); with one, the inventory's server row is
+   *  (design 2026-09-20 §14). Either way an unstamped server answers
+   *  `'unknown'` rather than manufacturing a disagreement with the fleet host
+   *  out of a stamp it never had. */
   build?: BuildInfo | null;
   /** The ONLY path to `ccd`. There is deliberately no raw `run` here: with one,
    *  "every ccd argv is built in ccdargv.ts" is enforceable only by scanning
@@ -293,6 +299,19 @@ export interface Deps {
    *  itself. Optional the same way `coord` is: a box with no coordination
    *  configured serves no pool-membership routes either. */
   poolEdgeLog?: PoolEdgeLog;
+  /** The release-catalogue poller (design 2026-09-20 §7, `update/catalogue.ts`).
+   *  Constructed in `index.ts` beside `coord`, whose one catalogue writer it
+   *  calls; `FleetWatcher` polls it on its own 30-minute clock and
+   *  `POST /api/updates/refresh` on demand. Optional the way `coord` is:
+   *  absent, the lane never runs and the update routes read "never checked". */
+  catalogue?: CataloguePoller;
+  /** The flat-file journal under `update_intent`/`update_epoch` (design
+   *  2026-09-20 §6), `poolEdgeLog`'s twin and for its reason:
+   *  `CoordStore.setIntent` appends to it INSIDE its transaction, so
+   *  `POST /api/updates/intent` needs the process's one instance, built in
+   *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
+   *  intent route answers `501 not-configured`. */
+  updateIntentLog?: UpdateIntentLog;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -309,6 +328,32 @@ function findPwaRoot(): string | null {
     dir = up;
   }
   return null;
+}
+
+/**
+ * `FleetHealth.builds`, derived from the inventory rows (design 2026-09-20
+ * §14): each live row's role and its five `current*` columns as one
+ * `BuildInfo` (`buildInfoOfRow`, update/inventory.ts), paired by
+ * `derivedBuilds`. Composition only — which row is which side is decided
+ * there.
+ *
+ * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
+ * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
+ * nothing in the health route's remote arm touched coord.db, and the banner
+ * route must not gain a new way to 500. It deliberately does NOT fall back to
+ * `fleetState.build` — spec §8: the handshake sample is never read as the
+ * current build where an inventory is wired. The fold of "unreadable" into
+ * "no rows yet" is honest for this field's readers, which render both as a
+ * dash; `GET /api/updates` is where the distinction is shown.
+ */
+function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
+  let rows: NodeRow[];
+  try {
+    rows = coord.nodes();
+  } catch {
+    return { own: null, fleet: null };
+  }
+  return derivedBuilds(rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) })));
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
@@ -1114,7 +1159,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
     ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1166,19 +1211,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // history.
     const lifecycle = watcher?.lifecycleHealth() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
+      // The two stamps: with a coordination database, the inventory's rows —
+      // re-measured every minute by `sweepInventory`, superseded rows excluded
+      // (design 2026-09-20 §14); without one (tests and scripts that build
+      // `Deps` by hand), what this box read at boot (`deps.build`) and what the
+      // fleet host said on its last `ready` (`fleetState.build`). `?? null`
+      // because `Deps.build` is optional for such callers — an absent stamp
+      // and a null one are the same condition, exactly as `/health` treats
+      // them. `buildAgreement` decides from whichever pair this is.
+      const builds = deps.coord
+        ? inventoryBuilds(deps.coord)
+        : { own: deps.build ?? null, fleet: deps.fleetState.build ?? null };
       return {
         mode: 'remote',
         connected: deps.fleetState.connected,
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp),
-        // `deps.build` is what THIS box's deploy stamped, read once at boot
-        // (`index.ts`); `fleetState.build` is what the fleet host said about
-        // itself on the last `ready`. `?? null` because `Deps.build` is
-        // optional for callers that build `Deps` some other way (tests,
-        // scripts) — an absent stamp and a null one are the same condition,
-        // exactly as `/health` treats them.
-        build: buildAgreement(deps.fleetState.build, deps.build ?? null),
-        builds: { own: deps.build ?? null, fleet: deps.fleetState.build ?? null },
+        build: buildAgreement(builds.fleet, builds.own),
+        builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
       };
@@ -1379,7 +1429,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()).then((sessions) => {
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()).then((sessions) => {
       onFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
@@ -1550,6 +1600,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // not carry the watcher (this function's own third argument), so there is
   // no second place this wiring could come from.
   registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher);
+
+  // The update control plane (design 2026-09-20 §12, update-management W2),
+  // registered from its own file — which is why `auth-gate.test.ts`'s `ROUTES`
+  // and `box-token-census.test.ts`'s lane sources both read `update/routes.ts` by
+  // name. `sessionAuth` for its one dual-credential read; `watcher` so a read
+  // that finds no row for this box yet measures once instead of answering an
+  // empty node list.
+  registerUpdateRoutes(app, deps, sessionAuth, watcher);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -1746,7 +1804,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
+  // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
@@ -1759,7 +1817,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (30 [registry-read-census:fields] field reads; identity failures follow
+  // (31 [registry-read-census:fields] field reads; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.

@@ -992,6 +992,16 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       expect(c.ruling, `${c.name} needs a ruling`).toBeTruthy();
     }
   });
+  it('declares the Claude Code temp dir as a session-bound class collected by ccd-tmp-sweep', () => {
+    // Policy row #9 named /tmp/claude-<uid> "a root we declare to agents in
+    // their own system prompt and then never collect"; it reached 138G on the
+    // fleet host before it had a collector.
+    const c = LIFECYCLE.find((x) => x.name === 'claude-tmp-session-dirs');
+    expect(c, 'shared/lifecycle.ts declares no claude-tmp-session-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('S');
+    expect(c!.collector).toContain('ccd-tmp-sweep');
+    expect(c!.root).toContain('claude-<uid>');
+  });
   it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
     // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
     // makes an unassigned artifact class a defect, and this one has NO

@@ -2,7 +2,22 @@
 // `registry.ts` already parses it into `SessionRecord.spawn: { at, rc } | null`. This is the ONE
 // derivation of that rc table into a word, in L0, so the wire and the PWA cannot mint a second.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { SPAWN_VERDICTS, isSpawnVerdict, spawnVerdict } from '../../shared/api.js';
+import { CCD } from './ccdWsHelpers.js';
+
+/** The rcs ccd's OWN spawn table names: the numeric arms of `_spawn_settle`'s
+ *  `case "$prompt_rc" in … esac`, read off the shipped file. A hand-kept list
+ *  here is how rc 6 reached the fleet as `unknown`: ccd gained the arm, the
+ *  list did not, and every suite stayed green. */
+const ccdSpawnArms = (): number[] => {
+  const src = readFileSync(CCD, 'utf8');
+  const opener = 'case "$prompt_rc" in';
+  expect(src.split(opener).length - 1, `ccd must hold exactly one \`${opener}\``).toBe(1);
+  const at = src.indexOf(opener);
+  const block = src.slice(at, src.indexOf('\n  esac', at));
+  return [...block.matchAll(/^\s*(\d+)\)/gm)].map((m) => Number(m[1]));
+};
 
 describe('spawnVerdict — ccd\'s shipped rc table, and nothing else', () => {
   it('maps every rc ccd actually writes', () => {
@@ -11,6 +26,20 @@ describe('spawnVerdict — ccd\'s shipped rc table, and nothing else', () => {
     expect(spawnVerdict(3)).toBe('vanished');
     expect(spawnVerdict(4)).toBe('expired');
     expect(spawnVerdict(5)).toBe('blocked');
+    // `_accept_first_run_prompts`' pass-1 stand-down: a live pane under
+    // READER_MIN_COLS, whose startup gates ccd did not read at all. It used to
+    // fall through to `unrecognised` and paint `unknown` on the fleet row.
+    expect(spawnVerdict(6)).toBe('narrow');
+  });
+
+  it('names every rc ccd\'s own spawn table names — derived, so the next new rc cannot land on `unrecognised` unseen', () => {
+    const arms = ccdSpawnArms();
+    // 0, 2, 3, 4, 5 and 6 today. A scan that found fewer is broken, not green.
+    expect(arms.length, `ccd's rc arms: ${JSON.stringify(arms)}`).toBeGreaterThanOrEqual(6);
+    for (const rc of arms) {
+      expect(spawnVerdict(rc), `ccd names rc ${rc} in _spawn_settle, and spawnVerdict has no word for it`)
+        .not.toBe('unrecognised');
+    }
   });
 
   it('answers null for NOT RECORDED — never `ready`, never a warning', () => {
@@ -25,13 +54,14 @@ describe('spawnVerdict — ccd\'s shipped rc table, and nothing else', () => {
     // refusals, not one verdict, so giving it a word would be inventing a distinction
     // ccd does not make.
     expect(spawnVerdict(1)).toBe('unrecognised');
+    expect(spawnVerdict(7)).toBe('unrecognised');
     expect(spawnVerdict(99)).toBe('unrecognised');
     expect(spawnVerdict(-1)).toBe('unrecognised');
   });
 
   it('derives SPAWN_VERDICTS from the map, and the list is the whole union', () => {
     expect([...SPAWN_VERDICTS].sort()).toEqual(
-      ['blocked', 'expired', 'login', 'ready', 'unrecognised', 'vanished'],
+      ['blocked', 'expired', 'login', 'narrow', 'ready', 'unrecognised', 'vanished'],
     );
   });
 

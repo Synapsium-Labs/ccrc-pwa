@@ -81,23 +81,23 @@ describe('slug rules', () => {
   });
 
   it('generates a slug that is itself valid', () => {
-    const slug = sh(`_ws_slug_new demo`);
+    makeRepo('demo'); const slug = sh(`_ws_slug_new demo`);   // a repo: it asks git too, and no repo is `unmeasurable`
     expect(sh(`_ws_slug_valid '${slug}' && echo yes || echo no`)).toBe('yes');
   });
 
   it('never collides with an existing registry entry', () => {
     // Pin the generator to one candidate, then occupy it.
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');   // free in git: the REGISTRY refuses
     const slug = sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`);
     expect(slug).toBe('EXHAUSTED');
   });
 
   it('honours CCD_WS_SLUG when the name is free', () => {
-    expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');   // free in git too
   });
 
   it('rejects an invalid CCD_WS_SLUG rather than passing it through', () => {
-    expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');   // VALIDITY refuses
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
@@ -268,7 +268,7 @@ describe('a partially purged registry never frees the slug', () => {
   });
 
   it('keeps the generator off a residue slug as well as the explicit one', () => {
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');   // the residue refuses
     expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`)).toBe('EXHAUSTED');
   });
 
@@ -460,6 +460,41 @@ describe('ws-add', () => {
     fs.mkdirSync(path.join(wt, 'graphify-out'));
     // the gate the sweep uses, asked in the WORKTREE (common-dir sharing is the point):
     expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
+  });
+
+  // Measured live on the fleet: a workspace whose `node_modules` is a SYMLINK
+  // to a shared cache (an operator's way to skip a fresh `npm install` per
+  // workspace) left `ws-rm` permanently refusing with `dirty-tree`, because a
+  // directory-only gitignore pattern (`node_modules/`, trailing slash) does
+  // not match a symlink even when it points at a directory — git's own
+  // documented rule for that pattern shape. `ws-add`'s lines for this pair
+  // carry NO trailing slash for exactly that reason, so this is the case the
+  // trailing-slash graphify-out/ test above cannot cover.
+  it('ws-add excludes node_modules and cdk.out, including a node_modules SYMLINK', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    // EXACT LINES, not `toContain`: the whole mechanism of this fix is the
+    // ABSENCE of a trailing slash, and `'node_modules/'.includes('node_modules')`
+    // is true — a regression to the directory-only spelling would satisfy a
+    // substring assertion while reintroducing the bug in full.
+    const lines = excludeOf(main).split('\n');
+    for (const line of ['node_modules', 'cdk.out']) expect(lines).toContain(line);
+    for (const line of ['node_modules/', 'cdk.out/']) expect(lines).not.toContain(line);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+
+    // BOTH names get the symlink shape, not just node_modules. A real
+    // DIRECTORY is matched by the directory-only spelling too, so exercising
+    // `cdk.out` as a plain mkdir pins nothing about the slash — the behaviour
+    // would stay green on the regression the two assertions above now catch.
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    for (const name of ['node_modules', 'cdk.out']) {
+      fs.symlinkSync(cache, path.join(wt, name), 'dir');
+      expect(() => h.git(wt, 'check-ignore', '-q', name)).not.toThrow();
+    }
+    // The property that actually unblocks ws-rm: git considers the tree clean
+    // with the symlinks present, not merely that check-ignore names them.
+    expect(h.git(wt, 'status', '--porcelain')).toBe('');
   });
 
   // ...and the environment does not get to redirect that write. The test above
@@ -885,6 +920,29 @@ describe('ws-rm', () => {
 
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
+  });
+
+  // The end-to-end case the "excludes node_modules and cdk.out" test above
+  // (`ws-add`) stops just short of: not merely that git considers the tree
+  // clean, but that `ws-rm` itself now actually tears the workspace down
+  // instead of refusing `dirty-tree` — the exact live-fleet failure this fix
+  // closes. Contrast with "refuses an untracked-only worktree" just above,
+  // which still refuses: the excluded name is the only thing that changed.
+  //
+  // The symlink TARGET is asserted to survive, and that is not paranoia.
+  // Measured on this fleet, the live symlinks do not point at a scratch cache
+  // at all — they point into ANOTHER WORKSPACE's tree — so a teardown that
+  // followed one would delete a second, still-live workspace's node_modules.
+  it('removes a workspace whose node_modules is a symlink, and leaves the symlink target standing', () => {
+    const wt = addOne();
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    fs.writeFileSync(path.join(cache, 'keep.txt'), 'someone else needs this\n');
+    fs.symlinkSync(cache, path.join(wt, 'node_modules'), 'dir');
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(fs.readFileSync(path.join(cache, 'keep.txt'), 'utf8')).toBe('someone else needs this\n');
   });
 
   it('keeps an unmerged branch and its commit after removing a clean, ahead-of-base workspace', () => {
@@ -1461,6 +1519,8 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, the comment that states the pair rule, and — fix round 2, B-I3 — THREE more on the two NESTED-ID legs that measure the `.<id>.` anchoring in the direction only the dot-leading loop can answer: a hyphen-neighbour id holding its own family (this slug FREE, its residue empty; the neighbour TAKEN and named), and a DOTTED nested id (`demo-quiet-mesa.x-y`) whose family shares this id\'s exact `.<id>.` prefix' },
     { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
       what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
+    { file: 'ccd-ws-slug-git.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the named-slug refusal\'s GIT/DISK arm (ws-slug-collision) — three assertions that a branch, a path and a registered worktree each refuse under the same `slug in use:` prefix, the prefix kept so one grep finds every refusal; the registry arm\'s message is untouched' },
     { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
