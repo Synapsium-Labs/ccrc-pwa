@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=66aa30ad1ced9fb6e1f508765a33ff32fa8d9d08701692145cb4a29c1faab4a0
+# ccrc:generated 1 sha256=da843934dedf8fc768cec7fe34996a53f3b642ae92922337eab7f60e0e183761
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -20861,18 +20861,26 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # no-record path and the preference always applies — the precedence is
   # stated here so it stays true when the first record appears.
   #
-  # THE STATUS IS UNIFORM, 0 ON EVERY EXIT, and this note is here because the
-  # branch that brought the preference in said the opposite. Its own comment
-  # claimed the status distinguished "typed" from "not typed"; measured, the
-  # stamp below is guarded by its POSITION — the one exit reached after the
-  # keystrokes — and nothing anywhere reads the rc: the call site spells
-  # `… && _inject_spawn_effort "$tname"` at the end of a statement. A signal
-  # no caller handles differently is not a distinction worth keeping on a seam.
+  # THE STATUS SAYS ONE THING: rc 0 IFF THIS FUNCTION SENT KEYSTROKES. Every
+  # other exit — stood down on width, answered by the routing record, no level
+  # to type, already typed, a guard tripped — answers 1. The branch that brought
+  # the box preference in established that meaning and PINNED it; `main`, which
+  # had no reason to tell those apart, had flattened every exit to 0, and this
+  # merge keeps the distinction rather than the flattening because the repo's
+  # own rule is that two conditions must not collapse to one value on a seam.
+  # Extending it over `main`'s two NEW exits is what keeps it a rule instead of
+  # an exception: a stand-down and a record-answered session type nothing, so
+  # they answer 1 like every other silent path.
+  #
+  # NOTHING OUTSIDE THE TESTS READS IT, measured: the call site spells
+  # `… && _inject_spawn_effort "$tname"` mid-statement and its function ends
+  # `return "$prompt_rc"`, so the value never leaves. That is an argument for
+  # the rc being cheap to keep honest, not for flattening it.
   local t="$1" id="${1#cc-}" level pinned="" prev
-  _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
+  _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 1; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
-    return 0
+    return 1
   fi
   _conf_session_effort
   level="$CONF_EFFORT"
@@ -20883,7 +20891,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
       && echo "ccd: warn: CCRC_SESSION_EFFORT is set in $CCRC_CONF_FILE but was not used — $CONF_EFFORT_WHY" >&2
     level="$SPAWN_EFFORT"
   fi
-  [[ -n "$level" ]] || return 0
+  [[ -n "$level" ]] || return 1
   # ALREADY TYPED, AND STILL THE LEVEL THE FILE ASKS FOR. The comparison is
   # against the RECORDED level rather than mere presence, so an operator who
   # edits the key gets their new level typed once on the next pane creation
@@ -20894,20 +20902,20 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # never empty, unlike the optional second argument this replaces.
   if [[ -n "$pinned" ]]; then
     prev=$(_reg_get "$id" effortset)
-    [[ "${prev#* }" == "$level" ]] && return 0
+    [[ "${prev#* }" == "$level" ]] && return 1
   fi
   # NO id, for the reason argued at `_auto_compact_check`'s copy: the guard
   # seven lines above already measured this pane, so passing it here could only
   # relabel an unmeasurable pane as an armed auto-continue.
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
+    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 1
   fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
+    echo "ccd: input box not empty, skipped /effort $level" >&2; return 1
   fi
   sleep 1
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter

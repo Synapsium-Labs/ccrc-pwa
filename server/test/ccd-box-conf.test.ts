@@ -238,7 +238,7 @@ const seedSession = (): void => {
 /** The AFFINITY arm: a pane at a clean prompt, idle long enough, every gate
  *  open but the one under test. */
 const AFFINITY = `
-  tmux() { case "\${1:-}" in
+  tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -249,7 +249,7 @@ const AFFINITY = `
 /** The RESCUE arm: a real limit banner, classified by the REAL
  *  `_pane_hard_blocked` — the classifier IS the discriminator here. */
 const RESCUE = `
-  tmux() { case "\${1:-}" in
+  tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
            esac; return 0; };
   _swap_target() { echo claude-a; }; _avail() { return 0; };
@@ -389,7 +389,7 @@ describe('the deploy-window refusal — cmd_swap and CCD_SWAP_AUTO', () => {
   // at the next supervisor sweep.
   const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; }; '
     + 'launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }; '
-    + 'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
+    + 'tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls"; }; sleep() { :; };';
 
   const SWAP_UUID = '22222222-2222-4222-8222-222222222222';
 
@@ -549,12 +549,12 @@ describe('CCRC_SESSION_ACCOUNT — a birth-only preference', () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 const EFFORT_STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls";
     case "\${1:-}" in capture-pane) printf '%s\\n' "? for shortcuts\\n❯ " ;; esac; return 0; };
   _pane_box_draft() { printf '%s' ""; };`;
 
 const inject = (id = SID): string =>
-  h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${id}; echo "rc=$?"`);
+  h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo; echo "rc=$?"`);
 
 const typed = (): string[] => h.calls().filter((l) => l.includes('-l /effort'));
 
@@ -565,15 +565,15 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
     // the next time anything restarts the pane — a supervisor revival, a swap
     // landing, a restart after a refused swap.
     inject(); inject();
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort ultracode',
-                             'tmux send-keys -t cc-test -l /effort ultracode']);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort ultracode',
+                             'tmux send-keys -t cc-claude-demo -l /effort ultracode']);
     expect(h.reg(SID, 'effortset'), 'nothing is recorded without the key').toBeNull();
   });
 
   it('types the operator level ONCE and records it', () => {
     conf('CCRC_SESSION_EFFORT=high\n');
     expect(inject()).toContain('rc=0');
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort high']);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort high']);
     expect(h.reg(SID, 'effortset')).toMatch(/^\d+ high$/);
   });
 
@@ -592,8 +592,8 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
     inject();
     conf('CCRC_SESSION_EFFORT=xhigh\n');
     inject(); inject();
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort high',
-                             'tmux send-keys -t cc-test -l /effort xhigh']);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort high',
+                             'tmux send-keys -t cc-claude-demo -l /effort xhigh']);
     expect(h.reg(SID, 'effortset')).toMatch(/^\d+ xhigh$/);
   });
 
@@ -604,15 +604,15 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
     // keystrokes, would record a lie about precisely those.
     conf('CCRC_SESSION_EFFORT=high\n');
     const ARMED_PANE = `sleep() { :; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+      tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls";
         case "\${1:-}" in capture-pane) echo "Usage limit reached · continuing automatically at 11:50am" ;; esac; return 0; };
       _pane_box_draft() { printf '%s' ""; };`;
-    expect(h.sh(`${ARMED_PANE} _inject_spawn_effort cc-test ${SID}; echo "rc=$?"`))
+    expect(h.sh(`${ARMED_PANE} _inject_spawn_effort cc-claude-demo; echo "rc=$?"`))
       .toContain('rc=1');
     expect(typed()).toEqual([]);
     expect(h.reg(SID, 'effortset'), 'a skip recorded a level it never typed').toBeNull();
     expect(inject()).toContain('rc=0');
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort high']);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort high']);
   });
 
   it('refuses a value that is not a single bare word, and says why', () => {
@@ -622,10 +622,10 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
     // remainder as an argument nobody wrote. This is also what makes the
     // un-stripped trailing comment loud rather than silently wrong.
     conf('CCRC_SESSION_EFFORT=high  # my choice\n');
-    const out = h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${SID} 2>"$HOME/eff-stderr"; echo "rc=$?"`);
+    const out = h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo 2>"$HOME/eff-stderr"; echo "rc=$?"`);
     expect(out).toContain('rc=0');
     expect(typed(), 'the build default stands in').toEqual(
-      ['tmux send-keys -t cc-test -l /effort ultracode']);
+      ['tmux send-keys -t cc-claude-demo -l /effort ultracode']);
     const err = fs.readFileSync(path.join(h.home, 'eff-stderr'), 'utf8');
     expect(err).toContain('CCRC_SESSION_EFFORT');
     expect(err).toContain('not a single bare word');
@@ -633,7 +633,7 @@ describe('CCRC_SESSION_EFFORT — the level, and the end of the retyping', () =>
 
   it('a newline in the value can never reach the pane', () => {
     conf('CCRC_SESSION_EFFORT=high\\nrm -rf /\n');
-    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${SID} 2>/dev/null`);
+    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo 2>/dev/null`);
     expect(typed().join('\n')).not.toContain('rm -rf');
   });
 });
@@ -729,7 +729,7 @@ describe('an unreadable preferences file is SAID, not just survived', () => {
 
   it('the effort injection names the file', () => {
     unreadable('CCRC_SESSION_EFFORT=high\n');
-    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${SID} 2>"$HOME/eff-stderr"`);
+    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo 2>"$HOME/eff-stderr"`);
     expect(fs.readFileSync(path.join(h.home, 'eff-stderr'), 'utf8')).toContain('could not be read');
     expect(typed(), 'the build default stands in').toHaveLength(1);
   });
@@ -772,15 +772,15 @@ describe('the effort shape gate, isolated', () => {
     // names: `/effort high please` would send `please` as an argument nobody
     // wrote.
     conf('CCRC_SESSION_EFFORT=high please\n');
-    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${SID} 2>"$HOME/eff-stderr"`);
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort ultracode']);
+    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo 2>"$HOME/eff-stderr"`);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort ultracode']);
     expect(fs.readFileSync(path.join(h.home, 'eff-stderr'), 'utf8'))
       .toContain('not a single bare word');
   });
 
   it('a slash is refused too — the value reaches the pane literally', () => {
     conf('CCRC_SESSION_EFFORT=high/../x\n');
-    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test ${SID} 2>/dev/null`);
+    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo 2>/dev/null`);
     expect(typed().join('\n')).not.toContain('high/');
   });
 });
@@ -791,10 +791,10 @@ describe('the effort marker is written only where something was typed', () => {
     // before, so re-flattening this exit to `return 0` left the suite green.
     conf('CCRC_SESSION_EFFORT=high\n');
     const DRAFT_PANE = `sleep() { :; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+      tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac; echo "tmux $*" >> "$HOME/ccd-calls";
         case "\${1:-}" in capture-pane) printf '%s\\n' "? for shortcuts\\n❯ " ;; esac; return 0; };
       _pane_box_draft() { printf '%s' "half a sentence"; };`;
-    expect(h.sh(`${DRAFT_PANE} _inject_spawn_effort cc-test ${SID}; echo "rc=$?"`))
+    expect(h.sh(`${DRAFT_PANE} _inject_spawn_effort cc-claude-demo; echo "rc=$?"`))
       .toContain('rc=1');
     expect(typed()).toEqual([]);
     expect(h.reg(SID, 'effortset')).toBeNull();
@@ -805,8 +805,8 @@ describe('the effort marker is written only where something was typed', () => {
     // name no registry glob sweeps and no session owns. The conjunct that
     // prevents it has no other test: every other case here passes an id.
     conf('CCRC_SESSION_EFFORT=high\n');
-    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-test`);
-    expect(typed()).toEqual(['tmux send-keys -t cc-test -l /effort high']);
+    h.sh(`${EFFORT_STUBS} _inject_spawn_effort cc-claude-demo`);
+    expect(typed()).toEqual(['tmux send-keys -t cc-claude-demo -l /effort high']);
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', '.effortset')),
       'an id-less call wrote a marker nothing owns').toBe(false);
   });
@@ -857,7 +857,7 @@ describe('the effort marker dies with the conversation it described', () => {
   // whose `--session-id` one does, which is `ccd-spawn-split.test.ts`'s own
   // RESUME_DIES fixture.
   const RESUME_DIES = `sleep() { :; };
-    tmux() {
+    tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;
       echo "tmux $*" >> "$HOME/ccd-calls"
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
@@ -889,7 +889,7 @@ describe('the effort marker dies with the conversation it described', () => {
     // its level is whatever it was switched to. Re-typing there is the thing
     // this key exists to stop.
     const TMUX = `sleep() { :; };
-      tmux() {
+      tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;
         echo "tmux $*" >> "$HOME/ccd-calls"
         case "$1" in
           new-session)  : > "$HOME/pane-up" ;;
