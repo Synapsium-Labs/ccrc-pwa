@@ -391,6 +391,25 @@ describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open',
     expect(rollback, 'the second node is never sent once the sheet is gone').toHaveBeenCalledTimes(1);
     expect(onDone, 'the first node was requested for real — the caller still needs to re-poll').toHaveBeenCalledTimes(1);
   });
+
+  // review F5: a SINGLE-node move has nothing "mid-sequence" to stop, but its POST is written all the same, so a
+  // dismiss before the answer lands must re-poll exactly as the multi-node one does (answers.length === planned === 1).
+  it.each([
+    ['Install', 'applyUpdate', { scope: 'node', direction: 'update', nodeId: FLEET_ID, tag: 'v0.0.10' }, 'Update v0.0.10'],
+    ['Roll back', 'rollbackUpdate', { scope: 'node', direction: 'rollback', nodeId: FLEET_ID, to: 'v0.0.8' }, 'Roll back to v0.0.8'],
+  ] as const)(
+    'dismissing a single-node %s before its answer lands still re-polls — the request was written (review F5)', async (_name, method, intent, button) => {
+      const answer = Promise.withResolvers<MoveRequestAnswer | 'unreadable'>();
+      const call = vi.spyOn(api, method).mockReturnValueOnce(answer.promise);
+      const onDone = vi.fn();
+      render(<DismissHarness first={plan(intent)} onDone={onDone} />);
+      fireEvent.click(screen.getByRole('button', { name: button }));
+      expect(call).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId('sheet-overlay'));
+      await act(async () => { answer.resolve(ok([FLEET_ID])); await new Promise((r) => setTimeout(r, 0)); });
+      expect(onDone, 'answers.length === planned === 1, and something WAS sent').toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe('one sheet for every move (D-3389)', () => {
