@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  DEADLINE_DETAIL, DETACH_CAP, PROVENANCE_DETAIL_PREFIX, ROLLBACK_CAP, UNVERSIONED_DETAIL,
+  DEADLINE_DETAIL, DETACH_CAP, PROVENANCE_DETAIL_PREFIX, ROLLBACK_CAP, UNVERSIONED_DETAIL, UPDATE_DEADLINE_HARD_CAP_FACTOR,
   autoPermits, deadlineExpired, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, planDispatch,
   type DispatchNodeView, type DispatchPlan, type DispatchRow, type FleetGate,
 } from '../src/update/dispatch.js';
@@ -543,6 +543,21 @@ describe('deadlineExpired (spec §10: the later of updateStartedAt and reportedU
       expect(deadlineExpired(fleet({ updateState: s, updateStartedAt: 0 }), 10 * D, D), s).toBe(false);
     }
     expect(DEADLINE_DETAIL).toBe('deadline');
+  });
+
+  it('D-3407: a report dated far in the future cannot hold the lease past the hard cap — 4x deadline from updateStartedAt alone', () => {
+    expect(UPDATE_DEADLINE_HARD_CAP_FACTOR).toBe(4);
+    const started = 1_000;
+    const futureReport = started + 1_000 * D;   // the node's own clock, far ahead — the later-of rule alone would never expire this row
+    const row = busy({ updateStartedAt: started, reportedUpdatedAt: futureReport });
+    expect(deadlineExpired(row, started + (UPDATE_DEADLINE_HARD_CAP_FACTOR - 1) * D, D)).toBe(false);
+    expect(deadlineExpired(row, started + UPDATE_DEADLINE_HARD_CAP_FACTOR * D, D)).toBe(true);
+  });
+
+  it('an ordinary row (no future report) still expires by the later-of rule alone, well below the hard cap', () => {
+    // Unchanged behaviour: every case above this one stays green because the hard cap is far above D+1.
+    expect(deadlineExpired(busy({ updateStartedAt: 1_000 }), 1_000 + D + 1, D)).toBe(true);
+    expect((UPDATE_DEADLINE_HARD_CAP_FACTOR - 1) * D).toBeGreaterThan(D + 1);
   });
 });
 

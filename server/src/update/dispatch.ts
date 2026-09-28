@@ -31,6 +31,13 @@ export const UNVERSIONED_DETAIL = 'unversioned box — any eligible release is n
 export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
 /** Spec §10's `failed: deadline` — the detail `runDispatch` (Task 5) releases an expired lease with. */
 export const DEADLINE_DETAIL = 'deadline';
+/** D-3407 — `reportedUpdatedAt` is the NODE's clock (bounded only by UNIX_SECONDS_MAX) and `dispatchNode` never
+ *  resets it, so a node whose clock runs ahead, or a same-user writer, can date a report far enough in the
+ *  future that the later-of rule in `deadlineExpired` never fires, holding the fleet's one lease forever with no
+ *  operator door (`ackNode` refuses a busy row). A busy row is expired at this multiple of `deadlineMs` measured
+ *  from `updateStartedAt` ALONE once it is reached, whatever the report says; the ordinary later-of rule still
+ *  governs below the cap. */
+export const UPDATE_DEADLINE_HARD_CAP_FACTOR = 4;
 
 /** The columns this module reads. `NodeRow` (coord/store.ts) satisfies it structurally — the consumer declares
  *  the port (L2), so this file never imports the store. `highestVersion` is `~/.ccrc/floor` (NULL = absent =
@@ -216,10 +223,12 @@ export function dispatchRefusalDetail(refusal: DispatchRefusal, view: DispatchNo
 }
 
 /** Busy AND (neither timestamp set — a lease nothing ever dated, bounded all the same — OR now − max(
- *  updateStartedAt, reportedUpdatedAt) > deadlineMs). Both columns are epoch ms (W2's validator converted the
- *  report's seconds once). A settled row never expires. */
+ *  updateStartedAt, reportedUpdatedAt) > deadlineMs) OR — D-3407, a hard cap `reportedUpdatedAt` cannot push out —
+ *  now − updateStartedAt ≥ UPDATE_DEADLINE_HARD_CAP_FACTOR × deadlineMs. Both columns are epoch ms (W2's
+ *  validator converted the report's seconds once). A settled row never expires. */
 export function deadlineExpired(row: Pick<DispatchRow, 'updateState' | 'updateStartedAt' | 'reportedUpdatedAt'>, now: number, deadlineMs: number): boolean {
   if (isSettled(row.updateState)) return false;
+  if (row.updateStartedAt !== null && now - row.updateStartedAt >= UPDATE_DEADLINE_HARD_CAP_FACTOR * deadlineMs) return true;
   const marks = [row.updateStartedAt, row.reportedUpdatedAt].filter((t): t is number => t !== null);
   if (marks.length === 0) return true;
   return now - Math.max(...marks) > deadlineMs;
