@@ -485,6 +485,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
   - Carried to wave 6's Task 8A (`14f77194`): the five citations (repaired in its Task 9), F5–F10, the refuted probe cap,
     and the worker's own carries.
   - After round 2's scoped review, #181 merges; no round 3.
+- **2026-09-28 15:35 UTC — operator ruling: macOS CI legs gate nothing** ("ignore the macos runs for now, they are
+  being fixed, treat as flaky"). No merge, review, wave-done or rollout waits on `test-macos`/`probe-macos`.
+  - One mechanism still reads them: #183's `release-stable.yml` promotes only on a green `full-suite` verdict, and
+    that verdict needs every `test-macos` shard. If macOS is still red at promotion time, the stable push is refused
+    by CI itself. That is the operator's to decide then; it is not a reason to wait now.
+- **2026-09-28 15:35 UTC — wave 4 round 2 is code-complete at `f546715d6` (unpushed); the gate was held for box memory.**
+  - Measured: load 64, 4 GB available of 30, root disk 98% full.
+  - Ruled: push, and let CI's Linux legs arbitrate. Under `CCRC_SELECTION: shadow`, PR CI still runs every server test,
+    plus the full agent, pwa and build legs, and that costs the box nothing. Locally, the worker runs only the
+    touched-file suites and the three main-compare guards.
+  - The worker restored `session-hook.test.ts` to `main`'s pin of 5, because round 2's lines put the census back
+    there. That supersedes round 2's "accept 4".
 
 ## Carried constraints
 
