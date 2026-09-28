@@ -8546,6 +8546,17 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(existsSync(join(home, 'kept-spine-argv'))).toBe(false);
   });
 
+  it('a flip that cannot be made falls through with its reporting window OPEN: the re-install\'s refusal closes update.json with a terminal `failed`, not the `installing` the flip path wrote (R-B)', () => {
+    const { home } = flipBox('ccrc-rollback-flip-rename-report-');
+    mkdirSync(join(home, 'ccrc.new'));   // `_plat_ln_swap` refuses to clear it: the flip cannot be made
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toContain('— rolling back by re-install instead');
+    expect(phasesOf(home)[0]).toBe('installing');
+    expect(lastReport(home)['phase'], 'the report was left non-terminal: a watchdog would read an updater that died').toBe('failed');
+  });
+
   it('a FULL rollback by flip: the kept version\'s REAL spine re-places ~/.local/bin/ccd, the stamp and the record are the kept version\'s, then the sweep — and not one release URL is asked (Review Focus 1)', () => {
     const home = onKeptV1('ccrc-rollback-flip-full-');
     const v1 = join(home, 'ccrc-versions', 'v1.0.0');
@@ -8741,6 +8752,81 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
       expect(treeDigest(other), `${shape}: something was written through the link`).toEqual(otherBefore);
       expect(dotEntries(home), shape).toEqual([]);
     }
+  });
+
+  // D-3459 (controller ruling R-A): `_upd_legacy_target` points ~/ccrc at the
+  // older spine's own directory BEFORE that spine runs. A spine that then dies
+  // WITHOUT replacing anything (cmd_update's moved=0 arm) must not leave the
+  // link there: exit 1 says "nothing was replaced", and the next restart would
+  // run the voided older version, or the copy, under the unchanged stamp.
+  describe('an older spine that dies before replacing anything gives ~/ccrc back (D-3459)', () => {
+    const DIED = /^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at /m;
+    /** A linked v2.0.0 box asked to move to an older v1.0.0 whose spine (the
+     *  STUB shim, exit 1, no directory of its own) dies; `kept` also plants a
+     *  kept, complete v1.0.0 beside it. Returns the box, v2.0.0's root, and
+     *  v2.0.0's digest before the run. */
+    const dyingBox = (prefix: string, kept: boolean): { home: string; cur: string; before: Record<string, string> } => {
+      const home = freshUpdateBox(prefix);
+      const cur = plantW6Box(home, 'v2.0.0', V2_SHA);
+      if (kept) installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+      packRelease(home, stubTree(home, { version: 'v1.0.0', installExit: 1 }), { tag: 'v1.0.0', latest: false });
+      return { home, cur, before: treeDigest(cur) };
+    };
+
+    it.each([['a copy of the running version', false], ['a kept directory', true]] as const)('a MARKED death before _inst_tree (%s): exit 1, ~/ccrc pointed back at the version it named before, that version byte-unchanged, and the sentence says so', (_what, kept) => {
+      const { home, cur, before } = dyingBox('ccrc-update-legacy-back-marked-', kept);
+      writeFileSync(join(home, 'fixture-install-step'), '_inst_node_id\n');
+      const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toContain("update: tree: v1.0.0's spine predates versioned installs and writes through $HOME/ccrc");
+      expect(r.stderr).toMatch(DIED);
+      expect(r.stderr).toContain('spine died at _inst_node_id, before _inst_tree: nothing was replaced;');
+      expect(r.stderr).toContain('$HOME/ccrc points back at $HOME/ccrc-versions/v2.0.0');
+      expect(linkOf(home), 'the legacy flip was left in place').toBe(cur);
+      expect(treeDigest(cur), 'the version this run replaces was written').toEqual(before);
+      // The directory named for the older tag stays where it was put.
+      expect(existsSync(join(home, 'ccrc-versions', 'v1.0.0'))).toBe(true);
+      expect(existsSync(join(home, 'ccrc-versions', 'v1.0.0', '.ccrc-installed')), 'the older directory claims completeness').toBe(false);
+      expect(lastReport(home)['phase']).toBe('failed');
+    });
+
+    it.each([['a copy of the running version', false], ['a kept directory', true]] as const)('an UNMARKED death (a spine older than W4 writes no step; its stamp did not move) reads the same (%s)', (_what, kept) => {
+      const { home, cur, before } = dyingBox('ccrc-update-legacy-back-unmarked-', kept);
+      const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(existsSync(join(home, '.ccrc', 'install-step')), 'the fixture wrote a marker — this case is about a spine that writes none').toBe(false);
+      expect(r.stderr).toMatch(DIED);
+      expect(r.stderr).toContain('spine died at an unrecorded step (no step marker; a spine older than W4 writes none)');
+      expect(r.stderr).toContain('$HOME/ccrc points back at $HOME/ccrc-versions/v2.0.0');
+      expect(linkOf(home), 'the legacy flip was left in place').toBe(cur);
+      expect(treeDigest(cur)).toEqual(before);
+      expect(lastReport(home)['phase']).toBe('failed');
+    });
+
+    it('a flip back that fails is named, never silent: ~/ccrc still points at the older tag\'s directory, and the sentence says flipping it back to v2.0.0 failed', () => {
+      const { home } = dyingBox('ccrc-update-legacy-back-fails-', false);
+      writeFileSync(join(home, 'fixture-install-step'), '_inst_node_id\n');
+      // The spine leaves a real directory at <link>.new, which `_plat_ln_swap`
+      // refuses to clear (Task 1): the legacy flip itself (before the spine)
+      // succeeded, the flip back cannot.
+      writeFileSync(join(home, 'fixture-on-install'), 'mkdir "$HOME/ccrc.new"\n');
+      const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).toMatch(DIED);
+      expect(r.stderr).toContain('$HOME/ccrc still points at $HOME/ccrc-versions/v1.0.0, and flipping it back to v2.0.0 failed');
+      expect(r.stderr).not.toContain('points back at');
+      expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    });
+
+    it('the moved=1 path is unchanged: a spine that dies AT or AFTER _inst_tree is gated, not flipped back (the control)', () => {
+      const { home } = dyingBox('ccrc-update-legacy-back-moved-', false);
+      writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');
+      const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).not.toContain('points back at');
+      expect(r.stderr).toContain('spine died at _inst_skills');
+      expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    });
   });
 });
 

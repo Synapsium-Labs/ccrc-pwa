@@ -1404,6 +1404,9 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
+      // W6 Task 4: `_ver_flip_back` restores a kept version's stamp over the
+      // box's, through a local — `_inst_stamp`'s `dest=` idiom above.
+      'local stamp="$BOX_STAMP_FILE"',
     ]);
     // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
     // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
@@ -1535,6 +1538,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // review fix round 1 I4) so an absent record prints no stray bash
       // error.
       '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
+      // W6 Task 4, `cmd_rollback`: a box already on the kept tag has nothing
+      // to do only when its record IS the kept version's (D-3264's rerun).
+      'if [ "$VER_CURRENT" = "$to" ] && [ "$now" = "$to" ] && cmp -s -- "$BOX_INSTALLED_FILE" "$BOX_VERSIONS_ROOT/$to/$VER_RECORD_COPY"; then',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
       // above). Measured (not the brief's claimed anchor, which put this
@@ -1561,6 +1567,12 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
+      // W6 Task 4, `_ver_flip_back`: the record, cleared before the kept
+      // version's own spine so its presence afterwards means that spine wrote it.
+      'local rec="$BOX_INSTALLED_FILE"',
+      // W6 Task 4, `_upd_restore_arm1`: a failed arm 1 clears the record, so
+      // arm 2's child cannot read the box as already on the previous tag.
+      'if ! rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);
