@@ -8757,3 +8757,47 @@ export function inFlightReport(text: string): InFlightReport | null {
       ? started : null,
   };
 }
+
+/* ---------------------------------------------------------------------------
+ * THE DISPATCHER'S VOCABULARY AND ORDER (design 2026-09-20 §9/§10; programme
+ * wave 5, Task 4). Still inside the end-of-file update block (D-3188, ruling
+ * R13): appended, so no line README or the session-hook audit cites moves.
+ * `server/src/update/dispatch.ts` (L1) decides with these; the update routes
+ * answer with the words; the PWA's move planner sorts with the comparator —
+ * one spelling of each, which `single-definition.test.ts` holds.
+ * ------------------------------------------------------------------------- */
+
+/** Why the dispatcher did not move a node it considered (spec §9/§10). EVERY word is NON-halting: it is noted
+ *  in `updateDetail` on an `idle` row (D-3375) and a standing request stays standing
+ *  (decision 7). The routes answer every word but `no-update-gate` (auto only — a route writes a request, never
+ *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
+export const DISPATCH_REFUSALS = [
+  'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+] as const;
+export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
+/** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
+export function isDispatchRefusal(v: unknown): v is DispatchRefusal {
+  return typeof v === 'string' && (DISPATCH_REFUSALS as readonly string[]).includes(v);
+}
+
+/** THE dispatch order's one spelling (spec §10's standing order: the server reads what the fleet host's hook
+ *  writes, and the agent caches `ccd caps` at boot). `fleet` 0; `server` and `both` 1 — the box the server
+ *  process runs on; `null`, a role token this build cannot name, 2 — last, so an unnamed row never jumps the
+ *  fleet. */
+export function dispatchRank(role: NodeRole | null): 0 | 1 | 2 {
+  if (role === 'fleet') return 0;
+  if (role === 'server' || role === 'both') return 1;
+  return 2;
+}
+
+/** `dispatchRank`, then `label`, then `nodeId`, the last two by UTF-16 code unit — never `localeCompare`, whose
+ *  answer follows the box's locale. The server's `planDispatch` and the PWA's `planMove` both sort with this, so
+ *  a confirm sheet names the nodes in the order the dispatcher will move them. */
+export function compareDispatchOrder(a: { role: NodeRole | null; label: string; nodeId: string }, b: { role: NodeRole | null; label: string; nodeId: string }): number {
+  const rank = dispatchRank(a.role) - dispatchRank(b.role);
+  if (rank !== 0) return rank;
+  if (a.label !== b.label) return a.label < b.label ? -1 : 1;
+  if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+  return 0;
+}

@@ -3512,7 +3512,7 @@ describe('the update ring — nothing under server/src/update holds the handle (
    *  routes.ts). A FLOOR, not a count: a new file raises it rather than
    *  breaking it, and a listed file that is gone — a moved or renamed
    *  directory — reds instead of disarming the scan. */
-  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts', 'notify.ts'];
+  const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts', 'notify.ts', 'dispatch.ts'];
   // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
   // too — the coord ring's `from\s+'node:sqlite'` sees neither.
   const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;
@@ -3791,5 +3791,60 @@ describe('the update op — its refusal words and its launcher are declared once
     const QUOTED = /['"`][^'"`\n]*\.local\/bin\/ccrc(?:['"`/]|$)/m;
     const holders = ALL.filter((f) => QUOTED.test(stripCommentLines(readFileSync(f, 'utf8')))).map(rel);
     expect(holders).toEqual([]);
+  });
+});
+
+// ── Programme wave 5 (design 2026-09-20 §9/§10): the dispatcher's words and order ──
+// APPENDED after the file's last line: `session-hook.test.ts`'s citation audit
+// cites this file by line, so nothing above may move (R13). No import is
+// added either — the eleven words are stated here as a LITERAL, on purpose (the
+// opposite of W2's `SQL_VOCABS`, which imports its arrays): `update-dispatch.test.ts` holds L0's array equal to
+// this same list, and the fingerprint below must find shared/api.ts's array,
+// so a word added on one side alone reds one of the two.
+//
+// THE FINGERPRINT is W2's SQL-tuple shape widened to brackets: two or more
+// quoted members and nothing else, in any order, parenthesised OR bracketed —
+// a copy from memory is as likely a `['halted', 'not-newer']` filter as an SQL
+// `IN (…)`. A Record keyed by the type (dispatch.ts's sentences, the PWA's
+// UPDATE_ERROR_TEXT) is braced, held exhaustive by the compiler, and is not a
+// copy. KNOWN WIDTH: a list spelled across a spread or a template is not seen.
+describe('the dispatcher refusal words and the dispatch order are declared once, in L0 (programme wave 5)', () => {
+  const WORDS = [
+    'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
+    'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+  ];
+  const alt = `(?:${WORDS.map((w) => w.replace(/-/g, '\\-')).join('|')})`;
+  const item = `\\s*['"]${alt}['"]\\s*`;
+  const LIST = new RegExp(`\\(${item}(?:,${item})+,?\\s*\\)|\\[${item}(?:,${item})+,?\\s*\\]`);
+  const DEF = /^\s*(?:export\s+)?(?:declare\s+)?(?:type\s+DispatchRefusal\b\s*(?:<[^>\n]*>)?\s*=|interface\s+DispatchRefusal\b)/m;
+  const VALUE = /^\s*(?:export\s+)?(?:const|let|var)\s+DISPATCH_REFUSALS\b/m;
+  const FNS = ['isDispatchRefusal', 'dispatchRank', 'compareDispatchOrder'] as const;
+
+  it('CONTROL: the list fingerprint sees a copy in any order, either bracket, and nothing that is not one', () => {
+    expect(LIST.test("if (['halted', 'not-newer'].includes(w))")).toBe(true);
+    expect(LIST.test("WHERE why IN ( 'waiting-for-fleet', \"halted\" )")).toBe(true);
+    expect(LIST.test("[\n  'no-detach-cap',\n  'no-rollback-cap',\n]")).toBe(true);
+    expect(LIST.test("['halted']"), 'one word states no set').toBe(false);
+    expect(LIST.test("['halted', 'busy']"), 'a non-member breaks the list').toBe(false);
+    expect(LIST.test("{ 'not-newer': 'a', halted: 'b' }"), 'a keyed record is not a list').toBe(false);
+    expect(LIST.test("moveRefusal(view, 'halted')"), 'an argument list with a non-literal').toBe(false);
+  });
+
+  it('declares DispatchRefusal once, in shared/api.ts', () => {
+    expect(DEF.test("import {\n  type DispatchRefusal,\n} from '../../../shared/api.js';"), 'import specifier').toBe(false);
+    expect(DEF.test("type DispatchRefusal = 'halted';"), 'un-exported local declaration').toBe(true);
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+  });
+
+  it('defines the array, its guard, the rank and the comparator once, in shared/api.ts', () => {
+    expect(ALL.filter((f) => VALUE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    for (const name of FNS) {
+      const FN = new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+      expect(ALL.filter((f) => FN.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('no source across the four roots spells a second list of the words — shared/api.ts holds the one', () => {
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
