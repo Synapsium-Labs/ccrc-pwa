@@ -108,6 +108,7 @@ import json
 import gzip
 import zlib
 import functools
+import socketserver
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1321,9 +1322,27 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _relay
 
 
+class _Server(ThreadingHTTPServer):
+    """`ThreadingHTTPServer` minus the reverse lookup of its own bind address.
+
+    `HTTPServer.server_bind` fills `server_name` with `socket.getfqdn(host)`,
+    which nothing here reads. On the macOS CI runner that lookup of 127.0.0.1
+    took 35.0 s in every new process (measured 2026-09-28, diagnostic run
+    36410278756), so each shim start waited 35 s before it listened. This bind
+    is `TCPServer`'s own, then the two attributes `HTTPServer` would have set,
+    with the address the socket was given as the name.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 if __name__ == "__main__":
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Handler)
+        server = _Server(("127.0.0.1", PROXY_PORT), Handler)
     except OSError as e:
         # Unwrapped, a bind failure (most commonly EADDRINUSE) is a bare
         # socketserver traceback with no ccrc-shaped message (fix round 1,
