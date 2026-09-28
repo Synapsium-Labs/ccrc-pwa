@@ -7,9 +7,9 @@
 // HOME.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { UPDATE_SPAWN_TIMEOUT_MS, type ResOk } from '../../shared/agent-protocol.js';
+import { UPDATE_LOCK_HELD_PREFIX, UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, inFlightBusyDetail, isUpdateLockHeldLine, type ResOk } from '../../shared/agent-protocol.js';
 import type { NodeRole, RequestKind } from '../../shared/api.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -21,13 +21,15 @@ import { AgentOpError } from '../src/remote/client.js';
 import type { Deps } from '../src/server.js';
 import {
   LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL, SPAWN_TIMEOUT_MESSAGE,
-  dispatchViewsFor, inFlightSentence, localUpdateSpawnFor, runDispatch,
+  dispatchViewsFor, localUpdateSpawnFor, runDispatch,
   type ConvergeDeps, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
 } from '../src/update/converge.js';
 import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL } from '../src/update/dispatch.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepPlanFor, type SweepPlan } from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
+import { CCRC_SRC, TERMINAL_REPORT, deadPid, holdLock, lockFree, plantRealBox } from './updateRealBox.js';
+import { itLinux } from './platformFixtures.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -38,6 +40,11 @@ const SERVER_ID = '05050505-0505-4505-8505-050505050505';
 const ACCEPTED: ResOk = { t: 'res', id: 1, ok: true, accepted: true };
 const LAUNCHER_ARGV = ['update', '--to', 'v0.0.10', '--detach', '--from', 'pwa'];
 const IN_FLIGHT = 'update.json says installing (target v0.0.10, started 1790000000)';
+/** D-3411: what the busy sentence for THIS process's in-flight report reads, spelled out (the builder is L0's). */
+const BUSY_TAIL = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
+const liveBusy = `update.json says installing (target v0.0.10, started 1790000000, writer pid ${process.pid})${BUSY_TAIL}`;
+const reportOf = (pid: unknown): string =>
+  `${JSON.stringify({ target: 'v0.0.10', phase: 'installing', startedAt: 1790000000, updatedAt: 1790000005, detail: null, from: 'cli', pid })}\n`;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -270,13 +277,31 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'failed', updateDetail: 'agent refused the op: bad-tag' });
   });
 
-  it('a server-role spawn that exits 1 on the lock → failed, carrying the parent\'s FIRST stderr line (Review Focus 3)', async () => {
+  it('a server-role spawn that exits 1 on the LOCK → busy: released idle, the request standing, carrying the parent\'s FIRST stderr line, and the next run asks again (D-3411, review F1)', async () => {
     const lock = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
     const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: `${lock}\nsecond line` }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
-    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'failed', detail: `spawn-failed — ${lock}` });
+    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${lock}` });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', updateDetail: `busy — ${lock}`, requestedTag: 'v0.0.10' });
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    // Not halting: the fleet gate reads no halted row, and the next run spawns again.
+    const r2 = ran(await runDispatch(h.deps, T0 + 61_000));
+    expect(r2.plan.gate.haltedBy).toEqual([]);
+    expect(h.spawned).toHaveLength(2);
+  });
+
+  it.each([
+    ['flock absent (`_upd_flock_die`)', "ccrc: flock (util-linux) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed"],
+    ["an unmeasured lock (the probe's last arm)", 'ccrc: update: ~/.ccrc/update.lock could not be measured (probe rc 3) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed'],
+    ['a lock sentence that is NOT the first line', 'ccrc: something else\nccrc: update: another update holds ~/.ccrc/update.lock (pid 7)'],
+  ])('every OTHER refusal keeps its halting spawn-failed — %s (D-3411)', async (_what, stderr) => {
+    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr }) });
+    seedServer(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
+    expect(h.store.node(SERVER_ID)?.updateState).toBe('failed');
+    expect(h.store.node(SERVER_ID)?.updateDetail).toMatch(/^spawn-failed — /);
   });
 
   it('a server-role spawn that exits non-zero with NO stderr names its exit, not the generic "no message" a missing launcher would share with a silent failure (Task 5 review finding 3)', async () => {
@@ -451,17 +476,43 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     expect(calls).toEqual([]);
   });
 
-  it('an in-flight update.json on the server box answers busy and spawns nothing (D-3384)', async () => {
+  it('an in-flight update.json whose writer is ALIVE answers busy, names the writer and the way out, and spawns nothing (D-3384, D-3411)', async () => {
     const h = harness();
     mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
-    writeFileSync(path.join(h.home, '.ccrc', 'update.json'),
-      '{"target":"v0.0.10","phase":"installing","startedAt":1790000000,"updatedAt":1790000005,"detail":null,"from":"cli","pid":7}\n');
+    writeFileSync(path.join(h.home, '.ccrc', 'update.json'), reportOf(process.pid));
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
-    expect(inFlightSentence({ phase: 'installing', target: 'v0.0.10', startedAtS: 1790000000 })).toBe(IN_FLIGHT);
-    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${IN_FLIGHT}` });
+    expect(inFlightBusyDetail({ phase: 'installing', target: 'v0.0.10', startedAtS: 1790000000, pid: process.pid })).toBe(liveBusy);
+    expect(liveBusy.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${liveBusy}` });
     expect(h.spawned).toEqual([]);
-    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.10' });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: 'v0.0.10', updateDetail: `busy — ${liveBusy}` });
+  });
+
+  it('a report whose pid is absent or unreadable keeps busy: that writer is unmeasurable, not dead (D-3411)', async () => {
+    for (const pid of [undefined, 0, -1, 1.5, '4242', null]) {
+      const h = harness();
+      mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
+      writeFileSync(path.join(h.home, '.ccrc', 'update.json'), reportOf(pid));
+      seedServer(h);
+      const r = ran(await runDispatch(h.deps, T0 + 1000));
+      expect(r.outcome, String(pid)).toMatchObject({ result: 'released', to: 'idle' });
+      expect(h.store.node(SERVER_ID)?.updateDetail, String(pid)).toContain('writer pid unknown');
+      expect(h.spawned, String(pid)).toEqual([]);
+    }
+  });
+
+  it('a leftover in-flight report whose writer is DEAD is spawned over: the parent\'s own lock probe decides (D-3411, review F2)', async () => {
+    const dead = await deadPid();
+    for (const phase of ['queued', 'installing', 'restoring']) {
+      const h = harness();
+      mkdirSync(path.join(h.home, '.ccrc'), { recursive: true });
+      writeFileSync(path.join(h.home, '.ccrc', 'update.json'), reportOf(dead).replace('installing', phase));
+      seedServer(h);
+      const r = ran(await runDispatch(h.deps, T0 + 1000));
+      expect(r.outcome, phase).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+      expect(h.spawned, phase).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    }
   });
 
   it('a FIFO planted at the server\'s update.json never blocks the run: W2\'s readNodeFile refuses it unopened, and the node\'s own _upd_lock_probe decides (the agent\'s O_NONBLOCK rule, server side)', async () => {
@@ -544,6 +595,66 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     const r3 = ran(await runDispatch(h.deps, T0 + 3000));
     expect(h.spawned).toHaveLength(2);
     expect(r3.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+  });
+});
+
+describe('runDispatch — the server-role spawn against the REAL ccrc: a held lock is busy (D-3411, review F1)', () => {
+  // The REAL `ccd/ccrc` behind the REAL launcher in a fixture HOME (`updateRealBox.ts`, whose header states the
+  // containment: an env built from scratch, a poisoned recording systemd-run, a stub curl), spawned by the REAL
+  // bounded runner, with a real `flock` holding `update.lock`.
+  const holders: { pid?: number }[] = [];
+  afterEach(() => {
+    for (const p of holders.splice(0)) {
+      if (p.pid !== undefined) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* already gone */ } }
+    }
+  });
+  const kinds: { kind: RequestKind; tag: string; argv: string[] }[] = [
+    { kind: 'update', tag: 'v0.0.10', argv: LAUNCHER_ARGV },
+    { kind: 'rollback', tag: 'v0.0.8', argv: ['rollback', '--to', 'v0.0.8', '--detach', '--from', 'pwa'] },
+  ];
+
+  for (const { kind, tag, argv } of kinds) {
+    itLinux(`${kind}: the lock held by a real flock answers busy with the lock line, update.json is byte-identical, and nothing reached systemd-run`, async () => {
+      const h = harness();
+      const env = plantRealBox(h.home);
+      h.deps.runLocal = localUpdateSpawnFor(h.home, { env });
+      expect(h.store.upsertNodeMeasurement(serverMeas()).ok).toBe(true);
+      expect(h.store.requestNode(SERVER_ID, tag, kind, T0).ok).toBe(true);
+      holders.push(holdLock(h.home));
+      const r = ran(await runDispatch(h.deps, T0 + 1000));
+      expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'idle' });
+      const detail = (r.outcome as { detail: string }).detail;
+      expect(detail).toMatch(/^busy — ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\)$/);
+      expect(isUpdateLockHeldLine(detail.slice('busy — '.length))).toBe(true);
+      expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: tag, requestedKind: kind });
+      expect(readFileSync(path.join(h.home, '.ccrc', 'update.json'), 'utf8')).toBe(TERMINAL_REPORT);
+      expect(existsSync(path.join(h.home, 'systemd-run-argv')), 'a lock the harness failed to hold reached systemd-run').toBe(false);
+      expect(existsSync(path.join(h.home, 'systemctl-argv')), 'the script reached systemctl').toBe(false);
+      if (kind === 'rollback') expect(readFileSync(path.join(h.home, 'curl-argv'), 'utf8')).toContain(`/download/${tag}/SHA256SUMS`);
+    });
+
+    itLinux(`${kind} (control): with the lock FREE the script goes on to the poisoned systemd-run, so the absence above is a measurement`, async () => {
+      const h = harness();
+      const env = plantRealBox(h.home);
+      h.deps.runLocal = localUpdateSpawnFor(h.home, { env });
+      expect(h.store.upsertNodeMeasurement(serverMeas()).ok).toBe(true);
+      expect(h.store.requestNode(SERVER_ID, tag, kind, T0).ok).toBe(true);
+      expect(lockFree(h.home)).toBe(true);
+      const r = ran(await runDispatch(h.deps, T0 + 1000));
+      // The poisoned systemd-run answers 97: the parent dies after its `queued` write, with its own sentence.
+      expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
+      expect((r.outcome as { detail: string }).detail).toMatch(/could not start the detached run \(systemd-run exited 97\)/);
+      expect(readFileSync(path.join(h.home, 'systemd-run-argv'), 'utf8')).toContain(`ccrc-detach ${argv[0]} --to ${tag} --from pwa`);
+    });
+  }
+
+  it('the declared prefix is the sentence `_upd_busy_die` prints — read from the script, not restated', () => {
+    const src = readFileSync(CCRC_SRC, 'utf8');
+    const die = /^_upd_busy_die\(\) \{[^\n]*\}$/m.exec(src);
+    expect(die, '_upd_busy_die not found in ccd/ccrc').not.toBeNull();
+    // `_ccrc_die` prefixes `$PROG: ` (PROG is `ccrc`), and the holder rides in parentheses after the prefix.
+    expect(die![0]).toContain(`_ccrc_die "${UPDATE_LOCK_HELD_PREFIX.slice('ccrc: '.length)} (`);
+    expect(/^PROG=ccrc$/m.test(src), "`_ccrc_die`'s prefix is PROG").toBe(true);
   });
 });
 

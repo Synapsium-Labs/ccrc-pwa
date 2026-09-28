@@ -31,8 +31,9 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
-  type UpdateSpawnResult,
+  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
+  updateLauncherPath, updateSpawnArgv, updateWriterAlive,
+  type KillProbeOutcome, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
@@ -613,14 +614,13 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       }
       const home = ctx.cfg.home;
       const inFlight = readInFlightReport(home);
-      if (inFlight !== null) {
-        // D-3391: the agent bounds its own details. `target` is only ever
-        // `isReleaseTag`-shaped, which has no length cap, so an operator (or
-        // a hostile report) can still make this sentence long — cut it to the
-        // op's one detail bound, same as `firstStderrLine`'s.
-        send(ws, failUpdate(req.id, 'busy',
-          `update.json says ${inFlight.phase} (target ${inFlight.target ?? 'none'}, started ${inFlight.startedAtS ?? 'unknown'})`
-            .slice(0, UPDATE_OP_DETAIL_MAX)));
+      // D-3411: an in-flight report answers busy only while its WRITER lives. A dead writer's report is a
+      // leftover (an updater killed mid-run), and the op spawns: the parent's own lock probe then decides.
+      // An absent or unreadable pid keeps busy — that writer is unmeasurable, which is not dead. The
+      // sentence is `inFlightBusyDetail`'s, the one both roles send, and it stays within the op's detail bound
+      // (D-3391) with its advice intact.
+      if (inFlight !== null && writerMayLive(inFlight.pid)) {
+        send(ws, failUpdate(req.id, 'busy', inFlightBusyDetail(inFlight)));
         return;
       }
       const file = updateLauncherPath(home);
@@ -642,7 +642,11 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
         return;
       }
       if (spawned.code !== 0) {
-        send(ws, failUpdate(req.id, 'spawn-failed', firstStderrLine(spawned.stderr)));
+        const line = firstStderrLine(spawned.stderr);
+        // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing on
+        // the box changed. That is a busy node, not a faulted one: `busy` releases `idle` with the request
+        // standing. `_upd_flock_die` and the probe's unmeasured arm carry other sentences and stay spawn-failed.
+        send(ws, failUpdate(req.id, isUpdateLockHeldLine(line) ? 'busy' : 'spawn-failed', line));
         return;
       }
       send(ws, ok(req.id, { accepted: true }));
@@ -867,6 +871,22 @@ export function readObservedEpoch(home: string): number | null {
 /** Wave 4's writer puts ONE line of a few hundred bytes. Anything larger is not its report. */
 const UPDATE_REPORT_READ_MAX = 65_536;
 
+/** The agent's `process.kill(pid, 0)` adapter for `updateWriterAlive` (D-3411; the liveness RULE is L0's). */
+function probeKill(pid: number): KillProbeOutcome {
+  try {
+    process.kill(pid, 0);
+    return { threw: false };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return { threw: true, code: typeof code === 'string' ? code : null };
+  }
+}
+/** Whether an in-flight report's writer may still be running: an unreadable pid (`null`) may, and a readable one
+ *  is asked. Exported for the pins; the `update` op is its one caller. */
+export function writerMayLive(pid: number | null): boolean {
+  return pid === null || updateWriterAlive(probeKill(pid));
+}
+
 /**
  * Spec §10: the handler refuses when `~/.ccrc/update.json` says an update is in
  * flight. The agent reads the file ITSELF, as `readObservedEpoch` and
@@ -877,7 +897,9 @@ const UPDATE_REPORT_READ_MAX = 65_536;
  * `null` (not busy) covers every failure: an absent, unreadable, over-cap or
  * unparseable file, a non-regular one, and a report that is not in flight.
  * The `--detach` parent's own lock probe (`_upd_detach`'s `_upd_lock_probe`) then decides, and a held lock comes back as
- * `spawn-failed` with the lock's sentence. Opened `O_NONBLOCK`, because a FIFO
+ * `busy` with the lock's sentence (D-3411; it was `spawn-failed` before). A report that IS in flight is returned
+ * with its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by the `update` case, not this
+ * read's. Opened `O_NONBLOCK`, because a FIFO
  * planted at this name would otherwise block `open(2)` and, with it, this
  * agent's whole event loop; `fstat` then refuses it as not a regular file. The
  * CONTENT is judged by `inFlightReport` (`shared/api.ts`), the same parser the

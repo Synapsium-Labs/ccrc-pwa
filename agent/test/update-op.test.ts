@@ -24,7 +24,7 @@
 //    case can see an extra call whose answer comes out the same.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readInFlightReport, realUpdateSpawn, type RunningAgent, type UpdateSpawn } from '../src/server.js';
@@ -60,16 +60,25 @@ function recorder(answer: SpawnAnswer = { code: 0, stdout: '', stderr: '', kille
   };
 }
 
-/** wave 4's `update.json` line — seven keys, times in unix SECONDS (rulings R1/R14). */
+/** wave 4's `update.json` line — seven keys, times in unix SECONDS (rulings R1/R14). The default writer is THIS
+ *  process, alive, because an in-flight report answers `busy` only while its writer lives (D-3411). */
 const reportLine = (o: Record<string, unknown> = {}): string => `${JSON.stringify({
   target: 'v0.0.8', phase: 'installing', startedAt: 1790000000, updatedAt: 1790000060, detail: null, from: 'pwa',
-  pid: 4242, ...o,
+  pid: process.pid, ...o,
 })}\n`;
 function reportPath(home: string): string {
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   return path.join(home, '.ccrc', 'update.json');
 }
 const TEMPLATE = ['update', '--to', 'v0.0.9', '--detach', '--from', 'pwa'];
+
+/** A pid that was real and is gone: a short child, waited for. Its number is free until the kernel wraps, far off. */
+async function deadPid(): Promise<number> {
+  const child = spawn('true', [], { stdio: 'ignore' });
+  const pid = child.pid!;
+  await new Promise<void>((resolve) => { child.once('exit', () => resolve()); });
+  return pid;
+}
 
 /** The text between `open` and the first `close` match after it: a named slice
  *  of the real source, which fails loudly when either anchor is missing. */
@@ -183,11 +192,28 @@ describe('the update op', () => {
       }]);
     });
 
-    it('a parent that exits 1 is spawn-failed carrying its first stderr line — the held-lock case (Review Focus 3)', async () => {
+    it('a parent that exits 1 on the LOCK is busy carrying its first stderr line, never spawn-failed (D-3411, review F1)', async () => {
       const LOCK = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
       const { c } = await up(recorder({ code: 1, stdout: '', stderr: `${LOCK}\nsecond\n`, killed: false, pid: 4242 }));
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' }))
-        .toEqual({ t: 'res', id: 1, ok: false, err: 'spawn-failed', detail: LOCK });
+        .toEqual({ t: 'res', id: 1, ok: false, err: 'busy', detail: LOCK });
+    });
+
+    it.each([
+      ["flock absent (`_upd_flock_die`)", "ccrc: flock (util-linux) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed"],
+      ['an unmeasured lock (the probe\'s last arm)', 'ccrc: update: ~/.ccrc/update.lock could not be measured (probe rc 3) — refusing to detach a run past a lock this box cannot see; nothing on this box was changed'],
+    ])('every OTHER refusal keeps spawn-failed — %s (D-3411)', async (_what, line) => {
+      const { c } = await up(recorder({ code: 1, stdout: '', stderr: `${line}\n`, killed: false, pid: 4242 }));
+      expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' })).toMatchObject({ ok: false, err: 'spawn-failed' });
+    });
+
+    it('the rule is the FIRST stderr line: a lock sentence behind another line is spawn-failed with the first (D-3411)', async () => {
+      const { c } = await up(recorder({
+        code: 1, stdout: '', killed: false, pid: 4242,
+        stderr: 'ccrc: something else\nccrc: update: another update holds ~/.ccrc/update.lock (pid 7)\n',
+      }));
+      expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' }))
+        .toMatchObject({ ok: false, err: 'spawn-failed', detail: 'ccrc: something else' });
     });
 
     it('a parent killed at the bound is spawn-failed naming the timeout (Review Focus 4)', async () => {
@@ -214,23 +240,51 @@ describe('the update op', () => {
   });
 
   describe('busy — a run in flight, or a spawn still running on this agent', () => {
-    it('update.json in flight is busy, naming the phase, target and start second — nothing spawned', async () => {
+    it('update.json in flight with a LIVE writer is busy, naming the phase, target, start second and writer pid, and the way out — nothing spawned (D-3411)', async () => {
       const { c, rec, home } = await up();
       const p = reportPath(home);
+      const tail = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
       for (const [i, phase] of (['queued', 'installing', 'restoring'] as const).entries()) {
         writeFileSync(p, reportLine({ phase }));
         expect(await c.req<Res>(i + 1, { op: 'update', tag: 'v0.0.9' }), phase).toEqual({
           t: 'res', id: i + 1, ok: false, err: 'busy',
-          detail: `update.json says ${phase} (target v0.0.8, started 1790000000)`,
+          detail: `update.json says ${phase} (target v0.0.8, started 1790000000, writer pid ${process.pid})${tail}`,
         });
       }
       writeFileSync(p, reportLine({ target: null, startedAt: 1790000000000 }));
       expect(await c.req<Res>(4, { op: 'update', tag: 'v0.0.9' }))
-        .toMatchObject({ err: 'busy', detail: 'update.json says installing (target none, started unknown)' });
+        .toMatchObject({ err: 'busy', detail: `update.json says installing (target none, started unknown, writer pid ${process.pid})${tail}` });
       expect(rec.calls).toEqual([]);
     });
 
-    it('a busy detail built from an in-flight report is bounded to UPDATE_OP_DETAIL_MAX (D-3391)', async () => {
+    it('a report whose pid is ABSENT or unreadable keeps busy — that writer is unmeasurable, not dead (D-3411)', async () => {
+      const { c, rec, home } = await up();
+      const p = reportPath(home);
+      const withoutPid = JSON.parse(reportLine()) as Record<string, unknown>;
+      delete withoutPid.pid;
+      writeFileSync(p, `${JSON.stringify(withoutPid)}\n`);
+      expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' }))
+        .toMatchObject({ err: 'busy', detail: expect.stringContaining('writer pid unknown') });
+      // 0 and negative would be a process GROUP to kill(2): never read as a pid, so unreadable, so busy.
+      for (const [i, bad] of ([0, -1, 1.5, '4242', null] as const).entries()) {
+        writeFileSync(p, reportLine({ pid: bad }));
+        expect(await c.req<Res>(i + 2, { op: 'update', tag: 'v0.0.9' }), String(bad))
+          .toMatchObject({ err: 'busy', detail: expect.stringContaining('writer pid unknown') });
+      }
+      expect(rec.calls).toEqual([]);
+    });
+
+    it('a leftover in-flight report whose writer is DEAD spawns — the parent\'s own lock probe decides (D-3411, review F2)', async () => {
+      const { c, rec, home } = await up();
+      const dead = await deadPid();
+      for (const [i, phase] of (['queued', 'installing', 'restoring'] as const).entries()) {
+        writeFileSync(reportPath(home), reportLine({ phase, pid: dead }));
+        expect(await c.req<Res>(i + 1, { op: 'update', tag: 'v0.0.9' }), phase).toMatchObject({ ok: true, accepted: true });
+      }
+      expect(rec.calls).toHaveLength(3);
+    });
+
+    it('a busy detail built from an in-flight report is bounded to UPDATE_OP_DETAIL_MAX, and the way out survives the cut (D-3391, D-3411)', async () => {
       // `isReleaseTag` has no length cap on the numeric components, so a
       // report whose target is a release tag with a ~1000-digit major
       // component still passes it and would otherwise blow the sentence past
@@ -242,6 +296,7 @@ describe('the update op', () => {
       expect(res).toMatchObject({ ok: false, err: 'busy' });
       expect(res.detail).toBeDefined();
       expect(res.detail!.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+      expect(res.detail!.endsWith('ack the row or mend the box')).toBe(true);
       expect(rec.calls).toEqual([]);
     });
 
@@ -290,7 +345,7 @@ describe('the update op', () => {
       fixture = makeFixture();
       expect(readInFlightReport(fixture.home)).toBeNull();
       writeFileSync(reportPath(fixture.home), reportLine());
-      expect(readInFlightReport(fixture.home)).toEqual({ phase: 'installing', target: 'v0.0.8', startedAtS: 1790000000 });
+      expect(readInFlightReport(fixture.home)).toEqual({ phase: 'installing', target: 'v0.0.8', startedAtS: 1790000000, pid: process.pid });
     });
 
     it('a second op while the first is still spawning is busy — on this connection AND on another', async () => {

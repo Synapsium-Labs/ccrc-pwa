@@ -8737,12 +8737,16 @@ export const UPDATE_GATE_CAP = 'update-gate';
  *  busy, and the node's own lock decides instead (the `--detach` parent's
  *  `_upd_lock_probe`, then the run's `_upd_lock`). `startedAtS` stays in
  *  SECONDS (ruling R1) because it is shown, never compared. */
-export interface InFlightReport { phase: UpdatePhase; target: string | null; startedAtS: number | null }
+export interface InFlightReport { phase: UpdatePhase; target: string | null; startedAtS: number | null; pid: number | null }
 /** Non-null iff `text` is ONE JSON object whose `phase` is in
  *  `IN_FLIGHT_UPDATE_PHASES`. Fields are read BY NAME and every other key is
- *  ignored (ruling R2: wave 4's `pid`, and any later key). `target` passes
+ *  ignored (ruling R2: any key this reader does not name). `target` passes
  *  through `isReleaseTag`, else `null`. `startedAt` must be a positive safe
- *  integer ≤ `UNIX_SECONDS_MAX` (W2's one declaration, above in this file), else `null`, and the report is still kept. */
+ *  integer ≤ `UNIX_SECONDS_MAX` (W2's one declaration, above in this file), else `null`, and the report is still kept.
+ *  `pid` (D-3411) is the WRITER's own pid — wave 4 stamps every in-flight write with the process that wrote it —
+ *  and is a positive safe integer or `null`, never 0 or a negative number: `kill(2)` reads those as a process
+ *  group, so a pid this reader admitted as such would ask about the wrong thing. A report whose pid is `null`
+ *  is kept (its writer is unmeasurable, which is not dead). */
 export function inFlightReport(text: string): InFlightReport | null {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { return null; }
@@ -8756,6 +8760,7 @@ export function inFlightReport(text: string): InFlightReport | null {
     target: isReleaseTag(doc.target) ? doc.target : null,
     startedAtS: typeof started === 'number' && Number.isSafeInteger(started) && started > 0 && started <= UNIX_SECONDS_MAX
       ? started : null,
+    pid: typeof doc.pid === 'number' && Number.isSafeInteger(doc.pid) && doc.pid > 0 ? doc.pid : null,
   };
 }
 

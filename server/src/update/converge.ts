@@ -14,8 +14,8 @@ import {
   inFlightReport, type InFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
 } from '../../../shared/api.js';
 import {
-  NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv, type ResOk,
-  type UpdateSpawnResult,
+  NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
+  updateLauncherPath, updateSpawnArgv, updateWriterAlive, type KillProbeOutcome, type ResOk, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
   DEADLINE_DETAIL, classifyOpAnswer, deadlineExpired, dispatchRefusalDetail, planDispatch,
@@ -79,9 +79,22 @@ export const SPAWN_TIMEOUT_MESSAGE = `the --detach parent did not exit within ${
 /** D-3400: the server-side twin of the agent's `an update op is already spawning on this agent`. */
 export const LOCAL_SPAWNING_DETAIL = 'an update op is already spawning on this server';
 
-/** The busy sentence — the same words Task 2's agent sends for an in-flight report, so both roles read alike. */
-export function inFlightSentence(r: InFlightReport): string {
-  return `update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'})`;
+/** The server's `process.kill(pid, 0)` adapter for `updateWriterAlive` (D-3411; the liveness RULE is L0's, and the
+ *  agent supplies its own adapter for the same rule). */
+function probeKill(pid: number): KillProbeOutcome {
+  try {
+    process.kill(pid, 0);
+    return { threw: false };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return { threw: true, code: typeof code === 'string' ? code : null };
+  }
+}
+
+/** Whether an in-flight report's writer may still be running: an unreadable pid (`null`) may, a readable one is
+ *  asked. The agent's `writerMayLive` is this rule on the other role; both sit on `updateWriterAlive`. */
+function writerMayLive(pid: number | null): boolean {
+  return pid === null || updateWriterAlive(probeKill(pid));
 }
 
 /** The ONE builder of the dispatcher's views: every live row, its RESOLVED auto (the resolver's own answer for
@@ -144,7 +157,8 @@ async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAns
  *  read here (a FIFO blocks `open(2)` for good) would leave the row `pending` and the single-flight dispatch run
  *  unsettled, and no later trigger would reach the deadline sweep. Absent, unreadable, non-regular, too large or
  *  not in flight all read "not busy" — the node's own `_upd_lock_probe` (in `_upd_detach`) then decides, the agent's rule
- *  (D-3371; Task 2's `readInFlightReport` is the agent's `O_NONBLOCK` twin). */
+ *  (D-3371; Task 2's `readInFlightReport` is the agent's `O_NONBLOCK` twin). A report that IS in flight comes back with
+ *  its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by `localAnswer` (D-3411). */
 async function localInFlight(deps: ConvergeDeps): Promise<InFlightReport | null> {
   const deadline = openPoolReadDeadline(INVENTORY_BUDGET_MS);
   try {
@@ -170,8 +184,10 @@ const spawning = new WeakSet<LocalUpdateSpawn>();
 async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAnswer> {
   const spawn = deps.runLocal;
   if (spawn === null) return { kind: 'transport', why: 'other', message: NO_LOCAL_RUNNER_DETAIL };
+  // D-3411: a report says busy only while its writer lives; a dead writer's is a leftover and the op spawns,
+  // and the parent's own lock probe decides. (F2 of review run 175; D-3384 read the file alone.)
   const busy = await localInFlight(deps);
-  if (busy !== null) return { kind: 'refused', err: 'busy', detail: inFlightSentence(busy) };
+  if (busy !== null && writerMayLive(busy.pid)) return { kind: 'refused', err: 'busy', detail: inFlightBusyDetail(busy) };
   // Checked and taken with no await between: two runs can never both pass.
   if (spawning.has(spawn)) return { kind: 'refused', err: 'busy', detail: LOCAL_SPAWNING_DETAIL };
   let child: Promise<UpdateSpawnResult>;
@@ -191,6 +207,9 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
     // the one condition this path can actually tell apart: an empty stderr on a non-zero exit means the launcher
     // itself never spoke (review finding 3). A launcher that could not START answers a sentence of its own.
     const stderrLine = firstStderrLine(res.stderr);
+    // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing changed:
+    // busy (release `idle`, the request stands), carrying that line. Every other refusal keeps `spawn-failed`.
+    if (isUpdateLockHeldLine(stderrLine)) return { kind: 'refused', err: 'busy', detail: stderrLine };
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {

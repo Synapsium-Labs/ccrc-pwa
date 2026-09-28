@@ -22,6 +22,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   UPDATE_OP, UPDATE_OP_ERRORS, isUpdateOpError, UPDATE_OP_FROM, UPDATE_LAUNCHER_PARTS, updateLauncherPath,
   updateSpawnArgv, UPDATE_SPAWN_TIMEOUT_MS, UPDATE_SPAWN_DRAIN_MS, UPDATE_OP_TIMEOUT_MS, UPDATE_OP_DETAIL_MAX, firstStderrLine,
+  UPDATE_LOCK_HELD_PREFIX, isUpdateLockHeldLine, updateWriterAlive, inFlightBusyDetail,
 } from '../../shared/agent-protocol.js';
 import { IN_FLIGHT_UPDATE_PHASES, inFlightReport } from '../../shared/api.js';
 import { AgentOpError, connectFleet, type ConnectedFleet } from '../src/remote/client.js';
@@ -129,12 +130,13 @@ const LINE = (o: Record<string, unknown> = {}): string => `${JSON.stringify({
   target: 'v0.0.9', phase: 'installing', startedAt: 1790000000, updatedAt: 1790000060, detail: null, from: 'pwa',
   pid: 4242, ...o,
 })}\n`;
+const ONE = { phase: 'installing', target: 'v0.0.9', startedAtS: 1790000000, pid: 4242 } as const;
 
 describe('inFlightReport — is a run in flight right now (asked by the agent and by the server-role spawn)', () => {
   it('every in-flight phase is in flight — and the list is not empty', () => {
     expect(IN_FLIGHT_UPDATE_PHASES).toHaveLength(9);
     for (const phase of IN_FLIGHT_UPDATE_PHASES) {
-      expect(inFlightReport(LINE({ phase })), phase).toEqual({ phase, target: 'v0.0.9', startedAtS: 1790000000 });
+      expect(inFlightReport(LINE({ phase })), phase).toEqual({ ...ONE, phase });
     }
   });
 
@@ -146,16 +148,25 @@ describe('inFlightReport — is a run in flight right now (asked by the agent an
     expect(inFlightReport(LINE({ phase: undefined }))).toBeNull();
   });
 
-  it("reads wave 4's seven-key line by name — the pid key, and any newer key, is ignored (ruling R2)", () => {
-    expect(inFlightReport(LINE())).toEqual({ phase: 'installing', target: 'v0.0.9', startedAtS: 1790000000 });
-    expect(inFlightReport(LINE({ extra: { nested: true } })))
-      .toEqual({ phase: 'installing', target: 'v0.0.9', startedAtS: 1790000000 });
+  it("reads wave 4's seven-key line by name — the pid is the writer's (D-3411), and any newer key is ignored (ruling R2)", () => {
+    expect(inFlightReport(LINE())).toEqual(ONE);
+    expect(inFlightReport(LINE({ extra: { nested: true } }))).toEqual(ONE);
+  });
+
+  it('a pid that is not a positive safe integer reads null, and the report is kept — kill(2) would read 0 or a negative as a process GROUP (D-3411)', () => {
+    for (const pid of [0, -1, -4242, 1.5, '4242', null, true, [], {}, Number.MAX_SAFE_INTEGER + 2, 1e21]) {
+      expect(inFlightReport(LINE({ pid })), JSON.stringify(pid)).toEqual({ ...ONE, pid: null });
+    }
+    // Absent altogether: `undefined` is dropped by JSON.stringify.
+    expect(inFlightReport(LINE({ pid: undefined }))).toEqual({ ...ONE, pid: null });
+    expect(inFlightReport(LINE({ pid: 1 }))?.pid).toBe(1);
+    expect(inFlightReport(LINE({ pid: Number.MAX_SAFE_INTEGER }))?.pid).toBe(Number.MAX_SAFE_INTEGER);
   });
 
   it('a start time that is not unix SECONDS reads null, and the report is kept (ruling R1)', () => {
     for (const startedAt of [1790000000000, 0, -1, 1.5, '1790000000', null]) {
       expect(inFlightReport(LINE({ startedAt })), String(startedAt))
-        .toEqual({ phase: 'installing', target: 'v0.0.9', startedAtS: null });
+        .toEqual({ ...ONE, startedAtS: null });
     }
   });
 
@@ -181,6 +192,41 @@ describe('inFlightReport — is a run in flight right now (asked by the agent an
     for (const text of ['{', '[]', 'null', '"installing"', '42', '', '[{"phase":"installing"}]']) {
       expect(inFlightReport(text), JSON.stringify(text)).toBeNull();
     }
+  });
+});
+
+describe('the writer-liveness rule and the lock sentence, declared once (D-3411)', () => {
+  it('updateWriterAlive: a returning kill and EPERM are alive, ESRCH is dead, any other failure reads alive', () => {
+    expect(updateWriterAlive({ threw: false })).toBe(true);
+    expect(updateWriterAlive({ threw: true, code: 'EPERM' })).toBe(true);
+    expect(updateWriterAlive({ threw: true, code: 'ESRCH' })).toBe(false);
+    for (const code of ['EINVAL', 'EACCES', 'ENOMEM', '', null]) {
+      expect(updateWriterAlive({ threw: true, code }), String(code)).toBe(true);
+    }
+  });
+
+  it('the lock prefix is `ccrc: update: another update holds ~/.ccrc/update.lock`, and matches by prefix on a line', () => {
+    expect(UPDATE_LOCK_HELD_PREFIX).toBe('ccrc: update: another update holds ~/.ccrc/update.lock');
+    expect(isUpdateLockHeldLine('ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)')).toBe(true);
+    expect(isUpdateLockHeldLine('ccrc: update: another update holds ~/.ccrc/update.lock')).toBe(true);
+    for (const line of ['', 'no message', 'ccrc: update: another update holds', ' ccrc: update: another update holds ~/.ccrc/update.lock',
+      'ccrc: update: ~/.ccrc/update.lock could not be measured (probe rc 3)', 'ccrc: flock (util-linux) is required by \'ccrc update\'']) {
+      expect(isUpdateLockHeldLine(line), line).toBe(false);
+    }
+  });
+
+  it('inFlightBusyDetail names the phase, target, start second, writer pid and the way out, within UPDATE_OP_DETAIL_MAX', () => {
+    expect(inFlightBusyDetail(ONE)).toBe(
+      'update.json says installing (target v0.0.9, started 1790000000, writer pid 4242)'
+      + ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box');
+    expect(inFlightBusyDetail({ phase: 'queued', target: null, startedAtS: null, pid: null })).toBe(
+      'update.json says queued (target none, started unknown, writer pid unknown)'
+      + ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box');
+    // A target with no length cap on its numeric parts cuts the FRONT, never the way out.
+    const long = inFlightBusyDetail({ ...ONE, target: `v${'1'.repeat(1000)}.0.0` });
+    expect(long.length).toBe(UPDATE_OP_DETAIL_MAX);
+    expect(long.endsWith('ack the row or mend the box')).toBe(true);
+    expect(long.startsWith('update.json says installing (target v111')).toBe(true);
   });
 });
 

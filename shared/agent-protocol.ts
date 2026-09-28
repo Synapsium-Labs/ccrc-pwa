@@ -11,7 +11,7 @@
 // and `shared/roster`), and saying otherwise would be a false fact sitting next
 // to a true rule — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
-import { isReleaseTag, isRequestKind, type RequestKind } from './api.js';
+import { isReleaseTag, isRequestKind, type InFlightReport, type RequestKind } from './api.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -455,6 +455,44 @@ export function firstStderrLine(stderr: string): string {
     if (line !== '') return line.slice(0, UPDATE_OP_DETAIL_MAX);
   }
   return 'no message';
+}
+
+/** D-3411 — the sentence the `--detach` parent's lock probe dies with, as the PREFIX both roles match. Wave 4's
+ *  `_upd_busy_die` (`ccd/ccrc`) prints `ccrc: update: another update holds ~/.ccrc/update.lock (<holder>)` to
+ *  stderr through `_ccrc_die`, whose `$PROG: ` prefix is part of the line; the parenthesised holder varies. It is
+ *  declared ONCE, here: a parent that exits non-zero with THIS as its first stderr line was refused by a lock
+ *  somebody holds, with nothing on the box changed, so the node is BUSY, not faulted. Every other refusal keeps its
+ *  mapping — `_upd_flock_die` (no `flock`) and the probe's unmeasured arm stay `spawn-failed`, because a box that
+ *  cannot measure its own lock has a fault. `agent/test/update-busy-writer.test.ts` and `server/test/update-converge.test.ts`
+ *  run the real `ccd/ccrc` under a held lock and pin this prefix to the line it prints. */
+export const UPDATE_LOCK_HELD_PREFIX = 'ccrc: update: another update holds ~/.ccrc/update.lock';
+/** True iff `line` — the parent's FIRST stderr line, as `firstStderrLine` cleans it — is the lock-held sentence. */
+export function isUpdateLockHeldLine(line: string): boolean {
+  return line.startsWith(UPDATE_LOCK_HELD_PREFIX);
+}
+
+/** What one `process.kill(pid, 0)` did: it returned, or it threw with this errno code (`null`: a throw without a
+ *  string code). Each ROLE supplies the adapter that makes one — L0 imports nothing, not even `node:*`. */
+export type KillProbeOutcome = { threw: false } | { threw: true; code: string | null };
+
+/** D-3411 — THE liveness rule, over the outcome of `kill(pid, 0)`. A call that returns is a live writer, and so is
+ *  `EPERM` (the process exists and is somebody else's). Only `ESRCH` is dead. Any OTHER failure proves nothing about
+ *  the writer, so it reads alive: today's `busy`, the direction that never spawns a second updater onto a run this
+ *  box could not measure. A report whose pid is absent or unreadable never reaches this function; its caller keeps
+ *  `busy`. A pid the kernel has REUSED reads alive (D-3411 names the cost). */
+export function updateWriterAlive(outcome: KillProbeOutcome): boolean {
+  return !outcome.threw || outcome.code !== 'ESRCH';
+}
+
+/** D-3411 — the busy sentence for an in-flight report, built ONCE for both roles (the agent's `update` op and the
+ *  server-role local spawn). It names the phase, target, start second and the WRITER's pid, then says what the
+ *  operator can do: a live updater that is hung answers busy on every sweep, so the exit is to ack the row or mend
+ *  the box (ruling (b)). The whole sentence stays within `UPDATE_OP_DETAIL_MAX`: a `target` has no length cap on its
+ *  numeric parts, so the FRONT is cut to fit and the advice at the end is never the part that is lost. */
+export function inFlightBusyDetail(r: InFlightReport): string {
+  const tail = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
+  const head = `update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'}, writer pid ${r.pid ?? 'unknown'})`;
+  return head.slice(0, UPDATE_OP_DETAIL_MAX - tail.length) + tail;
 }
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
