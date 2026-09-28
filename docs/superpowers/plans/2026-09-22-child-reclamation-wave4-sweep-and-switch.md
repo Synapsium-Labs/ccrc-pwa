@@ -5411,3 +5411,35 @@ task; ccd items keep A3's and A4's boundary rules. Anchors are to wave 3's final
 
 8. Report the Darwin status of wave 3's second-round cases beside Step 5a's list, including the BSD reliance of
    `_ws_reclaim_hidden`'s ancestor walk (`stat`'s exit status and text, `stat --`, `dirname --`, bash ≥ 4.3).
+
+### A17 — carried from review 172 (wave 3's third review, 2026-09-28)
+
+Wave 3 merged as `1ffdf947` (#187) with these three items riding here. None is a destroy path. All three fail closed.
+
+**Task 2b gains (below the boundary):**
+1. **F1 (class 2): `_ws_reclaim_hidden_absent` forks `dirname` once per absent flagged path**, before its memo can
+   answer (`parent=$(dirname -- "$up")`).
+   - Measured by three lenses: 5000 skip-worktree entries take 16.2 s against 0.52 s at the base, and 20000 take
+     75–84 s. On a large sparse child the in-lock reads can pass `ws-audit`'s 90 s or `ws-reclaim`'s 240 s budget, and
+     the child then strands on every attempt.
+   - Make the parent step fork-free, for example `${up%/*}`, with explicit cases for a path with no `/` and for the
+     root. Key the memo so that siblings under one missing directory share one walk, as the header claims.
+   - Case: 5000 out-of-cone flagged paths under one missing directory finish the hidden read within a stated bound
+     (measure the base, and set the bound at twice it).
+   - Measured on the live fleet on 2026-09-28: 0 of 37 marked children with a tree use a sparse checkout or
+     skip-worktree flags.
+2. **F2 (class 3): `_ws_reclaim_gitdir_walk`'s top-level guard** says "is neither a directory nor a regular file" when
+   `G/refs` or `G/logs` IS a regular file. Say "is not a directory". There is one case, pinning the corrected text.
+3. **R1 (refuted as pre-existing, recorded here): a `/proc/…` workdir** is absolute in form, but its meaning depends on
+   the reader's cwd (`/proc/self/cwd/<rel>`). It passes F-B's writer and reader alike.
+   - `cmd_start` refuses a workdir under `/proc/`.
+   - `_ws_reclaim_workdir_shared` treats such an OTHER row as unplaced, and decides after the loop, as for a
+     relative one.
+
+   Cases and mutation rows for both halves.
+
+**Task 9b gains:**
+
+4. D-3369's entry, in the wave-3 plan, names the three slugs folded into it after its text was written:
+   `gitdir-rides-the-logs-list`, `location-guard-case-added` and `default-config-reach-wider`. Each gets one measured
+   sentence, and the entry ends "(folded by the coordinator, review 172 ruling)".

@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in its third review** 2026-09-28 at `135f1625` (second fix round done; review 172 on `keen-ridge`; run 148 on `plain-summit`) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **merged** `1ffdf947` 2026-09-28 16:14 UTC (#187; run 148 on `plain-summit`; reviews 170, 171, 172); rollout pending |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
@@ -43,6 +43,26 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-09-28 — review 172 (`135f1625`): no destroy path; wave 3 MERGED as `1ffdf947` (#187).**
+  - **The panel.** Four lenses (SAFETY at xhigh) and fifteen refuters; none died. Every mutation row the brief named
+    reds, with green controls: F-A ×2, the F-B reader, the three `//` clauses, the writer's `-ef`, F-I and F-G.
+  - **Measurements.** The boundary line is byte-identical at 19168, and S6-R11 passes 13/13 under the real selector.
+    Suites are green bar `tmp-sweep`.
+  - **Ruled.**
+    - F1 (class 2): the hidden read forks per absent flagged path, which can strand a large sparse child and fails
+      closed. It rides wave 4 (A17). Measured first: 0 of 37 live marked children with a tree use sparse checkout or
+      skip-worktree.
+    - F2 (class 3, text): rides wave 4.
+    - R1 (refuted as pre-existing; a `/proc/self/cwd` workdir): recorded in wave 4 as A17.3.
+  - **Merged** with `--admin --match-head-commit 135f1625`. Every Linux leg is green. `test-macos 2/2` was cancelled at
+    its cap, which the operator's ruling treats as flaky.
+  - **Pre-rollout census, read-only, live.** 0 of 79 registry workdirs are any of:
+    - empty, relative, `//` or `/proc`;
+    - unreadable, or containing a newline;
+    - resolving through a `//` path.
+
+    So F-B's fail-closed reader stops nothing on rollout.
+  - **Review run 172 is closed.** Run 148 stays at `awaiting-review` until wave 4's run opens, then closes final.
 - **2026-09-28 — wave 3's second fix round done (`135f1625`); review 172 dispatched.**
   - **The round.** It shipped F-I (3523), F-A (3369), F-B (3521), and F-C through F-G.
     - Each fix had an Opus review, and scoped re-reviews until clean.
