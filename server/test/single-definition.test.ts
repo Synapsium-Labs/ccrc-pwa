@@ -23,7 +23,6 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
-import { UPDATE_OP_ERRORS } from '../../shared/agent-protocol.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -3778,7 +3777,7 @@ describe('the update op — its refusal words and its launcher are declared once
     }
   });
 
-  it('the four words are listed together in one file, in any order or quote style — a second list is a second vocabulary', () => {
+  it('the four words are listed together in one file, in any order or quote style — a second list is a second vocabulary', async () => {
     // The words alone don't prove a copy: `bad-tag` and `busy` are also
     // route and store words (`UpdateRouteError`, `UPDATE_STORE_REFUSE_CODES`),
     // and the dispatcher's answer mapping names `spawn-failed` in a `case`.
@@ -3787,6 +3786,9 @@ describe('the update op — its refusal words and its launcher are declared once
     // counts, not just this file's own single-quoted, in-order spelling. A
     // holder is a single line, or a single `[...]` array-literal span, that
     // quotes all four.
+    // A dynamic import, not a static top-of-file line: an import line above `:32-37` shifts every
+    // line the citation audit anchors (R13; the F16 `NODE_FILES` describe above does the same).
+    const { UPDATE_OP_ERRORS } = await import('../../shared/agent-protocol.js');
     const words = [...UPDATE_OP_ERRORS];
     const quoted = (w: string): RegExp => new RegExp(`(['"])${w}\\1`);
     const hasAllWords = (span: string): boolean => words.every((w) => quoted(w).test(span));
