@@ -1015,7 +1015,7 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
   const dropRow = (id: string): void => {
     for (const f of ['uuid', 'workdir']) fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.${f}`), { force: true });
   };
-  const UNPLACED = 'name no absolute workdir, so ccd cannot place them against this child';
+  const UNPLACED = 'name no plain absolute workdir, so ccd cannot place them against this child';
 
   it('the reviewer’s shape: a row `quiet-basin/server`, the reclaim’s cwd `$HOME` — unmeasured, never reclaimable, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -1027,7 +1027,7 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
     expect(r.detail).toContain(`registry row(s) demo-nested ${UNPLACED}`);
-    expect(r.detail).toContain('ccd start <id> stores an absolute workdir');
+    expect(r.detail).toContain('ccd start <id> stores a plain absolute workdir');
     expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
   }, 60_000);
 
@@ -1083,25 +1083,82 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
   }, 180_000);
 
   // Mode-000 on a regular file, as the unreadable-row case above — no platform
-  // distinction.
-  it('the UNREADABLE row takes the same shape: a row rooted inside the child found in the same pass outranks it, and with an unplaced row both are named', () => {
+  // distinction. Order-proof the same way as the case above: each pair of
+  // names planted in both creation orders, the order `find` lists READ, both
+  // orders asserted seen — an outranking pinned in one order is pinned in none.
+  it('the UNREADABLE row takes the same shape: a row rooted inside the child found in the same pass outranks it, whichever `find` lists first — and with an unplaced row both are named', () => {
     const { wt } = makeChild(h);
     fs.mkdirSync(path.join(wt, 'server'));
+    const seen = new Set<string>();
+    const pairs = [['demo-a-locked', 'demo-z-nested'], ['demo-z-locked', 'demo-a-nested'], ['demo-m-locked', 'demo-b-nested'],
+      ['demo-c-locked', 'demo-n-nested'], ['demo-q-locked', 'demo-d-nested'], ['demo-e-locked', 'demo-r-nested']] as const;
+    const plantLocked = (id: string): void => {
+      otherRow(id, '/somewhere');
+      fs.chmodSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), 0o000);
+    };
+    const unlock = (id: string): void => {
+      const f = path.join(h.home, '.cc-sessions', `${id}.workdir`);
+      if (fs.existsSync(f)) fs.chmodSync(f, 0o644);
+    };
+    for (const [locked, nested] of pairs) {
+      for (const lockedFirst of [true, false]) {
+        try {
+          if (lockedFirst) { plantLocked(locked); otherRow(nested, path.join(wt, 'server')); }
+          else { otherRow(nested, path.join(wt, 'server')); plantLocked(locked); }
+          const listed = h.sh(`find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*'`).split('\n');
+          const iL = listed.indexOf(path.join(h.home, '.cc-sessions', `${locked}.workdir`));
+          const iN = listed.indexOf(path.join(h.home, '.cc-sessions', `${nested}.workdir`));
+          expect(iL >= 0 && iN >= 0, listed.join('\n')).toBe(true);
+          const order = iL < iN ? 'unreadable-first' : 'nested-first';
+          seen.add(order);
+          const r = evalOf(h);
+          expect(r.verdict, `${locked}/${nested}, ${order}: ${r.detail}`).toBe('containment-unproven');
+          expect(r.detail).toContain(`registry row(s) ${nested} rooted inside`);
+          expect(r.token).toBe('');
+        } finally { unlock(locked); }
+        dropRow(locked); dropRow(nested);
+      }
+    }
+    expect([...seen].sort(), 'both listing orders were exercised').toEqual(['nested-first', 'unreadable-first']);
     const f = path.join(h.home, '.cc-sessions', 'demo-locked.workdir');
-    otherRow('demo-locked', '/somewhere');
-    fs.chmodSync(f, 0o000);
     try {
-      otherRow('demo-nested', path.join(wt, 'server'));
-      const refused = evalOf(h);
-      expect(refused.verdict, refused.detail).toBe('containment-unproven');
-      expect(refused.detail).toContain('registry row(s) demo-nested rooted inside');
-      dropRow('demo-nested');
+      plantLocked('demo-locked');
       otherRow('demo-blank', '');
       const both = evalOf(h);
       expect(both.verdict, both.detail).toBe('unmeasured');
       expect(both.detail).toContain(`could not read ${f}`);
       expect(both.detail).toContain(`registry row(s) demo-blank ${UNPLACED}`);
-    } finally { fs.chmodSync(f, 0o644); }
+    } finally { unlock('demo-locked'); }
+  }, 240_000);
+
+  it('a row spelled with a leading `//` is not placed either — `//<child>/server` is unmeasured, and `<child>/server` stands', () => {
+    // bash's `pwd -P`, which `_ws_realpath` answers with, KEEPS a leading `//`
+    // (POSIX leaves it implementation-defined), so the resolved spelling is no
+    // prefix of the child's and the row read as outside: the verb removed the
+    // other session's files (review fr171-B C1, measured). Fail-closed, like a
+    // row that is not absolute.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    otherRow('demo-nested', `/${wt}/server`);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`registry row(s) demo-nested ${UNPLACED}`);
+    expect(r.detail, 'the value is never printed').not.toContain(`/${wt}`);
+    expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('the CONTROL for `//`: a trailing-`/` row rooted inside the child still refuses containment-unproven, and so does a `///` one', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    for (const spelled of [`${wt}/server/`, `//${wt}/server`]) {
+      otherRow('demo-nested', spelled);
+      const r = evalOf(h);
+      expect(r.verdict, `${spelled}: ${r.detail}`).toBe('containment-unproven');
+      expect(r.detail).toContain('registry row(s) demo-nested');
+      dropRow('demo-nested');
+    }
   }, 60_000);
 
   it('the CONTROLS, unchanged: an absolute row at `<child>/server`, and the same row as `ccd start` now stores it from a relative operand, refuse containment-unproven', () => {

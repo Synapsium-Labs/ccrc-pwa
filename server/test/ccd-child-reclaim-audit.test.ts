@@ -224,8 +224,8 @@ describe('ws-audit --reclaim', () => {
     const a = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(a['verdict']).toBe('unmeasured');
     expect(a['token']).toBeUndefined();
-    expect(String(a['detail'])).toContain('registry row(s) demo-forge name no absolute workdir');
-    expect(r.stderr).toContain('registry row(s) demo-forge name no absolute workdir');
+    expect(String(a['detail'])).toContain('registry row(s) demo-forge name no plain absolute workdir');
+    expect(r.stderr).toContain('registry row(s) demo-forge name no plain absolute workdir');
     for (const [where, text] of [['stderr', r.stderr], ['detail', String(a['detail'])]] as const) {
       expect(text, `${where} carries no part of the value`).not.toContain('FORGED');
       expect(text, `${where} carries no part of the value`).not.toContain('quiet-basin/server');

@@ -356,6 +356,25 @@ describe('ccd start stores only a plain absolute workdir, naming the directory i
     }
   });
 
+  it('the CONTROL: under a LINKED `$HOME/projects` the stored path is the LOGICAL one — the default form byte-identical to what a pre-fix ccd stored', () => {
+    // On the fleet box `$HOME/projects` is a link to a mounted volume, and
+    // divergence.ts reads a row's workdir as written (its UNRESOLVED contract):
+    // `pwd -P` would rewrite every default-form row to the mount's spelling.
+    fs.mkdirSync(path.join(h.home, 'vol', 'projects', 'demo'), { recursive: true });
+    fs.symlinkSync(path.join(h.home, 'vol', 'projects'), path.join(h.home, 'projects'));
+    const want = path.join(h.home, 'projects', 'demo');
+    for (const [label, snippet] of [
+      ['the default form', `${STUBS} cmd_start claude demo`],
+      ['the absolute operand', `${STUBS} cmd_start claude demo "$HOME/projects/demo"`],
+      ['a relative operand from the linked cwd', `${STUBS} builtin cd -- "$HOME/projects" && cmd_start claude demo demo`],
+    ] as const) {
+      fs.rmSync(rowFile('claude-demo', 'workdir'), { force: true });
+      const r = run(snippet);
+      expect(r.code, `${label}: ${r.stderr}`).toBe(0);
+      expect(fs.readFileSync(rowFile('claude-demo', 'workdir'), 'utf8').trimEnd(), label).toBe(want);
+    }
+  });
+
   it('the id form writes back the RESOLVED spelling of a legacy row — relative, a trailing `/`, a leading `//`', () => {
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
     const want = path.join(h.home, 'projects', 'demo');
