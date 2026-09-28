@@ -439,6 +439,10 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 Findings every wave's reviewers get, because each is easy to lose between waves:
 
+- **macOS CI legs are treated as FLAKY** (operator, 2026-09-28: "ignore the macos runs for now, they are being
+  fixed, treat as flaky for the moment"). A red, cancelled or hung macOS leg (`test-macos`, `probe-macos`) blocks no
+  merge, no review and no wave-done, and nobody waits on one or re-runs one. Darwin evidence is still reported as
+  found, with job ids, or as unmeasured, but it gates nothing until the operator lifts this.
 - **Two authorities, always.** Child-ness is the box marker AND the server's `--child-of` argv, equal. No wave
   may add a path that infers child-ness from anything else — not `--no-rc`, not a dec reason string, not a
   run row alone.
