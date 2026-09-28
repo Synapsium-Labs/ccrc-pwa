@@ -8549,7 +8549,11 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(existsSync(join(home, 'kept-spine-argv'))).toBe(false);
   });
 
-  it('a flip that cannot be made falls through with its reporting window OPEN: the re-install\'s refusal closes update.json with a terminal `failed`, not the `installing` the flip path wrote (R-B)', () => {
+  // R-B pins the OBSERVABLE: the report ends terminal. It cannot pin the
+  // `UPD_REPORTING=1` the fall-through keeps — `cmd_update` opens its own
+  // window again right after its own `_upd_lock`, so a reset to 0 in
+  // `cmd_rollback` measures identically (mutation B1 in the task report).
+  it('a flip that cannot be made falls through to update\'s own re-install, whose refusal closes update.json with a terminal `failed` — never the `installing` the flip path wrote (R-B)', () => {
     const { home } = flipBox('ccrc-rollback-flip-rename-report-');
     mkdirSync(join(home, 'ccrc.new'));   // `_plat_ln_swap` refuses to clear it: the flip cannot be made
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });

@@ -13554,11 +13554,13 @@ cmd_rollback() {
       1)
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
         # path has already written a non-terminal `installing "rollback by
-        # flip …"` phase, so a refusal inside the in-process `cmd_update`
-        # below must close that report with a terminal `failed`. Resetting to
-        # 0 would leave `installing` as the last phase, which a watchdog or a
-        # detached caller waiting on a terminal report reads as an updater
-        # that died.
+        # flip …"` phase, so a refusal on the way into the in-process
+        # `cmd_update` below must close that report with a terminal `failed`.
+        # Resetting to 0 would leave `installing` as the last phase, which a
+        # watchdog or a detached caller waiting on a terminal report reads as
+        # an updater that died. (`cmd_update` sets it to 1 again itself, right
+        # after its own `_upd_lock`, so today nothing between this line and
+        # that one can die: the rule is for the next line added here.)
         echo "rollback: $to could not be flipped to ($VER_WHY) — rolling back by re-install instead" ;;
       *)
         _upd_phase failed "rollback to $to: the kept spine did not complete; $VER_WHY"
