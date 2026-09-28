@@ -336,14 +336,16 @@ export interface UpdateIntentRequest {
  * scheduled poll both set, so `lastOkAt` may still be null — and nothing says
  * "checked" while it is (spec §18).
  */
-const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'>, string> = {
+const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | 'waiting-for-fleet', string> = {
   'not-configured': 'This box has no update control plane — it runs without a coordination database.',
   'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',
   'bad-request': 'The server refused the shape of that request — reload the screen and try again.',
   'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
   'unknown-node': 'That node is no longer in the inventory.',
   superseded: 'That node was reinstalled under a new identity — reload to see it.',
-  busy: 'That node is mid-update — wait for it to settle, then acknowledge.',
+  // Shown for three different callers — the ack route's own 409, an apply/rollback 409, and an `{all}` skip —
+  // so this sentence must read true in all three, not only the one it was first written for.
+  busy: 'That node is in the middle of a move — wait for it to settle, then try again.',
   'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
   'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
   'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
@@ -354,12 +356,17 @@ const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'>, st
   'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
   'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
   'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
-  'no-detach-cap': 'That node cannot start a detached update yet — update it once from its own shell.',
+  // False on macOS, where `--detach` never exists: corrected to name both readings rather than the one that
+  // assumes a Linux box behind an old ccrc.
+  'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
   'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
   'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
   halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
   'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
   'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
+  // Never an HTTP 409 (the route answers it only through `{all: true}`'s per-node skip, never a single-node
+  // move's own refusal) — a key `moveSkipText` needs that `updateErrorText`'s own table never looks up.
+  'waiting-for-fleet': 'That node is held behind a fleet node’s own move — it moves once that node’s move settles or is acknowledged.',
 };
 
 /** Operator-facing text for a failed update-route call: the code in

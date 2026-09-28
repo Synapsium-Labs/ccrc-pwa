@@ -8814,9 +8814,17 @@ export interface RollbackUpdateBody { nodeId: string; to?: string }
  *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
  *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
  *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
- *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request. */
-export type MoveSkipWhy =
-  | Exclude<DispatchRefusal, 'halted' | 'no-update-gate' | 'no-rollback-cap' | 'waiting-for-fleet'> | 'no-desired' | 'busy';
+ *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
+ *
+ *  Two more words a row's OWN state can answer with, corrected after review: a row that is ITSELF halting
+ *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
+ *  is even asked — the only door out of a halt is `ack`, which clears the request columns, so a request written
+ *  beside a halting row's own verdict would be silently erased the same way a busy row's would; its detail is
+ *  already the verdict, so nothing is noted either. And once any live FLEET-role row was skipped this call for
+ *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
+ *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
+ *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap'> | 'no-desired' | 'busy';
 export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
 /** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as

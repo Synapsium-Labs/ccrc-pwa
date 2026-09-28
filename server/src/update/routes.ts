@@ -14,9 +14,9 @@ import {
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import { dispatchViewsFor } from './converge.js';
-import { dispatchRefusalDetail, fleetGate, moveRefusal, type FleetGate } from './dispatch.js';
+import { dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type FleetGate } from './dispatch.js';
 import {
-  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, SETTLED_UPDATE_STATES,
+  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, dispatchRank, SETTLED_UPDATE_STATES,
   type AckAnswer, type CatalogueState, type DispatchRefusal, type IntentWriteAnswer, type MoveRequestAnswer,
   type MoveSkip, type MoveSkipWhy, type NodeWire, type ReleaseWire, type RequestKind,
   type UpdateIntentWire, type UpdateRouteRefusal, type UpdatesView,
@@ -395,6 +395,25 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * dispatcher can only refuse stands until `ack`, and on a fleet row it would hold every server move behind it,
  * D-3381). Always 202 (§12).
  *
+ * A ROW THAT IS ITSELF HALTING IS SKIPPED FIRST (corrected after review): `isHalting(row)` — a `failed`/
+ * `reverted` row that is not a provenance verdict — is checked BEFORE `moveRefusal`, `why: 'halted'`, with no
+ * request and no note written. The only door out of a halt is `ack`, and `ackNode` clears the request columns
+ * in the same transaction — a request written onto a halting row here would be silently erased by that same
+ * `ack`, exactly the hazard D-3406 already names for a busy row's own lease. Its `updateDetail` is already the
+ * verdict `isHalting` reads, so nothing is noted either. A halt caused by ANOTHER row is a different thing
+ * entirely — the fleet's halt is enforced at dispatch time, not here (`NO_HALT` is passed to `moveRefusal` on
+ * purpose), so a row that is not itself halting still gets its request even while the fleet is halted by some
+ * other row.
+ *
+ * THE SERVER NEVER MOVES AHEAD OF A SKIPPED FLEET ROW (corrected after review): while ANY live fleet-role row
+ * (`dispatchRank(row.role) === 0`) was skipped in this same call for its OWN lease (`busy`) or its OWN halt
+ * (`halted`) — never for a capability word or `not-newer`, which do not block the row's peers — every row whose
+ * rank is not fleet's is skipped `waiting-for-fleet` instead of being asked anything else, with no request and
+ * no note. `compareDispatchOrder` sorts fleet rows first, so this is decided as the loop reaches them: without
+ * it, a request written on the server in the same breath as a skipped fleet row would move the server AHEAD of
+ * the fleet node the operator's tap could not reach, inverting the fleet-first order D-3381 already holds for a
+ * halt caused by another row.
+ *
  * A SKIP IS SAID ON THE ROW, not only in the reply (§12: "reports per-node refusals through `updateDetail`").
  * A skipped node gets no request, so `planDispatch` never considers it and the dispatcher's own note never
  * reaches it — the route notes the refusal itself, through the dispatcher's writer and sentence
@@ -403,16 +422,31 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * noted: that node was not refused a capability — it already runs the tag or a newer one, or it was rolled back
  * below a floor at or above the tag (D-3403) — and its row already reads what it runs
  * and its floor; the 202's `skipped` says it. A `busy` skip is likewise never noted: `noteDispatchRefusal`
- * refuses a busy row anyway (D-3375), and the row's own lease detail already says what it is doing.
+ * refuses a busy row anyway (D-3375), and the row's own lease detail already says what it is doing. Neither is
+ * `halted` or `waiting-for-fleet` (above): the first's detail is already the verdict, and the second names no
+ * refusal of the row at all.
  */
 function requestAll(coord: CoordStore, tag: string | null, now: number): MoveRequestAnswer {
   const requested: string[] = [];
   const skipped: MoveSkip[] = [];
   const views = new Map(dispatchViewsFor(coord).map((v) => [v.row.nodeId, v] as const));
+  // Set once any live fleet-role row is skipped THIS call for its own lease or its own halt — read only for a
+  // rank!=0 row, and only fleet rows (sorted first by compareDispatchOrder) ever set it.
+  let fleetSelfSkipped = false;
   for (const row of [...coord.nodes()].sort(compareDispatchOrder)) {
     const view = views.get(row.nodeId);
     if (view === undefined) {
       throw new Error(`update: live node ${row.nodeId} has no dispatch view in the same synchronous read`);
+    }
+    const isFleetRow = dispatchRank(row.role) === 0;
+    if (isHalting(row)) {
+      skipped.push({ nodeId: row.nodeId, why: 'halted' });
+      if (isFleetRow) fleetSelfSkipped = true;
+      continue;
+    }
+    if (!isFleetRow && fleetSelfSkipped) {
+      skipped.push({ nodeId: row.nodeId, why: 'waiting-for-fleet' });
+      continue;
     }
     const target = tag ?? tagOrNull(row.desiredTag);
     if (target === null) {
@@ -423,6 +457,7 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
     // unconditionally, the instant that running move settles (`settleNode`), so it is never written.
     if (!(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
       skipped.push({ nodeId: row.nodeId, why: 'busy' });
+      if (isFleetRow) fleetSelfSkipped = true;
       continue;
     }
     const refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);

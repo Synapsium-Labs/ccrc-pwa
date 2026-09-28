@@ -488,33 +488,82 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(f.coord.node(FLEET_ID)).toMatchObject({ updateState: 'failed', updateDetail: 'provenance: signature mismatch' });
   });
 
-  it('always 202 on a halted fleet, requests written — while a single-node apply on the same fleet is 409 halted', async () => {
+  it('always 202 on a halted fleet, requests written for a row NOT itself halting — while a single-node apply on the same fleet is 409 halted (tightened: the halting row itself gets nothing)', async () => {
     const f = await open();
     catalogue(f.coord);
     plant(f.coord, fleetNode());
     plant(f.coord, fleetNode({ nodeId: OTHER_ID, label: 'other' }));
     verdict(f.coord, OTHER_ID, 'spawn-failed — update: fixture refusal');
+    const otherDetailBefore = f.coord.node(OTHER_ID)!.updateDetail;
     const one = await post(f.app, '/api/updates/apply', { nodeId: FLEET_ID, tag: 'v0.0.10' });
     expect(one.statusCode).toBe(409);
     expect(one.json()).toMatchObject({ error: 'halted' });
     const all = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
     expect(all.statusCode, all.body).toBe(202);
-    expect((all.json() as MoveRequestAnswer).requested).toContain(FLEET_ID);
+    // Tightened (review): the full requested/skipped, not a loose `toContain` — and the halting row (OTHER_ID)
+    // is skipped `halted`, not asked at all (a halt by ANOTHER row still writes the request — D-3401).
+    expect(all.json()).toEqual({ ok: true, requested: [FLEET_ID], skipped: [{ nodeId: OTHER_ID, why: 'halted' }] });
     expect(f.coord.node(FLEET_ID)!.requestedTag).toBe('v0.0.10');
+    // The halting row's request columns are untouched, and its detail is still the verdict — nothing was noted.
+    expect(f.coord.node(OTHER_ID)!.requestedTag).toBeNull();
+    expect(f.coord.node(OTHER_ID)!.updateDetail).toBe(otherDetailBefore);
   });
 
-  it("skips a node whose OWN lease is busy — a request would be erased the moment that move settles (D-3406)", async () => {
+  it('a HALTING SERVER row does not hold the fleet back — only a fleet row’s own busy/halt does that (D-3401 corrected)', async () => {
     const f = await open();
     catalogue(f.coord);
     plant(f.coord, fleetNode());
     plant(f.coord, serverNode());
-    hold(f.coord, FLEET_ID);
+    verdict(f.coord, SERVER_ID, 'spawn-failed — update: fixture refusal');
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [FLEET_ID], skipped: [{ nodeId: SERVER_ID, why: 'halted' }] });
+    expect(f.coord.node(FLEET_ID)!.requestedTag).toBe('v0.0.10');
+    expect(f.coord.node(SERVER_ID)!.requestedTag).toBeNull();
+  });
+
+  it("a row that is ITSELF halting gets no request — the only door out is ack, which would erase it (corrected: the halt's own exit)", async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    verdict(f.coord, FLEET_ID, 'spawn-failed — update: fixture refusal');
     const before = f.coord.node(FLEET_ID)!;
     const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
     expect(r.statusCode, r.body).toBe(202);
-    expect(r.json()).toEqual({ ok: true, requested: [SERVER_ID], skipped: [{ nodeId: FLEET_ID, why: 'busy' }] });
-    // No request written, and no note either — the row is busy, not idle (`noteDispatchRefusal` refuses it anyway).
+    expect(r.json()).toEqual({
+      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'halted' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+    } satisfies MoveRequestAnswer);
+    // Nothing written on either — the halt's own detail is the verdict, and the server was never asked at all.
     expect(f.coord.node(FLEET_ID)).toEqual(before);
+    expect(f.coord.node(SERVER_ID)!.requestedTag).toBeNull();
+    // Ack the halting row, and confirm no stray request moves the server: `requestAll` wrote none, so there is
+    // nothing for the dispatcher to plan.
+    expect(f.coord.ackNode(FLEET_ID).ok).toBe(true);
+    const plan = planDispatch({
+      nodes: dispatchViewsFor(f.coord),
+      releases: resolveInputFor(f.coord, f.coord.node(SERVER_ID)!).releases,
+    });
+    expect(plan.move, JSON.stringify(plan)).toBeNull();
+  });
+
+  it("a fleet row's own busy lease skips it — and holds the server behind it too, never moving the server ahead (D-3406, D-3401 corrected)", async () => {
+    const f = await open();
+    catalogue(f.coord);
+    plant(f.coord, fleetNode());
+    plant(f.coord, serverNode());
+    hold(f.coord, FLEET_ID);   // an older tag's lease, still outstanding
+    const before = f.coord.node(FLEET_ID)!;
+    const beforeServer = f.coord.node(SERVER_ID)!;
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.11' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({
+      ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: 'busy' }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+    } satisfies MoveRequestAnswer);
+    // No request written, and no note either — the row is busy, not idle (`noteDispatchRefusal` refuses it
+    // anyway); the server was never asked at all, so nothing changed there either.
+    expect(f.coord.node(FLEET_ID)).toEqual(before);
+    expect(f.coord.node(SERVER_ID)).toEqual(beforeServer);
   });
 });
 
@@ -698,6 +747,24 @@ describe('a request write dispatches in the same turn (§18 "a request write tri
     held.release({ code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
     await vi.waitFor(() => expect(f.coord.node(SERVER_ID)!.updateState).toBe('failed'), { timeout: 3000 });
     expect(held.calls).toEqual([[updateLauncherPath(f.home), [...updateSpawnArgv('rollback', 'v0.0.8')]]]);
+  });
+
+  it('{all: true}: likewise — when the 202 is read, the one node it requested already holds the lease (review finding 2, minor: the trigger was unpinned for {all})', async () => {
+    const held = heldRunner();
+    const f = await open({ watcher: true, runner: held.runner });
+    catalogue(f.coord);
+    plant(f.coord, serverNode({ role: 'both' }));   // the only live row, so unambiguously the one dispatch moves
+    const before = Date.now();
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: 'v0.0.10' });
+    expect(r.statusCode, r.body).toBe(202);
+    expect((r.json() as MoveRequestAnswer).requested).toEqual([SERVER_ID]);
+    const row = f.coord.node(SERVER_ID)!;
+    expect(row.updateState, 'no dispatch ran in the {all: true} request').toBe('pending');
+    expect(row.updateTarget).toBe('v0.0.10');
+    expect(row.updateStartedAt!).toBeGreaterThanOrEqual(before);
+    held.release({ code: 1, stdout: '', stderr: 'update: fixture refusal\n' });
+    await vi.waitFor(() => expect(f.coord.node(SERVER_ID)!.updateState).toBe('failed'), { timeout: 3000 });
+    expect(held.calls).toEqual([[updateLauncherPath(f.home), [...updateSpawnArgv('update', 'v0.0.10')]]]);
   });
 });
 
