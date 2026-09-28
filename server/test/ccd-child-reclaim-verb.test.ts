@@ -1919,6 +1919,9 @@ describe('"gone" is PROVEN — a path that could not be looked at is never read 
 
     it('a mode-000 directory holding the flagged path answers UNMEASURED — never "no edit" (today: skipped, no path)', () => {
       const main = flaggedRepo('sparse-hidden');
+      // A real skip-worktree EDIT, as the ruling's case holds: git reads the
+      // index blob, so only the edited bytes make "no edit" a lost edit.
+      fs.writeFileSync(path.join(main, 'sub', 'f.txt'), 'password: zzzzzzzz\n');
       fs.chmodSync(path.join(main, 'sub'), 0o000);
       let a: { rc: string; why: string; paths: string[] };
       try { a = hiddenOf(main); } finally { fs.chmodSync(path.join(main, 'sub'), 0o755); }
