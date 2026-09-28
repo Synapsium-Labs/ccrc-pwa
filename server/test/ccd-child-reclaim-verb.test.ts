@@ -1383,6 +1383,59 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
     }, 90_000);
   }
+
+  /** The child's OWN workdir resolved to a `//` spelling: `$HOME/worktrees`
+   *  becomes a link to `/` + `$HOME/wtreal`, and the other session's row names
+   *  the REAL path inside the child (rereview fr171-B-r2 I1). Returns that
+   *  row's value, and whether this platform's `pwd -P` kept the `//` (read,
+   *  never assumed; mandatory off Darwin). */
+  const relinkChild = (c: Child): { real: string; kept: boolean } => {
+    fs.renameSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtreal'));
+    fs.symlinkSync(`/${path.join(h.home, 'wtreal')}`, path.join(h.home, 'worktrees'));
+    const kept = h.sh(`_ws_realpath "${c.wt}"`).startsWith('//');
+    if (process.platform !== 'darwin') expect(kept, 'the child resolves to a `//` spelling').toBe(true);
+    return { real: path.join(h.home, 'wtreal', 'demo', 'quiet-basin', 'server'), kept };
+  };
+
+  it('a CHILD whose own workdir resolves through a `//` link: the fresh arm answers `probe-unmeasured`, and the other session’s files stand', () => {
+    const c = makeChild(h);
+    plantNested(c);
+    const { real, kept } = relinkChild(c);
+    const tok = evalOf(h).token;
+    expect(tok, 'with no other row the audit mints a token').toMatch(/^[0-9a-f]{64}$/);
+    plantRow(real);
+    const before = treeOf(c.wt);
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
+    expect(fs.readFileSync(path.join(real, 'live.txt'), 'utf8')).toContain('uncommitted');
+    if (!kept) { expect(refusedWith(r)).toBe('containment-unproven'); intact(c); return; }
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(o['failed']).toBe('probe-unmeasured');
+    expect(String(o['detail'])).toContain(`registry row(s) demo-nested cannot be placed against this child: ${CHILD_ID}'s own workdir resolves to a path opening with //`);
+    expect(String(o['detail']), 'the row’s value is never printed').not.toContain(real);
+    expect(h.reg(CHILD_ID, 'reaping'), 'nothing started: no breadcrumb').toBeNull();
+    intact(c);
+  }, 90_000);
+
+  it('the same child stops a RESUMED tail with `worktree-remove-failed` — the tree byte-identical, the breadcrumb kept', () => {
+    const c = makeChild(h);
+    plantNested(c);
+    interrupted(c, 'worktree');
+    const tok = resumeToken('worktree');
+    const { real, kept } = relinkChild(c);
+    plantRow(real);
+    const before = treeOf(c.wt);
+    const r = childReclaimVerb(h, tok);
+    expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('worktree-remove-failed');
+    if (kept) expect(o.detail).toContain(`${CHILD_ID}'s own workdir resolves to a path opening with //`);
+    expect(h.calls(), 'it stops AFTER the kill: the child’s pane is down, nothing deleted').toContain(KILL);
+    failedPairAgrees(r);
+    expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+  }, 90_000);
 });
 
 describe('a nested checkout is PROVEN inside the child’s tree before it is removed — every component, and git’s record (spec §5.5)', () => {

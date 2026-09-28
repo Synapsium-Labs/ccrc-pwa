@@ -1187,6 +1187,69 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(c.detail).toContain('registry row(s) demo-plainlink rooted inside');
   }, 60_000);
 
+  it('a `//` VALUE is unplaced even where it resolves plain — through an absolute-target link — so the literal clause is pinned on its own', () => {
+    // bash's `pwd -P` drops a leading `//` at a link with an ABSOLUTE target,
+    // so `//$HOME/abslink/quiet-basin/server` resolves to the plain
+    // `<child>/server`: the resolved clause passes it, and only the literal
+    // one refuses to place it (rereview fr171-B-r2 M2). Without the literal
+    // clause the row would place as NESTED and refuse — never a deletion.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    fs.symlinkSync(path.join(h.home, 'worktrees', 'demo'), path.join(h.home, 'abslink'));
+    const row = `/${path.join(h.home, 'abslink', 'quiet-basin', 'server')}`;
+    if (process.platform !== 'darwin') {
+      expect(h.sh(`_ws_realpath "${row}"`), 'it resolves plain, so the resolved clause passes it').toBe(path.join(wt, 'server'));
+    }
+    otherRow('demo-absrow', row);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) demo-absrow ${UNPLACED}`);
+    expect(r.detail, 'the value is never printed').not.toContain('abslink');
+    expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('a CHILD whose own workdir resolves to a `//` spelling places no other row against it — unmeasured; a row LITERALLY naming it or a path inside it still refuses', () => {
+    // `$HOME/worktrees` -> `/` + `$HOME/wtreal`: the child's workdir resolves
+    // to `//…/wtreal/demo/quiet-basin`, so a row spelled by the REAL path
+    // inside the child resolves plain, is no prefix of it, and read as
+    // outside — the verb removed its files (rereview fr171-B-r2 I1, measured).
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    const real = path.join(h.home, 'wtreal', 'demo', 'quiet-basin', 'server');
+    // The CONTROL, an ordinary child: the real path is the child's, and the row refuses.
+    otherRow('demo-other', path.join(wt, 'server'));
+    expect(evalOf(h).verdict, 'an ordinary child refuses the nested row').toBe('containment-unproven');
+    dropRow('demo-other');
+    fs.renameSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtreal'));
+    fs.symlinkSync(`/${path.join(h.home, 'wtreal')}`, path.join(h.home, 'worktrees'));
+    const mine = h.sh(`_ws_realpath "${wt}"`);
+    if (process.platform !== 'darwin') expect(mine, 'the child resolves to a `//` spelling').toBe(`/${path.join(h.home, 'wtreal', 'demo', 'quiet-basin')}`);
+    expect(evalOf(h).verdict, 'with no other row there is nothing to place: it reclaims').toBe('reclaimable');
+    otherRow('demo-other', real);
+    const r = evalOf(h);
+    if (mine.startsWith('//')) {
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain(`registry row(s) demo-other cannot be placed against this child: ${CHILD_ID}'s own workdir resolves to a path opening with //`);
+      expect(r.detail, 'the value is never printed').not.toContain('wtreal');
+    } else {
+      expect(r.verdict, r.detail).toBe('containment-unproven');
+    }
+    expect(r.token).toBe('');
+    expect(fs.readFileSync(path.join(real, 'live.txt'), 'utf8')).toContain('uncommitted');
+    // A literal refusal still outranks it (M1): a row naming the child's own
+    // spelling, and one naming a path inside it through that spelling.
+    for (const [id, spelled, says] of [['demo-twin', wt, 'also named by registry row(s) demo-twin'],
+      ['demo-nested', path.join(wt, 'server'), 'registry row(s) demo-nested rooted inside']] as const) {
+      otherRow(id, spelled);
+      const t = evalOf(h);
+      expect(t.verdict, `${id}: ${t.detail}`).toBe('containment-unproven');
+      expect(t.detail).toContain(says);
+      dropRow(id);
+    }
+  }, 90_000);
+
   it('the CONTROL for `//`: a trailing-`/` row rooted inside the child still refuses containment-unproven, and so does a `///` one', () => {
     const { wt } = makeChild(h);
     fs.mkdirSync(path.join(wt, 'server'));

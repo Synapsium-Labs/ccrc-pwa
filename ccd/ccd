@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e9de8972234e072c71090b3e5020255992a7b5d3cdf3e20615438af15d9e79db
+# ccrc:generated 1 sha256=448dae5f4c9ca7b91a2d7062e05c759599b775188a7ce9e8daccde90e358ac2e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23806,11 +23806,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 a plain one — each comma-joined
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
-  #                                 `.workdir` would not read, or a row's `.workdir` is not absolute,
-  #                                 opens with `//`, or resolves to a path that does (it cannot be
-  #                                 placed) — the last two only when the same pass found no
-  #                                 SHARED, NESTED or THROUGH row, which outranks them; a row's value is
-  #                                 never printed, only its id
+  #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
+  #                                 opens with `//`, or resolves to a path that does, or the child's own
+  #                                 workdir resolves to one (the row cannot be placed) — every case after
+  #                                 the listing only when the same pass found no SHARED, NESTED or THROUGH
+  #                                 row, which outranks it; a row's value is never printed, only its id
   # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
   # path itself). Registry corruption or an old slug collision can leave a
   # child's row naming ANOTHER live session's worktree with no link anywhere
@@ -23881,8 +23881,15 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # fix round): a plain absolute row reached through a link whose target
   # opens with `//` resolves to `//<child>/server` and read as outside, and
   # the verb removed that session's files too (measured). `_ws_realpath` is
-  # not edited; its answer is refused here, where it is compared.
-  local id="$1" wd="$2" mine names n o w wr rc unread='' unplaced=''
+  # not edited; its answer is refused here, where it is compared. And the
+  # CHILD's own resolved spelling too (its third fix round): a child laid out
+  # through such a link resolves to `//…`, a row spelled by the REAL path
+  # inside it resolves plain and is no prefix of it, and the verb removed that
+  # session's files (measured). So a row not LITERALLY at or below the child's
+  # workdir is not compared with a `//` child at all. A row that is literally
+  # there skips both resolved-`//` clauses: the chain below always refuses it,
+  # and a terminal refusal must never read as a retry.
+  local id="$1" wd="$2" mine names n o w wr rc lit unread='' unplaced='' unmine=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -23896,7 +23903,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     wr=$(_ws_realpath "$w")
-    [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
+    (( lit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    (( lit )) || [[ "$mine" != //[!/]* ]] || { unmine+="${unmine:+, }$o"; continue; }
     if [[ "$w" == "$wd" || "$wr" == "$mine" ]]; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
     elif { [[ "$wr" == "${mine%/}/"* ]] && _ws_reclaim_plain_path "$wr"; } \
@@ -23907,7 +23916,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     fi
   done <<< "$names"
   [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
-  [[ -z "$unread" ]] || _WS_SHARED_WHY="could not read $unread"
+  [[ -z "$unmine" ]] \
+    || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir resolves to a path opening with //, so ccd cannot compare another row with it — re-point the link whose target opens with //"
+  [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
