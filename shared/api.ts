@@ -8816,7 +8816,7 @@ export interface RollbackUpdateBody { nodeId: string; to?: string }
  *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
  *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
  *
- *  Two more words a row's OWN state can answer with, corrected after review: a row that is ITSELF halting
+ *  Two more words a row's OWN state can answer with (D-3408): a row that is ITSELF halting
  *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
  *  is even asked — the only door out of a halt is `ack`, which clears the request columns, so a request written
  *  beside a halting row's own verdict would be silently erased the same way a busy row's would; its detail is

@@ -395,7 +395,7 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * dispatcher can only refuse stands until `ack`, and on a fleet row it would hold every server move behind it,
  * D-3381). Always 202 (§12).
  *
- * A ROW THAT IS ITSELF HALTING IS SKIPPED FIRST (corrected after review): `isHalting(row)` — a `failed`/
+ * A ROW THAT IS ITSELF HALTING IS SKIPPED FIRST (D-3408): `isHalting(row)` — a `failed`/
  * `reverted` row that is not a provenance verdict — is checked BEFORE `moveRefusal`, `why: 'halted'`, with no
  * request and no note written. The only door out of a halt is `ack`, and `ackNode` clears the request columns
  * in the same transaction — a request written onto a halting row here would be silently erased by that same
@@ -405,7 +405,7 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  * purpose), so a row that is not itself halting still gets its request even while the fleet is halted by some
  * other row.
  *
- * THE SERVER NEVER MOVES AHEAD OF A SKIPPED FLEET ROW (corrected after review): while ANY live fleet-role row
+ * THE SERVER NEVER MOVES AHEAD OF A SKIPPED FLEET ROW (D-3408): while ANY live fleet-role row
  * (`dispatchRank(row.role) === 0`) was skipped in this same call for its OWN lease (`busy`) or its OWN halt
  * (`halted`) — never for a capability word or `not-newer`, which do not block the row's peers — every row whose
  * rank is not fleet's is skipped `waiting-for-fleet` instead of being asked anything else, with no request and
