@@ -276,6 +276,17 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
   });
 
+  it('a server-role spawn that exits non-zero with NO stderr names its exit, not the generic "no message" a missing launcher would share with a silent failure (Task 5 review finding 3)', async () => {
+    const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: '' }) });
+    seedServer(h);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({
+      nodeId: SERVER_ID, result: 'released', to: 'failed', detail: 'spawn-failed — exit 1 with no stderr from the launcher',
+    });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'failed', updateDetail: 'spawn-failed — exit 1 with no stderr from the launcher' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+  });
+
   it('an ok reply without accepted: true → failed, named (D-3399)', async () => {
     const h = harness({ send: async () => ({ t: 'res', id: 1, ok: true }) });
     seedFleet(h);
@@ -622,6 +633,31 @@ describe('FleetWatcher — the dispatcher runs single-flight, at the end of ever
     expect(once).toHaveBeenCalledTimes(2);
     expect(sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
     expect(inventory).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected dispatch run is logged once and recovered — single-flight is not wedged by a thrown run (Task 5 review findings 1/2)', async () => {
+    const { watcher, once } = watcherFor({ role: 'both' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    once.mockRejectedValueOnce(new Error('boom'));
+    // The second trigger JOINS the run the first one already started (single-flight) and asks for exactly one
+    // follow-up — the same "join, don't stack" contract the other FleetWatcher cases above pin for a resolving
+    // run; here the run REJECTS instead.
+    watcher.triggerDispatch();
+    watcher.triggerDispatch();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const rejectWarns = warn.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /a dispatch run rejected: .*boom/.test(c[0]),
+    );
+    // ONE warn for the one rejection — even though TWO triggers touched this same run (review finding 2: a
+    // `.catch` attached inside `triggerDispatch` fires once per joiner, logging the same rejection twice).
+    expect(rejectWarns).toHaveLength(1);
+    // The queued follow-up (from the second `triggerDispatch`) ran a real second dispatch — single-flight
+    // recovered rather than staying wedged on the thrown run (review finding 1).
+    expect(once).toHaveBeenCalledTimes(2);
+    // And a caller reaching for a THIRD run afterward gets a fresh promise that resolves cleanly, not the
+    // rejected run replayed forever.
+    await expect(watcher.dispatchNow()).resolves.toBeDefined();
   });
 
   it('without a coord store there is nothing to dispatch', async () => {

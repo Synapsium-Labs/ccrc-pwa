@@ -919,6 +919,9 @@ export class FleetWatcher {
       this.dispatchAgain = true;
       return this.dispatchRun;
     }
+    // `.finally`, not `.then` — it must clear `dispatchRun` whether this run resolves OR rejects. A `.then`
+    // success-only callback would never run on a rejection, so a single thrown run would leave the single-flight
+    // field set forever and nothing would dispatch again until restart (review finding 1).
     const run = this.dispatchOnce().finally(() => {
       this.dispatchRun = null;
       if (this.dispatchAgain) {
@@ -926,16 +929,21 @@ export class FleetWatcher {
         this.triggerDispatch();
       }
     });
+    // D-3493 — the update lanes' rule at the tip: a rejection is warned, never swallowed. Attached ONCE, here, at
+    // the run's own creation — never inside `triggerDispatch`, which every caller that JOINS this same run also
+    // calls: a `.catch` there would fire once per joiner, logging one rejection N times (review finding 2).
+    void run.catch((err: unknown) => {
+      console.warn(`ccrc-server: a dispatch run rejected: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    });
     this.dispatchRun = run;
     return run;
   }
 
-  /** For a caller that must not wait: the inventory run's tail, a route's reply. */
+  /** For a caller that must not wait: the inventory run's tail, a route's reply. Fire-and-forget only —
+   *  `dispatchNow` itself attaches the rejection log to the run it creates (see above), so this must not attach
+   *  a second one. */
   triggerDispatch(): void {
-    void this.dispatchNow().catch((err: unknown) => {
-      // D-3493 — the update lanes' rule at the tip: a rejection is warned, never swallowed.
-      console.warn(`ccrc-server: a dispatch run rejected: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-    });
+    void this.dispatchNow();
   }
 
   /** The act's deps, built from this process's Deps — the ONE place they are assembled. The server's own

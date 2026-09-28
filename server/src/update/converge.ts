@@ -194,7 +194,14 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   try {
     const res = await withinSpawnDeadline(child);
     if (res === TIMED_OUT) return { kind: 'transport', why: 'timeout', message: SPAWN_TIMEOUT_MESSAGE };
-    return res.code === 0 ? { kind: 'accepted' } : { kind: 'refused', err: 'spawn-failed', detail: firstStderrLine(res.stderr) };
+    if (res.code === 0) return { kind: 'accepted' };
+    // A missing launcher (`realRunner`'s spawn-error branch) answers `code: 1, stderr: ''` — the child never ran,
+    // so there is no line to name and `firstStderrLine` would render the generic 'no message', indistinguishable
+    // from a launcher that ran, failed and simply printed nothing. Name the one condition this path can actually
+    // tell apart: an empty stderr on a non-zero exit means the launcher itself never spoke (review finding 3).
+    const stderrLine = firstStderrLine(res.stderr);
+    const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
+    return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {
     return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e) };
   }
