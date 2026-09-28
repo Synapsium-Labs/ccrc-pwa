@@ -23,6 +23,7 @@ import {
   ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES, TAG_FILE_READS,
   SPAWN_VERDICTS,
 } from '../../shared/api.js';
+import { UPDATE_OP_ERRORS } from '../../shared/agent-protocol.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
@@ -3739,27 +3740,56 @@ describe('the update op — its refusal words and its launcher are declared once
     }
   });
 
-  it('the four words are listed together in one file — a second list is a second vocabulary', () => {
-    // The ordered list, not the words alone: `bad-tag` and `busy` are also
+  it('the four words are listed together in one file, in any order or quote style — a second list is a second vocabulary', () => {
+    // The words alone don't prove a copy: `bad-tag` and `busy` are also
     // route and store words (`UpdateRouteError`, `UPDATE_STORE_REFUSE_CODES`),
     // and the dispatcher's answer mapping names `spawn-failed` in a `case`.
-    const LIST = /'bad-tag'\s*,\s*'bad-kind'\s*,\s*'busy'\s*,\s*'spawn-failed'/;
-    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel);
+    // What proves a second vocabulary is all four TOGETHER — derived from
+    // `UPDATE_OP_ERRORS` itself, so a reordered or double-quoted copy still
+    // counts, not just this file's own single-quoted, in-order spelling. A
+    // holder is a single line, or a single `[...]` array-literal span, that
+    // quotes all four.
+    const words = [...UPDATE_OP_ERRORS];
+    const quoted = (w: string): RegExp => new RegExp(`(['"])${w}\\1`);
+    const hasAllWords = (span: string): boolean => words.every((w) => quoted(w).test(span));
+    const isListHolder = (text: string): boolean =>
+      text.split('\n').some(hasAllWords) || (text.match(/\[[^[\]]*\]/g) ?? []).some(hasAllWords);
+    const holders = ALL.filter((f) => isListHolder(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
+  // Both scans below must not fire on `shared/agent-protocol.ts`'s OWN
+  // docstrings (around lines 379 and 386), which legitimately say
+  // `` `$HOME/.local/bin/ccrc` `` / `` `<home>/.local/bin/ccrc` `` as prose —
+  // so both read the source with every comment line (a trimmed start of
+  // `//`, `/*` or `*`) stripped first.
+  const stripCommentLines = (text: string): string =>
+    text
+      .split('\n')
+      .filter((l) => {
+        const t = l.trim();
+        return !(t.startsWith('//') || t.startsWith('/*') || t.startsWith('*'));
+      })
+      .join('\n');
+
   it("the launcher's path parts are spelled in one file — the agent and the server-role spawn call updateLauncherPath", () => {
-    const PARTS = /'\.local'\s*,\s*'bin'\s*,\s*'ccrc'/;
-    const holders = ALL.filter((f) => PARTS.test(readFileSync(f, 'utf8'))).map(rel);
+    // The three-arg array literal, and the two ways a `join(home, ...)` caller
+    // could split it across two arguments instead: `'.local', 'bin/ccrc'` or
+    // `'.local/bin', 'ccrc'`. Either quote style.
+    const PARTS =
+      /['"]\.local['"]\s*,\s*['"]bin['"]\s*,\s*['"]ccrc['"]|['"]\.local['"]\s*,\s*['"]bin\/ccrc['"]|['"]\.local\/bin['"]\s*,\s*['"]ccrc['"]/;
+    const holders = ALL.filter((f) => PARTS.test(stripCommentLines(readFileSync(f, 'utf8')))).map(rel);
     expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
   it('no TS root spells the launcher as one quoted path string', () => {
-    // `'…/.local/bin/ccrc'` or `"…/.local/bin/ccrc/…"`. `ccrc-api`'s path
+    // `'…/.local/bin/ccrc'`, `"…/.local/bin/ccrc/…"`, or a backtick template
+    // (`` `${home}/.local/bin/ccrc` ``) — no leading `/` is required before
+    // `.local`, so a bare `'.local/bin/ccrc'` counts too. `ccrc-api`'s path
     // (`coord/envelope.ts`) is a different binary and does not match: the
-    // character after `ccrc` must be a quote or a slash.
-    const QUOTED = /['"][^'"\n]*\/\.local\/bin\/ccrc['"/]/;
-    const holders = ALL.filter((f) => QUOTED.test(readFileSync(f, 'utf8'))).map(rel);
+    // character after `ccrc` must be a quote, a slash, or the end of the line.
+    const QUOTED = /['"`][^'"`\n]*\.local\/bin\/ccrc(?:['"`/]|$)/m;
+    const holders = ALL.filter((f) => QUOTED.test(stripCommentLines(readFileSync(f, 'utf8')))).map(rel);
     expect(holders).toEqual([]);
   });
 });

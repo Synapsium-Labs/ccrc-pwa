@@ -100,6 +100,9 @@ describe('firstStderrLine — what a spawn-failed answer carries (D-3372)', () =
   it("keeps printable ASCII only — every other run is one space, then trimmed (W2's printableDetail rule)", () => {
     expect(firstStderrLine('a—b\u0000c')).toBe('a b c');
     expect(firstStderrLine('\tindented\u0007')).toBe('indented');
+    // A RUN of several non-printable characters folds to exactly one space,
+    // not one space per character: `\u0000\u0001—` is three, not one.
+    expect(firstStderrLine('a\u0000\u0001—b')).toBe('a b');
   });
 
   it('is cut to UPDATE_OP_DETAIL_MAX', () => {
@@ -154,6 +157,18 @@ describe('inFlightReport — is a run in flight right now (asked by the agent an
   });
 
   it('a text that is not one JSON object is not in flight', () => {
+    // `typeof parsed !== 'object'` and `Array.isArray(parsed)` are defence in
+    // depth that no case here actually distinguishes: JSON's array syntax
+    // cannot carry a named `phase` key (`JSON.stringify` drops non-index
+    // properties on an array, and there is no array *literal* syntax for one
+    // either), and reading `.phase` off any other non-object JSON value
+    // (a string, a number, a boolean) is a safe `undefined` through
+    // auto-boxing, never a throw — only `null` throws, and that is pinned
+    // separately below. So every case here would read the same `null` with
+    // just the `parsed === null` guard in place; they still exercise real
+    // parse/shape edges (a truncated document, a bare array, a primitive, an
+    // empty string, an array of objects), just not those two guards apart
+    // from the null one.
     for (const text of ['{', '[]', 'null', '"installing"', '42', '', '[{"phase":"installing"}]']) {
       expect(inFlightReport(text), JSON.stringify(text)).toBeNull();
     }
