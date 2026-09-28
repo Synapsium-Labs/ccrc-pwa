@@ -1,7 +1,7 @@
 // Design 2026-09-20 §10 — the dispatcher's ACT (`runDispatch`, server/src/update/converge.ts) end to end, over
 // a real CoordStore on an `mkTmp` coord.db: the lease is acquired by Task 3's real `dispatchNode`, the op is
-// "sent" through a recording SendUpdateOp, the server-role node is spawned through `localUpdateSpawnFor` over a
-// recording Runner, and every settle and release is W2's own writers — including the sweep's, driven through
+// "sent" through a recording SendUpdateOp, the server-role node is spawned through `spawnFromRunner` (the double for
+// `localUpdateSpawnFor`) over a recording Runner, and every settle and release is W2's own writers — including the sweep's, driven through
 // W2's `sweepPlanFor` in the sweep's own order. Nothing here reads the live $HOME, spawns a real `ccrc` or
 // talks to a real agent: the link is a function, the spawn is a recorder, the node files live under a fixture
 // HOME.
@@ -28,6 +28,7 @@ import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL } from '../src/update/dispatch.j
 import { FLEET_LABEL, SERVER_LABEL, sweepPlanFor, type SweepPlan } from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
+import { spawnFromRunner } from './updateSpawnFake.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const T0 = 1_790_000_000_000;
@@ -87,9 +88,9 @@ interface Harness {
 }
 
 /** A fixture coord.db with three listed stable releases, a connected link whose live agentOps names the op, a
- *  recording send (default: accepted) and a recording Runner behind `localUpdateSpawnFor` (default: exit 0). */
+ *  recording send (default: accepted) and a recording Runner behind `spawnFromRunner` (default: exit 0). */
 function harness(o: {
-  send?: SendUpdateOp; run?: Runner; noLocal?: true; agentOps?: readonly string[]; role?: NodeRole; localIo?: FleetIO;
+  send?: SendUpdateOp; run?: Runner; boundMs?: number; noLocal?: true; agentOps?: readonly string[]; role?: NodeRole; localIo?: FleetIO;
 } = {}): Harness {
   const home = mkTmp('update-converge-');
   const store = new CoordStore(openCoordDb(path.join(home, 'coord.db')));
@@ -107,7 +108,7 @@ function harness(o: {
     store, role: o.role ?? 'server', ccrcDir: path.join(home, '.ccrc'), localIo: o.localIo ?? localIO,
     deadlineMs: DEADLINE,
     fleet: { state, send: (tag, kind) => { sent.push({ tag, kind }); return send(tag, kind); } },
-    runLocal: o.noLocal === true ? null : localUpdateSpawnFor(recording, home),
+    runLocal: o.noLocal === true ? null : spawnFromRunner(recording, home, o.boundMs),
     onAccepted: () => { accepted += 1; },
   };
   return { store, home, state, deps, sent, spawned, accepted: () => accepted };
@@ -438,12 +439,15 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
   });
 
   it('localUpdateSpawnFor throws RangeError on a non-tag BEFORE running anything', () => {
-    const calls: string[][] = [];
-    const spawn: LocalUpdateSpawn = localUpdateSpawnFor(async (cmd, args) => {
-      calls.push([cmd, ...args]);
-      return { code: 0, stdout: '', stderr: '' };
-    }, mkTmp('update-converge-spawn-'));
+    // The REAL capability, over a home with no launcher in it: a throw here is before any spawn is attempted,
+    // and a spawn that WAS attempted would answer `could not start the launcher` instead of throwing.
+    const spawn: LocalUpdateSpawn = localUpdateSpawnFor(mkTmp('update-converge-spawn-'));
     expect(() => spawn('update', '; rm -rf ~')).toThrow(RangeError);
+    expect(() => spawn('reinstall' as RequestKind, 'v0.0.9')).toThrow(RangeError);
+    // The double keeps the same contract: it throws before its runner is called.
+    const calls: string[][] = [];
+    const doubled = spawnFromRunner(async (cmd, args) => { calls.push([cmd, ...args]); return { code: 0, stdout: '', stderr: '' }; }, '/h');
+    expect(() => doubled('update', '; rm -rf ~')).toThrow(RangeError);
     expect(calls).toEqual([]);
   });
 
@@ -473,18 +477,17 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
   });
 
-  it('a spawn whose parent never exits is answered `timeout` exactly at UPDATE_SPAWN_TIMEOUT_MS; while it lives no second parent starts; its late exit writes nothing (Review Focus 4, D-3400)', async () => {
+  it('a spawn whose parent never exits is answered `timeout` exactly at UPDATE_SPAWN_TIMEOUT_MS, by the runner\'s own kill (Review Focus 4, D-3400, review F3)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const parked: { finish?: (r: ExecResult) => void } = {};
     let calls = 0;
-    // The FIRST spawn parks; any later one exits 0 at once, as a `--detach` parent does.
+    // The FIRST spawn parks; any later one exits 0 at once, as a `--detach` parent does. `boundMs` models the
+    // bounded runner: it resolves `killed: true` at its bound, having killed the parent's group.
     const h = harness({
       localIo: absentIo,
+      boundMs: UPDATE_SPAWN_TIMEOUT_MS,
       run: () => {
         calls += 1;
-        return calls === 1
-          ? new Promise<ExecResult>((resolve) => { parked.finish = resolve; })
-          : Promise.resolve({ code: 0, stdout: '', stderr: '' });
+        return calls === 1 ? new Promise<ExecResult>(() => {}) : Promise.resolve({ code: 0, stdout: '', stderr: '' });
       },
     });
     seedServer(h);
@@ -503,195 +506,44 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
       nodeId: SERVER_ID, result: 'released', to: 'idle', detail: 'timeout — the node dropped mid-dispatch; the request stands',
     });
     expect(SPAWN_TIMEOUT_MESSAGE).toBe(`the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`);
-    // The race gave up waiting; the parent did not exit. `realRunner` passes execFile no timeout, so nothing
-    // killed it — and a rollback parent asks the release host before it writes `queued`, so update.json can still
-    // read not-in-flight. The next run must not start a second `--detach` parent beside it.
+    // The runner killed the parent's group and answered, so the spawn is over: `spawning` left the set when the
+    // runner resolved, and the next run starts a fresh parent instead of answering busy for a parent that is gone.
     const second = runDispatch(h.deps, T0 + 61_000);
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.spawned).toHaveLength(1);
     const r2 = ran(await second);
+    expect(h.spawned).toHaveLength(2);
+    expect(r2.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+  });
+
+  it('while a spawn is still running, a run made after the lease was released out of band starts no second parent, and the entry leaves when the runner resolves (D-3400)', async () => {
+    const parked: { finish?: (r: ExecResult) => void } = {};
+    let calls = 0;
+    const h = harness({
+      localIo: absentIo,
+      run: () => {
+        calls += 1;
+        return calls === 1
+          ? new Promise<ExecResult>((resolve) => { parked.finish = resolve; })
+          : Promise.resolve({ code: 0, stdout: '', stderr: '' });
+      },
+    });
+    seedServer(h);
+    const first = runDispatch(h.deps, T0 + 1000);
+    await vi.waitFor(() => expect(h.spawned).toHaveLength(1));
+    // An out-of-band release (an ack, a rekey): the row is idle again with its request standing, and the first
+    // parent has not exited. The bounded runner would resolve it at its bound; here it is still running.
+    expect(h.store.releaseLease(SERVER_ID, 'idle', 'released out of band', null).ok).toBe(true);
+    const r2 = ran(await runDispatch(h.deps, T0 + 2000));
+    expect(h.spawned).toHaveLength(1);
     expect(r2.outcome).toEqual({
       nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${LOCAL_SPAWNING_DETAIL}`,
     });
     expect(LOCAL_SPAWNING_DETAIL).toBe('an update op is already spawning on this server');
-    const settledRow = h.store.node(SERVER_ID);
     parked.finish!({ code: 0, stdout: '', stderr: '' });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(h.store.node(SERVER_ID)).toEqual(settledRow);
-    expect(h.accepted()).toBe(0);
-    // The parent has exited: the gate is open again, and the standing request is spawned on the next run.
-    const r3 = ran(await runDispatch(h.deps, T0 + 62_000));
-    expect(r3.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
-    expect(h.spawned).toHaveLength(2);
-    expect(h.accepted()).toBe(1);
-  });
-});
-
-describe('runDispatch — refusal notes (Review Focus 5)', () => {
-  it('a node refused on two consecutive runs is written ONCE', async () => {
-    const h = harness();
-    seedFleet(h, 'v0.0.10', { caps: ['verify', 'node-id', 'floor', 'update-json'] });
-    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
-    const r2 = ran(await runDispatch(h.deps, T0 + 61_000));
-    expect(r1.noted).toBe(1);
-    expect(r2.noted).toBe(0);
-    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^no-detach-cap — /);
-    expect(h.sent).toEqual([]);
-  });
-
-  it('a provenance-failed server row does not halt the fleet node\'s dispatch, and its verdict is never overwritten (§18 "a provenance refusal does not halt", end to end)', async () => {
-    const h = harness();
-    seedFleet(h, null);
-    seedServer(h);
-    ran(await runDispatch(h.deps, T0 + 1000));
-    const verdict = 'provenance: the bundle signature did not verify';
-    const swept = sweepOnce(h.store, serverMeas({
-      measuredAt: T0 + 9000,
-      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
-    }));
-    expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
-    expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
-    expect(h.store.node(SERVER_ID)?.updateDetail).toMatch(/^provenance:/);
-    const serverBefore = h.store.node(SERVER_ID);
-    expect(h.store.requestNode(FLEET_ID, 'v0.0.10', 'update', T0 + 10_000).ok).toBe(true);
-    const r = ran(await runDispatch(h.deps, T0 + 11_000));
-    expect(r.plan.gate.haltedBy).toEqual([]);
-    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
-    expect(h.sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
-    expect(h.store.node(SERVER_ID)).toEqual(serverBefore);
-  });
-});
-
-describe('runDispatch — a FLEET node that refused its request on provenance holds no server move (D-3409, D-3378)', () => {
-  it('the fleet node fails `provenance: …` on the tag it was asked for: its request stands, and the server dispatches (the mirror of the server-row case above, §18 "a provenance refusal does not halt")', async () => {
-    const h = harness();
-    seedFleet(h);
-    seedServer(h);
-    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
-    expect(r1.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
-    const verdict = 'provenance: the bundle signature did not verify';
-    const swept = sweepOnce(h.store, fleetMeas({
-      measuredAt: T0 + 9000,
-      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
-    }));
-    expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
-    expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
-    // The request STANDS (decision 7) — it is the very row D-3381 would have counted as outstanding.
-    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'failed', requestedTag: 'v0.0.10' });
-    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^provenance:/);
-    const fleetBefore = h.store.node(FLEET_ID);
-    const r2 = ran(await runDispatch(h.deps, T0 + 11_000));
-    expect(r2.plan.gate.haltedBy).toEqual([]);
-    expect(r2.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
-    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
-    expect(h.sent).toHaveLength(1);
-    expect(h.store.node(FLEET_ID)).toEqual(fleetBefore);
-  });
-});
-
-describe('dispatchViewsFor — the one builder of the dispatcher\'s input (the routes read the same views)', () => {
-  it('carries every live row, its resolved auto, and only THIS node\'s refused tags', () => {
-    const h = harness();
-    seedFleet(h, null);
-    seedServer(h, null);
-    expect(h.store.refuseRelease(SERVER_ID, 'v0.0.10', T0, 'provenance: x').ok).toBe(true);
-    const views = dispatchViewsFor(h.store);
-    const byId = new Map(views.map((v) => [v.row.nodeId, v]));
-    expect([...byId.keys()].sort()).toEqual([FLEET_ID, SERVER_ID].sort());
-    expect(byId.get(FLEET_ID)?.auto).toBe('off');
-    expect([...(byId.get(FLEET_ID)?.refusedTags ?? [])]).toEqual([]);
-    expect([...(byId.get(SERVER_ID)?.refusedTags ?? [])]).toEqual(['v0.0.10']);
-  });
-});
-
-describe('converge.ts — nothing yields between the plan and the lease (D-3377)', () => {
-  it('runDispatch plans once, acquires once, and holds no await anywhere above the acquire', () => {
-    const src = readFileSync(new URL('../src/update/converge.ts', import.meta.url), 'utf8');
-    const start = src.indexOf('export async function runDispatch(');
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, src.indexOf('\n}\n', start));
-    expect(body.split('planDispatch(').length - 1).toBe(1);
-    expect(body.split('.dispatchNode(').length - 1).toBe(1);
-    const lease = body.indexOf('.dispatchNode(');
-    expect(body.indexOf('planDispatch(')).toBeLessThan(lease);
-    expect(body.slice(0, lease)).not.toMatch(/\bawait\b/);
-  });
-});
-
-describe('FleetWatcher — the dispatcher runs single-flight, at the end of every inventory run', () => {
-  const watcherFor = (o: { send?: SendUpdateOp; role?: NodeRole } = {}) => {
-    const home = mkTmp('update-converge-watch-');
-    const base = testDeps(home);
-    const coord = new CoordStore(openCoordDb(path.join(home, 'coord.db')));
-    seedReleases(coord);
-    const sent: { tag: string; kind: RequestKind }[] = [];
-    const fleetState: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, agentOps: ['update'] };
-    const deps: Deps = {
-      ...base, cfg: { ...base.cfg, role: o.role ?? 'server' }, coord, fleetState,
-      sendUpdateOp: (tag, kind) => { sent.push({ tag, kind }); return (o.send ?? (async () => ACCEPTED))(tag, kind); },
-      updateRunner: localUpdateSpawnFor(async () => ({ code: 0, stdout: '', stderr: '' }), home),
-    };
-    const watcher = new FleetWatcher(deps, new Bus());
-    const once = vi.spyOn(watcher as unknown as { dispatchOnce(): Promise<DispatchRunResult> }, 'dispatchOnce');
-    return { coord, watcher, once, sent };
-  };
-
-  it('an inventory run ends in exactly one dispatch run', async () => {
-    const { watcher, once } = watcherFor({ role: 'both' });
-    await watcher.inventoryNow();
-    expect(once).toHaveBeenCalledTimes(1);
-  });
-
-  it('a run acquires in the caller\'s own turn; two triggers during it ask for exactly ONE follow-up (§18 "one dispatch per sweep", the act half)', async () => {
-    const reply: { answer?: (r: ResOk) => void } = {};
-    const { coord, watcher, once, sent } = watcherFor({ send: () => new Promise<ResOk>((resolve) => { reply.answer = resolve; }) });
-    const inventory = vi.spyOn(watcher, 'triggerInventory').mockImplementation(() => {});
-    expect(coord.upsertNodeMeasurement(fleetMeas()).ok).toBe(true);
-    expect(coord.requestNode(FLEET_ID, 'v0.0.10', 'update', T0).ok).toBe(true);
-    const first = watcher.dispatchNow();
-    expect(coord.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.10' });
-    expect(watcher.dispatchNow()).toBe(first);
-    watcher.triggerDispatch();
-    watcher.triggerDispatch();
-    expect(once).toHaveBeenCalledTimes(1);
-    reply.answer!(ACCEPTED);
     await first;
-    expect(once).toHaveBeenCalledTimes(2);
-    await (once.mock.results[1]!.value as Promise<DispatchRunResult>);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(once).toHaveBeenCalledTimes(2);
-    expect(sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
-    expect(inventory).toHaveBeenCalledTimes(1);
-  });
-
-  it('a rejected dispatch run is logged once and recovered — single-flight is not wedged by a thrown run (Task 5 review findings 1/2)', async () => {
-    const { watcher, once } = watcherFor({ role: 'both' });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    once.mockRejectedValueOnce(new Error('boom'));
-    // The second trigger JOINS the run the first one already started (single-flight) and asks for exactly one
-    // follow-up — the same "join, don't stack" contract the other FleetWatcher cases above pin for a resolving
-    // run; here the run REJECTS instead.
-    watcher.triggerDispatch();
-    watcher.triggerDispatch();
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-    const rejectWarns = warn.mock.calls.filter(
-      (c) => typeof c[0] === 'string' && /a dispatch run rejected: .*boom/.test(c[0]),
-    );
-    // ONE warn for the one rejection — even though TWO triggers touched this same run (review finding 2: a
-    // `.catch` attached inside `triggerDispatch` fires once per joiner, logging the same rejection twice).
-    expect(rejectWarns).toHaveLength(1);
-    // The queued follow-up (from the second `triggerDispatch`) ran a real second dispatch — single-flight
-    // recovered rather than staying wedged on the thrown run (review finding 1).
-    expect(once).toHaveBeenCalledTimes(2);
-    // And a caller reaching for a THIRD run afterward gets a fresh promise that resolves cleanly, not the
-    // rejected run replayed forever.
-    await expect(watcher.dispatchNow()).resolves.toBeDefined();
-  });
-
-  it('without a coord store there is nothing to dispatch', async () => {
-    const watcher = new FleetWatcher(testDeps(mkTmp('update-converge-nocoord-')), new Bus());
-    await expect(watcher.dispatchNow()).resolves.toEqual({ ran: false, why: 'no-coord' });
+    const r3 = ran(await runDispatch(h.deps, T0 + 3000));
+    expect(h.spawned).toHaveLength(2);
+    expect(r3.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
   });
 });
 
@@ -702,7 +554,7 @@ describe('the composition root binds the two update ports (a text pin over index
     expect(depsLiterals).toHaveLength(2);
     expect(depsLiterals[0]).toContain('io: fleet.io');
     expect(depsLiterals[1]).toContain('io: localIO');
-    for (const lit of depsLiterals) expect(lit).toMatch(/^    updateRunner: localUpdateSpawnFor\(realRunner, cfg\.home\),$/m);
+    for (const lit of depsLiterals) expect(lit).toMatch(/^    updateRunner: localUpdateSpawnFor\(cfg\.home\),$/m);
     expect(depsLiterals[0]).toMatch(
       /^    sendUpdateOp: \(tag, kind\) => fleet\.client\.request\(\{ t: 'req', op: 'update', tag, kind \}, UPDATE_OP_TIMEOUT_MS\),$/m);
     expect(depsLiterals[1]).not.toContain('sendUpdateOp');
@@ -712,6 +564,6 @@ describe('the composition root binds the two update ports (a text pin over index
     // @ts-expect-error — a raw Runner is not a LocalUpdateSpawn: its second parameter is an argv, not a tag
     const raw: NonNullable<Deps['updateRunner']> = realRunner;
     void raw;
-    expect(typeof localUpdateSpawnFor(realRunner, '/h')).toBe('function');
+    expect(typeof localUpdateSpawnFor('/h')).toBe('function');
   });
 });

@@ -12,7 +12,7 @@
 // for a superseded row, `refuseRelease` for a refusal, and `dispatchNode` /
 // `releaseLease` for a lease — no hand-written UPDATE. Every box is a `mkTmp`
 // fixture home; the one spawn a case reaches is an injected `Runner`, behind
-// `localUpdateSpawnFor` exactly as `index.ts` builds `Deps.updateRunner`, that
+// the local-spawn capability (`spawnFromRunner`, the double for `localUpdateSpawnFor`) as `index.ts` builds `Deps.updateRunner`, that
 // records its argv and answers only when the test says so.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { writeFileSync } from 'node:fs';
@@ -33,7 +33,8 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
 import { resolveInputFor } from '../src/update/project.js';
 import { DETACH_CAP, ROLLBACK_CAP, planDispatch } from '../src/update/dispatch.js';
-import { dispatchViewsFor, localUpdateSpawnFor } from '../src/update/converge.js';
+import { dispatchViewsFor } from '../src/update/converge.js';
+import { spawnFromRunner } from './updateSpawnFake.js';
 import { parseApplyBody, parseRollbackBody } from '../src/update/routes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { updateLauncherPath, updateSpawnArgv } from '../../shared/agent-protocol.js';
@@ -151,7 +152,7 @@ const open = async (o: { auth?: boolean; watcher?: boolean; runner?: Runner } = 
     updateIntentLog: new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir)),
     // `Deps.updateRunner` is the two-template capability, never a raw Runner (Task 5,
     // D-3397): the recording Runner goes behind the same factory.
-    ...(o.runner ? { updateRunner: localUpdateSpawnFor(o.runner, cfg.home) } : {}),
+    ...(o.runner ? { updateRunner: spawnFromRunner(o.runner, cfg.home) } : {}),
   };
   const bus = new Bus();
   // A REAL watcher, never started: the routes call its `triggerDispatch()` and nothing else.

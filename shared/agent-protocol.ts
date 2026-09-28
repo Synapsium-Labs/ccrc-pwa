@@ -425,6 +425,20 @@ export const UPDATE_SPAWN_TIMEOUT_MS = 20_000;
  *  before the server gives up, so a timeout never releases a lease while a
  *  node is still starting a run. */
 export const UPDATE_OP_TIMEOUT_MS = 30_000;
+/** How long, after the `--detach` parent has EXITED, the bounded spawner still waits for its stdout to reach
+ *  EOF before it answers with `stdout: null`. A grandchild that left the parent's process group (setsid) and
+ *  still holds the pipe would otherwise keep `close` from ever firing. The whole answer therefore arrives within
+ *  `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` of the spawn, and that sum plus one bounded file read must stay
+ *  below `UPDATE_OP_TIMEOUT_MS`, so the agent always answers before the server gives up on the op (a test pins
+ *  the sum). */
+export const UPDATE_SPAWN_DRAIN_MS = 2_000;
+
+/** What the bounded update spawner answers, on both roles (the agent's `makeUpdateSpawn`, the server's
+ *  `localUpdateSpawnFor`). `stdout` is the parent's WHOLE stdout read to EOF, or `null` when EOF was not reached
+ *  within `UPDATE_SPAWN_DRAIN_MS` of the parent's exit, or the capture cap was hit: `null` is "not measured", never
+ *  "empty". `pid` is the spawned parent's pid, null only when the spawn itself failed. `killed` is true when the
+ *  bound fired and the whole process group was sent SIGKILL. */
+export interface UpdateSpawnResult { code: number; stdout: string | null; stderr: string; killed: boolean; pid: number | null }
 /** The bound on `ResErr.detail`. It is 200, the same as W2's
  *  `REPORT_DETAIL_MAX` for `update.json`'s own detail. */
 export const UPDATE_OP_DETAIL_MAX = 200;

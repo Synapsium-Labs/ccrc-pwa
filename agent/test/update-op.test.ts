@@ -43,7 +43,7 @@ type SpawnAnswer = Awaited<ReturnType<UpdateSpawn>>;
 
 /** A recording `spawnUpdate`. After `park()`, every call waits until
  *  `release()`, which stands in for a `--detach` parent still running. */
-function recorder(answer: SpawnAnswer = { code: 0, stderr: '', killed: false }) {
+function recorder(answer: SpawnAnswer = { code: 0, stdout: '', stderr: '', killed: false, pid: 4242 }) {
   const calls: SpawnCall[] = [];
   let gate: Promise<void> | null = null;
   let open: () => void = () => {};
@@ -185,13 +185,13 @@ describe('the update op', () => {
 
     it('a parent that exits 1 is spawn-failed carrying its first stderr line — the held-lock case (Review Focus 3)', async () => {
       const LOCK = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
-      const { c } = await up(recorder({ code: 1, stderr: `${LOCK}\nsecond\n`, killed: false }));
+      const { c } = await up(recorder({ code: 1, stdout: '', stderr: `${LOCK}\nsecond\n`, killed: false, pid: 4242 }));
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' }))
         .toEqual({ t: 'res', id: 1, ok: false, err: 'spawn-failed', detail: LOCK });
     });
 
     it('a parent killed at the bound is spawn-failed naming the timeout (Review Focus 4)', async () => {
-      const { c } = await up(recorder({ code: 1, stderr: '', killed: true }));
+      const { c } = await up(recorder({ code: 1, stdout: null, stderr: '', killed: true, pid: 4242 }));
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' })).toEqual({
         t: 'res', id: 1, ok: false, err: 'spawn-failed',
         detail: `the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`,
@@ -203,7 +203,7 @@ describe('the update op', () => {
       let first = true;
       const spawn: UpdateSpawn = async () => {
         if (first) { first = false; throw new Error('spawn port failed'); }
-        return { code: 0, stderr: '', killed: false };
+        return { code: 0, stdout: '', stderr: '', killed: false, pid: 4242 };
       };
       agent = await boot(fixture, { spawnUpdate: spawn });
       const c = await open(agent.port);
@@ -364,9 +364,9 @@ describe('the update op', () => {
     });
 
     it('the spawn port and the report read name no exec path either', () => {
-      const spawnBody = slice(src, 'export const realUpdateSpawn', /\ninterface PtyEntry/);
+      const spawnBody = slice(src, 'export function makeUpdateSpawn', /\ninterface PtyEntry/);
       expect(spawnBody).not.toMatch(EXEC_PATH);
-      expect(spawnBody).toMatch(/execFile\(file, args, /);
+      expect(spawnBody).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
       const readBody = slice(src, 'export function readInFlightReport(', /\n\}\n/);
       expect(readBody).not.toMatch(EXEC_PATH);
       expect(readBody).toMatch(/NODE_FILES\.report/);

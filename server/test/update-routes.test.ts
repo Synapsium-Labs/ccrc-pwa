@@ -34,7 +34,8 @@ import type { PushPayload } from '../src/push.js';
 import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UPDATE_GATE_CAP } from '../src/update/resolve.js';
 import { DETACH_CAP } from '../src/update/dispatch.js';
-import { localUpdateSpawnFor, type LocalUpdateSpawn } from '../src/update/converge.js';
+import type { LocalUpdateSpawn } from '../src/update/converge.js';
+import { spawnFromRunner } from './updateSpawnFake.js';
 import { REFRESH_MIN_INTERVAL_MS, parseIntentBody, toNodeWire } from '../src/update/routes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { CatalogueState, NodeWire, UpdatesView } from '../../shared/api.js';
@@ -1064,7 +1065,7 @@ describe('POST /api/updates/intent dispatches in the same request (update-manage
     };
     // The spawn's `home` only builds the launcher path (`updateLauncherPath`), which `refusing` never
     // executes — the argv itself is pinned by `update-apply-routes.test.ts`, not here.
-    const f = await open({ watcher: true, updateRunner: localUpdateSpawnFor(refusing, '/nonexistent-fixture-home') });
+    const f = await open({ watcher: true, updateRunner: spawnFromRunner(refusing, '/nonexistent-fixture-home') });
     catalogue(f.coord);
     // The server's OWN row and no other. Planted so `ensureInventory` does not sweep the fixture box and
     // write a capless one (the auto gate would answer 409); no fleet row, because in local mode no

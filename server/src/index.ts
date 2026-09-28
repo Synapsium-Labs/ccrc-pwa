@@ -131,7 +131,7 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
-    updateRunner: localUpdateSpawnFor(realRunner, cfg.home),
+    updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
@@ -187,7 +187,7 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
-    updateRunner: localUpdateSpawnFor(realRunner, cfg.home),
+    updateRunner: localUpdateSpawnFor(cfg.home),
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

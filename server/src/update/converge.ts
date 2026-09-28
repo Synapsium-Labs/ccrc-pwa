@@ -15,6 +15,7 @@ import {
 } from '../../../shared/api.js';
 import {
   NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv, type ResOk,
+  type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
   DEADLINE_DETAIL, classifyOpAnswer, deadlineExpired, dispatchRefusalDetail, planDispatch,
@@ -25,7 +26,7 @@ import { resolveInputFor } from './project.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from './inventory.js';
 import { openPoolReadDeadline } from '../pools.js';
 import { AgentOpError } from '../remote/client.js';
-import type { ExecResult, Runner } from '../exec.js';
+import { boundedUpdateSpawn, type BoundedSpawnOpts } from './spawn.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
 import type {
@@ -38,13 +39,14 @@ export type SendUpdateOp = (tag: string, kind: RequestKind) => Promise<ResOk>;
 
 /** D-3397: the server-role spawn as a CAPABILITY — it runs the two templates and nothing
  *  else. A raw `Runner` on `Deps` would hand every route a way around `CcdArgv` (task 13S's `runCcd` rule). */
-export type LocalUpdateSpawn = (kind: RequestKind, tag: string) => Promise<ExecResult>;
+export type LocalUpdateSpawn = (kind: RequestKind, tag: string) => Promise<UpdateSpawnResult>;
 
-/** The composition-root factory, `ccdRunner`'s idiom (`lifecycle.ts`): binds a Runner and this box's home into
- *  a LocalUpdateSpawn. The argv is built by the ONE builder the agent uses; a non-tag or a kind outside
- *  RequestKind throws RangeError synchronously, before `run` is called. */
-export function localUpdateSpawnFor(run: Runner, home: string): LocalUpdateSpawn {
-  return (kind, tag) => run(updateLauncherPath(home), [...updateSpawnArgv(kind, tag)]);
+/** The composition-root factory, `ccdRunner`'s idiom (`lifecycle.ts`): binds this box's home into a
+ *  LocalUpdateSpawn over the BOUNDED update runner (`spawn.ts`), never the shared `Runner` that tmux and ccd use.
+ *  The argv is built by the ONE builder the agent uses; a non-tag or a kind outside RequestKind throws RangeError
+ *  synchronously, before anything runs. `env` and `timeoutMs` are for a test (a fixture HOME, a small bound). */
+export function localUpdateSpawnFor(home: string, opts: BoundedSpawnOpts = {}): LocalUpdateSpawn {
+  return (kind, tag) => boundedUpdateSpawn(updateLauncherPath(home), updateSpawnArgv(kind, tag), opts);
 }
 
 /** The store port (L2, declared by the consumer); CoordStore satisfies it structurally. `updateEpoch` is here
@@ -136,17 +138,6 @@ async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAns
   }
 }
 
-const TIMED_OUT = Symbol('timed-out');
-
-/** The spawn raced against UPDATE_SPAWN_TIMEOUT_MS — the agent's own bound, strictly below the link's
- *  UPDATE_OP_TIMEOUT_MS (D-3374). A late exit after the bound resolves into nothing. */
-function withinSpawnDeadline<T>(p: Promise<T>): Promise<T | typeof TIMED_OUT> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => resolve(TIMED_OUT), UPDATE_SPAWN_TIMEOUT_MS);
-    p.then((v) => { clearTimeout(timer); resolve(v); }, (e: unknown) => { clearTimeout(timer); reject(e); });
-  });
-}
-
 /** `~/.ccrc/update.json` on THIS box, through the one shared parser and W2's BOUNDED node-file reader — the
  *  same `readNodeFile` the inventory sweep reads this file with: lstat to a regular file only, size ≤
  *  NODE_FILE_CAP_BYTES, every step raced against one deadline. It runs AFTER the lease is taken, so an unbounded
@@ -166,8 +157,9 @@ async function localInFlight(deps: ConvergeDeps): Promise<InFlightReport | null>
 
 /** D-3400: the server-role spawns whose `--detach` parent has not exited yet, by capability
  *  (one `LocalUpdateSpawn` per process in production — `index.ts` builds it once — and one per harness in a
- *  test). `realRunner` passes `execFile` no deadline, so the race below stops WAITING at UPDATE_SPAWN_TIMEOUT_MS
- *  but kills nothing; an entry leaves this set only when the child's own promise settles. While it is here, the
+ *  test). The bounded runner (`spawn.ts`) kills the parent's whole process group at UPDATE_SPAWN_TIMEOUT_MS and
+ *  answers within `UPDATE_SPAWN_DRAIN_MS` after that, so an entry leaves this set when the runner's promise
+ *  settles, and that is bounded. While it is here, the
  *  next run answers `busy` instead of starting a second parent — both parents would only PROBE the lock (wave 4),
  *  and a rollback parent asks the release host before it writes `queued`. The agent's process-wide `UpdateGate`
  *  (D-3392) is the same rule on the other role. */
@@ -182,7 +174,7 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   if (busy !== null) return { kind: 'refused', err: 'busy', detail: inFlightSentence(busy) };
   // Checked and taken with no await between: two runs can never both pass.
   if (spawning.has(spawn)) return { kind: 'refused', err: 'busy', detail: LOCAL_SPAWNING_DETAIL };
-  let child: Promise<ExecResult>;
+  let child: Promise<UpdateSpawnResult>;
   try {
     child = spawn(move.kind, move.target);   // a non-tag or non-kind throws RangeError here, before anything runs
   } catch (e) {
@@ -192,13 +184,12 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   const clear = (): void => { spawning.delete(spawn); };
   child.then(clear, clear);
   try {
-    const res = await withinSpawnDeadline(child);
-    if (res === TIMED_OUT) return { kind: 'transport', why: 'timeout', message: SPAWN_TIMEOUT_MESSAGE };
+    const res = await child;
+    if (res.killed) return { kind: 'transport', why: 'timeout', message: SPAWN_TIMEOUT_MESSAGE };
     if (res.code === 0) return { kind: 'accepted' };
-    // A missing launcher (`realRunner`'s spawn-error branch) answers `code: 1, stderr: ''` — the child never ran,
-    // so there is no line to name and `firstStderrLine` would render the generic 'no message', indistinguishable
-    // from a launcher that ran, failed and simply printed nothing. Name the one condition this path can actually
-    // tell apart: an empty stderr on a non-zero exit means the launcher itself never spoke (review finding 3).
+    // A launcher that ran, failed and printed nothing would render `firstStderrLine`'s generic 'no message'. Name
+    // the one condition this path can actually tell apart: an empty stderr on a non-zero exit means the launcher
+    // itself never spoke (review finding 3). A launcher that could not START answers a sentence of its own.
     const stderrLine = firstStderrLine(res.stderr);
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };

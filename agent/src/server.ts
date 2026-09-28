@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
@@ -31,7 +31,8 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
+  UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
+  type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
@@ -69,7 +70,7 @@ export interface AgentOpts {
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
-  spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (execFile) — tests inject a recorder; the `update` op's ONLY spawn
+  spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
 }
 
 export interface RunningAgent {
@@ -326,35 +327,99 @@ function runExec(
  * mind, which is exactly what §18 "the op never execs" forbids. Production is
  * `realUpdateSpawn`; tests inject a recorder through `AgentOpts.spawnUpdate`.
  */
-export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: number) =>
-  Promise<{ code: number; stderr: string; killed: boolean }>;
+export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: number) => Promise<UpdateSpawnResult>;
 
-/** Enough for any sentence a `--detach` parent prints; past it `execFile` kills the child. */
+/** Enough for any sentence a `--detach` parent prints; past it the capture stops and stdout reads as incomplete. */
 const UPDATE_SPAWN_MAX_BUFFER = 1024 * 1024;
 
 /**
- * `execFile(file, args)`, bounded by `timeoutMs` — the ABSOLUTE launcher and one
- * of the two templates, both built by the caller from `shared/agent-protocol.ts`.
+ * The `--detach` parent under a bound — the ABSOLUTE launcher and one of the two templates, both built by the
+ * caller from `shared/agent-protocol.ts`. `env` is the parent's whole environment, passed on purpose: the factory
+ * takes it so a test can hand the child a fixture HOME and PATH, and production hands it `process.env`.
  *
- * Three answers, kept apart:
- *  - `killed` — the parent was still running at the bound (`execFile`'s own flag).
- *  - A spawn error — the launcher absent or not executable (`ENOENT`/`EACCES`,
- *    `syscall` `spawn <file>`). It answers code 1 with the sentence
- *    `could not start the launcher (<code>)` (D-3393).
- *    Without that sentence the parent's stderr is empty, and a node with no
- *    `ccrc` installed would read `spawn-failed: no message` on the console.
- *  - Every other failure — the parent's own exit code and its stderr.
+ * The parent is its own PROCESS GROUP (`detached`, pgid = pid), and the bound kills the WHOLE group with SIGKILL:
+ * a bound that killed only the parent would leave whatever it had already forked running, and the caller would
+ * read that as a stopped run. Answers, kept apart:
+ *  - `killed` — the parent was still running at the bound; the group was sent SIGKILL.
+ *  - A spawn error — the launcher absent or not executable (`ENOENT`/`EACCES`). It answers code 1 with the
+ *    sentence `could not start the launcher (<code>)` (D-3393) and `pid: null`: without that sentence the
+ *    parent's stderr is empty, and a node with no `ccrc` installed would read `spawn-failed: no message`.
+ *  - Every other exit — the parent's own code, its stderr, its stdout.
+ *
+ * The answer comes once the parent has EXITED and then either both pipes reached EOF or
+ * `UPDATE_SPAWN_DRAIN_MS` passed. A grandchild that left the group (setsid) and still holds a pipe therefore never
+ * stops the answer; it costs `stdout: null` (EOF not reached). Nothing resolves twice.
  */
-export const realUpdateSpawn: UpdateSpawn = (file, args, timeoutMs) => new Promise((resolve) => {
-  execFile(file, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: UPDATE_SPAWN_MAX_BUFFER }, (error, _stdout, stderr) => {
-    if (error === null) { resolve({ code: 0, stderr, killed: false }); return; }
-    if (typeof error.code === 'string' && typeof error.syscall === 'string' && error.syscall.startsWith('spawn')) {
-      resolve({ code: 1, stderr: `could not start the launcher (${error.code})`, killed: false });
-      return;
-    }
-    resolve({ code: typeof error.code === 'number' ? error.code : 1, stderr, killed: error.killed === true });
+export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {
+  return (file, args, timeoutMs) => new Promise((resolve) => {
+    let settled = false;
+    let exited: { code: number } | null = null;
+    let killed = false;
+    let killTimer: NodeJS.Timeout | null = null;
+    let drainTimer: NodeJS.Timeout | null = null;
+    const out = { chunks: [] as Buffer[], bytes: 0, capped: false, eof: false };
+    const err = { chunks: [] as Buffer[], bytes: 0, capped: false, eof: false };
+    const child = spawn(file, [...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+    const finish = (r: UpdateSpawnResult): void => {
+      if (settled) return;
+      settled = true;
+      if (killTimer !== null) clearTimeout(killTimer);
+      if (drainTimer !== null) clearTimeout(drainTimer);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve(r);
+    };
+    const answer = (): void => {
+      if (exited === null) return;
+      finish({
+        code: exited.code,
+        stdout: out.eof && !out.capped ? Buffer.concat(out.chunks).toString('utf8') : null,
+        stderr: Buffer.concat(err.chunks).toString('utf8'),
+        killed,
+        pid: child.pid ?? null,
+      });
+    };
+    const take = (buf: typeof out) => (chunk: Buffer): void => {
+      if (buf.capped) return;
+      if (buf.bytes + chunk.length > UPDATE_SPAWN_MAX_BUFFER) { buf.capped = true; return; }
+      buf.chunks.push(chunk);
+      buf.bytes += chunk.length;
+    };
+    child.stdout?.on('data', take(out));
+    child.stderr?.on('data', take(err));
+    child.stdout?.on('end', () => { out.eof = true; if (err.eof) answer(); });
+    child.stderr?.on('end', () => { err.eof = true; if (out.eof) answer(); });
+    child.once('error', (e: NodeJS.ErrnoException) => {
+      // A spawn that never produced a pid (ENOENT, EACCES): the launcher never ran.
+      if (child.pid !== undefined) return;
+      finish({
+        code: 1, stdout: '', killed: false, pid: null,
+        stderr: `could not start the launcher (${typeof e.code === 'string' ? e.code : 'unknown'})`,
+      });
+    });
+    child.once('exit', (code) => {
+      if (killTimer !== null) { clearTimeout(killTimer); killTimer = null; }
+      exited = { code: typeof code === 'number' ? code : 1 };
+      if (drainTimer !== null) clearTimeout(drainTimer);   // the kill path's fallback: the parent did exit
+      if (out.eof && err.eof) { answer(); return; }
+      drainTimer = setTimeout(answer, UPDATE_SPAWN_DRAIN_MS);
+    });
+    killTimer = setTimeout(() => {
+      killTimer = null;
+      if (exited !== null || child.pid === undefined) return;
+      killed = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (e) {
+        // ESRCH: the group is already gone. Anything else: fall back to the parent alone rather than to nothing.
+        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
+      }
+      // A parent that will not die (an uninterruptible wait) must not stop the answer past the drain bound.
+      drainTimer = setTimeout(() => { exited ??= { code: 1 }; answer(); }, UPDATE_SPAWN_DRAIN_MS);
+    }, timeoutMs);
   });
-});
+}
+
+/** The agent's production spawner: the parent inherits this process's own environment. */
+export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);
 
 /** ONE per agent PROCESS, shared by every connection (D-3392).
  *  A server whose link dropped while an op was spawning reconnects on a NEW

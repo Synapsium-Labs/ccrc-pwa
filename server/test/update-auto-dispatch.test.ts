@@ -9,7 +9,7 @@
 // because `desiredTag` is a stored column the resolver writes. Nothing here
 // reads the live `$HOME`: every box is a `mkTmp` fixture, the fleet link is a
 // recording `SendUpdateOp`, and the server-role spawn a recording `Runner`
-// behind `localUpdateSpawnFor` — the same two-template capability `index.ts` binds.
+// behind `spawnFromRunner` (the double for `localUpdateSpawnFor`) — the same two-template capability `index.ts` binds.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -30,7 +30,8 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { RESOLVE_DETAIL, autoGateBlockers } from '../src/update/resolve.js';
 import { resolveAndProject } from '../src/update/project.js';
 import { DETACH_CAP, ROLLBACK_CAP } from '../src/update/dispatch.js';
-import { localUpdateSpawnFor, runDispatch, type ConvergeDeps, type DispatchRunResult } from '../src/update/converge.js';
+import { runDispatch, type ConvergeDeps, type DispatchRunResult } from '../src/update/converge.js';
+import { spawnFromRunner } from './updateSpawnFake.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -96,14 +97,14 @@ function box(): Box {
 }
 
 /** The recording `Runner` the local spawn capability runs: it records the argv
- *  `localUpdateSpawnFor` hands it and exits 0, as a `--detach` parent does. */
+ *  `spawnFromRunner` hands it and exits 0, as a `--detach` parent does. */
 const recorder = (spawned: { cmd: string; args: string[] }[]): Runner => async (cmd, args) => {
   spawned.push({ cmd, args: [...args] });
   return { code: 0, stdout: '', stderr: '' };
 };
 
 /** A two-box fleet's server: the link records every op it is asked to send and
- *  answers `accepted`; the local spawn is Task 5's `localUpdateSpawnFor` over the
+ *  answers `accepted`; the local spawn is `spawnFromRunner` (Task 5's capability, doubled) over the
  *  recorder, so the argv asserted below is the one the capability builds. */
 const deps = (b: Box): ConvergeDeps => ({
   store: b.store, role: 'server', ccrcDir: b.ccrcDir, localIo: localIO,
@@ -115,7 +116,7 @@ const deps = (b: Box): ConvergeDeps => ({
       return { t: 'res', id: b.sent.length, ok: true, accepted: true };
     },
   },
-  runLocal: localUpdateSpawnFor(recorder(b.spawned), b.home),
+  runLocal: spawnFromRunner(recorder(b.spawned), b.home),
   onAccepted: () => { b.accepted += 1; },
 });
 
@@ -354,7 +355,7 @@ describe('the advisory route and the enforcing dispatcher, one box (FleetWatcher
     expect(coord.applyReleaseListing(LISTING, NOW - 30_000, 'complete').ok).toBe(true);
     const spawned: { cmd: string; args: string[] }[] = [];
     // `Deps.updateRunner` is a LocalUpdateSpawn (Task 5, D-3397) — bound as index.ts binds it.
-    const updateRunner = localUpdateSpawnFor(recorder(spawned), home);
+    const updateRunner = spawnFromRunner(recorder(spawned), home);
     const log = new UpdateIntentLog(defaultUpdateIntentLogPath(base.cfg.ccrcDir));
     const deps: Deps = { ...base, coord, updateIntentLog: log, updateRunner };
     const bus = new Bus();
