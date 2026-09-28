@@ -5641,10 +5641,12 @@ export interface RunHealth {
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
    *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
    *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
-   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands), a
    *  `recipient rebound` park (a worker was re-bound to a new session,
-   *  cross-repo §4) are all the machinery working as designed, and reporting
-   *  any of them would announce a change that has already been handled. */
+   *  cross-repo §4) and a `child workspace reclaimed` park (the server
+   *  reclaimed a finished child, spec 2026-09-22 §5.6) are all the machinery
+   *  working as designed, and reporting any of them would announce a change
+   *  that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -6348,10 +6350,11 @@ export interface MailSummary {
    * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
    * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
    * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
-   * Three direct SQL writers add the deliberate-cancel sentences `'run
-   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
-   * examples of the column's contents, not a closed census or vocabulary: it
-   * is a maintainer's grep target and has never been validated on the way in.
+   * Four direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, `'recipient rebound'` and `'child
+   * workspace reclaimed'`. Those are examples of the column's contents, not
+   * a closed census or vocabulary: it is a maintainer's grep target and has
+   * never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a
@@ -6904,6 +6907,12 @@ export type LifecycleAct =
   | 'archive' | 'restore'
   | 'attic-drop'    // ws-attic --drop deleted pinned refs
   | 'reap'          // ws-reap
+  | 'reclaim'       // ws-reclaim (spec 2026-09-22 §5.9): a CHILD's pin-then-teardown,
+                    // server-composed. DISTINCT FROM `reap`: a reap is a human's
+                    // confirmed removal of an archived workspace; a reclaim is the
+                    // automated end of a workspace dispatch minted for one run. One
+                    // act per verb, so the journal never has to be read with a verb
+                    // filter to tell the two apart.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -6949,7 +6958,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
@@ -7387,10 +7396,10 @@ export interface LifecycleMeas {
   /** How many bytes `ws-reap` measured before destroying the worktree, or
    *  `null` when `_ws_gc_bytes` did not return a plain integer. */
   readonly bytes: number | null;
-  /** The reap PHASE (`children` | `worktree` | `branch` | `clips`) a resumed
-   *  `ws-reap` was interrupted at, read back from the registry's own
-   *  `.reaping` marker — not a boolean; an interrupted reap resumes from
-   *  wherever it stopped. */
+  /** The PHASE a resumed act was interrupted at, read back from the registry's
+   *  own `.reaping` marker — not a boolean, and ONE meaning for both verbs:
+   *  ws-reap's `children|worktree|branch|clips`, or ws-reclaim's
+   *  `children|worktree|branch|artifacts` (its `reclaim:` prefix stripped). */
   readonly resumed: string | null;
   /** The tombstone record's own path, as `_ws_tombstone` returned it. */
   readonly tombstone: string | null;
@@ -7418,6 +7427,22 @@ export interface LifecycleMeas {
    *  removed and there is nothing to name — the two must not be told apart by
    *  reading a sentence. It is prose for a person and never a parsed list. */
   readonly unremoved: string | null;
+  /** The run a `reclaim` act's CHILD was minted for — `ws-reclaim --child-of`,
+   *  equal to the box's `.child` marker or the act never started (child
+   *  reclamation, spec 2026-09-22 §5.5). The decimal string ccd wrote: every
+   *  `meas.` value crosses the encoder as a string, so a reader parses it
+   *  rather than trusting a `number` this seam never carried. */
+  readonly childOf: string | null;
+  /** The WIP commit a `reclaim` made of the child's uncommitted work, or null
+   *  when the tree was clean and no commit was made (ccd passes an empty value,
+   *  which the encoder omits). */
+  readonly wip: string | null;
+  /** The bytes `ws-reclaim`'s residue probe measured OUTSIDE the child's temp
+   *  root and left in place — the decimal string ccd wrote, or the literal
+   *  string `null` when the probe could not measure it (`ws-reap`'s
+   *  `meas.bytes` precedent) — never a fabricated 0. A `null` VALUE here means
+   *  the key was absent: an act that is not a reclaim. */
+  readonly residueBytes: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -7439,7 +7464,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
-  unremoved: true,
+  unremoved: true, childOf: true, wip: true, residueBytes: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -7610,7 +7635,9 @@ export type LcRefusalToken =
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
-  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
+  | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
+  | 'unit-still-active';      // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7671,6 +7698,22 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // because one map entry serves four callers.
   'purge-mechanism-absent':
     'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
+  // Child reclamation, wave 3. ws-reclaim's pin phase — the WIP commit and the
+  // attic pins, or the settle's re-pin once the session is stopped — failed, so
+  // the verb stopped BEFORE its next deletion. Only ever rides `_lc_fail`: the
+  // act started (a WIP commit may already exist, which destroys nothing), and a
+  // retry pins again. The sentence claims nothing about the worktree or the
+  // branch: on the vanished arm there is no worktree, and on a resumed act an
+  // earlier attempt may already have removed either.
+  'pin-failed':
+    'ccrc could not keep this workspace’s uncommitted work or its commits, so it stopped before deleting anything further. Reclamation tries again.',
+  // Child reclamation, wave 3. The tail disabled the unit and killed the pane,
+  // then asked the service manager and tmux, and one did not PROVE "stopped":
+  // still up, or not answering (a Restart=always unit; a claude left in its
+  // pane by KillMode=process). Only ever rides `_lc_fail`; the breadcrumb stays
+  // and a retry stops both again. True of every arm and cause: nothing FURTHER went.
+  'unit-still-active':
+    'ccrc could not prove this session’s service and its terminal pane had both stopped, so it stopped before deleting anything further. Reclamation tries again.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

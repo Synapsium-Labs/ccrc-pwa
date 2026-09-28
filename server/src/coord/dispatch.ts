@@ -726,7 +726,7 @@ export async function dispatchRun(
     // read. The open route asked the same gate, but spentness can turn true
     // between open and dispatch. A workspace with no marker passes untouched —
     // every workspace wave 1 did not mint.
-    const childGate = await childBindGate(deps, sessionId);
+    const childGate = await childBindGate(deps, coord, sessionId);
     if (!childGate.ok) return refuseSpentChild(deps, { id: run.id, sessionId }, childGate, dispatchDec);
     const argv = CCD_ARGV.ensure(sessionId);
     const res = await deps.runCcd(argv);

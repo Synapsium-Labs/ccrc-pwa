@@ -59,6 +59,11 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRestore: ['demo-quiet-basin', null],
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
+  // CHILD RECLAMATION wave 3. The audit half rides wsAudit's grant; the verb
+  // carries a dec, so layer 2 proves the FLAGGED shape crosses the new grant.
+  wsReclaimAudit: ['demo-quiet-basin', true],
+  wsReclaim: ['a'.repeat(64), 7, 'demo-quiet-basin', false,
+              { surface: 'agent', actor: 'run:7 reclaim close', reason: null }],
   wsAttic: ['demo-quiet-basin'],
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
@@ -219,6 +224,47 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     // …and the one the server actually builds is still allowed, so this is not
     // a blanket refusal of the verb.
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReap(tok, 'demo-quiet-basin')])).toBe(true);
+  });
+
+  // CHILD RECLAMATION wave 3 — the second destructive verb, and the first the
+  // SERVER sends with no human in the path. Same mechanism, same reasons, read
+  // from the object across the package boundary.
+  it('ws-reclaim is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const rc = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reclaim');
+    expect(rc.length, 'exactly one ws-reclaim grant').toBe(1);
+    expect(rc[0]).toEqual(['ws-reclaim', '--expect']);
+    const tok = 'a'.repeat(64);
+    expect(isExecAllowed('ccd', ['ws-reclaim', '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim', tok, '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true,
+      { surface: 'agent', actor: 'run:7 reclaim sweep', reason: null })])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true)])).toBe(true);
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit'), 'no second audit grant').toEqual([['ws-audit', '--session']]);
+    expect(UNGRANTABLE_VERBS, 'ws-reclaim has a lawful grantable form; it is not ungrantable').not.toContain('ws-reclaim');
+  });
+
+  // Fix round 1: the `deferExpired` polarity was unpinned in one arm of each
+  // builder. Layer 2c's exact-argv table (below) pins `wsReclaimAudit(…, true)`
+  // and `wsReclaim(…, false, …)` only — one arm each, from `SAMPLES`' own
+  // fixed shape — so dropping `...deferFlags(deferExpired)` from `wsReclaim`,
+  // or hardcoding `'--defer-expired'` into `wsReclaimAudit` regardless of its
+  // argument, survived every other test in this file. This pins BOTH arms of
+  // BOTH builders, independent of the dec.
+  it('wsReclaimAudit and wsReclaim both flip on deferExpired, independent of the dec', () => {
+    const tok = 'a'.repeat(64);
+    const dec = { surface: 'agent' as const, actor: 'run:7 reclaim sweep', reason: null };
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', false))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim']);
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--defer-expired', '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
   });
 
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
@@ -443,6 +489,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRestore: ['ws-restore', '--session', 'demo-quiet-basin'],
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
+    wsReclaimAudit: ['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired'],
+    wsReclaim: ['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim close'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],
