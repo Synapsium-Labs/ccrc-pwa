@@ -672,9 +672,11 @@ export function registerUpdateRoutes(
 
   /**
    * THE ONE-TAP (spec §12, update-management wave 5). A REQUEST, not a dispatch: the request columns are
-   * written (`requestNode`), and the dispatcher is asked to run in the same turn — `triggerDispatch()` starts
-   * its run synchronously, and the run acquires the lease before its first await (Task 5), so a node the
-   * dispatcher can move already reads `pending` when this reply is read. The result is learned by
+   * written (`requestNode`), and the dispatcher is asked to run in the same turn. When no run is in flight,
+   * `triggerDispatch()` starts one synchronously and it acquires the lease before its first await (Task 5), so a
+   * node the dispatcher can move already reads `pending` when this reply is read; when a run IS in flight,
+   * `dispatchNow` JOINS it and the one follow-up runs only after it settles (up to the ~30 s op deadline), so the
+   * node may still read `idle` with its request standing when the reply is read. The result is learned by
    * re-measurement (the inventory sweep), never from this answer. Session-only: no box-token check at all,
    * not in EXEMPT (decision 15). A single named node answers the dispatcher's own 409 synchronously
    * (`singleNodeMove`); `{all: true}` always answers 202, with what it skipped and why, each refusal also

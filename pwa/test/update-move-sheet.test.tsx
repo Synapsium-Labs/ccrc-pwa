@@ -163,19 +163,31 @@ describe('UpdateMoveSheet — what one confirm sends', () => {
     expect(moveSkipText('no-detach-cap')).toBe(updateErrorText(refusal('no-detach-cap')));
   });
 
-  it.each(['busy', 'waiting-for-fleet'] as const)(
-    'a 202 that skipped a NAMED node for %s renders that word\'s own sentence (review MINOR 6)', async (why) => {
+  // `busy` skips a node whose own lease is busy (either role); `waiting-for-fleet` skips only a NON-fleet row
+  // (D-3408), so its skipped node is the server and the fleet node is the one that was requested or halted.
+  it.each([
+    ['busy', FLEET_ID, SERVER_ID, 'fleet', 'server'],
+    ['waiting-for-fleet', SERVER_ID, FLEET_ID, 'server', 'fleet'],
+  ] as const)(
+    'a 202 that skipped a NAMED node for %s renders that word\'s own sentence (review MINOR 6)', async (why, skipped, requested, skippedLabel, requestedLabel) => {
       vi.spyOn(api, 'applyUpdate').mockResolvedValue({
-        ok: true, requested: [SERVER_ID], skipped: [{ nodeId: FLEET_ID, why }],
+        ok: true, requested: [requested], skipped: [{ nodeId: skipped, why }],
       });
       const { onClose, onDone } = mount(plan(UP));
       fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
       const said = await screen.findByRole('alert');
-      expect(said.textContent).toBe(`Not requested — fleet: ${moveSkipText(why)} Requested: server.`);
+      expect(said.textContent).toBe(`Not requested — ${skippedLabel}: ${moveSkipText(why)} Requested: ${requestedLabel}.`);
       expect(onDone).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
     },
   );
+
+  it('the waiting-for-fleet sentence promises nothing: it says nothing was requested and to tap again (D-3408 writes no request)', () => {
+    const s = moveSkipText('waiting-for-fleet');
+    expect(s).toMatch(/^Nothing was requested for that node/);
+    expect(s).toContain('Tap again');
+    expect(s).not.toMatch(/\bit moves\b/);
+  });
 
   it('a 202 that requested NOTHING — Install on a yanked or unlisted row, every node skipped unknown-tag — stays open and re-polls nothing', async () => {
     const s = moveSkipText('unknown-tag');

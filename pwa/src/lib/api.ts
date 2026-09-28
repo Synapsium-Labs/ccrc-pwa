@@ -366,8 +366,11 @@ const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | '
   'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
   // Never an HTTP 409 (the route answers it only through `{all: true}`'s per-node skip, never a single-node
   // move's own refusal) — a key `moveSkipText` needs that `updateErrorText`'s own table never looks up.
-  'waiting-for-fleet': 'That node is held behind a fleet node’s own move — it moves once that node’s move settles or is acknowledged.',
-};
+  'waiting-for-fleet': 'Nothing was requested for that node — it is held behind a fleet node’s own move. Tap again once that node’s move settles or it is acknowledged.',
+  // `satisfies` is what makes `moveSkipText`'s claim below true: the annotation above is keyed by
+  // `UpdateRouteError`, which does not follow `MoveSkipWhy`, so without this a skip word added to `MoveSkipWhy`
+  // alone would compile with no sentence. (`& Record<string, string>` keeps the extra keys legal.)
+} satisfies Record<MoveSkipWhy, string> & Record<string, string>;
 
 /** Operator-facing text for a failed update-route call: the code in
  *  `UPDATE_ERROR_TEXT` (OWN keys only — `Object.hasOwn`, so a body naming

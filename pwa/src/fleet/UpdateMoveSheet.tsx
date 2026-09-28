@@ -26,9 +26,11 @@
 // This plan previews by version and OS alone, so a node it NAMED can come back
 // skipped for a capability, the agent, a refusal or the catalogue: the sheet
 // says each such node and its sentence IN PLACE (moveSkippedText) and stays
-// open with no confirm — the reply is final, and Task 6's requestAll writes
-// no request and no updateDetail for a skipped node, so this sentence is the
-// only place the operator learns why. A readable reply that requested nothing
+// open with no confirm — the reply is final. Task 6's requestAll writes no
+// request for a skipped node, and notes an updateDetail on its row for every
+// word except not-newer, busy, halted and waiting-for-fleet (no-desired is
+// noted nowhere either: it is no refusal of the row), so for those this
+// sentence is the only place the operator learns why. A readable reply that requested nothing
 // at all is said the same way (MOVE_NOTHING_REQUESTED_TEXT); a skip of a node
 // the sheet never listed is the plan agreeing with the server, and is not said.
 //
