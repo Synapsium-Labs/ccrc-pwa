@@ -471,7 +471,7 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
 **Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with `--channel`, `--no-gate`, `--detach`
-and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
+and `--from`, below) — per box, explicit; unattended only under `auto` (below). `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
 `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
 running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
 last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
@@ -498,8 +498,8 @@ both boxes re-measured. `ccrc doctor`'s `build` check compares the
 running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`,
 and `update-exposure` FAILs a reachable server box whose session gate is unarmed (Exposure, above).
 
-**Control plane (update-management W2).** The server now measures and records the fleet's update state; nothing
-in it moves a node yet. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
+**Control plane (update-management W2).** The server now measures and records the fleet's update state; what moves
+a node is the one-tap, below. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
 listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
 `ccd/ccrc`, or from `CCRC_RELEASE_OWNER` and `CCRC_RELEASE_REPO` when both are set — a pair that is not two
 plain names stops the poll rather than falling back); a release that vanishes from the listing is marked
@@ -517,9 +517,9 @@ says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/
 (rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
 `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. Not yet: no
-apply or rollback route — and an `auto` other than `off` is refused (`409`) until every node the intent covers
-lists `update-gate` in its `ccrc-caps` (an install of the W4 node side writes it — below).
+`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. An `auto`
+other than `off` is refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`
+(an install of the W4 node side writes it); the dispatcher checks the same word again at every auto move.
 
 **One update at a time, reported, gated, and undone.** An installing `ccrc update` holds `~/.ccrc/update.lock`
 (`flock`; macOS needs `brew install flock`) from just after its arguments are checked until just before the supervisor
@@ -616,8 +616,8 @@ never "up to date" while nothing was reached. Then the release list (newest firs
 only when a node runs that tag and its bundle verified — a listed bundle alone reads `bundle listed`;
 notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
-that would move a node — Install, Roll back, Update, Update all — is shown disabled until the next
-release. A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
+(below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
 address. On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
 `/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
 whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
@@ -626,6 +626,41 @@ for the newest tag its release-notification setting (on my channel, stable only,
 `coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
 measured node already runs is recorded without a push. It has no session, so an open app does not suppress
 it; tapping it opens `/settings`.
+
+**Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update
+and Roll back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the
+nodes the move takes, fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an
+optional `tag` — without one, the node's desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an
+optional `to` — without one, the node's previous version). Both are session-only: the box token never moves a node.
+A single-node move the dispatcher would refuse answers `409` with its word in the same request (not newer, an unread
+stamp or floor, halted, the node's own lease busy, a missing capability, an agent that predates the op, an unknown or
+refused tag, no previous version, no desired tag); `{all: true}` always answers `202`, writing a request only for a
+node the tag takes forward and the dispatcher could move, and naming every other live node as skipped, with its word:
+a node whose own lease is busy, or that is itself halting, is skipped, and while a fleet node is skipped for either,
+so is every server-role node (`waiting-for-fleet`); a halt caused by another row still writes the request.
+What is written is a **request** on the node's row, never a command. On a `server` or `both` box the dispatcher
+reads the rows after every inventory sweep, every intent write and every request write, and moves at most one node
+at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet
+node's request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent
+that advertises it in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op`
+until that box is updated by hand). The agent answers `busy` while `~/.ccrc/update.json` reports a run in flight;
+otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` —
+two fixed argument lists with the tag the only word that varies, outside the exec whitelist — and answers
+`accepted` once the detaching parent has exited 0. The server node is spawned the same way on its own box, after
+the same `busy` check. `accepted` only holds the lease (the row reads `pending`): the node settles when a later
+sweep measures it on the target, and a request for the tag a node already runs is settled without a move. A
+refusal releases the lease in the same turn and never consumes the request — `busy`, a dropped link or a timeout
+returns the row to `idle` for a later sweep, while a spawn that fails, a tag or kind the agent refuses, or a
+`bad-request` from an agent that advertised the op fails it; a capability refusal takes no lease, is noted on the
+row and waits. A `failed` or `reverted` row **halts** every further move until **Ack** (`POST /api/updates/ack`)
+returns it to idle and clears its request and refusals; a `provenance:` verdict on a release does not halt (the row
+keeps `failed` and that detail), and the node moves on to the next release eligible for it. A lease is failed
+`deadline` once `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) has passed since the later of the dispatch and the
+node's last report, and at all events four deadlines after the dispatch; that halts too. With `auto` on (`stable`
+only for a node on the stable channel), the dispatcher moves a node to its desired tag with no request, and
+refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the intent route admitted. A macOS
+node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move and the dispatcher
+refuses one; `ccrc rollout` stays the path when the console itself is down.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
@@ -1673,6 +1708,10 @@ general remote-shell:
   server never asks systemd anything — nothing under `~/.config/systemd`.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
+- **Update op**: `update` only ever spawns `~/.local/bin/ccrc update` or `rollback`, as
+  `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
+  first — never through the exec whitelist, never an arbitrary command. The agent
+  names it in its ready frame, and the server sends it to no agent that does not.
 
 ### Degraded mode
 

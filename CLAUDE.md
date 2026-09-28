@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3400 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3500 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -142,7 +142,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. A
+  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
+  node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
+  locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
+  `ccrc rollout` stays the path when the console is down. A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
