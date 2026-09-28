@@ -1,5 +1,5 @@
 # DIAGNOSTIC ONLY — scratch branch ci/macos-diag-*, never merged. Dispatch-only: a push here triggers nothing.
-# Round 2: the ccgpt-proxy fix verified on macOS, and an A/B of vitest workers (1 vs 2) over identical file sets.
+# Round 3: repeat the full fixed suite twice with two workers to test stability before changing policy.
 name: ci
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workers: [2, 1]
+        workers: [2]
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
