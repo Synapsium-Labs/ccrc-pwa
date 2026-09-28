@@ -282,9 +282,9 @@ _plat_ln_swap() {   # <target> <link> -> 0 iff <link> is now a symlink to <targe
   fi
 }
 
-# `stat -c` -> `stat -f`. Three format letters, three functions, because a
-# single `_plat_stat <fmt> <file>` would put the GNU spelling at every call
-# site and leave this block translating a string it did not choose.
+# `stat -c` -> `stat -f`, one function per format letter: a single `_plat_stat <fmt> <file>` would
+# put the GNU spelling at every call site and leave this block translating a string it did not choose.
+_plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z "$@"; fi; }   # <file> -> ctime, epoch seconds: what a restore cannot backdate (D-3524)
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }

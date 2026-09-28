@@ -2112,7 +2112,7 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
 });
 
 // — the account-health probe's token convention —
-describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files', () => {
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly five bash files', () => {
   // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
   // so the mandatory upstream account cannot declare where its credential
   // lives — and a roster-driven probe would silently skip the primary account.
@@ -2144,18 +2144,31 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files'
   // into $HOME/.local/bin with no library beside it — so it is measured here
   // on exactly the same terms, and the value comparison below covers it.
   // A FIFTH holder should still have to argue.
+  //
+  // THE FIFTH ARGUES, AND IT NEVER READS THE FILE (D-3524). `ccd/ccd`'s
+  // `_authdead_cred_src` names the upstream's credential file so the auth-dead
+  // marker can expire once the credential it condemned is replaced: it STATS the
+  // file for its ctime and never opens it. The upstream is exactly the account
+  // the roster may give no `secretsFile`, and the file the probe measured dead is
+  // this one — so ccd must build the same path, and it cannot share a constant
+  // for the reason above: ccd is installed as a lone COPY into $HOME/.local/bin.
+  // A declared `exec.secretsFile` wins over it (`_ccrc_secrets_file`, generated);
+  // the convention is the fallback for the upstream alone, never a guess for any
+  // other id. Measured below on the same terms as the other four. A SIXTH
+  // holder should still have to argue.
   const NEEDLE = '-oauth.env';
 
-  it('is spelled by exactly those three files, each named here BY NAME', () => {
+  it('is spelled by exactly those five files, each named here BY NAME', () => {
     expect(holdersOf(NEEDLE)).toEqual([
-      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other three read what it renames into place
+      'ccd/ccd',                      // _authdead_cred_src — stats the upstream's file, never opens it (D-3524)
+      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other four read what it renames into place
       'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
       'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
       'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
     ]);
   });
 
-  it('and all four build the same path from an id', () => {
+  it('and all five build the same path from an id', () => {
     // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
     // lines whose trimmed start is `#`, and each file names the file TWICE in
     // shell — once building the path and once in an operator-facing message
@@ -2185,6 +2198,15 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files'
     expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
     expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
     expect(writer.length, `the writer renames onto it on ${writer.length} lines`).toBe(1);
+    // ccd's constructing line is the upstream arm of `_authdead_cred_src`. Found
+    // through `BASH` by its relative name, never by joining the script's path
+    // here: that spelling belongs to `ccdWsHelpers.ts` alone (the extraction
+    // finding above).
+    const ccdFile = BASH.find((f) => rel(f) === 'ccd/ccd');
+    expect(ccdFile, 'ccd/ccd is in the bash corpus').toBeDefined();
+    const ccdSrc = codeLines(ccdFile!)
+      .filter((l) => l.includes(NEEDLE) && l.includes('f="$HOME/.cc-secrets/'));
+    expect(ccdSrc.length, `ccd builds it on ${ccdSrc.length} lines`).toBe(1);
     // A REAL comparison, not a tautology. Each line is reduced to the path it
     // BUILDS, with the two files' different spellings of "the secrets dir" and
     // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
@@ -2197,13 +2219,16 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files'
       expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
       return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
         .replace('$SECRETS_DIR/$acct', '<dir>/<id>')
-        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>');
+        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>')
+        .replace('$HOME/.cc-secrets/$w', '<dir>/<id>');
     };
     expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
       .toBe('<dir>/<id>-oauth.env');
-    expect(shape(writer[0]!), 'the writer creates a path its three readers do not watch')
+    expect(shape(writer[0]!), 'the writer creates a path its readers do not watch')
+      .toBe('<dir>/<id>-oauth.env');
+    expect(shape(ccdSrc[0]!), 'ccd stats a path the writer does not create')
       .toBe('<dir>/<id>-oauth.env');
   });
 });
