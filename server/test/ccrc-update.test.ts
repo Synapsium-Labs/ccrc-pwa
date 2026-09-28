@@ -1307,7 +1307,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toContain('spine died at _inst_tree, before its flip: nothing was replaced '
-      + '($HOME/ccrc is still the pre-versioned directory; the spine died before the migration moved it); '
+      + '($HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved); '
       + 'read its lines above.');
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
@@ -1356,13 +1356,15 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(ask(alien, 'stage-old', 'v2.0.0', 'foreign', '')).toBe('rc=1');
 
     // W6 Task 3 (D-3458): a `directory` layout that still reads `directory`
-    // — no `~/ccrc.migrating`, no marker, no link — proves the real
-    // directory was never touched: every write before `_inst_migrate`'s move
-    // lands in `~/ccrc-versions/<name>`, never in `~/ccrc` itself.
+    // — no `~/ccrc.migrating`, no link — proves the real directory was
+    // never touched: every write before `_inst_migrate`'s move lands in
+    // `~/ccrc-versions/<name>`, never in `~/ccrc` itself. `_ver_layout`
+    // never reads `~/.ccrc/migrating-to`, so a marker left over from a
+    // failed aside-move would not change this reading either.
     const dir = freshUpdateBox('ccrc-update-untouched-dir-');
     mkdirSync(join(dir, 'ccrc', 'server'), { recursive: true });
     expect(ask(dir, 'stage-w6', 'v2.0.0', 'directory', ''))
-      .toBe('$HOME/ccrc is still the pre-versioned directory; the spine died before the migration moved it\nrc=0');
+      .toBe('$HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved\nrc=0');
     // A spine older than W6 still writes THROUGH ~/ccrc even on a directory
     // layout (no BOX_VERSIONS_ROOT line at all).
     expect(ask(dir, 'stage-old', 'v2.0.0', 'directory', '')).toBe('rc=1');
@@ -1451,7 +1453,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(rep['detail']).toBe('the floor write died inside _inst_installed - the box moved; its floor was not raised');
   });
 
-  it('a spine that DIED inside _inst_tree (after the tree moved) is gated, fails the gate on the OLD build, and exits 4 with the backup named — and leaves NO completed-install record (D-3114, design §11)', () => {
+  it('a spine that DIED after _inst_tree moved the tree (at _inst_bins) is gated, fails the gate on the OLD build, and exits 4 with the backup named — and leaves NO completed-install record (D-3114, design §11)', () => {
     // W6 Task 3 (D-3458): `plantOldBox` is a real-directory box, and since W6
     // that layout is placed exactly like `absent` — the version is placed
     // FULLY, deps included, before `_inst_migrate` ever moves the real
@@ -7953,22 +7955,28 @@ describe('ccrc update: the migration keeps the old tree until the gate (W6 Task 
     return { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` };
   };
 
-  it('a staged spine whose link cannot be placed moves ~/ccrc BACK before it dies — the real directory was never replaced, so this exits 1 with no gate and no restore, whichever updater is the parent (D-3436, D-3458)', () => {
+  it('a staged spine whose link cannot be placed moves ~/ccrc BACK before it dies, whichever updater is the parent — a W6 parent reads that as untouched and exits 1 with no gate or restore (D-3458); a wave-4 parent would gate and restore it instead (D-3436)', () => {
     const home = fullBox('ccrc-update-migrate-spine-ln-fail-');
     const r = runUpdate(home, [], armLn(home, 'fixture-ln-fail-once'));
     expect(existsSync(join(home, 'fixture-ln-fail-once')), 'the refusal never fired').toBe(false);
     expect(r.stderr).toContain('ccrc: $HOME/ccrc could not be linked to $HOME/ccrc-versions/v2.0.0, so it was moved back — nothing moved');
-    // Nothing for the post-spine resume to complete: the layout reads
-    // `directory`, so this case reads the same under a wave-4 parent, which
-    // has no resume at all (D-3438).
+    // The move-back (D-3436) itself runs in the staged spine — W6's own
+    // code — whichever updater drives this run, so no resume line is ever
+    // printed either way: the layout reads `directory`, never `crashed`.
     expect(at(r.stdout, (l) => l === resumed('v2.0.0'))).toBe(-1);
-    // The move back left ~/ccrc exactly as it was — the same real directory,
-    // byte for byte — so `_upd_tree_untouched`'s `directory` row (D-3458)
-    // reads this as NOTHING REPLACED: exit 1, never gated, never restored.
-    // Before D-3458 this read as moved and was gated/restored (exit 4) over
-    // a box whose tree was never touched.
+    // What DOES depend on the parent is what happens next. This harness's
+    // parent is always the CURRENT tree's own ccrc — a W6 parent — whose
+    // `_upd_tree_untouched` carries the `directory` row (D-3458): the move
+    // back left ~/ccrc exactly as it was, the same real directory byte for
+    // byte, so THIS run reads NOTHING REPLACED — exit 1, never gated, never
+    // restored. A wave-4 parent has no such row: it would read the death as
+    // moved (its `_upd_step_moved` default) and gate, then restore, this
+    // exact on-disk shape — the defect D-3436 describes. This harness
+    // cannot drive that parent to prove it (`runUpdate` always runs the
+    // current tree's ccrc as the outer process); D-3458's plan entry
+    // records the distinction instead.
     expect(r.stderr).toContain('nothing was replaced ($HOME/ccrc is still the pre-versioned directory; '
-      + 'the spine died before the migration moved it)');
+      + 'the migration did not leave it moved)');
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
     expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);

@@ -15174,14 +15174,23 @@ _upd_stamp_moved() {   # <old_sha>
 #     before `_inst_migrate`'s move lands there, never in `~/ccrc` itself —
 #     and only `_inst_migrate` moves the real directory, at its own last act.
 #     A death before that migrates nothing, so `directory` still reading
-#     `directory` (no `~/ccrc.migrating`, no marker, no link) proves the same
-#     thing the `linked|migrated` row proves for a versioned box
-#     (D-3458). A migration whose link failed and
-#     was moved BACK (D-3436) also lands here: the real
-#     directory the spine started with is the one now standing, byte for
-#     byte, so untouched is the true reading of that shape too;
-#   - `absent`, `crashed`: covered by the layout-refusal and the crash-pair
-#     cases respectively — neither writes a byte outside `~/ccrc-versions`.
+#     `directory` proves the same thing the `linked|migrated` row proves
+#     for a versioned box (D-3458) — this reads
+#     `_ver_layout` alone, never `~/.ccrc/migrating-to`, so a marker left
+#     behind by an aside-move that failed (step 2 died before
+#     `~/ccrc.migrating` existed) changes nothing here. A migration whose
+#     link failed and was moved BACK (D-3436) also lands
+#     here: the real directory the spine started with is the one now
+#     standing, byte for byte, so untouched is the true reading of that
+#     shape too;
+#   - `crashed`: `_inst_tree` refuses it before a byte is written (its own
+#     layout-refusal case), so a pre_layout of `crashed` never reaches here
+#     with anything to prove;
+#   - `absent`: NOT covered — `_inst_tree` genuinely places into
+#     `~/ccrc-versions/<name>` and then flips the (previously absent)
+#     `~/ccrc` onto it, so a death at-or-after the flip really did replace
+#     it. This falls through to `return 1`, wave 4's default, the same as
+#     any word this function does not name.
 # `foreign`/`unreadable` count as untouched while they read the same word:
 # `_inst_tree` refuses both before it writes a byte
 # (D-3429). Reads only; never dies.
@@ -15199,12 +15208,13 @@ _upd_tree_untouched() {   # <pre_layout> <pre_current>
     directory)
       # D-3458: nothing before `_inst_migrate`'s move writes into `~/ccrc`
       # itself, so a `directory` layout that still reads `directory` — no
-      # `~/ccrc.migrating`, no `~/.ccrc/migrating-to`, no link — proves the
-      # real directory was never touched, whether the spine never reached
-      # `_inst_migrate` or reached it and moved the tree back on a failed
-      # link (D-3436).
+      # `~/ccrc.migrating`, no link — proves the real directory was never
+      # touched, whether the spine never reached `_inst_migrate` or reached
+      # it and moved the tree back on a failed link (D-3436). A leftover
+      # `~/.ccrc/migrating-to` from a failed aside-move changes nothing:
+      # `_ver_layout` never reads it.
       [ "$VER_LAYOUT" = directory ] || return 1
-      echo "\$HOME/ccrc is still the pre-versioned directory; the spine died before the migration moved it"
+      echo "\$HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved"
       return 0 ;;
     foreign|unreadable)
       [ "$VER_LAYOUT" = "$pl" ] || return 1
