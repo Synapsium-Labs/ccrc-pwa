@@ -16,7 +16,7 @@ import {
   type AutoMode, type DispatchRefusal, type NodeRole, type RequestKind, type StampRead, type TagFileRead, type UpdateChannel,
   type UpdateState,
 } from '../../../shared/api.js';
-import { UPDATE_OP } from '../../../shared/agent-protocol.js';
+import { UPDATE_OP, firstStderrLine, isUpdateOpError, type UpdateOpError } from '../../../shared/agent-protocol.js';
 import { isNewerTag } from '../../../shared/semver.js';
 import { floorOf, type EligibilityRow } from './resolve.js';
 
@@ -282,4 +282,65 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
     }
   }
   return { gate, move, refusals, met };
+}
+
+// ── the op's answer (wave 5, Task 5) ─────────────────────────────────────────
+
+/** Spec §10, verbatim: the words a HALTING `failed` carries when an agent that ADVERTISES the op still answered
+ *  `bad-request` — it has the op and refused this frame, which only a server-side bug produces. */
+export const AGENT_REJECTED_DETAIL = 'agent rejected the update op';
+const ACCEPTED_DETAIL = 'accepted — the node queued a detached run';
+const SKEW_DETAIL =
+  `agent-predates-update-op — the agent answered bad-request and does not advertise the ${UPDATE_OP} op; the request stands`;
+
+/** What came back from ONE op: the agent's reply over the link, or the server-role spawn's exit. `refused` is a
+ *  word the NODE said (an AgentOpError, or a non-zero local exit as `spawn-failed`); `transport` is the link or
+ *  the spawn failing to answer at all — never a word the node said. */
+export type OpAnswer =
+  | { kind: 'accepted' }
+  | { kind: 'refused'; err: string; detail: string | null }
+  | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string };
+
+/** What the act does to the lease it holds. `hold` writes nothing: only the inventory sweep (or a met request)
+ *  settles a lease, so the row reads `pending` until then (D-3382). */
+export type AnswerAction =
+  | { kind: 'hold'; detail: string }
+  | { kind: 'release'; to: 'idle' | 'failed'; detail: string };
+
+/** A node-supplied word or detail, as ONE printable line of at most UPDATE_OP_DETAIL_MAX characters — the row's
+ *  `updateDetail` is rendered on the PWA and must not carry a second line, a control byte or a megabyte. */
+const said = (text: string | null, none: string): string => (text === null ? none : firstStderrLine(text));
+
+/**
+ * THE ANSWER MAPPING (spec §10). `advertised` is whether the LIVE `FleetState.agentOps` names the op when the
+ * answer arrives (always `true` for the server-role spawn): an agent that advertises the op and still answers
+ * `bad-request` HALTS, one that does not is version skew and waits. `busy` and every transport failure release
+ * the lease `idle` with the request standing (decision 7: a refusal never consumes it); `bad-tag`, `bad-kind`,
+ * `spawn-failed` and any word this build cannot name release it `failed`, which halts until `ack`.
+ * Exhaustive over `UpdateOpError`: a word added to UPDATE_OP_ERRORS and not here is a compile error at the
+ * `never` below (D-3370).
+ */
+export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction {
+  if (a.kind === 'accepted') return { kind: 'hold', detail: ACCEPTED_DETAIL };
+  if (a.kind === 'transport') {
+    const what = a.why === 'other' ? said(a.message, 'no message') : 'the node dropped mid-dispatch';
+    return { kind: 'release', to: 'idle', detail: `${a.why} — ${what}; the request stands` };
+  }
+  if (a.err === 'bad-request') {
+    return advertised
+      ? { kind: 'release', to: 'failed', detail: AGENT_REJECTED_DETAIL }
+      : { kind: 'release', to: 'idle', detail: SKEW_DETAIL };
+  }
+  if (!isUpdateOpError(a.err)) return { kind: 'release', to: 'failed', detail: `agent answered ${said(a.err, 'no word')}` };
+  const err: UpdateOpError = a.err;
+  switch (err) {
+    case 'busy': return { kind: 'release', to: 'idle', detail: `busy — ${said(a.detail, 'the node gave no detail')}` };
+    case 'bad-tag':
+    case 'bad-kind': return { kind: 'release', to: 'failed', detail: `agent refused the op: ${err}` };
+    case 'spawn-failed': return { kind: 'release', to: 'failed', detail: `spawn-failed — ${said(a.detail, 'no message')}` };
+    default: {
+      const unhandled: never = err;
+      return unhandled;
+    }
+  }
 }

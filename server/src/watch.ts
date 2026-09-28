@@ -61,6 +61,7 @@ import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
+import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
@@ -585,6 +586,12 @@ export class FleetWatcher {
    *  inventory run. Until then the `nodes` rows are the previous process's, so the catalogue side
    *  (`pushReleaseAfterPoll`) decides nothing. Set by `sweepThenProject`; never cleared. */
   private inventorySwept = false;
+  /** Wave 5 (design 2026-09-20 §10): the dispatcher's ONE run in flight, and whether a trigger arrived while
+   *  it ran. However many triggers arrive during a run, they ask for ONE follow-up after it — so a request
+   *  written mid-run is planned by a run that reads it, and no two runs ever hold the plan-then-acquire
+   *  stretch at once. */
+  private dispatchRun: Promise<DispatchRunResult> | null = null;
+  private dispatchAgain = false;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -901,6 +908,50 @@ export class FleetWatcher {
     });
   }
 
+  /**
+   * The dispatcher's ONE run (design 2026-09-20 §10), single-flight. Called at the end of every inventory run
+   * (`sweepThenProject`) and by the update routes after every intent and request write. A call while a run is
+   * in flight JOINS it and asks for exactly one follow-up; otherwise it starts a run SYNCHRONOUSLY — the run's
+   * plan and lease acquire happen in the caller's own turn, so a route's reply already reads `pending`.
+   */
+  dispatchNow(): Promise<DispatchRunResult> {
+    if (this.dispatchRun !== null) {
+      this.dispatchAgain = true;
+      return this.dispatchRun;
+    }
+    const run = this.dispatchOnce().finally(() => {
+      this.dispatchRun = null;
+      if (this.dispatchAgain) {
+        this.dispatchAgain = false;
+        this.triggerDispatch();
+      }
+    });
+    this.dispatchRun = run;
+    return run;
+  }
+
+  /** For a caller that must not wait: the inventory run's tail, a route's reply. */
+  triggerDispatch(): void {
+    void this.dispatchNow().catch((err: unknown) => {
+      // D-3493 — the update lanes' rule at the tip: a rejection is warned, never swallowed.
+      console.warn(`ccrc-server: a dispatch run rejected: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    });
+  }
+
+  /** The act's deps, built from this process's Deps — the ONE place they are assembled. The server's own
+   *  update.json is read through `localIO` in both modes (`deps.io` is the FLEET box's io in remote mode). */
+  private async dispatchOnce(): Promise<DispatchRunResult> {
+    const coord = this.deps.coord;
+    if (coord === undefined) return { ran: false, why: 'no-coord' };
+    const { cfg, fleetState, sendUpdateOp, updateRunner } = this.deps;
+    return runDispatch({
+      store: coord, role: cfg.role, ccrcDir: cfg.ccrcDir, localIo: localIO, deadlineMs: cfg.updateDeadlineMs,
+      fleet: sendUpdateOp !== undefined && fleetState !== undefined ? { state: fleetState, send: sendUpdateOp } : null,
+      runLocal: updateRunner ?? null,
+      onAccepted: () => this.triggerInventory(),
+    }, Date.now());
+  }
+
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
    *  sweep's `SweepOutcome[]` was discarded by both callers — nothing ever
    *  printed it. Warns each `node-id-collision`, each `refused` and each
@@ -1016,6 +1067,9 @@ export class FleetWatcher {
     // skipped too, rather than deciding on rows this process never wrote.
     if (this.sweptEnoughToDecide(inv, outcomes)) this.inventorySwept = true;
     if (this.inventorySwept) this.pushRelease(now);
+    // Wave 5 (design 2026-09-20 §10): the sweep is what settles a lease, so every inventory run ends in ONE
+    // dispatch run — the next node's turn starts on the beat that freed it.
+    this.triggerDispatch();
     return outcomes;
   }
 
