@@ -14277,11 +14277,11 @@ _upd_converged() {
 # is nothing for arm 2 to restore TO — and falls straight to arm 3, the
 # pre-update backup, which for a same-tag run whose staged sha equals the old
 # build's own AND whose `old_completed` was 1 IS that same release (D-3288,
-# review fix round 1 I3, NARROWED by fix round 2 F1); a same-tag run whose
-# staged sha DIFFERS, or whose `old_completed` was 0, is not provably the
-# same build — arm 3 says only that the PRE-UPDATE tree came back, never
-# `deploy.sh`'s MIXED-between-two-tags claim, since it is the same tag either
-# way. AMENDED AGAIN (fix round 2, F1+F2, review 167, rulings item 1): the
+# review fix round 1 I3, NARROWED by fix round 2 F1); with `old_completed` 0,
+# arm 3 says only that the PRE-UPDATE tree came back, never `deploy.sh`'s MIXED
+# claim; with `old_completed` 1 and a DIFFERING sha (a PROVEN rebuild, not an
+# unproven tree) it still ends there. AMENDED AGAIN (fix round 2, F1+F2, review
+# 167, rulings item 1): the
 # I4 narrowing above left one case open — a same-tag rerun with NO completed
 # record still finds `previous` naming the exact tag that just failed
 # whenever this keep's own UNCONDITIONAL branch, or D-3254 (b)'s "keep

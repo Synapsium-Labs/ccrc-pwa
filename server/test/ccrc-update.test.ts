@@ -4714,7 +4714,24 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     // NO .ccrc/installed. `previous` already names v2.0.0 — written by an
     // earlier `update --to v3.0.0` whose spine died before the tree moved.
     writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${OLD_SHA}\n`);
-    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // A RUNNABLE restore child (review 167 N1): without one, `~/ccrc/ccd/ccrc`
+    // never exists and arm 2 falls to arm 3 for THAT reason on every tree,
+    // fixed or not — the pin would then be red on 7a20ff8f for the wrong
+    // cause. With the child placed, the check this pin is FOR is what decides
+    // whether arm 2 ever reaches it: unfixed code has no second check, runs
+    // the child (which always exits 0), and prints the false `REVERTED
+    // (arm 2)` F2 describes; the check2 fix here skips arm 2 before ever
+    // looking at the child.
+    writeFileSync(join(home, 'fixture-restore-child'), RESTORE_RECORDER);
+    writeFileSync(join(home, 'fixture-on-install'),
+      'mkdir -p "$HOME/ccrc/ccd" && cp "$HOME/fixture-restore-child" "$HOME/ccrc/ccd/ccrc"\n');
+    // Published TWICE: `latest/download` (this run's own no-`--to` fetch)
+    // AND `download/v2.0.0` (arm 2's own bundle probe, `_upd_asset_listed
+    // v2.0.0 …`, which is tag-scoped and never reads `latest`). Same tree,
+    // no rebuild — `packRelease` only tars what `stubTree` already built.
+    const f2aTree = stubTree(home, { version: 'v2.0.0' });
+    packRelease(home, f2aTree, { tag: 'v2.0.0' });
+    packRelease(home, f2aTree, { tag: 'v2.0.0', latest: false });
     writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
     const r = runUpdate(home, ['--force']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
@@ -4723,6 +4740,13 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(r.stdout).toMatch(
       /^update: arm 2: previous \(v2\.0\.0\) also names v2\.0\.0, the release that just failed its gate — re-installing it would not restore anything; arm 3$/m);
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(`v2.0.0\n${OLD_SHA}\n`);
+    // The F1/F2 interaction the reviewer flagged: this same-tag, no-record
+    // run also falls into arm 3's `same_tag` branch (`old_completed=0`), so
+    // it lands on F1's own "may be mixed" line, never "not mixed" and never
+    // `deploy.sh`.
+    expect(r.stdout).toMatch(
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the PRE-UPDATE tree, which may itself be MIXED\. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m);
+    expect(String(lastReport(home)['detail'])).toMatch(/^arm3: restored v2\.0\.0 \(pre-update tree, may be mixed\); gate: /);
   });
 
   // Fix round 2, F2 input (b) (review 167; rulings item 1): the reviewer's
@@ -4738,6 +4762,12 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     plantOldBox(home, { version: 'v2.0.0' });
     // NO .ccrc/installed. `previous` already names v1.0.0.
     writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    // A RUNNABLE restore child (review 167 N1) — see F2 (a)'s comment for why
+    // one is needed: without it, arm 2 falls to arm 3 on EVERY tree because
+    // `~/ccrc/ccd/ccrc` is absent, not because of the check this pin is for.
+    writeFileSync(join(home, 'fixture-restore-child'), RESTORE_RECORDER);
+    writeFileSync(join(home, 'fixture-on-install'),
+      'mkdir -p "$HOME/ccrc/ccd" && cp "$HOME/fixture-restore-child" "$HOME/ccrc/ccd/ccrc"\n');
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
     writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
     const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
