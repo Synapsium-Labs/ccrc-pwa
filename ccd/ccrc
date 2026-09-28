@@ -1423,24 +1423,32 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 : "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
 
 # The SMALL probes — the provenance bundle fetch and `_upd_asset_listed` —
-# ALSO get a TOTAL bound, unlike SHA256SUMS and the tarball (a slow but LIVE
-# transfer must not be killed mid-download; those two get a STALL bound
-# instead — see `_upd_resolve`/`_upd_fetch`). `_upd_asset_listed` is the
-# release-host check `cmd_rollback --detach` runs BEFORE it detaches (review
-# 155 C32): W5 sizes its spawn deadline for that parent at
-# `UPDATE_SPAWN_TIMEOUT_MS = 20_000` (strictly below `UPDATE_OP_TIMEOUT_MS =
-# 30_000`), so this bound must sit well under 20s or a slow release host
-# surfaces as W5's own `spawn-failed` timeout rather than this verb's named
-# refusal. Named ONCE, read by every small-probe caller, so they cannot
-# drift apart.
+# ALSO get a TOTAL bound, unlike the tarball (a slow but LIVE transfer must
+# not be killed mid-download; the tarball gets a STALL bound instead — see
+# `_upd_fetch`). `_upd_asset_listed` is the release-host check `cmd_rollback
+# --detach` runs BEFORE it detaches (review 155 C32): W5 sizes its spawn
+# deadline for that parent at `UPDATE_SPAWN_TIMEOUT_MS = 20_000` (strictly
+# below `UPDATE_OP_TIMEOUT_MS = 30_000`), so this bound must sit well under
+# 20s or a slow release host surfaces as W5's own `spawn-failed` timeout
+# rather than this verb's named refusal. Named ONCE, read by every
+# small-probe caller, so they cannot drift apart.
 : "${CCRC_RELEASE_PROBE_MAX_TIME:=15}"
 
 # The STALL bound for SHA256SUMS and the tarball fetches
-# (`--speed-limit`/`--speed-time`, never `--max-time`: a slow but LIVE
+# (`--speed-limit`/`--speed-time`, never `--max-time` ALONE: a slow but LIVE
 # download must be let finish). A transfer under this many bytes/second for
 # this many seconds running is presumed dead, not merely slow.
 : "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
 : "${CCRC_RELEASE_SPEED_TIME:=30}"
+
+# Fix round 2, F4 (review 167): SHA256SUMS is SMALL BY DESIGN (one
+# `sha256sum` line — see `_upd_resolve`'s own derivation comment), so unlike
+# the tarball it ALSO gets a total `--max-time` and a `--max-filesize` — the
+# stall pair above admits a host that keeps sending at or above the floor
+# forever, which for a ~100-byte file is not "a slow but LIVE download", it
+# is a host that never has to stop.
+: "${CCRC_RELEASE_SUMS_MAX_TIME:=20}"
+: "${CCRC_RELEASE_SUMS_MAX_FILESIZE:=4096}"
 
 # ── ccrc account check: how long the CHEAP health question may take ───────
 # `claude auth status` is a LOCAL read — no inference, no network to the model
@@ -13990,6 +13998,23 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   _upd_validate_timeout CCRC_RELEASE_SPEED_LIMIT 1024 \
     'a whole number of bytes/second from 1 to 100000000' 100000000
   _upd_validate_timeout CCRC_RELEASE_SPEED_TIME 30
+  # Fix round 2, F4 (review 167): SHA256SUMS gets its OWN pair, a total
+  # --max-time and a --max-filesize — unlike the tarball, which stays on the
+  # connect+stall pair alone (see the comment on its own fetch, below).
+  # DERIVED, not hand-typed: `deploy/build-release.sh` writes SHA256SUMS with
+  # exactly one `sha256sum` line (`$BR_SHA256 "ccrc-$VERSION.tar.gz" >
+  # SHA256SUMS` — one tarball asset, no loop, no `>>`), and `sha256sum`'s own
+  # line shape is `<64 hex><two spaces><filename>\n`: 64 + 2 + 1 = 67 bytes of
+  # fixed overhead, plus the filename. `ccrc-vX.Y.Z.tar.gz` stays well under
+  # 25 bytes even for an implausible 3-digit-per-component version
+  # (`ccrc-v999.999.999.tar.gz` measures 24 bytes) — so a real SHA256SUMS
+  # measures under 91 bytes. 4096 is a ~45x margin over that, comfortably
+  # inside `_upd_validate_timeout`'s own generic shape. 20s matches the
+  # release-host bound this file already uses for a small, one-shot ask
+  # (`_upd_asset_listed`'s own `CCRC_RELEASE_PROBE_MAX_TIME`, review 155 C32).
+  _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_TIME 20
+  _upd_validate_timeout CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
+    'a whole number of bytes from 1 to 1048576' 1048576
   base="$(_upd_release_base)"
   if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_URL_DIR_SAFE="$(_upd_redact "$UPD_URL_DIR")"
@@ -13998,13 +14023,20 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
   echo "update: fetching $UPD_URL_DIR_SAFE/SHA256SUMS …"
-  # Fix round 1 item 12 / review 155 C22: a CONNECT bound plus a STALL bound
-  # (never a total `--max-time`, which a slow but LIVE download would hit) —
-  # by class with the tarball fetch below.
+  # Fix round 1 item 12 / review 155 C22, AMENDED by fix round 2 F4 (review
+  # 167): a CONNECT bound plus a STALL bound was the whole story here too,
+  # reasoned "never a total --max-time, which a slow but LIVE download would
+  # hit" — that reasoning fits the TARBALL (below), not this file, which is
+  # SMALL BY DESIGN (about 100 bytes — see the derivation above): a host that
+  # keeps sending at or above the stall floor forever would otherwise never
+  # trip either bound, holding `update.lock` (and growing `$UPD_STAGE`) for
+  # as long as it kept sending. Now also a total `--max-time` and a
+  # `--max-filesize`.
   curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
+    --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
-    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed"
+    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s — or did it time out after ${CCRC_RELEASE_SUMS_MAX_TIME}s / exceed ${CCRC_RELEASE_SUMS_MAX_FILESIZE} bytes) — nothing on this box was changed"
   read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
   UPD_TARNAME="${UPD_TARNAME#\*}"
@@ -14043,9 +14075,11 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
 _upd_fetch() {
   local allow_unsigned="${1:-0}" bundle rc=0 verifier vrc=0
   echo "update: fetching $UPD_URL_DIR_SAFE/$UPD_TARNAME …"
-  # Fix round 1 item 12 / review 155 C22: by class with the SHA256SUMS
-  # fetch above — a CONNECT bound plus a STALL bound, never a total
-  # `--max-time` that a slow but LIVE download would hit.
+  # Fix round 1 item 12 / review 155 C22: a CONNECT bound plus a STALL bound,
+  # never a total `--max-time` that a slow but LIVE download would hit — this
+  # tarball can legitimately be large, unlike SHA256SUMS (fix round 2 F4,
+  # review 167, amended its own fetch above to ALSO carry a total time and
+  # size bound; that reasoning does not fit here).
   curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
@@ -14242,9 +14276,21 @@ _upd_converged() {
 # re-installing a COMPLETED same tag is what just failed its gate, so there
 # is nothing for arm 2 to restore TO — and falls straight to arm 3, the
 # pre-update backup, which for a same-tag run whose staged sha equals the old
-# build's own IS that same release (D-3288, review fix round 1 I3); a
-# same-tag run whose staged sha DIFFERS is still a MIXED tree, exactly as
-# arm 3 always reported.
+# build's own AND whose `old_completed` was 1 IS that same release (D-3288,
+# review fix round 1 I3, NARROWED by fix round 2 F1); a same-tag run whose
+# staged sha DIFFERS, or whose `old_completed` was 0, is not provably the
+# same build — arm 3 says only that the PRE-UPDATE tree came back, never
+# `deploy.sh`'s MIXED-between-two-tags claim, since it is the same tag either
+# way. AMENDED AGAIN (fix round 2, F1+F2, review 167, rulings item 1): the
+# I4 narrowing above left one case open — a same-tag rerun with NO completed
+# record still finds `previous` naming the exact tag that just failed
+# whenever this keep's own UNCONDITIONAL branch, or D-3254 (b)'s "keep
+# without a well-formed baseline", already left it pointing there (an
+# earlier still-open move, or a prior restore). `_upd_restore_arm2` now also
+# checks `$UPD_PREV_TAG` against `$UPD_VERSION` AFTER reading `previous` —
+# on top of, never instead of, the `old_completed`-keyed check above — so
+# arm 2 never hands its child the tag that just failed either way, whether
+# or not that running build's own install of it had completed.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -14793,7 +14839,10 @@ _upd_restore() {
   _upd_phase restoring "$reason"
   echo "update: RESTORING — $reason; returning this box to the build it ran before this update (no supervisor sweep: they never moved in this run)"
   _upd_restore_arm2 "$reason" "$old_version" "$old_completed" && return 0
-  _upd_restore_arm3 "$role" "$reason" "$old_version" "$old_sha"
+  # Fix round 2, F1 (review 167): `old_completed` now reaches arm 3 too — it
+  # never did before this round, which is exactly F1's defect (arm 3's
+  # `same_build` compare ignored it).
+  _upd_restore_arm3 "$role" "$reason" "$old_version" "$old_sha" "$old_completed"
   return 0
 }
 
@@ -14827,6 +14876,24 @@ _upd_restore_arm2() {
     2) echo "update: arm 2: previous build carried no tag — arm 3"; return 1 ;;
     *) echo "update: arm 2: ~/.ccrc/previous is unreadable or malformed — arm 3"; return 1 ;;
   esac
+  # Fix round 2, F1+F2 (review 167; rulings item 1), ALSO — the check above
+  # covers only the case `old_completed` itself proves; it left F2 open: a
+  # same-tag run with NO completed record (so the check above never fires)
+  # can still find `previous` naming the exact tag that just failed, because
+  # `_upd_write_previous`'s same-tag keep (D-3254 (a)) is UNCONDITIONAL and a
+  # DIFFERENT-tag run with no completed record keeps whatever `previous`
+  # already held (D-3254 (b)) — which an earlier still-open move, or a prior
+  # restore, may already have set to THIS run's own target. Either way, the
+  # tag arm 2 is about to hand its child (`$UPD_PREV_TAG`) is the tag that
+  # just failed its gate (`$UPD_VERSION`) — re-installing it would not
+  # restore anything, per C1 ("arm 2 never 'restores' to the tag whose
+  # install just failed"), so this checks it directly, AFTER the read above,
+  # off what THIS run's own `_upd_write_previous` actually left on disk —
+  # `with or without a completed record` (the coordinator's own words).
+  if [ "$UPD_PREV_TAG" = "$UPD_VERSION" ]; then
+    echo "update: arm 2: previous ($UPD_PREV_TAG) also names $UPD_VERSION, the release that just failed its gate — re-installing it would not restore anything; arm 3"
+    return 1
+  fi
   if [ ! -f "$BOX_TREE_DIR/ccd/ccrc" ]; then
     echo "update: arm 2: ~/ccrc/ccd/ccrc is absent (the spine died placing the tree) — arm 3"
     return 1
@@ -14891,23 +14958,45 @@ _upd_restore_arm2() {
 # new install's, the dists the old one's — and the remedy for that is
 # deploy.sh, which the sentence names. Review fix round 1 I3: the ONE
 # exception is a same-tag run (item 2) whose STAGED sha turned out equal to
-# the OLD (running) build's sha — a genuine REPEAT, not a rebuild under the
-# same tag — where copying the old dists back over the new shared/ccd/
-# node_modules restores byte-identical content on every side, so nothing is
-# actually mixed.
+# the OLD (running) build's sha AND whose running build was itself a
+# COMPLETED install of that tag (`old_completed` — fix round 2, F1, review
+# 167: NARROWED here; I3 shipped this without it) — a genuine REPEAT, not a
+# rebuild under the same tag — where copying the old dists back over the new
+# shared/ccd/node_modules restores byte-identical content on every side, so
+# nothing is actually mixed. A same-tag run with NO completed record (arm 2
+# already ruled out restoring `previous` there — see its own header) still
+# reaches arm 3, but the backup it copies back is a snapshot of a tree that
+# may ITSELF have been half-installed before this run ever started — so arm
+# 3 says only that the PRE-UPDATE tree came back, not that nothing is mixed.
 _upd_restore_arm3() {
-  local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}"
+  local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}" old_completed="${5:-0}"
   local class src name back main=ccrc.service n=0 bad=0 missing=0 rrc=0 crc2=0 note="" unrec=""
   [ "$role" = fleet ] && main=ccrc-agent.service
-  # D-3288 (found in fix round 1, review 155 C1 — see the plan's Deviations):
-  # a same-tag run (`old_version = $UPD_VERSION`) whose staged sha equals
-  # the OLD build's sha is a REPEAT of the exact release that was running,
-  # not a rebuild: the tree this run replaced and the tree the backup holds
-  # are the SAME content, so restoring the backup is not mixing anything.
-  local same_build=0
-  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
-     && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
-    same_build=1
+  # D-3288 (found in fix round 1, review 155 C1; AMENDED in place, fix round
+  # 2 F1, review 167 — see the plan's Deviations): a same-tag run
+  # (`old_version = $UPD_VERSION`) whose staged sha equals the OLD build's
+  # sha is a REPEAT of the exact release that was running, not a rebuild —
+  # UNLESS `old_completed` is 0, in which case the OLD build was never
+  # proven whole on that tag to begin with, so the tree the backup holds
+  # might already have been mixed before this run started; "not mixed" is
+  # then a claim arm 3 cannot make. `old_completed` is passed through from
+  # `_upd_restore` (round 1 stopped one call short of doing so — F1's own
+  # defect).
+  # `same_tag` (may-be-mixed, uncertain) fires ONLY when `old_completed=0`:
+  # a same-tag run whose running build WAS proven complete but whose staged
+  # sha DIFFERS is a genuine REBUILD, not an unproven tree — that case still
+  # takes the definite MIXED/deploy.sh branch below, exactly as round 1
+  # shipped it (a fixture pins this: `old_completed=1`, a DIFFERENT staged
+  # sha, still says MIXED).
+  local same_build=0 same_tag=0
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ]; then
+    if [ "$old_completed" -eq 1 ]; then
+      if [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
+        same_build=1
+      fi
+    else
+      same_tag=1
+    fi
   fi
   # D-3260 — FIRST, before a single row moves. A
   # spine that COMPLETED and then failed the gate has already written the new
@@ -14987,6 +15076,21 @@ _upd_restore_arm3() {
     else
       echo "update: REVERTED (arm 3): copied the pre-update backup back — this box's tree is $UPD_VERSION again (the SAME release that was running before this update; nothing is mixed) AND $missing path(s) are MISSING (read the arm 3 lines above for where). Read 'ccrc doctor' for why the gate failed, or once fixed: ccrc update --to $UPD_VERSION --force. Best effort."
       _upd_phase reverted "arm3: restored $UPD_VERSION (same build, not mixed) with $missing path(s) MISSING$note; $reason"
+    fi
+  elif [ "$same_tag" -eq 1 ]; then
+    # Fix round 2, F1 (review 167): the SAME tag came back, but `old_completed`
+    # or the staged sha (or both) do not prove it is the SAME build — so this
+    # is honest about what is actually known: the tree put back is the
+    # PRE-UPDATE tree, which may itself have been mixed (a prior spine that
+    # died half-way through installing this very tag, before this run ever
+    # started). Never `deploy.sh` here — that remedy is for a tree definitely
+    # mixed between two DIFFERENT tags, which this is not.
+    if [ "$missing" -eq 0 ]; then
+      echo "update: REVERTED (arm 3): copied the pre-update backup back — this box's tree is $UPD_VERSION again, the PRE-UPDATE tree, which may itself be MIXED. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to $UPD_VERSION --force. Best effort."
+      _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed)$note; $reason"
+    else
+      echo "update: REVERTED (arm 3): copied the pre-update backup back — this box's tree is $UPD_VERSION again, the PRE-UPDATE tree, which may itself be MIXED, AND $missing path(s) are MISSING (read the arm 3 lines above for where). Read 'ccrc doctor' for its state, or once healthy: ccrc update --to $UPD_VERSION --force. Best effort."
+      _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed) with $missing path(s) MISSING$note; $reason"
     fi
   elif [ "$missing" -eq 0 ]; then
     echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."

@@ -159,7 +159,12 @@ function healthyBox(home: string): void {
     '  case "$1" in',
     '    -o) dest="$2"; shift 2 ;;',
     '    -w) wfmt="$2"; shift 2 ;;',
-    '    -H|--max-time|--connect-timeout|--speed-limit|--speed-time) shift 2 ;;',
+    // Fix round 2 F4 (review 167): `--max-filesize` joins this list — a
+    // TWO-ARG flag like its siblings. Left in the generic `-*) shift ;;`
+    // fallback below, its numeric argument (never starting with `-`) would
+    // fall through to the `*) url="$1"` arm on the NEXT loop turn and
+    // silently replace `$url` with a byte count.
+    '    -H|--max-time|--max-filesize|--connect-timeout|--speed-limit|--speed-time) shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
     '  esac',
@@ -1115,14 +1120,18 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(existsSync(join(backup, 'coord.db'))).toBe(true);
   });
 
-  // Fix round 1 item 12 / review 155 C22: every release-host curl call this
-  // run makes, pinned by FLAG SET through the stub's full-argv recorder
-  // (`curlFullArgv`, never the url-only `curl-argv`). By class: SHA256SUMS
-  // and the tarball get a connect timeout AND a stall bound
-  // (`--speed-limit`/`--speed-time`), NEVER a total `--max-time` (a slow but
-  // LIVE download must be let finish); the bundle — a SMALL probe — gets a
-  // connect timeout AND a total bound.
-  it('SHA256SUMS and the tarball get a connect+stall bound, never a total one; the bundle gets a connect+total bound (fix round 1 item 12 / review 155 C22)', () => {
+  // Fix round 1 item 12 / review 155 C22, AMENDED by fix round 2 F4 (review
+  // 167): every release-host curl call this run makes, pinned by FLAG SET
+  // through the stub's full-argv recorder (`curlFullArgv`, never the
+  // url-only `curl-argv`). The tarball keeps its round-1 shape (connect
+  // timeout AND a stall bound — `--speed-limit`/`--speed-time` — NEVER a
+  // total `--max-time`: a slow but LIVE download must be let finish); the
+  // bundle — a SMALL probe — keeps its connect timeout AND total bound.
+  // SHA256SUMS, round 1's OTHER small-file fetch, no longer matches the
+  // tarball's class: it is SMALL BY DESIGN (`_upd_resolve`'s own derivation
+  // comment), so it now ALSO carries a total `--max-time` and a
+  // `--max-filesize`, on top of the connect+stall pair it always had.
+  it('SHA256SUMS gets connect+stall+total+filesize bounds; the tarball keeps connect+stall only; the bundle keeps connect+total (fix round 1 item 12 / review 155 C22; fix round 2 F4, review 167)', () => {
     const home = freshUpdateBox('ccrc-update-timeouts-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
@@ -1139,16 +1148,66 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(sums, argv.join('\n')).toBeDefined();
     expect(tarball, argv.join('\n')).toBeDefined();
     expect(bundle, argv.join('\n')).toBeDefined();
-    for (const line of [sums!, tarball!]) {
-      expect(line).toMatch(/--connect-timeout \d+/);
-      expect(line).toMatch(/--speed-limit \d+/);
-      expect(line).toMatch(/--speed-time \d+/);
-      expect(line).not.toMatch(/--max-time/);
-    }
+    expect(sums!).toMatch(/--connect-timeout \d+/);
+    expect(sums!).toMatch(/--speed-limit \d+/);
+    expect(sums!).toMatch(/--speed-time \d+/);
+    expect(sums!).toMatch(/--max-time \d+/);
+    expect(sums!).toMatch(/--max-filesize \d+/);
+    expect(tarball!).toMatch(/--connect-timeout \d+/);
+    expect(tarball!).toMatch(/--speed-limit \d+/);
+    expect(tarball!).toMatch(/--speed-time \d+/);
+    expect(tarball!).not.toMatch(/--max-time/);
+    expect(tarball!).not.toMatch(/--max-filesize/);
     expect(bundle!).toMatch(/--connect-timeout \d+/);
     expect(bundle!).toMatch(/--max-time \d+/);
     expect(bundle!).not.toMatch(/--speed-limit|--speed-time/);
+    expect(bundle!).not.toMatch(/--max-filesize/);
   });
+
+  // Fix round 2, F4 (review 167): a release host that ACCEPTS the TCP
+  // connection and then TRICKLES bytes forever — never idle long enough to
+  // trip the STALL bound (`--speed-limit`/`--speed-time`), so only
+  // SHA256SUMS's NEW total `--max-time` can end this. A real
+  // `net.createServer`, NEVER a stubbed curl, so the REAL curl's own
+  // `--max-time` is what is measured (modelled on the never-answering-socket
+  // pin for `_upd_asset_listed`, fix round 1 item 12 / review 155 C32,
+  // below) — `updateEnv` alone, like that pin, NEVER `runUpdate`/
+  // `freshUpdateBox`'s own `replantDoctorStubs`, which would shadow the real
+  // curl with the LOCAL-URL-only fixture shim (it never writes `-o`'s
+  // destination file for a bare `http://` URL, so a run through it "fails"
+  // for a fixture reason having nothing to do with the bound this pins). The
+  // bound is overridden small so this pin finishes in seconds.
+  itLinux('SHA256SUMS from a release host that trickles bytes forever is refused by its own total bound, named in the sentence (F4, review 167)', async () => {
+    const server = createNetServer((socket) => {
+      socket.write('HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n');
+      const iv = setInterval(() => { try { socket.write('a'); } catch { /* closed */ } }, 100);
+      socket.on('close', () => clearInterval(iv));
+      socket.on('error', () => clearInterval(iv));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const home = mkTmp('ccrc-update-sums-trickle-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      const env = {
+        ...updateEnv(home),
+        CCRC_RELEASE_BASE_URL: `http://127.0.0.1:${port}/rel`,
+        CCRC_RELEASE_SUMS_MAX_TIME: '2',
+        CCRC_RELEASE_CONNECT_TIMEOUT: '2',
+      };
+      const t0 = Date.now();
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update'],
+        { env, encoding: 'utf8', timeout: 20_000 });
+      const elapsedMs = Date.now() - t0;
+      expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      // Bounded by the OVERRIDDEN total bound (2s), not left trickling
+      // forever, or to curl's own defaults, or to this test's own kill.
+      expect(elapsedMs, `took ${elapsedMs}ms`).toBeLessThan(10_000);
+      expect(r.stderr).toMatch(/download failed: .*\/SHA256SUMS \(is there a release, or did the connection stall.*or did it time out after 2s \/ exceed \d+ bytes\)/);
+    } finally {
+      server.close();
+    }
+  }, 20_000);
 
   it('a spine that COMPLETED under a failing doctor exits 3, not 1: the record is written, the report prints, and the line says the box IS on the new build (D-3114)', () => {
     // Measured 2026-09-20 on the live server box: record written, box on the
@@ -4606,6 +4665,90 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
   });
 
+  // Fix round 2, F1 (review 167): the reviewer's own half-installed
+  // same-tag probe — plantOldBox v2.0.0, NO `.ccrc/installed` (a prior
+  // spine died after `_inst_stamp`, before the completed-install record —
+  // `old_completed=0`), NO `.ccrc/previous` (so arm 2 falls to arm 3 via its
+  // existing "absent" case, UNCHANGED by this round), the v2.0.0 release
+  // packed so its STAGED sha equals the running stamp's own (`OLD_SHA`),
+  // health down. Built directly (one `stubTree`/`selfConvergedTree` call for
+  // the one tag), never `plantRestoreBox({ oldVersion: 'v2.0.0' })`, which
+  // publishes a SECOND `payload-v2.0.0` tree and corrupts its own MANIFEST.
+  // D-3288 (amended): `old_completed` must be 1, not just a staged-sha
+  // match, before arm 3 may say "not mixed" — this box's backup is a
+  // snapshot of a tree that was never proven whole, so arm 3 says only that
+  // the PRE-UPDATE tree came back.
+  it('a same-tag rerun over a half-installed tree (no completed-install record) never says "not mixed", even when the staged sha matches the running stamp (F1, D-3288 amended)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-halfinstalled-samebuild-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    packRelease(home, selfConvergedTree(home, 'v2.0.0', OLD_SHA), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(existsSync(join(home, '.ccrc', 'previous'))).toBe(false);
+    expect(restoreChildArgv(home)).toBeNull();
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    expect(r.stdout).toMatch(/^update: arm 2: no ~\/\.ccrc\/previous — the build this box ran before is not recorded — arm 3$/m);
+    expect(r.stdout).not.toMatch(/not mixed/);
+    expect(r.stdout).not.toMatch(/deploy\.sh is the remedy/);
+    expect(r.stdout).toMatch(
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the PRE-UPDATE tree, which may itself be MIXED\. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m);
+    expect(String(lastReport(home)['detail'])).toBe(
+      'arm3: restored v2.0.0 (pre-update tree, may be mixed); gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)');
+  });
+
+  // Fix round 2, F2 input (a) (review 167; rulings item 1): a same-tag rerun
+  // with NO completed record still finds `previous` naming the EXACT tag
+  // that just failed — the reviewer's own scenario: an earlier `update --to
+  // v3.0.0` wrote `previous: v2.0.0` as ITS baseline, then its spine died
+  // before the tree moved, so the box never actually left v2.0.0; a LATER
+  // update resolving v2.0.0 again fails its gate too. `old_completed=0` (no
+  // `.ccrc/installed`) means the FIRST arm-2 check (keyed on it) never
+  // fires; only the SECOND check — `$UPD_PREV_TAG` against `$UPD_VERSION`,
+  // read straight off `.ccrc/previous` — catches this. Built directly: the
+  // fixture plants `previous` at the state the earlier (died) run would have
+  // left it in, rather than actually running `ccrc update` twice.
+  it('F2 (a): a same-tag rerun with no completed record still skips arm 2 when `previous` already names the tag that just failed (review 167)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-f2a-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    // NO .ccrc/installed. `previous` already names v2.0.0 — written by an
+    // earlier `update --to v3.0.0` whose spine died before the tree moved.
+    writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${OLD_SHA}\n`);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(restoreChildArgv(home)).toBeNull();
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    expect(r.stdout).toMatch(
+      /^update: arm 2: previous \(v2\.0\.0\) also names v2\.0\.0, the release that just failed its gate — re-installing it would not restore anything; arm 3$/m);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(`v2.0.0\n${OLD_SHA}\n`);
+  });
+
+  // Fix round 2, F2 input (b) (review 167; rulings item 1): the reviewer's
+  // OTHER input — the stamp is v2.0.0 with NO completed record, `previous`
+  // names v1.0.0, then `update --to v1.0.0 --downgrade`. `_upd_write_previous`
+  // KEEPS v1.0.0 (D-3254 (b): no completed record, but a well-formed
+  // `previous` to keep), so by the time the gate fails, `previous` names
+  // EXACTLY the tag this run just failed to install — arm 2's second check
+  // must catch it even though `old_version` (v2.0.0) and `UPD_VERSION`
+  // (v1.0.0) plainly differ, so the FIRST check never even looks.
+  it('F2 (b): a downgrade with no completed record skips arm 2 when `previous` already names the target that just failed (review 167)', () => {
+    const home = freshUpdateBox('ccrc-update-restore-f2b-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    // NO .ccrc/installed. `previous` already names v1.0.0.
+    writeFileSync(join(home, '.ccrc', 'previous'), 'v1.0.0\nbaselinesha\n');
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(restoreChildArgv(home)).toBeNull();
+    expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
+    expect(r.stdout).toMatch(
+      /^update: arm 2: previous \(v1\.0\.0\) also names v1\.0\.0, the release that just failed its gate — re-installing it would not restore anything; arm 3$/m);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe('v1.0.0\nbaselinesha\n');
+  });
+
   // Review fix round 1 I4: item 2's same-tag skip narrows to a COMPLETED
   // install of the running tag. D-3240's own scenario — a spine that died
   // after `_inst_stamp` (the stamp reads the new tag, no completed-install
@@ -5249,17 +5392,22 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     // `_upd_asset_listed`'s pre-detach check (cmd_rollback's own, BEFORE
     // update's spine) — a SMALL probe, connect+total bound. The SECOND is
     // `_upd_resolve`'s own SHA256SUMS fetch, inside cmd_update — connect
-    // bound plus a STALL bound, never a total one (by class with the
-    // tarball fetch beside it in the same recording).
+    // bound plus a STALL bound (by class with the tarball fetch beside it in
+    // the same recording), AND, since fix round 2 F4 (review 167), its OWN
+    // total `--max-time`/`--max-filesize` pair too — the two SHA256SUMS asks
+    // now carry the SAME flag classes, from two different call sites
+    // (`_upd_asset_listed`'s own knobs, `_upd_resolve`'s own).
     const sumsArgv = curlFullArgv(home).filter((l) => l.includes('/SHA256SUMS'));
     expect(sumsArgv.length, curlFullArgv(home).join('\n')).toBe(2);
     expect(sumsArgv[0]).toMatch(/--connect-timeout \d+/);
     expect(sumsArgv[0]).toMatch(/--max-time \d+/);
     expect(sumsArgv[0]).not.toMatch(/--speed-limit|--speed-time/);
+    expect(sumsArgv[0]).not.toMatch(/--max-filesize/);
     expect(sumsArgv[1]).toMatch(/--connect-timeout \d+/);
     expect(sumsArgv[1]).toMatch(/--speed-limit \d+/);
     expect(sumsArgv[1]).toMatch(/--speed-time \d+/);
-    expect(sumsArgv[1]).not.toMatch(/--max-time/);
+    expect(sumsArgv[1]).toMatch(/--max-time \d+/);
+    expect(sumsArgv[1]).toMatch(/--max-filesize \d+/);
     // Below the floor on purpose, and the floor is never lowered. Fix round
     // 1 item 25 / your Q6 (first bullet): `cmd_rollback` passes BOTH
     // `--downgrade` and `--from rollback` to `cmd_update`, so the caller
