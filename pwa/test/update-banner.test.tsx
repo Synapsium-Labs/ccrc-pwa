@@ -101,8 +101,28 @@ describe('UpdateBanner — when it speaks', () => {
     expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
+  it("sides are picked from EVERY row, never a pre-filtered subset — two rows share the fleet role, and dropping the unstated one first would change the answer (W5 review 161, F-D)", () => {
+    // Every other case here carries at most ONE row per role, so a caller that
+    // filtered to the rows that vouch (`statedOf`) BEFORE picking sides would
+    // agree with one that did not. Here two LIVE rows are both `role: 'fleet'`:
+    // the first never read its stamp (it occupies the side and renders the
+    // dash), the second is fully stated on v0.0.8. `versionSides` takes the
+    // FIRST fleet row it finds, so the side is the dash; a pre-filter would
+    // drop the first and let the second stand in, naming `v0.0.8`.
+    render(<UpdateBanner updates={view({
+      nodes: [
+        fleetNode({ current: null, stampRead: 'unreadable' }),
+        fleetNode({ nodeId: '7c1d4e9a-3b5f-4a28-8d6e-0f9b2a4c6e81', label: 'fleet-2', current: stamp('v0.0.8') }),
+        serverNode(),
+      ],
+    })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
   it('reads a MEASURED but UNREAD stamp as a MISSING side, never as unversioned (D-3307)', () => {
-    // The fleet row WAS measured this sweep, but its stamp did not read (a
+    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161,
+    // F-I: `statedOf` asks "ever measured", never "measured this sweep"), but
+    // its stamp did not read (a
     // local-mode box that cannot read its own build.json). Only the server
     // side is behind, so the banner speaks off the server's arrow alone; the
     // fleet side must still read as missing, not "unversioned" — that word

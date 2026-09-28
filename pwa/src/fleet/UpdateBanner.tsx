@@ -1,8 +1,10 @@
 // UpdateBanner — the fleet screen's "a release is out" line (centralised-update
 // design 2026-09-20 §13; programme wave 3). One sentence and two buttons, over
 // the answer FleetScreen's one /api/updates poll hands down. The sentence is
-// `<tag> is out on <channel> — <summary>.`, the summary being versionsSummary's
-// (shared/update-summary.ts) — the ONE spelling of what the nodes run, which
+// `<tag> is out on <channel> — <summary>.`, the summary being summaryFromSides's
+// (shared/update-summary.ts, over the sides this file's own remoteSides/versionSides pick — W5 review 161,
+// F-L: the convenience wrapper versionsSummary this comment used to name is gone; this file never composed
+// through it either) — the ONE spelling of what the nodes run, which
 // the release push reads too; this file never restates it.
 //
 // It speaks iff the catalogue has been reached at least once since the server

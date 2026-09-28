@@ -582,9 +582,12 @@ export class FleetWatcher {
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
    *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
   private lastReleasePushFailure: string | null = null;
-  /** Plan W3 Task 3 (D-3314): true once THIS process has finished one
-   *  inventory run. Until then the `nodes` rows are the previous process's, so the catalogue side
-   *  (`pushReleaseAfterPoll`) decides nothing. Set by `sweepThenProject`; never cleared. */
+  /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
+   *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
+   *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
+   *  predicate, `sweepThenProject`'s own comment above its call site). Until it opens, the `nodes` rows are
+   *  the previous process's, so the catalogue side (`pushReleaseAfterPoll`) decides nothing. Set by
+   *  `sweepThenProject`; never cleared. */
   private inventorySwept = false;
   /** Wave 5 (design 2026-09-20 §10): the dispatcher's ONE run in flight, and whether a trigger arrived while
    *  it ran. However many triggers arrive during a run, they ask for ONE follow-up after it — so a request
@@ -1128,8 +1131,9 @@ export class FleetWatcher {
       marked = coord.markReleaseNotified(n.tag, now);
       // Fix round 1 (F1/F14, D-3313/D-3316): sides are picked from EVERY live row — filtering first is what
       // let a `both` server row's own version stand in for a fleet nobody measured (the reviewer's exact
-      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — measured this
-      // sweep, its stamp read, and (D-3316) reachable — so an occupying row that fails it renders as a dash,
+      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — EVER measured
+      // (W5 review 161, F-I: `measuredAt` is a persisting stamp, not "measured THIS sweep"), its stamp read,
+      // and (D-3316) reachable — so an occupying row that fails it renders as a dash,
       // never its stale value, but still blocks another row from falling back into its side. On a remote
       // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
       // is both (D-3301).
@@ -1157,8 +1161,11 @@ export class FleetWatcher {
 
   /**
    * The catalogue side's entry (plan W3 Task 3): `tick()`'s catalogue gate and `POST /api/updates/refresh`
-   * call this, never `pushRelease` directly. It decides only once THIS process has finished one inventory run
-   * (D-3314). Both lanes fire unawaited on the first tick after a start, and
+   * call this, never `pushRelease` directly. It decides only once THIS process's own sweep has actually
+   * REWRITTEN the rows it decides on (D-3314) — not merely once an inventory run has finished (W5 review
+   * 161, F-H: a finished run whose write was refused, errored or left the row merely marked unreachable
+   * leaves `inventorySwept` closed too; `sweptEnoughToDecide` is the exact gate). Both lanes fire unawaited
+   * on the first tick after a start, and
    * until the first sweep rewrites them the `nodes` rows are the previous process's. After a server-box update
    * they still carry the version the update replaced, so a poll that resolves first would push "vX is out" to
    * a fleet already on vX. The inventory run's own `pushRelease` call makes that first decision instead.
