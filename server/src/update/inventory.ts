@@ -364,7 +364,7 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
   // it never announced starting, whenever the row holds one (it does here,
   // BUSY having just been proven).
   if (r.startedAt === null) return { kind: 'none', why: 'stale-report' };
-  // FRESHNESS IS CHANGE, NOT CLOCK (W4 review 155, C33). A report's own
+  // FRESHNESS IS CHANGE, NOT CLOCK (W4 review 155, C33, D-3405). A report's own
   // `startedAt` is the NODE's clock, in whole seconds; `row.updateStartedAt`
   // is the SERVER's clock, in ms, stamped at `dispatchNode`'s acquire — the
   // two boxes' clocks are never ordered against each other here (the
@@ -379,7 +379,7 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
   // matching guard, by the lease's IDENTITY (`updateStartedAt` unchanged
   // since this plan was read), never by comparing a timestamp.
   //
-  // BUT CHANGE ALONE IS NOT ENOUGH (fix round following C33, review of the
+  // BUT CHANGE ALONE IS NOT ENOUGH (D-3405, fix round following C33, review of the
   // window C33 opened): between `dispatchNode`'s acquire and THIS lease's
   // own `queued` write — the op in transit over the fleet link, the
   // `--detach` parent's lock probe, rollback's release-host probe — a sweep

@@ -109,7 +109,7 @@ export const CATALOGUE_TIMEOUT_MS = 10_000;
  *  budget is 60 requests an hour per IP and a 304 still spends one, so every
  *  30 minutes is 2 scheduled polls an hour, leaving the rest of the budget
  *  to `POST /api/updates/refresh`. */
-export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
+export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;   // D-3404: declared here, not in watch.ts (which imports it)
 export const NOTES_CAP_BYTES = 4096;
 export const NOTES_MARKER = '…';
 /** D-3209: a hostile or oversized listing must never reach `JSON.parse` or
@@ -807,7 +807,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
       // real K out from under a store that merely failed to answer.
       const measured = measuredCurrentK();
       if (measured.threw) {
-        // F2 (review 150): a PERSISTENT store throw can leave `lastLatestTag`
+        // F2 (review 150, D-3405): a PERSISTENT store throw can leave `lastLatestTag`
         // holding a T a prior 200 arm only ever BORROWED for `keepTags`'
         // sake (never a measured K, `kNeedsReread` says so) — if that
         // borrowed value were left standing here, `keepTags` would go on
@@ -931,7 +931,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
    *  demoted K, or yank a live one — the listing wins). A row absent from
    *  the facts gives no verdict for a pending `'yank'` — the confirmed
    *  absence stands, and it proceeds to `applyWithdrawn` as it would with
-   *  no listing at all. F3 (review 150): for a pending `'demote'` whose OWN
+   *  no listing at all. F3 (review 150, D-3405): for a pending `'demote'` whose OWN
    *  check row is non-draft STABLE — nothing has actually changed about K —
    *  a listing silent about K (off its own window) is ALSO treated as a
    *  contradiction, so K stays the kept tag rather than moving to T and
@@ -956,7 +956,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     if (facts === null) return false;
     const fact = facts.get(pending.kind === 'yank' ? pending.k : pending.row.tag);
     if (fact === undefined) {
-      // F3 (review 150): a listing silent about K (off its own window)
+      // F3 (review 150, D-3405): a listing silent about K (off its own window)
       // proves nothing against a confirmed YANK, but a pending DEMOTE whose
       // own check row is non-draft STABLE means nothing has actually
       // changed — applying it anyway would strip K's keepTags protection
@@ -971,7 +971,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     return fact.channel === 'stable' || pending.row.draft || pending.row.channel !== 'dev';
   }
 
-  /** F4 (review 150): under COMPLETE coverage — the raw listing IS the whole
+  /** F4 (review 150, D-3405): under COMPLETE coverage — the raw listing IS the whole
    *  catalogue this poll — K's absence from it is itself a verdict, stronger
    *  than a stale `tags/K` check that still claims K is alive: applying that
    *  stale row would re-upsert K as stable/un-yanked and move the kept tag
@@ -988,7 +988,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     return !facts.has(pending.row.tag);
   }
 
-  /** F6 (review 151, the coordinator's ruling): the ONE contradiction cell
+  /** F6 (review 151, the coordinator's ruling, D-3405): the ONE contradiction cell
    *  where dropping the stale check still advances the kept tag — a listing
    *  naming K as a DRAFT against a non-draft demote check. THIS poll's own
    *  listing has already yanked K itself (a draft row is birth-rule-yanked),
@@ -1211,7 +1211,7 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     // pinned to the demoted K forever, and an off-page stable the listing
     // never lists stayed resolvable after real deletion.
     //
-    // F4 (review 150): a COMPLETE listing's own silence about K is checked
+    // F4 (review 150, D-3405): a COMPLETE listing's own silence about K is checked
     // FIRST — stronger evidence than a stale "still alive" check, so it
     // converts the pending into the YANK its absence actually proves,
     // rather than the "drop, do nothing" every other contradiction is (a

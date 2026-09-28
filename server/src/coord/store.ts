@@ -6309,7 +6309,7 @@ export class CoordStore {
    *  7). `expectedStartedAt` is the row's OWN `updateStartedAt` — the
    *  acquire's ms clock value, NOT a unique lease id — as the caller last
    *  read it, when the release is report-driven — never a report's own
-   *  `startedAt` (W4 review 155, C33: the two boxes' clocks are never
+   *  `startedAt` (W4 review 155, C33, D-3405: the two boxes' clocks are never
    *  ordered against each other; freshness is the report DIFFERING from what
    *  the row held AND naming this lease's own tag, both decided by the
    *  caller before this write, never a timestamp compared here) — and `null`
@@ -6345,7 +6345,7 @@ export class CoordStore {
   /** Convergence (§10): the row back to `idle` and its request cleared — the
    *  only path besides `ack` that clears one. Refused on a HALTED row
    *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  identity guard as `releaseLease`. */
+   *  identity guard as `releaseLease` (C33, D-3405). */
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
