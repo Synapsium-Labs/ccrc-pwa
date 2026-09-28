@@ -5354,3 +5354,60 @@ This is `_ws_slug_git_state`, per that programme's ledger, "Residue".
   - R-5's in-flight bound and sort, both caps, coordinating children, and the fence's uncapped read;
   - Task 2b's nested refusals and kill deadline;
   - Task 2c's `ws-reap` link guard.
+
+### A16 — carried from wave 3's second fix round (review 171, 2026-09-26/28)
+
+Measured by review 171, the attack on its rulings (`attack-rulings-171.json` in the coordinator's clips) and the worker's
+round report (`FIX-ROUND-171.md`, in the wave-3 worker's clips). This wave did not open any of them. Each item names its
+task; ccd items keep A3's and A4's boundary rules. Anchors are to wave 3's final tip, as it merges: locate by content.
+
+**Task 2c gains (above the boundary, in place, line-neutral):**
+1. **Human verbs read untracked files whatever the config says.**
+   - `_ws_gc_dirty` (`ws-gc`) and `cmd_ws_rm`'s dirty read obey `status.showUntrackedFiles=no`, so a clone holding an
+     untracked file reads clean.
+   - Pass `--untracked-files=all`, as wave 3's number 3523 does for rung 9.
+   - Cases: under the config, each verb reports the clone dirty and deletes nothing; control without the config.
+   - A mutation row for each.
+
+**Task 2b gains (below the boundary):**
+
+2. **A staged intermediate version is kept.** When the child's index differs from both HEAD and the WIP's tree (stage
+   A, then edit to B), the WIP keeps it:
+   - `_ws_wip_commit` commits the UNMODIFIED index copy's tree as a second parent, as `git stash` does, through
+     `_ws_reclaim_commit_tree`;
+   - otherwise the WIP's shape is unchanged.
+
+   Case: stage A, edit to B, reclaim, then `git gc --prune=now`. A is reachable from `refs/ccrc/attic/<id>/`, and B is
+   the WIP's tree. Mutation: drop the parent.
+3. **A nested foreign clone's reflog-only commits fail closed.**
+   - Rung 9's count becomes `rev-list --count --all --reflog --not --remotes`. A clone holding commits that only its
+     reflog names refuses `containment-unproven`, and the sentence names the count and the path.
+   - This strands such a child for a human, which is accepted: a foreign clone inside a child is rare, and its
+     `.git` goes with the tree.
+   - Case and mutation row.
+4. **F-A's keep, finished.**
+   - A name under `G/refs/` or `G/logs/` that git's ref format forbids (a component starting with `.`, measured with
+     `git check-ref-format`) is not a ref: skip it. So a stray `.DS_Store` never makes the keep `pin-failed` forever.
+   - F3's read of `G/logs/HEAD` refuses a symbolic link, as `link-entry-fails` does for every other entry.
+   - The standing arm's gitdir check calls `_ws_reclaim_gitdir_own` instead of an inline copy.
+5. **Containment and names.**
+   - `_ws_reclaim_contained` unsets any inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`.
+   - `cmd_start` refuses a workdir holding a newline or other control character (wave 3's M4).
+   - The memo table is `declare -gA`.
+   - A multi-path case exercises the memo.
+   - The ancestor walks' `dirname` keeps a trailing newline (use the `x` suffix idiom).
+6. **F-B's two unstated shapes, stated and pinned.**
+   - For an ordinary child, a nested row resolving to `//` is `containment-unproven`.
+   - A `//`-link child never reclaims while any other row exists.
+   - An absolute other row whose `_ws_realpath` cannot resolve is unplaced, like F-B's, if it is not already. Measure
+     it first.
+
+**Task 8 gains (server):**
+
+7. `parseChildReclaimResult` maps ccd's in-lock `probe-unmeasured`, which happens before any act, to the
+   `ChildReclaimResume` member that says a retry starts afresh, never `resumable`. The feed sentence says so.
+
+**Task 10 gains:**
+
+8. Report the Darwin status of wave 3's second-round cases beside Step 5a's list, including the BSD reliance of
+   `_ws_reclaim_hidden`'s ancestor walk (`stat`'s exit status and text, `stat --`, `dirname --`, bash ≥ 4.3).
