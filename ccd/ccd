@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d5bb20c8c72a2b50a3ac913634ffc526931de6b0caef43b07bb93d85b16623f5
+# ccrc:generated 1 sha256=c794b538799ea1704e65b2915767fa9b3f050fd96990f6a964b789fdec0bfa56
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24874,7 +24874,8 @@ _ws_reclaim_attic_extra() {   # main id sha... -> 0 once every sha is pinned und
 #     (`_ws_reclaim_gitdir_ids`, which says why it reads FILES).
 # NOTHING ELSE IS READ, and nothing of anyone else's: G's FETCH_HEAD (fetched
 # data git's own gc does not keep either) and AUTO_MERGE (a tree) are not
-# kept, and no other session's refs or reflogs are read. ws-reap's
+# kept, and no other session's refs or reflogs are read: G is read only
+# once it is proven this checkout's own (`_ws_reclaim_log_of`). ws-reap's
 # `_ws_attic_pin` (unchanged, above the
 # frozen boundary) reads `reflog show --all` — every reflog of the SHARED
 # repository, other sessions' included — and keeps only the 200 lowest ids of
@@ -24922,9 +24923,12 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   # LOCATED THROUGH GIT, never guessed. A checkout that stands answers its own
   # HEAD reflog through `rev-parse --git-path logs/HEAD` inside it, and its
   # own git directory G through `rev-parse --absolute-git-dir`. G must be a
-  # directory DIRECTLY under the common dir's `worktrees/`: anything else
-  # fails, since walking the shared directory would read every session's
-  # refs and reflogs. (Never `--git-path logs/<NAME>` for anything else in G:
+  # directory DIRECTLY under the common dir's `worktrees/`, and G's own
+  # `gitdir` file must name `<path>/.git` (as given, or resolved), exactly as
+  # the gone arm matches it: anything else fails, since a `.git` re-pointed at
+  # the shared directory, or at ANOTHER checkout's admin directory, would have
+  # the walk read, and the attic keep, every session's or that session's refs
+  # and reflogs. (Never `--git-path logs/<NAME>` for anything else in G:
   # it resolves a pseudo-ref's log into the COMMON dir.) A checkout
   # that is GONE (proven, `_ws_reclaim_absent`) cannot be asked, and
   # `worktree list --porcelain` does not print the admin directory's name, so
@@ -24952,6 +24956,11 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
       || { _WS_KEEP_WHY="could not locate the git directory of the checkout at $arg, so what it names was never read"; return 1; }
     [[ "$gd" == "$common/worktrees/"?* && "${gd#"$common/worktrees/"}" != */* && -d "$gd" && ! -L "$gd" ]] \
       || { _WS_KEEP_WHY="the git directory of the checkout at $arg is $gd, which is no directory directly under $common/worktrees — ccd reads only a checkout's own, so it was never read"; return 1; }
+    { g=$(cat -- "$gd/gitdir"); } 2>/dev/null \
+      || { _WS_KEEP_WHY="$gd/gitdir cannot be read — whether $gd, the git directory of the checkout at $arg, is git's record of it was never asked, so it was never read"; return 1; }
+    g="${g%%$'\n'*}"; real=$(_ws_realpath "$arg")
+    [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] \
+      || { _WS_KEEP_WHY="the git directory of the checkout at $arg is $gd, which git records as $g's — another checkout's, so it was never read"; return 1; }
     _WS_LOGS+=("$f" "gitdir:$gd"); return 0
   fi
   _ws_reclaim_absent "$arg"; rc=$?
@@ -25022,23 +25031,40 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
   #                                path left to its own reader (`G/logs/HEAD`, the caller's HEAD reflog).
   # ABSENT, OR EMPTY, IS NONE: `git bisect reset` leaves an empty
   # `refs/bisect/`, and `update-ref -d` empty `refs/worktree/` and
-  # `logs/refs/worktree/` (measured, git 2.43). A directory that cannot be
-  # listed AND searched fails — with `nullglob` set a glob of it is empty, and
-  # without it the pattern itself comes back, so neither answer is "none". So
-  # does an entry that is neither a directory nor a regular file: a link is
+  # `logs/refs/worktree/` (measured, git 2.43). THE LISTING ITSELF ANSWERS,
+  # never a check made before it: a glob of a directory that cannot be read
+  # is silently empty (with `nullglob`) or the pattern itself, and a
+  # directory can turn unreadable between a test and its listing — silence
+  # read as "none". So `find` lists it, and an exit that is not 0, or any
+  # word on its stderr, fails. An entry the listing named that no longer
+  # answers `-e` is skipped only when `_ws_reclaim_absent` PROVES it gone (a
+  # directory that could be listed but not searched answers 2, and fails). An
+  # entry that is neither a directory nor a regular file fails too: a link is
   # never followed. A name ending in `.lock` is git's own lock, never a ref.
-  local d="$1" kind="$2" out="$3" skip="$4" e rc
+  local d="$1" kind="$2" out="$3" skip="$4" e rc lst err
+  local ents=()
   _ws_reclaim_absent "$d"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — the ${kind}s under it were never read"; return 1; }
   [[ -d "$d" && ! -L "$d" ]] \
     || { _WS_KEEP_WHY="$d is neither a directory nor a regular file — the ${kind}s under it were never read"; return 1; }
-  [[ -r "$d" && -x "$d" ]] \
-    || { _WS_KEEP_WHY="$d cannot be listed and searched — the ${kind}s under it were never read"; return 1; }
-  for e in "$d"/* "$d"/.*; do
-    case "${e##*/}" in .|..|*.lock) continue ;; esac
-    [[ -e "$e" || -L "$e" ]] || continue
+  lst=$(_plat_mktemp) || { _WS_KEEP_WHY="could not make a scratch file to list $d — the ${kind}s under it were never read"; return 1; }
+  err=$(LC_ALL=C find "$d" -mindepth 1 -maxdepth 1 -print0 2>&1 >"$lst"); rc=$?
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$lst"
+    _WS_KEEP_WHY="$d cannot be listed and searched (find answered $rc: ${err%%$'\n'*}) — the ${kind}s under it were never read"
+    return 1
+  fi
+  while IFS= read -r -d '' e; do ents+=("$e"); done < "$lst"
+  rm -f "$lst"
+  for e in ${ents[@]+"${ents[@]}"}; do
+    case "${e##*/}" in *.lock) continue ;; esac
     [[ "$e" != "$skip" ]] || continue
+    if [[ ! -e "$e" && ! -L "$e" ]]; then
+      _ws_reclaim_absent "$e"; rc=$?
+      (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — what it names was never read"; return 1; }
+      (( rc == 0 )) && continue
+    fi
     if [[ -L "$e" ]]; then
       _WS_KEEP_WHY="$e is a symbolic link, neither a directory nor a regular file — what it names was never read"; return 1
     elif [[ -d "$e" ]]; then

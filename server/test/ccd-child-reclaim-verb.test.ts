@@ -2634,6 +2634,109 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
       expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
     }, 90_000);
 
+    it('a tree whose `.git` is re-pointed at ANOTHER checkout’s git directory after the settle stops step 4 pin-failed — that session’s refs are never read into this attic', () => {
+      // `worktrees/other` IS a directory directly under `worktrees/`, so only
+      // G's own `gitdir` file — which names `other/.git`, not this tree's —
+      // tells it is another session's.
+      const c = makeChild(h);
+      const other = path.join(h.home, 'other');
+      h.git(c.main, 'worktree', 'add', '-b', 'ws/other', other);
+      const [y] = looseCommits(h, c.main, 1, 'another session’s per-worktree ref');
+      h.git(other, 'update-ref', 'refs/worktree/keep', y!);
+      const ownG = gitDir(c.wt);
+      const otherG = gitDir(other);
+      const pre = afterSettle(`printf 'gitdir: %s\\n' "${otherG}" > "${path.join(c.wt, '.git')}";`);
+      const r = childReclaimVerb(h, evalOf(h).token, { pre });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('pin-failed');
+      expect(o.detail).toContain(`is ${otherG}, which git records as`);
+      expect(o.detail).toContain("another checkout's, so it was never read");
+      expect(gitDir(c.wt), 'the CONTROL: the tree resolves to the other admin directory').toBe(otherG);
+      expect(atticReach(h, c), 'another session’s commit was kept in this child’s attic').not.toContain(y);
+      for (const g of [ownG, otherG]) expect(fs.existsSync(g), `${g} stands`).toBe(true);
+      expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+      expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+    }, 90_000);
+
+    it('a directory whose LISTING fails is never read as empty — pin-failed, whatever a check before it said', () => {
+      // No fixture can make a directory unreadable between a test and its
+      // listing on cue, so the lister is stubbed to fail for this one
+      // directory, which stays readable throughout: the listing's own answer
+      // is the only thing that can stop it.
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'listing fails');
+      h.git(c.wt, 'update-ref', 'refs/worktree/keep', x!);
+      const dir = path.join(gitDir(c.wt), 'refs', 'worktree');
+      const pre = `find() { if [[ "$1" == "${dir}" ]]; then echo "find: $1: Input/output error" >&2; return 1; fi; command find "$@"; };`;
+      const tok = evalOf(h, { pre }).token;
+      const before = treeOf(c.wt);
+      const r = childReclaimVerb(h, tok, { pre });
+      pinFailedIntact(c, r, before, `${dir} cannot be listed and searched (find answered 1: find: ${dir}: Input/output error)`);
+    }, 90_000);
+
+    it('FAILS pin-failed on a directory that can be LISTED but not searched — an entry that no longer answers is never assumed gone', () => {
+      // Mode 600: a lister may name its entries without error (measured, this
+      // box's `find`), yet none can be looked at, so none is proven absent.
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'unsearchable holder');
+      h.git(c.wt, 'update-ref', 'refs/worktree/keep', x!);
+      const dir = path.join(gitDir(c.wt), 'refs', 'worktree');
+      const tok = evalOf(h).token;
+      const before = treeOf(c.wt);
+      let r: { code: number; stdout: string; stderr: string };
+      fs.chmodSync(dir, 0o600);
+      try { r = childReclaimVerb(h, tok); } finally { if (fs.existsSync(dir)) fs.chmodSync(dir, 0o755); }
+      pinFailedIntact(c, r, before, dir);
+    }, 90_000);
+
+    it.each([
+      ['G/refs/', ['refs', 'worktree', 'lnk'], (x: string, _c: Child) => `${x}\n`],
+      ['G/logs/', ['logs', 'refs', 'worktree', 'lnk'], (x: string, c: Child) => `${c.tip} ${x} T <t@x> 1700000000 +0000\tfixture\n`],
+    ] as const)('FAILS pin-failed on a SYMBOLIC LINK under %s — never followed, and what it points at is not kept', (_where, rel, body) => {
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'behind a link');
+      const target = path.join(h.home, 'link-target');
+      fs.writeFileSync(target, body(x!, c));
+      const link = path.join(gitDir(c.wt), ...rel);
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(target, link);
+      const before = treeOf(c.wt);
+      const r = childReclaimVerb(h, evalOf(h).token);
+      pinFailedIntact(c, r, before, `${link} is a symbolic link`);
+      expect(atticReach(h, c), 'the link was followed').not.toContain(x);
+    }, 90_000);
+
+    it('FAILS pin-failed on an EMPTY per-worktree ref file — it names nothing git could have written', () => {
+      const c = makeChild(h);
+      const empty = path.join(gitDir(c.wt), 'refs', 'worktree', 'empty');
+      fs.mkdirSync(path.dirname(empty), { recursive: true });
+      fs.writeFileSync(empty, '');
+      const before = treeOf(c.wt);
+      const r = childReclaimVerb(h, evalOf(h).token);
+      pinFailedIntact(c, r, before, `${empty} names neither a ref nor an object id`);
+    }, 90_000);
+
+    it.each(['ORIG_HEAD', 'MERGE_AUTOSTASH'])('FAILS pin-failed on a mode-000 %s in G — a named file that stands and cannot be read', (name) => {
+      // Made unreadable BEFORE the audit: the fingerprint reads the op heads,
+      // so a change after it is refused `state-changed`, not this.
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, `unreadable ${name}`);
+      const file = path.join(gitDir(c.wt), name);
+      fs.writeFileSync(file, `${x}\n`);
+      fs.writeFileSync(path.join(c.wt, 'notes.txt'), 'uncommitted work');
+      let r: { code: number; stdout: string; stderr: string };
+      let before: string[] | 'gone';
+      fs.chmodSync(file, 0o000);
+      try {
+        const tok = evalOf(h).token;
+        before = treeOf(c.wt);
+        r = childReclaimVerb(h, tok);
+      } finally { if (fs.existsSync(file)) fs.chmodSync(file, 0o644); }
+      pinFailedIntact(c, r, before, `${file} cannot be read`);
+    }, 90_000);
+
     it('keeps the COMMIT a per-worktree ref reaches through an annotated TAG', () => {
       const c = makeChild(h);
       const [x] = looseCommits(h, c.main, 1, 'tagged');
