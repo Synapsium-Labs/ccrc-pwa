@@ -5130,13 +5130,13 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
 
   // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
-  // then W4's four — `detach` on Linux only (decision 17: `--detach` refuses
-  // on Darwin), so a Linux install writes seven words and a Darwin one six.
-  // LITERALS, not a read of ccd/ccrc's arrays: a pin derived from the list
-  // it pins could never red on the list being wrong.
-  const CAPS_W4_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback'];
-  const CAPS_W4_LINUX = [...CAPS_W4_ALL, 'detach'];
-  const CAPS_HERE = process.platform === 'darwin' ? CAPS_W4_ALL : CAPS_W4_LINUX;
+  // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
+  // Darwin) — and W6's `versions`, so a Linux install writes eight words and
+  // a Darwin one seven. LITERALS, not a read of ccd/ccrc's arrays: a pin
+  // derived from the list it pins could never red on the list being wrong.
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions'];
+  const CAPS_LINUX = [...CAPS_ALL, 'detach'];
+  const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
   it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
     const home = freshBox('ccrc-install-nodeid-');
@@ -5163,7 +5163,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
     const r = runInstall(home);
@@ -5175,7 +5175,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout).toMatch(new RegExp(`^install: caps: ${CAPS_HERE.join(' ')} \\(os ${os}; `, 'm'));
   });
 
-  it('ccrc-caps: seven words on Linux, six on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -5199,7 +5199,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       pick(/^_ccrc_cap_words\(\) \{[\s\S]*?\n\}/m, '_ccrc_cap_words'),
       pick(/^_inst_caps\(\) \{[\s\S]*?\n\}/m, '_inst_caps'),
     ];
-    for (const [os, words] of [['linux', CAPS_W4_LINUX], ['darwin', CAPS_W4_ALL]] as const) {
+    for (const [os, words] of [['linux', CAPS_LINUX], ['darwin', CAPS_ALL]] as const) {
       const home = mkTmp(`ccrc-inst-caps-arm-${os}-`);
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
@@ -5227,6 +5227,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       'update-json': [/^_upd_phase\(\) \{/m],
       'update-gate': [/^_upd_gate\(\) \{/m, /^\s*--no-gate\) no_gate=1 ;;$/m],
       rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
+      // W6 Task 4: a kept version is a flip — restore arm 1 and rollback by flip.
+      versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
     };
     const arr = (name: string): string[] => {
@@ -5235,7 +5237,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       return m![1]!.split(/\s+/).filter(Boolean);
     };
     const words = [...arr('CCRC_CAP_WORDS'), ...arr('CCRC_CAP_WORDS_LINUX')];
-    expect(words).toEqual(CAPS_W4_LINUX);
+    expect(words).toEqual(CAPS_LINUX);
     for (const w of words) {
       expect(BACKING[w], `cap word '${w}' has no entry here — name the machinery it promises`).toBeDefined();
       for (const re of BACKING[w]!) expect(src, `cap word '${w}': ccd/ccrc has no ${re}`).toMatch(re);
