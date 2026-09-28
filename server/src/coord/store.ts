@@ -6306,17 +6306,22 @@ export class CoordStore {
   /** A refusal, a drop, a deadline, or a `failed`/`reverted`/stamp-mismatch
    *  report (§8, §10): a BUSY lease back to a settled state. The request
    *  columns are untouched — a refusal does not consume the request (decision
-   *  7). `reportStartedAt` is the report's own start when the release is
-   *  report-driven — the LATEST ms its whole-second stamp covers,
-   *  `startedAt*1000 + 999`, which the sweep computes
-   *  (D-3199) — and `null` otherwise; a report whose
-   *  run began before the lease belongs to a previous run and never moves it. */
-  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, reportStartedAt: number | null): ReleaseLeaseResult {
+   *  7). `expectedStartedAt` is the row's OWN `updateStartedAt`, as the
+   *  caller last read it, when the release is report-driven — never a
+   *  report's own `startedAt` (W4 review 155, C33: the two boxes' clocks are
+   *  never ordered against each other; freshness is the report DIFFERING
+   *  from what the row held, decided by the caller before this write, not a
+   *  timestamp compared here) — and `null` otherwise. The guard is IDENTITY:
+   *  a write whose caller observed a lease that has since moved on (a newer
+   *  `dispatchNode`, between that read and this write) is refused; one
+   *  observing the SAME lease, or observing none (a legacy row with no
+   *  recorded start), always proceeds. */
+  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult {
     const res = this.db.prepare(
       'UPDATE nodes SET updateState = ?, updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
       `AND updateState NOT IN ${SETTLED_UPDATE_SQL} ` +
-      'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
-    ).run(to, detail, nodeId, reportStartedAt, reportStartedAt);
+      'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
+    ).run(to, detail, nodeId, expectedStartedAt, expectedStartedAt);
     if (Number(res.changes) > 0) return { ok: true, state: to };
     const row = this.nodeLeaseRow(nodeId);
     if (row === null) return { ok: false, why: 'unknown-node' };
@@ -6324,24 +6329,25 @@ export class CoordStore {
     if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
       return { ok: false, why: 'not-busy', state: row.updateState };
     }
-    // Live and busy, and still refused: the precedence clause is the only
-    // predicate left, and it fails only when `updateStartedAt` is set.
+    // Live and busy, and still refused: the identity clause is the only
+    // predicate left, and it fails only when `updateStartedAt` is set and no
+    // longer matches what the caller expected — the lease moved on.
     return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
   }
 
   /** Convergence (§10): the row back to `idle` and its request cleared — the
    *  only path besides `ack` that clears one. Refused on a HALTED row
    *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  precedence as `releaseLease`. */
-  settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult {
+   *  identity guard as `releaseLease`. */
+  settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
       const res = this.db.prepare(
         "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
         'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
-        'AND (? IS NULL OR updateStartedAt IS NULL OR ? >= updateStartedAt)',
-      ).run(detail, nodeId, reportStartedAt, reportStartedAt);
+        'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
+      ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
       if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };

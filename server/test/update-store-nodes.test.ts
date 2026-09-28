@@ -298,12 +298,19 @@ describe('the lease group — releaseLease, settleNode, ackNode', () => {
     expect(fresh().releaseLease(UUID_A, 'failed', 'x', null)).toEqual({ ok: false, why: 'unknown-node' });
   });
 
-  it('a report older than the lease never moves it; NULL on either side is no precedence (§18 "a stale report never moves the lease")', () => {
+  it('an expected lease that no longer matches the row\'s own current one is refused, EITHER side of it — identity, not clock order (W4 review 155, C33); NULL on either side is no precedence (§18 "a stale report never moves the lease")', () => {
     const s = leased('applying', T0 + 5000);
+    // An expected `updateStartedAt` earlier than the row's own current lease is refused...
     expect(s.releaseLease(UUID_A, 'failed', 'stamp-mismatch', T0 + 4000))
       .toEqual({ ok: false, why: 'stale-report', updateStartedAt: T0 + 5000 });
     expect(s.node(UUID_A)).toMatchObject({ updateState: 'applying', updateDetail: 'planted' });
-    // The same run's report — started at the lease's own instant — does move it.
+    // ...and so, symmetrically, is one LATER than it — this is no longer a `>=` clock-order test (a node's
+    // report can read on either side of the lease's dispatch instant, C33), so a later expectation is refused
+    // exactly as an earlier one is: only the SAME lease the caller actually observed is ever moved.
+    expect(s.releaseLease(UUID_A, 'failed', 'stamp-mismatch', T0 + 6000))
+      .toEqual({ ok: false, why: 'stale-report', updateStartedAt: T0 + 5000 });
+    expect(s.node(UUID_A)).toMatchObject({ updateState: 'applying', updateDetail: 'planted' });
+    // The value the caller actually read off the SAME still-open lease does move it.
     expect(s.releaseLease(UUID_A, 'failed', 'stamp-mismatch', T0 + 5000)).toEqual({ ok: true, state: 'failed' });
     // Not report-driven (a refusal, a drop, the deadline): no precedence at all.
     expect(leased('applying', T0 + 5000).releaseLease(UUID_A, 'failed', 'deadline', null))
@@ -331,10 +338,13 @@ describe('the lease group — releaseLease, settleNode, ackNode', () => {
     expect(fresh().settleNode(UUID_A, 'x', null)).toEqual({ ok: false, why: 'unknown-node' });
   });
 
-  it('settleNode takes the same precedence as releaseLease', () => {
+  it('settleNode takes the same identity guard as releaseLease — an expected lease on either side of the row\'s own current one is refused (W4 review 155, C33)', () => {
     const s = leased('applying', T0 + 5000);
     plantRequest(s, UUID_A);
     expect(s.settleNode(UUID_A, 'converged', T0 + 4000))
+      .toEqual({ ok: false, why: 'stale-report', updateStartedAt: T0 + 5000 });
+    expect(s.node(UUID_A)).toMatchObject({ updateState: 'applying', requestedTag: 'v0.0.10' });
+    expect(s.settleNode(UUID_A, 'converged', T0 + 6000))
       .toEqual({ ok: false, why: 'stale-report', updateStartedAt: T0 + 5000 });
     expect(s.node(UUID_A)).toMatchObject({ updateState: 'applying', requestedTag: 'v0.0.10' });
   });

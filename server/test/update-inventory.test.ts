@@ -537,11 +537,26 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
     expect(sweepPlanFor(busy(), withReport({ phase: 'unknown' })).lease).toEqual({ kind: 'none', why: 'unknown-phase' });
   });
 
-  it('a previous run\'s report never moves the lease — and the lease\'s own second is not a previous run', () => {
-    expect(sweepPlanFor(busy(), withReport({ startedAt: (T_S - 3600) * 1000 })).lease).toEqual({ kind: 'none', why: 'stale-report' });
-    expect(sweepPlanFor(busy(), withReport({ startedAt: (T_S - 1) * 1000 })).lease).toEqual({ kind: 'none', why: 'stale-report' });
-    // D-3199: the report says T_S seconds, the lease was taken at T_S*1000+500 ms.
+  it('freshness is CHANGE, not CLOCK (W4 review 155, C33): a report settles the lease however its own clock reads against the dispatch instant', () => {
+    // A fleet node whose clock runs behind the server's — even by most of an hour — still settles its
+    // dispatched run: nothing here orders the report's own clock (whole seconds) against the lease's dispatch
+    // instant (ms). The row holds no prior report (`busy()` plants none), so this report DIFFERS from what
+    // is stored and counts for the lease, whatever `startedAt` itself says.
+    expect(sweepPlanFor(busy(), withReport({ startedAt: (T_S - 3600) * 1000 })).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
+    expect(sweepPlanFor(busy(), withReport({ startedAt: (T_S - 1) * 1000 })).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
+    // The old D-3199 boundary (the lease taken half a second into the report's own second) settles for the
+    // same reason — it differs from the row's own stored report — never because of a whole-second allowance.
     expect(sweepPlanFor(busy(), withReport({ startedAt: T_S * 1000 })).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
+  });
+
+  it('a report unchanged since the row\'s own last-seen one never moves the lease, whatever its own clock says (unchanged-report, not stale-report)', () => {
+    // A node whose report is unchanged since acquisition stays in flight until the deadline — never settled
+    // on the old report — even though its `startedAt` reads far behind the lease's dispatch instant: this is
+    // `unchanged-report` (a report identical to the one already stored), never `stale-report` (a clock verdict
+    // this code no longer computes).
+    const seenAlready = rep({ startedAt: (T_S - 3600) * 1000 });
+    expect(sweepPlanFor(busy(seen(seenAlready)), withReport({ startedAt: (T_S - 3600) * 1000 })).lease)
+      .toEqual({ kind: 'none', why: 'unchanged-report' });
   });
 
   it('a NULL row.updateStartedAt is not itself stale — only a report with no startedAt at all is (fix round 1, D-3214, item 12)', () => {
@@ -857,12 +872,14 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     },
   );
 
-  it('a previous run\'s done leaves a fresh lease busy', async () => {
+  it('a report an hour old by its own clock still settles a fresh lease, because it differs from what the row held — freshness is CHANGE, not CLOCK (W4 review 155, C33; this case was `lease: \'none\'` under the old clock-ordered precedence — this test now pins the ruling\'s replacement, not the old defence)', async () => {
     const b = await busyBox();
     plant(b.ccrcDir, { report: reportJson({ startedAt: T_S - 3600 }) });
     const [out] = await sweepInventory(localDeps(b), NOW);
-    expect(out).toMatchObject({ result: 'measured', lease: 'none' });
-    expect(b.store.node(U1)).toMatchObject({ updateState: 'applying', updateStartedAt: T0, reportedStartedAt: (T_S - 3600) * 1000 });
+    expect(out).toMatchObject({ result: 'measured', lease: 'settle' });
+    expect(b.store.node(U1)).toMatchObject({
+      updateState: 'idle', updateDetail: 'done: v0.0.12', updateStartedAt: T0, reportedStartedAt: (T_S - 3600) * 1000,
+    });
   });
 
   it('installing leaves it applying; failed and reverted release to their own word', async () => {
