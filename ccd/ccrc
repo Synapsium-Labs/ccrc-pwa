@@ -16199,10 +16199,14 @@ _ver_flip_back() {   # <name> <role> <prefix>
 # 2. Every refusal BEFORE a flip names its reason and changes nothing. After
 # the flip, `_ver_flip_back` re-runs the kept version's own spine and the
 # gate runs once more, on THAT tag. A ~/ccrc that never left <prev> is no
-# refusal (D-3445): a W6 staged spine that died inside
-# `_inst_tree` BEFORE its flip (its `npm ci` in the new directory, the
-# verb's likeliest failure) reads as moved to wave 4's `_upd_step_moved`,
-# so the gate ran and failed while the running version was untouched. Arm
+# refusal (D-3445): a staged spine that died leaving the link on <prev>
+# and a step marker `_upd_step_moved` reads as moved WITHOUT
+# `_upd_tree_untouched` ever being consulted (that re-measurement runs only
+# for a marker naming `_inst_tree`, D-3457): an unreadable marker, or a
+# newer spine's step this ccrc's `CCRC_INST_SPINE` does not list. The gate
+# ran and failed while the running version was untouched. (A W6 spine that
+# died inside `_inst_tree` before its flip never gets here: since D-3457 it
+# exits 1 before any gate.) Arm
 # 2 would re-download <prev>, and that child's same-name path would rsync
 # `--delete` and `npm ci` INTO the directory the live units run from. In
 # place, the rename is onto the target the link already names, and the

@@ -8208,7 +8208,68 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(r.stderr).toContain(`update: v2.0.0 was installed, but the box did not come back healthy on it (${GATE_DENIED.slice('gate: '.length)}) — exit 4.`);
   }, 60_000);
 
-  it('arm 1 with ~/ccrc already ON the previous version restores it IN PLACE — its kept stamp, its own spine, the gate once more — with no download, no npm ci in the running version, and that version byte-unchanged (D-3445; the arm is called directly: since D-3457 a W6 spine that dies inside _inst_tree before its flip is "nothing replaced" and never reaches a restore)', () => {
+  // The marker the dying spine leaves, as the stub npm writes it. Since D-3457
+  // an `_inst_tree`-marked death before the flip is "nothing replaced" (exit 1,
+  // no gate), so these are the two shapes `_upd_step_moved` still reads as
+  // moved with `_upd_tree_untouched` never consulted: a newer spine's step
+  // this ccrc's CCRC_INST_SPINE does not list, and an unreadable marker.
+  it.each([
+    ['a newer spine\'s step', '_inst_zz_newer_step', '_inst_zz_newer_step'],
+    ['an unreadable marker', 'not a step name; rm -rf', 'unreadable'],
+  ] as const)('a staged spine that dies before its flip with %s that reads as MOVED leaves ~/ccrc on the previous version: arm 1 restores it IN PLACE — its kept stamp, its own spine, the gate once more — with no download, no npm ci in the running version, and that version byte-unchanged (D-3445, D-3457)', (_what, marker, named) => {
+    const home = onKeptV1('ccrc-update-arm1-in-place-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    // A dependency the running version already holds. Arm 2's same-name
+    // `npm ci` in v1.0.0 is what would empty this directory; the recorder npm
+    // does not, so `npm-cwd` below is what measures that it never ran there.
+    mkdirSync(join(v1, 'server', 'node_modules'), { recursive: true });
+    writeFileSync(join(v1, 'server', 'node_modules', '.fixture-dep'), 'installed\n');
+    const ccdBefore = treeDigest(join(v1, 'ccd'));
+    const distBefore = treeDigest(join(v1, 'server', 'dist'));
+    rmSync(join(home, 'npm-cwd'), { force: true });
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    // `npm ci` refuses in v2.0.0's new directory only (a registry hiccup,
+    // the placement's likeliest failure); every other npm call records and
+    // succeeds. Ahead of the recorder npm that `runUpdate` re-plants.
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'npm'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"',
+      `case "$PWD" in */ccrc-versions/v2.0.0/*) echo "fixture npm: registry unreachable" >&2; printf '%s\\n' '${marker}' > "$HOME/.ccrc/install-step"; exit 1 ;; esac`,
+      'mkdir -p node_modules',
+      'exit 0',
+    ].join('\n') + '\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    // The spine died in `_inst_tree`'s npm ci, before its flip: `~/ccrc` never moved.
+    expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — \/health at 127\.0\.0\.1:7788 answers v1\.0\.0, not v2\.0\.0$/m);
+    expect(r.stdout).not.toMatch(/^install: tree: \$HOME\/ccrc -> /m);
+    expect(r.stdout).toContain('update: arm 1: $HOME/ccrc still points at v1.0.0, which is kept complete — re-running its own spine in place (no download)');
+    // The kept spine ran FROM the running version: Task 2's `running` answer,
+    // with its kept record present, so nothing was copied and no npm ci ran.
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(r.stdout).toMatch(/^install: tree: v1\.0\.0 is complete \(its kept install record is present\) — no npm ci$/m);
+    expect(r.stdout).toMatch(/^update: gate: both answers on v1\.0\.0 /m);
+    expect(r.stdout).toMatch(new RegExp(`^update: REVERTED \\(arm 1\\): this box runs v1\\.0\\.0 again — \\$HOME/ccrc never left \\$HOME/ccrc-versions/v1\\.0\\.0; its own spine re-ran, no download — spine died at ${named}; gate: `, 'm'));
+    expect(r.stdout).not.toMatch(/^update: arm 2|REVERTED \(arm [23]\)/m);
+    expect(String(lastReport(home)['detail'])).toMatch(new RegExp(`^arm1: restored v1\\.0\\.0 in place; spine died at ${named}; gate: `));
+    // No download of the tag it restored: the run fetched v2.0.0 and nothing else.
+    const urls = localUrls(home);
+    expect(urls.length, 'the update fetched nothing at all — the control is broken').toBeGreaterThan(0);
+    expect(urls.filter((u) => !u.startsWith(`local://${home}/releases/latest/download/`))).toEqual([]);
+    const npmDirs = fileText(join(home, 'npm-cwd')).split('\n').filter((l) => l !== '');
+    expect(npmDirs.some((d) => d.includes('/ccrc-versions/v2.0.0/')), 'npm never ran in v2.0.0 — the control is broken').toBe(true);
+    expect(npmDirs.filter((d) => d.includes('/ccrc-versions/v1.0.0')), 'npm ran in the running version').toEqual([]);
+    // The running version is the one it was: its tree, its deps, its kept record.
+    expect(linkOf(home)).toBe(v1);
+    expect(treeDigest(join(v1, 'ccd')), 'an in-place rsync rewrote the running version').toEqual(ccdBefore);
+    expect(treeDigest(join(v1, 'server', 'dist'))).toEqual(distBefore);
+    expect(fileText(join(v1, 'server', 'node_modules', '.fixture-dep'))).toBe('installed\n');
+    expect(existsSync(join(v1, '.ccrc-installed')), 'the running version stopped claiming completeness').toBe(true);
+    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
+  }, 60_000);
+
+  it('arm 1 with ~/ccrc already ON the previous version restores it IN PLACE — unit pin, the arm called directly on a FULL box: its kept stamp, its own spine, the gate once more, no download, no npm ci in the running version, that version byte-unchanged (D-3445; the end-to-end case above reaches it through cmd_update; an `_inst_tree`-marked death never gets here, D-3457)', () => {
     const home = onKeptV1('ccrc-update-arm1-in-place-');
     const v1 = join(home, 'ccrc-versions', 'v1.0.0');
     // A dependency the running version already holds. Arm 2's same-name
