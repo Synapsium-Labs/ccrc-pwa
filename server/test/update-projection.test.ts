@@ -3,11 +3,18 @@
 // nothing), resolveAndProject over a real coord.db on a fixture home, and the
 // inventory run that calls it. Fixture HOMEs only (mkTmp); nothing here reads
 // the live $HOME.
+//
+// The node's READING of this document is pinned by the real node code, not
+// restated here: update-intent-cross-side.test.ts feeds the real route
+// through the real `ccd/ccd-update-sync` into the real `_upd_intent_state`,
+// and the resolveAndProject cases below hand the server-role file to that
+// same reader (W4a Task 15). The embedded python validator this file carried
+// until the node side landed is deleted — it was a stand-in, and a stand-in
+// is green while both sides drift.
 import { describe, it, expect, vi } from 'vitest';
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import {
@@ -26,75 +33,8 @@ import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { NodeRole, UpdateChannel } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { testDeps } from './helpers.js';
-
-// THE PROJECTION'S GRAMMAR, restated in python on purpose: the reader that will
-// consume this file on a node is not TypeScript, so the pin must not be either.
-// It copies `ccd/ccd-pool-sync`'s discipline — a WHOLE-DOCUMENT pass over the
-// exact bytes, with the 65536-byte cap and the `end` terminator as the
-// torn-write detectors — and adds the two facts this document carries that
-// pool-epoch's does not: lease = issued + 900 s, and `issued` is unix SECONDS
-// near python's own clock (the C1 lesson recorded at GET /api/pools/epoch in
-// server.ts). W4's real `ccd/ccd-update-sync` renderer TAKES THIS PIN OVER when
-// it lands: the cross-side test then feeds GET /api/updates/intent/:nodeId
-// through that file (the pool-accounts-route.test.ts shape) and this embedded
-// copy is deleted with it.
-const VALIDATOR = String.raw`
-import re, sys, time
-NUM = r"(?:0|[1-9][0-9]*)"
-TAG = r"v[0-9]+\.[0-9]+\.[0-9]+"
-GRAMMAR = [
-    ("epoch", re.compile(r"epoch (%s)" % NUM)),
-    ("issued", re.compile(r"issued (%s)" % NUM)),
-    ("lease", re.compile(r"lease (%s)" % NUM)),
-    ("channel", re.compile(r"channel (stable|dev)")),
-    ("desired", re.compile(r"desired (%s|none)" % TAG)),
-    ("desired-stable", re.compile(r"desired-stable (%s|none)" % TAG)),
-    ("desired-dev", re.compile(r"desired-dev (%s|none)" % TAG)),
-    ("auto", re.compile(r"auto (off|stable|channel)")),
-]
-def check(raw):
-    if len(raw) >= 65536:
-        raise ValueError("document is %d bytes, at or over the 65536-byte cap" % len(raw))
-    doc = raw.decode("utf-8")
-    if not doc.endswith("\n"):
-        raise ValueError("document does not end in a newline")
-    lines = doc[:-1].split("\n")
-    if lines[-1] != "end":
-        raise ValueError("last line is not exactly end")
-    body = lines[:-1]
-    if len(body) != len(GRAMMAR):
-        raise ValueError("expected %d lines before end, got %d" % (len(GRAMMAR), len(body)))
-    v = {}
-    for (name, rx), ln in zip(GRAMMAR, body):
-        m = rx.fullmatch(ln)
-        if not m:
-            raise ValueError("off-grammar line for %s: %r" % (name, ln[:200]))
-        v[name] = m.group(1)
-    issued, lease = int(v["issued"]), int(v["lease"])
-    if lease - issued != 900:
-        raise ValueError("lease is not issued + 900 s")
-    if abs(issued - int(time.time())) > 86400:
-        raise ValueError("issued %d is not unix seconds near now" % issued)
-    want = v["desired-stable"] if v["channel"] == "stable" else v["desired-dev"]
-    if v["desired"] != want:
-        raise ValueError("desired disagrees with desired-%s" % v["channel"])
-try:
-    check(sys.stdin.buffer.read())
-    sys.stdout.write("ok\n")
-except Exception as ex:
-    sys.stderr.write(str(ex) + "\n")
-    sys.exit(1)
-`;
-
-function validate(doc: string): { ok: boolean; err: string } {
-  // Coordinator addendum (fix round 1, dispatch E): a bounded timeout and a
-  // hard kill signal, so a stuck python3 fails this one case instead of
-  // freezing the whole vitest worker.
-  const r = spawnSync('python3', ['-c', VALIDATOR], {
-    input: doc, encoding: 'utf8', env: { ...process.env, LC_ALL: 'C.UTF-8' }, timeout: 30_000, killSignal: 'SIGKILL',
-  });
-  return { ok: r.status === 0 && r.stdout === 'ok\n', err: r.stderr };
-}
+import { IS_DARWIN } from './platformFixtures.js';
+import { plantNode, readIntent } from './updateIntentFixtures.js';
 
 const FLEET_ID = '0123abcd-0000-4000-8000-000000000001';
 const NOW = Date.UTC(2026, 8, 22, 12, 0, 0);
@@ -169,46 +109,6 @@ describe('renderProjection — the §9 document', () => {
   });
 });
 
-describe('the embedded validator (W4\'s ccd-update-sync takes this pin over)', () => {
-  const nowS = (): number => Math.floor(Date.now() / 1000);
-  const good = (): string => {
-    const r = renderProjection(resolution(), 3, nowS());
-    if (!r.ok) throw new Error('fixture render refused');
-    return r.text;
-  };
-
-  it('accepts the renderer\'s own output', () => {
-    const v = validate(good());
-    expect(v.ok, v.err).toBe(true);
-  });
-
-  it('refuses a document with no `end` (a torn write)', () => {
-    const v = validate(good().replace(/end\n$/, ''));
-    expect(v.ok).toBe(false);
-    expect(v.err).toMatch(/end/);
-  });
-
-  it('refuses a document at the 65536-byte cap', () => {
-    const v = validate(good().replace('end\n', `${'x'.repeat(65536)}\nend\n`));
-    expect(v.ok).toBe(false);
-    expect(v.err).toMatch(/65536/);
-  });
-
-  it('refuses ms in issued/lease', () => {
-    const s = nowS();
-    const doc = good().replace(/^issued \d+$/m, `issued ${s * 1000}`).replace(/^lease \d+$/m, `lease ${s * 1000 + 900}`);
-    const v = validate(doc);
-    expect(v.ok).toBe(false);
-    expect(v.err).toMatch(/unix seconds/);
-  });
-
-  it('refuses a desired that disagrees with its channel\'s desired-* line', () => {
-    const v = validate(good().replace('desired v0.0.11\n', 'desired v0.0.12\n'));
-    expect(v.ok).toBe(false);
-    expect(v.err).toMatch(/disagrees/);
-  });
-});
-
 describe('writeOwnProjection — tmp then rename, 0600, whole or nothing', () => {
   it('writes the text at ~/.ccrc/update-intent with mode 0600 and leaves no tmp behind', async () => {
     const ccrcDir = path.join(mkTmp('ccrc-update-write-'), '.ccrc');
@@ -252,7 +152,7 @@ describe('writeOwnProjection — tmp then rename, 0600, whole or nothing', () =>
 });
 
 describe('resolveAndProject — every live node resolved and stored; the server row projected', () => {
-  it('stores each node\'s resolution and writes the server row\'s document, which the validator accepts', async () => {
+  it('stores each node\'s resolution and writes the server row\'s document, which the node\'s own reader accepts', async () => {
     const f = fixture('both');
     const now = Date.now();
     const run = await resolveAndProject(f.deps, now);
@@ -268,8 +168,16 @@ describe('resolveAndProject — every live node resolved and stored; the server 
     expect(text).toMatch(new RegExp(`^issued ${issued}\\nlease ${issued + 900}$`, 'm'));
     expect(text).toMatch(new RegExp(`^epoch ${f.store.updateEpoch().epoch}$`, 'm'));
     expect(statSync(projectionPath(f.ccrcDir)).mode & 0o777).toBe(0o600);
-    const v = validate(text);
-    expect(v.ok, v.err).toBe(true);
+    // THE REAL READER judges the server-role file: a `server`/`both` node
+    // reads THIS file through `ccd/ccrc`'s `_upd_intent_state`, with no puller
+    // between (W4a Task 15 — the cross-side pin this file's deleted python
+    // copy stood in for; the fleet half is update-intent-cross-side.test.ts).
+    // macOS is never centrally managed, and the reader says so first (Task 8).
+    plantNode(f.home, 'both');
+    expect(readIntent(f.home)).toMatchObject(IS_DARWIN
+      ? { state: 'not-configured', why: 'macos' }
+      : { state: 'ok', role: 'both', channel: 'stable', desired: 'v0.0.11',
+        desiredStable: 'v0.0.11', desiredDev: 'v0.0.12', auto: 'off' });
   });
 
   it('a never-reached node (markUnreachable\'s placeholder) resolves with the floorUnmeasured sentence, never noFloor (fix round 1, m-2)', async () => {
@@ -389,8 +297,18 @@ describe('the inventory run resolves and projects (§9: "at every resolution AND
     expect(coord.nodeByLabel(SERVER_LABEL)).toMatchObject({ channel: 'stable', desiredTag: 'v0.0.10' });
     const text = readFileSync(projectionPath(base.cfg.ccrcDir), 'utf8');
     expect(text).toContain('channel stable\ndesired v0.0.10\n');
-    const v = validate(text);
-    expect(v.ok, v.err).toBe(true);
+    // lease = issued + 900 s — the deleted python validator's own check,
+    // without pinning inventoryNow()'s own clock instant.
+    const leaseMatch = /^issued (\d+)\nlease (\d+)$/m.exec(text);
+    expect(leaseMatch, text).not.toBeNull();
+    expect(Number(leaseMatch![2]) - Number(leaseMatch![1])).toBe(900);
+    // The node reading its own server's file — the real reader, as above.
+    expect(path.basename(base.cfg.ccrcDir)).toBe('.ccrc');
+    const nodeHome = path.dirname(base.cfg.ccrcDir);
+    plantNode(nodeHome, 'both');
+    expect(readIntent(nodeHome)).toMatchObject(IS_DARWIN
+      ? { state: 'not-configured', why: 'macos' }
+      : { state: 'ok', channel: 'stable', desired: 'v0.0.10' });
   });
 
   it('C1 (final fix wave): a throw on the server row\'s apply still measures the fleet row and still writes the projection', async () => {

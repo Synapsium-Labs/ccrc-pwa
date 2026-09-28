@@ -501,9 +501,12 @@ describe('README: the graphify step enumeration is DERIVED, not remembered (D-12
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 
   const steps = (): string[] => {
-    const body = ccrc.slice(ccrc.indexOf('cmd_install() {'));
-    const seq = body.slice(0, body.indexOf('\n}\n'));
-    return [...seq.matchAll(/^\s*(_inst_graph(?:ify)?_\w+)\s*$/gm)].map((m) => m[1]!);
+    // D-3241 (W4 Task 4): `cmd_install`'s body no longer lists
+    // the steps — it iterates `CCRC_INST_SPINE` through `_inst_step` — so the
+    // scan reads the array, one step per line.
+    const m = /^CCRC_INST_SPINE=\(([\s\S]*?)\n\)/m.exec(ccrc);
+    if (m === null) throw new Error('ccd/ccrc has no CCRC_INST_SPINE array — re-derive this scan');
+    return [...m[1]!.matchAll(/^\s*(_inst_graph(?:ify)?_\w+)\s*$/gm)].map((x) => x[1]!);
   };
 
   it('every graphify step in cmd_install is role-gated, and there are more than a couple', () => {

@@ -167,6 +167,12 @@ describe('ccrc: dispatch and usage', () => {
     // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
     // does, this line owns that an operator can find it.
     //
+    // `rollback` joined it in the centralised-update programme's wave 4
+    // (design 2026-09-20 §11) — a verb, not the recipe `_upd_report` used to
+    // print: update's own path, below the floor, under update's lock, then the
+    // gate and the sweep. Same split: `server/test/ccrc-update.test.ts` owns
+    // what it does, this line owns that an operator can find it.
+    //
     // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
     // the exit ramp that leaves reinstall safe, update's backup step
     // standalone, and the role-aware journalctl passthrough. Same split:
@@ -176,17 +182,32 @@ describe('ccrc: dispatch and usage', () => {
     // a box a public name and a real certificate (spec D1–D3), the same shape
     // as `passwd`: prompts on a tty, writes ccrc-owned files, never runs sudo.
     // `server/test/ccrc-expose.test.ts` owns what it does.
+    //
+    // `channel` joined it in W4a Task 8 — the READ-ONLY view of this box's
+    // update-intent projection: what `ccrc update` with no --to would follow,
+    // and the line `ccrc rollout --channel` reads over ssh. It takes no
+    // argument, by decision 15. `server/test/ccrc-update.test.ts` owns what it
+    // does.
+    //
+    // `watchdog` joined it in W4a Task 9 — the verb `ccrc-update-watchdog.timer`
+    // runs every minute on a server/both box: it re-measures a self-update
+    // whose report went stale and reverts only a box that fails its health
+    // probe. A timer's verb is still a verb an operator can type by hand.
+    // `server/test/ccrc-update.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}channel {3}print this box's update channel as the control plane projects/m);
+    expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    expect(r.stdout).toMatch(/^ {2}watchdog {2}\(server\/both, Linux; run by ccrc-update-watchdog\.timer/m);
     // …and its `ip` arm (stage 5, S10) is discoverable from the same
     // paragraph: no domain at all, caddy's internal CA, passphrase-only.
     expect(r.stdout).toMatch(/ip \(no domain at all/);
