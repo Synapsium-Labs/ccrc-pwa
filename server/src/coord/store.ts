@@ -6394,12 +6394,19 @@ export class CoordStore {
    *  `apply` and `rollback` routes write the operator's one-tap here, and it
    *  stands until convergence (`settleNode`) or the operator (`ackNode`)
    *  clears it — a refusal or a drop never does (decision 7). Writes the three
-   *  request columns and nothing else, on a LIVE row; a request on a row that
-   *  holds a lease is written and waits, the lease untouched. The previous
-   *  request is read inside the same IMMEDIATE transaction only to REPORT it
-   *  (`replaced`); the write's own `WHERE` is the guard. `at` is the caller's
-   *  clock: a value that is not a non-negative safe integer throws, because
-   *  SQLite binds NaN as NULL (`markReleaseNotified`'s reason). */
+   *  request columns and nothing else, on a LIVE row. THIS WRITER does not
+   *  refuse a row that holds a lease — it is written beside it. But `settleNode`
+   *  clears the request columns UNCONDITIONALLY the moment that lease settles
+   *  (it does not read them first), so a request written beside a row's OWN
+   *  held lease is not "waiting its turn": it is erased under the operator's
+   *  own newer tap the instant the running move finishes. That is why the
+   *  routes never write one there — the single-node route refuses a busy named
+   *  node `409 busy` (D-3386), and `{all: true}`'s `requestAll` skips a node
+   *  whose own lease is busy before it ever calls this writer (D-3406). The
+   *  previous request is read inside the same IMMEDIATE transaction only to
+   *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
+   *  caller's clock: a value that is not a non-negative safe integer throws,
+   *  because SQLite binds NaN as NULL (`markReleaseNotified`'s reason). */
   requestNode(nodeId: string, tag: string, kind: RequestKind, at: number): RequestNodeResult {
     if (!Number.isSafeInteger(at) || at < 0) {
       throw new RangeError(`requestNode: at must be a non-negative integer ms timestamp, got ${String(at)}`);

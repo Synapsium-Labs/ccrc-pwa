@@ -8600,7 +8600,8 @@ export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[
 export type UpdateRouteError =
   | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
   | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
-  | 'journal-unreadable' | 'journal-unwritable';
+  | 'journal-unreadable' | 'journal-unwritable'
+  | Exclude<DispatchRefusal, 'no-update-gate' | 'waiting-for-fleet'> | 'no-previous' | 'no-desired';   // wave 5: the moves' 409s (spec §12)
 export interface UpdateRouteRefusal {
   ok: false; error: UpdateRouteError;
   field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
@@ -8801,3 +8802,23 @@ export function compareDispatchOrder(a: { role: NodeRole | null; label: string; 
   if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
   return 0;
 }
+
+/** `POST /api/updates/apply` (design 2026-09-20 §12, update-management wave 5). Exactly one of `nodeId` / `all`;
+ *  `tag` absent = each named node's resolved `desiredTag`. */
+export type ApplyUpdateBody = ({ nodeId: string } | { all: true }) & { tag?: string };
+/** `POST /api/updates/rollback` (§12). `to` absent = the node's measured `previousVersion`. */
+export interface RollbackUpdateBody { nodeId: string; to?: string }
+/** Why `{all: true}` wrote no request for a live node (D-3385, D-3401):
+ *  the dispatcher's own per-node refusal with the fleet's halt set aside (an update move is never asked for the
+ *  rollback cap, and never `no-update-gate` — that is auto's), or no tag to move it to. Every refusal word but
+ *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
+ *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
+ *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
+ *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request. */
+export type MoveSkipWhy =
+  | Exclude<DispatchRefusal, 'halted' | 'no-update-gate' | 'no-rollback-cap' | 'waiting-for-fleet'> | 'no-desired' | 'busy';
+export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
+/** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
+ *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
+ *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
+export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }

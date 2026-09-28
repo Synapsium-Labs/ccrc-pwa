@@ -112,7 +112,7 @@ describe("requestNode — the request group's setter (design 2026-09-20 §6, §1
     expect(s.node(UUID_A)).toMatchObject({ requestedTag: 'v0.0.10', requestedKind: 'update', requestedAt: T0 + 1 });
   });
 
-  it('writes a request beside a held lease and leaves the lease exactly as it was — the request waits its turn', () => {
+  it('writes a request beside a held lease and leaves the lease exactly as it was — the WRITER does not refuse it (D-3406: the routes keep one there anyway)', () => {
     const s = twoNodes();
     expect(s.dispatchNode(UUID_A, 'v0.0.10', 'update', T0, 'auto: v0.0.10')).toEqual({ ok: true });
     const leased = s.node(UUID_A)!;
@@ -224,6 +224,17 @@ describe('dispatchNode — the ONE lease acquire (design 2026-09-20 §6, §10)',
     expect(s.dispatchNode(UUID_A, 'v0.0.8', 'rollback', T0 + 2, 'rollback: v0.0.8')).toEqual({ ok: true });
     expect(s.node(UUID_A)).toEqual({ ...before, updateState: 'pending', updateTarget: 'v0.0.8',
       updateStartedAt: T0 + 2, updateDetail: 'rollback: v0.0.8' });
+  });
+
+  it("a superseded row's stale busy lease is never the holder NAMED in a refusal either — a rollback with no " +
+    'request over a live, settled row reads no-request, not busy (Task 3 review Minor, D-3406)', () => {
+    const s = superseded();
+    // 'fleet' is the retired row (superseded by UUID_A) and still carries a stale busy lease from before
+    // it was superseded. UUID_A is live and settled and has NO rollback request — a real op would refuse it
+    // `no-request`, and the retired row's stale lease must not be read as holding the fleet's one lease.
+    plantState(s, 'fleet', 'pending', 'stale lease on the retired row');
+    expect(quiet(s, () => s.dispatchNode(UUID_A, 'v0.0.8', 'rollback', T0, 'r'), 'superseded-busy'))
+      .toEqual({ ok: false, why: 'no-request' });
   });
 
   it('refuses an unknown id, a superseded row, a non-tag and an unknown kind, writing nothing', () => {

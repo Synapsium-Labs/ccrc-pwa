@@ -1216,11 +1216,22 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
     'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
     'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
     'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+    'unknown-tag': 'That tag is not a release this node can move to — choose one from the release list.',
+    'not-newer': 'That release is not newer than what that node runs, or than its floor after a rollback — use Roll back to move it there.',
+    'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
+    'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
+    'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
+    'no-detach-cap': 'That node cannot start a detached update yet — update it once from its own shell.',
+    'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+    'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
+    halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
+    'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
+    'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
   };
 
   it('has its sentence for every UpdateRouteError but unauthenticated', () => {
     const entries = Object.entries(SENTENCES);
-    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(12);
+    expect(entries, 'guards the guard — an empty census passes everything').toHaveLength(23);
     for (const [code, sentence] of entries) {
       expect(updateErrorText(asError(409, { ok: false, error: code })), code).toBe(sentence);
     }
@@ -1248,11 +1259,11 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
   });
 
   it('the five existing translators pass every update-only code through unchanged', () => {
-    // The ten words no other table owns. `not-configured` and `bad-request`
+    // The twenty-one words no other table owns. `not-configured` and `bad-request`
     // are excluded because they HAVE other owners — which is exactly why the
     // update table is read first rather than composed after apiErrorText.
     const updateOnly = Object.keys(SENTENCES).filter((c) => c !== 'not-configured' && c !== 'bad-request');
-    expect(updateOnly, 'guards the guard').toHaveLength(10);
+    expect(updateOnly, 'guards the guard').toHaveLength(21);
     for (const code of updateOnly) {
       expect(apiErrorText(asError(409, { ok: false, error: code })), code).toBe(code);
       expect(sendErrorText(code), code).toBe(code);

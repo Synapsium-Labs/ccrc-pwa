@@ -360,6 +360,17 @@ const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'>, st
   'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
   'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
   'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
+  'unknown-tag': 'That tag is not a release this node can move to — choose one from the release list.',
+  'not-newer': 'That release is not newer than what that node runs, or than its floor after a rollback — use Roll back to move it there.',
+  'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
+  'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
+  'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
+  'no-detach-cap': 'That node cannot start a detached update yet — update it once from its own shell.',
+  'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+  'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
+  halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
+  'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
+  'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
 };
 
 /** Operator-facing text for a failed update-route call: the code in

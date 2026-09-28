@@ -266,11 +266,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
-  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh` and `POST
-  /api/updates/ack` consult no box token. They are registered from `server/src/update/routes.ts`, a file neither
-  `SESSION_ONLY` nor the kickoff literal can see, so `box-token-census.test.ts` reads it as a lane source of its
-  own and keeps their names in a hand-kept `UPDATE_DOORS`, checked against that file in both directions (programme
-  wave 5, spec W4 part B, adds `apply` and `rollback` there with their routes).
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
+  /api/updates/ack`, `POST /api/updates/apply` and `POST /api/updates/rollback` consult no box token. They are
+  registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
+  `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
+  `UPDATE_DOORS`, checked against that file in both directions.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`
