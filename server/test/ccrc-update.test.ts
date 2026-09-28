@@ -8997,6 +8997,7 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
 describe('ccrc versions, and the GC that never removes a needed version (W6 Task 5)', () => {
   const REAL_READLINK = realPath('readlink');
   const REAL_STAT = realPath('stat');
+  const REAL_RM = realPath('rm');
   const lit = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const versionDirs = (home: string): string[] => readdirSync(join(home, 'ccrc-versions')).sort();
   const stopUnits = (home: string): void => writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
@@ -9340,6 +9341,62 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(p.code, p.stdout).toBe(0);
     expect(p.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/untagged-0123456789ab \(incomplete\)$/m);
     expect(versionDirs(home)).toEqual(['v1.0.2']);
+  });
+
+  // D-3460: the prune renames the version out of every reader's view in ONE
+  // rename, THEN deletes. The `rm` stub is planted in the replant directory
+  // (the seam `plantReadlinkFEmpty` and the `stat` shim use): for a path under
+  // ccrc-versions/ it deletes `server/node_modules` and exits 1 — a removal
+  // that dies part-way, in readdir order, with the kept record still standing.
+  it('a prune whose rm dies part-way leaves NO half-deleted version under a version name — it was renamed out of view first (D-3460)', () => {
+    const home = versionedBox('ccrc-versions-rm-dies-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    mkdirSync(join(home, 'ccrc-versions', 'v1.0.0', 'server', 'node_modules'), { recursive: true });
+    writeFileSync(join(home, 'ccrc-versions', 'v1.0.0', 'server', 'node_modules', 'x'), 'x\n');
+    writeFileSync(join(home, 'doctor-stubs', 'rm'),
+      '#!/bin/sh\n'
+      + 'for a in "$@"; do last="$a"; done\n'
+      + 'case "$last" in */ccrc-versions/*)\n'
+      + `  ${REAL_RM} -rf -- "$last/server/node_modules"; echo "rm: cannot remove '$last': fixture" >&2; exit 1 ;;\n`
+      + 'esac\n'
+      + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list; its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes$/m);
+    // not listed, and no directory under the version's own name
+    expect(r.stdout).not.toMatch(/^ {4}v1\.0\.0 /m);
+    const dirs = versionDirs(home);
+    expect(dirs.filter((d) => d === 'v1.0.0')).toEqual([]);
+    const husk = dirs.filter((d) => /^\.pruning-v1\.0\.0\.[0-9]+$/.test(d));
+    expect(husk, dirs.join(' ')).toHaveLength(1);
+    // the husk is what the stub left: node_modules gone, the kept record still there
+    expect(existsSync(join(home, 'ccrc-versions', husk[0]!, 'server', 'node_modules'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-versions', husk[0]!, '.ccrc-installed'))).toBe(true);
+    expect(dirs).toContain('v1.0.1');
+  });
+
+  it('the next prune finishes a leftover whose process is dead, and never touches one whose process is alive (D-3460)', () => {
+    const home = versionedBox('ccrc-versions-leftover-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    const DEAD = 999999;
+    expect(() => process.kill(DEAD, 0), 'the dead-pid fixture needs a pid nothing holds').toThrow();
+    const dead = `.pruning-v0.0.1.${DEAD}`;
+    const live = `.pruning-v0.0.1.${process.pid}`;
+    for (const d of [dead, live]) {
+      mkdirSync(join(home, 'ccrc-versions', d, 'server'), { recursive: true });
+      writeFileSync(join(home, 'ccrc-versions', d, '.ccrc-installed'), 'x\n');
+    }
+    // a list-only run never sweeps
+    const l = runVersions(home, [], { CCRC_VERSIONS_KEEP: '0' });
+    expect(l.code, l.stderr).toBe(0);
+    expect(versionDirs(home)).toContain(dead);
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`^versions: removed \\$HOME/ccrc-versions/${lit(dead)} \\(`, 'm'));
+    expect(r.stdout).not.toContain(live);
+    expect(versionDirs(home)).toEqual([live, 'v1.0.1']);
+    // and neither one was ever listed as a version
+    expect(r.stdout).not.toMatch(/^ {4}\.pruning/m);
   });
 
   it('--prune takes the update lock: a real holder refuses it at exit 1 and nothing is removed', () => {

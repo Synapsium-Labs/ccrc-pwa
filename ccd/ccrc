@@ -17391,7 +17391,7 @@ _ver_verdicts() {
 # incomplete versions.
 _ver_gc() {
   local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
-  local rc=0 lrc=0 prc=0 ncomp=0 npart=0
+  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 d b pid gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
   if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
     if [ "$mode" = auto ]; then
@@ -17435,6 +17435,23 @@ _ver_gc() {
     [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
     return 0
   fi
+  # LEFTOVERS FIRST (D-3460), on the path that is about to remove and never
+  # on a list-only run: a `.pruning-<name>.<pid>` directory is a version an
+  # earlier prune took out of view and did not finish deleting. One whose pid
+  # is dead is finished here. One whose pid is ALIVE is another GC's removal
+  # in flight, and is never touched.
+  for d in "$BOX_VERSIONS_ROOT"/.pruning-*; do
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    b="${d##*/}"; pid="${b##*.}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$pid" 2>/dev/null && continue
+    if rm -rf -- "$d"; then
+      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier prune left; its process is gone)"
+    else
+      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier prune left) — it is already out of the version list"
+      rc=1
+    fi
+  done
   for i in "${!VER_DOOMED[@]}"; do
     n="${VER_DOOMED[$i]}"
     # A belt over `pointed-at`: the link is read again at the moment of the
@@ -17445,10 +17462,26 @@ _ver_gc() {
       echo "$lead could not prune \$HOME/ccrc-versions/$n — \$HOME/ccrc points at it or could not be read; every version above it is intact"
       rc=1; continue
     fi
-    if rm -rf -- "$BOX_VERSIONS_ROOT/$n"; then
+    # THE VERSION LEAVES EVERY READER'S VIEW IN ONE RENAME, THEN IS DELETED
+    # (D-3460). `rm -rf` walks in readdir order, so one that fails or is killed
+    # part-way leaves a husk under a live version name that can still carry its
+    # kept stamp and install record: `_ver_list` calls it `complete`, `_ver_kept`
+    # (arm 1, a rollback by flip) can choose it, and `_inst_tree` skips
+    # `npm ci` on the strength of the record. The rename takes the name away
+    # first — a dot-name is never listed (VER_NAME_RE), never kept, and fails
+    # `_inst_tree`'s flip re-check — so a half-deleted tree is unreachable, and
+    # D-3456's window is back to the instant between the belt's read above and
+    # this rename, not the length of the delete. A removal that does not finish
+    # leaves `.pruning-<name>.<pid>`, which the next prune finishes (above).
+    gone="$BOX_VERSIONS_ROOT/.pruning-$n.$$"
+    if ! _plat_mv_notdir "$BOX_VERSIONS_ROOT/$n" "$gone"; then
+      echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
+      rc=1; continue
+    fi
+    if rm -rf -- "$gone"; then
       echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
     else
-      echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
+      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list; its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes"
       rc=1
     fi
   done
