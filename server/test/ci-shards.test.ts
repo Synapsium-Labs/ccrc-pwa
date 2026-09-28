@@ -82,8 +82,8 @@ describe('PROFILES', () => {
   it('matches the contract exactly', () => {
     expect(PROFILES).toEqual({
       linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
-      macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
-      macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
+      macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
+      macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
     });
   });
@@ -107,6 +107,7 @@ describe('planShards — durations known (LPT)', () => {
     };
     const plan = planShards(files, durations, PROFILES.linux);
     expect(plan).toHaveLength(3);
+    expect(plan.every((s) => s.workers === PROFILES.linux.workers)).toBe(true);
     const withHuge = plan.find((s) => s.files.includes('server/test/huge.test.ts'));
     expect(withHuge!.files).toEqual(['server/test/huge.test.ts']);
     expect(withHuge!.vitestShard).toBeNull();
@@ -206,6 +207,7 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
       expect(shard.total).toBe(3);
       expect(shard.files).toEqual(files);
       expect(shard.vitestShard).toBe(`${i + 1}/3`);
+      expect(shard.workers).toBe(profile.workers);
     }
   });
 
@@ -213,7 +215,7 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
     const files = ['server/test/a.test.ts'];
     const plan = planShards(files, null, PROFILES.linux);
     expect(plan).toEqual([
-      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1' },
+      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1', workers: 2 },
     ]);
   });
 });
@@ -221,13 +223,13 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
 describe('toMatrix', () => {
   it('converts repo-relative paths to server-relative, space-joined', () => {
     const plan = [
-      { index: 1, total: 2, files: ['server/test/a.test.ts', 'server/test/b.test.ts'], vitestShard: null },
-      { index: 2, total: 2, files: ['server/test/c.test.ts'], vitestShard: '2/2' },
+      { index: 1, total: 2, files: ['server/test/a.test.ts', 'server/test/b.test.ts'], vitestShard: null, workers: 2 },
+      { index: 2, total: 2, files: ['server/test/c.test.ts'], vitestShard: '2/2', workers: 7 },
     ];
     expect(toMatrix(plan)).toEqual({
       include: [
-        { shard: 1, total: 2, files: 'test/a.test.ts test/b.test.ts', vitest_shard: '' },
-        { shard: 2, total: 2, files: 'test/c.test.ts', vitest_shard: '2/2' },
+        { shard: 1, total: 2, files: 'test/a.test.ts test/b.test.ts', vitest_shard: '', workers: 2 },
+        { shard: 2, total: 2, files: 'test/c.test.ts', vitest_shard: '2/2', workers: 7 },
       ],
     });
   });

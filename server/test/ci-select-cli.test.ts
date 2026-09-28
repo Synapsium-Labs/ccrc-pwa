@@ -194,10 +194,15 @@ function uniqueFilesInMatrix(matrixJson: string): Set<string> {
   return set;
 }
 
-function expectValidMatrix(matrixJson: string): void {
+function expectValidMatrix(matrixJson: string, expectedWorkers: number): void {
   expect(matrixJson.includes('\n')).toBe(false);
-  const parsed = JSON.parse(matrixJson);
+  const parsed = JSON.parse(matrixJson) as { include: Array<{ workers: unknown }> };
   expect(Array.isArray(parsed.include)).toBe(true);
+  for (const row of parsed.include) {
+    expect(Number.isInteger(row.workers)).toBe(true);
+    expect(row.workers).toBeGreaterThan(0);
+    expect(row.workers).toBe(expectedWorkers);
+  }
 }
 
 describe('decideMode', () => {
@@ -281,8 +286,8 @@ describe('select.mjs CLI — pull_request', () => {
     expect(outputs.fallback).toBe('');
     expect(outputs.map_sha).toBe(baseSha);
 
-    expectValidMatrix(outputs.server_matrix);
-    expectValidMatrix(outputs.macos_matrix);
+    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.macos_matrix, 2);
     const files = uniqueFilesInMatrix(outputs.server_matrix);
     expect(files).toEqual(new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts']));
     expect(outputs.count).toBe('3');
@@ -600,6 +605,9 @@ describe('select.mjs CLI — schedule', () => {
     const all = new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts']);
     expect(uniqueFilesInMatrix(outputs.server_matrix)).toEqual(all);
     expect(uniqueFilesInMatrix(outputs.trace_matrix)).toEqual(all);
+    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.macos_matrix, 2);
+    expectValidMatrix(outputs.trace_matrix, 2);
     expect(outputs.count).toBe('4');
   });
 });

@@ -312,10 +312,11 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(step(job('trace-shard'), 'Keep the records')).toMatch(/^ {8}if: always\(\)$/m);
   });
 
-  it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
-    const t = runScript(step(job('trace-shard'), 'Trace'));
-    expect(t).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
-      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560\n');
+  it('a trace shard hands trace-run exactly its matrix row\'s files and worker count — no split of its own', () => {
+    const st = step(job('trace-shard'), 'Trace');
+    expect(st).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
+    expect(runScript(st)).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
+      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560\n');
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
@@ -642,12 +643,13 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // with `|| true` appended, with the run replaced by a no-op and the old line kept as a comment, and with
     // `continue-on-error: true` on the step (all three measured).
     const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
-    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}';
+    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"';
     expect(runScript(step(job('server-shard'), 'Test'))).toBe(
       `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
     expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
       const st = step(job(id), 'Test');
+      expect(st, `${id}: matrix workers reach the Test command`).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
       expect(st, `${id}: the Test step runs in server/`).toMatch(/^ {8}working-directory: server$/m);
       // A failed shard must fail its job: no continue-on-error (on the step or the job), and the runner's own
       // `bash -e` — no shell override on the step, and no `defaults:` on the job or the workflow.
