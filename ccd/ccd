@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1116476a32a510a3ac4996dbc5c3522f5f53ddf5fe02b34a4228d192fec2dd75
+# ccrc:generated 1 sha256=10aa335f1ac9ab3f6c3e79d887bc62346daaf8ed066efc0b6215eec3eccbfd03
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16238,9 +16238,16 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # affinity arm undoing it on the very next recovery.) The CROSSED home is
     # admitted, and only the crossed one: `_crosspool_valid` was asked about
     # `$home` specifically, so a marker written for `wrapper` cannot admit it.
+    #
+    # NEVER BACK TO AN AUTH-DEAD HOME (D-3522). A 401 writes no usage telemetry,
+    # so `_avail` passes a home whose credential is dead; the rescue that moved a
+    # session OFF it would move it straight back after SWAP_COOLDOWN, and a
+    # forced call would skip the candidate loop's rank-101 demotion by landing
+    # here first. `ccd-account-health` writes the marker on its own 401 and
+    # clears it on a live answer, so this holds exactly as long as it is true.
     if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
-      && _avail "$home"; then
+      && ! _authdead "$home" && _avail "$home"; then
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
       # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
@@ -16609,7 +16616,15 @@ _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is w
   grep -qiE "continuing automatically|continuing shortly" <<<"$1"
 }
 
-_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner and nobody is typing (D-2363)
+_pane_born() {   # id -> the epoch the session's tmux session was created, i.e. its current Claude Code process (D-3522); empty when tmux cannot say
+  # ccd creates a fresh tmux session on every spawn (`_spawn_start`'s
+  # `_tmux_new_session`, swap and revival alike), so this bounds the process
+  # that owns the pane. `session_created`, never `session_activity`, which moves
+  # on every redraw and would discard every row as "earlier".
+  tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null
+}
+
+_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing (D-2363, D-3522)
   # THE PANE FIRST, UNCHANGED. `_pane_hard_blocked` is the detector every landing,
   # rescue and strand verdict has run on since Wave 3 and it stays primary — its
   # contract (a visible banner swaps, draft or not) is not touched here. The
@@ -16619,6 +16634,12 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   #   - a banner whose TEXT the regex does not match and no "continuing
   #     automatically" line beside it — auto-resume off, its re-arm cap hit, a
   #     human's Esc. D-2364 records why the regex is NOT widened for that instead.
+  #   - (D-3522) a 2.1.280 banner the pane window cannot reach at all: every final
+  #     banner renders four rows above the prompt box. Rate limits were already
+  #     here; auth loss reached NO rung, so this arm reads the transcript in
+  #     `stuck` mode — a 401 written by THIS pane's process counts beside
+  #     `rate_limit` — rather than any pane reader being widened: `--resume`
+  #     re-renders old API-error rows, the very re-render D-2364 feared (measured).
   # Two stand-downs of its own:
   #   - a running turn ("esc to interrupt") cannot be sitting on a banner, and the
   #     fleet's busy steady state should not pay a transcript read every 5 s;
@@ -16647,7 +16668,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0 born
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -16690,7 +16711,8 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
         && $((now - scan_ts)) -lt "$TRANSCRIPT_ARM_INTERVAL" ]]; then
     verdict="$scan_verdict"
   else
-    if f=$(_transcript_path "$id") && _transcript_limit_banner "$f" >/dev/null; then
+    born=$(_pane_born "$id")
+    if f=$(_transcript_path "$id") && _transcript_limit_banner "$f" stuck "$born" >/dev/null; then
       verdict=1
     fi
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
@@ -16970,7 +16992,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
@@ -17457,6 +17479,21 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # signal, and it must survive that lane becoming placeable.
     _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
+    # A RESCUE OFF A DEAD CREDENTIAL MARKS IT (D-3522). `_swap_target`'s
+    # home-recovered arm refuses an auth-dead home, and the marker's only other
+    # writer, ccd-account-health, is systemd-only and silent for an account it
+    # cannot probe — so without this a session rescued off a 401 went back to
+    # it after SWAP_COOLDOWN. Re-measured, not read off the cached verdict: a
+    # FRESH stuck-mode scan must name the 401 this pane's process wrote. Never
+    # over a standing marker (the probe re-stamps its own; readers see a boolean).
+    # The probe clears it on a live answer; a clean spawn still clears it too.
+    if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" \
+       && authf=$(_transcript_path "$id") \
+       && [[ "$(_transcript_limit_banner "$authf" stuck "$(_pane_born "$id")" | cut -f3)" == authentication_failed ]]; then
+      authtmp=$(mktemp "$REG/$wrapper-authdead.tmp.XXXXXX") \
+        && printf '%s %s' "$now" rescue-401 > "$authtmp" && mv -f "$authtmp" "$REG/$wrapper-authdead" \
+        || rm -f "$authtmp"
+    fi
     _reg_set "$id" lastswap "$now"
     # `via=` NAMES THE DETECTOR THAT ACTUALLY FIRED (D-3101) — read off the
     # verdict rather than recomputed from a classifier that cannot see all three
@@ -20274,8 +20311,8 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     #
     # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
     # that came up on `$wrapper` is proof that account's credential
-    # authenticates — the second of the three owners §A.6 gives that marker,
-    # beside the probe's own 403 and an operator `rm`. Deliberately NOT the
+    # authenticates — a clearing owner beside the probe's own 403 and an operator
+    # `rm`; the probe's 401 and a rescue's (D-3522) write it. Deliberately NOT the
     # `cmd_start` shape one screen down, which clears `swapblocked` on the
     # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
     # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
@@ -20430,7 +20467,7 @@ _transcript_stalled_pair() {   # transcript-path -> 0 the newest real turn is th
   [[ "$state" -eq 2 ]]
 }
 
-_transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>") | 1 not | 2 unreadable (D-2362, D-2456)
+_transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the newest real row is a rate-limit banner (prints "<resetsAt>\t<rateLimitType>"; stuck mode's 401 prints "\t\tauthentication_failed") | 1 not | 2 unreadable (D-2362, D-2456)
   # STRUCTURAL, NOT TEXTUAL. The row Claude Code appends on a 429 carries
   # TOP-LEVEL `isApiErrorMessage:true` and `error:"rate_limit"` (measured
   # 2026-09-10: `quotaLimits:{status:"rejected",resetsAt:<epoch s>,
@@ -20442,12 +20479,40 @@ _transcript_limit_banner() {   # transcript-path -> 0 the newest real row is a r
   # banner means the session moved on (a re-drive, a human message, a new turn).
   # `-f && -r`, never `-r` alone — D-2347's class: `-r` is true for a FIFO and an
   # unbounded character device, and `tail` on either blocks for ever (D-2370).
-  local f="$1" rows rc
+  # `stuck` MODE (D-3522) also answers 0 for AUTH LOSS: `error:
+  # "authentication_failed"` with `apiErrorStatus` 401 ("Invalid API key",
+  # "Please run /login" — measured on 2.1.280 with the same envelope; it prints
+  # empty fields, carrying no `quotaLimits`). Two narrowings, each a measured
+  # loop: 403 is out, because 2.1.280 files a model-permission refusal under the
+  # same `error`, and a swap cannot grant a model; and the row must be written
+  # at or after `since-epoch` — the pane's tmux `session_created`, i.e. by THIS
+  # process. A swap carries the transcript, and Claude Code will not re-drive a
+  # turn whose error is over six hours old, so without the gate the old
+  # account's 401 stays the newest real row on the new account and swaps a
+  # healthy session every SWAP_COOLDOWN. No `since`, or an unreadable timestamp,
+  # and the row does not count. `billing_error` and `server_error` stay out.
+  # The default mode is unchanged.
+  local f="$1" mode="${2:-}" since="${3:-}" rows rc
   [[ -f "$f" && -r "$f" ]] || return 2
   rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
   command -v python3 >/dev/null 2>&1 || return 2
   printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
 import json, sys
+from datetime import datetime
+
+stuck = sys.argv[1:2] == ["stuck"]
+since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
+
+
+def born(row):
+    ts = row.get("timestamp")
+    if since is None or not isinstance(ts, str):
+        return False
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() >= since
+    except ValueError:
+        return False
+
 
 found = None
 for raw in sys.stdin:
@@ -20466,6 +20531,10 @@ for raw in sys.stdin:
     if row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "rate_limit":
         found = row
         continue
+    if stuck and row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "authentication_failed" \
+            and row.get("apiErrorStatus") == 401 and born(row):
+        found = row
+        continue
     chatter = row.get("type") == "user" and isinstance(content, str) and content.startswith(
         ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
     )
@@ -20475,13 +20544,16 @@ for raw in sys.stdin:
 
 if found is None:
     raise SystemExit(1)
+if found.get("error") == "authentication_failed":
+    print("\t\tauthentication_failed")
+    raise SystemExit(0)
 quota = found.get("quotaLimits")
 quota = quota if isinstance(quota, dict) else {}
 reset = quota.get("resetsAt")
 kind = quota.get("rateLimitType")
 reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
 print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
-' 2>/dev/null
+' "$mode" "$since" 2>/dev/null
   rc=$?
   [[ "$rc" -le 1 ]] && return "$rc"
   return 2

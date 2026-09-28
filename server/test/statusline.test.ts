@@ -399,4 +399,59 @@ describe('parseStatusline: workflowActive is the footer\'s Workflow row', () => 
     // The same capture's top border is 2.1.280's real ultracode title.
     expect(s.ultracode).toBe(true);
   });
+
+  // A FINISHED Workflow's row stays mounted for ~30 s after the run ends, with
+  // the same glyph and shape as a running one; only its count has caught up
+  // (`3/3`, or `2/3 agents done · 1 failed` — 2.1.280 counts a failed agent
+  // apart from the done ones, and its own "complete" is done + failed ≥ total),
+  // and its clock stops. Read as running, it held the orchestrator's card `busy`
+  // — and the "turn finished" push back — for that half minute.
+  //
+  // Real 2.1.280 rows (private tmux, mock API), each under its real footer.
+  // Sampled every ~100 ms through a three-phase workflow, each phase's new
+  // agents were counted on the repaint that finished the last (0/1 → 1/3,
+  // 2/3 → 3/4). NOT ALWAYS: a script that awaits a timer between agents, or
+  // worktree-isolated agents being torn down, reads N/N with its clock running
+  // (measured by review), so the count alone can call a running workflow
+  // finished. On 2.1.277–2.1.280 that is masked — Claude Code's own live status
+  // reads busy while any workflow runs, and fleet.ts consults this row only for
+  // an idle session — and it bites only where that status is unreadable. It
+  // read `0/0` for one sample at launch.
+  const footer = (row: string) => [
+    '─'.repeat(220), '❯ ', '─'.repeat(220),
+    '  👤 cfg │ 🤖 Opus 5.5 (1M context) · medium │ ⎇ ws/rig-branch │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0376',
+    '  ⏸ manual mode on · ← for agents',
+    row,
+  ].join('\n');
+  const DONE_3 = '  ◯ triage  Rig probe workflow' + ' '.repeat(146) + '3/3 agents done · 1m 15s · ↓ 3.6k tokens';
+  const DONE_4 = '  ◯ twophase  Phase probe' + ' '.repeat(151) + '4/4 agents done · 16s · ↓ 4.8k tokens';
+  const FAIL_ROW = (count: string) => '  ◯ rv5fail  Fail probe' + ' '.repeat(148) + count;
+
+  it('does not read a finished Workflow\'s lingering row as running', () => {
+    expect(parseStatusline(footer(DONE_3)).workflowActive).toBe(false);
+    expect(parseStatusline(footer(DONE_4)).workflowActive).toBe(false);
+  });
+
+  it('counts a failed agent as finished: 2 done + 1 failed of 3 is a finished run', () => {
+    expect(parseStatusline(footer(FAIL_ROW('2/3 agents done · 1 failed · 6s · ↓ 2.4k tokens'))).workflowActive).toBe(false);
+  });
+
+  it('still reads a run with a failure but agents left as running', () => {
+    expect(parseStatusline(footer(FAIL_ROW('1/3 agents done · 1 failed · 5s · ↓ 1.2k tokens'))).workflowActive).toBe(true);
+  });
+
+  it('still reads every mid-run count as running, across phase changes', () => {
+    for (const count of ['0/1 agents done · 0s', '1/3 agents done · 5s · ↓ 1.2k tokens', '2/3 agents done · 9s · ↓ 2.4k tokens', '3/4 agents done · 11s · ↓ 3.6k tokens']) {
+      expect([count, parseStatusline(footer('  ◯ twophase  Phase probe' + ' '.repeat(151) + count)).workflowActive]).toEqual([count, true]);
+    }
+  });
+
+  it('reads a 0/0 row as running — the launch row; a run that died before its first agent is indistinguishable, a known limit', () => {
+    expect(parseStatusline(footer('  ◯ twophase  Phase probe' + ' '.repeat(151) + '0/0 agents done · 0s')).workflowActive).toBe(true);
+  });
+
+  it('reads a running row beside a finished one as running', () => {
+    const both = footer(DONE_3) + '\n  ◯ twophase  Phase probe' + ' '.repeat(151) + '1/3 agents done · 5s';
+    expect(parseStatusline(both).workflowActive).toBe(true);
+  });
 });

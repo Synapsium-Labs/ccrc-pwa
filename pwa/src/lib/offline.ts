@@ -68,7 +68,8 @@ function isRosterWireLike(v: unknown): v is RosterWire {
  *    genuinely empty fleet — and while `watch.ts`'s tick path now refuses to
  *    broadcast that shape (it takes `readRegistryMeasured` and returns before
  *    `bus.emit('fleet', …)`), TWO producers still ship it: `server.ts`'s
- *    `GET /api/fleet` fallback and the connect-time `/ws/fleet` push both
+ *    `GET /api/fleet` fallback and a connect-time `/ws/fleet` push made before
+ *    the watcher's first broadcast (after it, the push IS that broadcast) both
  *    call `assembleFleet` fresh and take `readRegistry`'s `[]`-on-unlistable
  *    answer — plus any older server predating the ladder (the same
  *    FLEET_PROTO-stays-1 skew the `unmeasured` revival tolerates). So this
