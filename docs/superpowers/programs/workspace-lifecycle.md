@@ -34,7 +34,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   independent reviewers (spec fidelity, correctness and tests, executability and merges) found no blocker; every
   finding was applied, and the mutation table grew to 72 rows, 71 red and one (a double-tap guard jsdom cannot
   reach) recorded as unpinnable. The spec's §5.1 and §9 were corrected the same day to say what the plan builds
-  (`lastRunBySession(sessionIds)`, the `ChildMark` words, the instrument on the server box alone).
+  (`lastRunBySession(sessionIds)`, the `ChildMark` words, the instrument on the server box alone). The operator
+  approved the plan on 2026-09-28.
 - **Execution: coordinator dispatch** (the operator's 2026-09-24 ruling for these programmes). One coordinator per
   programme, created by the operator from its ticket; each wave goes to a fresh worker workspace running
   subagent-driven development, a review run reads the worker's branch, and the coordinator rules and merges. The
