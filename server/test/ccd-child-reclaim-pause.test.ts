@@ -9,7 +9,9 @@
 // The one case with no coord-pause twin is the LAST one: a switch is only a
 // switch if the verb that deletes reads it. Wave 3's `ws-reclaim` reads this
 // file at its rung 3 and again on resume; the scan below holds the writer's
-// path and the reader's path to one spelling, so neither can move alone.
+// path to one spelling, and a second assertion holds the exact reader
+// expression to that same spelling inside EACH of wave 3's two eval
+// functions, so neither the writer nor either reader can move alone.
 //
 // Everything runs against the isolated fixture HOME (`makeCcdHarness`), never
 // the live one: `$REG` is `$HOME/.cc-sessions`, so a test that wrote the real
@@ -196,5 +198,26 @@ describe('ccd reclaim-pause', () => {
     expect(inside.length, 'the writer names the path exactly once').toBe(1);
     expect(outside.length, "ws-reclaim's reader (wave 3) — a switch no deleting verb reads is wired to nothing")
       .toBeGreaterThanOrEqual(1);
+    // The scan above is satisfied by a REFUSAL MESSAGE
+    // (`_reap_refuse paused "… ($REG/reclaim-paused)"`), not by a reader — a
+    // mistyped TEST expression with its message left alone still names the
+    // path once outside the writer, so `outside` stays >= 1. Pin the reader
+    // side separately: the exact expression both readers use,
+    // `[[ ! -e "$REG/reclaim-paused" ]]`, must appear inside EACH of wave 3's
+    // two eval functions — the fresh arm (`_ws_reclaim_eval`, its rung 3) and
+    // the resume arm (`_ws_reclaim_resume_eval`) — sliced by their own
+    // `name() {` … `^}`, so mistyping either reader's path reds this suite on
+    // its own function, independently of the other and of the writer.
+    const READER = /\[\[ ! -e "\$REG\/reclaim-paused" \]\]/;
+    const sliceFn = (name: string): string[] => {
+      const fnStart = src.findIndex((l) => l.startsWith(`${name}() {`));
+      expect(fnStart, `${name} is not defined at column 0`).toBeGreaterThan(-1);
+      const fnEnd = src.findIndex((l, i) => i > fnStart && l === '}');
+      expect(fnEnd, `${name} has no closing brace at column 0`).toBeGreaterThan(fnStart);
+      return src.slice(fnStart, fnEnd + 1);
+    };
+    for (const name of ['_ws_reclaim_eval', '_ws_reclaim_resume_eval']) {
+      expect(sliceFn(name).some((l) => READER.test(l)), `${name} does not read $REG/reclaim-paused`).toBe(true);
+    }
   });
 });

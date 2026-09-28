@@ -9143,8 +9143,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // at this same key — two distinct sites sharing one anchor). Neither
         // corpus document changed (byte-identical to `origin/main` at this
         // tree, measured), so nothing was re-pointed. A coincidental fail is
-        // not new rot; Task 11 still owns the re-anchor. S6-R11 covers the
-        // re-measurement, so no D-number.
+        // not new rot; the compaction-card plan's Task 11 still owns the
+        // re-anchor. S6-R11 covers the re-measurement, so no deviation number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9314,7 +9314,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // above — `cmd_caps`'s two bare lines, the task's only insertion above
       // the corpus's highest anchor — sliding a different `ccd/ccd` line under
       // this row's second `:13573-13575` site so it now also appears here.
-      // Neither corpus document changed. S6-R11, no D-number.
+      // Neither corpus document changed. S6-R11, no deviation number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
