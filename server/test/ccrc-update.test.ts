@@ -8136,7 +8136,7 @@ function onKeptV1(prefix: string): string {
   const v1 = join(home, 'ccrc-versions', 'v1.0.0');
   expect(linkOf(home), 'the first move did not leave ~/ccrc pointing at v1.0.0').toBe(v1);
   expect(existsSync(join(v1, '.ccrc-installed')), 'v1.0.0 was placed but not kept complete').toBe(true);
-  appendFileSync(join(v1, 'ccd', 'ccd'), CCD_SENTINEL);
+  appendFileSync(join(v1, 'ccd/ccd'), CCD_SENTINEL);
   for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls']) rmSync(join(home, f), { force: true });
   return home;
 }
@@ -8188,7 +8188,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
     expect(fileText(join(v1, '.ccrc-stamp.json')), 'the kept stamp was rewritten').toBe(keptStamp);
     expect(fileText(join(v1, '.ccrc-installed')), 'the kept record was rewritten').toBe(keptRec);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd', 'ccd')));
+    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
     // A return is not a new baseline, and the floor never lowers.
     expect(fileText(join(home, '.ccrc', 'previous'))).toBe(`v1.0.0\n${V1_SHA}\n`);
@@ -8581,7 +8581,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
     expect(localUrls(home)).toEqual([]);
     expect(linkOf(home)).toBe(v1);
-    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd', 'ccd')));
+    expect(fileText(join(home, '.local', 'bin', 'ccd'))).toBe(fileText(join(v1, 'ccd/ccd')));
     expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
     expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
@@ -8655,7 +8655,7 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     expect(existsSync(join(v1, 'server', 'WROTE-BY-OLD-SPINE'))).toBe(true);
     expect(fileText(join(home, 'old-spine-saw-record'))).toBe('absent\n');
     // The copy began as v2.0.0's tree…
-    expect(fileText(join(v1, 'ccd', 'ccd'))).toBe(fileText(join(cur, 'ccd', 'ccd')));
+    expect(fileText(join(v1, 'ccd/ccd'))).toBe(fileText(join(cur, 'ccd/ccd')));
     // …and is now v1.0.0's, kept complete by cmd_update after that spine.
     expect(fileText(join(v1, '.ccrc-stamp.json'))).toBe(fileText(join(home, '.ccrc', 'build.json')));
     expect(fileText(join(v1, '.ccrc-installed'))).toBe(`${NEW_SHA}\n`);

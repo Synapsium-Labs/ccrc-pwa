@@ -1210,9 +1210,10 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 #   W4 — update-json (`_upd_phase` reports every phase, and `--from` is
 #        accepted), update-gate (`_upd_gate`, exit 4, `--no-gate`), rollback
 #        (`ccrc rollback`); and, Linux only, detach — below.
+#   W6 — versions (a kept version is a flip: `_upd_restore_arm1`, `_ver_flip_back`).
 # ccrc-install.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -1881,7 +1882,9 @@ already running).
             preflight. A rollback whose gate fails is NOT restored — its
             target was the known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
-            [--from <who>] names the caller (${UPD_FROM_WORDS[*]})
+            [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
+            A version kept under ~/ccrc-versions is rolled back to by a
+            flip of ~/ccrc and its own spine, with no download.
   channel   print this box's update channel as the control plane projects
             it (~/.ccrc/update-intent): one line (state, channel, desired,
             desired-stable, desired-dev, auto), then what 'ccrc update'
@@ -12813,6 +12816,19 @@ cmd_update() {
   # report; before the preflight, the old-identity read and `_upd_phase
   # resolving`, none of which needs the tree.
   _inst_migrate_resume update
+  # D-3429 (W6 Task 4, amending Task 2's): a $HOME/ccrc
+  # this ccrc did not make is refused HERE — before the old-identity read,
+  # the backup and any download — and not left to the staged spine. That
+  # spine's own `_inst_tree` refusal dies AT `_inst_tree`, which
+  # `_upd_step_moved` reads as moved: the gate would fail on the version and
+  # the restore arms would run over the foreign link (arm 2's child is
+  # whatever `ccd/ccrc` it names, an older spine rsyncs `--delete` through
+  # it, arm 3 copies through it). `crashed` was completed on the line above.
+  _ver_layout
+  case "$VER_LAYOUT" in
+    foreign|unreadable)
+      _ccrc_die "update: \$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; nothing was downloaded or installed, and \$HOME/ccrc and \$HOME/ccrc-versions were not touched" ;;
+  esac
 
   # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
   # missing tool three steps in would arrive as that step "failing", and two
@@ -12968,6 +12984,27 @@ cmd_update() {
   # it could not read.
   UPD_PREV_UNSIGNED=0
   _upd_marker_unsigned && UPD_PREV_UNSIGNED=1
+  # D-3440 (W6 Task 4): a staged spine older
+  # than versioned installs rsyncs `--delete` into $HOME/ccrc — through the
+  # link, into the version this run is replacing. Hand it a directory named
+  # for its own tag first. A same-name reinstall writes in place
+  # (D-3426). Here, BEFORE the record, the step
+  # marker and the caps are cleared, so a refusal leaves all three as they were.
+  #   D-3459: `legacy_from` records that the flip happened and from where —
+  # the version `~/ccrc` named before it (equal to `pre_current` above: no
+  # layout change lies between the two reads) — so the moved=0 arm below can
+  # flip back when that spine dies without replacing anything.
+  local legacy_from=""
+  _ver_layout
+  if ! grep -q '^BOX_VERSIONS_ROOT=' "$UPD_TREE/ccd/ccrc" 2>/dev/null; then
+    case "$VER_LAYOUT" in
+      linked|migrated)
+        if [ "$VER_CURRENT" != "$UPD_VERSION" ]; then
+          _upd_legacy_target "$UPD_VERSION"
+          legacy_from="$VER_CURRENT"
+        fi ;;
+    esac
+  fi
   # The completed-install record is written LAST by the spine (`_inst_installed`).
   # Cleared here, right before the staged install, its presence afterwards
   # means ONE thing — this run's spine ran to its end — which is what tells a
@@ -13108,11 +13145,33 @@ cmd_update() {
         # gone, and a later die on this path is a `failed` report like any other.
         UPD_SPINE_DIED="$step_desc"
       else
+        # D-3459: `_upd_legacy_target` pointed ~/ccrc at the older spine's own
+        # directory BEFORE it ran, and that spine replaced nothing — so the
+        # link goes back to the version it named, or the next restart runs a
+        # voided older version (or a copy) under the unchanged stamp. Right
+        # for every moved=0 shape: D-3440 guarantees the version this run
+        # replaces was never written. The directory named for the older tag
+        # stays (GC reads it incomplete). The moved=1 path is the gate's and
+        # the restore arms', unchanged.
+        if [ -n "$legacy_from" ]; then
+          if _plat_ln_swap "$BOX_VERSIONS_ROOT/$legacy_from" "$BOX_TREE_DIR"; then
+            place="$place; \$HOME/ccrc points back at \$HOME/ccrc-versions/$legacy_from"
+          else
+            place="$place; \$HOME/ccrc still points at \$HOME/ccrc-versions/$UPD_VERSION, and flipping it back to $legacy_from failed"
+          fi
+        fi
         UPD_REPORTING=0
         _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
       fi
     fi
   fi
+
+  # D-3428 (W6 Task 4): the version $HOME/ccrc points
+  # at keeps the stamp and record this spine wrote — idempotent after a W6
+  # spine's own `_inst_installed`, and the ONLY writer of them for a spine
+  # older than W6. Silent unless the record is present (a completed spine,
+  # or D-3114's doctor-FAIL arm); a spine that died wrote none.
+  _ver_keep_state update
 
   # ── THE HEALTH GATE (design §11) ─────────────────────────────────────────
   # The staged spine restarted the role's unit onto the new tree (and ran its
@@ -13388,15 +13447,52 @@ cmd_rollback() {
   fi
   command -v curl >/dev/null 2>&1 \
     || _ccrc_die "curl is required by 'ccrc rollback' but is not on PATH — nothing on this box was changed"
-  _upd_asset_listed "$to" SHA256SUMS || erc=$?
-  case "$erc" in
-    0) ;;
-    1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
-       [ "$UPD_REPORTING" = 1 ] \
-         && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
-       exit 2 ;;
-    *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+  # D-3442 (W6 Task 4): a COMPLETE kept
+  # version answers the existence question itself — the tag was installed,
+  # and completed, on this box — so the release host is not asked and
+  # nothing is downloaded. The role is read as `cmd_update` reads it. Any
+  # other tag asks, exactly as before (D-3244). A $HOME/ccrc this ccrc did
+  # not make is refused here, before the release host is asked and before
+  # `--detach` hands the run on — and before the lock is taken, except for
+  # a non-`cli` run without `--detach`, which took it above (D-3429 as
+  # amended; `cmd_update` refuses it too, for the re-install arm).
+  local role="" kept=0 frc=0 now=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  # W6 Task 3 (D-3437, applied here): a
+  # crashed migration reads `crashed` — neither `linked` nor `migrated` — so
+  # a kept tag would read as NOT kept, and the rollback would ask the release
+  # host and download. It is completed first, before the kept check and so
+  # before `--detach`'s hand-off to the shim, which cannot run with no
+  # ~/ccrc — but only when this process already holds the lock, or the lock
+  # probe answers FREE: a lock held elsewhere is an
+  # update that owns the link (its own resumes complete it), and every other
+  # probe answer is refused below, in its own words, by `_upd_lock` or
+  # `_upd_detach` (ruling R16), so nothing is folded here.
+  _ver_layout
+  if [ "$VER_LAYOUT" = crashed ] && { [ -n "$UPD_LOCK_FD" ] || _upd_lock_probe; }; then
+    _inst_migrate_resume rollback
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) _ver_kept "$to" "$role" && kept=1 ;;
+    foreign|unreadable) _ccrc_die "rollback: \$HOME/ccrc is $VER_WHY — refusing to place or flip a tree over something this ccrc did not make; nothing on this box was changed" ;;
   esac
+  if [ "$kept" -eq 1 ]; then
+    echo "rollback: $to is kept at \$HOME/ccrc-versions/$to — no release-host question and no download"
+  else
+    _upd_asset_listed "$to" SHA256SUMS || erc=$?
+    case "$erc" in
+      0) ;;
+      1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
+         [ "$UPD_REPORTING" = 1 ] \
+           && _upd_phase failed "rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed"
+         exit 2 ;;
+      *) _ccrc_die "rollback: could not ask the release host whether $to exists within ${CCRC_RELEASE_PROBE_MAX_TIME}s (curl failed, timed out, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+    esac
+  fi
   # RESET: this scope's own reporting window closes here. `cmd_update`'s own
   # argument-refusal block (D-3257, item 10, the tool preflight — all
   # reached below, whether through `--detach` or straight through) is
@@ -13415,6 +13511,61 @@ cmd_rollback() {
   _upd_lock
   local run_from=rollback
   [ "$from" = watchdog ] && run_from=watchdog
+  if [ "$kept" -eq 1 ]; then
+    # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
+    # the gate, then _upd_sweep"; "rollback after W5 is arm 1"). Re-measured
+    # under this verb's own lock. A box already on the tag whose install
+    # completed has nothing to do. Otherwise `_ver_flip_back` points ~/ccrc
+    # at the kept version and runs its own spine, then the gate, then the
+    # sweep behind its KillMode=process preflight: a PRIOR update's sweep
+    # moved the supervisors onto the build this replaces. `previous` is never
+    # rewritten; the floor never lowers. A flip that changed nothing falls
+    # through to update's own re-install below.
+    if _box_build_fields; then now="${BOX_BUILD[4]}"; fi
+    _ver_layout
+    if [ "$VER_CURRENT" = "$to" ] && [ "$now" = "$to" ] && cmp -s -- "$BOX_INSTALLED_FILE" "$BOX_VERSIONS_ROOT/$to/$VER_RECORD_COPY"; then
+      echo "rollback: this box already runs $to (\$HOME/ccrc points at \$HOME/ccrc-versions/$to and its install completed) — nothing to do"
+      # Wave 4's re-review clause on its own rollback pre-check: only a
+      # hand-typed run may end without a terminal report (a watchdog or
+      # detached caller waits on one).
+      if [ "$from" != cli ]; then UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; _upd_phase done "already converged at $to"; fi
+      _upd_unlock
+      return 0
+    fi
+    UPD_FROM="$run_from"
+    UPD_VERSION="$to"
+    UPD_REPORT_TARGET="$to"
+    UPD_REPORTING=1
+    _inst_migrate_resume update
+    _upd_phase installing "rollback by flip to $to"
+    echo "rollback: returning this box to $to (named by $via; asked by --from $from) — a flip of \$HOME/ccrc to its kept version and its own spine, as --from $run_from: below the floor if need be, and the floor itself is never lowered"
+    _ver_flip_back "$to" "$role" rollback || frc=$?
+    case "$frc" in
+      0)
+        # D-3243 on this path too: a failed gate is not restored.
+        _upd_gate "$role" "$to" || _upd_rollback_no_restore "gate: $UPD_GATE_WHY"
+        _inst_migrate_finish rollback "the health gate passed"
+        _upd_phase restarting
+        _upd_unlock
+        _upd_sweep
+        if _upd_report_is_mine; then _upd_phase done "rolled back by flip to $to"; else echo "rollback: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep"; fi
+        echo "rollback: this box runs $to again — flipped back to \$HOME/ccrc-versions/$to, no download"
+        return 0 ;;
+      1)
+        # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
+        # path has already written a non-terminal `installing "rollback by
+        # flip …"` phase, so a refusal inside the in-process `cmd_update`
+        # below must close that report with a terminal `failed`. Resetting to
+        # 0 would leave `installing` as the last phase, which a watchdog or a
+        # detached caller waiting on a terminal report reads as an updater
+        # that died.
+        echo "rollback: $to could not be flipped to ($VER_WHY) — rolling back by re-install instead" ;;
+      *)
+        _upd_phase failed "rollback to $to: the kept spine did not complete; $VER_WHY"
+        UPD_REPORTING=0
+        _ccrc_die "rollback: \$HOME/ccrc points at \$HOME/ccrc-versions/$to, but its own spine did not complete ($VER_WHY) — read its lines above; 'ccrc update --check' says where this box stands" ;;
+    esac
+  fi
   # Asked BEFORE `cmd_update` removes the record (it clears it right before
   # the staged spine), through Task 6's one reader of the record's line 2. An
   # absent or one-line record reads verified: the safe direction, because it
@@ -15613,10 +15764,11 @@ _upd_asset_listed() {
 }
 
 # ── _upd_restore <role> <reason> <old_version> <old_sha> <old_completed> ──
-# a failed gate returns the box (design 2026-09-20 §11). Arm 1 (a kept
-# version directory) is wave 6's; this wave has arm 2 — re-install the
-# release that was running, as a synchronous child under THIS run's lock —
-# falling to arm 3 — copy this run's backup back. Returns 0; the caller
+# a failed gate returns the box (design 2026-09-20 §11). Arm 1 — flip
+# ~/ccrc back to the previous tag's kept version and re-run its own spine,
+# no download (W6 Task 4) — falling to arm 2 — re-install the release that
+# was running, as a synchronous child under THIS run's lock — falling to
+# arm 3 — copy this run's backup back. Returns 0; the caller
 # exits 4. NO SWEEP: the gate failed before this run's `_upd_sweep` ever
 # fired, so the supervisors never left the build a restore returns to.
 # Called from the main shell only: arm 2's child proves its lock exemption
@@ -15631,6 +15783,7 @@ _upd_restore() {
   local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}" old_completed="${5:-0}"
   _upd_phase restoring "$reason"
   echo "update: RESTORING — $reason; returning this box to the build it ran before this update (no supervisor sweep: they never moved in this run)"
+  _upd_restore_arm1 "$role" "$reason" "$old_version" "$old_completed" && return 0
   _upd_restore_arm2 "$reason" "$old_version" "$old_completed" && return 0
   # Fix round 2, F1 (review 167): `old_completed` now reaches arm 3 too — it
   # never did before this round, which is exactly F1's defect (arm 3's
@@ -15807,6 +15960,20 @@ _upd_restore_arm3() {
     echo "update: arm 3: could not remove the completed-install record — this box may still read as converged on the build being backed out"
     unrec=" (the completed-install record could not be removed)"
   fi
+  # D-3441 (W6 Task 4): the copy below lands
+  # through the link, in the version ~/ccrc points at — which then holds a
+  # MIXED tree. Voided FIRST, as the record above is (D-3260): no later flip
+  # returns to it, and GC reads it incomplete.
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      if rm -f -- "$BOX_TREE_DIR/$VER_RECORD_COPY" 2>/dev/null; then
+        echo "update: arm 3: \$HOME/ccrc-versions/$VER_CURRENT is where the copy lands, so it will hold a MIXED tree — its kept install record is removed first, so no flip returns to it"
+      else
+        echo "update: arm 3: could not remove \$HOME/ccrc-versions/$VER_CURRENT's kept install record — a later flip could return to a MIXED tree"
+        unrec="$unrec (the kept install record of $VER_CURRENT could not be removed)"
+      fi ;;
+  esac
   echo "update: arm 3: copying this run's pre-update backup ($(_upd_redact "$UPD_BACKUP_DIR")) back over the install"
   while IFS=$'\t' read -r class src name; do
     [ "$class" = tree ] || continue
@@ -15894,6 +16061,277 @@ _upd_restore_arm3() {
     echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED AND $missing path(s) are MISSING (read the arm 3 lines above for where); the remedy is deploy.sh. Best effort."
     _upd_phase reverted "arm3: tree MIXED with $missing path(s) MISSING, deploy.sh is the remedy$note; $reason"
   fi
+}
+
+# ── W6 Task 4: a kept version, and the flip back to it ─────────────────────
+# `_ver_kept <name> <role>` — can a flip return to ~/ccrc-versions/<name>?
+# rc 0 complete; rc 1 absent (no REAL directory of that name — a symlink
+# there is nothing this ccrc placed); rc 2 incomplete, VER_WHY naming the
+# first missing piece. "Complete" is the placement's own evidence, never a
+# guess: the tree's `ccd/ccrc` (the spine a flip runs), the role's build
+# (what its unit starts), and the two copies `_ver_keep_state` writes when
+# an install of it COMPLETED — the record last, so its presence is the mark.
+# A tag-shaped name must also be what its kept stamp says, or a flip would
+# restore one build's stamp over another's tree. An empty role reads `both`,
+# the staged spine's own default. Prints nothing.
+_ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete (VER_WHY)
+  local name="$1" role="${2:-both}" vdir="$BOX_VERSIONS_ROOT/$1" v=""
+  local -a saved=()
+  VER_WHY=""
+  if [ -L "$vdir" ] || [ ! -d "$vdir" ]; then
+    VER_WHY="no kept version $name under \$HOME/ccrc-versions"
+    return 1
+  fi
+  [ -f "$vdir/ccd/ccrc" ] || { VER_WHY="no ccd/ccrc"; return 2; }
+  if [ "$role" = fleet ]; then
+    [ -f "$vdir/agent/dist/agent/src/index.js" ] || { VER_WHY="no agent build"; return 2; }
+  else
+    [ -f "$vdir/server/dist/server/src/index.js" ] || { VER_WHY="no server build"; return 2; }
+  fi
+  [ -f "$vdir/$VER_STAMP_COPY" ] || { VER_WHY="no kept stamp"; return 2; }
+  [ -f "$vdir/$VER_RECORD_COPY" ] || { VER_WHY="no kept install record"; return 2; }
+  # The one stamp parser, pointed at the kept copy — `_upd_converged`'s
+  # save-and-restore, so the caller keeps the box's own fields.
+  saved=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  if ! _box_build_fields "$vdir/$VER_STAMP_COPY"; then
+    BOX_BUILD=(${saved[@]+"${saved[@]}"})
+    VER_WHY="its kept stamp does not parse"
+    return 2
+  fi
+  v="${BOX_BUILD[4]}"
+  BOX_BUILD=(${saved[@]+"${saved[@]}"})
+  if [[ "$name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ "$v" != "$name" ]; then
+    VER_WHY="its kept stamp reads ${v:-an unversioned build}, not $name"
+    return 2
+  fi
+  return 0
+}
+
+# `_ver_can_flip` — can this box make the $HOME/ccrc flip? (W6 Task 4,
+# D-3419 as amended). `_plat_ln_swap`'s Darwin arm is
+# python3's os.replace, and `cmd_install`'s Darwin preflight names python3
+# for every spine. Two flips run in the `cmd_update`/`cmd_rollback` PARENT,
+# where no spine preflight has run — `_ver_flip_back`'s and
+# `_upd_legacy_target`'s — and each asks this first, so a missing python3 is
+# named before anything moves instead of surfacing as "the one rename
+# failed". Not a verb-level probe: a Darwin `ccrc update` that flips nothing
+# (a `directory` box moving to an older spine, or `--check`) needs no
+# python3. Builtins only, so it answers on any PATH.
+_ver_can_flip() {   # -> 0 can flip; 1 cannot (VER_WHY)
+  VER_WHY=""
+  if [ "$CCD_OS" = darwin ] && ! command -v python3 >/dev/null 2>&1; then
+    VER_WHY="python3 is not on PATH — on macOS the \$HOME/ccrc flip is one rename(2) through os.replace; install the Xcode Command Line Tools: xcode-select --install"
+    return 1
+  fi
+  return 0
+}
+
+# `_ver_flip_back <name> <role> <prefix>` (D-3439)
+# — point ~/ccrc at the kept version (ONE rename, `_plat_ln_swap`), restore
+# its kept stamp, clear the record, and run THAT version's own `ccrc
+# install` from the flipped tree: it re-places what the tree feeds outside
+# itself (`~/.local/bin/ccd` and the other executables, the session hooks,
+# the units), and its `_inst_enable` is the restart. rc 0: flipped, and its
+# spine COMPLETED — the record it writes last is present; a trailing doctor
+# FAIL with the record written is a completed spine (D-3114's reading).
+# rc 1: nothing changed (VER_WHY). rc 2: flipped, but the spine did not
+# complete (VER_WHY) — ~/ccrc stays on <name> and the box reads
+# `incomplete`, which is true.
+#   The STAMP is restored for a spine too old to stamp from its kept copy
+# (`_inst_stamp_shipped`'s fallback is this wave's). The RECORD is cleared,
+# never restored: a record written before the spine would make "present
+# afterwards" true for a spine that never ran — `cmd_update`'s own rule for
+# its staged spine. The spine writes it back, byte-equal to the kept copy,
+# because `CCRC_UPDATE_VERIFIED=1` is passed exactly when that copy says the
+# version was verified: a verified version stays verified, an unverified
+# one is never promoted. The caps file is cleared beside it (D-3147's
+# reason). The lock descriptor is closed for the spine as `cmd_update`
+# closes it for its staged one. Main shell only.
+_ver_flip_back() {   # <name> <role> <prefix>
+  local name="$1" role="$2" say="$3" vdir="$BOX_VERSIONS_ROOT/$1" krc=0 src=0 m1="" m2=""
+  local stamp="$BOX_STAMP_FILE"
+  local rec="$BOX_INSTALLED_FILE"
+  local -a spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install)
+  local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE)
+  _ver_can_flip || return 1
+  _ver_kept "$name" "$role" || krc=$?
+  case "$krc" in
+    0) ;;
+    1) return 1 ;;
+    *) VER_WHY="\$HOME/ccrc-versions/$name is incomplete ($VER_WHY)"; return 1 ;;
+  esac
+  { IFS= read -r m1; IFS= read -r m2; } < "$vdir/$VER_RECORD_COPY" 2>/dev/null || :
+  [ "$m2" = unsigned ] || spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1 CCRC_UPDATE_SPINE=$$)
+  [ -n "$role" ] && spine+=(--role "$role")
+  if ! _plat_ln_swap "$vdir" "$BOX_TREE_DIR"; then
+    VER_WHY="the one rename that points \$HOME/ccrc at \$HOME/ccrc-versions/$name failed"
+    return 1
+  fi
+  if ! { mkdir -p -- "${stamp%/*}" && cp -- "$vdir/$VER_STAMP_COPY" "$stamp.tmp.$$" \
+           && chmod 644 "$stamp.tmp.$$" && _plat_mv_notdir "$stamp.tmp.$$" "$stamp"; }; then
+    rm -f -- "$stamp.tmp.$$"
+    VER_WHY="its kept stamp could not be put back as this box's stamp"
+    return 2
+  fi
+  if ! rm -f -- "$rec" "$BOX_CAPS_FILE"; then
+    VER_WHY="the completed-install record could not be cleared before its spine ran"
+    return 2
+  fi
+  echo "$say: flip: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (one rename); its kept stamp restored — running its own spine: bash \$HOME/ccrc/ccd/ccrc install${role:+ --role $role}"
+  if [ -n "${UPD_LOCK_FD:-}" ]; then
+    ( exec {UPD_LOCK_FD}>&-; exec "${spine_env[@]}" "${spine[@]}" ) || src=$?
+  else
+    "${spine_env[@]}" "${spine[@]}" || src=$?
+  fi
+  if [ ! -f "$rec" ]; then
+    VER_WHY="its own spine exited $src without writing its completed-install record"
+    return 2
+  fi
+  [ "$src" -eq 0 ] || echo "$say: flip: $name's spine completed (its record is written) but its trailing doctor exited $src — the FAIL lines above are the box's health; the gate decides"
+  echo "$say: flip: \$HOME/ccrc -> \$HOME/ccrc-versions/$name; its stamp and install record restored; its own spine re-placed the executables, hooks and units (no release download)"
+  return 0
+}
+
+# ── _upd_restore_arm1 <role> <reason> — a flip back to the kept previous ───
+# version (design §11's arm 1, W6 Task 4). rc 0 restored; rc 1 fall to arm
+# 2. Every refusal BEFORE a flip names its reason and changes nothing. After
+# the flip, `_ver_flip_back` re-runs the kept version's own spine and the
+# gate runs once more, on THAT tag. A ~/ccrc that never left <prev> is no
+# refusal (D-3445): a W6 staged spine that died inside
+# `_inst_tree` BEFORE its flip (its `npm ci` in the new directory, the
+# verb's likeliest failure) reads as moved to wave 4's `_upd_step_moved`,
+# so the gate ran and failed while the running version was untouched. Arm
+# 2 would re-download <prev>, and that child's same-name path would rsync
+# `--delete` and `npm ci` INTO the directory the live units run from. In
+# place, the rename is onto the target the link already names, and the
+# kept spine runs from that version with its kept record present: no copy,
+# no `npm ci`. If either fails
+# (D-3443), ~/ccrc is pointed back at the version
+# this run installed and the completed-install record is cleared: arm 2's
+# child is then the NEW tree's `ccd/ccrc` (wave 4's arm 2 assumes it), and
+# it finds a box that reads `incomplete`. With arm 1's restored stamp and the
+# kept spine's record left in place, that child's `_upd_converged` would
+# answer "already runs <prev>" and install nothing while ~/ccrc names the new
+# version. Main shell only (arm 2's `$PPID` rule is the caller's).
+#   The re-gate rewrites UPD_GATE_WHY, and `cmd_update`'s exit-4 sentence,
+# printed after `_upd_restore` returns, names the FIRST gate's failure from
+# it — so the first gate's words are put back on both results
+# (D-3444).
+_upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
+  local role="$1" reason="$2" old_version="${3:-}" old_completed="${4:-0}" prc=0 krc=0 frc=0 cur="" why="" back="" first_why="$UPD_GATE_WHY"
+  local where="" done_as=""
+  _upd_read_previous || prc=$?
+  case "$prc" in
+    0) ;;
+    1) echo "update: arm 1: no ~/.ccrc/previous — arm 2"; return 1 ;;
+    2) echo "update: arm 1: the previous build carried no tag — arm 2"; return 1 ;;
+    *) echo "update: arm 1: ~/.ccrc/previous is unreadable or malformed — arm 2"; return 1 ;;
+  esac
+  # Wave 4's two arm-2 refusals (its fix rounds' same-tag and
+  # previous-is-the-target checks), applied before any flip: a same-tag
+  # rerun over a COMPLETED install of that tag is not returned to `previous`
+  # (the last DIFFERENT release), and `previous` naming the tag that just
+  # failed is nothing to return to.
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] && [ "$old_completed" -eq 1 ]; then
+    echo "update: arm 1: this run's target is $UPD_VERSION, the release that was already running — previous ($UPD_PREV_TAG) is not the build this box ran before; arm 2"
+    return 1
+  fi
+  if [ "$UPD_PREV_TAG" = "$UPD_VERSION" ]; then
+    echo "update: arm 1: previous ($UPD_PREV_TAG) also names $UPD_VERSION, the release that just failed its gate — arm 2"
+    return 1
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) ;;
+    *) echo "update: arm 1: \$HOME/ccrc is not versioned ($VER_LAYOUT) — arm 2"; return 1 ;;
+  esac
+  cur="$VER_CURRENT"
+  _ver_kept "$UPD_PREV_TAG" "$role" || krc=$?
+  case "$krc" in
+    0) ;;
+    1) echo "update: arm 1: no kept version $UPD_PREV_TAG under \$HOME/ccrc-versions — arm 2"; return 1 ;;
+    *) echo "update: arm 1: \$HOME/ccrc-versions/$UPD_PREV_TAG is incomplete ($VER_WHY) — arm 2"; return 1 ;;
+  esac
+  if [ "$cur" = "$UPD_PREV_TAG" ]; then
+    # D-3445 — see the header.
+    where="\$HOME/ccrc never left \$HOME/ccrc-versions/$UPD_PREV_TAG; its own spine re-ran"
+    done_as="restored $UPD_PREV_TAG in place"
+    echo "update: arm 1: \$HOME/ccrc still points at $UPD_PREV_TAG, which is kept complete — re-running its own spine in place (no download)"
+  else
+    where="\$HOME/ccrc flipped back to \$HOME/ccrc-versions/$UPD_PREV_TAG"
+    done_as="flipped back to $UPD_PREV_TAG"
+    echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
+  fi
+  _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
+  case "$frc" in
+    0)
+      # "Run the gate once more" (design §11) — on the tag it returned to.
+      if _upd_gate "$role" "$UPD_PREV_TAG"; then
+        UPD_GATE_WHY="$first_why"
+        _upd_phase reverted "arm1: $done_as; $reason"
+        echo "update: REVERTED (arm 1): this box runs $UPD_PREV_TAG again — $where, no download — $reason"
+        return 0
+      fi
+      why="gate: $UPD_GATE_WHY"
+      UPD_GATE_WHY="$first_why" ;;
+    1)
+      echo "update: arm 1: could not flip to $UPD_PREV_TAG ($VER_WHY) — nothing changed; arm 2"
+      return 1 ;;
+    *)
+      why="the spine did not complete: $VER_WHY" ;;
+  esac
+  if [ "$cur" = "$UPD_PREV_TAG" ]; then
+    back="\$HOME/ccrc stays on $cur, which it never left"
+  elif _plat_ln_swap "$BOX_VERSIONS_ROOT/$cur" "$BOX_TREE_DIR"; then
+    back="\$HOME/ccrc points at $cur again"
+  else
+    back="\$HOME/ccrc could NOT be pointed back at $cur (the one rename failed), so arm 2's child is $UPD_PREV_TAG's own ccrc"
+  fi
+  if ! rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then
+    back="$back; the completed-install record could not be cleared, so arm 2's child may read this box as already on $UPD_PREV_TAG"
+  fi
+  echo "update: arm 1 failed ($why) — $back; falling to arm 2"
+  return 1
+}
+
+# `_upd_legacy_target <tag>` (D-3440) — a staged
+# spine older than versioned installs rsyncs `--delete` into $HOME/ccrc,
+# i.e. THROUGH the link into whichever version it names. So before that
+# spine runs, ~/ccrc is pointed at a directory named for the tag it
+# installs: the kept one, or a copy of the pointed-at version (its two kept
+# copies removed — they described the source), which the old spine then
+# rewrites. The directory's name stays true, and the version this run
+# replaces is never written. A kept directory stops claiming completeness
+# first (its record copy removed): its content is about to be rewritten by
+# a spine that keeps nothing, and `_ver_keep_state update` re-marks it only
+# after that spine completes. `cmd_update` calls this BEFORE it clears the
+# record, the step marker and the caps, so a death here leaves them as they
+# were; only the backup and `previous` this run wrote are new.
+_upd_legacy_target() {   # <tag> -> 0, or dies before anything is installed
+  local tag="$1" cur="$VER_CURRENT" dir="$BOX_VERSIONS_ROOT/$1" inc="$BOX_VERSIONS_ROOT/.$1.incoming.$$" how="kept" made=0
+  local refuse="could not give $tag's older spine a directory of its own under \$HOME/ccrc-versions — nothing was installed; \$HOME/ccrc still points at $cur"
+  _ver_can_flip || _ccrc_die "$refuse ($VER_WHY)"
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    _ccrc_die "$refuse (\$HOME/ccrc-versions/$tag is not a directory ccrc placed)"
+  fi
+  if [ -d "$dir" ]; then
+    rm -f -- "$dir/$VER_RECORD_COPY" || _ccrc_die "$refuse"
+  else
+    how="a copy of $cur"
+    rm -rf -- "$inc" 2>/dev/null
+    if ! { cp -a -- "$BOX_VERSIONS_ROOT/$cur" "$inc" \
+             && rm -f -- "$inc/$VER_STAMP_COPY" "$inc/$VER_RECORD_COPY" \
+             && mv -- "$inc" "$dir"; }; then
+      rm -rf -- "$inc" 2>/dev/null
+      _ccrc_die "$refuse"
+    fi
+    made=1
+  fi
+  if ! _plat_ln_swap "$dir" "$BOX_TREE_DIR"; then
+    [ "$made" -eq 1 ] && rm -rf -- "$dir" 2>/dev/null
+    _ccrc_die "$refuse"
+  fi
+  echo "update: tree: $tag's spine predates versioned installs and writes through \$HOME/ccrc — \$HOME/ccrc now points at \$HOME/ccrc-versions/$tag ($how) for it to write into"
 }
 
 # ── _upd_sweep — step 4: the supervisor sweep (stage 4, Task 7; R1) ───────
