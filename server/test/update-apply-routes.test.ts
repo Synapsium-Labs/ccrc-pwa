@@ -437,7 +437,9 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(f.coord.node(OTHER_ID)!.requestedTag, 'a request the dispatcher can only refuse was written').toBeNull();
     expect(f.coord.node(THIRD_ID)!.requestedTag).toBeNull();
     // §12: the refusal is said where the operator reads the node — a node already at the tag is not refused.
-    expect(f.coord.node(THIRD_ID)!.updateDetail, 'the unread node was skipped silently').toMatch(/^stamp-unread — /);
+    // Said in the PAST tense — what was measured when the request was made — because nothing clears the note.
+    expect(f.coord.node(THIRD_ID)!.updateDetail, 'the unread node was skipped silently').toMatch(/^not requested: stamp-unread — /);
+    expect(f.coord.node(THIRD_ID)!.updateDetail, 'a present-tense sentence goes stale on the row').not.toMatch(/\bwaits\b|\bhas no\b/);
     expect(f.coord.node(OTHER_ID)!.updateDetail, 'a node already at the tag was told it was refused').toBe(atTag);
   });
 
@@ -467,7 +469,9 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     // No request, so the dispatcher never reaches this node: the route notes it (spec §12's "per-node
     // refusals through updateDetail"), through the one writer the dispatcher uses.
     expect(f.coord.node(FLEET_ID)!.updateDetail, 'the skip was said nowhere the operator reads the node')
-      .toMatch(/^no-detach-cap — /);
+      .toMatch(/^not requested: no-detach-cap — /);
+    expect(f.coord.node(FLEET_ID)!.updateDetail, 'the note says what happened, so it stays true after the condition clears')
+      .toBe("not requested: no-detach-cap — fleet's ccrc-caps had no detach");
     // D-3381 defers a server move while ANY fleet row holds a request —
     // so a request written on the darwin row would have parked the server behind it for good.
     const plan = planDispatch({

@@ -14,9 +14,12 @@ import {
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import { dispatchViewsFor } from './converge.js';
-import { dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type FleetGate } from './dispatch.js';
 import {
-  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, dispatchRank, SETTLED_UPDATE_STATES,
+  DETACH_CAP, ROLLBACK_CAP, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type DispatchNodeView, type FleetGate,
+} from './dispatch.js';
+import { UPDATE_OP } from '../../../shared/agent-protocol.js';
+import {
+  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, dispatchRank, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP,
   type AckAnswer, type CatalogueState, type DispatchRefusal, type IntentWriteAnswer, type MoveRequestAnswer,
   type MoveSkip, type MoveSkipWhy, type NodeWire, type ReleaseWire, type RequestKind,
   type UpdateIntentWire, type UpdateRouteRefusal, type UpdatesView,
@@ -330,6 +333,33 @@ function skipWord(r: DispatchRefusal): MoveSkipWhy {
   return r;
 }
 
+type SkipSentence = (view: DispatchNodeView, target: string) => string;
+/** `{all: true}`'s note for a node it did NOT request, in the PAST tense (spec §12 keeps it on the row through
+ *  `updateDetail`). `dispatchRefusalDetail`'s sentences are the dispatcher's, in the present tense — "waits", "has no
+ *  detach" — and are re-planned and rewritten every run while the condition holds; this note is written ONCE, at the
+ *  request, and nothing clears it, so a present-tense sentence would go on claiming a state the node has left. Each
+ *  says what was measured when the request was made. One Record over the words `moveRefusal` can answer, spelled
+ *  from the dispatcher's own vocabulary (`DETACH_CAP`, `ROLLBACK_CAP`, `UPDATE_GATE_CAP`, `UPDATE_OP`), so a word
+ *  added to `DISPATCH_REFUSALS` without its sentence is a compile error here, as it is in `REFUSAL_SENTENCE`. */
+const SKIP_SENTENCE: Record<DispatchRefusal, SkipSentence> = {
+  'unknown-tag': (v, t) => `${t} was not a release ${v.row.label} could be moved to (no eligible catalogue row for it)`,
+  'not-newer': (v, t) => `${t} was not newer than ${v.row.label}'s ${v.row.currentVersion ?? 'version'}`,
+  'refused-by-node': (v, t) => `${v.row.label} had refused ${t} on a provenance verdict`,
+  'stamp-unread': (v) => `${v.row.label}'s build stamp read ${v.row.stampRead}, so its version was unknown`,
+  'floor-unread': (v) => `${v.row.label}'s floor had not been measured`,
+  'no-detach-cap': (v) => `${v.row.label}'s ccrc-caps had no ${DETACH_CAP}`,
+  'no-update-gate': (v) => `${v.row.label}'s ccrc-caps had no ${UPDATE_GATE_CAP}`,
+  'no-rollback-cap': (v) => `${v.row.label}'s ccrc-caps had no ${ROLLBACK_CAP}`,
+  'agent-predates-update-op': (v) => `${v.row.label}'s agent did not advertise the ${UPDATE_OP} op`,
+  halted: (v, t) => `a failed or reverted node was halting every move, so ${v.row.label} was not asked for ${t}`,
+  'waiting-for-fleet': (v, t) => `a fleet node was holding a request, so ${v.row.label} was not asked for ${t}`,
+};
+
+/** `not requested: ${word} — ${what was measured}`. The one builder of a `{all: true}` skip note. */
+function skipDetail(refusal: DispatchRefusal, view: DispatchNodeView, target: string): string {
+  return `not requested: ${refusal} — ${SKIP_SENTENCE[refusal](view, target)}`;
+}
+
 type SingleMove =
   | { ok: true; target: string }
   | { ok: false; code: number; body: Omit<UpdateRouteRefusal, 'ok'> };
@@ -416,8 +446,9 @@ function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'ta
  *
  * A SKIP IS SAID ON THE ROW, not only in the reply (§12: "reports per-node refusals through `updateDetail`").
  * A skipped node gets no request, so `planDispatch` never considers it and the dispatcher's own note never
- * reaches it — the route notes the refusal itself, through the dispatcher's writer and sentence
- * (`noteDispatchRefusal`, `dispatchRefusalDetail`). That writer answers `not-idle` for a `failed`/`reverted`/
+ * reaches it — the route notes the refusal itself, through the dispatcher's writer and its own PAST-tense
+ * sentence (`noteDispatchRefusal`, `skipDetail`): the note is written once and nothing clears it, so it says what was
+ * measured when the request was made, never a state the node may since have left. That writer answers `not-idle` for a `failed`/`reverted`/
  * busy row (a verdict or a lease keeps its detail) and `changed: false` for a repeated text. `not-newer` is not
  * noted: that node was not refused a capability — it already runs the tag or a newer one, or it was rolled back
  * below a floor at or above the tag (D-3403) — and its row already reads what it runs
@@ -465,7 +496,7 @@ function requestAll(coord: CoordStore, tag: string | null, now: number): MoveReq
       const why = skipWord(refusal);
       skipped.push({ nodeId: row.nodeId, why });
       if (why !== 'not-newer') {
-        const noted = coord.noteDispatchRefusal(row.nodeId, dispatchRefusalDetail(refusal, view, target));
+        const noted = coord.noteDispatchRefusal(row.nodeId, skipDetail(refusal, view, target));
         if (!noted.ok && noted.why !== 'not-idle') {
           throw new Error(`update: noteDispatchRefusal refused live node ${row.nodeId} (${noted.why}) in the same synchronous read`);
         }
