@@ -10,7 +10,7 @@
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.
 // It adds no scroll logic of its own — the D-161 pane reset in app.tsx puts
 // `.shell-detail` back at the top on every route change, this one included.
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWire, NotifyMode, ReleaseWire, UpdateChannel, UpdateRouteError, UpdateRouteRefusal, UpdatesView } from '../../../shared/api';
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
@@ -641,9 +641,33 @@ function UpdatesBody({ view, stale, now, reload }: {
   // when the route named these ids, alongside the ids themselves — not just
   // the ids — so a LATER poll can be told from the one already in hand at
   // 409-time by identity, never by content (every real poll answer is a
-  // fresh object even when nothing about the fleet changed, so content
-  // would supersede the route's just-given answer on its own immediate
-  // reload, which is not what a later poll means here).
+  // fresh object even when nothing about the fleet changed, so an identity
+  // test, not a content one, is what "a later poll" means here).
+  //
+  // W5 review 161 (F-A, the coordinator's ruling; corrects this comment's
+  // earlier text, which said the opposite): the write's OWN immediate reload
+  // (`writeIntent`'s `.finally(reload)`) IS that later poll. The latest
+  // measurement supersedes the route's node list, so the route's list is
+  // what the note names only until that reload lands, and from then on the
+  // note names the poll's own `missing`.
+  //
+  // W5 review 161 (F-A): "the view that was current when the route named
+  // these ids" is the view live at 409-LANDING time, never the one closed
+  // over at TAP time. `writeIntent` is redefined every render, so its own
+  // `.then`/`.catch` closes over whatever `view` this function's PARAMETER
+  // was on the render that DEFINED it — the render active when the radio was
+  // tapped. A routine 60 s poll landing anywhere in that gap (before the 409
+  // arrives, and so before this instance's own reload) re-renders the
+  // component with a NEW `view` object; the closure does not see it. Stamping
+  // `gateRefusal.view` from that stale closure would then compare unequal to
+  // the CURRENT `view` prop on the very next render — superseding the note
+  // immediately, before it was ever shown, off a poll that was never "later"
+  // than the 409 it is compared against. `viewRef` below is written on every
+  // render, so the catch handler reads the view genuinely current at the
+  // instant the 409 lands; the write's OWN `.finally()` reload is then the
+  // first poll that can ever supersede it, exactly as F5 intended.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [gateRefusal, setGateRefusal] = useState<{ ids: string[]; view: UpdatesView } | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   // The move the operator is confirming — a plan taken at the tap, so a poll
@@ -684,7 +708,10 @@ function UpdatesBody({ view, stale, now, reload }: {
         (answer) => { if (answer === 'unreadable') toast(UNCONFIRMED_TEXT); },
         (err: unknown) => {
           const refused = gateRefusalOf(err);
-          if (refused !== null) setGateRefusal({ ids: refused, view });
+          // viewRef.current, not the closed-over `view` param (W5 F-A): the
+          // view genuinely current when this 409 lands, never the one active
+          // at the tap that started the write.
+          if (refused !== null) setGateRefusal({ ids: refused, view: viewRef.current });
           else toast(updateErrorText(err), 'error');
         },
       )

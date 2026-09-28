@@ -3702,6 +3702,33 @@ describe('the release summary clause is spelled once, in L0 (plan W3 Task 3)', (
     const holders = ALL.filter((f) => /^\s*export function statedOf\b/m.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual(['shared/update-summary.ts']);
   });
+
+  // W5 review 161 (F-J): the "one holder" scan above catches only a SECOND
+  // `export function statedOf`, by name — it never caught `pendingTag`
+  // (`pwa/src/fleet/useUpdatesView.ts`) re-deriving the exact same three
+  // clauses inline, unnamed, which is the copy a reasonable author actually
+  // writes (the file's own header explains why: a scan reads text, not
+  // meaning). This widens the trap to that shape too — every one of the three
+  // field names, PLUS a `=== 'ok'`/`!== 'ok'` stampRead comparison AND a
+  // `=== true`/`!== true` reachable comparison, within a short window of each
+  // other — outside `shared/update-summary.ts` itself. A plain fixture object
+  // (`stampRead: 'ok', reachable: true,`) never trips it: those are property
+  // assignments, not comparisons, so `ALL` (src only, no test fixtures) stays
+  // clean today; `pendingTag` now reads `statedOf(n)` instead of restating it.
+  it('no inline three-clause copy of statedOf\'s predicate (measuredAt + stampRead + reachable, compared) exists outside shared/update-summary.ts', () => {
+    const WINDOW = 6;
+    const offenders = ALL.filter((f) => {
+      if (rel(f) === 'shared/update-summary.ts') return false;
+      const lines = readFileSync(f, 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const w = lines.slice(i, i + WINDOW).join('\n');
+        if (/measuredAt/.test(w) && /stampRead/.test(w) && /reachable/.test(w)
+          && /(!==|===)\s*'ok'/.test(w) && /(!==|===)\s*true/.test(w)) return true;
+      }
+      return false;
+    }).map(rel);
+    expect(offenders).toEqual([]);
+  });
 });
 
 // Design 2026-09-20 §9/§13 (programme wave 3, Task 7; D-3305):

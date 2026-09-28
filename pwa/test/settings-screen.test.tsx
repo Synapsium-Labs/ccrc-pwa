@@ -475,6 +475,42 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
     await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}server`)).toBeInTheDocument());
   });
 
+  it("a poll landing MID-WRITE is not a LATER poll — the refusal is stamped with the view live when the 409 LANDS, never the one closed over at the tap (W5 review 161, F-A)", async () => {
+    // The bug this pins: `writeIntent` closes over `view` at the render that
+    // DEFINED it — the tap-time view. If a routine poll lands anywhere
+    // between the tap and the 409 (before this write's own `.finally()`
+    // reload), a stale tap-time stamp would compare unequal to the view
+    // already active by the time the 409 arrives and read as ALREADY
+    // superseded — hiding the route's own answer the instant it lands. Two
+    // genuinely distinct poll objects (never one reused response, F5's own
+    // trap) and a controlled write prove it names the RIGHT node either way.
+    const tapView = t7View({ nodes: [t7Node({ caps: ['verify', 'node-id', 'floor'] }), t7Server({ caps: T7_GATED })] });
+    const midWriteView = t7View({ nodes: [t7Node({ caps: T7_GATED }), t7Server({ caps: ['verify', 'node-id', 'floor'] })] });
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(tapView)          // the mount poll
+      .mockResolvedValueOnce(midWriteView)     // a routine poll, mid-write — BEFORE the 409
+      .mockReturnValue(new Promise<UpdatesView>(() => {}));   // the write's own reload: never resolves here
+    const write = Promise.withResolvers<never>();
+    vi.spyOn(api, 'setUpdateIntent').mockReturnValue(write.promise);
+    render(<><ToastHost /><SettingsScreen /></>);
+    const region = await screen.findByRole('region', { name: 'Updates' });
+    await within(region).findByText(`${T7_GATE_NOTE}fleet`);   // tapView: fleet lacks the gate
+    fireEvent.click(within(region).getByRole('radio', { name: CHANNEL_SENTENCES.dev }));   // the tap
+    // A routine poll lands WHILE the write is still in flight, before the 409
+    // — a fresh, distinct object naming a DIFFERENT missing node.
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await within(region).findByText(`${T7_GATE_NOTE}server`);   // midWriteView landed: server lacks it now
+    // The 409 lands. Stamping the stale TAP-time view (`fleet` missing) would
+    // compare unequal to the CURRENT view (`server` missing) and read as
+    // already superseded, silently falling back to midWriteView's own
+    // "server" note and dropping the route's answer. Stamping the view LIVE
+    // AT LANDING time makes the two compare equal, so the route's own list —
+    // naming fleet, never server — stands.
+    write.reject(new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [T7_FLEET_ID] }));
+    await waitFor(() => expect(within(region).getByText(`${T7_GATE_NOTE}fleet`)).toBeInTheDocument());
+    expect(within(region).queryByText(`${T7_GATE_NOTE}server`)).toBeNull();
+  });
+
   it('a 409 auto-needs-rollback-gate naming an EMPTY node list falls back to the route\'s own toast, not an empty "not yet on:" note', async () => {
     vi.spyOn(api, 'setUpdateIntent').mockRejectedValue(
       new ApiError(409, { ok: false, error: 'auto-needs-rollback-gate', nodes: [] }));
