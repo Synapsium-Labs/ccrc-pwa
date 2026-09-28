@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -294,17 +294,6 @@ const KICKOFF_ERROR_TEXT: Record<string, string> = {
 export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
 
 /**
- * The one sentence every move control carries while it is DISABLED (design
- * 2026-09-20 §13, §15 row W3): Install and Roll back on a release row, Update
- * and Roll back on a node row, and the fleet banner's Update all. One literal,
- * so five controls cannot disagree about when they arrive, and the wave that
- * enables them retires one line. This client has no method for either move
- * route, on purpose — `api.test.ts` pins the census of the update routes it
- * spells, so nothing here can be wired to a disabled control early.
- */
-export const MOVE_DISABLED_TEXT = 'lands with the next release (W4)';
-
-/**
  * The body of `POST /api/updates/intent` — W2's `INTENT_BODY_KEYS`, and nothing
  * else (its parser refuses an unknown key). A PARTIAL over one scope: an omitted
  * field keeps its stored value, so moving one setting cannot clobber another
@@ -384,6 +373,13 @@ export function updateErrorText(err: unknown): string {
     }
   }
   return apiErrorText(err);
+}
+
+/** The sentence for a word `{all: true}`'s 202 skipped a node with (`MoveRequestAnswer.skipped`, programme wave 5).
+ *  `MoveSkipWhy` is a subset of `UPDATE_ERROR_TEXT`'s keys, so this is the table's own sentence — the one a
+ *  single-node 409 of the same word renders — and a skip word with no sentence is a compile error here. */
+export function moveSkipText(why: MoveSkipWhy): string {
+  return UPDATE_ERROR_TEXT[why];
 }
 
 /** Injectable for tests; defaults to the real global fetch. */
@@ -599,6 +595,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  ack that answered unreadably may already have cleared the row. */
     ackUpdateNode: (nodeId: string) =>
       postJsonOr<AckAnswer | 'unreadable'>('/api/updates/ack', 'unreadable', { nodeId }),
+    /** `POST /api/updates/apply` (programme wave 5) — move one node (`{nodeId}`) or
+     *  every node the tag takes forward (`{all: true}`), to `tag` or, without one,
+     *  to each node's resolved desired tag. The answer is a REQUEST written, never
+     *  a move made: `202 {requested, skipped}`; the dispatcher moves the nodes one
+     *  at a time and the inventory is where the result is read.
+     *
+     *  `postJsonOr`, the `setUpdateIntent` argument (D-1150): a 2xx whose body
+     *  would not parse may still have written the request, so the move sheet
+     *  says "requested, unconfirmed" and re-polls rather than reporting a refusal
+     *  that did not happen. A refusal — `400`, `404`, a single node's `409`
+     *  (the dispatcher's own predicate), `501` — still rejects with its
+     *  `ApiError`, which `updateErrorText` reads code-first. */
+    applyUpdate: (body: ApplyUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/apply', 'unreadable', body),
+    /** `POST /api/updates/rollback` (programme wave 5) — one node back to `to`, or
+     *  without one to its `previousVersion`. Single-node by route: a fleet-wide
+     *  rollback is one of these per node, in dispatch order (the move sheet's
+     *  `sendMove`). `postJsonOr` for `applyUpdate`'s reason. */
+    rollbackUpdate: (body: RollbackUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/rollback', 'unreadable', body),
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

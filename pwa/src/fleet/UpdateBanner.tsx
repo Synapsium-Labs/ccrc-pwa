@@ -24,16 +24,21 @@
 // and never `.fleet-host-banner--warn`: a release being out is news, not a
 // fault, and several status regions share this screen.
 //
-// "Update all" is DISABLED beside MOVE_DISABLED_TEXT: the apply route it would
-// call does not exist in this wave (spec §13, §18 "the move controls are
-// disabled in W3"). "See what's new" opens /settings, where the release list is.
-import { useId } from 'react';
+// "Update all" opens the one move sheet (UpdateMoveSheet, programme wave 5)
+// with this banner's tag: every node the tag takes forward, named in dispatch
+// order, and one `apply {all: true, tag}` on confirm — a Sheet, because a
+// close-on-tap confirm cannot say a refusal (D-3389).
+// After a 2xx the sheet calls onMoved: the screen's re-poll when the view was
+// injected, this banner's own when it polls. "See what's new" opens /settings,
+// where the release list is.
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, UpdateChannel, UpdatesView } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../../shared/update-summary';
-import { MOVE_DISABLED_TEXT } from '../lib/api';
 import { navigate } from '../lib/router';
+import { planMove, type PlannedMove } from './movePlan';
+import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
 import './fleet.css';
 
@@ -95,28 +100,41 @@ export function updateBannerText(view: UpdatesView, health?: FleetHealth | null)
   return `${release.tag} is out on ${release.channel} — ${summaryFromSides(sides)}.`;
 }
 
-export function UpdateBanner(
-  { updates: injected, health = null }: { updates?: UpdatesView | null; health?: FleetHealth | null } = {},
-): ReactNode {
+export function UpdateBanner({ updates: injected, health = null, onMoved }: {
+  updates?: UpdatesView | null; health?: FleetHealth | null; onMoved?: () => void;
+} = {}): ReactNode {
   // Polls only when nothing was injected: FleetScreen polls once for the whole
   // screen; the standalone shape (tests, any other mount) still self-polls.
   const polled = useUpdatesView(injected === undefined ? UPDATES_POLL_MS : 0);
   const view = injected === undefined ? polled.view : injected;
-  const noteId = useId();
-  const text = view ? updateBannerText(view, health) : null;
-  if (text === null) return null;
+  // The move being confirmed — a plan taken at the tap, so a poll landing
+  // while the sheet is open cannot change the list under a thumb.
+  const [move, setMove] = useState<PlannedMove | null>(null);
+  // After a 2xx: the screen's re-poll when it handed one down, else this
+  // banner's own (useUpdatesView(0)'s reload is a no-op, by its contract).
+  const moved = injected === undefined ? polled.reload : (onMoved ?? (() => {}));
+  const release = view !== null ? bannerRelease(view) : null;
+  const text = view !== null ? updateBannerText(view, health) : null;
   return (
-    <div className="update-banner" role="status">
-      <span className="update-banner-msg">{text}</span>
-      <div className="update-banner-actions">
-        <button type="button" className="btn-ghost" disabled aria-describedby={noteId}>
-          Update all
-        </button>
-        <button type="button" className="btn-primary" onClick={() => navigate('/settings')}>
-          {"See what's new"}
-        </button>
-        <span id={noteId} className="update-banner-note">{MOVE_DISABLED_TEXT}</span>
-      </div>
-    </div>
+    <>
+      {view !== null && release !== null && text !== null && (
+        <div className="update-banner" role="status">
+          <span className="update-banner-msg">{text}</span>
+          <div className="update-banner-actions">
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }))}
+            >
+              Update all
+            </button>
+            <button type="button" className="btn-primary" onClick={() => navigate('/settings')}>
+              {"See what's new"}
+            </button>
+          </div>
+        </div>
+      )}
+      <UpdateMoveSheet open={move !== null} plan={move} onClose={() => setMove(null)} onDone={moved} />
+    </>
   );
 }

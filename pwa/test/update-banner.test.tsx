@@ -11,10 +11,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { api, MOVE_DISABLED_TEXT } from '../src/lib/api';
+import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { UPDATES_POLL_MS } from '../src/fleet/useUpdatesView';
@@ -269,12 +269,33 @@ describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1, widened fix roun
 });
 
 describe('UpdateBanner — its two buttons', () => {
-  it('renders Update all DISABLED, described by the one W3 sentence (spec §18 "the move controls are disabled in W3")', () => {
-    render(<UpdateBanner updates={view()} />);
+  it("Update all is ENABLED and opens the move sheet: the banner's tag, the nodes in dispatch order, sent as apply {all: true, tag} (spec §13 \"W4 adds\")", async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    const onMoved = vi.fn();
+    render(<UpdateBanner updates={view({ nodes: [serverNode(), fleetNode()] })} onMoved={onMoved} />);
     const all = screen.getByRole('button', { name: 'Update all' });
-    expect(all).toBeDisabled();
-    expect(all).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
-    expect(screen.getByText(MOVE_DISABLED_TEXT)).toBeInTheDocument();
+    expect(all).not.toBeDisabled();
+    expect(all).not.toHaveAttribute('aria-describedby');
+    fireEvent.click(all);
+    const list = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.7 → v0.0.9',
+      '2. server (server) v0.0.7 → v0.0.9',
+    ]);
+    expect(apply).not.toHaveBeenCalled();   // opening is not confirming
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' }));
+    await waitFor(() => expect(onMoved).toHaveBeenCalledTimes(1));
+    expect(apply.mock.calls).toEqual([[{ all: true, tag: 'v0.0.9' }]]);
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+  });
+
+  it('self-polling, a confirmed Update all re-polls /api/updates itself', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    render(<UpdateBanner />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update all' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.9' }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
   });
 
   it("See what's new lands on /settings", () => {

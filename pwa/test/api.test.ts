@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, MOVE_DISABLED_TEXT, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
-import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type MoveRequestAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -1047,8 +1047,8 @@ describe('account pools', () => {
 // and each one's helper is a DECISION (lib/api.ts says why at each call): the
 // two WRITES degrade an unparseable 2xx to `unreadable`, because the write may
 // have landed (D-1150); the refresh does not, because it writes nothing the
-// operator could be unconfirmed about. No method exists for the two move routes
-// W3 leaves disabled — pinned below by the route literals the file spells.
+// operator could be unconfirmed about. The two move routes' methods are
+// programme wave 5's (the last describe below); the census counts every literal.
 describe('the update plane client (W3 Task 5)', () => {
   const INTENT: UpdateIntentWire = {
     scope: FLEET_SCOPE, channel: 'dev', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 5_000, setBy: 'operator',
@@ -1174,19 +1174,29 @@ describe('the update plane client (W3 Task 5)', () => {
     await expect(unreadable.ackUpdateNode(NODE.nodeId)).resolves.toBe('unreadable');
   });
 
-  it('spells exactly the four W2 update routes — no apply, no rollback (spec §18: the move controls are disabled in W3)', () => {
-    // The route LITERALS, not a method-name guess: a method named anything at
-    // all that reaches either move route has to spell its path, and this is the
-    // census of every quoted `/api/updates…` path the client holds.
+  it('spells exactly the six update routes — the four W2 routes plus apply and rollback (programme wave 5; W3 held it to four)', () => {
+    // The route LITERALS, not a method-name guess: every quoted `/api/updates…`
+    // path the client holds. Wave 5 adds the two move routes and nothing else.
     const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'lib', 'api.ts'), 'utf8');
     const routes = [...new Set(src.match(/'\/api\/updates[^']*'/g) ?? [])].sort();
-    expect(routes).toEqual(["'/api/updates'", "'/api/updates/ack'", "'/api/updates/intent'", "'/api/updates/refresh'"]);
-    expect(src).not.toContain('/api/updates/apply');
-    expect(src).not.toContain('/api/updates/rollback');
+    expect(routes).toEqual([
+      "'/api/updates'", "'/api/updates/ack'", "'/api/updates/apply'",
+      "'/api/updates/intent'", "'/api/updates/refresh'", "'/api/updates/rollback'",
+    ]);
   });
 
-  it('MOVE_DISABLED_TEXT is the one literal every disabled move control carries', () => {
-    expect(MOVE_DISABLED_TEXT).toBe('lands with the next release (W4)');
+  it('no file under pwa/src spells the retired disabled-control sentence or its constant — the move controls are live (programme wave 5)', () => {
+    const root = path.join(import.meta.dirname, '..', 'src');
+    const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.(tsx?|css)$/.test(f));
+    // The walk reached the tree: a scan over zero files would pass vacuously.
+    expect(files).toContain(path.join('lib', 'api.ts'));
+    expect(files).toContain(path.join('fleet', 'UpdateBanner.tsx'));
+    expect(files).toContain(path.join('screens', 'SettingsScreen.tsx'));
+    const hits = files.filter((f) => {
+      const text = readFileSync(path.join(root, f), 'utf8');
+      return text.includes('MOVE_DISABLED_TEXT') || text.includes('lands with the next release (W4)');
+    }).sort();
+    expect(hits).toEqual([]);
   });
 });
 
@@ -1271,5 +1281,67 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
       expect(uploadErrorText(code), code).toBe(code);
       expect(kickoffErrorText(code), code).toBe(code);
     }
+  });
+});
+
+// ── Centralised update management, programme wave 5 Task 8: the move client ─
+// The two move routes (wave 5 Task 6), session-gated only. Each is a WRITE
+// whose 2xx means a request row was written — so, like setUpdateIntent and
+// ackUpdateNode, both degrade a 2xx they cannot parse to `unreadable` (D-1150)
+// rather than reporting a failure that did not happen, and a refusal still
+// rejects with its ApiError, whose body updateErrorText reads.
+describe('the move client — applyUpdate / rollbackUpdate (programme wave 5 Task 8)', () => {
+  const NODE_ID = '0f0e0d0c-0b0a-4908-8706-050403020100';
+  const ANSWER: MoveRequestAnswer = { ok: true, requested: [NODE_ID], skipped: [] };
+  /** A fresh Response per call — a body can be read once. */
+  const answering = (status: number, body: unknown) => vi.fn().mockImplementation(async () => jsonResponse(status, body));
+  const headersOf = (init: RequestInit): Headers => new Headers(init.headers);
+
+  it('applyUpdate POSTs {nodeId, tag} or {all: true, tag} as JSON to /api/updates/apply and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toEqual(ANSWER);
+    const calls = fetchImpl.mock.calls as [string, RequestInit][];
+    expect(calls).toHaveLength(2);
+    for (const [url, init] of calls) {
+      expect(url).toBe('/api/updates/apply');
+      expect(init.method).toBe('POST');
+      expect(headersOf(init).get('content-type')).toBe('application/json');
+      expect(headersOf(init).get('accept')).toBe('application/json');
+      expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();   // session-gated only (decision 15)
+    }
+    expect(calls.map(([, init]) => JSON.parse(init.body as string))).toEqual([
+      { nodeId: NODE_ID, tag: 'v0.0.10' },
+      { all: true, tag: 'v0.0.10' },
+    ]);
+  });
+
+  it('rollbackUpdate POSTs {nodeId, to} as JSON to /api/updates/rollback and resolves the answer', async () => {
+    const fetchImpl = answering(202, ANSWER);
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toEqual(ANSWER);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/updates/rollback');
+    expect(init.method).toBe('POST');
+    expect(headersOf(init).get('content-type')).toBe('application/json');
+    expect(headersOf(init).get('x-ccrc-mail-token')).toBeNull();
+    expect(JSON.parse(init.body as string)).toEqual({ nodeId: NODE_ID, to: 'v0.0.8' });
+  });
+
+  it('both resolve `unreadable` on a 2xx whose body cannot be read — the request may have been written (D-1150)', async () => {
+    const api = createApi(async () => new Response('{"ok":true,"requ', {
+      status: 202, headers: { 'content-type': 'application/json' },
+    }));
+    await expect(api.applyUpdate({ all: true, tag: 'v0.0.10' })).resolves.toBe('unreadable');
+    await expect(api.rollbackUpdate({ nodeId: NODE_ID, to: 'v0.0.8' })).resolves.toBe('unreadable');
+  });
+
+  it('a refusal rejects with its ApiError, status and body intact', async () => {
+    const api = createApi(answering(409, { ok: false, error: 'not-newer' }) as unknown as typeof fetch);
+    const err = await api.applyUpdate({ nodeId: NODE_ID, tag: 'v0.0.8' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'not-newer' });
   });
 });
