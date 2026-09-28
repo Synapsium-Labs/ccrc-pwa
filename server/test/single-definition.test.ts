@@ -3514,10 +3514,11 @@ describe('the update ring — nothing under server/src/update holds the handle (
    *  directory — reds instead of disarming the scan. */
   const UPDATE_RING_FILES: readonly string[] = ['catalogue.ts', 'inventory.ts', 'resolve.ts', 'project.ts', 'routes.ts', 'notify.ts', 'dispatch.ts', 'converge.ts'];
   // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
-  // too — the coord ring's `from\s+'node:sqlite'` sees neither.
-  const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;
-  const IMPORTS_DB = /(?:\bfrom\s+|\bimport\s*\(?\s*)'(?:\.{1,2}\/)+(?:coord\/)?db\.js'/;
-  const IMPORTS_UPDATE = /\bfrom\s+'(?:\.\/|(?:\.\.\/)+)update\//;
+  // too — the coord ring's `from\s+'node:sqlite'` sees neither. Either quote: a double-quoted specifier
+  // (`from "node:sqlite"`) is valid TS and would otherwise pass this scan unseen (D-3407 fix round).
+  const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)['"]node:sqlite['"]/;
+  const IMPORTS_DB = /(?:\bfrom\s+|\bimport\s*\(?\s*)['"](?:\.{1,2}\/)+(?:coord\/)?db\.js['"]/;
+  const IMPORTS_UPDATE = /\bfrom\s+['"](?:\.\/|(?:\.\.\/)+)update\//;
   /** Over `[name, source]` pairs, so the CONTROL below plants its shapes as
    *  text — no fixture directory, and so no new import line in this file. */
   const ringViolations = (files: readonly (readonly [string, string])[]): string[] =>
@@ -3559,6 +3560,16 @@ describe('the update ring — nothing under server/src/update holds the handle (
       'b.ts imports node:sqlite',
       'c.ts imports a coord db module',
       'd.ts names a database handle on a coord/store receiver',
+    ]);
+  });
+
+  it('CONTROL: a double-quoted specifier is caught too — valid TS the single-quote-only scan would miss', () => {
+    expect(ringViolations([
+      ['f.ts', 'import { readFileSync } from "node:fs";\nimport type { DatabaseSync } from "node:sqlite";\n'],
+      ['g.ts', 'import { tx } from "../coord/db.js";\n'],
+    ]).sort()).toEqual([
+      'f.ts imports node:sqlite',
+      'g.ts imports a coord db module',
     ]);
   });
 });

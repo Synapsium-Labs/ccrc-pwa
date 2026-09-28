@@ -482,6 +482,16 @@ describe('planDispatch — the order under partial eligibility (D-3381, Review F
     const p = plan(view(fleet(ask('v0.0.10'))), view(server({ ...ask('v0.0.10'), caps: [] })));
     expect(words(p)).toEqual([[SERVER_ID, 'no-detach-cap']]);
   });
+
+  it('a role: null row (rank 2) is held by a fleet request exactly like a server row — D-3381 covers every non-fleet rank, not just server\'s', () => {
+    // No planDispatch case elsewhere ever builds a `role: null` row; mutating the fleet-hold predicate's
+    // `dispatchRank(row.role) !== 0` to `=== 1` would leave every OTHER case in this file green while a rank-2
+    // row jumps the fleet — this is the one case that catches it.
+    const unranked = view(fleet({ nodeId: 'null-role-id', role: null, label: 'stray', agentOps: [UPDATE_OP], ...ask('v0.0.10') }));
+    const p = plan(view(fleet({ ...ask('v0.0.10'), reachable: false })), unranked);
+    expect(p.move).toBeNull();
+    expect(words(p)).toEqual([['null-role-id', 'waiting-for-fleet']]);
+  });
 });
 
 describe('planDispatch — an auto server move waits for a fleet row auto has not converged (D-3402)', () => {
@@ -565,7 +575,7 @@ describe('dispatchRefusalDetail — one sentence per word, stable across runs (R
 describe('the ring (programme wave 5, D-3383)', () => {
   it('dispatch.ts imports only the three shared modules and the resolver — no fs, no store, no link, no Runner', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'update', 'dispatch.ts'), 'utf8');
-    const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+'([^']+)'|^\s*import\s+'([^']+)'/gm)]
+    const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]/gm)]
       .map((m) => m[1] ?? m[2]);
     expect(new Set(specs)).toEqual(new Set([
       '../../../shared/api.js', '../../../shared/agent-protocol.js', '../../../shared/semver.js', './resolve.js',
