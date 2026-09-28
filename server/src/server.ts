@@ -1406,8 +1406,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
-    const onFleet = (sessions: FleetSession[]) =>
+    const sendFleet = (sessions: FleetSession[]) =>
       socket.send(JSON.stringify({ type: 'fleet', sessions } satisfies FleetMsg));
+    // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
+    // (`currentFleet`), and a snapshot is assembled only before it. The watcher
+    // re-emits only on change (`lastJson`), so a cold frame that differs from
+    // what it last broadcast is never corrected: one assembled from watcher
+    // state captured at connect could land AFTER a newer broadcast and replace
+    // it, and one assembled off a registry listing that failed once sent
+    // `fleet: []` to a fleet that was there. Before the first broadcast the
+    // snapshot is all there is, and `broadcastSeen` still keeps it from
+    // landing on a broadcast that beat it: anything newer it did read differs
+    // from `lastJson`, so the next tick broadcasts that anyway.
+    let broadcastSeen = false;
+    const onFleet = (sessions: FleetSession[]) => {
+      broadcastSeen = true;
+      sendFleet(sessions);
+    };
     const onNotice = (n: Notice) => socket.send(JSON.stringify({ type: 'notice', ...n } satisfies FleetMsg));
     const onRuns = (runs: RunSummary[]) =>
       socket.send(JSON.stringify({ type: 'runs', runs } satisfies FleetMsg));
@@ -1429,8 +1444,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()).then((sessions) => {
-      onFleet(sessions);
+    const broadcast = watcher?.currentFleet() ?? null;
+    const cold = broadcast !== null
+      ? Promise.resolve(broadcast)
+      : assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches());
+    void cold.then((sessions) => {
+      if (!broadcastSeen) sendFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
       // emitRuns`'s own byte-equality guard), so a client connecting into a
