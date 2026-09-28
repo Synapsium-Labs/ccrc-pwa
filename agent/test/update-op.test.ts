@@ -192,11 +192,13 @@ describe('the update op', () => {
       }]);
     });
 
+    // Step 0.1: a lock-held busy names the way out, as an in-flight report's does (a holder that hangs writes no report).
+    const ADVICE = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
     it('a parent that exits 1 on the LOCK is busy carrying its first stderr line, never spawn-failed (D-3411, review F1)', async () => {
       const LOCK = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
       const { c } = await up(recorder({ code: 1, stdout: '', stderr: `${LOCK}\nsecond\n`, killed: false, pid: 4242 }));
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' }))
-        .toEqual({ t: 'res', id: 1, ok: false, err: 'busy', detail: LOCK });
+        .toEqual({ t: 'res', id: 1, ok: false, err: 'busy', detail: `${LOCK}${ADVICE}` });
     });
 
     it.each([

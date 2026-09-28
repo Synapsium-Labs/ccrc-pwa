@@ -282,8 +282,10 @@ describe('runDispatch — the answer decides only what happens to the lease (§1
     const h = harness({ run: async () => ({ code: 1, stdout: '', stderr: `${lock}\nsecond line` }) });
     seedServer(h);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
-    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: `busy — ${lock}` });
-    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', updateDetail: `busy — ${lock}`, requestedTag: 'v0.0.10' });
+    // The lock line, then the ack advice (Step 0.1): a holder that hangs writes no report, so the row names the way out.
+    const busy = `busy — ${lock} - a live updater that hangs answers busy on every sweep: ack the row or mend the box`;
+    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: busy });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', updateDetail: busy, requestedTag: 'v0.0.10' });
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
     // Not halting: the fleet gate reads no halted row, and the next run spawns again.
     const r2 = ran(await runDispatch(h.deps, T0 + 61_000));
@@ -624,7 +626,7 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
       const r = ran(await runDispatch(h.deps, T0 + 1000));
       expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'idle' });
       const detail = (r.outcome as { detail: string }).detail;
-      expect(detail).toMatch(/^busy — ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\)$/);
+      expect(detail).toMatch(/^busy — ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\) - a live updater that hangs answers busy on every sweep: ack the row or mend the box$/);
       expect(isUpdateLockHeldLine(detail.slice('busy — '.length))).toBe(true);
       expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: tag, requestedKind: kind });
       expect(readFileSync(path.join(h.home, '.ccrc', 'update.json'), 'utf8')).toBe(TERMINAL_REPORT);

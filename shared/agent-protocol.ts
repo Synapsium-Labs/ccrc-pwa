@@ -485,15 +485,35 @@ export function updateWriterAlive(outcome: KillProbeOutcome): boolean {
   return !outcome.threw || outcome.code !== 'ESRCH';
 }
 
+/** D-3411 — the way out a `busy` detail ends with, on both roles: a live updater (or a lock holder that writes no
+ *  report, a hung `versions --prune`) answers busy on every sweep, so the exit is to ack the row or mend the box
+ *  (ruling (b)). ONE constant, ONE cutter (`withBusyAdvice`): a `busy` detail is never built without it. */
+const BUSY_ADVICE = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
+/** `head` cut to fit, then the advice: the FRONT is cut so the advice at the end is never the part that is lost, and
+ *  the whole stays within `UPDATE_OP_DETAIL_MAX`. */
+function withBusyAdvice(head: string): string {
+  return head.slice(0, UPDATE_OP_DETAIL_MAX - BUSY_ADVICE.length) + BUSY_ADVICE;
+}
+
 /** D-3411 — the busy sentence for an in-flight report, built ONCE for both roles (the agent's `update` op and the
  *  server-role local spawn). It names the phase, target, start second and the WRITER's pid, then says what the
- *  operator can do: a live updater that is hung answers busy on every sweep, so the exit is to ack the row or mend
- *  the box (ruling (b)). The whole sentence stays within `UPDATE_OP_DETAIL_MAX`: a `target` has no length cap on its
- *  numeric parts, so the FRONT is cut to fit and the advice at the end is never the part that is lost. */
+ *  operator can do (`withBusyAdvice`). A `target` has no length cap on its numeric parts, so the FRONT is cut. */
 export function inFlightBusyDetail(r: InFlightReport): string {
-  const tail = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
-  const head = `update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'}, writer pid ${r.pid ?? 'unknown'})`;
-  return head.slice(0, UPDATE_OP_DETAIL_MAX - tail.length) + tail;
+  return withBusyAdvice(`update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'}, writer pid ${r.pid ?? 'unknown'})`);
+}
+
+/** The busy sentence for a LOCK-held refusal: the parent's lock line (`isUpdateLockHeldLine` true) with the same way
+ *  out. A holder that hangs without ever writing a report (a hung watchdog hold, `versions --prune`) answers busy on
+ *  every sweep, so the line alone would leave the operator with no exit named. The line's tail is cut, never the advice. */
+export function lockHeldBusyDetail(line: string): string {
+  return withBusyAdvice(line);
+}
+
+/** D-3411 — whether an in-flight report's writer may still be running, the ONE composition both roles use: a `null`
+ *  pid (absent or unreadable) is not dead, so it may, and a readable pid is asked through the role's own `kill(pid, 0)`
+ *  adapter (`probe`) and judged by `updateWriterAlive`. L0 imports nothing, so the adapter is passed in. */
+export function updateWriterMayLive(pid: number | null, probe: (pid: number) => KillProbeOutcome): boolean {
+  return pid === null || updateWriterAlive(probe(pid));
 }
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —

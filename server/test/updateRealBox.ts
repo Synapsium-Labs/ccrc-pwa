@@ -63,7 +63,11 @@ export function holdLock(home: string): ChildProcess {
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   const child = spawn('bash', ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 60', '_', lockPath(home)], { stdio: 'ignore' });
   for (let i = 0; i < 400 && lockFree(home); i++) spawnSync('sleep', ['0.025']);
-  if (lockFree(home)) throw new Error('the fixture holder never took the lock');
+  if (lockFree(home)) {
+    // Kill the blocking holder before throwing: a throw here means the caller never gets the child to kill.
+    if (child.pid !== undefined) { try { process.kill(child.pid, 'SIGKILL'); } catch { /* already gone */ } }
+    throw new Error('the fixture holder never took the lock');
+  }
   return child;
 }
 

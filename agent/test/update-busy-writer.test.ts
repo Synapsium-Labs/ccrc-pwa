@@ -104,7 +104,7 @@ describe.skipIf(!linux)('the update op against the REAL ccrc — a held lock is 
       const res = await c.req<Res>(1, { op: 'update', tag: 'v0.0.9', kind });
       expect(res).toMatchObject({ t: 'res', id: 1, ok: false, err: 'busy' });
       // The sentence is the one `_upd_busy_die` really prints: the L0 prefix, then the holder in parentheses.
-      expect(res.detail).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\)$/);
+      expect(res.detail).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\) - a live updater that hangs answers busy on every sweep: ack the row or mend the box$/);
       expect(res.detail!.startsWith(UPDATE_LOCK_HELD_PREFIX)).toBe(true);
       expect(isUpdateLockHeldLine(res.detail!)).toBe(true);
       expect(readFileSync(report, 'utf8')).toBe(TERMINAL);

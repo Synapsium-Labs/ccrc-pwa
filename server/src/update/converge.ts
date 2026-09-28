@@ -14,8 +14,8 @@ import {
   inFlightReport, type InFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
 } from '../../../shared/api.js';
 import {
-  NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
-  updateLauncherPath, updateSpawnArgv, updateWriterAlive, type KillProbeOutcome, type ResOk, type UpdateSpawnResult,
+  NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine, lockHeldBusyDetail,
+  updateLauncherPath, updateSpawnArgv, updateWriterMayLive, type KillProbeOutcome, type ResOk, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
   DEADLINE_DETAIL, classifyOpAnswer, deadlineExpired, dispatchRefusalDetail, planDispatch,
@@ -91,10 +91,10 @@ function probeKill(pid: number): KillProbeOutcome {
   }
 }
 
-/** Whether an in-flight report's writer may still be running: an unreadable pid (`null`) may, a readable one is
- *  asked. The agent's `writerMayLive` is this rule on the other role; both sit on `updateWriterAlive`. */
+/** Whether an in-flight report's writer may still be running: L0's `updateWriterMayLive` over this role's adapter.
+ *  The agent's `writerMayLive` is the same composition on the other role. */
 function writerMayLive(pid: number | null): boolean {
-  return pid === null || updateWriterAlive(probeKill(pid));
+  return updateWriterMayLive(pid, probeKill);
 }
 
 /** The ONE builder of the dispatcher's views: every live row, its RESOLVED auto (the resolver's own answer for
@@ -209,7 +209,7 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
     const stderrLine = firstStderrLine(res.stderr);
     // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing changed:
     // busy (release `idle`, the request stands), carrying that line. Every other refusal keeps `spawn-failed`.
-    if (isUpdateLockHeldLine(stderrLine)) return { kind: 'refused', err: 'busy', detail: stderrLine };
+    if (isUpdateLockHeldLine(stderrLine)) return { kind: 'refused', err: 'busy', detail: lockHeldBusyDetail(stderrLine) };
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {

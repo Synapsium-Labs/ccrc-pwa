@@ -31,8 +31,8 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
-  updateLauncherPath, updateSpawnArgv, updateWriterAlive,
+  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine, lockHeldBusyDetail,
+  updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
   type KillProbeOutcome, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
@@ -670,7 +670,10 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
         // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing on
         // the box changed. That is a busy node, not a faulted one: `busy` releases `idle` with the request
         // standing. `_upd_flock_die` and the probe's unmeasured arm carry other sentences and stay spawn-failed.
-        send(ws, failUpdate(req.id, isUpdateLockHeldLine(line) ? 'busy' : 'spawn-failed', line));
+        // The busy detail carries the way out (`lockHeldBusyDetail`): a holder that hangs writes no report.
+        send(ws, isUpdateLockHeldLine(line)
+          ? failUpdate(req.id, 'busy', lockHeldBusyDetail(line))
+          : failUpdate(req.id, 'spawn-failed', line));
         return;
       }
       send(ws, ok(req.id, { accepted: true }));
@@ -905,10 +908,10 @@ function probeKill(pid: number): KillProbeOutcome {
     return { threw: true, code: typeof code === 'string' ? code : null };
   }
 }
-/** Whether an in-flight report's writer may still be running: an unreadable pid (`null`) may, and a readable one
- *  is asked. Exported for the pins; the `update` op is its one caller. */
+/** Whether an in-flight report's writer may still be running: L0's `updateWriterMayLive` over this role's adapter.
+ *  Exported for the pins; the `update` op is its one caller. */
 export function writerMayLive(pid: number | null): boolean {
-  return pid === null || updateWriterAlive(probeKill(pid));
+  return updateWriterMayLive(pid, probeKill);
 }
 
 /**

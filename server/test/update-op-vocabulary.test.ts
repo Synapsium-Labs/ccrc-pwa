@@ -18,11 +18,14 @@
 //     from a link that FAILED by `instanceof`, never by a message string, and
 //     `message` stays `err`, so every existing `.message` caller is unchanged.
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   UPDATE_OP, UPDATE_OP_ERRORS, isUpdateOpError, UPDATE_OP_FROM, UPDATE_LAUNCHER_PARTS, updateLauncherPath,
   updateSpawnArgv, UPDATE_SPAWN_TIMEOUT_MS, UPDATE_SPAWN_DRAIN_MS, UPDATE_OP_TIMEOUT_MS, UPDATE_OP_DETAIL_MAX, firstStderrLine,
-  UPDATE_LOCK_HELD_PREFIX, isUpdateLockHeldLine, updateWriterAlive, inFlightBusyDetail,
+  UPDATE_LOCK_HELD_PREFIX, isUpdateLockHeldLine, updateWriterAlive, inFlightBusyDetail, lockHeldBusyDetail, updateWriterMayLive,
 } from '../../shared/agent-protocol.js';
 import { IN_FLIGHT_UPDATE_PHASES, inFlightReport } from '../../shared/api.js';
 import { AgentOpError, connectFleet, type ConnectedFleet } from '../src/remote/client.js';
@@ -231,6 +234,40 @@ describe('the writer-liveness rule and the lock sentence, declared once (D-3411)
     expect(long.length).toBe(UPDATE_OP_DETAIL_MAX);
     expect(long.endsWith('ack the row or mend the box')).toBe(true);
     expect(long.startsWith('update.json says installing (target v111')).toBe(true);
+  });
+
+  it('lockHeldBusyDetail is the lock line plus the SAME way out, cut at the line\'s tail and never at the advice (Step 0.1)', () => {
+    const line = 'ccrc: update: another update holds ~/.ccrc/update.lock (pid 7, target v0.0.8)';
+    expect(lockHeldBusyDetail(line)).toBe(`${line} - a live updater that hangs answers busy on every sweep: ack the row or mend the box`);
+    // The advice is one shared tail: the in-flight builder ends with the same words.
+    const tail = lockHeldBusyDetail('x').slice(1);
+    expect(inFlightBusyDetail(ONE).endsWith(tail)).toBe(true);
+    // A holder string as long as firstStderrLine allows still fits: the line's tail goes, the advice and the prefix stay.
+    const longLine = `${UPDATE_LOCK_HELD_PREFIX} (${'p'.repeat(400)})`.slice(0, UPDATE_OP_DETAIL_MAX);
+    const cut = lockHeldBusyDetail(longLine);
+    expect(cut.length).toBe(UPDATE_OP_DETAIL_MAX);
+    expect(cut.endsWith('ack the row or mend the box')).toBe(true);
+    expect(isUpdateLockHeldLine(cut)).toBe(true);
+  });
+
+  it('neither role restates the null-pid policy: each keeps only its process.kill adapter over L0\'s updateWriterMayLive (Step 0.3)', () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    for (const rel of ['../../agent/src/server.ts', '../src/update/converge.ts']) {
+      const src = readFileSync(path.resolve(here, rel), 'utf8');
+      expect(src, rel).toContain('updateWriterMayLive(');
+      expect(/pid\s*===\s*null\s*\|\|/.test(src), `${rel} restates the null-pid policy`).toBe(false);
+      expect(src.includes('updateWriterAlive('), `${rel} composes updateWriterAlive itself`).toBe(false);
+    }
+  });
+
+  it('updateWriterMayLive is the ONE null-pid policy: a null pid may live and is never probed; a pid is asked and judged by updateWriterAlive (Step 0.3)', () => {
+    const asked: number[] = [];
+    expect(updateWriterMayLive(null, (p) => { asked.push(p); return { threw: true, code: 'ESRCH' }; })).toBe(true);
+    expect(asked).toEqual([]);
+    expect(updateWriterMayLive(7, (p) => { asked.push(p); return { threw: true, code: 'ESRCH' }; })).toBe(false);
+    expect(updateWriterMayLive(8, (p) => { asked.push(p); return { threw: true, code: 'EPERM' }; })).toBe(true);
+    expect(updateWriterMayLive(9, (p) => { asked.push(p); return { threw: false }; })).toBe(true);
+    expect(asked).toEqual([7, 8, 9]);
   });
 });
 
