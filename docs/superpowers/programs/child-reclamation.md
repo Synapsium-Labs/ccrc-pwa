@@ -19,7 +19,7 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **second fix round** 2026-09-26 (review 171 found two destroy paths; run 148 on `plain-summit`) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **in its third review** 2026-09-28 at `135f1625` (second fix round done; review 172 on `keen-ridge`; run 148 on `plain-summit`) |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
@@ -39,10 +39,40 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**; a third, scoped, follows the second fix round). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-09-28 — wave 3's second fix round done (`135f1625`); review 172 dispatched.**
+  - **The round.** It shipped F-I (3523), F-A (3369), F-B (3521), and F-C through F-G.
+    - Each fix had an Opus review, and scoped re-reviews until clean.
+    - F-B's reviews found three more pre-existing shapes, each a MEASURED deletion of another session's file:
+      - an other row spelled `//…`;
+      - an other row resolving through a `//`-target link;
+      - a child whose own workdir resolves through one.
+    - The worker closed them as one fail-closed extension, `double-slash-row-unplaceable`. The coordinator ratified
+      it, and told the worker that a scope extension is named for the coordinator to rule, never ruled by the worker.
+  - **Slugs.** Every departure slug is FOLDED into 3369, 3521 or 3523 (mail 2452), and the worker named nine of them
+    in the plan (`135f1625`). Three more F-A slugs are folded too: `gitdir-rides-the-logs-list`,
+    `location-guard-case-added` and `default-config-reach-wider`. Their entry text rides wave 4.
+  - **Gate.**
+    - Server: 16437 passed at the merge. The reds were `tmp-sweep`, plus two load flakes that pass alone.
+    - One shard failed first on ccd's 10 G free-space floor. The worker freed its own scratch and re-ran it green.
+      The box's root filesystem is at 93–97%, which is the operator's to deal with.
+    - agent 331/331; pwa 3010/3010; the ledger guards 87/87.
+    - S6-R11 (the real selector) is 196/196/196 on every ccd commit, and 13/13 at the merge.
+  - **The frozen boundary's line** now reads at 19168. Main added 37 lines above it; the bytes are unchanged.
+  - **Review 172** (`keen-ridge`) is scoped to `1715d410` up to the tip: the held-out panel, plus SAFETY at xhigh on
+    F-A, F-B and F-I. Only a destroy path THIS round opened re-opens the wave. Mail 2457 corrected line 8 of its
+    brief: three slug names blanked by a shell-quoting slip.
+  - **Wave 4's plan gained A16** (`3de54b6b`, docs PR #188), with the round's carries:
+    - `ws-gc` and `ws-rm` obey `showUntrackedFiles=no`;
+    - a staged intermediate version is kept;
+    - a foreign clone's reflog-only commits fail closed;
+    - F-A's keep is finished;
+    - `probe-unmeasured` is not resumable.
+  - **Before rollout**, re-count the live registry for workdirs that are empty, not absolute, or `//`-prefixed, and
+    resolve each path, because the two link shapes do not show in the stored text.
 - **2026-09-26 — review 171 on wave 3's fix round (`1715d410`): two destroy paths; a SECOND, tight fix round.**
   - **The panel.** Five Opus lenses (SAFETY at xhigh), and three Sonnet refuters per finding. 56 agents ran, none
     died; 15 survived and merged into 8 findings, and 2 were refuted. The reviewer reproduced the two class-1
