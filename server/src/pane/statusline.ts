@@ -63,7 +63,31 @@ export interface Statusline {
 // renderers, measured at 60-220 columns), or opens a ` · ` part (the older
 // fleet capture below the row in statusline.test.ts) — so a sentence that
 // merely contains "2/4 agents done", one space before the number, is not it.
-const WORKFLOW_RE = /(?:^|\s·\s|\s{2})\d+\/\d+\s+agents?\s+done\b/i;
+const WORKFLOW_RE = /(?:^|\s·\s|\s{2})(\d+)\/(\d+)\s+agents?\s+done\b(?:\s+·\s+(\d+)\s+failed\b)?/i;
+
+/** A Workflow row that is still RUNNING. A finished run's row stays mounted
+ *  for ~30 s after it ends, same glyph, same shape, its clock stopped — only
+ *  the count tells them apart: done plus failed has caught up with a nonzero
+ *  total (`3/3`, `2/3 agents done · 1 failed`; 2.1.280 counts a failed agent
+ *  apart, and its own "complete" is done + failed ≥ total). `0/0` reads as
+ *  running: it is the launch row, and a count cannot tell it from a run that
+ *  died before its first agent, whose `0/0` lingers like any finished row.
+ *  THE COUNT IS NOT PROOF of a finish either: a script awaiting a timer
+ *  between agents, or worktree-isolated agents being torn down, reads N/N
+ *  with its clock running. On 2.1.277–2.1.280 Claude Code's own live status
+ *  reads busy while any workflow runs (`delegatedActive`), and fleet.ts asks
+ *  this row only for an idle session, so both bite only where that status is
+ *  unreadable. A killed run's row (`k/M`, k < M) still lingers as running.
+ *  Unread, as before this function: a count after ONE space (a description cut
+ *  to `…`, or a pane ≤ 60 columns once the tokens segment shows), a row paused
+ *  on a usage limit (no count at all), and 2.1.281+, whose binaries carry no
+ *  `agents done` literal. */
+function workflowRunning(line: string): boolean {
+  const m = WORKFLOW_RE.exec(line.trim());
+  if (!m) return false;
+  const [done, total, failed] = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
+  return total === 0 || done + failed < total;
+}
 
 const ROBOT = '🤖';
 const BRANCH = '⎇'; // U+2387 branch glyph in the statusline
@@ -272,8 +296,9 @@ export function parseStatusline(pane: string): Statusline {
   // Read BELOW the statusline row only: Claude Code mounts the workflow row
   // after the footer (a real fleet capture has it under the `👤` row), and
   // nothing but footer chrome is ever drawn there — chat sits above the box.
-  // A sentence quoting "2/4 agents done" used to hold an idle session `busy`.
-  const workflowActive = at !== -1 && lines.slice(at + 1).some((l) => WORKFLOW_RE.test(l.trim()));
+  // A sentence quoting "2/4 agents done" used to hold an idle session `busy`,
+  // and so did a finished run's row, for the half minute it lingers.
+  const workflowActive = at !== -1 && lines.slice(at + 1).some(workflowRunning);
 
   const ctxPct = parseCtxPct(row);
 
