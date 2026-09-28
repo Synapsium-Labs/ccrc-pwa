@@ -366,8 +366,9 @@ const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | '
   'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
   // Never an HTTP 409 (the route answers it only through `{all: true}`'s per-node skip, never a single-node
   // move's own refusal) — a key `moveSkipText` needs that `updateErrorText`'s own table never looks up. The
-  // skip holds EVERY row that is not fleet-role (`dispatchRank` != 0): a server-role node and a `role: null`
-  // one alike, whenever a fleet row was itself skipped busy or halted in the same call (D-3408).
+  // skip holds EVERY non-fleet row (`dispatchRank` != 0) that is not itself halting — a server-role node and a
+  // `role: null` one alike (a halting one is skipped `halted` first) — whenever a fleet row was itself skipped
+  // busy or halted in the same call (D-3408).
   'waiting-for-fleet': 'Nothing was requested for that node — it is held behind a fleet node’s own move. Tap again once that node’s move settles or it is acknowledged.',
   // `satisfies` is what makes `moveSkipText`'s claim below true: the annotation above is keyed by
   // `UpdateRouteError`, which does not follow `MoveSkipWhy`, so without this a skip word added to `MoveSkipWhy`

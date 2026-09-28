@@ -107,6 +107,17 @@ function DismissHarness({ first, onDone }: { first: PlannedMove; onDone: () => v
   return <UpdateMoveSheet open={p !== null} plan={p} onClose={() => setP(null)} onDone={onDone} />;
 }
 
+/** A screen that can dismiss the sheet and reopen a move control (another plan) while an answer is still in flight. */
+function ReopenHarness({ first, again, onDone }: { first: PlannedMove; again: PlannedMove; onDone: () => void }): ReactNode {
+  const [p, setP] = useState<PlannedMove | null>(first);
+  return (
+    <>
+      <button type="button" onClick={() => setP(again)}>reopen</button>
+      <UpdateMoveSheet open={p !== null} plan={p} onClose={() => setP(null)} onDone={onDone} />
+    </>
+  );
+}
+
 describe('UpdateMoveSheet — what it names', () => {
   it('names the nodes it moves in dispatch order — fleet then server whatever the wire order — under the headline, which is also its confirm', () => {
     mount(plan(UP));
@@ -408,7 +419,7 @@ describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open',
     expect(await screen.findByText(MOVE_UNREADABLE_TEXT, { selector: '.toast' })).toBeInTheDocument();
   });
 
-  it('a late answer for a plan the sheet no longer shows is dropped (the AbandonSheet generation idiom)', async () => {
+  it('a late answer for a plan the sheet no longer shows is dropped from the SCREEN but still re-polls — a request was written (the AbandonSheet generation idiom, review F5)', async () => {
     const pending = Promise.withResolvers<MoveRequestAnswer | 'unreadable'>();
     vi.spyOn(api, 'applyUpdate').mockReturnValueOnce(pending.promise);
     const onDone = vi.fn();
@@ -418,8 +429,23 @@ describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open',
     // A macrotask, not one microtask: sendMove's own await and its `.then` must
     // both have run, or "not called" would pass before the late answer arrived.
     await act(async () => { pending.resolve(ok([FLEET_ID, SERVER_ID])); await new Promise((r) => setTimeout(r, 0)); });
-    expect(onDone).not.toHaveBeenCalled();
+    expect(onDone, 'the request was written — the caller re-polls even though the sheet shows something else').toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert'), 'the stale answer renders nothing').toBeNull();
     expect(screen.getByRole('button', { name: 'Roll back to v0.0.8' })).not.toBeDisabled();
+  });
+
+  it('dismissing a single-node Install, reopening a move control, then the answer landing still re-polls once (review F5: a plan switch IS dismiss then reopen)', async () => {
+    const answer = Promise.withResolvers<MoveRequestAnswer | 'unreadable'>();
+    vi.spyOn(api, 'applyUpdate').mockReturnValueOnce(answer.promise);
+    const onDone = vi.fn();
+    render(<ReopenHarness first={plan({ scope: 'node', direction: 'update', nodeId: FLEET_ID, tag: 'v0.0.10' })} again={plan(DOWN)} onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    fireEvent.click(screen.getByText('reopen'));
+    expect(screen.getByRole('button', { name: 'Roll back to v0.0.8' })).toBeInTheDocument();   // shown again, over another plan
+    await act(async () => { answer.resolve(ok([FLEET_ID])); await new Promise((r) => setTimeout(r, 0)); });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('sendMove rejects with a MoveSendError carrying the refusal and the nodes already requested', async () => {

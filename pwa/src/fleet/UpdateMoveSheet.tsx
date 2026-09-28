@@ -167,16 +167,11 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
   // AbandonSheet's generation: every close and every new plan bumps it in the
   // effect's cleanup, and an answer issued under an older generation is dropped.
   const gen = useRef(0);
-  // Whether the sheet is still shown (open, over the plan it was confirmed on or a newer one). The cleanup
-  // clears it and the next effect run sets it back, in one commit, so an answer reads `false` only after a
-  // dismiss or an unmount — never across a plan switch (review F5).
-  const shown = useRef(open);
   useEffect(() => {
     setBusy(false);
     setError(null);
     setAnswered(false);
-    shown.current = open;
-    return () => { gen.current += 1; shown.current = false; };
+    return () => { gen.current += 1; };
   }, [open, plan]);
 
   if (!open || plan === null) return null;
@@ -186,20 +181,18 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
   const confirm = (): void => {
     if (busy || answered) return;
     const mine = gen.current;
-    const planned = moveRequests(plan).length;
     setBusy(true);
     setError(null);
     void sendMove(plan, () => gen.current === mine).then(
       (answers) => {
         if (gen.current !== mine) {
-          // Superseded — a plan switch (nothing more to say, the sheet already shows something else), or a
-          // dismiss (scrim, Esc, swipe — never gated by the disabled Cancel). A dismiss leaves something written
-          // whenever an answer came back at all: a mid-sequence stop (`answers.length < planned`) and equally a
-          // single-node move, whose one POST is written before the answer lands (`answers.length === planned`),
-          // so a dismissed sheet re-polls for anything it sent (review F5). A plan switch re-polls only for the
-          // mid-sequence gap; the reload is harmless there, so it is only skipped for a plan switch that
-          // finished sending everything it planned, because there is nothing to report (review IMPORTANT 1).
-          if (answers.length > 0 && (answers.length < planned || !shown.current)) onDone();
+          // Superseded — a dismiss (scrim, Esc, swipe — never gated by the disabled Cancel), or a new plan: in the
+          // real app neither parent can change `plan` while the sheet is open, so a new plan IS a dismiss then a
+          // reopen. Either way the answer is dropped from the SCREEN (nothing is rendered for a plan the sheet no
+          // longer shows), but if it came back at all something was written — a single-node move's one POST, or
+          // a mid-sequence stop's first — and the operator is now looking at something else, so the caller
+          // re-polls. The reload is harmless when nothing new was written (review F5, IMPORTANT 1).
+          if (answers.length > 0) onDone();
           return;
         }
         setBusy(false);
