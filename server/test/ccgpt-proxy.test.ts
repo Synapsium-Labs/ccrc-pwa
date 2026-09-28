@@ -52,6 +52,7 @@ afterEach(async () => {
   // child (and its port) were still alive for a few more milliseconds —
   // ordinarily harmless, but it is also what made the vacuous-suite failure
   // mode possible in the first place (see `startPair`'s comment below).
+  const dT0 = performance.now();
   if (proc) {
     const p = proc;
     proc = null;
@@ -61,7 +62,9 @@ afterEach(async () => {
       p.kill('SIGKILL');
     });
   }
+  const dT1 = performance.now();
   if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+  console.error(`[diag ${new Date().toISOString()}] afterEach kill->close ${(dT1 - dT0).toFixed(0)}ms upstream.close ${(performance.now() - dT1).toFixed(0)}ms`);
 });
 
 type SpawnOutcome = { kind: 'exited'; code: number | null } | { kind: 'still-serving' };
@@ -239,7 +242,10 @@ async function startPair(
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => handler(req, Buffer.concat(chunks), res));
   });
+  const dT0 = performance.now();
+  const dlog = (m: string) => console.error(`[diag ${new Date().toISOString()}] startPair +${(performance.now() - dT0).toFixed(0)}ms ${m}`);
   await new Promise<void>((r) => upstream!.listen(UPSTREAM_PORT, '127.0.0.1', () => r()));
+  dlog('upstream listening');
 
   const lane = mintLane();
   const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
@@ -257,6 +263,9 @@ async function startPair(
     },
   });
   proc = child;
+  dlog(`spawned pid=${child.pid}`);
+  child.once('spawn', () => dlog('child spawn event'));
+  let dRefused = 0; let dForeign = 0; let dFetchMs = 0;
 
   let stderr = '';
   child.stderr?.on('data', (c) => { stderr += c.toString(); });
@@ -287,18 +296,22 @@ async function startPair(
         `(code=${c.code} signal=${c.signal}): ${stderr || '(no stderr)'}`,
       );
     }
+    const dF = performance.now();
     try {
       const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+      dFetchMs += performance.now() - dF;
       if (r.ok) {
         const body: unknown = await r.json();
         if (body && typeof body === 'object' && (body as { lane?: unknown }).lane === lane) {
+          dlog(`ANSWERED as this lane on poll ${i} (refused=${dRefused} foreign=${dForeign} fetch total ${dFetchMs.toFixed(0)}ms)`);
           return { child, lane };
         }
+        dForeign++;
         // Answered, but not as THIS lane — a foreign or stale listener owns
         // the port right now. Keep polling rather than accepting an answer
         // that is not provably ours.
       }
-    } catch { /* not up yet */ }
+    } catch (e) { dFetchMs += performance.now() - dF; dRefused++; if (dRefused % 20 === 1) dlog(`poll ${i} refused: ${String((e as { cause?: { code?: string } })?.cause?.code ?? e)} (fetch ${(performance.now() - dF).toFixed(0)}ms)`); }
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`shim did not come up as lane ${JSON.stringify(lane)} (stderr: ${stderr || '(none)'})`);
