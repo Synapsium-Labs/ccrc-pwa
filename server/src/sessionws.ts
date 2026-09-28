@@ -64,7 +64,7 @@ export class SessionStream {
   private uuid: string | null = null;
   private status: SessionStatus | null = null;
   /** What the client last saw of the pane menu — see nextDialogFrame. */
-  private seenDialog: DialogSeen = { id: null, ask: null };
+  private seenDialog: DialogSeen = { id: null, ask: null, raw: null };
   /** The transcript state that already failed to explain the menu on screen —
    *  see claimAskRead. */
   private askProbe: { file: string; id: string; size: number; mtimeMs: number } | null = null;
@@ -701,10 +701,12 @@ export class SessionStream {
 }
 
 /** What a client has already been told about the pane menu: the dialog id it
- *  last saw, and the enrichment (if any) that rode along with it. */
+ *  last saw, the enrichment (if any) that rode along with it, and — for an
+ *  UNPARSED dialog only, null otherwise — the raw pane it was sent. */
 export interface DialogSeen {
   id: string | null;
   ask: DialogAsk | null;
+  raw: string | null;
 }
 
 /**
@@ -722,6 +724,14 @@ export interface DialogSeen {
  * So: send on a new id OR on the first upgrade to an enriched dialog, and never
  * the other way round — a transient read miss must not strip descriptions off a
  * sheet the operator is already reading.
+ *
+ * And send again when an UNPARSED dialog repaints under the same id. Its raw
+ * pane is the only picture of it the phone has (`DialogSheet.tsx` shows it in
+ * a well), and a multi-select keeps one id while its boxes are ticked at the
+ * terminal (`parseDialog`: that id is what the push edge-triggers on), so an
+ * id-only gate froze the well at its first capture with every box unticked.
+ * The phone replaces its dialog on every frame and keys dismissal on the id,
+ * so the refresh never re-opens a sheet the operator closed.
  */
 export function nextDialogFrame(
   prev: DialogSeen,
@@ -729,15 +739,16 @@ export function nextDialogFrame(
 ): { seen: DialogSeen; msg: SessionStreamMsg | null } {
   if (!dialog) {
     if (prev.id === null) return { seen: prev, msg: null };
-    return { seen: { id: null, ask: null }, msg: { type: 'dialog_cleared' } };
+    return { seen: { id: null, ask: null, raw: null }, msg: { type: 'dialog_cleared' } };
   }
   const isNew = prev.id !== dialog.id;
   const latched = isNew ? null : prev.ask;       // a new menu forgets the old ask
   const ask = dialog.ask ?? latched;             // and a missed read never downgrades
   const upgraded = ask !== null && latched === null;
-  if (!isNew && !upgraded) return { seen: prev, msg: null };
+  const repainted = !dialog.parsed && prev.raw !== dialog.raw;
+  if (!isNew && !upgraded && !repainted) return { seen: prev, msg: null };
   return {
-    seen: { id: dialog.id, ask },
+    seen: { id: dialog.id, ask, raw: dialog.parsed ? null : dialog.raw },
     msg: { type: 'dialog', dialog: ask === null ? dialog : { ...dialog, ask } },
   };
 }
