@@ -96,7 +96,11 @@ describe('modelOptions', () => {
     expect(active('gpt', 'gpt-5.6-terra')).toEqual(['GPT-5.6 Terra']);
     expect(active('gpt', 'gpt-5.6-luna')).toEqual(['GPT-5.6 Luna']);
     // The 1M-context suffix the Anthropic lanes render must not defeat the match.
-    expect(active('claude', 'Opus 5 (1M context)')).toEqual(['Opus 5']);
+    expect(active('claude', 'Opus 5.5 (1M context)')).toEqual(['Opus 5.5']);
+    // The readback is the bare FAMILY word, so the row stays lit across a
+    // version bump the label has not caught up with yet — the pane said
+    // "Opus 5" before 2026-09-22 and the same row answered for it.
+    expect(active('claude', 'Opus 5 (1M context)')).toEqual(['Opus 5.5']);
   });
 
   it('matches a tier name case-insensitively, as the pane may title-case it', () => {

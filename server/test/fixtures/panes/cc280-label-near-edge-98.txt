@@ -1,0 +1,14 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Plan
+
+Which rollout plan should the rig follow?
+
+❯ 1. Roll the fleet box first and then the server box, waiting for every supervisor to report back
+     Slow and careful, the default order.
+  2. Server first
+     When the server arm widens a reader.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

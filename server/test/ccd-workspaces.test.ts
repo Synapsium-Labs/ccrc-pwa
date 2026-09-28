@@ -81,23 +81,23 @@ describe('slug rules', () => {
   });
 
   it('generates a slug that is itself valid', () => {
-    const slug = sh(`_ws_slug_new demo`);
+    makeRepo('demo'); const slug = sh(`_ws_slug_new demo`);   // a repo: it asks git too, and no repo is `unmeasurable`
     expect(sh(`_ws_slug_valid '${slug}' && echo yes || echo no`)).toBe('yes');
   });
 
   it('never collides with an existing registry entry', () => {
     // Pin the generator to one candidate, then occupy it.
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.uuid'), 'x');   // free in git: the REGISTRY refuses
     const slug = sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`);
     expect(slug).toBe('EXHAUSTED');
   });
 
   it('honours CCD_WS_SLUG when the name is free', () => {
-    expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo`)).toBe('quiet-mesa');   // free in git too
   });
 
   it('rejects an invalid CCD_WS_SLUG rather than passing it through', () => {
-    expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
+    makeRepo('demo'); expect(sh(`CCD_WS_SLUG=quiet.mesa _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');   // VALIDITY refuses
     expect(sh(`CCD_WS_SLUG=feat/thing _ws_slug_new demo || echo REJECTED`)).toBe('REJECTED');
   });
 });
@@ -268,7 +268,7 @@ describe('a partially purged registry never frees the slug', () => {
   });
 
   it('keeps the generator off a residue slug as well as the explicit one', () => {
-    fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');
+    makeRepo('demo'); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.reaping'), 'clips\n');   // the residue refuses
     expect(sh(`CCD_WS_SLUG=quiet-mesa _ws_slug_new demo || echo EXHAUSTED`)).toBe('EXHAUSTED');
   });
 
@@ -1519,6 +1519,8 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, the comment that states the pair rule, and — fix round 2, B-I3 — THREE more on the two NESTED-ID legs that measure the `.<id>.` anchoring in the direction only the dot-leading loop can answer: a hyphen-neighbour id holding its own family (this slug FREE, its residue empty; the neighbour TAKEN and named), and a DOTTED nested id (`demo-quiet-mesa.x-y`) whose family shares this id\'s exact `.<id>.` prefix' },
     { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
       what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
+    { file: 'ccd-ws-slug-git.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the named-slug refusal\'s GIT/DISK arm (ws-slug-collision) — three assertions that a branch, a path and a registered worktree each refuse under the same `slug in use:` prefix, the prefix kept so one grep finds every refusal; the registry arm\'s message is untouched' },
     { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,

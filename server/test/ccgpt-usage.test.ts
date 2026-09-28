@@ -1,8 +1,10 @@
 // server/test/ccgpt-usage.test.ts
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
 import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -88,6 +90,10 @@ const HAS_IPV6_LOOPBACK = Object.values(os.networkInterfaces()).some(
 // OS-assigned one, matching the proxy suite's own convention.
 const USAGE_PORT = 45020;
 
+/** lane.json's one writer (spec §5.4), resolved from this file's path the way
+ *  `ccgptFile` resolves the publisher — see the task-6 case below. */
+const MODELS_OP = fileURLToPath(new URL('../../deploy/models-op.mjs', import.meta.url));
+
 // Minted, never shared (task-10-rulings.md (commit 4893935a) §5). Each case gets its own lane
 // id, so two cases can never collide over a leftover row.
 let mintedIdCount = 0;
@@ -98,7 +104,9 @@ function mintId(): string {
 
 /** Plants `~/.ccrc/codex/<id>/lane.json` with `probeModel` and `authDir`
  *  fields — the two things this wave's ccgpt-usage.py reads from it
- *  (lane.json has no writer until Plan 2b, task-10-brief.md (commit 4893935a)). By default
+ *  (lane.json had no writer until Plan 2b, task-10-brief.md (commit 4893935a);
+ *  it has one now, `deploy/models-op.mjs`, and the task-6 case below reads
+ *  what that writer produced instead of calling this helper). By default
  *  also plants a stub `auth.json` (empty object; its CONTENTS are never
  *  read by the publisher, only its existence — task-10-fix-rulings.md I-3)
  *  at that `authDir`, so every case is "logged in" unless it opts out via
@@ -144,6 +152,47 @@ function limitsPath(home: string, id: string): string {
 
 function readRow(home: string, id: string): Record<string, unknown> {
   return JSON.parse(readFileSync(limitsPath(home, id), 'utf8'));
+}
+
+/** Task 6: renders `~/.ccrc/codex/<id>/lane.json` with the REAL writer
+ *  (`deploy/models-op.mjs`), never by hand — a codex-kind roster row, `init
+ *  codex`, then each of `mutations` (the argv after `--id`) — and plants
+ *  `auth.json` ONLY at the roster's `authDir`, a path that shares nothing with
+ *  any naming convention, so a publisher that re-derived its token directory
+ *  instead of reading the manifest finds nothing there.
+ *
+ *  Synchronous (`spawnSync`), so a caller runs it BEFORE binding its endpoint:
+ *  the materialiser opens no socket, so blocking the event loop here starves
+ *  nothing (D-3157 is about a mock that must answer mid-run). */
+function materialiseLane(home: string, id: string, mutations: string[][]): void {
+  const authDir = `.${id}-oauth-fixture`;
+  const roster = join(home, '.ccrc', 'accounts.json');
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(roster, `${JSON.stringify({
+    version: 1,
+    accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
+      { id, label: id, configDirSuffix: `.claude-${id}`,
+        exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir },
+        homeAble: false, telemetry: 'codex' },
+    ],
+  }, null, 2)}\n`);
+  for (const [verb, ...rest] of [['init', '--probe', 'codex'], ...mutations]) {
+    const m = spawnSync(process.execPath, [MODELS_OP, verb!, '--file', roster, '--id', id, ...rest],
+      { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(m.status, `models-op ${verb}: ${m.stdout}${m.stderr}`).toBe(0);
+  }
+  // Existence, never contents — the stub Authenticator reads nothing.
+  mkdirSync(join(home, authDir), { recursive: true });
+  writeFileSync(join(home, authDir, 'auth.json'), '{}');
+}
+
+/** The registry FILE's haiku class — the oracle a materialised lane.json's
+ *  `probeModel` is checked against, rather than a literal. */
+function haikuOf(home: string, id: string): unknown {
+  const registry = JSON.parse(readFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), 'utf8'));
+  return (registry as { classes: { haiku: unknown } }).classes.haiku;
 }
 
 type CapturedRequest = { headers: IncomingHttpHeaders; body: unknown };
@@ -689,6 +738,124 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect((ep2.requests[0].body as { model?: unknown }).model).toBe(model2);
     } finally {
       await ep2.close();
+    }
+  });
+
+  // -------------------------------------------------------------------
+  // Task 6 of the 2b1 plan — D-3158's real gap. Every case above reads a
+  // lane.json `plantLane` wrote BY HAND, and so did the reader's own pins:
+  // a fixture and a reader written together agree with each other, and would
+  // agree just as well with a producer that spelled the key differently or
+  // put the wrong value in it. This case plants nothing: the REAL materialiser
+  // (`deploy/models-op.mjs`, the one writer spec §5.4 names) renders lane.json
+  // from a codex-kind roster row and a class registry, and the REAL publisher
+  // reads it — so the two agree through the writer, or this reds.
+  //
+  // The materialiser runs through `spawnSync`, deliberately, and BEFORE the
+  // endpoint is bound: it opens no socket, so blocking the event loop there
+  // can starve nothing. The publisher runs through `runPyAsync` (D-3157), and
+  // that holds under a mutation too — a producer that dropped or renamed
+  // `probeModel` makes the publisher REFUSE, and a refusal needs no answer from
+  // the mock, so this case reds on its assertions rather than on a deadlock.
+  it('task-6 (D-3158): publishes from a lane.json the REAL materialiser wrote, not a hand-planted one', async () => {
+    const home = mkTmp('ccgpt-usage-materialised-');
+    const id = mintId();
+    // `init` plants the seed; `set-class` then moves haiku onto an id the seed
+    // does not carry, so the value can only have come from the registry this
+    // lane has NOW — the one an operator's reclassification leaves behind.
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'gpt-x-mini']]);
+    expect(existsSync(join(home, '.ccrc', 'codex', id, 'lane.json'))).toBe(true);
+    // The oracle is the registry FILE, not a literal; the next line is the
+    // control that it holds the reclassified id rather than the seed's.
+    const probeModel = haikuOf(home, id);
+    expect(probeModel).toBe('gpt-x-mini');
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect((requests[0].body as { model?: unknown }).model).toBe(probeModel);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
+
+  // The writer's OTHER output, through the same two real programs: haiku
+  // unassigned, so lane.json carries no `probeModel` at all (the writer omits
+  // it rather than choosing a fallback). The refusal must name the act that
+  // cures it. `ccrc doctor --fix` did not — no doctor arm renders lane.json,
+  // and a re-render would read the same null — so this pins the remedy the
+  // publisher now names, and that the old one is gone. A mutation that let the
+  // publisher proceed would reach a mock that answers, so `runPyAsync` keeps
+  // that red an assertion rather than a deadlock (D-3157).
+  it('task-6 fix round 1 (T2): refuses a materialised lane.json with haiku unassigned, naming set-class haiku', async () => {
+    const home = mkTmp('ccgpt-usage-materialised-nohaiku-');
+    const id = mintId();
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'none']]);
+    expect(haikuOf(home, id)).toBeNull();
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/carries no usable probeModel/);
+      expect(r.stderr).toContain(`ccrc models ${id} set-class haiku <modelId>`);
+      expect(r.stderr).not.toMatch(/doctor --fix/);
+      expect(requests.length).toBe(0);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
+  // Final review F-7: the authDir refusal named `ccrc doctor --fix`, which
+  // renders no lane.json. It now names a `ccrc models` mutation, and this case
+  // proves that remedy WORKS rather than pinning its text alone: the real
+  // materialiser writes the manifest, `authDir` is then stripped from it (a
+  // hand edit, or a writer that predates the field), the publisher refuses,
+  // one mutation through the real writer re-renders it, and the publisher then
+  // publishes. The ABSENT-file refusal and its `doctor --fix` pin above are
+  // deliberately untouched (deferred to Plan 3).
+  it('final review F-7: a lane.json with no authDir is refused naming a models mutation, and that mutation cures it', async () => {
+    const home = mkTmp('ccgpt-usage-no-authdir-');
+    const id = mintId();
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'gpt-x-mini']]);
+    const lanePath = join(home, '.ccrc', 'codex', id, 'lane.json');
+    const manifest = JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, unknown>;
+    expect(typeof manifest['authDir'], 'the real writer wrote no authDir to strip').toBe('string');
+    delete manifest['authDir'];
+    writeFileSync(lanePath, `${JSON.stringify(manifest, null, 2)}\n`);
+    let ep = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, ep.url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/carries no usable authDir/);
+      expect(r.stderr).toContain(`ccrc models ${id} set-class haiku <modelId>`);
+      expect(r.stderr).not.toMatch(/doctor --fix/);
+      expect(ep.requests.length).toBe(0);
+    } finally {
+      await ep.close();
+    }
+    // The remedy, through the real writer — the same verb and flags the
+    // refusal names — then the same publisher, unchanged.
+    const roster = join(home, '.ccrc', 'accounts.json');
+    const m = spawnSync(process.execPath,
+      [MODELS_OP, 'set-class', '--file', roster, '--id', id, '--class', 'haiku', '--model', 'gpt-x-mini'],
+      { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(m.status, `models-op set-class: ${m.stdout}${m.stderr}`).toBe(0);
+    expect(typeof (JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, unknown>)['authDir'],
+      'the mutation did not re-render authDir').toBe('string');
+    ep = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, ep.url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(ep.requests.length).toBe(1);
+    } finally {
+      await ep.close();
     }
   });
 

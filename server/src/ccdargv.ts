@@ -107,6 +107,17 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
 
 /**
+ * `--defer-expired`, or nothing (child reclamation, spec 2026-09-22 §5.7: the
+ * presence defer's ceiling, spent on the audit and the verb alike). A named
+ * helper and not an inline ternary ON PURPOSE: `ccdargv-dec-parity.test.ts`
+ * derives the dec-appending verbs from every `argv([…])` literal in the table
+ * below with a LAZY match to the first `])`, and an inline `: []` inside
+ * `wsReclaim`'s literal would end that match before `decFlags(` — hiding
+ * `ws-reclaim` from the one test that runs the real binary on its dec.
+ */
+const deferFlags = (deferExpired: boolean): readonly string[] => (deferExpired ? ['--defer-expired'] : []);
+
+/**
  * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
  * `route`, the one dec-carrying verb below that never touches a pane and
  * whose real parser (`cmd_route`, `ccd/ccd`) has no `--surface` case at all.
@@ -131,6 +142,22 @@ const actorReasonFlags = (dec: ActorFlags | null): readonly string[] =>
  */
 const routeFlags = (r: RouteFields | null): string[] =>
   r === null ? [] : ROUTE_WRITABLE_FIELDS.flatMap((f) => (r[f] === undefined ? [] : ['--route', `${f}=${r[f]}`]));
+
+/**
+ * The `--child <runId>` pair for a dispatched spawn (child-workspace
+ * reclamation, spec §5.1). `null` contributes NOTHING — `routeFlags`' own
+ * contract, for the same reason: a box that does not advertise `child-argv-v1`
+ * must receive the argv it always did, byte for byte.
+ *
+ * A HELPER RATHER THAN AN INLINE TERNARY, and that is measured, not taste:
+ * `ccdargv-dec-parity.test.ts` derives which verbs carry a dec by walking each
+ * `argv([…])` literal in `CCD_ARGV` up to its first `])`, and an inline
+ * `[...(child === null ? [] : ['--child', String(child)]), …]` closes a `])`
+ * INSIDE the literal — so the walk stops short of `decFlags(`, `ws-add` drops
+ * out of the derived set, and that suite reds on a builder that still declares.
+ */
+const childFlags = (child: number | null): string[] =>
+  child === null ? [] : ['--child', String(child)];
 
 /**
  * The session's own device label as an `--actor` value.
@@ -348,8 +375,21 @@ export const CCD_ARGV = {
    * this builder shipped before this slice, token for token — the residual
    * `dispatch.ts`'s own call site states is which capability gates it.
    */
-  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null) =>
-                 argv(['ws-add', '--no-rc', ...routeFlags(route), p, ...decFlags(dec)]),
+  /**
+   * `child`, the minting run's id (child-workspace reclamation, spec §5.1): the
+   * BOX half of the two authorities that make a workspace a child. It goes
+   * IMMEDIATELY AFTER `--no-rc`, in the leading-flag group `cmd_ws_add`'s strip
+   * loop parses — never trailing after `decFlags`, for `route`'s reason above —
+   * and ahead of `--route`, so the two declarations the dispatch path makes
+   * about WHAT this spawn is (`--no-rc`, `--child`) sit together and the one
+   * about how it RUNS follows them. `null` — the default, and what dispatch
+   * passes to a box without `child-argv-v1` — composes this builder's previous
+   * argv token for token. A NUMBER, not a string: the run id is a SQLite rowid
+   * everywhere in the coordination store, and stringifying it here, once, means
+   * no caller can hand ccd a padded or signed spelling its grammar would refuse.
+   */
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
@@ -360,6 +400,23 @@ export const CCD_ARGV = {
                argv(['ws-restore', '--session', id, ...decFlags(dec)]),
   wsAudit:   (id: string) => argv(['ws-audit', '--session', id]),
   wsReap:    (tok: string, id: string) => argv(['ws-reap', '--expect', tok, '--session', id]),
+  /** `ws-audit --reclaim` (child reclamation, spec 2026-09-22 §5.5): the SAME
+   *  verb and the SAME granted prefix as `wsAudit` — `['ws-audit','--session']`
+   *  — with the mode flag AFTER the id, the order `cmd_ws_audit`'s fixed-arity
+   *  parse reads. No grant of its own: the audit destroys nothing. */
+  wsReclaimAudit: (id: string, deferExpired: boolean) =>
+    argv(['ws-audit', '--session', id, '--reclaim', ...deferFlags(deferExpired)]),
+  /** `ws-reclaim` — the ONE destructive argv this server composes with no human
+   *  in the path (spec §5.5). `childOf` is the run the SERVER holds as having
+   *  minted the workspace — the second authority, which ccd compares to the
+   *  box's `.child` marker, refusing `not-a-child` on any disagreement.
+   *  `token` is `ws-audit --reclaim`'s, re-proven by ccd inside the reap lock.
+   *  The confirmation token LEADS (`['ws-reclaim','--expect']` is the grant);
+   *  `--defer-expired` and the dec trail, and ccd strips both before it binds a
+   *  positional. */
+  wsReclaim: (token: string, childOf: number, id: string, deferExpired: boolean, dec: ActorFlags | null) =>
+    argv(['ws-reclaim', '--expect', token, '--child-of', String(childOf), '--session', id,
+          ...deferFlags(deferExpired), ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -615,6 +672,29 @@ export const ROUTE_CAP = 'route-v1';
  *  different parse paths in `ccd/ccd`, landed in separate commits. */
 export const ROUTE_ARGV_CAP = 'route-argv-v1';
 
+/** The `ccd caps` token that says this box parses `--child <runId>` on
+ *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
+ *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
+ *  §5.1–§5.2, wave 1). One token for both halves, because they ship in one ccd
+ *  inode. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's
+ *  own `echo child-argv-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` line holds this one equal to them.
+ *
+ *  IT GATES THE D-410 HAZARD, ONE FLAG TO THE LEFT. An older `cmd_ws_add` has
+ *  no `--child` arm, so its strip loop hands the flag to the positionals: the
+ *  argv `wsAddWorker` composes would bind `--child` as the PROJECT and every
+ *  dispatched spawn on that box would refuse before a worktree existed. So the
+ *  flag is OMITTED, and the omission journalled on the run
+ *  (`child-omitted:no-child-argv-cap`), unless this token is advertised — and
+ *  read with `capSupported` (null → REFUSE), never `verbSupported`, whose
+ *  null → PERMIT is the right default for a verb that always existed and the
+ *  wrong one for a flag that never did. What an omission costs is stated
+ *  rather than hidden: the workspace is minted WITHOUT the marker and is
+ *  therefore simply not a child — the same thing every workspace minted before
+ *  this token existed already is (spec §6, "Deploy"). */
+export const CHILD_ARGV_CAP = 'child-argv-v1';
+
 /** The `ccd caps` token that says this box takes `--apply` on `ccd route` and
  *  re-applies a pending routing record from its supervise tick, with the
  *  SESSION-ONLY keystrokes and the acknowledgement read back before anything is
@@ -665,6 +745,20 @@ export const ROUTE_APPLY_CAP = 'route-apply-v1';
  *  This is a note on the token, not a wrapper function — the gate belongs at
  *  wave 3's own seam, where its mutation test can red on it. */
 export const WIN_SIZE_CAP = 'win-size-v1';
+
+/** The `ccd caps` token that says this box has child-workspace reclamation
+ *  (spec 2026-09-22 §5.5, wave 3): `ws-audit --reclaim`, `ws-reclaim` with its
+ *  own ladder, pin phase and tail arm, and ws-reap's mirror refusal — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo reclaim-v1` and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`. `verbSupported` PERMITS
+ *  on an absent verb list; the verb this token gates deletes a workspace, and a
+ *  destructive verb dispatched to a box with no evidence it exists is the
+ *  failure the capability reader was built to prevent. A box without the token
+ *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
+export const RECLAIM_CAP = 'reclaim-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

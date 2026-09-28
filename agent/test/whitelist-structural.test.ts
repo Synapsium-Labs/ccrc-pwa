@@ -120,6 +120,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the window-size verb granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // CHILD RECLAMATION wave 3, g5's shape for the second destructive verb with a
+  // confirmation token: the enrolment, not the grant, is what refuses it.
+  'g13-ws-reclaim-without-expect.ts': {
+    what: 'the child-reclaim verb granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -320,6 +326,20 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     // own length and nothing past it.
     expect(() => auditExecWhitelist(withCcd([['ws-reap', '--session', '--expect']])))
       .toThrow(/only grantable with '--expect'/);
+  });
+
+  // CHILD RECLAMATION wave 3, fix round 1 — `ws-reap`'s own case one verb over.
+  // Without this, mutation row 2 (narrowing the shipped grant to `['ws-reclaim']`)
+  // is caught only by the module-load crash every consumer of `whitelist.ts`
+  // takes on import, which proves the crash fires, not that THIS verb's rule
+  // is what fires it. This case runs the audit over a CONSTRUCTED table, so
+  // the row reds here as an assertion instead.
+  it('throws on a ws-reclaim with no confirmation token, the second destructive verb', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-reclaim', '--expect']]))).not.toThrow();
   });
 
   it('throws on a coord-pause grant with no --state — the flag is the whole grant', () => {

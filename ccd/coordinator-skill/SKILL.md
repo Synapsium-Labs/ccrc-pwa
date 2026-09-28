@@ -69,7 +69,7 @@ with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
 2. The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.
-3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason.
+3. This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.
 4. This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.
 5. A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.
 6. A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.
@@ -161,7 +161,8 @@ code rides on is NOT the same on every route, and `ok:false` is the only
 field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
 `refused` (`paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
-`claimed-by-another`, `not-dispatched`, `prhistory-unreadable`); those same
+`claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
+`workspace-spent`, `spent-unmeasured`); those same
 three routes put `unknown-run`, `bad-transition` and the re-measurement
 family (`stale-tip`, `pr-regressed`, `no-handoff-commit`) on `error` instead;
 `POST /api/mail` puts every one of its own refusals on `error`; and `POST /api/runs/:id/advance` puts **every**
@@ -173,7 +174,8 @@ client's exit status — it reports whether a response HAPPENED, never what the
 response said. The refusals you will actually meet are
 `paused`, `mail-disabled`, `cap-concurrency`, `cap-daily`, `ambiguous-dispatch`,
 `worker-busy`, `hookstate-unmeasurable`, `claimed-by-another`,
-`project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `hold-oversize`, `hold-invalid`,
+`project-mismatch`, `home-mismatch`, `claimant-is-a-worker`, `workspace-spent`,
+`spent-unmeasured`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
 `unknown-item`, `item-terminal`. Their meanings are in
@@ -356,6 +358,22 @@ not after.
      zero open runs, and the server retires a program with none — silently
      breaking every `toId:'coordinator'` mail from that point on. Opening first
      never lets the count reach zero.
+     **One PR per child decides `sessionId` before the project does:** a
+     MARKED child — a workspace carrying the `$REG/<id>.child` marker,
+     minted for a run by a box that records it — carries at most one PR, so
+     a producer whose MARKED workspace opened a PR is SPENT: wave N+1 opens
+     without its `sessionId` and the producer closes as the cross-project
+     arm closes it, even inside one project — naming a spent workspace is
+     refused `workspace-spent` (`references/wave-lifecycle.md` §5).
+     Separately, a fresh child always branches from the project's default
+     branch and carries none of the previous producer's unmerged commits,
+     which is why, when wave N+1 builds on wave N's code, it dispatches only
+     once wave N's PR is proven merged, exactly as §5's "One PR per child"
+     requires. An UNMARKED producer — every workspace minted without a
+     marker, before wave 1's deploy, or by a dispatch that journaled
+     `child-omitted` — is never refused this way; dropping its `sessionId`
+     anyway is still safe and follows the same one-PR rule. The same-project
+     arm is for a producer whose workspace opened no PR.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open
      successor on the same workspace, then run `"$API" runs list --closed 1`,
@@ -371,12 +389,18 @@ not after.
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
 7. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
-   and, *if no other open run names this workspace*, releases the hold. Nothing
-   archives the workspace on its own after that: the merged sweep only pushes
-   a notification, so the workspace stays live and supervised until a human
-   archives it. Read `released` in the response: `false`
+   and, *if no other open run names this workspace*, releases the hold. What
+   happens to the workspace next depends on whose it is. A **child** — one
+   dispatch minted for one of your runs — is reclaimed by the server right
+   after the close: the response says `"childReclaim":"queued"`, the act runs
+   after the answer, and its outcome is a row in the feed, never a reply to
+   you (`references/wave-lifecycle.md` §6). **Your own workspace**, and any
+   workspace dispatch did not mint, is not a child: nothing archives it, the
+   merged sweep only pushes a notification, and it stays live and supervised
+   until a human cleans it up. Read `released` in the response: `false`
    means the run closed but the workspace is **still claimed** — another open
-   run owns it, which is exactly the state step 6's open-before-close creates.
+   run owns it, which is exactly the state step 6's open-before-close creates,
+   and nothing is reclaimed while it is.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
 

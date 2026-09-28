@@ -84,7 +84,7 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * `verbSupported` call, and widening this past named verbs would let a
  * missing one hide behind an unrelated `capSupported` in the same function.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim']);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by
@@ -379,7 +379,13 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // `verbSupported`'s permit-on-no-evidence default means a route that forgets
     // the gate sends it to a box that answers `die "usage: ..."` -> 502 "the tag
     // failed", which reads as a broken feature rather than an old fleet host.
-const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool'];
+    // `ws-reclaim` (child reclamation, wave 3) joins too: its one call site
+    // (`coord/childReclaim.ts`'s `childReclaimAct`) is gated by
+    // `capSupported(RECLAIM_CAP)` — CAP_GATED_VERBS above — because a verb
+    // that never existed must REFUSE on no evidence, and `verbSupported`
+    // permits on none. Named here so the site cannot vanish or lose its gate.
+const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
+  'ws-reclaim'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

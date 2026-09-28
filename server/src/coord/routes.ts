@@ -26,9 +26,11 @@ import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
+import { reclaimChild, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { queueSystemMail } from './rundefs.js';
+import { childBindGate } from './childBind.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
@@ -195,6 +197,16 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
         ok: false, error: 'registry-unmeasurable',
         ...(r.stderr === undefined ? {} : { stderr: r.stderr }),
       });
+    // Rule 3 at dispatch. `pr`/`detail` spread by PRESENCE (an L4 adapter may
+    // not narrow a distinction it received); `unbound` unconditionally — it is
+    // the answer to "what do I do next", and absent would read as `false`.
+    // `child-reclaim-refusals.test.ts` harvests this arm's fields and requires
+    // each in `wave-lifecycle.md` §2.
+    case 'childSpent':
+      return reply.code(409).send({ ok: false, refused: r.code,
+        ...(r.pr === undefined ? {} : { pr: r.pr }),
+        ...(r.detail === undefined ? {} : { detail: r.detail }),
+        unbound: r.unbound });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
@@ -210,7 +222,10 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
 function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
-  if (r.ok) return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released });
+  if (r.ok) {
+    return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released,
+      childReclaim: r.childReclaim, ...(r.childReclaimWhy === undefined ? {} : { childReclaimWhy: r.childReclaimWhy }) });
+  }
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
@@ -230,6 +245,27 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
       return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
     }
   }
+}
+
+/**
+ * The close path's hand-off to THE ONE child-reclaim executor (spec 2026-09-22
+ * §5.7): on the session's OWN queue — the same `KeyedQueue` `POST
+ * /workspace/reap` and the naming sweep join, so a reclaim never races either
+ * on one workspace — and NEVER awaited, so the close answers before the act
+ * runs. Its `ChildReclaimDeps` are read from `deps` WHEN THE JOB RUNS, not
+ * when it was queued, so `fleetState` is the box's current answer. A
+ * rejection is a bug, logged; the sweep reaches the child either way.
+ */
+function childReclaimPort(deps: Deps, coord: CoordStore): (req: ChildReclaimRequest) => void {
+  return (req) => {
+    void deps.queue.run(req.sessionId, () => reclaimChild({
+      coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
+      fleetState: deps.fleetState, presence: deps.presence, notifyLog: deps.notifyLog,
+    }, req)).catch((err: unknown) => {
+      console.warn(`ccrc-server: the reclaim of ${req.sessionId} threw `
+        + `(${err instanceof Error ? err.message : String(err)}) — left to the sweep`);
+    });
+  };
 }
 
 /** `settleItems`' typed result union -> HTTP status + body (Build 4, Task 3).
@@ -1330,6 +1366,26 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });
     }
 
+    // Rule 3 (child-reclamation spec §5.4): a CHILD whose branch has had a PR
+    // may not take another run. HERE, for F1's reason: a refusal must leave no
+    // `planned` orphan and place no hold, so it runs before `openRun` and the
+    // hold below. After every DB-only refusal above, because this is the
+    // handler's first awaited read of the registry and, for a child with no PR
+    // on record, a live `pr-state` round trip — a cheaper refusal is never
+    // kept waiting behind it. It runs inside `coordMutex`, which is the cost:
+    // at most `pr-state`'s 20 s budget, and only for a CHILD with no PR on
+    // record — a workspace with no marker costs one registry read. The two
+    // codes are spelled here, not forwarded from the verdict: `mail-routes.
+    // test.ts` requires every `RunRefuseCode` to be quoted in this directory.
+    if (typeof sessionId === 'string') {
+      const gate = await childBindGate(deps, coord, sessionId);
+      if (!gate.ok) {
+        return gate.code === 'workspace-spent'
+          ? reply.code(409).send({ ok: false, refused: 'workspace-spent', pr: gate.pr })
+          : reply.code(409).send({ ok: false, refused: 'spent-unmeasured', detail: gate.detail });
+      }
+    }
+
     // The coordinator's project, from the REGISTRY — never `sessionProject`,
     // which reads the runs table and so answers only for a session that has
     // been a worker. Measured over all 64 runs in history: no session has ever
@@ -1500,7 +1556,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, req.body, 'coordinator'));
     return sendCloseOutcome(reply, outcome);
   });
@@ -1533,7 +1589,7 @@ export function registerCoordRoutes(
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
-      fleetState: deps.fleetState };
+      fleetState: deps.fleetState, childReclaim: childReclaimPort(deps, coord) };
     const outcome = await coordMutex.run(() => closeRun(closeDeps, id, { intent: 'abandon' }, 'operator'));
     return sendCloseOutcome(reply, outcome);
   });

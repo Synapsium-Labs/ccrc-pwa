@@ -310,7 +310,7 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
     const labels = Array.from(classSelect.options).map((o) => o.textContent);
     expect(labels).toEqual([
       'Coordinator row', 'Default',
-      'Fable 5 — fable', 'Opus 5 — opus', 'Sonnet 5 — sonnet', 'Haiku 4.5 — haiku',
+      'Fable 5 — fable', 'Opus 5.5 — opus', 'Sonnet 5 — sonnet', 'Haiku 4.5 — haiku',
     ]);
   });
 
@@ -328,7 +328,7 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
   it('shows the coordinator-row note under the row', async () => {
     await openAtStepTwo([]);
     expect(await screen.findByText(
-      "Unset fields take the coordinator row (Fable · ultracode, Sonnet subagents, workflows on). "
+      "Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on). "
       + "If the account can't serve the class today, ccd starts one rung down and restores it when it can.",
     )).toBeInTheDocument();
   });

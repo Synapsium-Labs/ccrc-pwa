@@ -269,6 +269,39 @@ describe('_swap_target ranks an auth-dead lane LAST, and never makes it ineligib
   });
 });
 
+// D-3522: a 401 writes no usage telemetry, so `_avail` passes an auth-dead home,
+// and the "home recovered: go back" arm returned a rescued session straight to
+// the account it was rescued off — after SWAP_COOLDOWN idle, or at once on a
+// forced call, ahead of the candidate loop's rank-101 demotion.
+describe('_swap_target never returns a session to an auth-dead home (D-3522)', () => {
+  const away = (id: string, wrapper: string, homeW: string): void => {
+    const reg = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, `${id}.uuid`), 'u\n');
+    fs.writeFileSync(path.join(reg, `${id}.wrapper`), `${wrapper}\n`);
+    fs.writeFileSync(path.join(reg, `${id}.home`), `${homeW}\n`);
+  };
+
+  it('an idle rescued session stays where it is instead of going home to a dead account', () => {
+    away('claude-demo', 'claude-b', 'claude');
+    writeLimits('claude', 5, 5);          // home reads healthy: a 401 wrote nothing
+    writeLimits('claude-b', 40, 40);      // cur: fine to stay on
+    expect(sh('_swap_target claude-demo claude-b claude || true')).toBe('claude');   // control: live home
+    mark('claude', '1757203200 auth-401');
+    expect(sh('_swap_target claude-demo claude-b claude || true')).not.toBe('claude');
+  });
+
+  it('a forced rescue off cur does not land on the dead home either — it takes a live candidate', () => {
+    away('claude-demo', 'claude-b', 'claude');
+    writeLimits('claude', 5, 5);
+    writeLimits('claude-b', 99, 99);      // cur: pinned, must leave
+    writeLimits('claude-a', 10, 10);
+    writeLimits('claude-d', 20, 20);
+    expect(sh('_swap_target claude-demo claude-b claude 1 || true')).toBe('claude');   // control
+    mark('claude', '1757203200 auth-401');
+    expect(sh('_swap_target claude-demo claude-b claude 1 || true')).toBe('claude-a');
+  });
+});
+
 describe('a successful spawn is evidence, and clears the marker', () => {
   // §A.6's second owner. The probe (owner one) clears on a 403 within its
   // 15-minute cadence; this narrows the stale window to zero for the case where

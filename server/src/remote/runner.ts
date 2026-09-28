@@ -38,6 +38,11 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // even though no test can tell this line apart from its own absence.
   'ws-audit': 90_000,
   'ws-reap': 240_000,
+  // Child reclamation (spec 2026-09-22 §5.6): ws-reap's destruction — a
+  // worktree that can hold gigabytes of node_modules, a branch, the clips, a
+  // temp root — plus a pin phase and a settle. It earns ws-reap's budget, not
+  // the flat 90 s it would silently inherit without this row.
+  'ws-reclaim': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in

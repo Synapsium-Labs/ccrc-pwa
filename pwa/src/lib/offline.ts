@@ -68,7 +68,8 @@ function isRosterWireLike(v: unknown): v is RosterWire {
  *    genuinely empty fleet — and while `watch.ts`'s tick path now refuses to
  *    broadcast that shape (it takes `readRegistryMeasured` and returns before
  *    `bus.emit('fleet', …)`), TWO producers still ship it: `server.ts`'s
- *    `GET /api/fleet` fallback and the connect-time `/ws/fleet` push both
+ *    `GET /api/fleet` fallback and a connect-time `/ws/fleet` push made before
+ *    the watcher's first broadcast (after it, the push IS that broadcast) both
  *    call `assembleFleet` fresh and take `readRegistry`'s `[]`-on-unlistable
  *    answer — plus any older server predating the ladder (the same
  *    FLEET_PROTO-stays-1 skew the `unmeasured` revival tolerates). So this
@@ -132,7 +133,9 @@ export function loadFleetSnapshot(): FleetSnapshot | null {
     if (typeof parsed !== 'object' || parsed === null) return null;
     const { savedAt, sessions, roster } = parsed as { savedAt?: unknown; sessions?: unknown; roster?: unknown };
     if (typeof savedAt !== 'number') return null;
-    const revived = reviveFleetSessions(sessions);
+    // `keep`: this snapshot holds what live frames carried, so a spawn word
+    // this bundle cannot name renders offline exactly as it did live.
+    const revived = reviveFleetSessions(sessions, 'keep');
     if (revived === null) return null;
     const revivedRoster = Array.isArray(roster) ? roster.filter(isRosterWireLike) : [];
     return { savedAt, sessions: revived, roster: revivedRoster };

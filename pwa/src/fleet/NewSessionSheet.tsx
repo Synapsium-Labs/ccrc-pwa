@@ -416,7 +416,7 @@ export function NewSessionSheet({
             </label>
           </div>
           <p className="sheet-copy route-note">
-            Unset fields take the coordinator row (Fable · ultracode, Sonnet subagents, workflows on).
+            Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
           <button

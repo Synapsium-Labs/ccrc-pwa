@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -119,6 +119,40 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
     // The flag alone (no env var set) verifies normally.
     const ok = verify([...mainArgs(), '--trusted-root', join(REPO, 'deploy', 'sigstore-trusted-root.jsonl')]);
     expect(ok.code, ok.stderr).toBe(0);
+  });
+
+  // W1 minor M2: the OIDC issuer is the fourth check, a single clause in the
+  // sigstore arm's `v.verify` call (`extensions: { issuer: ISSUER }`), and no
+  // case here could tell it was there — every real fixture bundle carries
+  // the right issuer. So the SHIPPED verifier is copied with its one ISSUER
+  // literal swapped for a foreign issuer, beside a link to `server/` (so its
+  // `createRequire(HERE/../server/package.json)` resolves the same deps) and
+  // to the vendored root (its DEFAULT_ROOT). The unmodified copy is the
+  // control: it verifies, so the refusal is the issuer's and not the layout's.
+  // Deleting the clause from deploy/verify-provenance.mjs makes the foreign
+  // copy verify too — this case reds.
+  it('a bundle whose issuer is not the one the verifier trusts refuses — the issuer clause is load-bearing (M2; §18 "the identity set is exactly two workflow URIs")', () => {
+    const LITERAL = `const ISSUER = '${ISSUER}';`;
+    const src = readFileSync(VERIFIER, 'utf8');
+    expect(src.split(LITERAL).length - 1, 'the verifier spells its issuer in exactly one literal').toBe(1);
+    const copyAt = (prefix: string, text: string): string => {
+      const root = mkTmp(prefix);
+      mkdirSync(join(root, 'deploy'), { recursive: true });
+      writeFileSync(join(root, 'deploy', 'verify-provenance.mjs'), text);
+      symlinkSync(join(REPO, 'deploy', 'sigstore-trusted-root.jsonl'), join(root, 'deploy', 'sigstore-trusted-root.jsonl'));
+      symlinkSync(join(REPO, 'server'), join(root, 'server'));
+      return join(root, 'deploy', 'verify-provenance.mjs');
+    };
+    const runCopy = (file: string): Result => {
+      const r = spawnSync('node', [file, ...mainArgs()], { env: { ...process.env }, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const control = runCopy(copyAt('ccrc-verify-issuer-control-', src));
+    expect(control.code, control.stderr).toBe(0);
+    const foreign = runCopy(copyAt('ccrc-verify-issuer-foreign-', src.replace(LITERAL, "const ISSUER = 'https://issuer.invalid';")));
+    expect(foreign.code, foreign.stdout).toBe(1);
+    expect(foreign.stderr).toMatch(new RegExp(`^verify-provenance: no bundle verified against the trusted root for either release workflow of ${OWNER}/${REPO_NAME} `));
+    expect(foreign.stdout).toBe('');
   });
 });
 

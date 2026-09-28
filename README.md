@@ -398,7 +398,13 @@ re-points the record at this box every five minutes, reading the token from
 `exposure.env` at run time so the world-readable unit file never carries the
 0600 secret. Four doctor checks — `exposure`, `caddy`, `cert`, `name` —
 measure each piece, and all four SKIP on a box that never ran the verb:
-not-configured is a valid end state, not a fault.
+not-configured is a valid end state, not a fault. A fifth, `update-exposure`, needs no verb
+run: on a box that serves ccrc it FAILs while the box is reachable — `CCRC_HOST` off loopback,
+`~/.ccrc/exposure.env`, a Caddyfile or a `ccrc-ddns` unit present — and `CCRC_AUTH` is not
+`on` (read from `exposure.env` over `ccrc.env`, the order the unit reads them in), because an
+unarmed gate lets whoever reaches the box drive every write route, the update control plane's
+included. It WARNs, measuring nothing, when `exposure.env` is there but cannot be read, and it
+SKIPs on a fleet box, which serves none.
 
 Users with their own proxy skip the Caddy step; the documented contract is
 "terminate TLS, forward to `localhost:$CCRC_PORT`" (set in ccrc.env at
@@ -464,9 +470,9 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
-**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` —
-per box, explicit, never automatic. `--check` prints where this box stands against the published release (a
-fixed-shape `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
+**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with `--channel`, `--no-gate`, `--detach`
+and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
+`check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
 running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
 last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
 loudly: resolve (`SHA256SUMS`; with `--to`, the tarball it names must BE that tag), the floor
@@ -481,13 +487,145 @@ version; back up to `~/ccrc-backups/<ts>/` (coord.db via
 `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
 the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
 mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
-floor last); the supervisor sweep behind its mandatory `KillMode=process` preflight; then the from→to report.
-Rolling back is `--to <the older tag> --downgrade`, which
-prints the coord.db restore commands rather than auto-restoring. **Across a two-box fleet, `ccrc
-rollout [--to] [--server-first] [--check] [--force]`** from a machine holding `~/.ccrc/deploy.env`
+floor last); the health gate (below); the supervisor sweep behind its mandatory `KillMode=process` preflight;
+then the from→to report.
+Rolling back is `ccrc rollback` (below), which, like any move below the floor, prints the coord.db restore commands rather than
+auto-restoring. **Across a two-box fleet, `ccrc rollout [--to] [--server-first] [--check] [--force]`** (with `--channel`,
+`--downgrade` and `--allow-unsigned`, below) from a machine holding `~/.ccrc/deploy.env`
 does it in order — roles preflighted, version pinned once from SHA256SUMS, fleet box then server
-box, stop on the first failure, both boxes re-measured. `ccrc doctor`'s `build` check compares the
-running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`.
+box, stop on the first failure (a box's exit 3 is relayed and the rollout goes on; its exit 4 stops it),
+both boxes re-measured. `ccrc doctor`'s `build` check compares the
+running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`,
+and `update-exposure` FAILs a reachable server box whose session gate is unarmed (Exposure, above).
+
+**Control plane (update-management W2).** The server now measures and records the fleet's update state; nothing
+in it moves a node yet. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
+listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
+`ccd/ccrc`, or from `CCRC_RELEASE_OWNER` and `CCRC_RELEASE_REPO` when both are set — a pair that is not two
+plain names stops the poll rather than falling back); a release that vanishes from the listing is marked
+yanked, never deleted — a **node inventory** re-measured every 60 seconds (each node's `~/.ccrc` stamp,
+install record, `ccrc-caps`, floor, previous version, `node-id` and update report; every file lstat-gated,
+capped at 64 KiB and validated; the fleet node's read through an exact-basename read set on the agent, never a
+prefix of `~/.ccrc`), and one **desired-state intent** per scope (`*`, or a node id: channel, pin, auto,
+notify), each write journalled to `~/.ccrc/update-intent.log` under a rising epoch. The catalogue and the
+inventory keep their cadence when the fleet registry cannot be listed. After every inventory sweep the server
+resolves each node's desired tag — the newest eligible release on its channel, never below the node's floor
+(the higher of its recorded floor and the version it runs), pinned or not — and on a `server` or `both` box
+writes its own projection, `~/.ccrc/update-intent` (whole, by rename; mode 0600; times in unix seconds). The
+role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from `CCRC_FLEET` and the boot log
+says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
+(rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
+`/api/updates/ack` are session-only — the box token never writes intent — and
+`GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
+`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. Not yet: no
+apply or rollback route — and an `auto` other than `off` is refused (`409`) until every node the intent covers
+lists `update-gate` in its `ccrc-caps` (an install of the W4 node side writes it — below).
+
+**One update at a time, reported, gated, and undone.** An installing `ccrc update` holds `~/.ccrc/update.lock`
+(`flock`; macOS needs `brew install flock`) from just after its arguments are checked until just before the supervisor
+sweep, so a second run is refused and told the holder's pid and target (only `flock`'s own contention, rc 1, reads as a live
+holder; any other `flock` failure refuses as unmeasured, never as busy). Every phase is reported to
+`~/.ccrc/update.json` — one line of JSON (`target`, `phase`, `startedAt`, `updatedAt`, `detail`, `from`, `pid`; the
+two times in unix seconds), placed by rename; a write that fails is a WARN, never a failed update — from `queued` or
+`resolving` through `done`, or `failed`, `restoring` and `reverted`, and it is what the console reads. `--from` names
+who asked: one of `cli` (the default), `pwa`, `restore`, `rollback`, `watchdog` or `rollout` — `restore` is the automatic
+restore's own word, spoken only as arm 2's own child and refused (exit 2) if typed by hand without its parent's lock;
+any other word is a usage error. Before the staged install the run records the build it replaces in `~/.ccrc/previous` (its tag and sha,
+`untagged` for an unversioned build) — except when `--from` is `restore`, `rollback` or `watchdog`: that run returns
+to a known build and is no new baseline. Nor is a `--force` reinstall of the running tag, or a box whose last update
+never completed: a `previous` already recorded is kept. After the install and before the sweep comes
+**the health gate**, bounded by `CCRC_UPDATE_HEALTH_S` (default 90 seconds): on a `server` or `both` box
+`ccrc.service` is active and its `/health` (at the configured server address, loopback by default) answers the staged
+`version`; on a fleet box `ccrc-agent.service` is active and stays up (on macOS, launchd's view of the same jobs). A
+gate that passes under a failing doctor is still exit 3. A gate that fails restores the box, and the run exits **4**:
+arm 2 re-installs `previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
+under the parent's lock, passing `--allow-unsigned` only when the replaced install was itself unsigned (a verified box
+whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); the child exiting **3** (its
+own spine completed but ITS doctor FAILed) still counts as arm 2 restored, never a fall to arm 3 — arm 3 runs only when
+arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — usually a MIXED tree, whose remedy is `deploy.sh`. Arm 2 never re-installs the tag whose install just failed: when `previous` names it, arm 2 is skipped with a line saying why, and arm 3 runs. On a run whose target is the version that was running, arm 3's backup is that same version's pre-update tree: it says "same build, not mixed" only when that tree was a completed install with the staged sha; a completed install with a different sha is a rebuild, MIXED as above; and an incomplete one is a pre-update tree that may itself be MIXED, remedy `ccrc update --to <tag> --force` once the box is healthy.
+`update.json` ends `reverted`, naming the arm; neither `coord.db` nor `~/.ccrc/memory` is ever restored, and the
+restore does not sweep. A spine that dies before it replaces the tree changed nothing and exits 1
+(`~/.ccrc/install-step` names the step it died in; a spine older than W4 writes none, and counts as after the tree
+once the box's stamp has moved, else it exits 1 saying the tree's state is unknown); one that dies after is gated — a
+failing gate restores it (exit 4), a passing one exits 1 and names the rerun. `--no-gate` skips the gate — the restore
+child passes it — and `--detach` (Linux only, and it needs `--to`) re-runs `ccrc update --to <tag> --from <who>`, with
+the flags typed beside it, as a transient `systemd --user` unit and returns at once, so a server box's update outlives
+the `ccrc.service` restart it causes; `update.json` is its progress.
+
+**Rolling back, and the watchdog.** `ccrc rollback [--to vX.Y.Z] [--detach] [--from <who>]` takes the lock and
+re-installs `previous`'s tag, or the one named — which must be a published release (a `SHA256SUMS` that answers
+404 is exit 2) — as a downgrade that leaves the floor where it is, then runs the gate, then the supervisor
+sweep behind the same `KillMode=process` preflight. A rollback whose gate fails is left for the operator at
+exit 1, never restored over, and an `untagged` previous build is refused by name (`--to` names one). On a
+`server` or `both` Linux box, `ccrc-update-watchdog.timer` runs `ccrc watchdog` every minute, for the one update
+nothing else can watch — the server's own, whose updater can die with the unit it restarts. An in-flight report
+older than `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) with no live lock holder is re-measured, the report
+re-read under the lock so a run that moved since is left for the next tick rather than acted on stale: a box
+that answers healthy and on its target has its report closed as abandoned, with what was measured, and nothing
+is reverted — one healthy but off its target past `backing-up` instead has its report LEFT open, re-measured
+each tick. Only a box that fails three probe samples (`CCRC_WATCHDOG_PROBE_GAP_S` apart, default 5 seconds),
+whose report is past `backing-up` (the tree has moved) and whose running stamp carries a version, gets
+`ccrc rollback --from watchdog`; a failing box whose tree never moved, or an unversioned one, has its report
+closed as abandoned too, never rolled back. A live holder is left alone until its report is twice the
+deadline old, and is then named wedged; a lock the watchdog cannot measure, it does not act on.
+
+**Following the control plane.** With no `--to`, `ccrc update` asks one reader for this node's projection,
+`~/.ccrc/update-intent` — nine lines ending `end`, times in unix seconds, its lease 15 minutes. On a fleet box
+`ccd-update-sync.timer` (installed with the fleet role, Linux only) pulls it every minute from
+`GET /api/updates/intent/:nodeId` with the box token and places it (mode 0600, by rename) only when the whole
+document parses, carries no NUL byte and no epoch wider than 18 digits, its `desired` line agrees with its
+`desired-<channel>` line, its body is under 64 KiB, and its times are seconds within a day of now; on a
+`server` or `both` box the server writes it itself. The reader answers by role, and exactly one of its answers is a fallback: a box with no control
+plane — macOS, or a fleet box (or one with no recorded role) whose puller timer is not installed, such as a
+`deploy.sh` install — follows `stable` through `latest/download` and says so. A readable, in-lease projection
+is followed (`desired`, or `desired-<ch>` with `--channel stable|dev`) and the run says that instead. Every
+other answer refuses and names its remedy: an unreadable, stale or malformed projection
+(`systemctl --user start ccd-update-sync.service` on a fleet box, a `ccrc.service` restart on a server box),
+a `none` target (its reason is on the console's update screen), and `--channel` off the control plane. The
+floor applies whichever way the target was chosen. `ccrc channel` prints the projection and changes nothing —
+the channel is set from the console. `update --check`'s machine line carries `caps=` (what this `ccrc` can
+do) and `floor=` ahead of `state=`, and a target below the floor on a box not already `current` reads
+`state=below-floor` (a `current` box keeps `state=current` — it has nothing to move).
+`rollout --channel stable|dev` reads each box's own projection over ssh and pins the one tag they name (a box whose projection names none must already run that tag, or nothing moves); a box
+whose floor tag sits ABOVE the pinned target — whatever its `--check` state, a box rolled back below its own
+floor and reading `current` on the older tag included — stops a rollout before anything moves unless
+`--downgrade` is passed, and a box whose floor file is unreadable or malformed stops it either way
+(`--downgrade` and `--allow-unsigned` reach each box's update only when typed); `--from rollout` reaches only a box whose `--check` line lists `update-json` in
+`caps=`, so a box still on an older `ccrc` is never handed a flag it does not know.
+
+**Two trust roots, both named.** Everything above verifies against two things nothing on the box verifies: the
+Sigstore trusted root vendored in the INSTALLED tree at `deploy/sigstore-trusted-root.jsonl` — a snapshot taken
+when it was vendored, whose age nothing on the box reports, so an upstream key rotation it outlives makes it
+refuse every newer bundle until refreshed (the override below, for one update) — and a box's first
+`install.sh --release`, which trusts the transport checksum alone — trust on first use — and places the verifier
+every later update runs. Whoever controls the environment can substitute the vendored root through
+`CCRC_SIGSTORE_TRUSTED_ROOT` — including a value set in the user manager's environment, which reaches a
+`--detach` unit and the watchdog, though a value exported only in a shell does not. A separate supply-chain fact,
+not a third root: the verifier's own npm dependencies are fetched from the registry, pinned by the attested
+tarball's own lockfile integrity hashes, never installed from the tarball's bytes directly. Doctor's `provenance`
+check PASSes, naming the next step, while `~/.ccrc/installed` says `unsigned`, whatever made it so (a checkout
+install, that first install, or `--allow-unsigned`); the next `ccrc update` that installs a release (a newer one, or `--force` on this one) verifies it and clears the mark.
+
+**Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
+door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.
+Updates: the fleet's channel (stable or dev); auto-install (off; stable releases only and every release on
+my channel — the latter two disabled, naming the nodes, until every node lists `update-gate`); **Check
+now** (`POST /api/updates/refresh`); and the catalogue line — how long ago GitHub was last reached, amber
+with the reason when it could not be, `never checked` until the server's first poll since it started, and
+never "up to date" while nothing was reached. Then the release list (newest first by version; `verified`
+only when a node runs that tag and its bundle verified — a listed bundle alone reads `bundle listed`;
+notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
+and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
+that would move a node — Install, Roll back, Update, Update all — is shown disabled until the next
+release. A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+address. On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
+`/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
+whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
+has answered since the server started. A `server` or `both` box sends at most one Web Push per release tag,
+for the newest tag its release-notification setting (on my channel, stable only, off) selects, recorded in
+`coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
+measured node already runs is recorded without a push. It has no session, so an open app does not suppress
+it; tapping it opens `/settings`.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
@@ -497,7 +635,9 @@ takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 `--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
 inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
-`~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
+`~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
+`previous`, `install-step`, `update.json`, `update.lock`, `update-intent` — which leave with the
+tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
 (never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
 (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
 `~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
@@ -566,14 +706,14 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the twenty-six machine lanes the
+liveness gate reads the shipped sha out of it), the twenty-seven machine lanes the
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation,
-and `/api/pools/epoch` — the callers are `curl` inside a Claude Code session and
-`ccd-pool-sync.timer`, both with no cookie jar, though the
+`/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
+Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
-`/api/asks`, `/api/pools/epoch`) take a live session
+`/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
 the fleet host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
@@ -1174,9 +1314,9 @@ only ever sees the tmux name, so `_spawn` is what emits this, once it has
 both back): `<id> is waiting for login on <wrapper> — attach and run
 /login`.
 
-The startup verdict is four-valued now, not the one non-zero code above: `0`
+The startup verdict is six-valued now, not the one non-zero code above: `0`
 a live marker appeared, `2` a login screen (unchanged, above), `3` the tmux
-session vanished mid-poll, `4` the window expired with no marker. `3` ends
+session vanished mid-poll, `4` the window expired with no marker, `5` a hard block (a limit/spend banner or lost auth), `6` a live pane too narrow to read (or of unreadable width), so the startup gates stood down. `3` ends
 the wait **immediately** — a debounced second probe, not the ~15-minute wait
 a vanished pane used to cost. Every verdict, success included, is recorded in
 `$REG/<id>.spawn` as `<epoch> <rc>`, which is the one channel from a spawn
@@ -1246,6 +1386,18 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this classifier; a blank pane no longer blinds the rescue, and the `auto-rescue` line says
   ` via=transcript` when the pane alone would not have fired. The pane regex is deliberately not
   widened (D-2364).
+- **Auth loss is stuck too (D-3522).** Claude Code 2.1.280 renders every final banner four rows
+  above the prompt box, out of the rescue's pane window, so a 401 (`Invalid API key`, `Please run
+  /login`) reached no detector at all. The transcript arm now reads it in `stuck` mode:
+  `error:"authentication_failed"` with `apiErrorStatus:401`, written at or after the pane's tmux
+  `session_created` — a swap carries the transcript, so an earlier process's 401 is not evidence about
+  this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
+  marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
+  session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
+  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
+  feared.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -1281,8 +1433,10 @@ can carry config dirs no roster entry names. **Scratch slugs are skipped**, beca
 mints one for every throwaway directory a session was started in — four prefixes, because the OS
 scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
 `-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
-`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
-this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`) — and one infix, `*--cc-tmp-*`,
+a marked child's own temp root (`$HOME/.cc-tmp/<id>`, which is its `TMPDIR`), wherever that home
+lives. `/var/tmp` is **not** scratch by the prefixes — POSIX makes it persistent — so a project kept
+there is censused like any other, unless its path runs through a `.cc-tmp` directory. The
 summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
 slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
 
@@ -1509,14 +1663,14 @@ general remote-shell:
 - **Path whitelist**: every file op resolves the target through `realpath`
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
-  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), and the
-  fleet's projects root. Writes: `$HOME/.cc-clips/` only. **This list did not
-  widen for the transcript resolver or the supervisor heartbeat**, and both
-  are worth saying out loud: the resolver's uuid search (rungs 5 and 6 of
-  its ladder) rides the existing `$HOME/.claude*` grant — no new read
-  permission — and the supervisor heartbeat exists specifically so the
-  server never has to ask systemd anything; nothing under
-  `~/.config/systemd` was added to reach it.
+  `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
+  fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
+  name (`NODE_FILES`, `shared/agent-protocol.ts`) — a live symlink inside
+  `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
+  list did not widen for the transcript resolver or the supervisor
+  heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
+  rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
+  server never asks systemd anything — nothing under `~/.config/systemd`.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
 
@@ -1628,7 +1782,11 @@ what it cannot.
    an unmeasured marker must not read as "running".
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
-   control anywhere on the sheet. An abandon asserts nothing about PR
+   control anywhere on the sheet. A CHILD goes further: an abandon finishes
+   it, so once no other open run names it the server reclaims it after the
+   release — pinned, then removed; a review child only once the run it
+   reviewed is terminal (**A child is not a reap**, below;
+   `wave-lifecycle.md` §6). An abandon asserts nothing about PR
    lineage — no fingerprint, no `.prhistory` fold, no `verifyDone` — because
    the case it exists for is a run whose claim can no longer be measured.
 3. **Start a program.** Composition over existing routes, not a new one:
@@ -1936,11 +2094,23 @@ run against that home. One of the coordinator's clauses is
 that **`ws-reap` stays human-only, by convention plus a speed bump, named as
 exactly that**: the skill's contract excludes the verb outright (the same
 test asserts it is named only inside the clause that forbids it), the
-coordinator holds every workspace it owns so a reap needs a deliberate
-release first, and reap consent stays the PWA's own ceremony either way.
+coordinator holds every non-child workspace it owns so a reap needs a
+deliberate release first, and reap consent stays the PWA's own ceremony
+either way.
 Nothing server-side makes reap mechanically impossible for a process with a
 shell — see "The honest boundary" below for what a contract does and does not
-buy.
+buy. **A child is not a reap.** Since child reclamation (spec
+`docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`) the
+server itself removes one kind of workspace: a CHILD — one dispatch minted for
+a run, marked `$REG/<id>.child` — once the coordinator has finished with it,
+through `ccd ws-reclaim`. That is not `ws-reap` delegated. It is a separate
+verb that refuses anything but a child whose marker names the run the server
+holds as having minted it, pins every uncommitted change, commit and stash —
+except a secret-shaped file, which is never committed and is deleted with the
+tree — before it deletes anything, and re-proves its token on the box inside
+the reap lock; the server composes it and no session runs it. The
+coordinator's clause 3 still excludes every reap, and a coordinator's own
+workspace is still cleaned up by a human.
 
 **Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
@@ -2039,12 +2209,23 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    its now-distinct workspace is released, require `released:true`
    in the close response, then verify the exact producer closed row
    is `done` with a full 40-hex `handoffCommit`. If the consumer depends
-   on an interface from this producer, independently prove
-   through `ccd pr-state --session <producer-session>` that the
-   selected `phase` is `merged` and raw `headRefOid` equals both that
-   `handoffCommit` and `producerSha` —
+   on an interface from this producer, independently prove it
+   by PR NUMBER — `gh pr view <pr> --repo <owner/repo>
+   --json state,headRefOid`, where `<owner/repo>` is
+   `gh repo view --json nameWithOwner -q .nameWithOwner` run FROM INSIDE
+   `producerRepoRoot` (that path itself is not a `--repo` value `gh`
+   accepts, and the coordinator's own cwd is never assumed to be the
+   producer's repository), and `<pr>` is the producer's own wave-done
+   fingerprint's `prNumber` — the same number this close submitted, held
+   from before the close, because the closed row carries none of its
+   own — requiring `state` to be `MERGED` and raw `headRefOid` to equal
+   both that `handoffCommit` and `producerSha` —
    prove its PR merged at the named producer SHA
-   before dispatching the consumer. Only then dispatch the consumer
+   before dispatching the consumer. Never prove it through
+   `ccd pr-state --session <producer-session>` after this close: a CHILD
+   producer's `final:true` close queues its reclaim, which purges the row
+   that proof would need, so it would race the reclaim and usually could
+   not run. Only then dispatch the consumer
    fresh in its target project.
    A `done` run proves fingerprint and close, **not merge proof**;
    missing, ambiguous, or mismatched PR evidence means report and do
@@ -2063,6 +2244,12 @@ three answers per line (a value, absent, unrecognised) and `null` when no wave-d
    run just went terminal — abandoning mid-program needs `final:true` or
    `archive:true` explicitly, or the workspace stays held for a wave that
    is never coming.
+   **Except a CHILD** (**A child is not a reap**, above): a close that
+   finishes one no other open run names — `final:true`, `state:'failed'`,
+   and the other cases `wave-lifecycle.md` §6 lists — releases it and never
+   re-holds it, the server then reclaims it (pinned, then removed; a review
+   child once the run it reviewed is terminal), and an `archive:true` on it
+   is overruled into that release.
 
 **The mail bus and its token.** Sessions send each other mail — `finding |
 question | answer | status | artifact` — through `POST /api/mail`, attributed
@@ -2557,8 +2744,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7465-7467`), each with an operator sentence of its own at `:7505`,
-`:7513` and `:7526`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7636-7638`), each with an operator sentence of its own at `:7678`,
+`:7686` and `:7699`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2596,8 +2783,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:20970`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19758-19760`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21482`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20215-20217`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
@@ -2979,7 +3166,7 @@ never left half-true:
 | `$REG/<id>.stopped` | `<epoch> <surface>` | `_ws_unsupervise` — the one choke point every stop path (`cmd_stop`, ws-rm, ws-archive, ws-reap, forget) routes through, so an archived workspace is never left reading `orphan` |
 | `$REG/<id>.supervised` | `<epoch>` | `cmd_supervise`, before it ever calls `cmd_ensure` (which can block up to ~15 minutes on a large resume) and again every 30s from the watch loop — and by `cmd_swap` **throughout** its carry, on the same 30s cadence, so a 188MB `cp -a` never leaves the row reading `orphan` mid-swap |
 | `$REG/<id>.swapblocked` | `<epoch> <reason>` | `_swap_refuse` — cleared by a completed swap, or by a deliberate `ccd start`/`ccd ensure` revival. **Not** by the refusal's own restart, and **not** by the supervisor re-entering its unit: neither is a human act, and both used to erase the record seconds after it was written |
-| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
+| `$REG/<id>.spawn` | `<epoch> <rc>` | `_spawn`, on EVERY verdict (0/2/3/4/5/6), success included — the one channel from a spawn inside the supervisor unit to a `ccd start` polling from another process |
 
 A heartbeat inside **120 seconds** is fresh; the supervisor re-stamps every
 **30 seconds**, so a live loop never drifts stale under its own steady

@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
+import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '../src/components/Toast';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
@@ -14,10 +15,10 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
 });
 
 /** The REAL server failure shape: runCcd routes answer 502 with `stderr` and
@@ -638,6 +639,72 @@ describe('the spawn-state note (§1.6b)', () => {
     // broken teaches the operator to ignore the sheet.
     renderSheet(s({ spawnState: 'expired' }));
     expect(notes().join(' ')).toContain('not a fault');
+  });
+
+  it('tells a narrow spawn to widen the window and look for an unanswered prompt', () => {
+    // rc 6: ccd stood its startup gates down on a pane under READER_MIN_COLS,
+    // so a trust/bypass/resume prompt may still be waiting, and the window
+    // stays narrow until something re-pins it. The drawer re-pins 220x50 on
+    // open and on close (server.ts's `resizeWindow(id, 220, 50)`).
+    renderSheet(s({ spawnState: 'narrow' }));
+    const t = notes().join(' ');
+    // Rendered from the constant ccd stands down at (a hand-typed 120 would
+    // match this too — what this pins is the value, not its spelling).
+    expect(t).toContain(`under ${READER_MIN_COLS} columns`);
+    // rc 6 also answers when ccd could not read the width at all.
+    expect(t).toContain('could not read');
+    expect(t).toContain('terminal drawer');
+    expect(t).toContain('startup prompt');
+    // ccd pins every spawn 220x50 now (ccd-spawn-split.test.ts), so a narrow
+    // terminal on ANOTHER session no longer narrows one — the usual cause left
+    // is a terminal on this session. But rc 6 also covers a failed pin and an
+    // unreadable width, and a marker written by an older ccd outlives the
+    // rollout (panes are not respawned), so the sentence is hedged, not single.
+    expect(t).toContain('attached straight to this session');
+    expect(t).toContain('failed pin');
+    expect(t).toContain('older ccd');
+    // rc 6 answers only for a live pane, so Restart session (ensure) spawns
+    // nothing there — the note must not offer it as the remedy.
+    expect(t).not.toContain('Restart session');
+  });
+
+  it('tells a narrow spawn whose pane is measured wide again what is back on, and what the spawn still skipped', () => {
+    // `paneCols` is THIS tick's prompt-box width, so a reading at or over
+    // READER_MIN_COLS means the pane is wide with its prompt up — no startup
+    // gate is showing, and ccd's per-tick readers are back on.
+    renderSheet(s({ spawnState: 'narrow', paneCols: 220 }));
+    const t = notes().join(' ');
+    expect(t).toContain('since been widened');
+    // rc 6 folds two causes; the widened arm keeps both.
+    expect(t).toContain('could not read');
+    expect(t).toContain('auto-swap and auto-compact are back on');
+    expect(t).toContain('/effort');
+    // Nothing left to widen: no drawer instruction, no "keeps … off".
+    expect(t).not.toContain('terminal drawer');
+    expect(t).not.toContain('keeps auto-swap');
+  });
+
+  it('keeps the widen-it note while the pane is unmeasured or still narrow — unmeasured is never wide', () => {
+    for (const paneCols of [null, READER_MIN_COLS - 1]) {
+      cleanup();
+      renderSheet(s({ spawnState: 'narrow', paneCols }));
+      const t = notes().join(' ');
+      expect(t, `paneCols ${paneCols}`).toContain('terminal drawer');
+      expect(t, `paneCols ${paneCols}`).not.toContain('since been widened');
+    }
+  });
+
+  it('sends a DEAD narrow row to Restart session — the pane to widen is gone', () => {
+    // `.spawn` survives the pane, so a stopped or dead row can still carry rc
+    // 6. There is no drawer to open; Restart session is the respawn, and ccd
+    // pins that new pane 220x50.
+    renderSheet(s({ spawnState: 'narrow', status: 'dead', bucket: 'dead' }));
+    const t = notes().join(' ');
+    expect(t).toContain('Restart session builds a new one');
+    // True only on a fleet box running a pinning ccd, and it says so.
+    expect(t).toContain('a current ccd pins 220x50');
+    expect(t).not.toContain('attached to any session');
+    expect(t).not.toContain('terminal drawer');
   });
 
   it('says NOTHING for a CLEAN spawn', () => {

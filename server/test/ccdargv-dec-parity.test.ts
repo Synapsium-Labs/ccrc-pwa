@@ -147,6 +147,10 @@ const PROBES: Record<string, Probe> = {
   'ws-hold': { argv: (d) => CCD_ARGV.wsHold(ABSENT, 'probe reason', d), reached: refusedForTheAbsentSession },
   'ws-release': { argv: (d) => CCD_ARGV.wsRelease(ABSENT, d), reached: refusedForTheAbsentSession },
   'ws-rename': { argv: (d) => CCD_ARGV.wsRename(ABSENT, 'ws/probe', d), reached: refusedForTheAbsentSession },
+  // Child reclamation, wave 3. The real verb takes the reap lock and answers
+  // `no-such-session` as JSON for the absent id — the five session verbs'
+  // witness, and proof the dec was stripped before `--session` bound.
+  'ws-reclaim': { argv: (d) => CCD_ARGV.wsReclaim('a'.repeat(64), 7, ABSENT, false, d), reached: refusedForTheAbsentSession },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
     setup: () => { h.makeRepo(PROJECT); },
@@ -214,7 +218,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds six — the five workspace verbs and ws-add', () => {
+  it('derives the dec-appending verbs from the table, and finds seven — the five workspace verbs, ws-add and ws-reclaim', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -228,7 +232,7 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // not a property of source text: it is the AGENT-FIRST deploy order, stated
     // where the argv is composed.
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-hold', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['ws-add', 'ws-archive', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {
@@ -305,5 +309,42 @@ describe('ws-add was this file\'s negative control, and D-410\'s remedy turned i
     const created = eventsOf(h.home, 'create');
     expect(created, 'ws-add wrote no create line').toHaveLength(1);
     expect(decOf(created[0]!)).toEqual({ surface: 'none' });
+  });
+});
+
+describe('the child the server composes is the child real ccd records (child-workspace reclamation wave 1)', () => {
+  it('wsAddWorker with a run id: the marker holds exactly that id, beside the declared dec', () => {
+    // THE SAME CROSSING as the describe above, for the flag that makes a
+    // workspace a CHILD. `whitelist-subset.test.ts` proves the tokens cross the
+    // agent's bare `['ws-add']` grant, which they would whatever ccd made of
+    // them; this proves the binary on the fleet box READS them — as the marker,
+    // and not as a slug or a project (D-410, one flag to the left).
+    h.makeRepo(PROJECT);
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, 7));
+    const rows = uuidRows();
+    expect(rows, 'the child-marked ws-add created no workspace — the flag was bound as a positional')
+      .toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.readFileSync(path.join(h.home, '.cc-sessions', `${id}.child`), 'utf8')).toBe('7');
+    const created = eventsOf(h.home, 'create');
+    expect(created).toHaveLength(1);
+    expect(decOf(created[0]!)).toEqual({ surface: 'agent', actor: 'probe:dec parity' });
+    // And the first spawn already made its root: `_spawn_start` ran before the
+    // fixture's contained tmux refused, and the root is made before the pane.
+    const root = path.join(h.home, '.cc-tmp', id);
+    expect(fs.statSync(root).isDirectory()).toBe(true);
+    expect(fs.statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it('and handed no child it writes no marker — absence permits, byte for byte the old argv', () => {
+    h.makeRepo(PROJECT);
+    expect(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null))
+      .toEqual(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC));
+    runCcd(CCD_ARGV.wsAddWorker(PROJECT, PROBE_DEC, null, null));
+    const rows = uuidRows();
+    expect(rows).toHaveLength(1);
+    const id = rows[0]!.replace(/\.uuid$/, '');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.child`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp'))).toBe(false);
   });
 });

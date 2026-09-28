@@ -1,0 +1,19 @@
+❯ rvsteps
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Path
+
+Which migration path?
+
+❯ 1. Alpha
+     First choice.
+  2. Beta
+     Second choice.
+  3. Gamma
+     Pick this when the old cluster must stay readable during the move, which takes a while. Order:
+     1. stop the writers and drain every queue so nothing new lands in the old cluster at all, then
+     2. migrate the db and flip the readers.
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

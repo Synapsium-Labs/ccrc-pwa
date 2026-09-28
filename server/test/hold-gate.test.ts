@@ -107,7 +107,7 @@ const mergedPushes = (
   notify.mock.calls.map(([p]) => p).filter((p) => p.tag?.startsWith(`merged-${id}#`) === true);
 
 /** `localIO` with every `<id>.hold` read failing and everything else real —
- *  the shape `remote/io.ts` produces when one of the 30
+ *  the shape `remote/io.ts` produces when one of the 31
  *  [registry-read-census:fields] reads a session's `readRegistry` fires in
  *  parallel times out: null, indistinguishable at `field()` from a file that
  *  is not there. */
@@ -251,7 +251,7 @@ describe('sweepMerged — a held merge is announced, never acted on', () => {
       workspace: 'quiet-basin', branch: 'ws/quiet-basin', branchEvidence: 'named', base: 'origin/main',
       prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
       substrate: null, stopped: null, supervisedAt: null, swapBlocked: null, stranded: null, spawn: null, lifecycleUnmeasured: [],
-      unmeasured: ['wrapper'], route: null,
+      unmeasured: ['wrapper'], route: null, child: { kind: 'none' },
     };
     const merged: PrState = { phase: 'merged', number: 42, url: null, title: null, checks: null,
       checkNames: null, ahead: 3, reason: null, checkedAt: 1785300000000, mergedAt: null, retryAt: null };
@@ -366,7 +366,7 @@ describe('SessionRecord.held', () => {
   });
 
   it('an ordinary release landing inside readRegistry\'s own read window is NOT corruption', async () => {
-    // `readRegistry` lists the directory, then fires 30
+    // `readRegistry` lists the directory, then fires 31
     // [registry-read-census:fields] reads per session. A `ccd ws-release`
     // anywhere in that window leaves the name in
     // the listing with no bytes behind it — indistinguishable at `field()`
