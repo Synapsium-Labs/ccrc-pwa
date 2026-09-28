@@ -44,6 +44,14 @@ async function untilDead(pid: number): Promise<boolean> {
   for (let i = 0; i < 100; i += 1) { if (!alive(pid)) return true; await new Promise((r) => setTimeout(r, 20)); }
   return false;
 }
+/** The moment a process is observed gone (polled every 5 ms). A drain bound is measured from the PARENT'S exit, so the
+ *  measurement must not include the script's own start-up: `Date.now()` before the spawn would. */
+async function deadAt(pid: number): Promise<number> {
+  for (let i = 0; i < 4000; i += 1) { if (!alive(pid)) return Date.now(); await new Promise((r) => setTimeout(r, 5)); }
+  throw new Error(`pid ${pid} never exited`);
+}
+/** The room a kill-path case gives its scripts to write their pid files before the bound can fire. */
+const KILL_BOUND_MS = 3000;
 /** A grandchild in its OWN session that inherits (and so holds) the parent's stdout and stderr pipes. */
 const ESCAPEE = `setsid bash -c 'echo $$ > "$DIR/escapee.pid"; exec sleep 300' &\nwhile [ ! -s "$DIR/escapee.pid" ]; do sleep 0.01; done`;
 
@@ -92,29 +100,34 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
 
   it('at the bound the WHOLE group dies, the answer says killed, and no grandchild outlives it', async () => {
     const dir = fixtureDir();
-    // The grandchild stays in the parent's group (no setsid): it must die with it.
-    const file = script(dir, 'sleep 300 &\necho $! > "$DIR/grandchild.pid"\nwait');
-    const t0 = Date.now();
-    const r = await boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 400 });
+    // The grandchild stays in the parent's group (no setsid): it must die with it. The pid files are written FIRST.
+    const file = script(dir, 'echo $$ > "$DIR/parent.pid"\nsleep 300 &\necho $! > "$DIR/grandchild.pid"\nwait');
+    const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: KILL_BOUND_MS });
+    const parent = await pidFrom(path.join(dir, 'parent.pid'));
+    pids.push(parent);   // recorded before the answer, so a red run still cleans up
     const grandchild = await pidFrom(path.join(dir, 'grandchild.pid'));
     pids.push(grandchild);
-    if (r.pid !== null) pids.push(r.pid);
+    const parentGone = deadAt(parent);
+    const answeredAt = running.then(() => Date.now());
+    const r = await running;
     expect(r.killed).toBe(true);
     expect(r.code).not.toBe(0);
-    const took = Date.now() - t0;
     expect(await untilDead(grandchild), 'the grandchild in the parent\'s group survived the bound').toBe(true);
     expect(r.pid === null || await untilDead(r.pid)).toBe(true);
-    expect(took).toBeLessThan(400 + UPDATE_SPAWN_DRAIN_MS);
-  });
+    expect(await answeredAt - await parentGone).toBeLessThan(UPDATE_SPAWN_DRAIN_MS);
+  }, 20_000);
 
   it('a grandchild that left the group and holds the pipes does not stop the answer: a parent that exits 0 answers within the drain bound, stdout null', async () => {
     const dir = fixtureDir();
-    const file = script(dir, `${ESCAPEE}\necho parent-done\nexit 0`);
-    const t0 = Date.now();
+    const file = script(dir, `echo $$ > "$DIR/parent.pid"\n${ESCAPEE}\necho parent-done\nexit 0`);
     const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 10_000 });
-    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));   // recorded before the answer, so a red run still cleans up
+    const parent = await pidFrom(path.join(dir, 'parent.pid'));
+    pids.push(parent);   // recorded before the answer, so a red run still cleans up
+    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));
+    const parentGone = deadAt(parent);
+    const answeredAt = running.then(() => Date.now());
     const r = await running;
-    const took = Date.now() - t0;
+    const took = await answeredAt - await parentGone;   // from the PARENT'S exit, not from before the spawn
     expect(r).toMatchObject({ code: 0, killed: false, stdout: null });
     expect(took).toBeGreaterThanOrEqual(UPDATE_SPAWN_DRAIN_MS - 100);
     expect(took).toBeLessThan(UPDATE_SPAWN_DRAIN_MS + 1500);
@@ -123,17 +136,26 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
 
   it('a KILLED parent whose grandchild left the group and holds the pipes answers promptly too', async () => {
     const dir = fixtureDir();
-    const file = script(dir, `${ESCAPEE}\nsleep 300`);
-    const t0 = Date.now();
-    const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 600 });
-    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));   // recorded before the answer, so a red run still cleans up
+    const file = script(dir, `echo $$ > "$DIR/parent.pid"\n${ESCAPEE}\nsleep 300`);
+    const running = boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: KILL_BOUND_MS });
+    const parent = await pidFrom(path.join(dir, 'parent.pid'));
+    pids.push(parent);   // recorded before the answer, so a red run still cleans up
+    pids.push(await pidFrom(path.join(dir, 'escapee.pid')));
+    const parentGone = deadAt(parent);
+    const answeredAt = running.then(() => Date.now());
     const r = await running;
-    const took = Date.now() - t0;
-    if (r.pid !== null) pids.push(r.pid);
+    const took = await answeredAt - await parentGone;   // from the PARENT'S death at the bound, not from before the spawn
     expect(r).toMatchObject({ killed: true, stdout: null });
-    expect(took).toBeLessThan(600 + UPDATE_SPAWN_DRAIN_MS + 1500);
+    expect(took).toBeLessThan(UPDATE_SPAWN_DRAIN_MS + 1500);
     expect(took).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
   }, 20_000);
+
+  it('a parent that a signal it did not get from us ended answers 128 + signo, not code 1 (M4)', async () => {
+    const dir = fixtureDir();
+    const file = script(dir, 'kill -TERM $$\nsleep 5');
+    const r = await boundedUpdateSpawn(file, [], { env: ENV, timeoutMs: 5000 });
+    expect(r).toMatchObject({ code: 143, killed: false });
+  });
 
   it('a parent that exits before the bound is not reported killed', async () => {
     const dir = fixtureDir();
@@ -162,14 +184,15 @@ describe('boundedUpdateSpawn — the real process-group spawner (server role)', 
 
     it('kills the launcher\'s group at the injected bound and answers killed', async () => {
       const home = fixtureDir();
-      plantLauncher(home, 'sleep 300 &\necho $! > "$DIR/grandchild.pid"\nwait');
-      const r = await localUpdateSpawnFor(home, { env: ENV, timeoutMs: 400 })('update', 'v0.0.9');
+      plantLauncher(home, 'echo $$ > "$DIR/parent.pid"\nsleep 300 &\necho $! > "$DIR/grandchild.pid"\nwait');
+      const running = localUpdateSpawnFor(home, { env: ENV, timeoutMs: KILL_BOUND_MS })('update', 'v0.0.9');
+      pids.push(await pidFrom(path.join(home, 'parent.pid')));   // recorded before the answer, so a red run still cleans up
       const grandchild = await pidFrom(path.join(home, 'grandchild.pid'));
       pids.push(grandchild);
-      if (r.pid !== null) pids.push(r.pid);
+      const r = await running;
       expect(r.killed).toBe(true);
       expect(await untilDead(grandchild)).toBe(true);
-    });
+    }, 20_000);
 
     it('a non-tag or a non-kind throws synchronously, before anything runs', () => {
       const home = fixtureDir();

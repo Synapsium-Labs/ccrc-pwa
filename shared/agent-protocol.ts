@@ -428,8 +428,9 @@ export const UPDATE_OP_TIMEOUT_MS = 30_000;
 /** How long, after the `--detach` parent has EXITED, the bounded spawner still waits for its stdout to reach
  *  EOF before it answers with `stdout: null`. A grandchild that left the parent's process group (setsid) and
  *  still holds the pipe would otherwise keep `close` from ever firing. The whole answer therefore arrives within
- *  `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` of the spawn, and that sum plus one bounded file read must stay
- *  below `UPDATE_OP_TIMEOUT_MS`, so the agent always answers before the server gives up on the op (a test pins
+ *  `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` of the spawn (the drain is ONE deadline, armed by the kill or by
+ *  the exit, whichever comes first — never restarted), and that sum plus the op's bounded reads before and after it must
+ *  stay below `UPDATE_OP_TIMEOUT_MS`, so the agent always answers before the server gives up on the op (a test pins
  *  the sum). */
 export const UPDATE_SPAWN_DRAIN_MS = 2_000;
 

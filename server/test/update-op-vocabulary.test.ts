@@ -90,13 +90,17 @@ describe('the op timeouts — the agent answers before the server gives up (Revi
     expect(UPDATE_SPAWN_TIMEOUT_MS).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
   });
 
-  it('the bound, the drain after the parent exits, and one bounded file read all fit below UPDATE_OP_TIMEOUT_MS', () => {
-    // The bounded spawner answers at most UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS after the spawn (it kills at
-    // the bound, then waits at most the drain for the pipes). The agent's re-read of update.json is one bounded read;
-    // 5 s is the allowance this pin holds for it, well above a regular-file read and below the node-file budget.
-    const REREAD_ALLOWANCE_MS = 5_000;
+  it('the WHOLE agent op fits below UPDATE_OP_TIMEOUT_MS: bounded read before, spawn bound, ONE drain, bounded re-read after', () => {
+    // The agent's op is: the pre-spawn in-flight report read (one bounded, O_NONBLOCK read of a <= 64 KiB file), the
+    // spawn — killed at UPDATE_SPAWN_TIMEOUT_MS, answered within UPDATE_SPAWN_DRAIN_MS of that (the drain is ONE
+    // absolute deadline: the exit of a killed parent does not restart it, I1) — and the post-kill re-read of
+    // update.json (one more bounded read). The allowances are what this pin holds each read to: well above a regular-file
+    // read, and small enough that the four terms leave the op a second to spare — room for no second drain.
+    const PRE_SPAWN_READ_ALLOWANCE_MS = 2_000;
+    const POST_KILL_REREAD_ALLOWANCE_MS = 5_000;
     expect(UPDATE_SPAWN_DRAIN_MS).toBe(2_000);
-    expect(UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS + REREAD_ALLOWANCE_MS).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
+    const wholeOp = PRE_SPAWN_READ_ALLOWANCE_MS + UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS + POST_KILL_REREAD_ALLOWANCE_MS;
+    expect(wholeOp).toBeLessThan(UPDATE_OP_TIMEOUT_MS);
   });
 });
 

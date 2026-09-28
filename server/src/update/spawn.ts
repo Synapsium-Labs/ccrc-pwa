@@ -4,6 +4,7 @@
 // its pid. The two roles answer the same shape (`UpdateSpawnResult`, L0) under the same rule, so the dispatcher
 // reads one vocabulary whichever box the node is on.
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, type UpdateSpawnResult } from '../../../shared/agent-protocol.js';
 
 /** Enough for any sentence a `--detach` parent prints; past it the capture stops and stdout reads as incomplete. */
@@ -20,7 +21,9 @@ export interface BoundedSpawnOpts {
  * Run `file args` as its own PROCESS GROUP (`detached`, pgid = pid; no shell) under a bound. At the bound the WHOLE
  * group gets SIGKILL (ESRCH tolerated), so nothing the parent already forked outlives the answer. The answer comes
  * once the parent has EXITED and then either both pipes reached EOF or `UPDATE_SPAWN_DRAIN_MS` passed: a grandchild
- * that left the group (setsid) and still holds a pipe never stops the answer, it costs `stdout: null`. A launcher
+ * that left the group (setsid) and still holds a pipe never stops the answer, it costs `stdout: null`. The drain is ONE
+ * deadline, armed by the kill or by the parent's exit, whichever comes first, so the whole answer is within
+ * `timeoutMs + UPDATE_SPAWN_DRAIN_MS` of the spawn. A parent that a signal ended answers `128 + signo`. A launcher
  * that cannot start answers code 1 with `could not start the launcher (<code>)` and `pid: null` (D-3393). Nothing
  * resolves twice.
  */
@@ -28,13 +31,14 @@ export function boundedUpdateSpawn(file: string, args: readonly string[], opts: 
   const env = opts.env ?? process.env;
   const timeoutMs = opts.timeoutMs ?? UPDATE_SPAWN_TIMEOUT_MS;
   return new Promise((resolve) => {
+    // ── BEGIN bounded-spawn body — identical in `agent/src/server.ts` and `server/src/update/spawn.ts`; a test holds the two equal
     let settled = false;
     let exited: { code: number } | null = null;
     let killed = false;
     let killTimer: NodeJS.Timeout | null = null;
     let drainTimer: NodeJS.Timeout | null = null;
-    const out = { chunks: [] as Buffer[], bytes: 0, capped: false, eof: false };
-    const err = { chunks: [] as Buffer[], bytes: 0, capped: false, eof: false };
+    const out = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
+    const err = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
     const child = spawn(file, [...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
     const finish = (r: UpdateSpawnResult): void => {
       if (settled) return;
@@ -49,11 +53,17 @@ export function boundedUpdateSpawn(file: string, args: readonly string[], opts: 
       if (exited === null) return;
       finish({
         code: exited.code,
-        stdout: out.eof && !out.capped ? Buffer.concat(out.chunks).toString('utf8') : null,
+        stdout: out.eof && !out.capped && !out.broken ? Buffer.concat(out.chunks).toString('utf8') : null,
         stderr: Buffer.concat(err.chunks).toString('utf8'),
         killed,
         pid: child.pid ?? null,
       });
+    };
+    // ONE absolute drain deadline (I1): the first arm stands. The kill arms it at T; a parent that then exits at
+    // T + D - e must not restart it, or the answer would come at T + 2D and the op's budget be TIMEOUT + 2 * DRAIN.
+    const armDrain = (): void => {
+      if (drainTimer !== null) return;
+      drainTimer = setTimeout(() => { exited ??= { code: 1 }; answer(); }, UPDATE_SPAWN_DRAIN_MS);
     };
     const take = (buf: typeof out) => (chunk: Buffer): void => {
       if (buf.capped) return;
@@ -61,11 +71,22 @@ export function boundedUpdateSpawn(file: string, args: readonly string[], opts: 
       buf.chunks.push(chunk);
       buf.bytes += chunk.length;
     };
+    // A pipe that errors (EPIPE, ECONNRESET) never reaches `end`, and an uncaught stream error kills the process:
+    // the capture is marked incomplete (stdout reads null) and counts as finished, so the answer is not held for it.
+    const broke = (buf: typeof out, other: typeof out) => (): void => {
+      buf.broken = true;
+      buf.eof = true;
+      if (other.eof) answer();
+    };
     child.stdout?.on('data', take(out));
     child.stderr?.on('data', take(err));
     child.stdout?.on('end', () => { out.eof = true; if (err.eof) answer(); });
     child.stderr?.on('end', () => { err.eof = true; if (out.eof) answer(); });
-    child.once('error', (e: NodeJS.ErrnoException) => {
+    child.stdout?.on('error', broke(out, err));
+    child.stderr?.on('error', broke(err, out));
+    // `on`, not `once` (M2): `child.kill()` in the kill's fallback can emit `error` a second time, and an `error`
+    // event with no listener throws.
+    child.on('error', (e: NodeJS.ErrnoException) => {
       // A spawn that never produced a pid (ENOENT, EACCES): the launcher never ran.
       if (child.pid !== undefined) return;
       finish({
@@ -73,12 +94,14 @@ export function boundedUpdateSpawn(file: string, args: readonly string[], opts: 
         stderr: `could not start the launcher (${typeof e.code === 'string' ? e.code : 'unknown'})`,
       });
     });
-    child.once('exit', (code) => {
+    child.once('exit', (code, signal) => {
       if (killTimer !== null) { clearTimeout(killTimer); killTimer = null; }
-      exited = { code: typeof code === 'number' ? code : 1 };
-      if (drainTimer !== null) clearTimeout(drainTimer);   // the kill path's fallback: the parent did exit
+      // A parent that a signal ended (not ours: `killed` says ours) answers the shell's `128 + signo`, so the detail
+      // says what happened; a code of its own is kept as it is (M4).
+      const signo = signal === null ? undefined : os.constants.signals[signal];
+      exited = { code: typeof code === 'number' ? code : signo !== undefined ? 128 + signo : 1 };
       if (out.eof && err.eof) { answer(); return; }
-      drainTimer = setTimeout(answer, UPDATE_SPAWN_DRAIN_MS);
+      armDrain();
     });
     killTimer = setTimeout(() => {
       killTimer = null;
@@ -89,7 +112,8 @@ export function boundedUpdateSpawn(file: string, args: readonly string[], opts: 
         if ((e as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
       }
       // A parent that will not die (an uninterruptible wait) must not stop the answer past the drain bound.
-      drainTimer = setTimeout(() => { exited ??= { code: 1 }; answer(); }, UPDATE_SPAWN_DRAIN_MS);
+      armDrain();
     }, timeoutMs);
+    // ── END bounded-spawn body
   });
 }
