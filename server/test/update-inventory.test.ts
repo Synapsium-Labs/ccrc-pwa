@@ -512,8 +512,14 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
       .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
     expect(sweepPlanFor(busy(), withReport({}, { currentVersion: null })).lease)
       .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
+    // A `target: null` report no longer reaches the `done` switch at all: the
+    // report-acts-on-a-lease-by-identity clause (review of C33) refuses it
+    // BEFORE the phase table runs, because `null` can never equal this
+    // lease's own `updateTarget` ('v0.0.12') — this used to release
+    // stamp-mismatch at once; now the lease stays pending until the deadline
+    // (W4's), on the chance a same-tag run's real report is still coming.
     expect(sweepPlanFor(busy(), withReport({ target: null }, { currentVersion: null })).lease)
-      .toEqual({ kind: 'release', to: 'failed', detail: 'stamp-mismatch' });
+      .toEqual({ kind: 'none', why: 'stale-report' });
   });
 
   it('a done report whose stamp could not be read gives NO verdict — the lease stays pending (fix round 1, D-3214, F2)', () => {
@@ -579,6 +585,37 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
     expect(sweepPlanFor(null, withReport({ ...r, target: null })).refuse).toBeNull();
     expect(sweepPlanFor(null, withReport({ phase: 'failed', detail: 'spine died' })).refuse).toBeNull();
     expect(sweepPlanFor(null, withReport({ phase: 'reverted', detail: 'provenance: x' })).refuse).toBeNull();
+  });
+
+  it('a report naming another tag than the lease\'s own never acts on the lease — settle, release AND in-flight alike, refused before the phase table runs (review of C33: change is not enough — identity too)', () => {
+    // done, at a DIFFERENT tag, with a matching stamp: without the identity
+    // clause this would settle THIS lease on ANOTHER run's success.
+    expect(sweepPlanFor(busy(), withReport({ target: 'v0.0.11' }, { currentVersion: 'v0.0.11' })).lease)
+      .toEqual({ kind: 'none', why: 'stale-report' });
+    // failed, at a different tag: without the clause this would halt THIS
+    // lease on another run's failure.
+    expect(sweepPlanFor(busy(), withReport({ phase: 'failed', target: 'v0.0.11', detail: 'x' })).lease)
+      .toEqual({ kind: 'none', why: 'stale-report' });
+    // reverted, at a different tag: same halt hazard.
+    expect(sweepPlanFor(busy(), withReport({ phase: 'reverted', target: 'v0.0.11', detail: null })).lease)
+      .toEqual({ kind: 'none', why: 'stale-report' });
+    // in-flight, at a different tag: a stale queued/installing is not "leave
+    // it busy" for THIS lease — it is simply not this lease's report.
+    expect(sweepPlanFor(busy(), withReport({ phase: 'installing', target: 'v0.0.11', detail: null })).lease)
+      .toEqual({ kind: 'none', why: 'stale-report' });
+  });
+
+  it('a report naming THIS lease\'s own tag is unaffected by the identity clause — every existing outcome is unchanged', () => {
+    expect(sweepPlanFor(busy(), withReport({})).lease).toEqual({ kind: 'settle', detail: 'done: v0.0.12' });
+    expect(sweepPlanFor(busy(), withReport({ phase: 'failed', detail: 'x' })).lease)
+      .toEqual({ kind: 'release', to: 'failed', detail: 'x' });
+    expect(sweepPlanFor(busy(), withReport({ phase: 'installing', detail: null })).lease)
+      .toEqual({ kind: 'none', why: 'in-flight' });
+  });
+
+  it('a legacy row with no recorded updateTarget (NULL) never trips the identity clause — falls through to the phase table exactly as before', () => {
+    expect(sweepPlanFor(busy({ updateTarget: null }), withReport({ target: 'v0.0.11' }, { currentVersion: 'v0.0.11' })).lease)
+      .toEqual({ kind: 'settle', detail: 'done: v0.0.11' });
   });
 });
 
@@ -937,6 +974,118 @@ describe('sweepInventory — the phase table through the store (§18 "the phase 
     const [readableOut] = await sweepInventory(localDeps(b), NOW + 120_000);
     expect(readableOut).toMatchObject({ result: 'measured', lease: 'none', refused: false });
     expect(b.store.refusalsFor(U1)).toEqual([]);
+  });
+
+  it('sequence pin: a fresh v0.0.11 lease, dispatched while the row still holds a previous run\'s done v0.0.10 report, settles done exactly once — at the real v0.0.11 done, never on the stale v0.0.10 one', async () => {
+    const b = box('ccrc-inv-target-seq-');
+    plant(b.ccrcDir, { ...FULL, stamp: stampJson({ version: 'v0.0.10' }) });
+    await sweepInventory(localDeps(b), NOW - 60_000);   // the row exists; no report yet
+    // The node's LAST report on disk, from its last (unrelated) completed
+    // run, is still 'done v0.0.10' — nothing has swept it yet, so the row
+    // has never stored it.
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.10', phase: 'done', detail: 'converged' }) });
+    const T = NOW;
+    plantLease(b.db, U1, 'applying', 'v0.0.11', T);
+    // The FIRST sweep after acquire is the one that first reads that stale
+    // v0.0.10 done report — the "op in transit" window (Context, this brief):
+    // the real v0.0.11 process has not written anything yet.
+    const [stale] = await sweepInventory(localDeps(b), T + 500);
+    expect(stale).toMatchObject({ lease: 'none' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'applying', updateTarget: 'v0.0.11' });
+    // The node's clock reads 5s BEHIND the server's dispatch instant T for
+    // every report the real v0.0.11 run writes from here on.
+    const nodeS = Math.floor((T - 5000) / 1000);
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.11', phase: 'queued', startedAt: nodeS, updatedAt: nodeS, detail: null }) });
+    const [queued] = await sweepInventory(localDeps(b), T + 1000);
+    expect(queued).toMatchObject({ lease: 'none' });
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.11', phase: 'installing', startedAt: nodeS, updatedAt: nodeS + 2, detail: null }) });
+    const [installing] = await sweepInventory(localDeps(b), T + 2000);
+    expect(installing).toMatchObject({ lease: 'none' });
+    plant(b.ccrcDir, { stamp: stampJson({ version: 'v0.0.11' }),
+      report: reportJson({ target: 'v0.0.11', phase: 'done', startedAt: nodeS, updatedAt: nodeS + 5, detail: 'converged' }) });
+    const [done] = await sweepInventory(localDeps(b), T + 3000);
+    expect(done).toMatchObject({ lease: 'settle' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'idle', updateDetail: 'done: v0.0.11' });
+  });
+
+  it('Q1b: a CLI run\'s stored installing v0.0.11, followed by ITS OWN later done v0.0.11, never settles a freshly dispatched v0.0.12 lease — stays pending, the v0.0.12 request stands', async () => {
+    const b = box('ccrc-inv-target-q1b-');
+    plant(b.ccrcDir, { ...FULL, stamp: stampJson({ version: 'v0.0.11' }),
+      report: reportJson({ target: 'v0.0.11', phase: 'installing', detail: null }) });
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'installing', reportedTarget: 'v0.0.11', updateState: 'idle' });
+    expect(b.store.requestNode(U1, 'v0.0.12', 'update', NOW - 30_000)).toMatchObject({ ok: true });
+    plantLease(b.db, U1, 'pending', 'v0.0.12', NOW);
+    // The v0.0.11 CLI run finishes on its own, unrelated to the v0.0.12 lease.
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.11', phase: 'done', detail: 'converged' }) });
+    const [out] = await sweepInventory(localDeps(b), NOW + 1000);
+    expect(out).toMatchObject({ result: 'measured', lease: 'none' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.12', requestedTag: 'v0.0.12' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('Q2a: the row holds the UNKNOWN report at acquire — a previous run\'s readable done v0.0.11, read after, does not settle the fresh v0.0.12 lease', async () => {
+    const b = box('ccrc-inv-target-q2a-');
+    plant(b.ccrcDir, { ...FULL, stamp: stampJson({ version: 'v0.0.11' }),
+      report: reportJson({ target: 'v0.0.11', phase: 'done', detail: 'converged' }) });
+    // update.json is unreadable on the row's VERY FIRST sweep — nothing was
+    // ever measured before, so (F8) the stored report is the UNKNOWN fold
+    // (§8, D-3210), not the real 'done v0.0.11' the file actually holds.
+    // (An unreadable read AFTER a real report was already stored would
+    // instead carry that real report forward unchanged — D-3210's whole
+    // point — so this scenario needs the unreadable read to be the first.)
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o000);
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'unknown' });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o644);
+    expect(b.store.requestNode(U1, 'v0.0.12', 'update', NOW - 10_000)).toMatchObject({ ok: true });
+    plantLease(b.db, U1, 'pending', 'v0.0.12', NOW);
+    // update.json is readable again — the SAME 'done v0.0.11' it held all
+    // along, now DIFFERING from the stored UNKNOWN fold.
+    const [out] = await sweepInventory(localDeps(b), NOW + 1000);
+    expect(out).toMatchObject({ lease: 'none' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'pending', requestedTag: 'v0.0.12' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('Q2b: the row holds the UNKNOWN report at acquire — a previous run\'s readable failed v0.0.10, read after, does not spuriously halt the fresh v0.0.12 lease', async () => {
+    const b = box('ccrc-inv-target-q2b-');
+    plant(b.ccrcDir, { ...FULL, stamp: stampJson({ version: 'v0.0.10' }),
+      report: reportJson({ target: 'v0.0.10', phase: 'failed', detail: 'spine died at _inst_skills' }) });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o000);
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    expect(b.store.node(U1)).toMatchObject({ reportedPhase: 'unknown' });
+    chmodSync(path.join(b.ccrcDir, 'update.json'), 0o644);
+    expect(b.store.requestNode(U1, 'v0.0.12', 'update', NOW - 10_000)).toMatchObject({ ok: true });
+    plantLease(b.db, U1, 'pending', 'v0.0.12', NOW);
+    const [out] = await sweepInventory(localDeps(b), NOW + 1000);
+    expect(out).toMatchObject({ lease: 'none' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'pending', requestedTag: 'v0.0.12' });
+  });
+
+  it('Q3 arm-2: the restore child\'s own done <prev> report, read before the parent writes reverted, must not settle the lease idle — it stays pending until the parent\'s reverted (naming the LEASE\'s own tag) releases it', async () => {
+    const b = box('ccrc-inv-target-q3-');
+    plant(b.ccrcDir, { ...FULL, stamp: stampJson({ version: 'v0.0.12' }) });
+    await sweepInventory(localDeps(b), NOW - 60_000);
+    // The lease is for v0.0.12 — the tag whose install failed its health
+    // gate and triggered arm-2's restore back to v0.0.11.
+    plantLease(b.db, U1, 'applying', 'v0.0.12', NOW);
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.12', phase: 'restoring', detail: null }) });
+    const [restoring] = await sweepInventory(localDeps(b), NOW + 1000);
+    expect(restoring).toMatchObject({ lease: 'none' });
+    expect(b.store.node(U1)?.updateState).toBe('applying');
+    // The restore CHILD is itself an ordinary `ccrc update --to v0.0.11
+    // --from restore` run, and it writes ITS OWN done, at v0.0.11 — read in
+    // the window before the PARENT overwrites it with `reverted` at v0.0.12
+    // (the parent's own target throughout, per the restore arms' contract).
+    plant(b.ccrcDir, { stamp: stampJson({ version: 'v0.0.11' }),
+      report: reportJson({ target: 'v0.0.11', phase: 'done', detail: 'converged' }) });
+    const [mid] = await sweepInventory(localDeps(b), NOW + 2000);
+    expect(mid).toMatchObject({ lease: 'none' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'applying', updateTarget: 'v0.0.12' });
+    // The parent's own final write: `reverted`, naming the LEASE's own target.
+    plant(b.ccrcDir, { report: reportJson({ target: 'v0.0.12', phase: 'reverted', detail: 'health gate failed; restored v0.0.11' }) });
+    const [final] = await sweepInventory(localDeps(b), NOW + 3000);
+    expect(final).toMatchObject({ lease: 'release' });
+    expect(b.store.node(U1)).toMatchObject({ updateState: 'reverted', updateDetail: 'health gate failed; restored v0.0.11' });
   });
 });
 

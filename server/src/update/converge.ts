@@ -53,8 +53,8 @@ export interface ConvergeStore {
   nodes(): NodeRow[]; releases(): ReleaseRow[]; refusalsFor(nodeId: string): RefusalRow[];
   intentFor(scope: string): UpdateIntentRow | null; updateEpoch(): { epoch: number; issuedAt: number };
   dispatchNode(nodeId: string, target: string, kind: RequestKind, startedAt: number, detail: string): DispatchNodeResult;
-  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, reportStartedAt: number | null): ReleaseLeaseResult;
-  settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult;
+  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult;
+  settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult;
   noteDispatchRefusal(nodeId: string, detail: string): NoteDispatchRefusalResult;
 }
 

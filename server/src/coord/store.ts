@@ -6306,16 +6306,23 @@ export class CoordStore {
   /** A refusal, a drop, a deadline, or a `failed`/`reverted`/stamp-mismatch
    *  report (§8, §10): a BUSY lease back to a settled state. The request
    *  columns are untouched — a refusal does not consume the request (decision
-   *  7). `expectedStartedAt` is the row's OWN `updateStartedAt`, as the
-   *  caller last read it, when the release is report-driven — never a
-   *  report's own `startedAt` (W4 review 155, C33: the two boxes' clocks are
-   *  never ordered against each other; freshness is the report DIFFERING
-   *  from what the row held, decided by the caller before this write, not a
-   *  timestamp compared here) — and `null` otherwise. The guard is IDENTITY:
-   *  a write whose caller observed a lease that has since moved on (a newer
-   *  `dispatchNode`, between that read and this write) is refused; one
-   *  observing the SAME lease, or observing none (a legacy row with no
-   *  recorded start), always proceeds. */
+   *  7). `expectedStartedAt` is the row's OWN `updateStartedAt` — the
+   *  acquire's ms clock value, NOT a unique lease id — as the caller last
+   *  read it, when the release is report-driven — never a report's own
+   *  `startedAt` (W4 review 155, C33: the two boxes' clocks are never
+   *  ordered against each other; freshness is the report DIFFERING from what
+   *  the row held AND naming this lease's own tag, both decided by the
+   *  caller before this write, never a timestamp compared here) — and `null`
+   *  otherwise. The guard's WHERE clause is IDENTITY: a write whose caller
+   *  observed a lease that has since moved on (a newer `dispatchNode`,
+   *  between that read and this write) is refused; one observing the SAME
+   *  lease, or observing none (a legacy row with no recorded start), always
+   *  proceeds. In practice this is DEFENCE IN DEPTH, structurally
+   *  unreachable today: the caller (`applyMeasurement`, `inventory.ts`) reads
+   *  `preRow` and reaches this write in one synchronous stretch with no
+   *  await between them, so nothing can move the row's `updateStartedAt` in
+   *  between — the clause guards against a caller shape that does not exist
+   *  yet, not a race this build can produce. */
   releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult {
     const res = this.db.prepare(
       'UPDATE nodes SET updateState = ?, updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +

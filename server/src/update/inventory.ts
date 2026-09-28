@@ -375,10 +375,33 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
   // belong to THIS lease is that it DIFFERS from the report the row already
   // held — `sameReport`, in this function's one caller (`sweepPlanFor`),
   // above — a report identical to the row's own is the previous run's
-  // leftover and never reaches here at all; a report that differs is this
-  // lease's, whatever its own clock says. The store's write carries the
+  // leftover and never reaches here at all. The store's write carries the
   // matching guard, by the lease's IDENTITY (`updateStartedAt` unchanged
   // since this plan was read), never by comparing a timestamp.
+  //
+  // BUT CHANGE ALONE IS NOT ENOUGH (fix round following C33, review of the
+  // window C33 opened): between `dispatchNode`'s acquire and THIS lease's
+  // own `queued` write — the op in transit over the fleet link, the
+  // `--detach` parent's lock probe, rollback's release-host probe — a sweep
+  // can read a PREVIOUS run's report that still DIFFERS from what the row
+  // held at acquire (a stale `installing`/`done` from a CLI run, or the
+  // UNKNOWN fold left by a prior unreadable sweep) and would settle a fresh
+  // lease — clearing the operator's request and freeing the lease while the
+  // node's real run is still proceeding — or halt it on a stale failure,
+  // before this lease's own run has written anything at all. IDENTITY closes
+  // that window: every report a DISPATCHED run writes carries the lease's
+  // OWN tag — `_upd_detach`'s queued, `cmd_update`'s --to/UPD_VERSION,
+  // `cmd_rollback` (itself `cmd_update --to`), the restore arms'
+  // restoring/reverted (which keep the PARENT's target throughout, never the
+  // restore child's own), the watchdog's restart (keeps the report's own
+  // target) and the server-role local spawn (the same argv) — so a report
+  // naming a tag OTHER than `row.updateTarget` is provably another run's,
+  // whatever it says and however its own clock reads. What this cannot tell
+  // apart is a PREVIOUS run of the SAME tag: that can only spuriously settle
+  // a node already AT that tag (a no-op the next sweep's own stamp confirms)
+  // or spuriously halt (safe — the operator sees failed/reverted and acks).
+  // No column, no clock: the one field a report and a lease both carry.
+  if (row.updateTarget !== null && r.target !== row.updateTarget) return { kind: 'none', why: 'stale-report' };
   if (IN_FLIGHT.has(r.phase)) return { kind: 'none', why: 'in-flight' };
   switch (r.phase) {
     case 'done':
@@ -582,10 +605,18 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
   // C33 (W4 review 155): the store's write re-checks the lease's IDENTITY,
   // not the report's clock — `preRow.updateStartedAt`, read above before
   // this sweep wrote anything, is what `dispatchNode` last stamped this
-  // row's lease with. Passing it back lets the store refuse a write whose
-  // plan is stale because the lease itself moved on (a newer dispatch)
-  // between that read and this write; it never refuses one for a node
-  // whose own clock merely disagrees with the server's.
+  // row's lease with (the acquire's own ms clock value, not a unique lease
+  // id — a second dispatch in the same millisecond would stamp the same
+  // number, which the target check above, not this guard, is what tells
+  // apart). Passing it back is DEFENCE IN DEPTH: this whole function runs in
+  // one synchronous stretch from `preRow`'s read to the write below — the
+  // `node:sqlite` handle is synchronous and this process is single-threaded,
+  // and nothing between the two awaits (there IS no await between them) — so
+  // no other write to this row's `updateStartedAt` can land inside that
+  // stretch, and the guard cannot actually fire today. It stays because nothing
+  // enforces that invariant AT this call site if the function is ever split
+  // or an await is introduced between the read and the write; it is not
+  // protecting against a live race this build can produce.
   const expectedStartedAt = preRow === null ? null : preRow.updateStartedAt;
   let lease: LeaseAction['kind'] = 'none';
   if (plan.lease.kind === 'settle') {
