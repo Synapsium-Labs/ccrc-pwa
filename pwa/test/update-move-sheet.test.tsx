@@ -11,7 +11,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { MoveRequestAnswer, NodeWire, UpdatesView } from '../../shared/api';
+import type { MoveRequestAnswer, MoveSkip, MoveSkipWhy, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { ApiError, api, apiErrorText, moveSkipText, updateErrorText } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -57,6 +57,25 @@ const plan = (intent: MoveIntent, nodes: NodeWire[] = [server(), node()]): Plann
 const UP: MoveIntent = { scope: 'fleet', direction: 'update', tag: 'v0.0.10' };
 const DOWN: MoveIntent = { scope: 'fleet', direction: 'rollback', to: 'v0.0.8' };
 const ok = (requested: string[]): MoveRequestAnswer => ({ ok: true, requested, skipped: [] });
+/** The answer `requestAll` (server/src/update/routes.ts) gives `{all: true}` for rows in dispatch order (fleet
+ *  first), each with what its OWN check would do. Its two cross-row rules, and only those, are derived here, so a
+ *  fixture cannot spell an answer the server never produces: a row that is itself `halted` is skipped so before
+ *  anything else; else a NON-fleet row (rank != 0 — server-role AND role-null) is skipped `waiting-for-fleet`
+ *  once any fleet row was skipped `busy` or `halted` in this call (D-3408), and never otherwise. */
+type RowDoes = 'requested' | Exclude<MoveSkipWhy, 'waiting-for-fleet'>;
+const requestAllAnswer = (rows: ReadonlyArray<{ nodeId: string; fleet: boolean; does: RowDoes }>): MoveRequestAnswer => {
+  const requested: string[] = [];
+  const skipped: MoveSkip[] = [];
+  let fleetSelfSkipped = false;
+  for (const r of rows) {
+    if (r.does === 'halted') skipped.push({ nodeId: r.nodeId, why: 'halted' });
+    else if (!r.fleet && fleetSelfSkipped) skipped.push({ nodeId: r.nodeId, why: 'waiting-for-fleet' });
+    else if (r.does === 'requested') requested.push(r.nodeId);
+    else skipped.push({ nodeId: r.nodeId, why: r.does });
+    if (r.fleet && (r.does === 'halted' || r.does === 'busy')) fleetSelfSkipped = true;
+  }
+  return { ok: true, requested, skipped };
+};
 const refusal = (error: string): ApiError => new ApiError(409, { ok: false, error });
 
 /** Mount the sheet (and the one toast subscriber) over a plan; onClose/onDone are spies, so the sheet stays mounted. */
@@ -163,24 +182,58 @@ describe('UpdateMoveSheet — what one confirm sends', () => {
     expect(moveSkipText('no-detach-cap')).toBe(updateErrorText(refusal('no-detach-cap')));
   });
 
-  // `busy` skips a node whose own lease is busy (either role); `waiting-for-fleet` skips only a NON-fleet row
-  // (D-3408), so its skipped node is the server and the fleet node is the one that was requested or halted.
-  it.each([
-    ['busy', FLEET_ID, SERVER_ID, 'fleet', 'server'],
-    ['waiting-for-fleet', SERVER_ID, FLEET_ID, 'server', 'fleet'],
-  ] as const)(
-    'a 202 that skipped a NAMED node for %s renders that word\'s own sentence (review MINOR 6)', async (why, skipped, requested, skippedLabel, requestedLabel) => {
-      vi.spyOn(api, 'applyUpdate').mockResolvedValue({
-        ok: true, requested: [requested], skipped: [{ nodeId: skipped, why }],
-      });
-      const { onClose, onDone } = mount(plan(UP));
+  // `busy` skips a node whose OWN lease is busy, and a fleet-role row's busy (or halted) skip is what holds every
+  // other row `waiting-for-fleet` (D-3408) — so a busy skip beside a REQUESTED node is the server's, and the
+  // waiting-for-fleet skip never comes with the fleet node requested. Both answers come from `requestAllAnswer`.
+  it('a 202 that skipped a NAMED node for busy renders that word\'s own sentence (review MINOR 6)', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue(requestAllAnswer([
+      { nodeId: FLEET_ID, fleet: true, does: 'requested' }, { nodeId: SERVER_ID, fleet: false, does: 'busy' },
+    ]));
+    const { onClose, onDone } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByRole('alert');
+    expect(said.textContent).toBe(`Not requested — server: ${moveSkipText('busy')} Requested: fleet.`);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // The role-null node is rank 2 (`dispatchRank`), held exactly like the server-role one (rank 1): `requestAll`
+  // skips EVERY rank!=0 row `waiting-for-fleet`, and nothing was requested — so no onDone.
+  it.each(['busy', 'halted'] as const)(
+    'a 202 whose fleet node is skipped %s holds every non-fleet node waiting-for-fleet — server-role and role-null alike — and requests nothing (D-3408)', async (fleetWhy) => {
+      const UNKNOWN_ID = '78787878-7878-4878-8878-787878787878';
+      vi.spyOn(api, 'applyUpdate').mockResolvedValue(requestAllAnswer([
+        { nodeId: FLEET_ID, fleet: true, does: fleetWhy }, { nodeId: SERVER_ID, fleet: false, does: 'requested' },
+        { nodeId: UNKNOWN_ID, fleet: false, does: 'requested' },
+      ]));
+      const { onClose, onDone } = mount(plan(UP, [server(), node(), node({ nodeId: UNKNOWN_ID, role: null, label: 'unknown' })]));
       fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
       const said = await screen.findByRole('alert');
-      expect(said.textContent).toBe(`Not requested — ${skippedLabel}: ${moveSkipText(why)} Requested: ${requestedLabel}.`);
-      expect(onDone).toHaveBeenCalledTimes(1);
+      const held = moveSkipText('waiting-for-fleet');
+      expect(said.textContent).toBe(`Not requested — fleet: ${moveSkipText(fleetWhy)} server: ${held} unknown: ${held}`);
+      expect(onDone, 'nothing was written').not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
     },
   );
+
+  it('requestAllAnswer derives only what requestAll can produce: a fleet busy/halted skip is the one thing that makes waiting-for-fleet', () => {
+    const rows = (fleet: 'requested' | 'busy' | 'halted' | 'no-detach-cap'): MoveRequestAnswer => requestAllAnswer([
+      { nodeId: FLEET_ID, fleet: true, does: fleet }, { nodeId: SERVER_ID, fleet: false, does: 'requested' },
+    ]);
+    expect(rows('requested')).toEqual({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    expect(rows('no-detach-cap'), 'a capability word does not block the row\'s peers').toEqual({
+      ok: true, requested: [SERVER_ID], skipped: [{ nodeId: FLEET_ID, why: 'no-detach-cap' }],
+    });
+    for (const why of ['busy', 'halted'] as const) {
+      expect(rows(why)).toEqual({
+        ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why }, { nodeId: SERVER_ID, why: 'waiting-for-fleet' }],
+      });
+    }
+    // A row that is ITSELF halting is `halted` before the waiting check, and the server's own halt blocks no one.
+    expect(requestAllAnswer([
+      { nodeId: FLEET_ID, fleet: true, does: 'busy' }, { nodeId: SERVER_ID, fleet: false, does: 'halted' },
+    ]).skipped).toEqual([{ nodeId: FLEET_ID, why: 'busy' }, { nodeId: SERVER_ID, why: 'halted' }]);
+  });
 
   it('the waiting-for-fleet sentence promises nothing: it says nothing was requested and to tap again (D-3408 writes no request)', () => {
     const s = moveSkipText('waiting-for-fleet');
