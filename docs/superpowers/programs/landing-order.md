@@ -4,6 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-23-landing-order-and-main-churn-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-landing-order-wave<N>-*.md` — each written once the waves it depends on
 have landed what it reads
 Home project: `ccrc-pwa`   Coordinator: assigned at the first run-open   Workspace: **a fresh one per wave**
+Ticket: `CCR-19` (Linear; mirrored as GitHub issue #198) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/session-continuity.md`
 
 **What this program is.** The fleet manufactures main churn — ritual syncs, `update-branch`, repeat absorptions —

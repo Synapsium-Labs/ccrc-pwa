@@ -4,6 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-23-session-continuity-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-session-continuity-wave<N>-*.md` — each written once the waves it depends on
 have measured what it needs (the table's "depends on" column)
 Home project: `ccrc-pwa`   Coordinator: assigned at the first run-open   Workspace: **a fresh one per wave**
+Ticket: `CCR-18` (Linear; mirrored as GitHub issue #197) — the coordinator is created from it
 Companion programme: `docs/superpowers/programs/landing-order.md`
 
 **What this program is.** A restart — limit rescue, auto-home, manual swap, supervisor revival — is today a place
