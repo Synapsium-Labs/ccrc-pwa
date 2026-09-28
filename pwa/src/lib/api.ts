@@ -382,11 +382,30 @@ export function updateErrorText(err: unknown): string {
   return apiErrorText(err);
 }
 
+/** A raw wire word `UPDATE_ERROR_TEXT` has no sentence for, made printable rather than rendered raw — the same
+ *  collapse `shared/agent-protocol.ts`'s `firstStderrLine` applies to a stderr line: every run outside printable
+ *  ASCII (0x20–0x7E) becomes one space, the ends are trimmed, and the result is bounded so a long or hostile word
+ *  cannot grow the sentence around it. */
+function printableSkipWord(raw: string): string {
+  const cleaned = raw.replace(/[^\x20-\x7e]+/g, ' ').trim();
+  return (cleaned === '' ? '(blank)' : cleaned).slice(0, 40);
+}
+
 /** The sentence for a word `{all: true}`'s 202 skipped a node with (`MoveRequestAnswer.skipped`, programme wave 5).
  *  `MoveSkipWhy` is a subset of `UPDATE_ERROR_TEXT`'s keys, so this is the table's own sentence — the one a
- *  single-node 409 of the same word renders — and a skip word with no sentence is a compile error here. */
-export function moveSkipText(why: MoveSkipWhy): string {
-  return UPDATE_ERROR_TEXT[why];
+ *  single-node 409 of the same word renders — and a MoveSkipWhy variant with no sentence is a compile error at
+ *  `UPDATE_ERROR_TEXT`'s own definition.
+ *
+ *  Read with `Object.hasOwn`, never a bare index (review MINOR 2). The value arrives over the wire — additive
+ *  discipline (README) means a CACHED OLDER PWA can face a NEWER server that skips for a word this build's
+ *  `MoveSkipWhy` union does not carry — so `why`'s type also admits any string, the honest wire type. A bare
+ *  `UPDATE_ERROR_TEXT[why]` would render the literal `"undefined"` for such a word, and would hand back the
+ *  `Object.prototype` method itself for an inherited key such as `'toString'`; `hasOwn` refuses both, and the
+ *  fallback names the raw word, made printable, rather than pretending nothing was skipped. */
+export function moveSkipText(why: MoveSkipWhy | (string & {})): string {
+  return Object.hasOwn(UPDATE_ERROR_TEXT, why)
+    ? UPDATE_ERROR_TEXT[why as keyof typeof UPDATE_ERROR_TEXT]
+    : `An update reason this build doesn't recognise (${printableSkipWord(why)}).`;
 }
 
 /** Injectable for tests; defaults to the real global fetch. */

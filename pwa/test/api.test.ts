@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
+import { ApiError, apiErrorText, clipUrl, createApi, kickoffErrorText, moveSkipText, sendErrorText, submitErrorText, updateErrorText, uploadErrorText, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { FLEET_SCOPE, type AckAnswer, type CatalogueState, type IntentWriteAnswer, type MoveRequestAnswer, type NodeWire, type UpdateIntentWire, type UpdateRouteError } from '../../shared/api';
 
 const jsonResponse = (status: number, body: unknown): Response =>
@@ -1343,5 +1343,28 @@ describe('the move client — applyUpdate / rollbackUpdate (programme wave 5 Tas
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(409);
     expect((err as ApiError).body).toEqual({ ok: false, error: 'not-newer' });
+  });
+});
+
+// moveSkipText's OWN-key guard (review MINOR 2). Wire additive discipline means a cached OLDER PWA can face a
+// NEWER server that skips a node for a MoveSkipWhy word this build's union does not carry — `why` arrives as
+// plain JSON, not the narrowed literal type, so both words below are real inputs, not merely type-system
+// gymnastics.
+describe('moveSkipText — an unknown skip word (review MINOR 2)', () => {
+  it('renders every real MoveSkipWhy word as UPDATE_ERROR_TEXT\'s own sentence', () => {
+    expect(moveSkipText('halted')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'halted' })));
+    expect(moveSkipText('busy')).toBe(updateErrorText(new ApiError(409, { ok: false, error: 'busy' })));
+  });
+
+  it('a word no version of this table has ever owned is made printable, not "undefined"', () => {
+    const said = moveSkipText('quarantined');
+    expect(said).not.toMatch(/undefined/);
+    expect(said).toContain('quarantined');
+  });
+
+  it('an inherited Object.prototype key is refused too — never the prototype method itself', () => {
+    const said = moveSkipText('toString');
+    expect(said).not.toMatch(/function|native code/);
+    expect(said).toContain('toString');
   });
 });

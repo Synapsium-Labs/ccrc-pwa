@@ -80,6 +80,14 @@ function Harness({ first, second, onDone }: { first: PlannedMove; second: Planne
   );
 }
 
+/** Wired the way a real screen wires this sheet: `onClose` actually dismisses (plan -> null), unlike `mount`'s
+ *  spy. So the scrim/Esc/swipe path — which `Sheet`'s `onOpenChange`/overlay call directly, bypassing the
+ *  disabled Cancel button — genuinely bumps the sheet's own generation, the way review IMPORTANT 1 measures. */
+function DismissHarness({ first, onDone }: { first: PlannedMove; onDone: () => void }): ReactNode {
+  const [p, setP] = useState<PlannedMove | null>(first);
+  return <UpdateMoveSheet open={p !== null} plan={p} onClose={() => setP(null)} onDone={onDone} />;
+}
+
 describe('UpdateMoveSheet — what it names', () => {
   it('names the nodes it moves in dispatch order — fleet then server whatever the wire order — under the headline, which is also its confirm', () => {
     mount(plan(UP));
@@ -104,6 +112,11 @@ describe('UpdateMoveSheet — what it names', () => {
     cleanup();
     render(<UpdateMoveSheet open plan={null} onClose={() => {}} onDone={() => {}} />);
     expect(document.querySelector('.update-move-sheet')).toBeNull();
+  });
+
+  it('the node list carries an explicit role="list" — list-style:none drops the implicit one in Safari/VoiceOver (review MINOR 5)', () => {
+    mount(plan(UP));
+    expect(screen.getByRole('list', { name: LIST })).toHaveAttribute('role', 'list');
   });
 
   it('renders a label carrying markup as literal text', () => {
@@ -150,6 +163,20 @@ describe('UpdateMoveSheet — what one confirm sends', () => {
     expect(moveSkipText('no-detach-cap')).toBe(updateErrorText(refusal('no-detach-cap')));
   });
 
+  it.each(['busy', 'waiting-for-fleet'] as const)(
+    'a 202 that skipped a NAMED node for %s renders that word\'s own sentence (review MINOR 6)', async (why) => {
+      vi.spyOn(api, 'applyUpdate').mockResolvedValue({
+        ok: true, requested: [SERVER_ID], skipped: [{ nodeId: FLEET_ID, why }],
+      });
+      const { onClose, onDone } = mount(plan(UP));
+      fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+      const said = await screen.findByRole('alert');
+      expect(said.textContent).toBe(`Not requested — fleet: ${moveSkipText(why)} Requested: server.`);
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
+    },
+  );
+
   it('a 202 that requested NOTHING — Install on a yanked or unlisted row, every node skipped unknown-tag — stays open and re-polls nothing', async () => {
     const s = moveSkipText('unknown-tag');
     vi.spyOn(api, 'applyUpdate').mockResolvedValue({
@@ -172,6 +199,37 @@ describe('UpdateMoveSheet — what one confirm sends', () => {
     expect(said.textContent).toBe(MOVE_NOTHING_REQUESTED_TEXT);
     expect(onDone).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a 2xx that parses to null is read as unreadable, not indexed — the confirm button is not left live for a second send (review MINOR 3)', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue(null as unknown as MoveRequestAnswer);
+    const { onClose, onDone } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(MOVE_UNREADABLE_TEXT, { selector: '.toast' })).toBeInTheDocument();
+  });
+
+  it('a `skipped` element that is not an object is read as unreadable too, never indexed (review MINOR 3)', async () => {
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({
+      ok: true, requested: [], skipped: [null as unknown as { nodeId: string; why: 'busy' }],
+    });
+    const { onClose, onDone } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(MOVE_UNREADABLE_TEXT, { selector: '.toast' })).toBeInTheDocument();
+  });
+
+  it('a node the server requested that this plan never previewed is named — a stale {all: true} view (review MINOR 4)', async () => {
+    const EXTRA = '78787878-7878-4878-8878-787878787878';
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET_ID, SERVER_ID, EXTRA], skipped: [] });
+    const { onClose, onDone } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    const said = await screen.findByRole('alert');
+    expect(said.textContent).toBe(`Also requested — not previewed here: ${EXTRA}. Requested: fleet, server, ${EXTRA}.`);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onClose, 'a reply naming more than this sheet previewed is never a clean close').not.toHaveBeenCalled();
   });
 
   it('a skip of a node the sheet never listed is the plan agreeing with the server — it closes and says nothing', async () => {
@@ -306,6 +364,20 @@ describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open',
     expect(failed).toBeInstanceOf(MoveSendError);
     expect((failed as MoveSendError).err).toBe(err);
     expect((failed as MoveSendError).requested).toEqual([FLEET_ID]);
+  });
+
+  it('dismissing mid-sequence (scrim/Esc/swipe, never gated by the disabled Cancel) stops the rest, and the reload still fires for what already went out (review IMPORTANT 1)', async () => {
+    const first = Promise.withResolvers<MoveRequestAnswer | 'unreadable'>();
+    const rollback = vi.spyOn(api, 'rollbackUpdate').mockReturnValueOnce(first.promise);
+    const onDone = vi.fn();
+    render(<DismissHarness first={plan(DOWN)} onDone={onDone} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.8' }));
+    expect(rollback).toHaveBeenCalledTimes(1);
+    // The scrim — Sheet wires it straight to onClose, unlike the busy-disabled Cancel button.
+    fireEvent.click(screen.getByTestId('sheet-overlay'));
+    await act(async () => { first.resolve(ok([FLEET_ID])); await new Promise((r) => setTimeout(r, 0)); });
+    expect(rollback, 'the second node is never sent once the sheet is gone').toHaveBeenCalledTimes(1);
+    expect(onDone, 'the first node was requested for real — the caller still needs to re-poll').toHaveBeenCalledTimes(1);
   });
 });
 

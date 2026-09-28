@@ -67,12 +67,34 @@ export class MoveSendError extends Error {
   }
 }
 
-export async function sendMove(plan: PlannedMove): Promise<Array<MoveRequestAnswer | 'unreadable'>> {
+/** A 2xx body normalised to the shape this sheet trusts. `postJsonOr` only degrades a body that failed to
+ *  PARSE (D-1150) — a body that parsed fine but is not the object this route promises (`null`, an array, a
+ *  `requested`/`skipped` that is not an array, or a `skipped` element that is not an object) reaches here
+ *  UNCHANGED, and indexing `.requested`/`.skipped` on it throws (review MINOR 3). Read as the same
+ *  `'unreadable'` a parse failure already is — never indexed as if it were the real shape. */
+function asAnswer(raw: unknown): MoveRequestAnswer | 'unreadable' {
+  if (raw === 'unreadable') return raw;
+  if (typeof raw !== 'object' || raw === null) return 'unreadable';
+  const { requested, skipped } = raw as { requested?: unknown; skipped?: unknown };
+  if (!Array.isArray(requested) || !Array.isArray(skipped)) return 'unreadable';
+  if (skipped.some((s) => typeof s !== 'object' || s === null)) return 'unreadable';
+  return raw as MoveRequestAnswer;
+}
+
+/** `isCurrent` is AbandonSheet's generation check, asked BETWEEN requests (review IMPORTANT 1): a fleet-wide
+ *  rollback sends one request per node, in order, and a sheet dismissed mid-sequence (the scrim, Esc, swipe —
+ *  none of which the disabled Cancel button gates) must not keep sending into a plan nothing shows any more.
+ *  Defaults to always-current so a direct caller (a test, or a future one-shot use) behaves exactly as before
+ *  this parameter existed. What already went out stands regardless — this only stops the REST from being sent. */
+export async function sendMove(
+  plan: PlannedMove, isCurrent: () => boolean = () => true,
+): Promise<Array<MoveRequestAnswer | 'unreadable'>> {
   const answers: Array<MoveRequestAnswer | 'unreadable'> = [];
   const requested: string[] = [];
   for (const r of moveRequests(plan)) {
+    if (!isCurrent()) break;
     try {
-      answers.push(r.route === 'apply' ? await api.applyUpdate(r.body) : await api.rollbackUpdate(r.body));
+      answers.push(asAnswer(r.route === 'apply' ? await api.applyUpdate(r.body) : await api.rollbackUpdate(r.body)));
     } catch (err) {
       throw new MoveSendError(err, [...requested]);
     }
@@ -95,6 +117,17 @@ export function moveSkippedText(answers: ReadonlyArray<MoveRequestAnswer | 'unre
     }
   }
   return said.length === 0 ? null : `Not requested — ${said.join(' ')}`;
+}
+
+/** `{all: true}`'s 202 can REQUEST a node this plan never listed — a snapshot the server's own, fresher view has
+ *  moved past (review MINOR 4). `moveSkippedText` only speaks for a SKIP of a node this plan named; silence for
+ *  a REQUEST of a node it did not would close the sheet without saying anything moved beyond what it previewed.
+ *  Said the same way a named skip is — in place, no confirm offered again. */
+function moveUnnamedText(requested: readonly string[], plan: PlannedMove): string | null {
+  const named = new Set(plan.nodes.map((n) => n.nodeId));
+  const extra = requested.filter((id) => !named.has(id));
+  return extra.length === 0 ? null
+    : `Also requested — not previewed here: ${extra.map((id) => moveLabel(plan, id)).join(', ')}.`;
 }
 
 /** The labels a `409 halted` names in its `detail` — the halting nodeIds, `, `-joined (Task 6's singleNodeMove),
@@ -146,18 +179,29 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
   const confirm = (): void => {
     if (busy || answered) return;
     const mine = gen.current;
+    const planned = moveRequests(plan).length;
     setBusy(true);
     setError(null);
-    void sendMove(plan).then(
+    void sendMove(plan, () => gen.current === mine).then(
       (answers) => {
-        if (gen.current !== mine) return;   // superseded — another plan is shown now
+        if (gen.current !== mine) {
+          // Superseded — a plan switch (nothing more to say, the sheet already shows something else), or a
+          // dismiss that `isCurrent` stopped mid-sequence. Only the second may have left something written that
+          // finished sending everything it planned did not: `answers.length < planned` is exactly that gap, and
+          // the reload onDone triggers is harmless even for the plan-switch case, so it is only skipped there
+          // because there is nothing to report (review IMPORTANT 1).
+          if (answers.length > 0 && answers.length < planned) onDone();
+          return;
+        }
         setBusy(false);
         const unread = answers.includes('unreadable');
         const requested = answers.flatMap((a) => (a !== 'unreadable' && Array.isArray(a.requested) ? a.requested : []));
-        // The reply is authoritative (D-3401): a node this sheet NAMED that it skipped, or a
-        // readable reply that requested nothing at all, is said HERE and the sheet stays open — never a close
-        // that reads as "moved". onDone only when something may have been written.
-        const short = moveSkippedText(answers, plan) ?? (!unread && requested.length === 0 ? MOVE_NOTHING_REQUESTED_TEXT : null);
+        // The reply is authoritative (D-3401): a node this sheet NAMED that it skipped, a node it did NOT name
+        // that the server requested anyway (a fresher view than this plan's own), or a readable reply that
+        // requested nothing at all, is said HERE and the sheet stays open — never a close that reads as "moved".
+        // onDone only when something may have been written.
+        const short = moveSkippedText(answers, plan) ?? moveUnnamedText(requested, plan)
+          ?? (!unread && requested.length === 0 ? MOVE_NOTHING_REQUESTED_TEXT : null);
         if (short !== null) {
           setAnswered(true);
           setError(requested.length === 0 ? short : `${short} Requested: ${requested.map((id) => moveLabel(plan, id)).join(', ')}.`);
@@ -169,7 +213,13 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         onClose();
       },
       (err: unknown) => {
-        if (gen.current !== mine) return;   // superseded — this refusal is for a plan no longer shown
+        if (gen.current !== mine) {
+          // Same dismiss-vs-switch reasoning as the success arm: a MoveSendError's own `requested` is exactly
+          // what already went out before the refusal, and a dismiss stopping the sequence never reaches this
+          // branch with an empty one unless nothing was ever written.
+          if (err instanceof MoveSendError && err.requested.length > 0) onDone();
+          return;
+        }
         setBusy(false);
         setError(moveErrorText(err, plan));
         if (err instanceof MoveSendError && err.requested.length > 0) {
@@ -188,7 +238,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
         {lines.length === 0 ? (
           <p className="qc-consequence">{moveEmptyText(plan.intent)}</p>
         ) : (
-          <ol className="update-move-list" aria-label="Nodes this moves, in order">
+          <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
           </ol>
         )}
