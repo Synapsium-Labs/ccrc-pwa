@@ -1613,6 +1613,17 @@ BOX_HEALTH_WHY=""
 VER_LAYOUT=""
 VER_CURRENT=""
 VER_WHY=""
+# `ccrc versions` and the GC (W6 Task 5), declared at file scope for the
+# `set -u` reason the arrays above are. The two ASSOCIATIVE arrays,
+# VER_PROTECT (<name> -> the words that keep it) and VER_VERDICT (<name> ->
+# the listing's verdict), are declared `declare -gA` inside the functions
+# that reset them instead: `declare -g` is bash 4.2, and at file scope
+# macOS's /bin/bash 3.2 would print an invalid-option error on every ccrc
+# invocation, ahead of cmd_install's bash-floor refusal.
+VER_NAMES=()                 # _ver_list: the version directories, complete ones newest first
+VER_RUNNING=()               # _ver_running_names: the versions a running unit's command resolves to
+VER_DOOMED=()                # _ver_verdicts: what a prune removes, in order …
+VER_DOOMED_WHY=()            # … and why, index for index
 
 # `cmd_update`'s out-parameters (stage 4, Task 6), declared at file scope for
 # the `set -u` reason the arrays above are: `_upd_fetch` fills the first
@@ -1768,7 +1779,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|versions|channel|rollout|uninstall|backup|logs|passwd|expose|version|watchdog}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1885,6 +1896,16 @@ already running).
             [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
             A version kept under ~/ccrc-versions is rolled back to by a
             flip of ~/ccrc and its own spine, with no download.
+  versions  list the kept release trees under ~/ccrc-versions (* marks the one ~/ccrc points at);
+            --prune removes the ones nothing needs, under update's lock, and
+            lists what is left. Never pruned: the one ~/ccrc points at, the
+            previous (~/.ccrc/previous), every tag the control plane's
+            projection names (desired, desired-stable, desired-dev) and every
+            version a running ccrc.service or ccrc-agent.service runs from;
+            beyond those it keeps the newest CCRC_VERSIONS_KEEP (default 3)
+            complete ones. An input it cannot measure prunes nothing (exit
+            1). The same prune runs after every install or update whose
+            health gate passed, and that one never removes an incomplete tree
   channel   print this box's update channel as the control plane projects
             it (~/.ccrc/update-intent): one line (state, channel, desired,
             desired-stable, desired-dev, auto), then what 'ccrc update'
@@ -10443,6 +10464,18 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
   # reaches it: the block above migrates it instead (W6 Task 3).
   if [ "$name" != "$VER_CURRENT" ]; then
     [ -n "$VER_CURRENT" ] && was="\$HOME/ccrc-versions/$VER_CURRENT"
+    # W6 Task 5 — THE TARGET IS MEASURED AGAIN AT THE FLIP (D-3456).
+    # A plain install takes no lock, and the GC is a remover that can run
+    # beside it: `ccrc versions --prune` removes an incomplete directory (the
+    # one this run is placing: its record was voided before the rsync), and
+    # another run's automatic GC removes a complete one nothing protects yet
+    # (a version this run is about to flip onto is neither pointed-at nor
+    # previous until it lands). `_plat_ln_swap` never checks its target, and
+    # a flip onto a directory that is gone leaves ~/ccrc dangling, which every
+    # later install refuses as `foreign`. `_inst_migrate` measures the layout
+    # again for the same reason.
+    { [ -d "$dest" ] && [ ! -L "$dest" ] && [ -f "$dest/ccd/ccrc" ]; } \
+      || _ccrc_die "the new tree at \$HOME/ccrc-versions/$name is gone before the flip — a prune may have run beside this install; \$HOME/ccrc was not touched, and the install can be run again"
     _plat_ln_swap "$dest" "$BOX_TREE_DIR" \
       || _ccrc_die "could not point \$HOME/ccrc at \$HOME/ccrc-versions/$name (one rename) — the running tree is untouched; the new one is complete at $dest"
     echo "install: tree: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (was $was) — one rename"
@@ -10632,6 +10665,7 @@ _inst_doctor_tail() {
     0)
       if [ "$drc" -eq 0 ]; then
         _inst_migrate_finish install "ccrc doctor passed; a plain install is its own gate"
+        _ver_gc install auto || :   # W6 Task 5: behind the same gate as the migration's removal (D-3451); its WARN never changes the install's exit
       elif [ "$VER_LAYOUT" = migrated ]; then
         echo "install: migration: \$HOME/ccrc.migrating kept — ccrc doctor did not pass; the next install or update whose gate passes removes it"
       fi
@@ -13231,6 +13265,7 @@ cmd_update() {
       && echo "update: migration: \$HOME/ccrc.migrating kept — --no-gate measured nothing"
   else
     _inst_migrate_finish update "the health gate passed"
+    _ver_gc update auto || :   # W6 Task 5: under this run's lock, after the gate passed; a skipped prune never fails the update
   fi
 
   if [ "$UPD_FROM" = restore ]; then
@@ -17143,6 +17178,346 @@ _bak_prune() {
   done
 }
 
+# ── ccrc versions, and the GC that never removes a needed version ─────────
+# (design 2026-09-20 §11 "GC"; W6 Task 5.) `_bak_prune` above is the sweep
+# this copies — nullglob saved and restored, a fixed shape, newest-N — and
+# the differences are the guards: a version directory is removed only when
+# nothing on this box needs it. Needed means the version `~/ccrc` points at,
+# the previous (`~/.ccrc/previous`), every tag the control plane's projection
+# names (D-3420), and every version a running
+# ccrc.service/ccrc-agent.service runs from (D-3446);
+# beyond those, the newest CCRC_VERSIONS_KEEP complete ones
+# (D-3423). An input that cannot be measured stops the whole
+# prune (D-3447); the automatic GC never removes
+# an incomplete version, which a concurrent plain install may be placing
+# (D-3448). The CALLER holds ~/.ccrc/update.lock.
+
+# `_ver_list` → VER_NAMES: every real directory directly under
+# $BOX_VERSIONS_ROOT whose name is a version name — complete ones (their kept
+# install record present) first, newest record first, then the incomplete
+# ones by name. Dot-names (a legacy target's `.incoming`) and anything else
+# are never listed, so never touched. The ordering is bash-only: no `sort`
+# binary on the install path. rc 1 (VER_WHY) when a record's mtime cannot be
+# read — the order is then unknown, and a prune that needs it is skipped;
+# VER_NAMES is still filled.
+_ver_list() {
+  VER_NAMES=()
+  local had_nullglob=0 d n t i j rc=0
+  local -a cn=() ct=() part=()
+  [ -d "$BOX_VERSIONS_ROOT" ] || return 0
+  shopt -q nullglob && had_nullglob=1
+  shopt -s nullglob
+  for d in "$BOX_VERSIONS_ROOT"/*; do
+    n="${d##*/}"
+    [[ "$n" =~ $VER_NAME_RE ]] || continue
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    if [ -f "$d/$VER_RECORD_COPY" ]; then
+      t="$(_plat_mtime "$d/$VER_RECORD_COPY" 2>/dev/null)" || t=""
+      if [[ ! "$t" =~ ^[0-9]+$ ]]; then
+        t=0; rc=1; VER_WHY="the kept install record of $n has no readable mtime"
+      fi
+      cn+=("$n"); ct+=("$t")
+    else
+      part+=("$n")
+    fi
+  done
+  [ "$had_nullglob" -eq 1 ] || shopt -u nullglob   # the caller's nullglob, restored (_bak_prune's idiom)
+  # Insertion sort, newest first. The glob expanded in name order and a tie
+  # never moves an element, so equal mtimes keep that order.
+  for ((i = 1; i < ${#cn[@]}; i++)); do
+    n="${cn[$i]}"; t="${ct[$i]}"; j=$((i - 1))
+    while [ "$j" -ge 0 ] && [ "${ct[$j]}" -lt "$t" ]; do
+      cn[j + 1]="${cn[$j]}"; ct[j + 1]="${ct[$j]}"; j=$((j - 1))
+    done
+    cn[j + 1]="$n"; ct[j + 1]="$t"
+  done
+  VER_NAMES=("${cn[@]}" "${part[@]}")
+  return "$rc"
+}
+
+# `_ver_running_names` → rc 0 with VER_RUNNING = the version names a RUNNING
+# ccrc.service/ccrc-agent.service command resolves to; rc 1 (VER_WHY) when
+# that cannot be measured. Spec §11 reads `systemctl --user show -p
+# ExecStart` through `readlink -f`. Three things it takes care over:
+#   - systemd prints a STRUCT, `ExecStart={ path=<p> ; argv[]=<argv> ;
+#     ignore_errors=… ; … }`, and `path=` is `/usr/bin/env` for both units:
+#     the tree path is inside argv[], which is what is read.
+#   - `readlink -f` resolves the token's VERSION PREFIX (`$HOME/ccrc`, or
+#     `$HOME/ccrc-versions/<seg>`), not the whole token: GNU `readlink -f`
+#     answers empty, rc 1, when any directory above the last component is
+#     missing (measured 2026-09-23, coreutils 9.4), and which version a
+#     command runs from is decided by its prefix alone
+#     (D-3449).
+#   - an empty answer — from `_svc_is_active` (the manager did not answer),
+#     from `readlink -f` (BSD before macOS 12.3 has no -f) — is UNMEASURED,
+#     never "not running": reading it as "not running" prunes the version the
+#     guard exists for.
+# On macOS the job's own plist is read (`_svc_plist`, `plutil -convert
+# json`), its ProgramArguments split on whitespace with the quotes
+# `_inst_plist_server` puts round the entry path stripped.
+_ver_running_names() {
+  VER_RUNNING=()
+  local unit st line argv tok pfx seg res vroot="" name json
+  local re='^ExecStart=\{ path=([^ ]*) ; argv\[\]=(.*) ; ignore_errors='
+  local -a toks=()
+  for unit in "${BOX_UNIT_NAMES[@]}"; do
+    st="$(_svc_is_active "$unit")"
+    case "$st" in
+      active|activating|deactivating|reloading|refreshing) ;;
+      inactive|failed) continue ;;   # a stopped unit runs nothing
+      *) [[ "$st" =~ ^[a-z-]{1,32}$ ]] || st="${st:+an unrecognised answer}"
+         VER_WHY="the service manager did not say whether $unit is running (${st:-no answer})"
+         return 1 ;;
+    esac
+    if [ "$CCD_OS" = darwin ]; then
+      json="$(plutil -convert json -o - "$(_svc_plist "$unit")" 2>/dev/null)" || json=""
+      argv="$(printf '%s' "$json" | jq -er '.ProgramArguments | if type == "array" and length > 0 then map(tostring) | join(" ") else error("none") end' 2>/dev/null)" \
+        || { VER_WHY="$unit is running and its job file's ProgramArguments could not be read (plutil -convert json)"; return 1; }
+    else
+      line="$(systemctl --user show -p ExecStart "$unit" 2>/dev/null)" || line=""
+      [[ "$line" =~ $re ]] || { VER_WHY="$unit's ExecStart did not parse as systemd's struct form"; return 1; }
+      argv="${BASH_REMATCH[2]}"
+    fi
+    read -r -a toks <<<"$argv"
+    for tok in "${toks[@]}"; do
+      tok="${tok#\'}"; tok="${tok#\"}"; tok="${tok%;}"; tok="${tok%\'}"; tok="${tok%\"}"
+      case "$tok" in
+        "$BOX_TREE_DIR"/*) pfx="$BOX_TREE_DIR" ;;
+        "$BOX_VERSIONS_ROOT"/*) seg="${tok#"$BOX_VERSIONS_ROOT"/}"; pfx="$BOX_VERSIONS_ROOT/${seg%%/*}" ;;
+        *) continue ;;
+      esac
+      res="$(readlink -f -- "$pfx" 2>/dev/null)" || res=""
+      [ -n "$res" ] || { VER_WHY="$unit's command names $tok, which readlink -f could not resolve"; return 1; }
+      if [ -z "$vroot" ]; then
+        vroot="$(readlink -f -- "$BOX_VERSIONS_ROOT" 2>/dev/null)" || vroot=""
+        [ -n "$vroot" ] \
+          || { VER_WHY="\$HOME/ccrc-versions could not be resolved by readlink -f"; return 1; }
+      fi
+      case "$res" in
+        "$vroot"/*) name="${res#"$vroot"/}"; name="${name%%/*}"
+                    [[ "$name" =~ $VER_NAME_RE ]] && VER_RUNNING+=("$name") ;;
+      esac
+    done
+  done
+  return 0
+}
+
+# `_ver_protect_add <name> <word>` — one reason a version is kept, once.
+# Anything that is not a version name (the projection's `none`, an absent
+# tag) protects nothing and is dropped here.
+_ver_protect_add() {
+  [[ "$1" =~ $VER_NAME_RE ]] || return 0
+  case " ${VER_PROTECT[$1]:-} " in *" $2 "*) return 0 ;; esac
+  VER_PROTECT[$1]="${VER_PROTECT[$1]:+${VER_PROTECT[$1]} }$2"
+}
+
+# `_ver_protect` → rc 0 with VER_PROTECT[<name>] = the words that keep it;
+# rc 1 (VER_WHY) when an input cannot be measured. The projection is read in
+# a subshell so the caller's UPD_INTENT_* (cmd_update's own read) is left as
+# it found it. An UNTAGGED previous (wave 4's D-3231 lines `untagged` /
+# <the stamp's sha>) still names a directory: `_inst_version_name` put that
+# build at `untagged-<sha12>` from the same stamp sha, so that is the name
+# kept. Line 2 `unstamped` makes `untagged-unstamped`, which is not a
+# version name, and `_ver_protect_add` drops it.
+_ver_protect() {
+  declare -gA VER_PROTECT=()
+  local prc=0 n
+  local -a iv=()
+  [ -n "$VER_CURRENT" ] && _ver_protect_add "$VER_CURRENT" pointed-at
+  _upd_read_previous || prc=$?
+  case "$prc" in
+    0) _ver_protect_add "$UPD_PREV_TAG" previous ;;
+    2) _ver_protect_add "untagged-${UPD_PREV_SHA:0:12}" previous ;;
+    1) ;;   # no previous: nothing to keep for it
+    *) VER_WHY="~/.ccrc/previous is unreadable or malformed"; return 1 ;;
+  esac
+  mapfile -t iv < <(_upd_intent_state
+    printf '%s\n' "$UPD_INTENT_STATE" "$UPD_INTENT_WHY" "$UPD_INTENT_DESIRED" \
+      "$UPD_INTENT_DESIRED_STABLE" "$UPD_INTENT_DESIRED_DEV")
+  [ "${#iv[@]}" -eq 5 ] \
+    || { VER_WHY="the control plane's projection could not be read"; return 1; }
+  case "${iv[0]}" in
+    ok|none)
+      _ver_protect_add "${iv[2]}" desired
+      _ver_protect_add "${iv[3]}" desired-stable
+      _ver_protect_add "${iv[4]}" desired-dev ;;
+    not-configured) ;;   # no control plane on this box: it names no tag
+    *) VER_WHY="the control plane's projection is ${iv[0]} (${iv[1]}) — its desired tags cannot be read"
+       return 1 ;;
+  esac
+  _ver_running_names || return 1
+  for n in "${VER_RUNNING[@]}"; do _ver_protect_add "$n" running; done
+  return 0
+}
+
+# `_ver_verdicts <auto|prune> <keep>` — the ONE place a version's fate is
+# decided, for the listing and the prune alike, over VER_NAMES in
+# `_ver_list`'s order: protected → kept; complete → the first <keep> kept,
+# the rest doomed; incomplete → doomed by `prune` only. Fills VER_VERDICT
+# and VER_DOOMED / VER_DOOMED_WHY. rc 0.
+_ver_verdicts() {
+  declare -gA VER_VERDICT=()
+  local mode="$1" keep="$2" n slots=0
+  VER_DOOMED=(); VER_DOOMED_WHY=()
+  for n in "${VER_NAMES[@]}"; do
+    # Not bash 4.2's `-v` variable test: bash 3.2 cannot PARSE it inside
+    # `[[ ]]`, and a parse error here would stop the whole file before
+    # cmd_install's bash-floor refusal. `_ver_protect_add` never stores an
+    # empty value, so non-empty is the same question.
+    if [ -n "${VER_PROTECT[$n]:-}" ]; then
+      VER_VERDICT[$n]="kept: ${VER_PROTECT[$n]}"
+    elif [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
+      if [ "$slots" -lt "$keep" ]; then
+        slots=$((slots + 1)); VER_VERDICT[$n]="kept: newest $keep"
+      else
+        VER_VERDICT[$n]="prunable"
+        VER_DOOMED+=("$n"); VER_DOOMED_WHY+=("complete, not among the newest $keep")
+      fi
+    else
+      VER_VERDICT[$n]="prunable by --prune only"
+      if [ "$mode" = prune ]; then VER_DOOMED+=("$n"); VER_DOOMED_WHY+=("incomplete"); fi
+    fi
+  done
+  return 0
+}
+
+# `_ver_gc <prefix> <auto|prune>` → rc 0 done (or nothing to do), rc 1
+# skipped on an unmeasured input or a removal failed. `auto` is the call
+# after a PASSED gate only — a plain install's doctor under a free lock, an
+# update's `_upd_gate` — never after a failed one, and never inside a restore
+# or a rollback, whose spine runs under its parent's lock
+# (D-3451); it says nothing unless it removes
+# something or skips. `prune` is `ccrc versions --prune`, which also removes
+# incomplete versions.
+_ver_gc() {
+  local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
+  local rc=0 lrc=0 prc=0 ncomp=0 npart=0
+  lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
+  if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: CCRC_VERSIONS_KEEP is not a number — nothing pruned"
+    else
+      echo "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+    fi
+    return 1
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated) ;;
+    *) [ "$mode" = auto ] || echo "versions: nothing to prune — \$HOME/ccrc is not versioned ($VER_LAYOUT)"
+       return 0 ;;
+  esac
+  _ver_list || lrc=$?
+  for n in "${VER_NAMES[@]}"; do
+    [ "$n" = "$VER_CURRENT" ] && continue
+    if [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then ncomp=$((ncomp + 1)); else npart=$((npart + 1)); fi
+  done
+  # NOTHING IS PRUNABLE, WHATEVER IS PROTECTED (D-3450):
+  # a protection can only take a version OUT of the removal set, so with no
+  # more complete versions than <keep> beside the pointed-at one (and, for
+  # `auto`, incomplete ones never counted) there is nothing to measure — and
+  # no service manager, projection or previous is read.
+  if [ "$ncomp" -le "$keep" ] && { [ "$mode" = auto ] || [ "$npart" -eq 0 ]; }; then
+    [ "$mode" = auto ] || echo "versions: nothing to prune — $ncomp complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=$keep, and none incomplete"
+    return 0
+  fi
+  if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
+  if [ "$prc" -ne 0 ]; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: nothing pruned — $VER_WHY"
+    else
+      echo "versions: prune skipped — $VER_WHY; nothing was removed"
+    fi
+    return 1
+  fi
+  _ver_verdicts "$mode" "$keep"
+  if [ "${#VER_DOOMED[@]}" -eq 0 ]; then
+    [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
+    return 0
+  fi
+  for i in "${!VER_DOOMED[@]}"; do
+    n="${VER_DOOMED[$i]}"
+    # A belt over `pointed-at`: the link is read again at the moment of the
+    # removal, and a link that names this directory — or cannot be read —
+    # stops it.
+    cur="$(readlink -- "$BOX_TREE_DIR" 2>/dev/null)" || cur=""
+    if [ -z "$cur" ] || [ "${cur%/}" = "$BOX_VERSIONS_ROOT/$n" ]; then
+      echo "$lead could not prune \$HOME/ccrc-versions/$n — \$HOME/ccrc points at it or could not be read; every version above it is intact"
+      rc=1; continue
+    fi
+    if rm -rf -- "$BOX_VERSIONS_ROOT/$n"; then
+      echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
+    else
+      echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# `ccrc versions [--prune]` — the kept release trees, and the one hand-run
+# prune (design §11 "GC and `ccrc versions`"). The listing takes no lock and
+# writes nothing; `--prune` takes update's lock (a prune never races an
+# update's flip), completes a crashed migration first, prunes, and then
+# lists what is left. Exit 0 listed or pruned; 1 a prune skipped or a
+# removal failed; 2 usage.
+cmd_versions() {
+  local prune=0 keep="${CCRC_VERSIONS_KEEP:-3}" grc=0 lrc=0 prc=0 n mark cpl line
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --prune) prune=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  [[ "$keep" =~ ^[0-9]+$ ]] \
+    || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  if [ "$prune" -eq 1 ]; then
+    _upd_lock
+    _inst_migrate_resume versions
+    _ver_gc versions prune || grc=$?
+    _upd_unlock
+  fi
+  _ver_layout
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      line="versions: \$HOME/ccrc -> \$HOME/ccrc-versions/$VER_CURRENT"
+      if [[ "$VER_CURRENT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _box_build_fields; then
+        [ "${BOX_BUILD[4]}" = "$VER_CURRENT" ] \
+          || line="$line (its stamp reads ${BOX_BUILD[4]:-an unversioned build} — something wrote through \$HOME/ccrc)"
+      fi
+      echo "$line"
+      if [ "$VER_LAYOUT" = migrated ]; then
+        echo "versions: \$HOME/ccrc.migrating (the pre-versioned tree) is kept until a health gate passes"
+      fi ;;
+    directory) echo "versions: \$HOME/ccrc is a directory — not versioned yet; the next ccrc install or update migrates it" ;;
+    absent)    echo "versions: no \$HOME/ccrc on this box" ;;
+    crashed)   echo "versions: a migration crashed — \$HOME/ccrc is absent beside \$HOME/ccrc.migrating; $(_ver_crashed_remedy)" ;;
+    *)         echo "versions: \$HOME/ccrc is $VER_WHY — not touching it" ;;
+  esac
+  declare -gA VER_VERDICT=()
+  _ver_list || lrc=$?
+  case "$VER_LAYOUT" in
+    linked|migrated)
+      if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
+      if [ "$prc" -ne 0 ]; then
+        echo "versions: WARN: $VER_WHY — nothing would be pruned"
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
+      else
+        _ver_verdicts prune "$keep"
+      fi ;;
+    *) for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: nothing is pruned while \$HOME/ccrc reads $VER_LAYOUT"; done ;;
+  esac
+  for n in "${VER_NAMES[@]}"; do
+    mark=" "; [ "$n" = "$VER_CURRENT" ] && mark="*"
+    cpl=incomplete; [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ] && cpl=complete
+    printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
+  done
+  echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
+  return "$grc"
+}
+
 # ── cmd_logs — the journal, thin (stage 4, Task 8; spec §7) ───────────────
 # `journalctl --user -u <this box's unit>` with `-f`/`-n` passed straight
 # through — no parsing, no filtering: journalctl's own interface is the
@@ -17801,6 +18176,7 @@ case "$VERB" in
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
   rollback) cmd_rollback "$@" ;;
+  versions) cmd_versions "$@" ;;
   channel) cmd_channel "$@" ;;
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
