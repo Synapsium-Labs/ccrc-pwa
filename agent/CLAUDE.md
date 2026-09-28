@@ -50,6 +50,17 @@ get wrong when editing `src/whitelist.ts`.
   `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
+- The **`update` op** (design 2026-09-20 §10) is the ONE wire-triggered spawn outside the exec whitelist. It spawns
+  exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
+  `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
+  `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
+  op means "this agent predates it"). It never calls `isExecAllowed`, `runExec` or `resolveSpawnCmd`, and `ccrc` is on
+  neither `EXEC_COMMANDS` nor `FORBIDDEN_COMMANDS`; `test/update-op.test.ts`'s source scan reds the day either changes.
+  Its busy check reads `~/.ccrc/update.json` itself (bounded, `O_NONBLOCK`, never through `checkPath`), and one gate
+  per agent process refuses a second op while a `--detach` parent is still running. **Adding an op:** an `AgentReq`
+  member in `shared/agent-protocol.ts`; a `validateReq` case that type-checks every field (an argument failing its
+  guard answers a `ReqRefusal` word, a shape failure `null`); a `handleReq` case; and, when the server must know this
+  agent answers it, a word in the ready frame's `ops` (`readReadyOps`, `server/src/remote/client.ts`, is its reader).
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,15 +25,15 @@ import type {
   TailData,
   TailOpenReq,
   TailReset,
+  UpdateOpError,
+  UpdateReq,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  CCRC_DIR_NAME,
-  NODE_FILE_BASENAMES,
-  parseCcdCaps,
-  parseObservedEpochDoc,
-  POOL_EPOCH_FILE_NAME,
+  CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
+  UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
 } from '../../shared/agent-protocol.js';
+import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -69,6 +69,7 @@ export interface AgentOpts {
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
+  spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (execFile) — tests inject a recorder; the `update` op's ONLY spawn
 }
 
 export interface RunningAgent {
@@ -170,10 +171,17 @@ export function resolveProjectsRoot(
  *  for "never synced"). The wire declares it optional only so a READER can
  *  tolerate an OLDER agent that predates the field entirely; this build is
  *  never that agent, so its own frame type says so and the send site cannot
- *  compile while silently omitting it. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch'> & {
+ *  compile while silently omitting it.
+ *
+ *  `ops` is narrowed the same way, for the same reason (design 2026-09-20 §10):
+ *  the wire declares it optional so a READER tolerates an agent from before the
+ *  `update` op, and this build is never that agent. It answers the op, so its
+ *  own frame type says so, and the send site cannot compile while silently
+ *  omitting the one word the server's dispatcher looks for before it sends it. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops'> & {
   ccdVerbs: string[];
   observedEpoch: number | null;
+  ops: string[];
 };
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
@@ -186,8 +194,20 @@ function ok(id: number, fields: Record<string, unknown> = {}): ResOk {
   return { t: 'res', id, ok: true, ...fields };
 }
 
-function fail(id: number, message: string): ResErr {
-  return { t: 'res', id, ok: false, err: message };
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): spread
+ *  only when there is one, so every existing refusal's frame is byte-identical
+ *  to what it was. */
+function fail(id: number, message: string, detail?: string): ResErr {
+  return detail === undefined
+    ? { t: 'res', id, ok: false, err: message }
+    : { t: 'res', id, ok: false, err: message, detail };
+}
+
+/** The `update` op's refusals. `err` is typed to the op's closed vocabulary
+ *  (`UPDATE_OP_ERRORS`), so a word the server's answer mapping does not know is
+ *  a compile error here, not a string that drifts. */
+function failUpdate(id: number, err: UpdateOpError, detail?: string): ResErr {
+  return fail(id, err, detail);
 }
 
 /** Builds the `read` op's wire payload from `readWhole`'s result. `data`
@@ -298,6 +318,51 @@ function runExec(
   });
 }
 
+/**
+ * The `update` op's spawn port (design 2026-09-20 §10). It is the ONE place a
+ * wire-triggered request reaches a process spawn outside the exec whitelist,
+ * and it is deliberately NOT `runExec`: `runExec` is the exec op's executor,
+ * and a call to it here would put this op on the exec path in the reader's
+ * mind, which is exactly what §18 "the op never execs" forbids. Production is
+ * `realUpdateSpawn`; tests inject a recorder through `AgentOpts.spawnUpdate`.
+ */
+export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: number) =>
+  Promise<{ code: number; stderr: string; killed: boolean }>;
+
+/** Enough for any sentence a `--detach` parent prints; past it `execFile` kills the child. */
+const UPDATE_SPAWN_MAX_BUFFER = 1024 * 1024;
+
+/**
+ * `execFile(file, args)`, bounded by `timeoutMs` — the ABSOLUTE launcher and one
+ * of the two templates, both built by the caller from `shared/agent-protocol.ts`.
+ *
+ * Three answers, kept apart:
+ *  - `killed` — the parent was still running at the bound (`execFile`'s own flag).
+ *  - A spawn error — the launcher absent or not executable (`ENOENT`/`EACCES`,
+ *    `syscall` `spawn <file>`). It answers code 1 with the sentence
+ *    `could not start the launcher (<code>)` (D-3393).
+ *    Without that sentence the parent's stderr is empty, and a node with no
+ *    `ccrc` installed would read `spawn-failed: no message` on the console.
+ *  - Every other failure — the parent's own exit code and its stderr.
+ */
+export const realUpdateSpawn: UpdateSpawn = (file, args, timeoutMs) => new Promise((resolve) => {
+  execFile(file, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: UPDATE_SPAWN_MAX_BUFFER }, (error, _stdout, stderr) => {
+    if (error === null) { resolve({ code: 0, stderr, killed: false }); return; }
+    if (typeof error.code === 'string' && typeof error.syscall === 'string' && error.syscall.startsWith('spawn')) {
+      resolve({ code: 1, stderr: `could not start the launcher (${error.code})`, killed: false });
+      return;
+    }
+    resolve({ code: typeof error.code === 'number' ? error.code : 1, stderr, killed: error.killed === true });
+  });
+});
+
+/** ONE per agent PROCESS, shared by every connection (D-3392).
+ *  A server whose link dropped while an op was spawning reconnects on a NEW
+ *  socket and re-sends the op, and a per-connection flag would let that second
+ *  `--detach` parent start beside the first. Both parents only PROBE the lock
+ *  (wave 4 Task 3), so both would pass it and write `queued`. */
+interface UpdateGate { spawning: boolean }
+
 interface PtyEntry {
   proc: PtyProcess;
   dataSub: { dispose(): void };
@@ -311,6 +376,8 @@ interface ConnCtx {
   ptys: Map<number, PtyEntry>;
   nextPtyId: number;
   spawnPty: PtySpawn;
+  spawnUpdate: UpdateSpawn;
+  updateGate: UpdateGate;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -463,6 +530,54 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ptyId }));
       return;
     }
+    case 'update': {
+      // Design 2026-09-20 §10. THE ONE wire-triggered spawn outside the exec
+      // whitelist (agent/CLAUDE.md). `validateReq` has already refused a tag
+      // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
+      // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
+      // and throws on a caller bug, so an edit that lets one through reaches
+      // the envelope's `.catch`, never `execFile`. Nothing here consults the
+      // exec whitelist, and nothing here may: `ccrc` is on neither list, and
+      // the argv is one of two templates with `tag` the only variable token.
+      //
+      // No `await` before the busy decision. The gate is checked and taken in
+      // one synchronous stretch, so two ops arriving together cannot both pass.
+      if (ctx.updateGate.spawning) {
+        send(ws, failUpdate(req.id, 'busy', 'an update op is already spawning on this agent'));
+        return;
+      }
+      const home = ctx.cfg.home;
+      const inFlight = readInFlightReport(home);
+      if (inFlight !== null) {
+        send(ws, failUpdate(req.id, 'busy',
+          `update.json says ${inFlight.phase} (target ${inFlight.target ?? 'none'}, started ${inFlight.startedAtS ?? 'unknown'})`));
+        return;
+      }
+      const file = updateLauncherPath(home);
+      const argv = updateSpawnArgv(req.kind ?? 'update', req.tag);
+      ctx.updateGate.spawning = true;
+      let spawned: Awaited<ReturnType<UpdateSpawn>>;
+      try {
+        spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);
+      } finally {
+        ctx.updateGate.spawning = false;
+      }
+      // D-3372: `accepted` is a measured fact about the
+      // node. The `--detach` parent exits 0 only after `_upd_phase queued` (which WARNs, never fails) and
+      // `_svc_run_detached` started the unit (wave 4 Task 3). It is never "a
+      // process was forked". Everything else is `spawn-failed`, carrying what
+      // the parent said.
+      if (spawned.killed) {
+        send(ws, failUpdate(req.id, 'spawn-failed', `the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`));
+        return;
+      }
+      if (spawned.code !== 0) {
+        send(ws, failUpdate(req.id, 'spawn-failed', firstStderrLine(spawned.stderr)));
+        return;
+      }
+      send(ws, ok(req.id, { accepted: true }));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -488,6 +603,13 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
+/** `validateReq`'s answer for a well-shaped op whose ARGUMENT failed its guard
+ *  (design 2026-09-20 §10). The message handler sends it as
+ *  `failUpdate(id, refuse)` before any case body runs. It is not `null`,
+ *  because the handler answers `null` with `bad-request`, which from the
+ *  `update` op must mean exactly one thing: this agent predates it. */
+export interface ReqRefusal { refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'>; id: number }
+
 /**
  * Runtime shape/type validation for an already-JSON-parsed `req` frame.
  * `msg as AgentReq` (the old dispatch site) is a *compile-time-only*
@@ -500,7 +622,7 @@ function isStringArray(v: unknown): v is string[] {
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -559,6 +681,15 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     }
     case 'caps':
       return { t: 'req', id, op: 'caps' } satisfies CapsReq;
+    case 'update': {
+      // The ONE tag-shape guard (`isReleaseTag`, never a regex here) and the
+      // one kind guard. A failed argument is a `ReqRefusal` carrying the op's
+      // own word; nothing past this point sees an unvalidated tag.
+      if (!isReleaseTag(msg.tag)) return { refuse: 'bad-tag', id };
+      const kind = msg.kind === undefined ? 'update' : msg.kind;
+      if (!isRequestKind(kind)) return { refuse: 'bad-kind', id };
+      return { t: 'req', id, op: 'update', tag: msg.tag, kind } satisfies UpdateReq;
+    }
     default:
       return null;
   }
@@ -663,6 +794,46 @@ export function readObservedEpoch(home: string): number | null {
   }
 }
 
+/** Wave 4's writer puts ONE line of a few hundred bytes. Anything larger is not its report. */
+const UPDATE_REPORT_READ_MAX = 65_536;
+
+/**
+ * Spec §10: the handler refuses when `~/.ccrc/update.json` says an update is in
+ * flight. The agent reads the file ITSELF, as `readObservedEpoch` and
+ * `readBuildStamp` read theirs (D-3371). This
+ * is the agent's own decision about its own box, not a wire file op, so it
+ * never goes through `checkPath`: that gate exists for what the SERVER reads.
+ *
+ * `null` (not busy) covers every failure: an absent, unreadable, over-cap or
+ * unparseable file, a non-regular one, and a report that is not in flight.
+ * The `--detach` parent's own lock probe (`_upd_detach`'s `_upd_lock_probe`) then decides, and a held lock comes back as
+ * `spawn-failed` with the lock's sentence. Opened `O_NONBLOCK`, because a FIFO
+ * planted at this name would otherwise block `open(2)` and, with it, this
+ * agent's whole event loop; `fstat` then refuses it as not a regular file. The
+ * CONTENT is judged by `inFlightReport` (`shared/api.ts`), the same parser the
+ * server-role spawn uses, so the two roles cannot disagree about what "in
+ * flight" means.
+ */
+export function readInFlightReport(home: string): InFlightReport | null {
+  let fd: number;
+  try {
+    fd = openSync(path.join(home, CCRC_DIR_NAME, NODE_FILES.report), fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch {
+    return null;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > UPDATE_REPORT_READ_MAX) return null;
+    const buf = Buffer.alloc(st.size);
+    const n = readSync(fd, buf, 0, st.size, 0);
+    return inFlightReport(buf.subarray(0, n).toString('utf8'));
+  } catch {
+    return null;
+  } finally {
+    try { closeSync(fd); } catch { /* nothing left to release */ }
+  }
+}
+
 /**
  * This box's own build stamp — `~/.ccrc/build.json` as `deploy/deploy.sh`'s
  * `stamp_build` installed it on the agent lane — or `undefined` when there
@@ -747,7 +918,10 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
   return cache.verbs;
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache): void {
+function handleConnection(
+  ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
+  updateGate: UpdateGate,
+): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -756,6 +930,8 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
     ptys: new Map(),
     nextPtyId: 1,
     spawnPty: opts.spawnPty,
+    spawnUpdate: opts.spawnUpdate,
+    updateGate,
   };
 
   const helloTimer = setTimeout(() => {
@@ -796,8 +972,11 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // becomes four spellings of one frame, and a third field eight. The
       // contract is unchanged — a key is written only when there is
       // something to write.
+      // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
+      // the closed set every agent has always had, which is exactly one today.
+      // It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home),
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -823,6 +1002,9 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
         if (typeof msg.id === 'number') send(ws, fail(msg.id, 'bad-request'));
         return;
       }
+      // A well-shaped op whose ARGUMENT failed its guard (design 2026-09-20
+      // §10) is answered with the op's own word, never `bad-request`.
+      if ('refuse' in req) { send(ws, failUpdate(req.id, req.refuse)); return; }
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
@@ -878,6 +1060,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     home: rawOpts.home ?? os.homedir(),
     projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
+    spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
@@ -891,7 +1074,9 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache));
+  // ONE update gate per agent process, shared by every connection (D-3392).
+  const updateGate: UpdateGate = { spawning: false };
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
