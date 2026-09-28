@@ -19,7 +19,7 @@ import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
-import { planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
+import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView, type UpdatesPoll } from '../fleet/useUpdatesView';
 import { ApiError, api, updateErrorText } from '../lib/api';
@@ -197,8 +197,11 @@ export function verifiedAt(tag: string, nodes: readonly NodeWire[]): boolean {
 }
 
 export function releaseDirection(tag: string, nodes: readonly NodeWire[]): 'install' | 'rollback' {
-  if (!isReleaseTag(tag) || nodes.length === 0) return 'install';
-  return nodes.every((n) => {
+  // D-3410: over the nodes a move can name — planMove's own filter (isManagedNode), so a Mac lagging behind
+  // never turns a Roll back row into Install while the sheet would move the Linux nodes.
+  const managed = nodes.filter(isManagedNode);
+  if (!isReleaseTag(tag) || managed.length === 0) return 'install';
+  return managed.every((n) => {
     const v = nodeVersion(n);
     return v !== null && isNewerTag(v, tag);
   }) ? 'rollback' : 'install';

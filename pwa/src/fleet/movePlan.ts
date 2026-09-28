@@ -51,6 +51,13 @@ export type MoveRequest =
   | { route: 'apply'; body: ApplyUpdateBody }
   | { route: 'rollback'; body: RollbackUpdateBody };
 
+/** A node a move can name at all: not macOS (not centrally managed, decision 17; D-3308, D-3309). THE filter —
+ *  `planMove` picks fleet-wide sets through it and the release list's direction (`releaseDirection`, D-3410)
+ *  asks it too, so a lagging Mac cannot make a row read Install where the sheet would move the Linux nodes back. */
+export function isManagedNode(n: NodeWire): boolean {
+  return n.os !== 'darwin';
+}
+
 /** `tag` takes `n` forward: a tag it runs is older, or its stamp was READ and carries no tag — and in either case
  *  the tag is strictly newer than the node's floor when `highestVersion` is a tag, the dispatcher's rule
  *  (D-3403: `moveRefusal` answers `not-newer` at or below `floorOf(highestVersion,
@@ -79,10 +86,10 @@ export function planMove(view: UpdatesView, intent: MoveIntent): PlannedMove {
     picked = all.filter((n) => n.nodeId === intent.nodeId);
   } else if (intent.direction === 'update') {
     const tag = intent.tag;
-    picked = isReleaseTag(tag) ? all.filter((n) => n.os !== 'darwin' && takesForward(n, tag)) : [];
+    picked = isReleaseTag(tag) ? all.filter((n) => isManagedNode(n) && takesForward(n, tag)) : [];
   } else {
     const to = intent.to;
-    picked = isReleaseTag(to) ? all.filter((n) => n.os !== 'darwin' && runsNewer(n, to)) : [];
+    picked = isReleaseTag(to) ? all.filter((n) => isManagedNode(n) && runsNewer(n, to)) : [];
   }
   // `filter` returned a fresh array, so this sort never reorders the poll's view.
   return { intent, nodes: picked.sort(compareDispatchOrder), inventory: all };

@@ -607,6 +607,7 @@ describe('SettingsScreen — Updates: rendering (design 2026-09-20 §13)', () =>
 const T8_T0 = Date.UTC(2026, 8, 23, 12, 0, 0);
 const T8_NODE_A = '11111111-1111-4111-8111-111111111111';
 const T8_NODE_B = '22222222-2222-4222-8222-222222222222';
+const T8_NODE_C = '33333333-3333-4333-8333-333333333333';
 /** A stamp at `version`; `undefined` = an unversioned (deploy.sh) build — the key is ABSENT, as the parser leaves it. */
 const t8Stamp = (version: string | undefined): BuildInfo => ({
   sha: 'a'.repeat(40), ref: 'main', builtAt: '2026-09-23T12:00:00Z', dirty: false,
@@ -656,6 +657,14 @@ describe('SettingsScreen — the release list: helpers', () => {
     expect(releaseDirection('v0.0.9', [both10[0]!, t8Server({ current: null, measuredAt: null })])).toBe('install');
     expect(releaseDirection('v0.0.9', [])).toBe('install');
     expect(releaseDirection('vnext', both10)).toBe('install');           // never handed to the comparator, which throws
+  });
+
+  it('releaseDirection leaves a macOS node out, as planMove does (D-3410): a lagging Mac never turns Roll back into Install', () => {
+    const linux12 = [t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') })];
+    const mac9 = t8Node({ nodeId: T8_NODE_C, label: 'mac', os: 'darwin', current: t8Stamp('v0.0.9') });
+    expect(releaseDirection('v0.0.10', [...linux12, mac9])).toBe('rollback');
+    expect(releaseDirection('v0.0.10', [mac9])).toBe('install');           // nothing managed to roll back
+    expect(releaseDirection('v0.0.10', [])).toBe('install');
   });
 
   it('refusedLine: distinct refusing nodes out of the live count; null with no refusal; a malformed element is ignored', () => {
@@ -828,6 +837,28 @@ describe('SettingsScreen — the release list: rendering (design 2026-09-20 §13
     await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
     expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.9' }], [{ nodeId: T8_NODE_B, to: 'v0.0.9' }]]);
     expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('a Mac lagging behind does not hide Roll back: the row reads Roll back and the sheet names the Linux nodes only (D-3410)', async () => {
+    const rollback = vi.spyOn(api, 'rollbackUpdate')
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_A], skipped: [] })
+      .mockResolvedValueOnce({ ok: true, requested: [T8_NODE_B], skipped: [] });
+    const list = await renderList(
+      [t8Release('v0.0.12'), t8Release('v0.0.10')],
+      [
+        t8Node({ current: t8Stamp('v0.0.12') }), t8Server({ current: t8Stamp('v0.0.12') }),
+        t8Node({ nodeId: T8_NODE_C, label: 'mac', role: null, os: 'darwin', current: t8Stamp('v0.0.9') }),
+      ],
+    );
+    fireEvent.click(within(rowOf(list, 'v0.0.10')).getByRole('button', { name: 'Roll back' }));
+    const sheet = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(sheet).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.12 → v0.0.10',
+      '2. server (server) v0.0.12 → v0.0.10',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back to v0.0.10' }));
+    await waitFor(() => expect(rollback).toHaveBeenCalledTimes(2));
+    expect(rollback.mock.calls).toEqual([[{ nodeId: T8_NODE_A, to: 'v0.0.10' }], [{ nodeId: T8_NODE_B, to: 'v0.0.10' }]]);
   });
 
   it('a refusal on the first node leaves the second unsent; the sheet says why and stays open', async () => {
