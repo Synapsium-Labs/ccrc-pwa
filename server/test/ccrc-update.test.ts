@@ -1286,6 +1286,43 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       'the running version was written into').toEqual(before);
   });
 
+  it('a REAL-DIRECTORY (pre-W6) box whose staged npm ci fails replaced nothing either: exit 1 BEFORE the gate, no restore, and the directory byte-unchanged (D-3458)', () => {
+    // The controller's ruling on the pre-flight scan: Task 2 left
+    // `_upd_tree_untouched`'s `directory` row "Task 3's to revisit" and
+    // Task 3 never did. Since W6, a `directory` layout is placed exactly
+    // like `absent` — the new version is placed FULLY at
+    // ~/ccrc-versions/<name> before `_inst_migrate` ever moves the real
+    // directory — so an `npm ci` failure here dies before a single byte of
+    // ~/ccrc has moved, exactly like the VERSIONED case above.
+    const home = freshUpdateBox('ccrc-update-directory-npmfail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'npm'),
+      '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('spine died at _inst_tree, before its flip: nothing was replaced '
+      + '($HOME/ccrc is still the pre-versioned directory; the spine died before the migration moved it); '
+      + 'read its lines above.');
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
+    expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
+    expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);
+    const phases = reportWrites(home).map((w) => w['phase']);
+    expect(phases, 'the report went through the gate').not.toContain('checking');
+    expect(phases, 'the report went through a restore').not.toContain('restoring');
+    expect(lastReport(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_tree', target: 'v2.0.0' });
+    const st = lstatSync(join(home, 'ccrc'));
+    expect(!st.isSymbolicLink() && st.isDirectory(), '~/ccrc was migrated away').toBe(true);
+    expect(treeDigest(join(home, 'ccrc')), 'the real directory was written into').toEqual(before);
+    expect(existsSync(join(home, 'ccrc.migrating')), 'a migration was started').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'migrating-to'))).toBe(false);
+  });
+
   it('_upd_tree_untouched (VERSIONED layouts): nothing replaced only for a W6 spine, a new name, and a layout that still reads what it read before', () => {
     const home = freshUpdateBox('ccrc-update-untouched-');
     installVersionedTree(home, 'v1.0.0');
@@ -1318,11 +1355,24 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       .toBe('$HOME/ccrc is still a link whose target is not a version directory under $HOME/ccrc-versions, which the spine refused to place over\nrc=0');
     expect(ask(alien, 'stage-old', 'v2.0.0', 'foreign', '')).toBe('rc=1');
 
-    // A pre-versioned DIRECTORY is still rsynced in place by `_inst_tree`'s
-    // `directory` arm at this task's commit, so nothing is proven.
+    // W6 Task 3 (D-3458): a `directory` layout that still reads `directory`
+    // — no `~/ccrc.migrating`, no marker, no link — proves the real
+    // directory was never touched: every write before `_inst_migrate`'s move
+    // lands in `~/ccrc-versions/<name>`, never in `~/ccrc` itself.
     const dir = freshUpdateBox('ccrc-update-untouched-dir-');
     mkdirSync(join(dir, 'ccrc', 'server'), { recursive: true });
-    expect(ask(dir, 'stage-w6', 'v2.0.0', 'directory', '')).toBe('rc=1');
+    expect(ask(dir, 'stage-w6', 'v2.0.0', 'directory', ''))
+      .toBe('$HOME/ccrc is still the pre-versioned directory; the spine died before the migration moved it\nrc=0');
+    // A spine older than W6 still writes THROUGH ~/ccrc even on a directory
+    // layout (no BOX_VERSIONS_ROOT line at all).
+    expect(ask(dir, 'stage-old', 'v2.0.0', 'directory', '')).toBe('rc=1');
+    // The layout moved on since the pre-measurement: a migration completed
+    // (a real link beside a real ~/ccrc.migrating is `migrated`), so the
+    // real directory was NOT left untouched.
+    const migrated = freshUpdateBox('ccrc-update-untouched-dir-migrated-');
+    installVersionedTree(migrated, 'v9.9.9');
+    mkdirSync(join(migrated, 'ccrc.migrating'), { recursive: true });
+    expect(ask(migrated, 'stage-w6', 'v2.0.0', 'directory', '')).toBe('rc=1');
   });
 
   it('a spine that COMPLETED under a failing doctor exits 3, not 1: the record is written, the report prints, and the line says the box IS on the new build (D-3114)', () => {
@@ -1402,19 +1452,24 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
   });
 
   it('a spine that DIED inside _inst_tree (after the tree moved) is gated, fails the gate on the OLD build, and exits 4 with the backup named — and leaves NO completed-install record (D-3114, design §11)', () => {
-    // `npm ci` failing after the tree is placed — v0.0.2's own death shape
-    // (D-3105) — kills `_inst_tree` before the stamp and long before the
-    // record. The record was cleared before the staged install ran, so the
-    // box reads `incomplete` afterwards rather than the OLD build's record.
+    // W6 Task 3 (D-3458): `plantOldBox` is a real-directory box, and since W6
+    // that layout is placed exactly like `absent` — the version is placed
+    // FULLY, deps included, before `_inst_migrate` ever moves the real
+    // directory. An `npm ci` failure (this case's original lever) therefore
+    // dies BEFORE the migration and leaves `~/ccrc` untouched — the shape
+    // `_upd_tree_untouched`'s `directory` row now reads as "nothing was
+    // replaced" (its own describe, below), not this case's "after the tree
+    // moved". So the death is moved one step later, to `_inst_bins` — the
+    // step right after `_inst_tree`, reached only once the migration has
+    // already linked `~/ccrc` — with the harness's recording `mv` refusing
+    // the one destination `_inst_atomic` renames onto: `~/.local/bin/ccd`.
     const home = freshUpdateBox('ccrc-update-died-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
     writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
-    // Ahead of the recorder npm that `runUpdate` re-plants on every call.
-    mkdirSync(join(home, 'fail-bin'), { recursive: true });
-    writeFileSync(join(home, 'fail-bin', 'npm'), '#!/bin/sh\necho "fixture npm: refusing" >&2\nexit 1\n', { mode: 0o755 });
-    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    writeFileSync(join(home, 'fixture-mv-fail'), '/.local/bin/ccd\n');
+    const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
     // Task 6: its v1.0.0 is unpublished, so arm 2 refuses and arm 3 runs —
@@ -1423,7 +1478,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.stdout).toMatch(/^update: arm2-refused: v1\.0\.0 ships no bundle — /m);
     expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
     expect(r.stderr).toMatch(/update: v2\.0\.0 was installed, but the box did not come back healthy on it \(.*\) — exit 4\. The backup taken BEFORE the install is complete at/);
-    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
+    // The tree DID move this time — the migration linked ~/ccrc before the
+    // death at the very next step.
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_bins\n');
     expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
     expect(r.stdout).not.toMatch(/^update: build: /m);
   });
@@ -7756,4 +7813,204 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     expect(lines(home, 'launcher-argv')).toEqual(['rollback --from watchdog']);
     expect(lines(home, 'launcher-lock')).toEqual(['free']);
   }, 60_000);
+});
+
+describe('ccrc update: the migration keeps the old tree until the gate (W6 Task 3)', () => {
+  // On a pre-W6 box the W6 staged spine migrates `~/ccrc` (Task 3's install
+  // half), but it runs under THIS run's `~/.ccrc/update.lock`, so its doctor
+  // is not the gate and it keeps `~/ccrc.migrating`; `cmd_update` removes it
+  // only once `_upd_gate` has passed. A crash pair left by an earlier run is
+  // completed before anything else this verb does.
+  const OLD_SHA = 'oldsha0000000000000000000000000000000000';
+  const NEW_SHA = 'newsha0000000000000000000000000000000000';
+  const REAL_LN = realPath('ln');
+  const migrating = (home: string): string => join(home, 'ccrc.migrating');
+  const resumed = (name: string): string =>
+    `update: tree: completed a crashed migration — $HOME/ccrc was absent beside $HOME/ccrc.migrating; linked to $HOME/ccrc-versions/${name} (named by ~/.ccrc/migrating-to)`;
+  const REMOVED = 'update: migration: $HOME/ccrc.migrating removed — the health gate passed';
+  /** The FULL flavour over plantOldBox's REAL ~/ccrc — the migration fixture
+   *  as it stands. */
+  const fullBox = (prefix: string): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: NEW_SHA }), { tag: 'v2.0.0' });
+    return home;
+  };
+  /** A crash pair an earlier run left: the pre-versioned tree aside, a
+   *  complete v1.0.0 placed, the marker naming it, and no ~/ccrc at all. */
+  const crashedPair = (home: string): void => {
+    mkdirSync(join(migrating(home), 'server'), { recursive: true });
+    writeFileSync(join(migrating(home), 'server', 'OLD-MARKER'), 'the pre-versioned tree\n');
+    installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: OLD_SHA, version: 'v1.0.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'migrating-to'), 'v1.0.0\n');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      `{"sha":"${OLD_SHA}","ref":"main","builtAt":"2026-08-20T00:00:00Z","dirty":false,"version":"v1.0.0"}\n`);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${OLD_SHA}\n`);
+  };
+  const at = (stdout: string, pred: (l: string) => boolean): number => stdout.split('\n').findIndex(pred);
+
+  it('a pre-W6 box migrates inside the staged spine, which KEEPS ~/ccrc.migrating (this run holds the lock); cmd_update removes it only after _upd_gate passes (§18 "the migration keeps the old tree until the gate")', () => {
+    const home = fullBox('ccrc-update-migrate-');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+    const linked = at(r.stdout, (l) => l === 'install: tree: $HOME/ccrc -> $HOME/ccrc-versions/v2.0.0 (the pre-versioned tree is kept at $HOME/ccrc.migrating until a health gate passes)');
+    const kept = at(r.stdout, (l) => l === 'install: migration: $HOME/ccrc.migrating kept — an update holds ~/.ccrc/update.lock, and its health gate decides');
+    const gate = at(r.stdout, (l) => l.startsWith('update: gate: both answers on v2.0.0 '));
+    const removed = at(r.stdout, (l) => l === REMOVED);
+    expect(linked, r.stdout).toBeGreaterThan(-1);
+    expect(kept, 'the staged spine took its own doctor as the gate').toBeGreaterThan(linked);
+    expect(gate).toBeGreaterThan(kept);
+    expect(removed, 'the old tree went before the gate, or never').toBeGreaterThan(gate);
+    expect(existsSync(migrating(home))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'migrating-to'))).toBe(false);
+  });
+
+  it('a FAILED gate never removes ~/ccrc.migrating: the run exits 4, and the pre-versioned tree and its marker are still there, byte for byte', () => {
+    const home = fullBox('ccrc-update-migrate-gate-fail-');
+    const before = treeDigest(join(home, 'ccrc'));
+    writeFileSync(join(home, 'fixture-health-pin'), 'v1.0.0\n');   // /health keeps answering the OLD build
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
+    expect(treeDigest(migrating(home))).toEqual(before);
+    expect(readFileSync(join(home, '.ccrc', 'migrating-to'), 'utf8')).toBe('v2.0.0\n');
+    expect(r.stdout.split('\n')).not.toContain(REMOVED);
+  });
+
+  it('--no-gate measured nothing, so ~/ccrc.migrating is kept and the run says why', () => {
+    const home = fullBox('ccrc-update-migrate-nogate-');
+    const r = runUpdate(home, ['--no-gate']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const skipped = at(r.stdout, (l) => l.startsWith('update: gate: skipped (--no-gate)'));
+    const kept = at(r.stdout, (l) => l === 'update: migration: $HOME/ccrc.migrating kept — --no-gate measured nothing');
+    expect(skipped, r.stdout).toBeGreaterThan(-1);
+    expect(kept).toBeGreaterThan(skipped);
+    expect(lstatSync(migrating(home)).isDirectory()).toBe(true);
+  });
+
+  it('a crash pair is completed FIRST by ccrc update — before its backup, its install and its gate — and its old tree goes only after the gate passes (§18 "a crashed migration is completed first")', () => {
+    const home = freshUpdateBox('ccrc-update-migrate-resume-');
+    crashedPair(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const resume = at(r.stdout, (l) => l === resumed('v1.0.0'));
+    const backup = at(r.stdout, (l) => l.startsWith('update: backup: '));
+    const installing = at(r.stdout, (l) => l.startsWith('update: installing v2.0.0'));
+    const gate = at(r.stdout, (l) => l.startsWith('update: gate: '));
+    const removed = at(r.stdout, (l) => l === REMOVED);
+    expect(resume, r.stdout).toBeGreaterThan(-1);
+    expect(backup, 'something ran before the link was completed').toBeGreaterThan(resume);
+    expect(installing).toBeGreaterThan(backup);
+    expect(gate).toBeGreaterThan(installing);
+    expect(removed).toBeGreaterThan(gate);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
+    expect(existsSync(migrating(home))).toBe(false);
+  });
+
+  it('--check on a crashed box says so after its machine line and repairs NOTHING — no link, no marker change', () => {
+    const home = freshUpdateBox('ccrc-update-migrate-check-');
+    crashedPair(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // runUpdate's own environment build, once, before the snapshot — the
+    // `--check writes nothing` case's idiom, for the same reason.
+    updateEnv(home);
+    replantDoctorStubs(home);
+    const before = homeSnapshot(home);
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    const lines = r.stdout.split('\n');
+    expect(lines[0]).toMatch(/^check: box=v1\.0\.0 /);
+    // The remedy names a command that can run: the ccrc on PATH is the shim,
+    // which execs the missing $HOME/ccrc/ccd/ccrc (crashedPair's marker names
+    // the placed v1.0.0).
+    expect(lines).toContain('this box\'s migration crashed ($HOME/ccrc is absent beside $HOME/ccrc.migrating) — '
+      + 'run bash $HOME/ccrc-versions/v1.0.0/ccd/ccrc install (or bash install.sh from a ccrc checkout) to complete it '
+      + '— the ccrc on PATH cannot run until then, and deploy.sh would place a second tree beside it');
+    expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  /** ONE `ln` ahead of the harness's PATH with two knobs, each disarmed on
+   *  first use and each biting only an `ln` whose last argument is ~/ccrc —
+   *  the staged spine's migration link. `fail` refuses it (exit 1); `kill`
+   *  SIGKILLs the shell that ran it, i.e. the staged spine itself, so the
+   *  parent's `inst_rc` reads 137 with the crash pair left behind. */
+  const armLn = (home: string, knob: 'fixture-ln-fail-once' | 'fixture-ln-kill-once'): NodeJS.ProcessEnv => {
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'ln'), '#!/bin/sh\n'
+      + 'for last in "$@"; do :; done\n'
+      + 'if [ "$last" = "$HOME/ccrc" ] && [ -f "$HOME/fixture-ln-fail-once" ]; then\n'
+      + '  rm -f "$HOME/fixture-ln-fail-once"; echo "ln: fixture refusal" >&2; exit 1\n'
+      + 'fi\n'
+      + 'if [ "$last" = "$HOME/ccrc" ] && [ -f "$HOME/fixture-ln-kill-once" ]; then\n'
+      + '  rm -f "$HOME/fixture-ln-kill-once"; kill -KILL "$PPID"; exit 1\n'
+      + 'fi\n'
+      + `exec ${REAL_LN} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(home, knob), 'yes\n');
+    return { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` };
+  };
+
+  it('a staged spine whose link cannot be placed moves ~/ccrc BACK before it dies — the real directory was never replaced, so this exits 1 with no gate and no restore, whichever updater is the parent (D-3436, D-3458)', () => {
+    const home = fullBox('ccrc-update-migrate-spine-ln-fail-');
+    const r = runUpdate(home, [], armLn(home, 'fixture-ln-fail-once'));
+    expect(existsSync(join(home, 'fixture-ln-fail-once')), 'the refusal never fired').toBe(false);
+    expect(r.stderr).toContain('ccrc: $HOME/ccrc could not be linked to $HOME/ccrc-versions/v2.0.0, so it was moved back — nothing moved');
+    // Nothing for the post-spine resume to complete: the layout reads
+    // `directory`, so this case reads the same under a wave-4 parent, which
+    // has no resume at all (D-3438).
+    expect(at(r.stdout, (l) => l === resumed('v2.0.0'))).toBe(-1);
+    // The move back left ~/ccrc exactly as it was — the same real directory,
+    // byte for byte — so `_upd_tree_untouched`'s `directory` row (D-3458)
+    // reads this as NOTHING REPLACED: exit 1, never gated, never restored.
+    // Before D-3458 this read as moved and was gated/restored (exit 4) over
+    // a box whose tree was never touched.
+    expect(r.stderr).toContain('nothing was replaced ($HOME/ccrc is still the pre-versioned directory; '
+      + 'the spine died before the migration moved it)');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
+    expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);
+    const st = lstatSync(join(home, 'ccrc'));
+    expect(!st.isSymbolicLink() && st.isDirectory(), 'the tree was not moved back to a real ~/ccrc').toBe(true);
+    expect(existsSync(migrating(home))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'migrating-to'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-versions', 'v2.0.0', 'ccd', 'ccrc'))).toBe(true);
+  });
+
+  it('a staged spine KILLED inside the window is completed by cmd_update itself, before its gate and its restore arms — so arm 3 writes through the link and never recreates a real ~/ccrc beside ~/ccrc.migrating (D-3433)', () => {
+    const home = fullBox('ccrc-update-migrate-spine-window-');
+    const r = runUpdate(home, [], armLn(home, 'fixture-ln-kill-once'));
+    expect(existsSync(join(home, 'fixture-ln-kill-once')), 'the kill never fired').toBe(false);
+    const resume = at(r.stdout, (l) => l === resumed('v2.0.0'));
+    const gate = at(r.stdout, (l) => l.startsWith('update: gate'));
+    expect(resume, r.stdout).toBeGreaterThan(-1);
+    expect(gate, 'the gate ran before the link was completed').toBeGreaterThan(resume);
+    // The tree died at or after _inst_tree and its stamp never moved, so the
+    // gate fails honestly and the box restores (exit 4) — through the LINK.
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink(), 'a restore arm recreated a real ~/ccrc').toBe(true);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+    expect(lstatSync(migrating(home)).isDirectory()).toBe(true);
+  });
+
+  itLinux('--detach on a crash pair completes the link BEFORE it queues, because the run it hands off execs the launcher shim, which cannot start with no ~/ccrc (D-3437)', () => {
+    const home = freshUpdateBox('ccrc-update-migrate-detach-');
+    crashedPair(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--detach', '--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const resume = at(r.stdout, (l) => l === resumed('v1.0.0'));
+    const detached = at(r.stdout, (l) => l.startsWith('update: detached — \'update --to v2.0.0\''));
+    expect(resume, r.stdout).toBeGreaterThan(-1);
+    expect(detached, 'the run was handed off before the link was completed').toBeGreaterThan(resume);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    // wave 4 Task 3's recorder: exactly the spec argv, handed to a box whose
+    // launcher can now run.
+    expect(readFileSync(join(home, 'systemd-run-argv'), 'utf8').split('\n').filter((l) => l !== '')).toEqual([
+      '--user --collect --quiet /bin/sh -c PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@" '
+      + 'ccrc-detach update --to v2.0.0 --from cli',
+    ]);
+  });
 });
