@@ -40,7 +40,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
   statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
-  symlinkSync, readlinkSync,
+  symlinkSync, readlinkSync, utimesSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -407,6 +407,25 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '      fi',
     '      exit 0',
     '    fi',
+    // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
+    // systemd's REAL struct form (measured on a user unit, 2026-09-23):
+    // `path=` is `/usr/bin/env` and the tree path is inside `argv[]`, so a
+    // reader of `path=` protects nothing. The argv is the shipped unit's
+    // ExecStart with %h expanded (deploy/ccrc.service:19,
+    // deploy/ccrc-agent.service:7), `fixture-execstart-<unit>`'s one line
+    // when a test plants it; `fixture-execstart-raw` is printed VERBATIM
+    // (the unparseable case). Never a bare path.
+    '    if [ "$2" = "-p" ] && [ "$3" = "ExecStart" ] && [ -n "$4" ]; then',
+    '      if [ -f "$HOME/fixture-execstart-raw" ]; then cat "$HOME/fixture-execstart-raw"; exit 0; fi',
+    '      case "$4" in',
+    '        ccrc.service) a="/usr/bin/env node $HOME/ccrc/server/dist/server/src/index.js" ;;',
+    '        ccrc-agent.service) a="/usr/bin/env node $HOME/ccrc/agent/dist/agent/src/index.js" ;;',
+    '        *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
+    '      esac',
+    '      if [ -f "$HOME/fixture-execstart-$4" ]; then IFS= read -r a < "$HOME/fixture-execstart-$4"; fi',
+    '      echo "ExecStart={ path=/usr/bin/env ; argv[]=$a ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"',
+    '      exit 0',
+    '    fi',
     '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
     '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     // `fixture-mainpid-churn`: a unit crash-looping behind `active` — every
@@ -527,7 +546,7 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     `exec ${REAL_NODE} "$@"`,
   ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
-    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP']) delete env[k];
+    'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP', 'CCRC_VERSIONS_KEEP']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
   // The health gate (design §11) probes once and decides at a 0 s deadline;
@@ -8964,5 +8983,420 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
     expect(r.stdout).not.toContain('survived');
     expect(linkOf(home)).toBe(cur2);
     expect(readdirSync(join(home, 'ccrc-versions')).sort()).toEqual(['v2.0.0']);
+  });
+});
+
+// ── ccrc versions, and the GC (design 2026-09-20 §11 "GC"; W6 Task 5) ────
+// Spec §18 "GC never removes a needed version", one case per guard, each with
+// its CONTROL in the same run: CCRC_VERSIONS_KEEP=0 makes every complete,
+// unprotected version prunable, so a planted version the guard does not
+// cover is removed beside the one it does. The two units read STOPPED
+// (`fixture-unit-state`, wave 4 Task 5's knob; on macOS the launchctl stub
+// answers "no such job" for a job nobody bootstrapped) in every case but the
+// running guard's, so no case is held green by a second guard.
+describe('ccrc versions, and the GC that never removes a needed version (W6 Task 5)', () => {
+  const REAL_READLINK = realPath('readlink');
+  const REAL_STAT = realPath('stat');
+  const lit = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionDirs = (home: string): string[] => readdirSync(join(home, 'ccrc-versions')).sort();
+  const stopUnits = (home: string): void => writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
+  const plantPrevious = (home: string, text: string): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'previous'), text);
+  };
+
+  /** A W6 box: each of `names` placed COMPLETE under ~/ccrc-versions, the
+   *  FIRST linked from ~/ccrc; each kept install record's mtime set so the
+   *  order given IS the age order (`names[1]` the newest of the rest) —
+   *  `_ver_list` orders by that mtime, never by name. `incomplete` adds
+   *  directories with no kept record. The box stamp names the pointed-at
+   *  version, as a completed install leaves it. */
+  function versionedBox(prefix: string, names: string[], incomplete: string[] = []): string {
+    const home = freshUpdateBox(prefix);
+    names.forEach((n, i) => {
+      const stamp = /^v\d/.test(n) ? { sha: 'b'.repeat(40), version: n } : { sha: 'b'.repeat(40) };
+      const root = installVersionedTree(home, n, { link: i === 0, stamp });
+      const t = 1_800_000_000 - i * 100;
+      utimesSync(join(root, '.ccrc-installed'), t, t);
+    });
+    for (const n of incomplete) installVersionedTree(home, n, { link: false, complete: false });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp(names[0]!, 'b'.repeat(40)));
+    return home;
+  }
+
+  /** `ccrc versions` against the fixture box, in `runUpdate`'s environment and
+   *  order (env built, then the doctor stubs re-planted). */
+  function runVersions(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result {
+    const env = { ...updateEnv(home), ...extraEnv };
+    replantDoctorStubs(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'versions', ...args], { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+
+  /** `readlink -f` answering EMPTY, rc 0 — what BSD's readlink before macOS
+   *  12.3 (no -f) leaves a caller holding. Planted in the replant directory;
+   *  every other readlink argv is the real binary. */
+  function plantReadlinkFEmpty(home: string): void {
+    writeFileSync(join(home, 'doctor-stubs', 'readlink'),
+      '#!/bin/sh\n'
+      + 'if [ "$1" = "-f" ] && [ -f "$HOME/fixture-readlink-f-empty" ]; then exit 0; fi\n'
+      + `exec ${REAL_READLINK} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(home, 'fixture-readlink-f-empty'), 'yes\n');
+  }
+
+  const LISTED = ['v1.0.4', 'v1.0.3', 'untagged-0123456789ab', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+  const LAST_LINE = 'versions: 7 kept tree(s) under $HOME/ccrc-versions; CCRC_VERSIONS_KEEP=2 plus the protected set '
+    + "(pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones";
+
+  it('lists every kept tree newest first, marks the pointed-at one, says why each is kept — and takes no lock', () => {
+    // untagged-… sits BETWEEN v1.0.3 and v1.0.2 by age: neither name order puts it there.
+    const home = versionedBox('ccrc-versions-list-', LISTED, ['unstamped-fedcba987654']);
+    stopUnits(home);
+    plantPrevious(home, `v1.0.1\n${'c'.repeat(40)}\n`);
+    const before = versionDirs(home);
+    const r = runVersions(home, [], { CCRC_VERSIONS_KEEP: '2' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout.split('\n')).toEqual([
+      'versions: $HOME/ccrc -> $HOME/ccrc-versions/v1.0.4',
+      '  * v1.0.4  complete  kept: pointed-at',
+      '    v1.0.3  complete  kept: newest 2',
+      '    untagged-0123456789ab  complete  kept: newest 2',
+      '    v1.0.2  complete  prunable',
+      '    v1.0.1  complete  kept: previous',
+      '    v1.0.0  complete  prunable',
+      '    unstamped-fedcba987654  incomplete  prunable by --prune only',
+      LAST_LINE,
+      '',
+    ]);
+    expect(versionDirs(home)).toEqual(before);
+    expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+    // A stamp that disagrees with the pointed-at name is said, not hidden:
+    // something (deploy.sh, a pre-W6 spine) wrote through the link.
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.0.3', 'b'.repeat(40)));
+    const s = runVersions(home, [], { CCRC_VERSIONS_KEEP: '2' });
+    expect(s.stdout.split('\n')[0]).toBe(
+      'versions: $HOME/ccrc -> $HOME/ccrc-versions/v1.0.4 (its stamp reads v1.0.3 — something wrote through $HOME/ccrc)');
+  });
+
+  it('--prune removes only what nothing needs — complete ones past the newest N, and the incomplete — then lists what is left', () => {
+    const home = versionedBox('ccrc-versions-prune-', LISTED, ['unstamped-fedcba987654']);
+    stopUnits(home);
+    plantPrevious(home, `v1.0.1\n${'c'.repeat(40)}\n`);
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '2' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.2 \(complete, not among the newest 2\)$/m);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 2\)$/m);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/unstamped-fedcba987654 \(incomplete\)$/m);
+    expect(versionDirs(home)).toEqual(['untagged-0123456789ab', 'v1.0.1', 'v1.0.3', 'v1.0.4']);
+    expect(r.stdout).toMatch(/^versions: 4 kept tree\(s\) under \$HOME\/ccrc-versions;/m);
+    // Nothing left to remove: the second prune says so and removes nothing.
+    const again = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '2' });
+    expect(again.code).toBe(0);
+    expect(again.stdout).toMatch(/^versions: nothing to prune — every kept tree is protected or among the newest 2$/m);
+    expect(versionDirs(home)).toEqual(['untagged-0123456789ab', 'v1.0.1', 'v1.0.3', 'v1.0.4']);
+  });
+
+  it('the argument surface: -h is usage at exit 0; anything else is exit 2; a non-numeric CCRC_VERSIONS_KEEP refuses at exit 1 before the lock', () => {
+    const home = versionedBox('ccrc-versions-args-', ['v1.0.1', 'v1.0.0']);
+    let r = runVersions(home, ['-h']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^ {2}versions {2}list the kept release trees under ~\/ccrc-versions \(\* marks the one ~\/ccrc points at\);$/m);
+    r = runVersions(home, ['--bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
+    r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'three' });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP must be a number \(got a non-numeric value\) — nothing was pruned$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+  });
+
+  it('a box whose ~/ccrc is still a directory: nothing is versioned, and --prune removes nothing', () => {
+    const home = freshUpdateBox('ccrc-versions-dir-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    let r = runVersions(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^versions: \$HOME\/ccrc is a directory — not versioned yet; the next ccrc install or update migrates it$/m);
+    expect(r.stdout).toMatch(/^versions: 0 kept tree\(s\) under \$HOME\/ccrc-versions;/m);
+    r = runVersions(home, ['--prune']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^versions: nothing to prune — \$HOME\/ccrc is not versioned \(directory\)$/m);
+    expect(existsSync(join(home, 'ccrc', 'server', 'OLD-MARKER'))).toBe(true);
+  });
+
+  it('a crashed migration is said with a command that can complete it — the placed version\'s own ccrc by its path, never the shim on PATH, never deploy.sh', () => {
+    const home = freshUpdateBox('ccrc-versions-crashed-');
+    mkdirSync(join(home, 'ccrc.migrating', 'server'), { recursive: true });
+    installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: 'b'.repeat(40), version: 'v1.0.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'migrating-to'), 'v1.0.0\n');
+    let r = runVersions(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')[0]).toBe('versions: a migration crashed — $HOME/ccrc is absent beside $HOME/ccrc.migrating; '
+      + 'run bash $HOME/ccrc-versions/v1.0.0/ccd/ccrc install (or bash install.sh from a ccrc checkout) to complete it '
+      + '— the ccrc on PATH cannot run until then, and deploy.sh would place a second tree beside it');
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: nothing is pruned while \$HOME\/ccrc reads crashed$/m);
+    // A marker that names no placed version: no install can complete it, and
+    // the line says the by-hand remedies instead of a command that would die.
+    writeFileSync(join(home, '.ccrc', 'migrating-to'), 'v9.9.9\n');
+    r = runVersions(home);
+    expect(r.stdout.split('\n')[0]).toBe('versions: a migration crashed — $HOME/ccrc is absent beside $HOME/ccrc.migrating; '
+      + '~/.ccrc/migrating-to names no placed version, so no install can complete it — link it by hand '
+      + '(ln -s $HOME/ccrc-versions/<name> $HOME/ccrc) or move it back (mv $HOME/ccrc.migrating $HOME/ccrc); '
+      + 'not deploy.sh, which would place a second tree beside it');
+    // The listing reads; it repairs nothing.
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+  });
+
+  it('guard — the pointed-at version is never pruned (spec §18)', () => {
+    const home = versionedBox('ccrc-versions-g-current-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // the control: a complete version nothing protects IS removed
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 0\)$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: pointed-at$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.1']);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(home, 'ccrc', 'ccd', 'ccrc'))).toBe(true);
+  });
+
+  it('guard — the previous version (~/.ccrc/previous) is never pruned (spec §18)', () => {
+    const home = versionedBox('ccrc-versions-g-prev-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    plantPrevious(home, `v1.0.0\n${'c'.repeat(40)}\n`);
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 \(complete, not among the newest 0\)$/m);
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: previous$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.2']);
+    // An UNTAGGED previous (wave 4's D-3231: line 1 `untagged`, line 2 the old
+    // stamp's sha) names the directory `_inst_version_name` gave that build,
+    // `untagged-<sha12>` (Task 8's R4 writes exactly this). It is kept too,
+    // beside the same control.
+    const u = versionedBox('ccrc-versions-g-prev-untagged-', ['v1.0.2', 'untagged-0123456789ab', 'v1.0.0']);
+    stopUnits(u);
+    plantPrevious(u, `untagged\n0123456789ab${'c'.repeat(28)}\n`);
+    const s = runVersions(u, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(s.code, `stderr: ${s.stderr}\nstdout: ${s.stdout}`).toBe(0);
+    expect(s.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 0\)$/m);
+    expect(s.stdout).toMatch(/^ {4}untagged-0123456789ab {2}complete {2}kept: previous$/m);
+    expect(versionDirs(u)).toEqual(['untagged-0123456789ab', 'v1.0.2']);
+  });
+
+  // PLATFORM-ONLY: a macOS box is never centrally managed (decision 17) —
+  // `_upd_intent_state` answers not-configured there whatever the file says,
+  // so its projection names no tag to protect. What macOS keeps is pinned by
+  // the pointed-at and previous cases above, which run on both.
+  itLinux('guard — every tag the control plane projection names is never pruned (spec §18)', () => {
+    const home = versionedBox('ccrc-versions-g-desired-', ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    plantRole(home, 'fleet');
+    plantSyncTimer(home);
+    plantClock(home);
+    plantIntent(home, intentDoc({ desired: 'v1.0.2', desiredStable: 'v1.0.2', desiredDev: 'v1.0.1' }));
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 0\)$/m);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.3 \(complete, not among the newest 0\)$/m);
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.2 {2}complete {2}kept: desired desired-stable$/m);
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.1 {2}complete {2}kept: desired-dev$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.4']);
+  });
+
+  // PLATFORM-ONLY: this is systemd's `show -p ExecStart` struct. The macOS
+  // arm reads the job's plist instead; the case after this one measures that
+  // arm on either platform by forcing CCD_OS in a sourced shell.
+  itLinux('guard — a version a running unit argv[] names directly is never pruned, and path= is never what is read (spec §18)', () => {
+    const home = versionedBox('ccrc-versions-g-running-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+    // Both units RUN (the stub's default answer). The agent's command names
+    // v1.0.1's own path — a unit hand-edited to run from a physical path.
+    writeFileSync(join(home, 'fixture-execstart-ccrc-agent.service'),
+      `/usr/bin/env node ${home}/ccrc-versions/v1.0.1/agent/dist/agent/src/index.js\n`);
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 0\)$/m);
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.1 {2}complete {2}kept: running$/m);
+    // ccrc.service's command names $HOME/ccrc/…, which resolves through the link
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.2 {2}complete {2}kept: pointed-at running$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.1', 'v1.0.2']);
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8').split('\n');
+    expect(calls).toContain('--user show -p ExecStart ccrc.service');
+    expect(calls).toContain('--user show -p ExecStart ccrc-agent.service');
+  });
+
+  it('the Darwin arm reads the job ProgramArguments through plutil, the quotes round the entry path stripped — and an empty answer is unmeasured', () => {
+    const home = versionedBox('ccrc-versions-darwin-arm-', ['v1.0.2', 'v1.0.1']);
+    const entry = `${home}/ccrc-versions/v1.0.1/server/dist/server/src/index.js`;
+    // What `plutil -convert json` prints for `_inst_plist_server`'s job (its
+    // `&amp;&amp;` is `&&` once parsed; the entry path single-quoted).
+    writeFileSync(join(home, 'fixture-plist.json'), `${JSON.stringify({
+      Label: 'app.ccrc.ccrc',
+      ProgramArguments: ['/bin/bash', '-c',
+        `set -a; [ -f '${home}/.ccrc/ccrc.env' ] && . '${home}/.ccrc/ccrc.env'; `
+        + `[ -f '${home}/.ccrc/exposure.env' ] && . '${home}/.ccrc/exposure.env'; set +a; `
+        + `exec /usr/bin/env node '${entry}'`],
+    })}\n`);
+    const probe = (plutil: string): Result => sourcedCcrc(home, [
+      'CCD_OS=darwin',
+      plutil,
+      '_svc_is_active() { case "$1" in ccrc.service) printf active ;; *) printf inactive ;; esac; }',
+      '_ver_running_names; rc=$?',
+      'printf "rc=%s running=[%s] why=[%s]\\n" "$rc" "${VER_RUNNING[*]}" "$VER_WHY"',
+    ].join('\n'));
+    let r = probe('plutil() { [ "$1 $2 $3 $4" = "-convert json -o -" ] && cat "$HOME/fixture-plist.json"; }');
+    expect(r.stdout, r.stderr).toBe('rc=0 running=[v1.0.1] why=[]\n');
+    r = probe('plutil() { return 0; }');
+    expect(r.stdout, r.stderr).toBe(
+      "rc=1 running=[] why=[ccrc.service is running and its job file's ProgramArguments could not be read (plutil -convert json)]\n");
+  });
+
+  // PLATFORM-ONLY: every input here is one only a Linux box's reader asks —
+  // systemd's is-active and ExecStart, `readlink -f` on the tokens those
+  // yield, and a projection (macOS is never centrally managed, decision 17).
+  // The input both platforms read, ~/.ccrc/previous, is the next case.
+  itLinux('an input that cannot be measured prunes nothing, and the prune says which (unit state, ExecStart, readlink -f, the projection)', () => {
+    const fixtures: Array<[string, (h: string) => void, (h: string) => string]> = [
+      ['unit-state', (h) => writeFileSync(join(h, 'fixture-unit-state'), ''),
+        () => 'the service manager did not say whether ccrc.service is running (no answer)'],
+      ['execstart', (h) => writeFileSync(join(h, 'fixture-execstart-raw'),
+        `ExecStart=/usr/bin/env node ${h}/ccrc/server/dist/server/src/index.js\n`),
+      () => "ccrc.service's ExecStart did not parse as systemd's struct form"],
+      ['readlink', (h) => plantReadlinkFEmpty(h),
+        (h) => `ccrc.service's command names ${h}/ccrc/server/dist/server/src/index.js, which readlink -f could not resolve`],
+      ['projection', (h) => {
+        stopUnits(h); plantRole(h, 'fleet'); plantSyncTimer(h); plantClock(h);
+        plantIntent(h, intentDoc({ issued: String(INTENT_NOW - 2000), lease: String(INTENT_NOW - 1000) }));
+      }, () => "the control plane's projection is stale (its lease ended 1000s ago) — its desired tags cannot be read"],
+    ];
+    for (const [label, plant, why] of fixtures) {
+      const home = versionedBox(`ccrc-versions-unmeasured-${label}-`, ['v1.0.1', 'v1.0.0']);
+      plant(home);
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, `${label}: ${r.stdout}${r.stderr}`).toBe(1);
+      expect(r.stdout, label).toMatch(new RegExp(`^versions: prune skipped — ${lit(why(home))}; nothing was removed$`, 'm'));
+      expect(r.stdout, label).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: unmeasured$/m);
+      expect(versionDirs(home), label).toEqual(['v1.0.0', 'v1.0.1']);
+    }
+  });
+
+  // Both platforms: `_plat_mtime` is `stat -c %Y` or `stat -f %m`, and the
+  // shim below fails either spelling the same way. It is not a fifth row of
+  // the itLinux table above, so the macOS leg measures it too.
+  it('a kept install record whose mtime cannot be read prunes nothing — the keep-N order would be a guess', () => {
+    const home = versionedBox('ccrc-versions-unmeasured-mtime-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    // `stat` that fails for a kept install record, and only for one; every
+    // other argv is the real binary (plantReadlinkFEmpty's idiom).
+    writeFileSync(join(home, 'doctor-stubs', 'stat'),
+      '#!/bin/sh\n'
+      + 'for a in "$@"; do last="$a"; done\n'
+      + 'if [ -f "$HOME/fixture-stat-record-fails" ]; then\n'
+      + '  case "$last" in */.ccrc-installed) echo "stat: cannot statx \'$last\': Permission denied" >&2; exit 1 ;; esac\n'
+      + 'fi\n'
+      + `exec ${REAL_STAT} "$@"\n`, { mode: 0o755 });
+    writeFileSync(join(home, 'fixture-stat-record-fails'), 'yes\n');
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, `${r.stdout}${r.stderr}`).toBe(1);
+    // The glob runs in name order and VER_WHY keeps the LAST record that failed.
+    expect(r.stdout).toMatch(/^versions: prune skipped — the kept install record of v1\.0\.1 has no readable mtime; nothing was removed$/m);
+    expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: unmeasured$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+  });
+
+  it('a malformed ~/.ccrc/previous prunes nothing — by hand or automatically', () => {
+    const home = versionedBox('ccrc-versions-prev-bad-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    plantPrevious(home, 'garbage\n');
+    const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).toMatch(/^versions: prune skipped — ~\/\.ccrc\/previous is unreadable or malformed; nothing was removed$/m);
+    const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=0; _ver_gc update auto; echo "rc=$?"');
+    expect(a.stdout, a.stderr).toBe('update: versions: WARN: nothing pruned — ~/.ccrc/previous is unreadable or malformed\nrc=1\n');
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+  });
+
+  it('the automatic GC is silent, and measures nothing, when nothing is prunable whatever is protected', () => {
+    const home = versionedBox('ccrc-versions-silent-', ['v1.0.1', 'v1.0.0']);
+    // an input that WOULD stop a prune that measured it
+    plantPrevious(home, 'garbage\n');
+    const quiet = sourcedCcrc(home, '_ver_gc install auto; echo "rc=$?"');
+    expect(quiet.stdout, quiet.stderr).toBe('rc=0\n');
+    // the control: with one complete version more than CCRC_VERSIONS_KEEP, the
+    // same box measures — and says why it stops
+    const loud = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=0; _ver_gc install auto; echo "rc=$?"');
+    expect(loud.stdout, loud.stderr).toBe('install: versions: WARN: nothing pruned — ~/.ccrc/previous is unreadable or malformed\nrc=1\n');
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+  });
+
+  it('the automatic GC never removes an incomplete version — a plain install may be placing it; --prune does', () => {
+    const home = versionedBox('ccrc-versions-incomplete-', ['v1.0.2', 'v1.0.1'], ['untagged-0123456789ab']);
+    stopUnits(home);
+    const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=0; _ver_gc install auto; echo "rc=$?"');
+    expect(a.stdout, a.stderr).toBe('install: versions: pruned $HOME/ccrc-versions/v1.0.1 (complete, not among the newest 0)\nrc=0\n');
+    expect(versionDirs(home)).toEqual(['untagged-0123456789ab', 'v1.0.2']);
+    const p = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+    expect(p.code, p.stdout).toBe(0);
+    expect(p.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/untagged-0123456789ab \(incomplete\)$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.2']);
+  });
+
+  it('--prune takes the update lock: a real holder refuses it at exit 1 and nothing is removed', () => {
+    const home = versionedBox('ccrc-versions-lock-', ['v1.0.1', 'v1.0.0']);
+    stopUnits(home);
+    const lock = join(home, '.ccrc', 'update.lock');
+    const holder = spawn('flock', [lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
+    try {
+      // HELD is measured, never assumed from the spawn: a fresh flock -n fails.
+      let held = false;
+      for (let i = 0; i < 100 && !held; i++) {
+        held = existsSync(lock) && spawnSync('flock', ['-n', lock, 'true']).status === 1;
+        if (!held) spawnSync('sleep', ['0.05']);
+      }
+      expect(held).toBe(true);
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, r.stdout).toBe(1);
+      expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(/m);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    } finally {
+      if (holder.pid !== undefined) {
+        try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    }
+  });
+
+  it('_ver_list restores the caller nullglob, whichever way it was set', () => {
+    const home = versionedBox('ccrc-versions-nullglob-', ['v1.0.1', 'v1.0.0']);
+    const r = sourcedCcrc(home, [
+      'shopt -u nullglob; _ver_list; shopt -q nullglob && echo on || echo off',
+      'shopt -s nullglob; _ver_list; shopt -q nullglob && echo on || echo off',
+      'printf "%s\\n" "${VER_NAMES[*]}"',
+    ].join('\n'));
+    expect(r.stdout, r.stderr).toBe('off\non\nv1.0.1 v1.0.0\n');
+  });
+
+  // PLATFORM-ONLY: on macOS the running read is plutil over the job's plist,
+  // which this harness's plutil stub answers with nothing — an unmeasured
+  // read, so the automatic GC WARNs and prunes nothing there (the safe
+  // direction). The Darwin read itself is measured by the sourced case above.
+  itLinux('an update whose health gate passed prunes behind it and keeps the previous', () => {
+    const home = versionedBox('ccrc-versions-update-gc-', ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0']);
+    plantKillModeDropIn(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // The STUB spine's ccd/ccrc carries no BOX_VERSIONS_ROOT= line, so Task 4's
+    // `_upd_legacy_target` gave it v2.0.0 (a copy of v1.0.4, its kept record
+    // removed): five complete versions stand beside the pointed-at one. v1.0.4
+    // is this run's `previous` (the stamp it replaced) and is protected, so it
+    // takes no keep slot: the newest three of the REST stay (v1.0.3, v1.0.2,
+    // v1.0.1) and only v1.0.0 goes. v1.0.1 staying is what measures the
+    // previous guard here — without it v1.0.4 would fill a slot and v1.0.1
+    // would be pruned too.
+    expect(r.stdout).toMatch(/^update: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 3\)$/m);
+    expect(r.stdout).not.toMatch(/^update: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 /m);
+    expect(versionDirs(home)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.3', 'v1.0.4', 'v2.0.0']);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('v1.0.4');
   });
 });

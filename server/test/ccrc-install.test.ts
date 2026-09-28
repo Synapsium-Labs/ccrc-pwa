@@ -466,6 +466,25 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
+    // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
+    // systemd's REAL struct form (measured on a user unit, 2026-09-23):
+    // `path=` is `/usr/bin/env` and the tree path is inside `argv[]`, so a
+    // reader of `path=` protects nothing. The argv is the shipped unit's
+    // ExecStart with %h expanded (deploy/ccrc.service:19,
+    // deploy/ccrc-agent.service:7), `fixture-execstart-<unit>`'s one line
+    // when a test plants it; `fixture-execstart-raw` is printed VERBATIM
+    // (the unparseable case). Never a bare path.
+    '    if [ "$2" = "-p" ] && [ "$3" = "ExecStart" ] && [ -n "$4" ]; then',
+    '      if [ -f "$HOME/fixture-execstart-raw" ]; then cat "$HOME/fixture-execstart-raw"; exit 0; fi',
+    '      case "$4" in',
+    '        ccrc.service) a="/usr/bin/env node $HOME/ccrc/server/dist/server/src/index.js" ;;',
+    '        ccrc-agent.service) a="/usr/bin/env node $HOME/ccrc/agent/dist/agent/src/index.js" ;;',
+    '        *) echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
+    '      esac',
+    '      if [ -f "$HOME/fixture-execstart-$4" ]; then IFS= read -r a < "$HOME/fixture-execstart-$4"; fi',
+    '      echo "ExecStart={ path=/usr/bin/env ; argv[]=$a ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"',
+    '      exit 0',
+    '    fi',
     '    [ "$2" = "-p" ] && [ "$3" = "MainPID" ] && [ "$4" = "--value" ] \\',
     '      || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
     '    p=4242',
@@ -559,7 +578,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     ...python3ProgramArm(PYTHON3),
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_VERSIONS_KEEP']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -2588,6 +2607,64 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(existsSync(vroot(home))).toBe(false);
     expect(existsSync(join(home, 'ccrc'))).toBe(false);
     expect(existsSync(join(home, 'rsync-argv')), 'a tree was placed before the refusal').toBe(false);
+  });
+
+  // PLATFORM-ONLY: the GC's running-unit read on macOS is plutil over the
+  // job's plist, which this harness's plutil stub answers with nothing — an
+  // unmeasured read, so a macOS install WARNs and prunes nothing (the safe
+  // direction, pinned in ccrc-update.test.ts, where the Darwin read itself is
+  // measured by forcing CCD_OS in a sourced shell).
+  itLinux('after an install whose doctor passed, the GC keeps the newest CCRC_VERSIONS_KEEP beside the pointed-at one and prunes the rest (W6 Task 5)', () => {
+    const home = freshBox('ccrc-install-w6-gc-');
+    ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'].forEach((n, i) => {
+      const root = installVersionedTree(home, n, { link: i === 0, stamp: { sha: 'b'.repeat(40), version: n } });
+      const t = 1_800_000_000 - i * 100;
+      utimesSync(join(root, '.ccrc-installed'), t, t);
+    });
+    // The projection a `both` box reads (W2's server writes it): in force and
+    // naming no tag, so every one of the GC's inputs measures.
+    const now = Math.floor(Date.now() / 1000);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'update-intent'), [
+      'epoch 1', `issued ${now - 60}`, `lease ${now + 840}`, 'channel stable',
+      'desired none', 'desired-stable none', 'desired-dev none', 'auto off', 'end',
+    ].join('\n') + '\n', { mode: 0o600 });
+    const r = runInstall(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^install: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 \(complete, not among the newest 3\)$/m);
+    expect(r.stdout).toMatch(/^install: versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 3\)$/m);
+    const left = readdirSync(join(home, 'ccrc-versions')).sort();
+    const placedName = left.find((n) => n.startsWith('unstamped-'));
+    expect(placedName, left.join(' ')).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    expect(left).toEqual([placedName!, 'v1.0.2', 'v1.0.3', 'v1.0.4'].sort());
+    // …and it ran BEHIND the gate: after doctor's summary, never before it.
+    expect(r.stdout.indexOf('install: versions: pruned'))
+      .toBeGreaterThan(r.stdout.search(/^summary: /m));
+  });
+
+  // W6 Task 5 introduces a remover that can run BESIDE a plain install, which
+  // takes no lock: `ccrc versions --prune` removes an incomplete directory
+  // (the one this run is placing), and another run's automatic GC removes a
+  // complete one that nothing protects yet. `_plat_ln_swap` never checks its
+  // target, so the flip measures it again (D-3456).
+  it('a new version removed before the flip — a prune beside a plain install — is refused, and ~/ccrc keeps the version it names (W6 Task 5)', () => {
+    const home = freshBox('ccrc-install-w6-vanished-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // This run's last npm ci (the default role runs none in the agent)
+    // succeeds and then stands in for the concurrent prune: the directory
+    // it ran in is gone before the flip.
+    const r = runInstall(home, ['install'], {}, {
+      stubs: {
+        npm: '#!/bin/sh\nmkdir -p node_modules\n'
+          + 'case "$PWD" in */ccrc-versions/v9.9.1/server) rm -rf -- "${PWD%/server}" ;; esac\nexit 0\n',
+      },
+    });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the new tree at \$HOME\/ccrc-versions\/v9\.9\.1 is gone before the flip — a prune may have run beside this install; \$HOME\/ccrc was not touched, and the install can be run again$/m);
+    expect(readlinkSync(join(home, 'ccrc')), '~/ccrc was flipped onto a tree that is gone').toBe(vroot(home, 'v9.9.0'));
+    expect(existsSync(join(home, 'ccrc', 'ccd', 'ccrc'))).toBe(true);
+    expect(r.stdout).not.toMatch(/one rename$/m);
   });
 });
 
