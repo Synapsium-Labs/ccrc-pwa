@@ -15,7 +15,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   workdir: '/w/demo/quiet-mesa', workspace: 'quiet-mesa', name: null,
   status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false,
   version: null, model: null, effort: null, ultracode: false, branch: null,
-  ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
+  ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
@@ -655,21 +655,55 @@ describe('the spawn-state note (§1.6b)', () => {
     expect(t).toContain('could not read');
     expect(t).toContain('terminal drawer');
     expect(t).toContain('startup prompt');
-    // The step that stops the NEXT spawn landing narrow too.
-    expect(t).toMatch(/narrow terminal attached to any session[^.]*close it first/);
+    // ccd pins every spawn 220x50 now (ccd-spawn-split.test.ts), so a narrow
+    // terminal on ANOTHER session no longer narrows one — the usual cause left
+    // is a terminal on this session. But rc 6 also covers a failed pin and an
+    // unreadable width, and a marker written by an older ccd outlives the
+    // rollout (panes are not respawned), so the sentence is hedged, not single.
+    expect(t).toContain('attached straight to this session');
+    expect(t).toContain('failed pin');
+    expect(t).toContain('older ccd');
     // rc 6 answers only for a live pane, so Restart session (ensure) spawns
     // nothing there — the note must not offer it as the remedy.
     expect(t).not.toContain('Restart session');
   });
 
+  it('tells a narrow spawn whose pane is measured wide again what is back on, and what the spawn still skipped', () => {
+    // `paneCols` is THIS tick's prompt-box width, so a reading at or over
+    // READER_MIN_COLS means the pane is wide with its prompt up — no startup
+    // gate is showing, and ccd's per-tick readers are back on.
+    renderSheet(s({ spawnState: 'narrow', paneCols: 220 }));
+    const t = notes().join(' ');
+    expect(t).toContain('since been widened');
+    // rc 6 folds two causes; the widened arm keeps both.
+    expect(t).toContain('could not read');
+    expect(t).toContain('auto-swap and auto-compact are back on');
+    expect(t).toContain('/effort');
+    // Nothing left to widen: no drawer instruction, no "keeps … off".
+    expect(t).not.toContain('terminal drawer');
+    expect(t).not.toContain('keeps auto-swap');
+  });
+
+  it('keeps the widen-it note while the pane is unmeasured or still narrow — unmeasured is never wide', () => {
+    for (const paneCols of [null, READER_MIN_COLS - 1]) {
+      cleanup();
+      renderSheet(s({ spawnState: 'narrow', paneCols }));
+      const t = notes().join(' ');
+      expect(t, `paneCols ${paneCols}`).toContain('terminal drawer');
+      expect(t, `paneCols ${paneCols}`).not.toContain('since been widened');
+    }
+  });
+
   it('sends a DEAD narrow row to Restart session — the pane to widen is gone', () => {
     // `.spawn` survives the pane, so a stopped or dead row can still carry rc
-    // 6. There is no drawer to open; Restart session is the respawn, and it
-    // lands narrow again if a narrow terminal is still attached anywhere.
+    // 6. There is no drawer to open; Restart session is the respawn, and ccd
+    // pins that new pane 220x50.
     renderSheet(s({ spawnState: 'narrow', status: 'dead', bucket: 'dead' }));
     const t = notes().join(' ');
     expect(t).toContain('Restart session builds a new one');
-    expect(t).toContain('close any narrow terminal');
+    // True only on a fleet box running a pinning ccd, and it says so.
+    expect(t).toContain('a current ccd pins 220x50');
+    expect(t).not.toContain('attached to any session');
     expect(t).not.toContain('terminal drawer');
   });
 

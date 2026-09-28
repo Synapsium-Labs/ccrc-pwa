@@ -206,13 +206,17 @@ describe('the two stand-downs outside the phrase population', () => {
       `${panesRecording(`1 ${NARROW}`)} _accept_first_run_prompts() { return 6; };`
       + ' _spawn_settle demo 0 2>"$HOME/ccd-err" >/dev/null; cat "$HOME/ccd-err"');
     expect(out).toContain(`demo: pane is under ${READER_MIN_COLS} columns`);
-    // The remedy names the CAUSE as measured on a private tmux 3.4 server: a
-    // narrow client attached to ANY session narrows the window a new session
-    // is born into — not a drawer on this one, which re-pins 220x50 on open
-    // and on close (server.ts).
+    // The remedy names the CAUSE that is left once `_spawn_start` pins every
+    // new window 220x50 (ccd-spawn-split.test.ts): measured on a private tmux
+    // 3.4 server, a narrow client on ANOTHER session no longer narrows a
+    // spawn, so what can still narrow this pane is a terminal attached to
+    // THIS session under `window-size latest` (a `ccd attach` from a phone —
+    // not the drawer, which pins 220x50 on open and on close, server.ts).
     expect(out, 'the sentence must name the remedy, not just the refusal')
-      .toContain('any narrow terminal attached to this tmux server narrows new panes: close it');
+      .toContain('a terminal attached to this session');
     expect(out, 'the sentence must say how to widen this pane').toContain('open and close its terminal drawer');
+    expect(out, 'the pre-pin cause is no longer true and must not be told to the operator')
+      .not.toContain('narrows new panes');
   });
 
   it('_inject_spawn_effort types nothing into a narrow pane (edit 4h)', () => {

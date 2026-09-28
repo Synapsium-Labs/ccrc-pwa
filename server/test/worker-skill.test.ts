@@ -157,6 +157,18 @@ describe('the worker skill: its contract', () => {
     }
   });
 
+  // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
+  // unchanged and the count stays fifteen — but a sentence in the reporting
+  // section, because it is the fact a worker needs at the moment it reports.
+  it('says, in its reporting section, that this workspace ends when its run closes', () => {
+    const at = skill.indexOf('**This workspace ends when its run closes.**');
+    expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
+    expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
+    expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
+    expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
+    expect(skill).not.toContain('ws-reclaim');
+  });
+
   it('carries no references of its own — the census corpus is the whole skill (D-103)', () => {
     // The plan's locked decision, made mechanical. Two things break the moment
     // a `references/` directory appears here: the duplicate-content ban (the

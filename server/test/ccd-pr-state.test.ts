@@ -88,12 +88,12 @@ describe('pr-state argv', () => {
     expect(call).not.toContain('mergeStateStatus');   // literal "UNKNOWN" on merged PRs
     expect(call).not.toContain('mergeable');
     // The whole list, in order. The loop above says WHY six of these are here;
-    // this says that none of the twelve may quietly leave, which the loop
+    // this says that none of the thirteen may quietly leave, which the loop
     // cannot: the stub returns its rows whatever --json asks for, and `state`
     // is a substring of `--state all`, so five field names were assertable
     // only as an exact string. Task 12's prstate.ts reads every one of them.
     expect(call).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,statusCheckRollup');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,statusCheckRollup');
     // …and the call is WRAPPED. `gh pr list` has no timeout of its own, so a
     // blocking DNS hang is bounded by this and nothing else; without the stub
     // logging its own argv, dropping the wrapper left the suite green.
@@ -116,10 +116,10 @@ describe('the per-session call asks about one branch', () => {
   // (which conjoins `bound`) and `pick()` (which filters by it) on the ccd
   // side; `boundRow()` and `isMergedRow()` on the server's, and `childSpent`'s
   // spent rung (D-3347), which conjoins `headRefName === line.branch` exactly
-  // as `boundRow` does. `childSpent`'s `unplaceable` rung (D-3351) has NO
+  // as `boundRow` does. `childSpent`'s `headUnreadable` rung (D-3351) has NO
   // branch conjunct — it asks whether any non-fork row's head cannot be read —
   // but a row `--head` drops is one gh placed on a DIFFERENT, readable head,
-  // so it is never unplaceable: that rung loses nothing to the filter either.
+  // so its head is never unreadable: that rung loses nothing to the filter either.
   //
   // `--project` is a different question — every workspace of the repo at once,
   // from one call — and keeps the wide window; the second test is that guard.
@@ -277,10 +277,12 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
       .find((c) => c.includes('--json number,state,'));
     expect(rowCall).toBeDefined();
     expect(rowCall).not.toContain('statusCheckRollup');
-    // The other eleven stay, in order and entire: this task removes ONE field,
+    // The other twelve stay, in order and entire: this task removes ONE field,
     // and the row window is still what every binding conjunct is read from.
+    // The twelfth, `createdAt`, is no binding conjunct: it dates a row against
+    // a child's birth (child-reclamation spec §5.3).
     expect(rowCall).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt');
     expect(rowCall).toContain('--state all');
     expect(rowCall).toContain('--limit 100');
   });

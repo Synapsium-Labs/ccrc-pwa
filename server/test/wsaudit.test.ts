@@ -58,7 +58,9 @@ describe('refusal-token <-> sentence linkage (ccd source <-> wsaudit.ts SENTENCE
   for (const m of ccdSrc.matchAll(/"refused":"([a-zA-Z0-9-]+)"/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/'!([a-zA-Z0-9-]+)/g)) tokens.add(m[1]!);
   for (const m of ccdSrc.matchAll(/"verdict":"([a-zA-Z0-9-]+)"/g)) {
-    if (m[1] !== 'reapable') tokens.add(m[1]!);
+    // `reapable` and `reclaimable` are the two SUCCESS verdicts — each means "a
+    // token follows" — not refusals, so neither has (or may have) a sentence.
+    if (m[1] !== 'reapable' && m[1] !== 'reclaimable') tokens.add(m[1]!);
   }
   const ccdTokens = [...tokens].sort();
 

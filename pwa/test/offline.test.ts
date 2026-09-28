@@ -6,6 +6,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import type { FleetSession } from '../../shared/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
+import { spawnVerdictChip } from '../src/fleet/spawnWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { TEST_ROSTER } from './rosterFixture';
@@ -21,7 +22,7 @@ const session = (id: string): FleetSession => ({
   status: 'idle',
   statusUpdatedAt: null,
   limits: { five: 10, seven: 40 },
-  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
 });
@@ -424,6 +425,28 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
     expect(pr?.phase).toBe('unchecked');
     expect(pr?.reason).toBeNull();
     expect(pr?.number).toBe(12);
+  });
+
+  it('keeps a snapshot holding a spawnState word this bundle cannot name — the word itself, as the live chip showed it', () => {
+    // #174's `narrow` was exactly such a word to every older bundle, and one
+    // narrow row used to cost the whole offline fleet. The live frame is CAST,
+    // so spawnWords.ts shows an unnameable word as itself, loud; the offline
+    // copy keeps the same word so the chip does not turn quiet `unknown`.
+    putRaw([
+      { ...v1Session('claude:OpenClawHetzner'), spawnState: 'some-future-word' },
+      v1Session('claude:rp-llm'),
+    ]);
+    const snap = loadFleetSnapshot();
+    expect(snap?.sessions.map((s) => s.spawnState)).toEqual(['some-future-word', null]);
+    expect(spawnVerdictChip(snap!.sessions[0]!)).toEqual({ word: '? some-future-word', data: 'some-future-word' });
+  });
+
+  it('never revives a pane width — offline is not THIS tick', () => {
+    putRaw([{ ...v1Session('claude:OpenClawHetzner'), spawnState: 'narrow', paneCols: 220 }]);
+    const row = loadFleetSnapshot()?.sessions[0];
+    expect(row?.paneCols).toBeNull();
+    // …so a narrow spawn stays LOUD offline rather than claiming it was widened.
+    expect(spawnVerdictChip(row!)?.word).toBe('narrow');
   });
 
   it('rejects the whole snapshot rather than launder a malformed session', () => {

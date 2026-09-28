@@ -13,7 +13,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Runner } from '../src/exec.js';
 import { readSessionRecord, type SessionRecord } from '../src/registry.js';
-import { childSpent, type ChildSpentDeps } from '../src/coord/childSpent.js';
+import {
+  CHILD_BIRTH_SKEW_MS, childBirthOf, childSpent, childSpentLive, type ChildBirth, type ChildSpentDeps,
+} from '../src/coord/childSpent.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
@@ -70,13 +72,21 @@ const recordOf = async (deps: ChildSpentDeps): Promise<SessionRecord> => {
   if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
   return r.record;
 };
-const verdict = async (h: ReturnType<typeof harness>) => childSpent(h.deps, await recordOf(h.deps));
+/** This child's birth — its minting run's `dispatchStartedAt` — for every
+ *  case that does not test placement itself. The rows of those cases carry
+ *  no `createdAt` (an older ccd's shape), so they place `unplaced` whatever
+ *  the birth, and every `spent` they answer says so. */
+const BIRTH_MS = Date.parse('2026-09-24T12:00:00Z');
+const AT_BIRTH: ChildBirth = { kind: 'at', ms: BIRTH_MS };
+const iso = (ms: number): string => new Date(ms).toISOString();
+const verdict = async (h: ReturnType<typeof harness>, birth: ChildBirth = AT_BIRTH) =>
+  childSpent(h.deps, await recordOf(h.deps), birth);
 
 describe('childSpent — the fast path', () => {
   it('a registry PR number present → spent/registry, and no live call is made', async () => {
     put('prnumber', '42');
     const h = harness();
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'registry' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'registry', incarnation: 'unplaced' });
     expect(h.verbs).not.toContain('pr-state');
   });
 
@@ -89,7 +99,7 @@ describe('childSpent — the fast path', () => {
       JSON.stringify({ pr: 8, branch: BRANCH, phase: 'closed', recordedAt: 200 }),
     ].join('\n') + '\n');
     const h = harness();
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'prhistory' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'prhistory', incarnation: 'unplaced' });
     expect(h.verbs).not.toContain('pr-state');
   });
 
@@ -104,7 +114,7 @@ describe('childSpent — the fast path', () => {
     put('prnumber', '42');
     const h = harness({ code: 0, stdout: `${fullLine([prRow('OPEN')])}\n`, stderr: '' },
       { io: unreadableField(ID, 'prnumber') });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
     expect(h.verbs).toContain('pr-state');
   });
 });
@@ -117,7 +127,7 @@ describe('childSpent — the live lookup', () => {
     ['closed', prRow('CLOSED')],
   ] as const)('a bound %s PR → spent/live, naming it', async (_phase, row) => {
     const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
   });
 
   // D-3347 (review run 144, F1): the operator ruled "a PR OPENED from its
@@ -137,7 +147,7 @@ describe('childSpent — the live lookup', () => {
     // "title":"the work","isDraft":false,"statusCheckRollup":null,"ours":true}
     const row = prRow('OPEN', { number: 42, baseRefName: 'release/9' });
     const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
   it('(ii) a same-branch row with ours:false → spent/live, naming it', async () => {
@@ -149,7 +159,7 @@ describe('childSpent — the live lookup', () => {
     // reachable from our tip) and STILL printed the row.
     const row = prRow('OPEN', { number: 42, ours: false });
     const h = harness({ code: 0, stdout: `${fullLine([row])}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
   it('(iii) a CROSS-repository row naming the same head, alone → unspent — it does not count', async () => {
@@ -192,7 +202,7 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('could not be established');
   });
 
-  // Review 145 F1 (D-3351): a line's `branch` was assumed to be a string —
+  // Review 145 F7 (D-3351): a line's `branch` was assumed to be a string —
   // reachable only through a cast, never validated — so a malformed line
   // fell straight through the (empty) same-branch filters to `phaseFor`.
   it('(vii) a line with no branch key at all → unmeasured', async () => {
@@ -207,7 +217,7 @@ describe('childSpent — the live lookup', () => {
   // Review 145 F7 (D-3351): the same-branch comparison (`r.headRefName ===
   // line.branch`) answers `false` for a row whose `headRefName` cannot even
   // be compared, so it never reaches `sameBranch`/`unestablished` though it is
-  // exactly as unplaced as they are. Widened alongside the `unestablished`
+  // exactly as uncomparable as they are. Widened alongside the `unestablished`
   // rung, checked after `sameRepo` so a genuine same-repo row still wins.
   it.each([
     ['isCrossRepository:false, headRefName DELETED', (() => {
@@ -249,14 +259,16 @@ describe('childSpent — the live lookup', () => {
     const stdout = JSON.stringify(
       { id: ID, rows: [row], baseShort: 'main', branch: 'ws/a', ahead: null, tip: null, checkedAt: 1 });
     const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live', incarnation: 'unplaced' });
   });
 
   // Fix round 2's own review (not review 145), its M3 (a): a `tip` KEY ABSENT (not merely
   // `null`) must ALSO answer unmeasured — the check is `typeof line.tip !==
   // 'string'`, not `line.tip === null`, and a mutant narrowing to the latter
-  // stayed green because every other case in this file sends `tip:null`
-  // explicitly.
+  // stayed green because the only OTHER tip-unmeasured case, (x), sends
+  // `tip:null` explicitly — no case before this one covered a tip key that is
+  // ABSENT rather than null (`fullLine` defaults `tip` to a measured 40-hex
+  // sha, which the `fullLine` cases rely on).
   it('(xii) a line whose tip KEY IS ABSENT (never sent, not merely null) → unmeasured', async () => {
     const stdout = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: BRANCH, ahead: 1, checkedAt: 1 });
     const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
@@ -277,17 +289,17 @@ describe('childSpent — the live lookup', () => {
     expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
   });
 
-  // That review's M3 (c): pins the order the comment above (viii) claims — `unplaceable` is
-  // checked AFTER `sameRepo`, so a genuine same-repo same-branch row still
-  // wins even when an unplaceable non-fork row is ALSO present. A mutant that
-  // moved the `unplaceable` check above `sameRepo` would answer `unmeasured`
+  // That review's M3 (c): pins the order the comment above (viii) claims — `headUnreadable` is
+  // checked AFTER the same-repo rows, so a genuine same-repo same-branch row still
+  // wins even when a non-fork row with an unreadable head is ALSO present. A mutant that
+  // moved the `headUnreadable` check above the same-repo one would answer `unmeasured`
   // here instead of `spent`.
-  it('(xiv) a genuine same-repo same-branch row PLUS an unplaceable non-fork row → spent — sameRepo wins, checked first', async () => {
+  it('(xiv) a genuine same-repo same-branch row PLUS a non-fork row with an unreadable head → spent — sameRepo wins, checked first', async () => {
     const good = prRow('OPEN', { number: 42 });
     const bad = prRow('OPEN', { number: 99 }) as Record<string, unknown>;
     delete bad.headRefName;
     const h = harness({ code: 0, stdout: `${fullLine([good, bad])}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'unplaced' });
   });
 
   it('(vi) three same-repo same-branch rows → spent/live names the HIGHEST number, not the first or the last', async () => {
@@ -296,7 +308,7 @@ describe('childSpent — the live lookup', () => {
     // true highest would both answer wrong (F5, review 145).
     const rows = [prRow('OPEN', { number: 7 }), prRow('CLOSED', { number: 9 }), prRow('CLOSED', { number: 8 })];
     const h = harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 9, source: 'live', incarnation: 'unplaced' });
   });
 
   // Departure from the plan text's "keep every existing case green": the
@@ -311,7 +323,7 @@ describe('childSpent — the live lookup', () => {
   // spent. Moved out of the `unmeasured` table below into its own assertion.
   it('a same-branch PR gh reports MERGED but cannot prove → still spends the child (D-3347)', async () => {
     const h = harness({ code: 0, stdout: `${fullLine([prRow('MERGED', { mergeCommit: null })])}\n`, stderr: '' });
-    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
   });
 
   it('no PR bound to the branch → unspent (a research child still hands over)', async () => {
@@ -351,5 +363,170 @@ describe('childSpent — the live lookup', () => {
     });
     expect(await verdict(h)).toEqual({ kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' });
     expect(h.verbs).not.toContain('pr-state');
+  });
+});
+
+// Incarnation placement (child-reclamation spec §5.3; a slug is recycled,
+// §5.5). A child's branch name is a recycled slug, so a PR row can belong to
+// an EARLIER workspace that wore the same name. Every same-repository
+// same-branch row is placed against this child's birth, ±`CHILD_BIRTH_SKEW_MS`:
+// `this` (created at or after birth + skew), `inherited` (created before
+// birth − skew) or `unplaced` (anything else — no or unparseable `createdAt`,
+// an unplaceable birth, or inside the window). Only `inherited` rows are
+// dropped, from EVERY later step, `phaseFor` included.
+describe('childSpent — incarnation placement', () => {
+  const at = (offsetMs: number, extra: Record<string, unknown> = {}) =>
+    prRow('OPEN', { createdAt: iso(BIRTH_MS + offsetMs), ...extra });
+  const live = (rows: unknown[]) => harness({ code: 0, stdout: `${fullLine(rows)}\n`, stderr: '' });
+  const HOUR = 3_600_000;
+
+  it('the skew is ±120 s', () => {
+    expect(CHILD_BIRTH_SKEW_MS).toBe(120_000);
+  });
+
+  it('a pre-birth row alone → unspent: it belongs to an earlier incarnation', async () => {
+    expect(await verdict(live([at(-HOUR)]))).toEqual({ kind: 'unspent' });
+  });
+
+  it('a row created at birth + skew → spent/this', async () => {
+    expect(await verdict(live([at(CHILD_BIRTH_SKEW_MS)])))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'this' });
+  });
+
+  it('a row created an hour after birth → spent/this', async () => {
+    expect(await verdict(live([at(HOUR)])))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'this' });
+  });
+
+  it.each([
+    ['absent (an older ccd never asked for it)', undefined],
+    ['null', null],
+    ['a word', 'yesterday'],
+    ['a number, not a string', BIRTH_MS - HOUR],
+    // Date-only and zone-less shapes `Date.parse` accepts but reads by a
+    // RULE, not a fact: a bare date is midnight UTC, a zone-less time is the
+    // server's LOCAL time. Neither is gh's shape, and neither is dated.
+    ['a bare date a day before birth', '2026-09-23'],
+    ['a zone-less time an hour before birth', '2026-09-24T11:00:00'],
+    // gh's shape, but no real instant: `Date.parse` answers NaN.
+    ['an impossible month', '2026-13-01T00:00:00Z'],
+  ] as const)('a row whose createdAt is %s → spent/unplaced', async (_what, createdAt) => {
+    expect(await verdict(live([prRow('OPEN', { createdAt })])))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
+  });
+
+  it.each([
+    ['at birth − skew (the window is closed at its low end)', -CHILD_BIRTH_SKEW_MS],
+    ['one minute before birth', -60_000],
+    ['at birth', 0],
+    ['one millisecond short of birth + skew', CHILD_BIRTH_SKEW_MS - 1],
+  ] as const)('a row created %s → spent/unplaced: inside ±skew is neither old nor new', async (_what, offset) => {
+    expect(await verdict(live([at(offset)])))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
+  });
+
+  it('a row one millisecond before birth − skew → inherited, so unspent', async () => {
+    expect(await verdict(live([at(-CHILD_BIRTH_SKEW_MS - 1)]))).toEqual({ kind: 'unspent' });
+  });
+
+  it('an UNPLACEABLE birth → spent/unplaced, even for a row a day older than any birth', async () => {
+    const birth: ChildBirth = { kind: 'unplaceable', detail: 'the minting run has no dispatch start' };
+    expect(await verdict(live([at(-24 * HOUR)]), birth))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
+  });
+
+  it('old and new rows together → spent/this, naming the highest THIS row — never the higher inherited one', async () => {
+    // The inherited row carries the HIGHEST number, and the new rows are in
+    // neither first nor last position among themselves by number.
+    const rows = [at(HOUR, { number: 12 }), at(-HOUR, { number: 50 }), at(2 * HOUR, { number: 14 }),
+      at(3 * HOUR, { number: 13 })];
+    expect(await verdict(live(rows))).toEqual({ kind: 'spent', pr: 14, source: 'live', incarnation: 'this' });
+  });
+
+  it('a THIS row beside a higher-numbered UNPLACED row → spent/this naming the this row', async () => {
+    const rows = [at(HOUR, { number: 12 }), prRow('OPEN', { number: 30 })];
+    expect(await verdict(live(rows))).toEqual({ kind: 'spent', pr: 12, source: 'live', incarnation: 'this' });
+  });
+
+  it('an inherited row beside an unplaced one → spent/unplaced naming the unplaced row', async () => {
+    const rows = [at(-HOUR, { number: 50 }), prRow('OPEN', { number: 30 })];
+    expect(await verdict(live(rows))).toEqual({ kind: 'spent', pr: 30, source: 'live', incarnation: 'unplaced' });
+  });
+
+  it("the merge-commit shape: an inherited-only row that BINDS the tip → unspent — dropped from phaseFor too", async () => {
+    // A MERGED, `ours`, base-matching row: `phaseFor` would answer `merged`
+    // for it and spend the child, were the inherited row still in its rows.
+    const old = prRow('MERGED', { createdAt: iso(BIRTH_MS - HOUR) });
+    expect(await verdict(live([old]))).toEqual({ kind: 'unspent' });
+  });
+
+  it('an inherited row does not mask a line that is otherwise unmeasured — the tip still decides', async () => {
+    const stdout = JSON.stringify({ id: ID, rows: [at(-HOUR)], baseShort: 'main', branch: BRANCH,
+      ahead: 1, tip: null, checkedAt: 1 });
+    const v = await verdict(harness({ code: 0, stdout: `${stdout}\n`, stderr: '' }));
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
+  });
+
+  it("a fork's row is never placed: a pre-birth fork row does not drop, and still never counts", async () => {
+    const fork = at(-HOUR, { isCrossRepository: true });
+    expect(await verdict(live([fork]))).toEqual({ kind: 'unspent' });
+  });
+
+  it('deploy tolerance: an older ccd (no createdAt on any row) → spent/unplaced, so the bind still refuses', async () => {
+    const old = prRow('MERGED');   // no createdAt key at all
+    expect('createdAt' in old).toBe(false);
+    expect(await verdict(live([old])))
+      .toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
+  });
+
+  it('the fast path answers unplaced — a registry number and a .prhistory entry carry no date', async () => {
+    put('prnumber', '42');
+    expect(await verdict(live([at(HOUR)])))
+      .toEqual({ kind: 'spent', pr: 42, source: 'registry', incarnation: 'unplaced' });
+  });
+
+  it('childSpentLive dates a fast-path spent: it skips the registry number and reads the live rows', async () => {
+    // The close's use: `childSpent` said spent/registry/unplaced, and only a
+    // dated live row may turn that into `this`.
+    put('prnumber', '42');
+    const h = live([at(HOUR, { number: 42 })]);
+    const rec = await recordOf(h.deps);
+    expect(rec.prNumber).toBe(42);
+    expect(await childSpentLive(h.deps, rec, AT_BIRTH))
+      .toEqual({ kind: 'spent', pr: 42, source: 'live', incarnation: 'this' });
+    expect(h.verbs).toContain('pr-state');
+  });
+
+  it('childSpentLive on a registry number whose live row predates birth → unspent (the merge-commit path)', async () => {
+    put('prnumber', '42');
+    const h = live([prRow('MERGED', { number: 42, createdAt: iso(BIRTH_MS - HOUR) })]);
+    expect(await childSpentLive(h.deps, await recordOf(h.deps), AT_BIRTH)).toEqual({ kind: 'unspent' });
+  });
+});
+
+// A child's birth is its MINTING run's `dispatchStartedAt` (spec §5.1: the
+// marker names the minting run). Every way that cannot be read is its own
+// `unplaceable` answer — and the bind cannot tell some of them apart from a
+// placed birth (a null stamp read as 0 would place every row `this`, which a
+// bind refuses just the same), so they are pinned here, where they differ.
+describe('childBirthOf — the minting run row, read three ways', () => {
+  const row = (over: { sessionId?: string | null; dispatchStartedAt?: number | null } = {}) =>
+    ({ ok: true as const, run: { sessionId: ID, dispatchStartedAt: BIRTH_MS, ...over } });
+
+  it("the minting run's dispatch start, when the run minted THIS session", () => {
+    expect(childBirthOf(row(), ID)).toEqual({ kind: 'at', ms: BIRTH_MS });
+  });
+
+  it.each([
+    ['the row could not be read', { ok: false as const, detail: 'integer out of range' },
+      'the minting run could not be read: integer out of range'],
+    ['there is no such row', { ok: true as const, run: null }, 'the minting run is absent'],
+    ['its dispatch start is null', row({ dispatchStartedAt: null }), 'the minting run never stamped a dispatch start'],
+    ['it is bound to another session (a retry orphan)', row({ sessionId: 'demo-retry' }),
+      'the minting run is bound to another session'],
+    ['it is bound to no session yet', row({ sessionId: null }), 'the minting run is bound to another session'],
+  ] as const)('unplaceable when %s', (_what, read, detail) => {
+    expect(childBirthOf(read, ID)).toEqual({ kind: 'unplaceable', detail });
   });
 });

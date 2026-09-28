@@ -27,7 +27,13 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
-import { parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
+import {
+  CCRC_DIR_NAME,
+  NODE_FILE_BASENAMES,
+  parseCcdCaps,
+  parseObservedEpochDoc,
+  POOL_EPOCH_FILE_NAME,
+} from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -46,7 +52,7 @@ import {
 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
-import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
+import { canonicalize, checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
 
 /**
  * ccrc-agent: a small authenticated WS service exposing a whitelisted
@@ -374,8 +380,44 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // `parent === null` is the whitelist ROOT itself (`.cc-sessions`, whose
       // parent is $HOME and is not whitelisted): fall back to the canonical
       // path, which for a directory is the same answer.
-      const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
-      const subject = parent === null ? p : path.join(parent, path.basename(req.path));
+      //
+      // ONE exception to that fallback (F12/D-3195, fix round 1 dispatch C).
+      // `~/.ccrc` is not itself independently whitelisted in the common case
+      // (only its eight literal node-file paths are), so `parent === null`
+      // usually fires for a node-file request, and the fallback subject would
+      // then be `p` — `checkPath`'s CANONICAL, already symlink-resolved,
+      // answer. That is correct when the node file is admitted through
+      // `isCcrcNodeFile` (that grant requires canonical === `<ccrc>/<literal
+      // basename>`, so canonical already equals the literal path). But a node
+      // file can ALSO be admitted through a DIFFERENT whitelist arm: a live
+      // symlink whose FULLY RESOLVED target lies in another admitted prefix
+      // (`.cc-sessions`, `.cc-clips`, a `.claude*` dir, the projects root) —
+      // that target is a regular file the OTHER prefix's own arm admits on
+      // its own — and then `p` names that other file, not the link. Scoped
+      // narrowly so every other request's answer stays byte-for-byte
+      // unchanged, whether or not `~/.ccrc` itself happens to be
+      // independently admitted (e.g. `~/.ccrc` itself under another prefix):
+      // only when the request literally names `<canonical
+      // ~/.ccrc>/<one of the eight basenames>` does the subject become that
+      // literal path directly, never the parent-probe fallback. The basename
+      // check runs FIRST — a cheap array lookup — so the two `canonicalize`
+      // calls (realpath walks) below run only when it can possibly matter,
+      // never on every `lstat`.
+      const literalBasename = path.basename(req.path);
+      const viaParentProbe = async (): Promise<string> => {
+        const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
+        return parent === null ? p : path.join(parent, path.basename(req.path));
+      };
+      let subject: string;
+      if (NODE_FILE_BASENAMES.includes(literalBasename)) {
+        const canonicalCcrc = await canonicalize(path.join(ctx.cfg.home, CCRC_DIR_NAME));
+        const literalParent = await canonicalize(path.dirname(req.path));
+        subject = literalParent === canonicalCcrc
+          ? path.join(canonicalCcrc, literalBasename)
+          : await viaParentProbe();
+      } else {
+        subject = await viaParentProbe();
+      }
       send(ws, ok(req.id, lstatPayload(await lstatMeasured(subject))));
       return;
     }

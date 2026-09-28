@@ -8080,12 +8080,13 @@ describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
   // forked (a plain, non-symlink `memory` directory) and must never reach the
   // verdict.
   //
-  // FOUR PREFIXES, ONE RULE (D-2375): `/tmp` on Linux, and on Darwin
-  // `/private/tmp` plus a per-user `/var/folders/<x>/<y>/T`. `_check_memory`
-  // reads a directory NAME, so all four are measurable on a Linux runner —
-  // unlike the hook's own copy, which derives its slug from a live cwd and can
-  // only be measured where it runs. That asymmetry is why the Linux-only
-  // spelling survived to `test-macos`.
+  // FOUR PREFIXES PLUS ONE INFIX, ONE RULE (D-2375, A4): `/tmp` on Linux, and
+  // on Darwin `/private/tmp` plus a per-user `/var/folders/<x>/<y>/T`, plus a
+  // marked child's own `$HOME/.cc-tmp/<id>`. `_check_memory` reads a
+  // directory NAME, so all five are measurable on a Linux runner — unlike the
+  // hook's own copy, which derives its slug from a live cwd and can only be
+  // measured where it runs. That asymmetry is why the Linux-only spelling
+  // survived to `test-macos`.
   for (const slug of SCRATCH_SLUGS) {
     it(`skips the scratch project slug ${slug} even when it looks forked`, () => {
       const home = healthy('ccrc-doctor-mem-tmp-skip-');

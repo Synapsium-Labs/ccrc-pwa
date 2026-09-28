@@ -409,7 +409,7 @@ describe('selection is polarity, status is hue', () => {
     expect(group, 'the spawn chip left the achromatic group entirely').not.toEqual([]);
     const scrubbed = stripComments(css);
     const groupAt = scrubbed.indexOf('.sess-line--active .sess-spawn');
-    for (const variant of ['expired', 'unrecognised']) {
+    for (const variant of ['expired', 'unrecognised', 'narrow-widened']) {
       const sel = `.sess-spawn[data-spawn=${variant}]`;
       // The variant really does paint a colour of its own — without that there
       // is nothing to beat and everything below would be vacuous.
@@ -447,6 +447,13 @@ describe('selection is polarity, status is hue', () => {
     // result below is a finding, not a scan that saw nothing.
     expect(painted).toEqual(expect.arrayContaining(['expired', 'unrecognised']));
     expect(painted).not.toContain('narrow');
+  });
+
+  it('paints a narrow spawn whose pane is measured wide again (`narrow-widened`) in the QUIET ink', () => {
+    // History, not a fault: the pane is wide with its prompt up, and ccd's
+    // readers are back on (spawnWords.ts's `narrowSinceWidened`). What stays
+    // loud is a narrow spawn still unmeasured or narrow — the case above.
+    expect(declValue(ruleFor(".sess-spawn[data-spawn='narrow-widened']"), 'color')).toBe('var(--ink-tertiary)');
   });
 
   it('beats the ctx-pressure chip\'s own [data-wedge] variant by SPECIFICITY, not by source order (Finding 4)', () => {

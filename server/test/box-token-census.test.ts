@@ -17,7 +17,7 @@
 // `requireMailToken` call sites alone. A scanner
 // demanding one word from all three would be wrong twice. So this file derives
 // ONE set — every route handler that CONSULTS the box token, by either
-// mechanism, across both files that register one — and the prose was rewritten
+// mechanism, across the three files that register one — and the prose was rewritten
 // to speak that set rather than the scanner widened to tolerate three
 // vocabularies.
 //
@@ -65,6 +65,12 @@ const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8')
 
 const COORD_SRC = read('server/src/coord/routes.ts');
 const SERVER_SRC = read('server/src/server.ts');
+/** The THIRD file that registers routes (update-management W2, design 2026-09-20
+ *  §12 census step (a)). Without it, "the update routes are absent from every
+ *  box-token lane" would be a measured zero over an empty set — this file is
+ *  where a box-token call on the update surface would BE, so it is read like
+ *  the two above. */
+const UPDATE_SRC = read('server/src/update/routes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -80,12 +86,87 @@ const CCD_SRC = read('ccd/ccd');
  *  had to add a prose caveat about the mail pair. */
 const GATE_PATTERNS = [/requireMailToken\(req/, /checkMailToken\(/];
 
-/** Every `app.get`/`app.post` handler in one source file whose body consults the
- *  box token, keyed `VERB /path`. Bodies run from a route's own registration to
- *  the next one, the same slice `auth-gate.test.ts:432-440` takes. */
+/** Every fastify registration VERB this scan credits — not just `get`/`post`.
+ *  F14: the two callers below (`lanesIn` and the update-surface `REGISTERED`)
+ *  used to match only `get|post`, so a route registered with any other verb —
+ *  or through `app.route({...})` — was invisible to both: not counted as a
+ *  lane, not counted as a door, and "no route can join or leave without the
+ *  literal moving" was false for exactly that shape. Measured (fix round 1,
+ *  scratch copy of `update/routes.ts`): a planted `app.delete(...)` and a
+ *  planted `app.route({ method: 'PUT', ... })` were both absent from
+ *  `REGISTERED` before this fix, so "UPDATE_DOORS is exactly the rest" stayed
+ *  GREEN over a door it never saw. */
+const ALL_VERBS = 'get|post|put|patch|delete|head|options|all';
+
+/** `app.route({ method, url, ... })` calls, brace-counted rather than regexed
+ *  end to end — the handler nested inside the object routinely contains its
+ *  own `{`/`}` pairs, so a naive `[\s\S]*?\}\)` would close on the FIRST inner
+ *  brace followed by a `)` and silently mis-read the object's extent. `method`
+ *  may be a single-quoted/double-quoted string or an array of them; each
+ *  method the call registers is emitted as its own entry sharing the call's
+ *  `at`, so a `body.slice(at, next.at)` still spans the whole registration.
+ *  Fix round 1, dispatch E (F14, m1): `app\.route\(\s*\{` tolerates whitespace
+ *  between the call and its opening brace (`app.route( {`), which the bare
+ *  `app\.route\(\{` missed — measured, the residual stayed 20/20 green. */
+const routeCallsIn = (src: string): { key: string; at: number }[] => {
+  const out: { key: string; at: number }[] = [];
+  const re = /app\.route\(\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const openBrace = m.index + m[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = openBrace; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}') {
+        depth--;
+        if (depth === 0) { close = i; break; }
+      }
+    }
+    if (close === -1) continue;
+    const body = src.slice(openBrace + 1, close);
+    const methodMatch = /method:\s*(\[[^\]]*\]|'[^']*'|"[^"]*")/.exec(body);
+    const urlMatch = /url:\s*'([^']+)'|url:\s*"([^"]+)"/.exec(body);
+    if (!methodMatch || !urlMatch) continue;
+    const url = urlMatch[1] ?? urlMatch[2]!;
+    const methods = methodMatch[1]!.startsWith('[')
+      ? [...methodMatch[1]!.matchAll(/'([^']+)'|"([^"]+)"/g)].map((x) => (x[1] ?? x[2])!.toUpperCase())
+      : [methodMatch[1]!.replace(/['"]/g, '').toUpperCase()];
+    for (const method of methods) out.push({ key: `${method} ${url}`, at: m.index });
+  }
+  return out;
+};
+
+/** Every registration in one source file — every `app.<verb>('/path', ...)` for
+ *  every fastify verb, plus every `app.route({...})` — keyed `VERB /path`, in
+ *  source order. The shared extraction `lanesIn` and `REGISTERED` both build on,
+ *  so a verb or shape invisible to one is invisible to the other. Fix round 1,
+ *  dispatch E (F14, m1): the path capture is QUOTE-AGNOSTIC
+ *  (`(['"\x60])([^'"\x60]+)\1`) — a single-quoted-only capture left
+ *  `app.put("/x", …)` and `` app.put(`/x`, …) `` both unseen, measured 20/20
+ *  green residuals. The backtick in the character class needs the `\x60`
+ *  escape (a literal backtick is unremarkable inside `[...]`, but this file's
+ *  own source is read back by OTHER regex-vs-template scans, so spelling it
+ *  as a raw backtick here would itself be a stray template delimiter to
+ *  anyone re-reading this literal). Fix round 2 (R14): `\s*` between the verb
+ *  call's `(` and the path's quote, for EVERY verb — `app.route(\s*\{` already
+ *  had this tolerance (fix round 1, m1), but the bare-verb branch required the
+ *  quote to sit immediately after `(`, so a formatter-wrapped
+ *  `app.put(\n  '/api/updates/x', …)` matched nothing: invisible to both
+ *  `lanesIn` and `REGISTERED`, exactly F14's original failure mode, for a
+ *  shape a Prettier-style reflow produces routinely. */
+const registrationsIn = (src: string): { key: string; at: number }[] => {
+  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\(\\s*(['"\\x60])([^'"\\x60]+)\\2`, 'g');
+  const verbHits = [...src.matchAll(verbRe)]
+    .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[3]!}`, at: mm.index! }));
+  return [...verbHits, ...routeCallsIn(src)].sort((a, b) => a.at - b.at);
+};
+
+/** Every handler in one source file whose body consults the box token, keyed
+ *  `VERB /path`. Bodies run from a route's own registration to the next one,
+ *  the same slice `auth-gate.test.ts:432-440` takes. */
 const lanesIn = (src: string): string[] => {
-  const starts = [...src.matchAll(/app\.(get|post)\('([^']+)'/g)]
-    .map((m) => ({ key: `${m[1]!.toUpperCase()} ${m[2]!}`, at: m.index! }));
+  const starts = registrationsIn(src);
   return starts
     .filter(({ at }, i) => {
       const body = src.slice(at, starts[i + 1]?.at ?? src.length);
@@ -95,7 +176,8 @@ const lanesIn = (src: string): string[] => {
 };
 
 const COORD_LANES = lanesIn(COORD_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC)];
+const UPDATE_LANES = lanesIn(UPDATE_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -125,7 +207,18 @@ const SESSION_ONLY_DOORS = harvestSet('SESSION_ONLY');
 const KICKOFF = '/api/sessions/:id/kickoff';
 
 /** Every coordination write the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF];
+/** The update control plane's session-only routes (design 2026-09-20 §12 census
+ *  step (b): the FOUR the W2 wave registers of §12's six). Registered from `server/src/update/routes.ts`,
+ *  which `coord-pause-route.test.ts`'s `SESSION_ONLY` harvest cannot see for the
+ *  kickoff route's reason. Hand-kept for the NAMES only: the update-surface
+ *  describe below derives the same set from the file and compares in both
+ *  directions, so a route there cannot join or leave without this literal
+ *  moving. Programme wave 5 (spec W4 part B) appends `/api/updates/apply` and
+ *  `/api/updates/rollback` with their routes. */
+const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refresh', '/api/updates/ack'];
+
+/** Every session-only route the bullet must describe as carrying no box token. */
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ...UPDATE_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -265,7 +358,12 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(COORD_LANES).toContain('GET /api/runs');
     expect(ALL_LANES, 'the server.ts lane is missing').toContain('POST /api/notify');
     expect(ALL_LANES, 'the new server.ts lane is missing').toContain('GET /api/pools/epoch');
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 2);
+    expect(ALL_LANES, 'the update projection read is missing — update/routes.ts is not being read')
+      .toContain('GET /api/updates/intent/:nodeId');
+    // THREE since update-management W2: `server.ts`'s pair plus the update
+    // projection read, the one handler in `update/routes.ts` that consults the
+    // box token (design 2026-09-20 §12, decision 15).
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -564,6 +662,136 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and every door it lists as ungated really is one.
     for (const door of UNGATED_DOORS) {
       expect(bullet, `the bullet no longer names the ungated ${door}`).toContain(door);
+    }
+  });
+});
+
+// ── the update surface (update-management W2, design 2026-09-20 §12) ─────────
+//
+// `server/src/update/routes.ts` is the THIRD file that registers routes and the
+// first whose routes neither harvest above can see. So the census is run over it
+// by construction: which of its handlers consult the box token (exactly one, the
+// projection read), which do not (the rest, and `UPDATE_DOORS` must name exactly
+// them), whether a box-token call planted there would be SEEN (the control that
+// makes the first two assertions mean something), and whether CLAUDE.md's bullet
+// names every one of them.
+describe('the update surface: one dual-credential read, every other route session-only (decision 15)', () => {
+  const REGISTERED = registrationsIn(UPDATE_SRC).map((r) => r.key);
+
+  it('update/routes.ts registers what the checks below reason over', () => {
+    // Anti-vacuity: every loop below is over REGISTERED or a filter of it.
+    expect(REGISTERED.length, 'the update scan collapsed — this describe is over nothing')
+      .toBeGreaterThan(UPDATE_DOORS.length);
+    expect(new Set(REGISTERED).size, 'a route is registered twice').toBe(REGISTERED.length);
+  });
+
+  it('exactly one handler there consults the box token — the projection read (§18 "no write route takes the box token")', () => {
+    expect(UPDATE_LANES).toEqual(['GET /api/updates/intent/:nodeId']);
+  });
+
+  it('UPDATE_DOORS is exactly the rest of what the file registers, in both directions', () => {
+    const rest = REGISTERED.filter((k) => !UPDATE_LANES.includes(k)).map((k) => k.slice(k.indexOf(' ') + 1));
+    expect([...rest].sort(),
+      'update/routes.ts and UPDATE_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...UPDATE_DOORS].sort());
+  });
+
+  it('a box-token call planted in update/routes.ts is SEEN — the lane source is live, not decorative', () => {
+    // The control for the two cases above: they would pass just as green over a
+    // scanner that could not see this file at all.
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = UPDATE_SRC.replace(anchor, `${anchor}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toContain('POST /api/updates/ack');
+    }
+    expect(lanesIn(UPDATE_SRC)).not.toContain('POST /api/updates/ack');
+  });
+
+  it('a route registered with a non-get/post verb, or through app.route(), is SEEN by REGISTERED (F14)', () => {
+    // The control for "UPDATE_DOORS is exactly the rest": before this fix,
+    // `REGISTERED`'s extraction matched only `get|post`, so a route added with
+    // any other verb — or via `app.route({...})` — never appeared in
+    // `REGISTERED` at all, and "the rest" stayed equal to `UPDATE_DOORS`
+    // whether or not the new door was named. Measured (scratch copy): both
+    // plants below were invisible pre-fix, so this describe's assertions
+    // stayed green over an uncensused door.
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    const plantedDelete = UPDATE_SRC.replace(anchor,
+      `app.delete('/api/updates/x', async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedDelete).map((r) => r.key), 'a planted app.delete went unseen')
+      .toContain('DELETE /api/updates/x');
+
+    const plantedRoute = UPDATE_SRC.replace(anchor,
+      `app.route({ method: 'PUT', url: '/api/updates/y', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedRoute).map((r) => r.key), 'a planted app.route({ method, url }) went unseen')
+      .toContain('PUT /api/updates/y');
+
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('DELETE /api/updates/x');
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('PUT /api/updates/y');
+  });
+
+  // Fix round 1, dispatch E (F14, m1): three residual shapes review 134
+  // measured staying 20/20 green — a double-quoted path, a backtick-quoted
+  // path, and `app.route( {` with whitespace before the brace.
+  it('a route registered with a double-quoted or backtick-quoted path, or app.route( { with whitespace, is SEEN (F14, m1)', () => {
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    const plantedDoubleQuoted = UPDATE_SRC.replace(anchor,
+      `app.put("/api/updates/z", async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedDoubleQuoted).map((r) => r.key), 'a planted double-quoted app.put went unseen')
+      .toContain('PUT /api/updates/z');
+
+    const plantedBacktick = UPDATE_SRC.replace(anchor,
+      'app.put(`/api/updates/t`, async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ' + anchor);
+    expect(registrationsIn(plantedBacktick).map((r) => r.key), 'a planted backtick-quoted app.put went unseen')
+      .toContain('PUT /api/updates/t');
+
+    const plantedSpacedRoute = UPDATE_SRC.replace(anchor,
+      `app.route( { method: 'PUT', url: '/api/updates/w', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedSpacedRoute).map((r) => r.key), 'a planted app.route( { …with whitespace went unseen')
+      .toContain('PUT /api/updates/w');
+
+    for (const key of ['PUT /api/updates/z', 'PUT /api/updates/t', 'PUT /api/updates/w']) {
+      expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain(key);
+    }
+  });
+
+  it('a formatter-wrapped verb call — the quote on its own line, indented — is SEEN by registrationsIn for EVERY verb (fix round 2, R14)', () => {
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    // CONTROL (R14's own shape): before this fix, `verbRe` required the
+    // quote immediately after `(`, so this Prettier-style reflow — legal
+    // JavaScript, and exactly what a formatter produces on a long argument
+    // list — matched nothing at all.
+    const plantedWrapped = UPDATE_SRC.replace(anchor,
+      `app.put(\n    '/api/updates/x',\n    async (req, reply) => { reply.code(200).send({ ok: true }); },\n  );\n\n  ${anchor}`);
+    expect(registrationsIn(plantedWrapped).map((r) => r.key), 'a formatter-wrapped app.put went unseen')
+      .toContain('PUT /api/updates/x');
+
+    // Every verb, not only put — `\s*` sits in the shared verb alternation, not a per-verb branch.
+    for (const verb of ['get', 'post', 'delete', 'patch']) {
+      const plantedVerb = UPDATE_SRC.replace(anchor,
+        `app.${verb}(\n    '/api/updates/reflow-${verb}',\n    async (req, reply) => { reply.code(200).send({ ok: true }); },\n  );\n\n  ${anchor}`);
+      expect(registrationsIn(plantedVerb).map((r) => r.key), `a formatter-wrapped app.${verb} went unseen`)
+        .toContain(`${verb.toUpperCase()} /api/updates/reflow-${verb}`);
+    }
+
+    expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('PUT /api/updates/x');
+  });
+
+  it("CLAUDE.md's box-token bullet names every update route by its backticked verb and path", () => {
+    // Anchored on the backticked VERB + path, because a bare `/api/updates` is a
+    // substring of every sibling and would be satisfied by any of them.
+    const bullet = passage('CLAUDE.md, the box-token bullet', CLAUDE_MD,
+      '- **Box token gates every coordination WRITE**', '\n- **').replace(/\s+/g, ' ');
+    for (const key of REGISTERED) {
+      expect(bullet, `the bullet does not name \`${key}\` — the update surface grew and the sentence did not`)
+        .toContain(`\`${key}\``);
     }
   });
 });

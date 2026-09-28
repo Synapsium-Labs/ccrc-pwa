@@ -20,8 +20,9 @@ get wrong when editing `src/whitelist.ts`.
 - **Boot-refusal asymmetry:** refuse to boot for OVER-permission (forbidden/undeclared key, over-granting or
   empty prefix, ungrantable verb, gated verb missing its flag). NEVER refuse for UNDER-permission (a declared
   command missing an entry → loud non-fatal; one route answers 502).
-- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv
-  is built from model output with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv is
+  built from model output with no human in the path), `ws-reclaim` requires `--expect` (the child-reclaim token; the
+  server composes it for a child with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail
@@ -42,7 +43,11 @@ get wrong when editing `src/whitelist.ts`.
 - **Write whitelist:** the agent may write files only under `$HOME/.cc-clips/`. Every other fleet mutation crosses
   the WS as a whitelisted `ccd`/`tmux` verb, never a raw file write. Read whitelist is canonical-prefix,
   realpath-resolved (closes symlink escapes): `~/.cc-sessions/`, `~/.cc-limits/`, `~/.cc-clips/`, `~/.claude*`,
-  and the fleet projects root.
+  and the fleet projects root — plus ONE non-prefix grant: exactly the eight `~/.ccrc` node files
+  (`NODE_FILES`, `shared/agent-protocol.ts`: `build.json`, `installed`, `ccrc-caps`, `floor`, `previous`,
+  `node-id`, `update.json`, `update-intent`), by canonical-path EQUALITY, a live symlink inside `~/.ccrc`
+  carrying one of those names is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the server's update inventory refuses to read as that file (design 2026-09-20 §8). Never `isUnder(~/.ccrc)`: that directory holds `agent.env`,
+  `auth.scrypt`, `coord.db` and `deploy.env`, and `test/whitelist.test.ts` reds the moment one becomes readable.
 - `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's

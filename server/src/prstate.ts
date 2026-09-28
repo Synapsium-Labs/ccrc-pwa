@@ -9,6 +9,11 @@ export interface CcdPrRow {
   baseRefName?: string; isCrossRepository?: boolean; mergedAt?: string | null;
   mergeCommit?: { oid?: string } | null; url?: string; title?: string;
   isDraft?: boolean; statusCheckRollup?: unknown; ours?: boolean;
+  /** gh's own ISO-8601 creation time, passed through unchanged. Absent from
+   *  every row an older ccd emits (it never asked for the field), which the
+   *  one reader, `childSpent`'s incarnation placement, reads as UNDATED —
+   *  never as old and never as new (child-reclamation spec §5.3). */
+  createdAt?: string;
 }
 
 export interface CcdPrLine {
