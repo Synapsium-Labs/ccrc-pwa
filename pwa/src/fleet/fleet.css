@@ -50,9 +50,9 @@
    is the one case this has not been measured against in a real browser.
    (Centralised update management, Task 6, D-3303, later added a FIFTH item
    — the settings door — to this group; the four-item, 38px figure above is
-   unchanged by that addition, and the group now WRAPS at 390px rather than
-   holding everything on the one line this note assumes — see the override
-   comment near `.settings-door` below.) */
+   unchanged by that addition; with `20 sessions` the group WRAPS below a 460px
+   viewport (369px with no count) rather than holding everything on one line, as
+   this note assumes — see the override comment near `.settings-door` below.) */
 .pool-epoch-lag {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -3015,13 +3015,13 @@ button.proj-card-pool::before {
    the 44px floor. Without this rule the head would push the fleet screen past
    the viewport, the defect #116 shipped. With it, a group that does not fit
    breaks onto a second right-aligned line. CORRECTED (R3 + the coordinator's
-   parked note): "where it fits nothing moves" is not true at every width
-   this rule reaches — measured in Chromium, the group does NOT fit on one
-   line at exactly the 390px viewport this note's own math is about (the
-   fleet header grows from 48px to 92px there), nor in the desktop sidebar
-   between roughly 300px and 380px wide, so it wraps in both places; outside
-   those two bands the group does fit and the header stays a single 48px
-   row, which is the one case "nothing moves" still describes correctly.
+   parked note, then W5 review 161): "where it fits nothing moves" is not true
+   at every width this rule reaches. Measured in Chromium: the head fits from
+   a 369px viewport with no session count, from 460px with `20 sessions` (459
+   wraps, 73px; 390px wraps to 92px) and from about 546px with `20 sessions ·
+   3 waiting`, so a phone at or below ~459px wraps whenever the fleet has a
+   session. The desktop sidebar's 300-380px range was NOT re-measured. Only
+   above those widths does the header stay one 48px row, "nothing moves".
    The descendant form out-specifies `.fleet-head-right` (0,2,0 against
    0,1,0), so it wins from any position — the cascade trap documented at the
    class chooser. No row gap: every control on the group is already a 44px
