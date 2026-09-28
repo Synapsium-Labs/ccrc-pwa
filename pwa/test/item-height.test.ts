@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FALLBACK_ITEM_HEIGHT, HEIGHT_BUCKETS, MAX_PX_PER_LINE, MAX_ROW_PX,
-  MIN_ROW_PX, NOMINAL_MEASURE, WELL_LINES,
+  MIN_ROW_PX, NOMINAL_MEASURE, TABLE_ROW_LINES, WELL_LINES,
   estimateRow, fitRowModel, nominalLines, openingHeight, rememberModels,
   rememberedHeight, rememberedModels, rowHeights,
   type HeightBucket, type RowModel, type RowSample,
@@ -88,11 +88,19 @@ describe('nominalLines — the predictor the model is a line in', () => {
     expect(nominalLines('x'.repeat(NOMINAL_MEASURE * 3))).toBe(3);
   });
 
-  it('counts a table row as ONE line however wide — the table scrolls sideways', () => {
+  it('does not WRAP a table row however wide — the table scrolls sideways', () => {
     const row = `| ${'c'.repeat(400)} |`;
-    expect(nominalLines(row)).toBe(1);
+    expect(nominalLines(row)).toBe(TABLE_ROW_LINES);
     // and the same text outside a table does not get that exemption
     expect(nominalLines(row.slice(2))).toBeGreaterThan(5);
+  });
+
+  it('counts a table row as TALLER than a line of prose, by what the tokens say', () => {
+    // A cell is --text-sm at --leading-normal with --sp-2 above and below:
+    // (13 * 1.5 + 8 + 8) / (15 * 1.5). Counting it as one line under-measured
+    // a table-heavy session by 15% in a browser.
+    expect(TABLE_ROW_LINES).toBeCloseTo((13 * 1.5 + 8 + 8) / (15 * 1.5), 2);
+    expect(nominalLines('| a | b |\n| c | d |')).toBeCloseTo(2 * TABLE_ROW_LINES, 6);
   });
 
   it('saturates a fenced block, because `pre` caps at --well-max and scrolls', () => {
@@ -157,6 +165,22 @@ describe('fitRowModel — learning the line from measured rows', () => {
     expect(fitRowModel([], { a: 1, b: 1 })).toBeNull();
   });
 
+  it('refits through the ORIGIN rather than clamping a negative intercept', () => {
+    // Rows that bend upward: the free fit wants an intercept BELOW zero, so
+    // the two treatments actually differ and this case can tell them apart.
+    // Clamping `a` to zero while keeping the slope computed for a negative one
+    // leaves a line that misses its own data, every row, for ever; the
+    // constrained answer is least squares through the origin, b = Sxy / Sxx.
+    const rows = [{ lines: 1, px: 5 }, { lines: 10, px: 200 }, { lines: 40, px: 900 }];
+    const m = fitRowModel(rows, null);
+    expect(m?.a).toBe(0);
+    expect(m?.b).toBeCloseTo(38005 / 1701, 6);   // 22.34, not the free 23.05
+    // …and on points that DO pass through the origin it is still the line.
+    const exact = fitRowModel(onLine(0, 20, [1, 5, 20, 60]), null);
+    expect(exact?.b).toBeCloseTo(20, 6);
+    expect(estimateRow(exact, 20, 96)).toBe(400);
+  });
+
   it('never learns that more text makes a row SHORTER', () => {
     const m = fitRowModel(onLine(900, -8, [1, 10, 40, 80]), null);
     expect(m?.b).toBe(0);
@@ -180,6 +204,14 @@ describe('estimateRow — what one row is believed to cost', () => {
 
   it('hands an unlearned bucket the caller GUESS, and never stores it', () => {
     expect(estimateRow(null, 60, 137)).toBe(137);
+  });
+
+  it('does NOT trim a long turn — the ceiling is for nonsense, not for tall rows', () => {
+    // Measured in a browser: one assistant turn of 396 nominal lines really
+    // rendered 7728px. With `a=10.6, b=18.4` the model asks for 7291px, a 6%
+    // miss; a 4000px ceiling turned that into a 34% one and was the whole of
+    // the residual error on that session.
+    expect(estimateRow({ a: 10.58, b: 18.38 }, 396, 96)).toBeGreaterThan(7000);
   });
 
   it('keeps every estimate inside the row band', () => {

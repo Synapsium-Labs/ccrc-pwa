@@ -294,6 +294,23 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
       render(<ChatList id="s" events={[]} pending={[]} />);
       expect(restored()).toBeUndefined();
     });
+
+    it('seeds NOTHING on a browser that has measured nothing yet', () => {
+      // Every row would carry the same fallback, so the seed would say only
+      // "n rows of 96px" — and saying it before the first render replaces the
+      // total virtuoso would have reached by measuring what it shows. Measured
+      // in a browser: seeding a cold profile opened at -53% against the truth,
+      // not seeding at -8%.
+      render(<ChatList id="s" events={events(4)} pending={[]} />);
+      expect(restored()).toBeUndefined();
+      expect(seen.props?.defaultItemHeight).toBe(96); // …and the guess still rides
+    });
+
+    it('DOES seed once any one kind on screen has been measured', () => {
+      localStorage.setItem(KINDS_KEY, JSON.stringify({ user: { a: 60, b: 0 } }));
+      render(<ChatList id="s" events={events(4)} pending={[]} />);
+      expect(restored()?.ranges.length).toBeGreaterThan(0);
+    });
   });
 
   // Two properties for two failures. The pixel budget covers ordinary

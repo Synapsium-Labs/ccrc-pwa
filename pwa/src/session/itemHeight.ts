@@ -36,14 +36,21 @@ export const FALLBACK_ITEM_HEIGHT = 96;
 export const MIN_ITEM_HEIGHT = 40;
 export const MAX_ITEM_HEIGHT = 600;
 
-/** The band a per-row ESTIMATE lands in. Far wider than the band above, and
- *  deliberately: that one was calibrated for the mean of a whole mixture, where
- *  600px really would have been absurd. A single assistant turn measured 1413px
- *  in a browser, so as a per-ROW ceiling 600 was not a guard, it was a lie that
- *  capped every long turn at less than half its height. The floor is what a
- *  divider costs (35px, measured) with room to spare. */
+/** The band a per-row ESTIMATE lands in.
+ *
+ *  THE CEILING IS A SANITY BOUND ON A CORRUPTED MODEL, NOT A BELIEF ABOUT
+ *  ROWS, and it is set high for a reason paid for twice. The old band capped a
+ *  row at 600px, which quietly halved every long turn. Raising it to 4000
+ *  looked generous and was measured, in a browser, to be the ENTIRE remaining
+ *  error on one session: a single assistant turn of 396 nominal lines really
+ *  renders 7728px, the model predicted 7291px — a 6% miss — and the ceiling
+ *  threw away 3291px of it, turning a 5% estimate into a 34% one. A ceiling
+ *  that trims a correct prediction is not a guard. What remains here only
+ *  refuses arithmetic nobody could mean.
+ *
+ *  The floor is what a divider costs (35px, measured) with room to spare. */
 export const MIN_ROW_PX = 16;
-export const MAX_ROW_PX = 4000;
+export const MAX_ROW_PX = 50_000;
 
 /** The slope's band: pixels per nominal line. It cannot sensibly exceed a few
  *  text lines' worth; measured values are 0 (a collapsed tool card, whose
@@ -114,8 +121,14 @@ const clampRow = (px: number): number =>
  *   1. A line shorter than the measure is ONE line. Raw character count gets
  *      this catastrophically wrong: a ten-item list is ten lines, not one
  *      sixth of one.
- *   2. A table row is ONE line however wide, because `.md-table-wrap` scrolls
- *      sideways (`overflow-x: auto`) rather than wrapping.
+ *   2. A table row does not WRAP however wide it is, because `.md-table-wrap`
+ *      scrolls sideways (`overflow-x: auto`). It is taller than a line of
+ *      prose, though, and by a ratio the tokens state outright: a cell is set
+ *      in `--text-sm` at `--leading-normal` with `--sp-2` above and below, so
+ *      (13 x 1.5 + 8 + 8) / (15 x 1.5) = 1.58 — `TABLE_ROW_LINES`. Counting it
+ *      as one line under-measured a table-heavy session by 15%, and this ratio
+ *      is what brought four live sessions from 19.7-22.1 px per nominal line
+ *      to 18.9-19.3 — the same rendering, finally described the same way.
  *   3. A fenced block SATURATES, because `.msg-assist pre` caps at
  *      `--well-max` (240px) and scrolls inside itself. `WELL_LINES` is that
  *      cap expressed in this function's own unit: 240px over a ~24px text
@@ -123,6 +136,7 @@ const clampRow = (px: number): number =>
  */
 export const NOMINAL_MEASURE = 60;
 export const WELL_LINES = 10;
+export const TABLE_ROW_LINES = 1.58;
 
 export function nominalLines(text: string): number {
   const body = String(text ?? '');
@@ -142,7 +156,7 @@ export function nominalLines(text: string): number {
       continue;
     }
     if (inFence) { fenced += 1; continue; }
-    if (/^\s*\|/.test(line)) { lines += 1; continue; }
+    if (/^\s*\|/.test(line)) { lines += TABLE_ROW_LINES; continue; }
     lines += Math.max(1, Math.ceil(line.length / NOMINAL_MEASURE));
   }
   // A turn cut off mid-block — a streaming assistant message — still saturates.
@@ -272,10 +286,22 @@ export function fitRowModel(
   const mx = sx / n;
   const my = sy / n;
   const spread = sxx - n * mx * mx;   // n * variance of the predictor
-  const b = n >= MIN_FIT_ROWS && spread >= n * MIN_LINE_VARIANCE
-    ? clampSlope((sxy - n * mx * my) / spread)
-    : clampSlope(prior?.b ?? 0);
-  return { a: clampIntercept(my - b * mx), b };
+  if (!(n >= MIN_FIT_ROWS && spread >= n * MIN_LINE_VARIANCE)) {
+    // Nothing here can see a slope. Keep the one already learned and re-seat
+    // the intercept through what this visit did measure.
+    const b = clampSlope(prior?.b ?? 0);
+    return { a: clampIntercept(my - b * mx), b };
+  }
+  const free = (sxy - n * mx * my) / spread;
+  const at = my - free * mx;
+  // A NEGATIVE INTERCEPT IS REFUSED BY REFITTING, not by clamping. A row
+  // cannot cost less than nothing, but a fit is a pair: clamping `a` to zero
+  // while keeping the slope that was computed FOR a negative one leaves a line
+  // that no longer passes through its own data, and the bias is systematic —
+  // measured in a browser, it put every assistant row ~40px low. The honest
+  // answer under the constraint is the least-squares line THROUGH THE ORIGIN.
+  const b = clampSlope(at >= 0 ? free : (sxx === 0 ? 0 : sxy / sxx));
+  return { a: clampIntercept(at >= 0 ? at : 0), b };
 }
 
 /** What one row is believed to cost. A kind with no model takes the caller's

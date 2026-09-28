@@ -603,7 +603,18 @@ export function ChatList({
     // `initialTopMostItemIndex` independently says to open. Virtuoso routes a
     // restored snapshot through that same prop, so the two must agree or they
     // would fight over the opening position; both say "the newest turn".
-    seeded.current = px.length === 0 ? null : {
+    // A SEED MADE ENTIRELY OF GUESSES IS NOT INFORMATION, and seeding it is
+    // worse than not seeding at all. With nothing learned every row is priced
+    // at the same fallback, so the seed says only "thirty-five rows of 96px" —
+    // and by saying it before the first render it FREEZES that total in place
+    // of the one virtuoso would have reached by measuring the rows it shows.
+    // Measured in a browser on a cold profile: seeding there opened the list
+    // believing 3360px against a true 7201px (-53%), where not seeding opened
+    // at -8%. From the second visit, when the kinds carry real lines, seeding
+    // is what holds the total steady. So: seed when at least one kind on
+    // screen has been measured, and otherwise leave virtuoso to its own probe.
+    const anyLearned = shapes.some((r) => baseline[r.bucket] !== null);
+    seeded.current = px.length === 0 || !anyLearned ? null : {
       ranges: sizeRanges(px),
       scrollTop: px.reduce((a, b) => a + b, 0),
     };
