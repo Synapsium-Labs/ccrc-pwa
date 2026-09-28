@@ -44,7 +44,23 @@ const L = {
   command: () => JSON.stringify({ type: 'user', uuid: 'c2', timestamp: 't', message: { role: 'user', content: '<command-name>/effort</command-name><command-args>ultracode</command-args>' } }),
   stdout: () => JSON.stringify({ type: 'user', uuid: 'c3', timestamp: 't', message: { role: 'user', content: '<local-command-stdout>Set effort level to ultracode</local-command-stdout>' } }),
   system: () => JSON.stringify({ type: 'system', uuid: 's1', timestamp: 't', content: 'Remote Control disconnected' }),
+  /** Claude Code 2.1.280's own API-error rows for the two other ways an account
+   *  leaves a session stuck, field for field as a private rig wrote them
+   *  (mock API, 2026-09-23 and 2026-09-26): a 401, and a 400 on exhausted credit.
+   *  The 529 is the control — transient, and not the account's. */
+  apiError: (error: string, status: number, text: string) => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: 'e1', timestamp: '2026-09-26T10:50:02.000Z',
+    message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text }] },
+    isApiErrorMessage: true, error, apiErrorStatus: status,
+  }),
 };
+const AUTH = () => L.apiError('authentication_failed', 401, 'Invalid API key · Fix external API key');
+/** The row's own clock, as epoch seconds: a `since` above it means the row was
+ *  written by an EARLIER process than the pane's current one. */
+const ROW_AT = Math.floor(Date.parse('2026-09-26T10:50:02.000Z') / 1000);
+const OAUTH = () => L.apiError('authentication_failed', 401, 'Please run /login · API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token.');
+const BILLING = () => L.apiError('billing_error', 400, 'Credit balance is too low');
+const OVERLOADED = () => L.apiError('server_error', 529, 'API Error: Repeated 529 Overloaded errors. The API is at capacity — this is not a problem with your account.');
 const writeTranscript = (lines: string[]): string => {
   const p = h.sh(`_transcript_path ${ID}`);
   fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -137,6 +153,74 @@ describe('_transcript_limit_banner (D-2362)', () => {
   });
 });
 
+// D-3522: the operator's widening. On 2.1.280 every final banner sits four
+// rows above the prompt box, outside the rescue's pane window, so auth loss
+// and exhausted credit were rescued by NOTHING — the old pane alternation
+// names the auth phrases, but only where the banner never renders. The
+// transcript already records the kind as an envelope field; `stuck` mode reads
+// those two kinds beside `rate_limit`. The default mode is unchanged.
+describe('_transcript_limit_banner stuck mode: auth loss written by this process (D-3522)', () => {
+  const stuck = (p: string, since: string | number = ROW_AT): string =>
+    h.sh(`_transcript_limit_banner ${JSON.stringify(p)} stuck ${JSON.stringify(String(since))} >/dev/null; echo $?`);
+  it.each([['an invalid API key', AUTH], ['an expired OAuth login', OAUTH]])(
+    'reads %s as stuck', (_what, row) => {
+      seed(); const p = writeTranscript([L.human(), row()]);
+      expect(stuck(p)).toBe('0');
+    });
+  it('still reads a rate limit as stuck, with or without a since', () => {
+    seed(); const p = writeTranscript([L.banner()]);
+    expect(stuck(p)).toBe('0');
+    expect(stuck(p, '')).toBe('0');
+  });
+  it('the default mode is unchanged: a 401 is not a limit banner, even handed a since', () => {
+    seed(); const p = writeTranscript([AUTH()]);
+    expect(detect(p).rc).toBe('1');
+    expect(h.sh(`_transcript_limit_banner ${JSON.stringify(p)} '' ${ROW_AT} >/dev/null; echo $?`)).toBe('1');
+  });
+  it('a 401 written by an EARLIER process is not stuck — a swap carries the transcript, not the fault', () => {
+    // The loop this closes: Claude Code will not re-drive a turn whose error is
+    // over six hours old, so after a swap the old account's 401 stays the newest
+    // real row and would swap a healthy session every SWAP_COOLDOWN.
+    seed(); const p = writeTranscript([AUTH()]);
+    expect(stuck(p, ROW_AT + 1)).toBe('1');
+    expect(stuck(p, ROW_AT)).toBe('0');
+  });
+  it('no since, or one that is not digits, and a 401 does not count — fail closed', () => {
+    seed(); const p = writeTranscript([AUTH()]);
+    expect(stuck(p, '')).toBe('1');
+    expect(stuck(p, 'yesterday')).toBe('1');
+  });
+  it('an unreadable row timestamp does not count', () => {
+    seed(); const p = writeTranscript([JSON.stringify({ ...JSON.parse(AUTH()), timestamp: 'soon' })]);
+    expect(stuck(p)).toBe('1');
+  });
+  it('a 403 is not stuck — 2.1.280 files a model-permission refusal under the same error, and a swap cannot grant a model', () => {
+    seed(); expect(stuck(writeTranscript([L.apiError('authentication_failed', 403, 'Please run /login · API Error: 403 permission denied')]))).toBe('1');
+  });
+  it('exhausted credit is not stuck — nothing marks a billing-dead account, so a rescue would bounce home', () => {
+    seed(); expect(stuck(writeTranscript([BILLING()]))).toBe('1');
+  });
+  it("a 529 is not stuck, in either mode — transient, and not the account's", () => {
+    seed(); const p = writeTranscript([OVERLOADED()]);
+    expect(stuck(p)).toBe('1');
+    expect(detect(p).rc).toBe('1');
+  });
+  it('the text on an ordinary assistant row is not stuck — the envelope decides', () => {
+    seed(); expect(stuck(writeTranscript([L.assistant('Invalid API key · Fix external API key')]))).toBe('1');
+  });
+  it('a row carrying the error field without the API-error marker is not stuck', () => {
+    const unmarked = JSON.stringify({ ...JSON.parse(AUTH()), isApiErrorMessage: undefined });
+    seed(); expect(stuck(writeTranscript([unmarked]))).toBe('1');
+  });
+  it('a USER row carrying every field is not stuck — only the assistant row Claude Code appends', () => {
+    const user = JSON.stringify({ ...JSON.parse(AUTH()), type: 'user' });
+    seed(); expect(stuck(writeTranscript([user]))).toBe('1');
+  });
+  it("a landing's META resume prompt after the row means the session moved on", () => {
+    seed(); expect(stuck(writeTranscript([AUTH(), L.metaPrompt()]))).toBe('1');
+  });
+});
+
 describe('_transcript_stalled_pair pairs -f with -r (D-2370, closing D-2347)', () => {
   it('a directory at the path: rc 2', () => {
     seed(); const d = path.join(h.home, 'dir.jsonl'); fs.mkdirSync(d);
@@ -157,7 +241,8 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
    *  verdict, never the fixture roster's telemetry. */
   const STUBS = (pane: string, target = 'claude2'): string => `
     tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
-      capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
+      capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;;
+      display-message) echo "\${TMUX_CREATED:-1}" ;; esac; return 0; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
     _swap_target() { echo ${target}; }; _avail() { return 0; };
     _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
@@ -167,6 +252,8 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
   };
   const stranded = (): boolean => fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`));
+  const authdeadPath = (): string => path.join(h.home, '.cc-sessions', 'claude-authdead');
+  const authdead = (): string | null => (fs.existsSync(authdeadPath()) ? fs.readFileSync(authdeadPath(), 'utf8') : null);
 
   it('a banner newest in the transcript rescues a session whose pane shows only a prompt; the line says via=transcript', () => {
     seed(); writeTranscript([L.banner()]);
@@ -241,6 +328,77 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     h.sh(`_reg_set ${ID} stalepress $(date +%s)`);
     h.sh(`${STUBS(PROMPT)} _tick_strand_undecidable ${ID} wrapper claude`);
     expect(stranded()).toBe(false);
+  });
+  it('auth loss newest in the transcript rescues a prompt pane, via=transcript (D-3522)', () => {
+    seed(); writeTranscript([L.human(), AUTH()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+  });
+  it("the old account's 401, carried into a pane created after it, rescues nothing (D-3522)", () => {
+    seed(); writeTranscript([L.human(), AUTH()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`, { TMUX_CREATED: String(ROW_AT + 60) });
+    expect(dispatches()).toEqual([]);
+    expect(authdead()).toBeNull();
+  });
+  it('a rescue off a 401 marks the account auth-dead, so nothing sends a session back to it (D-3522)', () => {
+    seed(); writeTranscript([L.human(), AUTH()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(authdead()).toMatch(/^\d+ rescue-401$/);
+    expect(h.sh('_authdead claude && echo dead || echo live')).toBe('dead');
+  });
+  it('the rescue never writes over a standing marker (D-3522)', () => {
+    seed(); writeTranscript([L.human(), AUTH()]);
+    fs.writeFileSync(authdeadPath(), '1757203200 auth-401');
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toHaveLength(1);
+    expect(authdead()).toBe('1757203200 auth-401');
+  });
+  it('a rate-limit rescue marks nothing — a limit is not a dead credential (D-3522)', () => {
+    seed(); writeTranscript([L.banner()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toHaveLength(1);
+    expect(authdead()).toBeNull();
+  });
+  it('a pane-rung rescue marks nothing — only the transcript\'s 401 is evidence of a dead credential (D-3522)', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS(BANNER_PANE)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toHaveLength(1);
+    expect(authdead()).toBeNull();
+  });
+  it('the process bound is tmux session_created, read by one helper both callers share (source pin, D-3522)', () => {
+    // `session_activity` would move on every redraw and silently discard every
+    // 401 as "earlier"; the harness's tmux stub answers any display-message, so
+    // only the source can hold the format.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src).toContain(`tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null`);
+    expect(src).toContain('born=$(_pane_born "$id")');
+    expect(src).toContain('stuck "$(_pane_born "$id")"');
+    expect(src.match(/#\{session_created\}/g)).toHaveLength(1);
+  });
+  it('control: exhausted credit rescues nothing (D-3522)', () => {
+    seed(); writeTranscript([L.human(), BILLING()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+  });
+  it('auth loss with no destination strands the row, and the strand half reads it too (D-3522)', () => {
+    seed(); writeTranscript([AUTH()]);
+    h.sh(`${STUBS(PROMPT, '')} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+    expect(stranded()).toBe(true);
+    h.sh(`${STUBS(PROMPT)} _strand_clear ${ID}; _tick_strand_undecidable ${ID} wrapper claude`);
+    expect(stranded()).toBe(true);
+  });
+  it('control: a draft still stands the arm down for a 401 (D-3522)', () => {
+    seed(); writeTranscript([AUTH()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`, { BOX_DRAFT: 'half a sentence' });
+    expect(dispatches()).toEqual([]);
+  });
+  it('control: a 529 newest in the transcript rescues nothing (D-3522)', () => {
+    seed(); writeTranscript([OVERLOADED()]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
   });
   it('both call sites go through _session_hard_blocked (source pin)', () => {
     const src = fs.readFileSync(CCD, 'utf8');
