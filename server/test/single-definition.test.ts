@@ -1398,6 +1398,9 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       '4) printf \'build:     unreadable (%s is not a regular file)\\n\' "$BOX_STAMP_FILE" ;;',
       '5) printf \'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\\n\' "$BOX_STAMP_FILE" ;;',
       '*) printf \'build:     unreadable (%s does not parse as a build stamp)\\n\' "$BOX_STAMP_FILE" ;;',
+      // W6 Task 2: `_ver_keep_state` copies the stamp into the version
+      // directory it describes — a reader, through one local.
+      'local from_stamp="$BOX_STAMP_FILE"',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
@@ -1502,6 +1505,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // unsigned/verified marker, so `cmd_version` reads both lines in one
       // redirect rather than the record's first line alone.
       '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
+      // W6 Task 2: `_ver_keep_state` copies the record into the version
+      // directory it describes, as that version's completeness mark.
+      'local from_record="$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
       // cmd_update (review fix round 1 I4): whether the OLD (running) build

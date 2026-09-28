@@ -40,13 +40,14 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
   statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
-  symlinkSync,
+  symlinkSync, readlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
+import { itLinux, itDarwin, platformContrast, python3ProgramArm } from './platformFixtures.js';
+import { installVersionedTree } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
@@ -64,6 +65,10 @@ const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
 const REAL_NODE = realPath('node');
 const REAL_MV = realPath('mv');
+/** The real python3, resolved once and without a throw (W6 Task 2): only the
+ *  two macOS programs of `DARWIN_PYTHON3_PROGRAMS` reach it, through the
+ *  `python3` stub's `-c` arm. */
+const REAL_PYTHON3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
 // D-3277 (fix round 1, Task 9): the real `flock`, so a shim placed ahead of
 // it on PATH can rewrite a file and then `exec` into the genuine binary —
 // the locking semantics the shim intercepts stay real, only the write in
@@ -472,6 +477,10 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '  chmod 755 "$bin/graphify"',
     '  exit 0',
     'fi',
+    // W6 Task 2: the staged spine's Darwin flip (`os.replace`) and its
+    // preflight probe (`import os`) go to the real interpreter; every other
+    // `-c` is refused below, like any other unexpected argv.
+    ...python3ProgramArm(REAL_PYTHON3),
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
   // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
@@ -1208,6 +1217,113 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       server.close();
     }
   }, 20_000);
+
+  it('happy path on a VERSIONED box (W6 Task 2): v2.0.0 is placed in ~/ccrc-versions/v2.0.0, ~/ccrc flips to it, and v1.0.0\'s directory is byte-unchanged', () => {
+    // The staged spine is the real one (FULL flavour), so this is the
+    // install path `ccrc update` really takes on a box that is already on the
+    // W6 layout: the staged tree names itself from its shipped build.json
+    // (`_inst_version_name` rule 3), is placed beside the running version,
+    // and the link is renamed only after its deps are in place.
+    const home = freshUpdateBox('ccrc-update-versioned-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    rmSync(join(home, 'ccrc'), { recursive: true, force: true });
+    installVersionedTree(home, 'v1.0.0', { stamp: { sha: '1'.repeat(40), version: 'v1.0.0' } });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const before = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(lstatSync(join(home, 'ccrc')).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
+      'the update wrote into the version it was replacing').toEqual(before);
+    expect(r.stdout).toMatch(/^install: tree: placed v2\.0\.0 at \$HOME\/ccrc-versions\/v2\.0\.0$/m);
+    expect(r.stdout).toMatch(/^install: tree: \$HOME\/ccrc -> \$HOME\/ccrc-versions\/v2\.0\.0 \(was \$HOME\/ccrc-versions\/v1\.0\.0\) — one rename$/m);
+    expect(readFileSync(join(home, 'npm-cwd'), 'utf8').trim().split('\n')[0])
+      .toBe(join(home, 'ccrc-versions', 'v2.0.0', 'server'));
+    // The new version keeps the stamp and record this update left on the box.
+    expect(readFileSync(join(home, 'ccrc-versions', 'v2.0.0', '.ccrc-installed'), 'utf8'))
+      .toBe(readFileSync(join(home, '.ccrc', 'installed'), 'utf8'));
+    expect(readFileSync(join(home, 'ccrc-versions', 'v2.0.0', '.ccrc-stamp.json'), 'utf8'))
+      .toBe(readFileSync(join(home, '.ccrc', 'build.json'), 'utf8'));
+  });
+
+  it('a VERSIONED box whose staged npm ci fails replaced nothing: exit 1 BEFORE the gate, no restore, and v1.0.0 — the running version — byte-unchanged (D-3457)', () => {
+    // The commonest failure — the registry is down — kills the W6 spine
+    // inside `_inst_tree` (marker `_inst_tree`), after the rsync into
+    // ~/ccrc-versions/v2.0.0 and BEFORE the flip. Wave 4 alone reads that
+    // marker as "the tree WAS replaced", gates a unit still on v1.0.0, fails,
+    // and its arm-2 child re-installs v1.0.0 IN PLACE: rsync --delete and
+    // npm ci inside the running version.
+    const home = freshUpdateBox('ccrc-update-versioned-npmfail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    rmSync(join(home, 'ccrc'), { recursive: true, force: true });
+    installVersionedTree(home, 'v1.0.0', { stamp: { sha: '1'.repeat(40), version: 'v1.0.0' } });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const before = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
+    // Ahead of the recorder npm that `runUpdate` re-plants on every call
+    // (the `a spine that DIED …` case's idiom).
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'npm'),
+      '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, before its flip: nothing was replaced \(\$HOME\/ccrc still points at \$HOME\/ccrc-versions\/v1\.0\.0\); read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
+    expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
+    expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
+    expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);
+    const phases = reportWrites(home).map((w) => w['phase']);
+    expect(phases, 'the report went through the gate').not.toContain('checking');
+    expect(phases, 'the report went through a restore').not.toContain('restoring');
+    expect(lastReport(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_tree', target: 'v2.0.0' });
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
+      'the running version was written into').toEqual(before);
+  });
+
+  it('_upd_tree_untouched (VERSIONED layouts): nothing replaced only for a W6 spine, a new name, and a layout that still reads what it read before', () => {
+    const home = freshUpdateBox('ccrc-update-untouched-');
+    installVersionedTree(home, 'v1.0.0');
+    // Two staged trees: one whose ccrc declares the versions root (a W6
+    // spine) and one whose ccrc does not (a spine older than W6).
+    mkdirSync(join(home, 'stage-w6', 'ccd'), { recursive: true });
+    writeFileSync(join(home, 'stage-w6', 'ccd', 'ccrc'), 'BOX_VERSIONS_ROOT="$HOME/ccrc-versions"\n');
+    mkdirSync(join(home, 'stage-old', 'ccd'), { recursive: true });
+    writeFileSync(join(home, 'stage-old', 'ccd', 'ccrc'), 'BOX_TREE_DIR="$HOME/ccrc"\n');
+    const ask = (h: string, tree: string, version: string, pl: string, pc: string): string =>
+      sourcedCcrc(h, `UPD_TREE='${join(home, tree)}'; UPD_VERSION='${version}'; `
+        + `_upd_tree_untouched '${pl}' '${pc}'; echo "rc=$?"`).stdout.trim();
+    // A W6 spine, a new name, the link where it was: nothing replaced.
+    expect(ask(home, 'stage-w6', 'v2.0.0', 'linked', 'v1.0.0'))
+      .toBe('$HOME/ccrc still points at $HOME/ccrc-versions/v1.0.0\nrc=0');
+    // The same name: the in-place reinstall wrote INTO the running version (M17).
+    expect(ask(home, 'stage-w6', 'v1.0.0', 'linked', 'v1.0.0')).toBe('rc=1');
+    // A spine older than W6 writes THROUGH ~/ccrc (M16).
+    expect(ask(home, 'stage-old', 'v2.0.0', 'linked', 'v1.0.0')).toBe('rc=1');
+    // The link points somewhere else than it did before the spine (M18).
+    expect(ask(home, 'stage-w6', 'v2.0.0', 'linked', 'v0.9.0')).toBe('rc=1');
+    // Was foreign, reads linked now: not the same word.
+    expect(ask(home, 'stage-w6', 'v2.0.0', 'foreign', '')).toBe('rc=1');
+
+    // A FOREIGN ~/ccrc still foreign: `_inst_tree` refused it before a byte.
+    const alien = freshUpdateBox('ccrc-update-untouched-foreign-');
+    mkdirSync(join(alien, 'elsewhere'));
+    symlinkSync(join(alien, 'elsewhere'), join(alien, 'ccrc'));
+    expect(ask(alien, 'stage-w6', 'v2.0.0', 'foreign', ''))
+      .toBe('$HOME/ccrc is still a link whose target is not a version directory under $HOME/ccrc-versions, which the spine refused to place over\nrc=0');
+    expect(ask(alien, 'stage-old', 'v2.0.0', 'foreign', '')).toBe('rc=1');
+
+    // A pre-versioned DIRECTORY is still rsynced in place by `_inst_tree`'s
+    // `directory` arm at this task's commit, so nothing is proven.
+    const dir = freshUpdateBox('ccrc-update-untouched-dir-');
+    mkdirSync(join(dir, 'ccrc', 'server'), { recursive: true });
+    expect(ask(dir, 'stage-w6', 'v2.0.0', 'directory', '')).toBe('rc=1');
+  });
 
   it('a spine that COMPLETED under a failing doctor exits 3, not 1: the record is written, the report prints, and the line says the box IS on the new build (D-3114)', () => {
     // Measured 2026-09-20 on the live server box: record written, box on the
