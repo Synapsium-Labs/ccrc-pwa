@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=959f9399d573e57cb5af49b62be298f2624ef0df3b10cd34590e720917a539d4
+# ccrc:generated 1 sha256=e9de8972234e072c71090b3e5020255992a7b5d3cdf3e20615438af15d9e79db
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -3303,7 +3303,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 #     carries NO re-run clause at all, for any verb (measured across all five with
                                 #     a bogus WHY token set: every verb ends "… inspect … by hand" alone).
                                 #   - the SURVIVING-STATE clause, every token:
-                                #     `ws-rm`/`forget`/`ws-reap` have already
+                                #     `ws-rm`/`forget`/`ws-reap`/`ws-reclaim` have already
                                 #     torn the workspace down, so "$REG/$id.*
                                 #     and $REG/$id.generation still stand" is
                                 #     the true residue; `ws-gc --prune`
@@ -3397,7 +3397,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
   # follows. `$tail` is computed above the `case`, before any token is read, so
   # it is true for every token there will ever be and for this line by
   # construction: `ws-gc --prune` declined before anything irreversible and its
-  # row is untouched; the other three have already torn the workspace down and
+  # row is untouched; the other four have already torn the workspace down and
   # own the registry residue instead. Having no remedy to give is no reason to
   # withhold a fact the caller measured. A SINGLE form is still right here
   # because this line prescribes no re-run — that is the clause the verb
@@ -7727,7 +7727,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # which is the defect that let one sentence stand for two conditions.
     # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
     # acquire sites, one level up; this is it one level down, where the
-    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
     local _rm_why; _rm_why=$(_compact_lock_why_remedy "$id" ws-rm)
     _lc_fail destroy "$id" "$lctx" purge-refused \
@@ -14670,7 +14670,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # which is the defect that let one sentence stand for two conditions.
     # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
     # acquire sites, one level up; this is it one level down, where the
-    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
     local _rt_why; _rt_why=$(_compact_lock_why_remedy "$id" ws-reap)
     _lc_fail reap "$id" "$lctx" purge-refused \
@@ -15255,7 +15255,7 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # two conditions. That is the same argument `cmd_ws_add` and
         # `cmd_start` make at their own acquire sites, one level up; this is
         # it one level down, where the record is DURABLE — and it is the ONE
-        # renderer all four durable callers consult, so this caller's text
+        # renderer all five durable callers consult, so this caller's text
         # cannot drift from theirs. `<id>` is `$project-$slug` here, this
         # caller's own spelling of the row id, and `<verb>` selects both the
         # RE-RUN clause (this sweep never re-runs against one row) and the
@@ -23402,7 +23402,7 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # which is the defect that let one sentence stand for two conditions.
     # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
     # acquire sites, one level up; this is it one level down, where the
-    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # record is DURABLE — and it is the ONE renderer all five durable callers
     # consult, so this caller's text cannot drift from theirs.
     local _fg_why; _fg_why=$(_compact_lock_why_remedy "$id" forget)
     _lc_fail forget "$id" "$lctx" purge-refused \
@@ -24450,7 +24450,8 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
 
 _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free,
   #                              fsmonitor-free, free of optional locks and with untracked files
-  #                              shown whatever the config says; answers cmd's status
+  #                              shown whatever the repository's or the user's config files say;
+  #                              answers cmd's status
   # WHAT THIS DOES — EXACTLY FOUR THINGS. Three it DISABLES (the plan's Task
   # 3: "no hook of the repository runs"): the repository's HOOKS
   # (`core.hooksPath=/dev/null`), its FSMONITOR (`core.fsmonitor=false`) and
@@ -24533,6 +24534,10 @@ _ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index f
 }
 
 _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
+declare -A _WS_HIDDEN_STAND=()   # `_ws_reclaim_hidden_absent`'s memo — directory -> 'skip' or
+                                  # 'unmeasured:<why>' — reset once per `_ws_reclaim_hidden_contained` call
+                                  # (below), so many out-of-cone siblings under one missing ancestor share
+                                  # its one walk instead of repeating it.
 _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktree and assume-unchanged
   #                          paths PRESENT on disk whose content differs from their index blob,
   #                          and _WS_HIDDEN_MODES = each one's index mode, index for index; rc 1
@@ -24552,18 +24557,72 @@ _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktr
   # blob, so a file whose bytes ARE the blob is never an edit (a CRLF blob
   # under `text=auto`, which `--path` would hash as LF). A symbolic link's
   # blob is its target (hash-object would follow it), read with `readlink`.
-  # A path absent from disk (a sparse checkout's out-of-cone entry)
-  # is not an edit; a gitlink or a sparse directory entry is not a file; a
-  # directory or anything else standing at a file's path cannot be compared.
-  # Every git read runs under `_ws_reclaim_contained`, and a read that fails is
-  # UNMEASURED — never "not an edit": the ladder answers unmeasured, the pin
-  # fails.
+  # A path PROVEN absent from disk (a sparse checkout's out-of-cone entry) is
+  # not an edit — proven by `_ws_reclaim_hidden_absent` (below), never by a
+  # bare `-e`/`-L` test, because that answers false on EACCES exactly as on
+  # ENOENT: a directory this process cannot search would read as "no edit"
+  # for everything under it. A gitlink or a sparse directory entry is not a
+  # file; a directory or anything else standing at a file's path cannot be
+  # compared. Every git read runs under `_ws_reclaim_contained`, and a read
+  # that fails, or an absence that cannot be proven, is UNMEASURED — never
+  # "not an edit": the ladder answers unmeasured, the pin fails.
   _ws_reclaim_contained _ws_reclaim_hidden_contained "$@"
+}
+
+_ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, proven or safely inferred; 1
+  #                                  "unmeasured" (_WS_HIDDEN_WHY). Called only once the caller has already
+  #                                  proven `[[ ! -e "$f" && ! -L "$f" ]]` — a sparse checkout's out-of-cone
+  #                                  entries are most of its index (measured: 8.5ms per
+  #                                  `_ws_reclaim_absent`-shaped stat), so this walks up from f to the
+  #                                  nearest ancestor that STANDS (`-e || -L`), memoising every level the
+  #                                  walk visits in `_WS_HIDDEN_STAND` (reset once per
+  #                                  `_ws_reclaim_hidden_contained` call) so many out-of-cone siblings under
+  #                                  one missing directory share its one walk. This is
+  #                                  `_ws_reclaim_absent`'s own ancestor walk, with one more verdict that
+  #                                  function does not carry: an ancestor that stands but is not a directory
+  #                                  (a file, or a link, dangling or not) is SKIP here — nothing can stand
+  #                                  under it, and git's removal never follows a link — where
+  #                                  `_ws_reclaim_absent` answers unmeasured for the same shape (a
+  #                                  non-directory parent fails its `-d` test). Never called on the leaf
+  #                                  `_ws_reclaim_absent` proves absent for its OTHER callers, and that
+  #                                  function's own answers for them are unchanged.
+  local f="$1" up="$1" parent verdict err c
+  local chain=()
+  while :; do
+    if [[ -v _WS_HIDDEN_STAND["$up"] ]]; then verdict="${_WS_HIDDEN_STAND[$up]}"; break; fi
+    chain+=("$up")
+    parent=$(dirname -- "$up")
+    if [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; then
+      up="$parent"; continue
+    fi
+    if [[ -L "$parent" ]]; then
+      verdict='skip'   # a link, dangling or not: git's removal never follows it, so nothing git would touch can stand under it
+    elif [[ ! -d "$parent" ]]; then
+      verdict='skip'   # $parent stands but is not a directory (nor a link): nothing can stand under it
+    elif [[ -x "$parent" ]]; then
+      err=$(LC_ALL=C stat -- "$up" 2>&1 >/dev/null)
+      if [[ $? -eq 0 ]]; then
+        verdict="unmeasured:$up stands although it was proven absent a moment before — refusing to guess what changed"
+      elif [[ "$err" == *"No such file or directory"* ]]; then
+        verdict='skip'
+      else
+        verdict="unmeasured:$up could not be looked at: ${err:-stat failed and said nothing}"
+      fi
+    else
+      verdict="unmeasured:$parent cannot be searched, so whether $up exists was never asked"
+    fi
+    break
+  done
+  for c in "${chain[@]}"; do _WS_HIDDEN_STAND["$c"]="$verdict"; done
+  case "$verdict" in
+    skip) return 0 ;;
+    *) _WS_HIDDEN_WHY="whether the hidden path $f holds an edit is unmeasured: ${verdict#unmeasured:}"; return 1 ;;
+  esac
 }
 
 _ws_reclaim_hidden_contained() {   # `_ws_reclaim_hidden`'s body, run under `_ws_reclaim_contained` — call that
   local dir="$1" lsf entry tag meta mode rest oid stage p f disk raw islink wantlink
-  _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
+  _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''; _WS_HIDDEN_STAND=()
   lsf=$(_plat_mktemp) || { _WS_HIDDEN_WHY='could not make a scratch file'; return 1; }
   git -C "$dir" ls-files -v -s -z >"$lsf" 2>/dev/null \
     || { rm -f "$lsf"; _WS_HIDDEN_WHY="could not read which paths of $dir are skip-worktree or assume-unchanged"; return 1; }
@@ -24579,9 +24638,12 @@ _ws_reclaim_hidden_contained() {   # `_ws_reclaim_hidden`'s body, run under `_ws
     [[ "$stage" == 0 && -n "$p" ]] || continue
     case "$mode" in 100644|100755|120000) : ;; *) continue ;; esac
     f="$dir/$p"
-    [[ -e "$f" || -L "$f" ]] || continue
+    if [[ ! -e "$f" && ! -L "$f" ]]; then
+      _ws_reclaim_hidden_absent "$f" || { rm -f "$lsf"; return 1; }
+      continue
+    fi
     if [[ -L "$f" ]]; then
-      disk=$(readlink "$f") && disk=$(printf '%s' "$disk" | git hash-object --stdin 2>/dev/null) \
+      disk=$(readlink "$f") && disk=$(printf '%s' "$disk" | git -C "$dir" hash-object --stdin 2>/dev/null) \
         || { rm -f "$lsf"; _WS_HIDDEN_WHY="could not read the hidden link $p at $dir, so whether it holds an edit is unmeasured"; return 1; }
     elif [[ -f "$f" ]]; then
       disk=$(git -C "$dir" hash-object --path="$p" -- "$p" 2>/dev/null) \
@@ -24627,9 +24689,14 @@ _ws_reclaim_landed() {   # dir rev [path oid]... -> 0 when rev's tree holds each
 }
 
 _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP commit ('' when nothing
-  #                     was uncommitted); 1 with RECLAIM_WIP_WHY. THE ONLY COMMIT ccd WRITES, and its
-  #                     one call site is `_ws_reclaim_pin` — which is reason enough for it to be one
-  #                     function (spec §5.5, pin phase step 2).
+  #                     was uncommitted); 1 with RECLAIM_WIP_WHY. ONE of the commits the reclaim writes,
+  #                     not the only one: every commit a reclaim writes goes through
+  #                     `_ws_reclaim_commit_tree` (below), the one writer and the one identity — this WIP
+  #                     commit, and `_ws_reclaim_keep_reflogs`' reflog-keep chain, which also carries what
+  #                     the child's own git directory names and writes no separate commit of its own for
+  #                     it. Its only caller is the pin's body, `_ws_reclaim_pin_contained`: once per nested
+  #                     same-repository checkout, then once for the child's tree (spec §5.5, pin phase
+  #                     step 2).
   # THE COMMIT MOVES NO REF AND NO HEAD — a departure from spec §5.5 step 2's
   # "one WIP commit on the child's own branch", named `wip-moves-no-ref`. It
   # is built with `git commit-tree` from the scratch index below and pinned by
@@ -26330,8 +26397,9 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # optional lock. Those three change what git RUNS and WRITES, not what a read
 # answers. The fourth thing the containment does changes one: it pins
 # `status.showUntrackedFiles=normal`, so under a `no` config the reclaim
-# audit's `dirty` and `children` list the untracked files that the plain
-# audit's identical lines, uncontained, do not. The plain audit is not
+# audit's `dirty` lists, and `children`'s own per-child `dirty` counts, the
+# untracked files that the plain audit's identical lines, uncontained, do
+# not. The plain audit is not
 # contained: it is ws-reap's ceremony, unchanged by this wave. A
 # gitattributes filter driver still runs (`_ws_reclaim_contained` says why).
 #

@@ -1022,6 +1022,26 @@ describe('a hidden-flag edit is found by CONTENT, in every tree the pin commits 
     expect(h.git(c.main, 'show', `${p.wip}:lnk`), 'the re-pointed link was dropped').toBe('f2.txt');
   }, 60_000);
 
+  it('a flagged link is hashed inside the CHILD’s own repository, never ccd’s cwd — a sha1 child reclaimed from a cwd inside a sha256 repository reports no hidden edit for an unchanged flagged SECRET-SHAPED link (review 171 F-C)', () => {
+    // The mismatch is fail-safe on the WIP tree itself (the raw bytes staged
+    // at `_ws_wip_commit`'s own `hash-object -w --stdin`, already `-C "$dir"`,
+    // land byte-identical to HEAD's, so an unchanged link never grows a
+    // commit either way) — it is only OBSERVABLE where a false "differs"
+    // reaches the secret classifier before that identity check: an
+    // unchanged secret-shaped link is recorded as a dropped secret when
+    // nothing was ever dropped.
+    const c = makeChild(h);
+    fs.symlinkSync('f1.txt', path.join(c.wt, '.env'));
+    h.git(c.wt, 'add', '.env'); h.git(c.wt, 'commit', '-m', 'link');
+    h.git(c.wt, 'update-index', '--skip-worktree', '.env');
+    const sha256Repo = path.join(h.home, 'sha256-cwd');
+    execFileSync('git', ['init', '-q', '--object-format=sha256', sha256Repo]);
+    const p = pinOf(c, { pre: `cd "${sha256Repo}";` });
+    expect(p.rc, p.why).toBe('0');
+    expect(p.wip, 'an unchanged link never grows a commit — the raw-bytes stage is already -C "$dir"').toBe('');
+    expect(p.secrets, 'an unchanged link must not be reported dropped, whatever object format ccd’s own cwd happens to use').toEqual([]);
+  }, 60_000);
+
   it.each([
     ['alone', false],
     ['beside another edit', true],

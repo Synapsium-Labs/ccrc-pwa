@@ -1712,7 +1712,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
    *  `_compact_lock_why_remedy`'s SECOND argument selects it: `ws-gc --prune`
    *  declines before anything irreversible (`_lc_refuse_return`, never
    *  `_lc_fail`), so "the registry row is untouched" is the true residue
-   *  there, while the other three have already torn the workspace down and own
+   *  there, while the other four have already torn the workspace down and own
    *  "$REG/$id.* and $REG/$id.generation still stand" instead. The helper's own
    *  docstring calls that "a different claim, not a style choice", and nothing
    *  measured it: swapping the gc caller's verb argument left this file and

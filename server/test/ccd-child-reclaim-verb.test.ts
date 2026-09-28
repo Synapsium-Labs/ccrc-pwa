@@ -1843,6 +1843,55 @@ describe('"gone" is PROVEN — a path that could not be looked at is never read 
     try { expect(ask(path.join(locked, 'inner')), 'EACCES is not absence').toBe('2'); } finally { fs.chmodSync(locked, 0o755); }
   }, 30_000);
 
+  describe('`_ws_reclaim_hidden` over a flagged path a sparse checkout has no entry for (review 171 F-G)', () => {
+    /** A repo with `sub/f.txt` committed and then flagged skip-worktree, so
+     *  `_ws_reclaim_hidden_contained`'s sparse skip is the only thing between
+     *  `f.txt`'s flagged entry and a verdict. */
+    const flaggedRepo = (name: string): string => {
+      const main = h.makeRepo(name);
+      fs.mkdirSync(path.join(main, 'sub'));
+      fs.writeFileSync(path.join(main, 'sub', 'f.txt'), 'password: template\n');
+      h.git(main, 'add', 'sub/f.txt'); h.git(main, 'commit', '-m', 'add sub/f.txt');
+      h.git(main, 'update-index', '--skip-worktree', 'sub/f.txt');
+      return main;
+    };
+    const hiddenOf = (main: string): { rc: string; why: string; paths: string[] } => {
+      const out = h.sh(
+        `_ws_reclaim_hidden '${main}'; rc=$?;`
+        + ` printf '%s\\x1f%s\\x1f%s' "$rc" "$_WS_HIDDEN_WHY" "$(printf '%s\\n' \${_WS_HIDDEN_PATHS[@]+"\${_WS_HIDDEN_PATHS[@]}"})"`,
+      );
+      const [rc = '', why = '', paths = ''] = out.split('\x1f');
+      return { rc, why, paths: paths.split('\n').filter(Boolean) };
+    };
+
+    it('a mode-000 directory holding the flagged path answers UNMEASURED — never "no edit" (today: skipped, no path)', () => {
+      const main = flaggedRepo('sparse-hidden');
+      fs.chmodSync(path.join(main, 'sub'), 0o000);
+      let a: { rc: string; why: string; paths: string[] };
+      try { a = hiddenOf(main); } finally { fs.chmodSync(path.join(main, 'sub'), 0o755); }
+      expect(a.rc, a.why).toBe('1');
+      expect(a.why).toContain('cannot be searched');
+      expect(a.paths).toEqual([]);
+    }, 30_000);
+
+    it('CONTROL: an out-of-cone path under a directory that is simply MISSING is skipped, no path recorded', () => {
+      const main = flaggedRepo('sparse-hidden-missing');
+      fs.rmSync(path.join(main, 'sub'), { recursive: true, force: true });
+      const a = hiddenOf(main);
+      expect(a.rc, a.why).toBe('0');
+      expect(a.paths).toEqual([]);
+    }, 30_000);
+
+    it('CONTROL: an untracked FILE standing at the flagged path’s directory name is skipped, no path recorded', () => {
+      const main = flaggedRepo('sparse-hidden-shadowed');
+      fs.rmSync(path.join(main, 'sub'), { recursive: true, force: true });
+      fs.writeFileSync(path.join(main, 'sub'), 'not a directory\n');
+      const a = hiddenOf(main);
+      expect(a.rc, a.why).toBe('0');
+      expect(a.paths).toEqual([]);
+    }, 30_000);
+  });
+
   for (const phase of ['children', 'worktree']) {
     it(`the child’s parent turning unsearchable AFTER the removal-time identity check, on a resume at \`${phase}\`, stops the tail at that step`, () => {
       // `_ws_reclaim_owned` asks before the settle; this makes the directory

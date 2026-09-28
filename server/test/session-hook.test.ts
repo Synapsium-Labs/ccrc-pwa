@@ -9116,6 +9116,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // there instead. Neither corpus document
         // changed (byte-identical to this task's base, measured); still stale
         // in fact, and Task 11 still owns the re-anchor. S6-R11, no D-number.
+        // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+        // 53 -> 53, and genuinely UNCHANGED — not a coincidental pass masking
+        // a swap: the produced array is byte-identical to this one, in the
+        // same order, measured by running this suite against the round's own
+        // tree rather than inferred. F-C and F-G's new code, and F-D's header
+        // rewrite, sit in the RECLAIM region, below every corpus anchor this
+        // set reaches (the highest is `:19131`, the boundary itself). F-E's
+        // six comment edits are the only ones inside a cited range —
+        // `:3400`'s "the other three" -> "the other four" lies inside
+        // `:3390-3402`, already in this set (below) — and a wording change
+        // inside an already-stale range does not by itself move it into or
+        // out of the set. Neither corpus document changed (byte-identical to
+        // `origin/main` at this tree, measured), so nothing was re-pointed
+        // either. S6-R11 covers the re-measurement, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9270,6 +9284,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // (the +33 it ends at) — and nothing re-pointed: both corpus documents
       // are byte-identical to this task's base, measured. S6-R11, no
       // D-number.
+      // RE-MEASURED at review 171's second fix round (F-C, F-D, F-E, F-G),
+      // FROM THE SAME RUN as the row-pass set above: 36 -> 36, genuinely
+      // UNCHANGED, same reasoning — every F-C/F-D/F-G insertion sits below
+      // this set's highest anchor (`spec:2125 ccd/ccd:19131`), and F-E's
+      // wording change at `:3400`/`:3401` lies inside the already-stale
+      // `spec:2209 ccd/ccd:3390-3402` / `:3401` entries below, unmoved.
+      // Neither corpus document changed. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
