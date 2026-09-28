@@ -20,7 +20,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | the carry merges instead of skipping; its slot and byte budget; `(merged +N ~R !D)`; the prerequisite write-model measurement; `deploy/measure-continuity.py` with its carry counter | **AGENT-FIRST** (ccd) | — | — | planned |
-| 2 | 4, rules 1–3 | `$REG/<id>.landed`; a carried-in banner is not a block; the rescue wait near a five-hour reset (600 s) with its own grace; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait` | **AGENT-FIRST** (ccd) | — | — | planned |
+| 2 | 4, rules 1–3 | `$REG/<id>.landed`; a carried-in banner is not a block; the rescue wait near a five-hour reset (600 s) with its own grace; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait` | **AGENT-FIRST** (ccd) | — | — | **HELD — re-plan owed (#195)** |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin | **AGENT-FIRST** (ccd) | — | — | to plan |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | — | — | to plan |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | to plan |
@@ -54,6 +54,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   ticket. Each wave goes to a fresh worker workspace running subagent-driven development, a review run reads the
   worker's branch, and the coordinator rules and merges; the plans reach a worker only from `main`, so the docs
   PR carrying the specs, the ledgers and the first four plans merges before the first dispatch.
+- **2026-09-28 — the plans re-measured against `main` `c62e22b9`.** Nine commits landed after 2026-09-24 (#182–#186,
+  #192–#195); three edit `ccd/ccd`. Wave 1 holds: only line hints, README's two anchors and one scan total moved, and
+  every count and mutation row reproduced on a copy of `c62e22b9` with its edits applied. **Wave 2 is HELD for a
+  re-plan:** #195 (D-3522) made the rescue read a 401 its own process wrote as a block, and the plan as written drops
+  that detection (Task 1), rules the 401 `carried-in` on an account rescued onto after a rate limit (Task 2), and lets a
+  transcript-only 401 chain-wait (Task 4). The plan's status block names the measured fix; the re-plan is
+  prototype-first on current `main`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -83,8 +90,8 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 
 ## Next-wave brief
 
-Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch either on a fresh workspace with its
-plan path and this file.
+Wave 1 is planned, reviewed and re-measured (2026-09-28); once the docs PR has merged, dispatch it on a fresh
+workspace with its plan path and this file. Wave 2 is HELD until its re-plan against #195 lands (its status block).
 Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
 records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
 its safety lens is `xhigh`.

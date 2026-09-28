@@ -142,7 +142,10 @@ can pause or remove, never choose a successor (stage 5).
    after one fetch, exits 1 with a 40-hex tree id on stdout's first line. Exit 0 is clean; any other answer is
    unmeasured and licenses nothing, including exit 1 with an empty stdout, which git 2.43 on the fleet box
    returns for an unresolvable ref;
-2. a required check on the PR is red while main's latest push run of the same required job is green;
+2. a required check on the PR is red while main passes the same tests: the worker re-runs the failing test files on a
+   clean checkout of `origin/HEAD` (after the same one fetch), and a red there too is main's own. Ruled 2026-09-28:
+   this replaces "main's latest push run of the same required job is green", because since CI test selection (#183)
+   a push to main runs no test legs and reports every required check green;
 3. the PR was ejected from the landing line with a base sha, or, in a strict-protection repository, the
    coordinator names it next to land (a land-sync). Both arrive on the `merging → working` edge as a fix-round
    mail, because worker clause 9 forbids pushing after wave-done; the worker absorbs, re-gates and sends a fresh

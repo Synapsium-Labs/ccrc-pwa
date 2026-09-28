@@ -18,7 +18,7 @@ merges, workers never do, and nothing merges unattended** (spec §3, R5). The op
 | # | spec stage | scope | deploy class | depends on | PRs | state |
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | — | planned |
-| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | planned; Tasks 3–5 re-plan owed |
+| 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | — | planned; **Tasks 1, 3–5 and Task 7's precondition re-plan owed** |
 | 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run | — | to plan |
 | 3 | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | — | — | to plan |
 | 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
@@ -49,16 +49,24 @@ carries it (spec §5.1, amended 2026-09-24).
   producer's run closes before its PR merges and wave 3 reclaims its workspace. So the dequeue lane has no open run
   or registry row to key on. The landing spelling must keep `--match-head-commit`, and the merge deny has a window
   (the plan's status block names the directions).
+- **2026-09-28 — the plans re-measured against `main` `c62e22b9`; two rulings.** Nine commits landed after 2026-09-24
+  (#182–#186, #192–#195). Eight opus agents re-checked every tree-dependent claim, a second per plan re-ran each. Wave 1:
+  numbers only, except that CI test selection (#183) took away trigger 2's evidence — a push to main now runs no test
+  legs and reports every required check green. **Ruled by the operator:** trigger 2 reads "a required check is red while
+  main passes the same tests", measured by re-running the failing test files on a clean `origin/HEAD` (spec §5.1); Tasks 3
+  and 5 re-measured with it. `measure-landing.py main-red` stays valid for the frozen baseline only; stage 2 reads
+  red-main from runs that ran the required legs, or refuses a window crossing `814fc53d`. Wave 2: #183 landed first and
+  reshaped `ci.yml`, so Task 1 and Task 7's precondition join Tasks 3–5 in the re-plan. **Ruled by the operator:** a
+  merge-queue run runs the selected tests, like a PR.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
 ## Carried constraints
 
-- **Another programme edits `ci.yml`.** CI test selection (spec on `ws/ccrc-ci-runs-optimization`, awaiting the
-  operator's review) reshapes the same workflow. Wave 2's `merge_group` trigger, macOS skip and concurrency group
-  are written to survive that reshaping, and whichever lands second merges the other's shape rather than
-  overwriting it. Two points that programme must carry: a `merge_group` run keeps a run-unique concurrency group
-  (never its shared push-to-main refresh group, which may drop runs), and its mode table needs a `merge_group` row.
+- **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
+  rather than overwriting it: a `merge_group` run keeps a run-unique concurrency group (never the shared push-to-main
+  refresh group, which may drop runs), the mode table gains a `merge_group` row, the macOS legs and `full-suite` skip a
+  queue run, and the queue runs the selected tests (ruling 2026-09-28).
 - **The skill pins move with the clauses.** `worker-skill.test.ts`, `coordinator-skill.test.ts`, and the
   clause-count words in `README.md` and `CLAUDE.md` that both pins read move in the same commit as a clause.
   session-continuity wave 8 appends its clauses after this programme's wave 1.
@@ -72,6 +80,7 @@ carries it (spec §5.1, amended 2026-09-24).
 
 Waves 1 and 2 are planned and reviewed; once the docs PR has merged, dispatch wave 1 on a fresh workspace with its
 plan path and this file. Wave 2 needs wave 1's clause 15 to append its native-queue sentence to, and is dispatched
-only after its Tasks 3–5 are re-planned against child-reclamation wave 3 (the plan's status block). After wave 2
+only after its Tasks 1, 3–5 and Task 7's precondition are re-planned — Task 1 against CI test selection (#183), the
+rest against child-reclamation wave 3 (the plan's status block). After wave 2
 merges, the operator applies the ruleset and approval change and runs the proof (spec §5.2 steps 2–3); wave 2b is
 planned and dispatched only on that proof's result.
