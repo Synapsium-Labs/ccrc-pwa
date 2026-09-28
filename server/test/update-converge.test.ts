@@ -547,6 +547,174 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
   });
 });
 
+describe('runDispatch — refusal notes (Review Focus 5)', () => {
+  it('a node refused on two consecutive runs is written ONCE', async () => {
+    const h = harness();
+    seedFleet(h, 'v0.0.10', { caps: ['verify', 'node-id', 'floor', 'update-json'] });
+    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
+    const r2 = ran(await runDispatch(h.deps, T0 + 61_000));
+    expect(r1.noted).toBe(1);
+    expect(r2.noted).toBe(0);
+    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^no-detach-cap — /);
+    expect(h.sent).toEqual([]);
+  });
+
+  it('a provenance-failed server row does not halt the fleet node\'s dispatch, and its verdict is never overwritten (§18 "a provenance refusal does not halt", end to end)', async () => {
+    const h = harness();
+    seedFleet(h, null);
+    seedServer(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    const verdict = 'provenance: the bundle signature did not verify';
+    const swept = sweepOnce(h.store, serverMeas({
+      measuredAt: T0 + 9000,
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
+    }));
+    expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
+    expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
+    expect(h.store.node(SERVER_ID)?.updateDetail).toMatch(/^provenance:/);
+    const serverBefore = h.store.node(SERVER_ID);
+    expect(h.store.requestNode(FLEET_ID, 'v0.0.10', 'update', T0 + 10_000).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 11_000));
+    expect(r.plan.gate.haltedBy).toEqual([]);
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    expect(h.sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
+    expect(h.store.node(SERVER_ID)).toEqual(serverBefore);
+  });
+});
+
+describe('runDispatch — a FLEET node that refused its request on provenance holds no server move (D-3409, D-3378)', () => {
+  it('the fleet node fails `provenance: …` on the tag it was asked for: its request stands, and the server dispatches (the mirror of the server-row case above, §18 "a provenance refusal does not halt")', async () => {
+    const h = harness();
+    seedFleet(h);
+    seedServer(h);
+    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r1.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    const verdict = 'provenance: the bundle signature did not verify';
+    const swept = sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 9000,
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
+    }));
+    expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
+    expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
+    // The request STANDS (decision 7) — it is the very row D-3381 would have counted as outstanding.
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'failed', requestedTag: 'v0.0.10' });
+    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^provenance:/);
+    const fleetBefore = h.store.node(FLEET_ID);
+    const r2 = ran(await runDispatch(h.deps, T0 + 11_000));
+    expect(r2.plan.gate.haltedBy).toEqual([]);
+    expect(r2.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    expect(h.sent).toHaveLength(1);
+    expect(h.store.node(FLEET_ID)).toEqual(fleetBefore);
+  });
+});
+
+describe('dispatchViewsFor — the one builder of the dispatcher\'s input (the routes read the same views)', () => {
+  it('carries every live row, its resolved auto, and only THIS node\'s refused tags', () => {
+    const h = harness();
+    seedFleet(h, null);
+    seedServer(h, null);
+    expect(h.store.refuseRelease(SERVER_ID, 'v0.0.10', T0, 'provenance: x').ok).toBe(true);
+    const views = dispatchViewsFor(h.store);
+    const byId = new Map(views.map((v) => [v.row.nodeId, v]));
+    expect([...byId.keys()].sort()).toEqual([FLEET_ID, SERVER_ID].sort());
+    expect(byId.get(FLEET_ID)?.auto).toBe('off');
+    expect([...(byId.get(FLEET_ID)?.refusedTags ?? [])]).toEqual([]);
+    expect([...(byId.get(SERVER_ID)?.refusedTags ?? [])]).toEqual(['v0.0.10']);
+  });
+});
+
+describe('converge.ts — nothing yields between the plan and the lease (D-3377)', () => {
+  it('runDispatch plans once, acquires once, and holds no await anywhere above the acquire', () => {
+    const src = readFileSync(new URL('../src/update/converge.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('export async function runDispatch(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    expect(body.split('planDispatch(').length - 1).toBe(1);
+    expect(body.split('.dispatchNode(').length - 1).toBe(1);
+    const lease = body.indexOf('.dispatchNode(');
+    expect(body.indexOf('planDispatch(')).toBeLessThan(lease);
+    expect(body.slice(0, lease)).not.toMatch(/\bawait\b/);
+  });
+});
+
+describe('FleetWatcher — the dispatcher runs single-flight, at the end of every inventory run', () => {
+  const watcherFor = (o: { send?: SendUpdateOp; role?: NodeRole } = {}) => {
+    const home = mkTmp('update-converge-watch-');
+    const base = testDeps(home);
+    const coord = new CoordStore(openCoordDb(path.join(home, 'coord.db')));
+    seedReleases(coord);
+    const sent: { tag: string; kind: RequestKind }[] = [];
+    const fleetState: FleetState = { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, agentOps: ['update'] };
+    const deps: Deps = {
+      ...base, cfg: { ...base.cfg, role: o.role ?? 'server' }, coord, fleetState,
+      sendUpdateOp: (tag, kind) => { sent.push({ tag, kind }); return (o.send ?? (async () => ACCEPTED))(tag, kind); },
+      updateRunner: spawnFromRunner(async () => ({ code: 0, stdout: '', stderr: '' }), home),
+    };
+    const watcher = new FleetWatcher(deps, new Bus());
+    const once = vi.spyOn(watcher as unknown as { dispatchOnce(): Promise<DispatchRunResult> }, 'dispatchOnce');
+    return { coord, watcher, once, sent };
+  };
+
+  it('an inventory run ends in exactly one dispatch run', async () => {
+    const { watcher, once } = watcherFor({ role: 'both' });
+    await watcher.inventoryNow();
+    expect(once).toHaveBeenCalledTimes(1);
+  });
+
+  it('a run acquires in the caller\'s own turn; two triggers during it ask for exactly ONE follow-up (§18 "one dispatch per sweep", the act half)', async () => {
+    const reply: { answer?: (r: ResOk) => void } = {};
+    const { coord, watcher, once, sent } = watcherFor({ send: () => new Promise<ResOk>((resolve) => { reply.answer = resolve; }) });
+    const inventory = vi.spyOn(watcher, 'triggerInventory').mockImplementation(() => {});
+    expect(coord.upsertNodeMeasurement(fleetMeas()).ok).toBe(true);
+    expect(coord.requestNode(FLEET_ID, 'v0.0.10', 'update', T0).ok).toBe(true);
+    const first = watcher.dispatchNow();
+    expect(coord.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.10' });
+    expect(watcher.dispatchNow()).toBe(first);
+    watcher.triggerDispatch();
+    watcher.triggerDispatch();
+    expect(once).toHaveBeenCalledTimes(1);
+    reply.answer!(ACCEPTED);
+    await first;
+    expect(once).toHaveBeenCalledTimes(2);
+    await (once.mock.results[1]!.value as Promise<DispatchRunResult>);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(once).toHaveBeenCalledTimes(2);
+    expect(sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
+    expect(inventory).toHaveBeenCalledTimes(1);
+  });
+
+  it('a rejected dispatch run is logged once and recovered — single-flight is not wedged by a thrown run (Task 5 review findings 1/2)', async () => {
+    const { watcher, once } = watcherFor({ role: 'both' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    once.mockRejectedValueOnce(new Error('boom'));
+    // The second trigger JOINS the run the first one already started (single-flight) and asks for exactly one
+    // follow-up — the same "join, don't stack" contract the other FleetWatcher cases above pin for a resolving
+    // run; here the run REJECTS instead.
+    watcher.triggerDispatch();
+    watcher.triggerDispatch();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const rejectWarns = warn.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /a dispatch run rejected: .*boom/.test(c[0]),
+    );
+    // ONE warn for the one rejection — even though TWO triggers touched this same run (review finding 2: a
+    // `.catch` attached inside `triggerDispatch` fires once per joiner, logging the same rejection twice).
+    expect(rejectWarns).toHaveLength(1);
+    // The queued follow-up (from the second `triggerDispatch`) ran a real second dispatch — single-flight
+    // recovered rather than staying wedged on the thrown run (review finding 1).
+    expect(once).toHaveBeenCalledTimes(2);
+    // And a caller reaching for a THIRD run afterward gets a fresh promise that resolves cleanly, not the
+    // rejected run replayed forever.
+    await expect(watcher.dispatchNow()).resolves.toBeDefined();
+  });
+
+  it('without a coord store there is nothing to dispatch', async () => {
+    const watcher = new FleetWatcher(testDeps(mkTmp('update-converge-nocoord-')), new Bus());
+    await expect(watcher.dispatchNow()).resolves.toEqual({ ran: false, why: 'no-coord' });
+  });
+});
+
 describe('the composition root binds the two update ports (a text pin over index.ts; no suite boots it in remote mode)', () => {
   it('names updateRunner in both deps literals and sendUpdateOp — with t: \'req\' and the op\'s own timeout — in the remote one only', () => {
     const indexTs = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
