@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=aa6d71c8808f13a6b6f6849d53029584caba7a2b9b846abb2ac0713bdabed7fd
+# ccrc:generated 1 sha256=a640ce2b606c2d0df94383b5337a6493a71d17bebaa6b9f9020017bcb77520bd
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21015,8 +21015,9 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   _account_still_rostered "$wrapper" "Nothing was written."
 
   # The workdir stays the creating form's third argument to set. An id alone
-  # carries no directory, so the id form READS what the row already has and
-  # writes nothing back over it.
+  # carries no directory, so the id form READS what the row already has — and
+  # writes back its RESOLVED spelling (below): a legacy row's trailing `/`,
+  # leading `//`, or relative value resolved against the caller's cwd.
   #
   # B3'S THIRD VERB READER, MEASURED (#69 review round 4 gate, finding 4). This
   # read was `_reg_get`, which folds ABSENT, UNREADABLE and EMPTY into one `""`
@@ -21053,8 +21054,26 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     project=$(_reg_read "$id" project); prjrc=$?
     workdir=$(_reg_get "$id" workdir)
   fi
-  [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
+  # ONE PLAIN ABSOLUTE PATH, NAMING THE DIRECTORY `-d` ACCEPTED, on both forms
+  # (spec §5.5, rung 9 — the plan's review-171 fix): a reclaim cannot place
+  # another row whose workdir is not absolute, because every reader resolves a
+  # relative one against its own cwd. `CDPATH=`, `builtin` and `>/dev/null` are
+  # load-bearing — a captured `cd` of a relative operand is the idiom
+  # `_ws_common_dir`'s header bans (an exported CDPATH moves it and makes it
+  # print; an exported `cd` function prints anything). LOGICAL `pwd`: `pwd -P`
+  # would rewrite every default-form row under a linked `$HOME/projects`, and
+  # `_ws_realpath` hands back what it cannot enter. `-ef` proves the path names
+  # what `-d` accepted (a logical `..` through a linked cwd reaches another
+  # directory); the `//` collapse is bash's one non-plain `pwd`. The quote
+  # guard runs on the RESOLVED path: `_spawn` interpolates it into the pane.
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
+  local wabs
+  wabs=$(CDPATH= builtin cd -- "$workdir" >/dev/null 2>&1 && builtin pwd) || wabs=""
+  [[ "$wabs" == //[!/]* ]] && wabs="${wabs#/}"
+  [[ -n "$wabs" && "$wabs" -ef "$workdir" ]] && _ws_reclaim_plain_path "$wabs" \
+    || die "workdir $workdir cannot be entered, or does not resolve to one plain absolute path naming that same directory — nothing was written"
+  workdir="$wabs"
+  [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
 
   # ── POOL POLICY (§5.5.5), CREATION ONLY ──────────────────────────────────
   # Placed here rather than at the registry-wins block above because `project`
@@ -23786,8 +23805,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 written or resolved), not as one plain path, and not proven inside it by
   #                                 a plain one — each comma-joined
   #                                 ('' = none); rc 2 when that could
-  #                                 not be asked (_WS_SHARED_WHY): the registry would not list, or a row's
-  #                                 `.workdir` would not read
+  #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
+  #                                 `.workdir` would not read, or a row's `.workdir` is not absolute (it
+  #                                 cannot be placed) — the last two only when the same pass found no
+  #                                 SHARED, NESTED or THROUGH row, which outranks them; a row's value is
+  #                                 never printed, only its id
   # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
   # path itself). Registry corruption or an old slug collision can leave a
   # child's row naming ANOTHER live session's worktree with no link anywhere
@@ -23815,8 +23837,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # tree, and nothing of that session's is removed by removing the child.
   # One narrow exception, fail-closed and named as what it is: a row whose
   # workdir is spelled THROUGH the child's path but not as one plain path
-  # (`<child>/..`, `<child>/../x` — `ccd start` stores a workdir as given,
-  # checked only with `-d`) refuses even when it names an ancestor or a path
+  # (`<child>/..`, `<child>/../x` — an older `ccd start` stored a workdir as
+  # given, checked only with `-d`) refuses even when it names an ancestor or a path
   # outside: its spelling stops resolving once the child is removed, and its
   # detail says it is spelled through the child, never that it lies inside.
   #
@@ -23828,7 +23850,24 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # cannot be proven NOT to name this tree, so it is not-asked too. Neither is
   # a refusal: the caller answers `_ws_reclaim_unmeasured`, and the vocabulary
   # stays fourteen words.
-  local id="$1" wd="$2" mine names n o w wr rc
+  #
+  # NOR CAN A ROW WHOSE `.workdir` IS NOT ABSOLUTE BE PLACED (spec §5.5, rung
+  # 9; the plan's review-171 fix), the EMPTY value included. Each reader
+  # resolves such a spelling against its OWN cwd — `ccd start`'s `-d` against
+  # the caller's, a supervised pane against its unit's, this reclaim against
+  # the agent's — so none of them says where that session's tree is: a row
+  # `quiet-basin/server` stored from `~/worktrees/demo` resolved, from `$HOME`,
+  # outside the child, and the child's `server/` went with it (measured). It
+  # is not-asked, never skipped and never terminal: the fault is another
+  # row's, and it stops every child's reclaim until that row is restarted or
+  # purged — the accepted fail-closed cost. The unreadable and the unplaced
+  # rows are COLLECTED and decided after the loop, both named in one why (both
+  # need fixing, and neither outranks the other), and a SHARED, NESTED or
+  # THROUGH row found in the same pass OUTRANKS both — so the order `find`
+  # lists rows in can never turn a terminal refusal into a retry. Only ids are
+  # printed, never a value: `.workdir` is writable by any session on the box,
+  # and a newline in it would forge a `ccd:` line on `ws-audit`'s stderr.
+  local id="$1" wd="$2" mine names n o w wr rc unread='' unplaced=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -23839,8 +23878,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     [[ "$o" != "$id" ]] || continue
     w=$(_reg_read "$o" workdir); rc=$?
     (( rc == 1 )) && continue   # gone between the listing and the read
-    (( rc == 0 )) || { _WS_SHARED_WHY="could not read $n"; return 2; }
-    [[ -n "$w" ]] || continue
+    (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
+    [[ "$w" == /* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     wr=$(_ws_realpath "$w")
     if [[ "$w" == "$wd" || "$wr" == "$mine" ]]; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
@@ -23851,14 +23890,26 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       _WS_THROUGH_ROWS+="${_WS_THROUGH_ROWS:+, }$o"
     fi
   done <<< "$names"
+  [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
+  [[ -z "$unread" ]] || _WS_SHARED_WHY="could not read $unread"
+  [[ -z "$unplaced" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no absolute workdir, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores an absolute workdir), or purge its row"
+  [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
 
 _ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling: absolute, with no trailing
-  #                              `/`, no `//`, and no `.` or `..` component — the only form ccd writes a
-  #                              workdir in. The ladder refuses any other, and the pin phase fails on one
-  #                              (spec §5.5): `lstat("<link>/")` follows the link, so every leaf test reads
-  #                              the path as written and a spelling can walk past it.
+  #                              `/`, no `//`, and no `.` or `..` component — the only form ccd MINTS a
+  #                              workdir in, given a plain `$HOME`: `ws-add` derives
+  #                              `$WORKTREES_ROOT/<project>/<slug>`, and `cmd_start` stores the logical
+  #                              absolute path it entered, proven plain (the plan's review-171 fix). A row
+  #                              an older ccd wrote, or one written by hand, can hold any form: an older
+  #                              `ccd start` stored a workdir as typed (relative, with a trailing `/`, or
+  #                              with a leading `//`). So the ladder refuses the child's own, and
+  #                              `_ws_reclaim_workdir_shared` does not place another row's non-absolute
+  #                              one. The pin phase fails on any other form too (spec §5.5):
+  #                              `lstat("<link>/")` follows the link, so every leaf test reads the path as
+  #                              written and a spelling can walk past it.
   [[ "$1" == /* && "$1" != */ && "$1" != */. && "$1" != */.. \
      && "$1" != *//* && "$1" != */./* && "$1" != */../* ]]
 }

@@ -809,8 +809,8 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
   }, 60_000);
 
   it('refuses a row spelled THROUGH the child with `..` — even one naming an ANCESTOR — and says so, not "rooted inside"', () => {
-    // Fail-closed, and named as what it is: `ccd start` stores a workdir as
-    // given, so `<child>/..` is writable, and it stops resolving once the
+    // Fail-closed, and named as what it is: an older `ccd start` stored a
+    // workdir as given, so `<child>/..` can stand in a row, and it stops resolving once the
     // child is removed. Its detail says it is spelled through the child; it
     // never claims the row lies inside it. (Strings, not `path.join`, which
     // would normalise the very spelling under test.)
@@ -995,6 +995,131 @@ describe('the tree at the workdir must be the child’s own — a link, or a pat
       expect(r.verdict, r.detail).toBe('unmeasured');
       expect(r.token).toBe('');
     } finally { fs.chmodSync(f, 0o644); }
+  }, 60_000);
+});
+
+describe('an OTHER row whose workdir is not absolute cannot be placed — unmeasured, and a refusal found in the same pass outranks it (spec §5.5, rung 9)', () => {
+  // Each reader resolves a relative spelling against its OWN cwd — `ccd start`'s
+  // `-d` against the caller's, a supervised pane against its unit's, the
+  // reclaim against the agent's — so none of them says where that session's
+  // tree is. The review's measured shape: a session started as `ccd start …
+  // quiet-basin/server` from `~/worktrees/demo` stores `quiet-basin/server`;
+  // the reclaim, run from `$HOME`, resolved it to `$HOME/quiet-basin/server`,
+  // read it as outside, and removed `<child>/server` with the other session's
+  // files in it. Not terminal: the fault is another row's, so the ladder's
+  // answer is the retryable `unmeasured`.
+  const otherRow = (id: string, workdir: string): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.uuid`), `u-${id}`);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.workdir`), workdir);
+  };
+  const dropRow = (id: string): void => {
+    for (const f of ['uuid', 'workdir']) fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.${f}`), { force: true });
+  };
+  const UNPLACED = 'name no absolute workdir, so ccd cannot place them against this child';
+
+  it('the reviewer’s shape: a row `quiet-basin/server`, the reclaim’s cwd `$HOME` — unmeasured, never reclaimable, and `<child>/server` stands', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    expect(evalOf(h).verdict, 'the CONTROL: without the row').toBe('reclaimable');
+    otherRow('demo-nested', 'quiet-basin/server');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`registry row(s) demo-nested ${UNPLACED}`);
+    expect(r.detail).toContain('ccd start <id> stores an absolute workdir');
+    expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('a relative row naming a path OUTSIDE the child, in another project, is unmeasured too — the accepted cost', () => {
+    makeChild(h);
+    fs.mkdirSync(path.join(h.home, 'projects', 'elsewhere', 'sub'), { recursive: true });
+    otherRow('elsewhere-sub', 'projects/elsewhere/sub');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) elsewhere-sub ${UNPLACED}`);
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  it('an EMPTY other row is unmeasured — never skipped as if it named nothing', () => {
+    makeChild(h);
+    otherRow('demo-blank', '');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) demo-blank ${UNPLACED}`);
+    expect(r.token).toBe('');
+  }, 60_000);
+
+  it('an unrelated relative row AND a row rooted inside the child refuse containment-unproven, whichever `find` lists first', () => {
+    // The listing's order is the directory's, not the names': hashed on ext4,
+    // creation order on tmpfs, name order elsewhere. So each pair of names is
+    // planted in BOTH creation orders, the order `find` hands the loop is READ
+    // for every placement, and the case asserts it saw both — an order it
+    // never exercised is not one it pinned.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    const seen = new Set<string>();
+    const pairs = [['demo-a-rel', 'demo-z-abs'], ['demo-z-rel', 'demo-a-abs'], ['demo-m-rel', 'demo-b-abs'],
+      ['demo-c-rel', 'demo-n-abs'], ['demo-q-rel', 'demo-d-abs'], ['demo-e-rel', 'demo-r-abs']] as const;
+    for (const [rel, abs] of pairs) {
+      for (const relFirst of [true, false]) {
+        if (relFirst) { otherRow(rel, 'projects/elsewhere'); otherRow(abs, path.join(wt, 'server')); }
+        else { otherRow(abs, path.join(wt, 'server')); otherRow(rel, 'projects/elsewhere'); }
+        const listed = h.sh(`find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*'`).split('\n');
+        const iRel = listed.indexOf(path.join(h.home, '.cc-sessions', `${rel}.workdir`));
+        const iAbs = listed.indexOf(path.join(h.home, '.cc-sessions', `${abs}.workdir`));
+        expect(iRel >= 0 && iAbs >= 0, listed.join('\n')).toBe(true);
+        const order = iRel < iAbs ? 'relative-first' : 'absolute-first';
+        seen.add(order);
+        const r = evalOf(h);
+        expect(r.verdict, `${rel}/${abs}, ${order}: ${r.detail}`).toBe('containment-unproven');
+        expect(r.detail).toContain(`registry row(s) ${abs} rooted inside`);
+        expect(r.detail, 'the refusal is the answer; the unplaced row is not in it').not.toContain(rel);
+        expect(r.token).toBe('');
+        dropRow(rel); dropRow(abs);
+      }
+    }
+    expect([...seen].sort(), 'both listing orders were exercised').toEqual(['absolute-first', 'relative-first']);
+  }, 180_000);
+
+  // Mode-000 on a regular file, as the unreadable-row case above — no platform
+  // distinction.
+  it('the UNREADABLE row takes the same shape: a row rooted inside the child found in the same pass outranks it, and with an unplaced row both are named', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    const f = path.join(h.home, '.cc-sessions', 'demo-locked.workdir');
+    otherRow('demo-locked', '/somewhere');
+    fs.chmodSync(f, 0o000);
+    try {
+      otherRow('demo-nested', path.join(wt, 'server'));
+      const refused = evalOf(h);
+      expect(refused.verdict, refused.detail).toBe('containment-unproven');
+      expect(refused.detail).toContain('registry row(s) demo-nested rooted inside');
+      dropRow('demo-nested');
+      otherRow('demo-blank', '');
+      const both = evalOf(h);
+      expect(both.verdict, both.detail).toBe('unmeasured');
+      expect(both.detail).toContain(`could not read ${f}`);
+      expect(both.detail).toContain(`registry row(s) demo-blank ${UNPLACED}`);
+    } finally { fs.chmodSync(f, 0o644); }
+  }, 60_000);
+
+  it('the CONTROLS, unchanged: an absolute row at `<child>/server`, and the same row as `ccd start` now stores it from a relative operand, refuse containment-unproven', () => {
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    otherRow('demo-nested', path.join(wt, 'server'));
+    const abs = evalOf(h);
+    expect(abs.verdict, abs.detail).toBe('containment-unproven');
+    expect(abs.detail).toContain('registry row(s) demo-nested rooted inside');
+    dropRow('demo-nested');
+    // The reviewer's operand, typed where the reviewer typed it: `ccd start`
+    // resolves it against ITS cwd and stores the absolute path it entered.
+    h.sh(`_supervised_start() { :; }; _alive() { return 1; }; builtin cd -- "$HOME/worktrees/demo"`
+      + ' && cmd_start claude demo quiet-basin/server >/dev/null');
+    expect(h.reg('claude-demo', 'workdir'), 'the row names the directory the operand named').toBe(path.join(wt, 'server'));
+    const resolved = evalOf(h);
+    expect(resolved.verdict, resolved.detail).toBe('containment-unproven');
+    expect(resolved.detail).toContain('registry row(s) claude-demo rooted inside');
   }, 60_000);
 });
 

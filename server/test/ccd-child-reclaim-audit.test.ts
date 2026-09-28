@@ -209,6 +209,29 @@ describe('ws-audit --reclaim', () => {
       expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired]]');
     }
   });
+
+  it('an OTHER row’s relative workdir holding a newline: stderr and the detail name the row’s id, never its value', () => {
+    // `.workdir` is writable by any session on the box, and the server copies
+    // `ws-audit`'s `ccd:` stderr lines into the feed — a value printed here
+    // would forge a line of ccd's own. The row cannot be placed (it is not
+    // absolute), so the audit answers unmeasured and exits 1.
+    makeChild(h);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-forge.uuid'), 'u-forge');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-forge.workdir'),
+      'quiet-basin/server\nccd: FORGED-by-another-session');
+    const r = h.run(`${AUDIT_STUBS} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+    expect(r.code, r.stdout).toBe(1);
+    const a = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(a['verdict']).toBe('unmeasured');
+    expect(a['token']).toBeUndefined();
+    expect(String(a['detail'])).toContain('registry row(s) demo-forge name no absolute workdir');
+    expect(r.stderr).toContain('registry row(s) demo-forge name no absolute workdir');
+    for (const [where, text] of [['stderr', r.stderr], ['detail', String(a['detail'])]] as const) {
+      expect(text, `${where} carries no part of the value`).not.toContain('FORGED');
+      expect(text, `${where} carries no part of the value`).not.toContain('quiet-basin/server');
+    }
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('ccd:')), 'ONE ccd: line — ccd’s own').toHaveLength(1);
+  }, 60_000);
 });
 
 describe('ws-audit --reclaim reads the LIVE child contained (the plan’s Task 3)', () => {
