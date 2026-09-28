@@ -31,7 +31,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -54,13 +54,15 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow } from './coord/store.js';
+import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow, type MarkReleaseNotifiedResult } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
-import { sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
+import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
+import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
+import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -94,6 +96,12 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+/** How long the FIRST fleet assembly after boot waits for the first HEAD
+ *  sweep (`headBranches`) before shipping without it. Bounded because that
+ *  sweep is serial agent round trips per project and a dropped one need not
+ *  answer; only the first tick waits, and the first tick's busy->idle pushes
+ *  are already suppressed, so what this delays is one frame at boot. */
+export const HEADS_BOOT_WAIT_MS = 2_500;
 
 /** The journal mirror's lane, and it is fast for the one reason the census's is
  *  slow: a sweep is ONE `readdir` plus one `readFileFrom` per live generation,
@@ -406,9 +414,22 @@ const ASKS_DISABLED_MARKER = 'asks-disabled';
  *  now, so `id` alone is not an identity. */
 const mergedKey = (id: string, number: number | null): string => `${id}#${number ?? '?'}`;
 
+/** What one `FleetWatcher.pushRelease` call did (design 2026-09-20 §13; plan W3 Task 3). Each arm is a fact
+ *  a caller or a test tells apart: nothing to decide; decided and marked with no push, every measured node
+ *  already running the tag (D-3294); pushed; the mark lost to another writer, so nothing
+ *  was sent; or a store read or write threw, so nothing was marked or sent. */
+export type ReleasePushOutcome =
+  | { did: 'skipped'; why: 'no-coord' | 'not-server-role' | 'no-push-service' | 'not-yet-swept' | 'nothing-to-notify' }
+  | { did: 'marked'; tag: string }
+  | { did: 'pushed'; tag: string; payload: PushPayload }
+  | { did: 'refused'; tag: string; why: Extract<MarkReleaseNotifiedResult, { ok: false }>['why'] }
+  | { did: 'failed'; detail: string };
+
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
   private lastJson: string | null = null;
+  /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
+  private lastFleet: FleetSession[] | null = null;
   /** Last-reported dialog id per session id. */
   private dialogIds = new Map<string, string>();
   /**
@@ -487,6 +508,11 @@ export class FleetWatcher {
    *  census's per-sweep map: that retention must never reach the census,
    *  which a failed read may only ever suppress, never feed. */
   private headBranches = new Map<string, { project: string; branch: string | null }>();
+  /** Settles the first time `headBranches` is written; the first assembly
+   *  after boot waits on it, bounded (`HEADS_BOOT_WAIT_MS`). */
+  private headsSettled!: Promise<void>;
+  private settleHeads: () => void = () => {};
+  private headsBootWaited = false;
   /** Prior status per session — drives the busy→idle push. */
   private prevStatus = new Map<string, SessionStatus>();
   /** Last swept task progress per session id, and when the sweep ran. */
@@ -552,6 +578,13 @@ export class FleetWatcher {
   /** Task 12: the last projection-warning KEY (`projectionWarn`'s `key`, never its `message`), so a box
    *  whose ~/.ccrc cannot take the file warns once per change of reason, not once a minute. */
   private lastProjectionWhy: string | null = null;
+  /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
+   *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
+  private lastReleasePushFailure: string | null = null;
+  /** Plan W3 Task 3 (D-3314): true once THIS process has finished one
+   *  inventory run. Until then the `nodes` rows are the previous process's, so the catalogue side
+   *  (`pushReleaseAfterPoll`) decides nothing. Set by `sweepThenProject`; never cleared. */
+  private inventorySwept = false;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -774,6 +807,7 @@ export class FleetWatcher {
   constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
+    this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
   }
 
   start(): void {
@@ -925,6 +959,22 @@ export class FleetWatcher {
     return this.sweepThenProject(inv, Date.now());
   }
 
+  /** Fix round 1 (F3/F4, D-3314 amended): true only when THIS sweep's outcomes are a real write — the row
+   *  was upserted, not merely marked unreachable, refused, or lost to a throw. Fix round 2: looked up by
+   *  `label` (`SERVER_LABEL`/`FLEET_LABEL`, every `SweepOutcome`'s own field), never by array position —
+   *  `sweepInventory` has always ordered `[own, fleet?]`, but a lookup by label reads the same regardless of
+   *  that ordering, matching how every OTHER outcome reader in this file (`warnInventoryIssues`,
+   *  `unreachable()`'s own callers) already keys on `label`. Local mode has no fleet row to demand — the
+   *  server row alone opens the gate. */
+  private sweptEnoughToDecide(inv: InventoryDeps, outcomes: readonly SweepOutcome[]): boolean {
+    const wasMeasured = (label: string): boolean => {
+      const o = outcomes.find((x) => x.label === label);
+      return o !== undefined && (o.result === 'measured' || o.result === 'node-id-collision');
+    };
+    if (!wasMeasured(SERVER_LABEL)) return false;
+    return inv.fleet === null || wasMeasured(FLEET_LABEL);
+  }
+
   /** One inventory run (design 2026-09-20 §9): the sweep, then the resolver over every live row and the
    *  server-role projection — so the file's `lease` is refreshed on the sweep's 60 s beat. Called ONLY from
    *  `runInventory()`, i.e. inside `inventoryNow()`'s single-flight promise, so a ready-triggered run and the
@@ -952,16 +1002,116 @@ export class FleetWatcher {
     }
     const key = warn?.key ?? null;
     if (warn !== null && key !== this.lastProjectionWhy) {
-      console.warn(`update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
+      console.warn(`ccrc-server: update: this server's own ~/.ccrc/update-intent was not written (${warn.message})`);
     }
     this.lastProjectionWhy = key;
+    // Plan W3 Task 3: the inventory run MEASURES what the nodes run, so it is where a release every node
+    // already runs is marked instead of pushed (D-3294), where the first release after a
+    // fresh install is decided at all (D-3300), and what opens the catalogue
+    // side's decisions in this process — fix round 1 (F3/F4, D-3314 amended):
+    // `inventorySwept` opens only once THIS sweep actually rewrote what the push decides on — the server's
+    // own row written without a throw or refusal, AND (in remote mode) the fleet row measured by this
+    // process, never merely marked unreachable. A link-down sweep or a `sweepOwn` throw leaves it closed, so
+    // the direct call below — the same hazard `pushReleaseAfterPoll` guards for the catalogue lane — is
+    // skipped too, rather than deciding on rows this process never wrote.
+    if (this.sweptEnoughToDecide(inv, outcomes)) this.inventorySwept = true;
+    if (this.inventorySwept) this.pushRelease(now);
     return outcomes;
   }
 
   /**
+   * The release push (design 2026-09-20 §13; plan W3 Task 3): ONE Web Push per release tag, across restarts.
+   * Called at the end of every inventory run (`sweepThenProject`) and, through `pushReleaseAfterPoll`, after
+   * every catalogue poll — `tick()`'s catalogue gate and `POST /api/updates/refresh` (`update/routes.ts`), the
+   * *Check now* poll, which runs outside `tick()`. PUBLIC for those callers and for the tests — the
+   * `inventoryNow()` precedent.
+   *
+   * SYNCHRONOUS, and that is the dedup. The decision (`releaseToNotify`, pure) and the mark
+   * (`markReleaseNotified`, whose `WHERE notifiedAt IS NULL` makes a second marker lose) run with no `await`
+   * between them, so nothing else in this process — the other lane, a second tick — can interleave, and a
+   * restarted process reads the committed `notifiedAt`. `mergedNotified`'s in-memory `Set` is the shape this
+   * deliberately is not: a latch that forgets on restart repeats the push.
+   *
+   * The send starts only AFTER the mark committed, is `void`ed and is never retried
+   * (D-3295): at most once, because a repeated "vX is out" is the noise the persisted
+   * mark exists to stop, and a missed one is still shown by the banner and the settings screen.
+   *
+   * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
+   * `pushOne` is about a session and this is about the fleet. A server-role process only: the push
+   * subscriptions are this box's disk (`push.ts`'s header), and the notify mode is the fleet row's alone.
+   * With no push service (no VAPID keys — `index.ts` builds `push` only then) it decides and marks NOTHING:
+   * a mark with no sender would answer `pushed` for a push nobody sent and use the tag up for good, so a
+   * sender configured later could never announce it.
+   * Never throws: a store failure is the `failed` arm, so no caller's `.catch` (a lane's, or the refresh route's
+   * request) is ever what stops it.
+   */
+  pushRelease(now: number): ReleasePushOutcome {
+    const coord = this.deps.coord;
+    if (coord === undefined) return { did: 'skipped', why: 'no-coord' };
+    const role = this.deps.cfg.role;
+    if (role !== 'server' && role !== 'both') return { did: 'skipped', why: 'not-server-role' };
+    const sender = this.deps.push;
+    if (sender === undefined) return { did: 'skipped', why: 'no-push-service' };
+    let n: ReleaseNotification | null;
+    let marked: MarkReleaseNotifiedResult;
+    let summary: string;
+    try {
+      const fleetIntent = coord.intentFor(FLEET_SCOPE);
+      const nodes = coord.nodes();
+      n = releaseToNotify({ fleetIntent, releases: coord.releases(), nodes });
+      if (n === null) {
+        this.lastReleasePushFailure = null;
+        return { did: 'skipped', why: 'nothing-to-notify' };
+      }
+      marked = coord.markReleaseNotified(n.tag, now);
+      // Fix round 1 (F1/F14, D-3313/D-3316): sides are picked from EVERY live row — filtering first is what
+      // let a `both` server row's own version stand in for a fleet nobody measured (the reviewer's exact
+      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — measured this
+      // sweep, its stamp read, and (D-3316) reachable — so an occupying row that fails it renders as a dash,
+      // never its stale value, but still blocks another row from falling back into its side. On a remote
+      // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
+      // is both (D-3301).
+      const summaryRows = nodes.map((r) => ({ role: r.role, version: r.currentVersion, stated: statedOf(r) }));
+      const sides = this.deps.cfg.fleetMode === 'remote' ? remoteSides(summaryRows) : versionSides(summaryRows);
+      summary = summaryFromSides(sides);
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      if (detail !== this.lastReleasePushFailure) console.warn(`ccrc-server: update: the release push was not decided (${detail}) — nothing was marked or sent`);
+      this.lastReleasePushFailure = detail;
+      return { did: 'failed', detail };
+    }
+    this.lastReleasePushFailure = null;
+    if (!marked.ok) return { did: 'refused', tag: n.tag, why: marked.why };
+    if (!n.push) return { did: 'marked', tag: n.tag };
+    const copy = releasePushCopy(n, summary);
+    const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
+    const tag = n.tag;
+    const sending = sender.notify(payload);
+    void sending.catch((e: unknown) => {
+      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the banner and the settings screen still show the release`);
+    });
+    return { did: 'pushed', tag, payload };
+  }
+
+  /**
+   * The catalogue side's entry (plan W3 Task 3): `tick()`'s catalogue gate and `POST /api/updates/refresh`
+   * call this, never `pushRelease` directly. It decides only once THIS process has finished one inventory run
+   * (D-3314). Both lanes fire unawaited on the first tick after a start, and
+   * until the first sweep rewrites them the `nodes` rows are the previous process's. After a server-box update
+   * they still carry the version the update replaced, so a poll that resolves first would push "vX is out" to
+   * a fleet already on vX. The inventory run's own `pushRelease` call makes that first decision instead.
+   */
+  pushReleaseAfterPoll(now: number): ReleasePushOutcome {
+    if (!this.inventorySwept) return { did: 'skipped', why: 'not-yet-swept' };
+    return this.pushRelease(now);
+  }
+
+  /**
    * The set of session ids that currently have a pending menu dialog. Exposed
-   * so a one-shot fleet assembly (the /api/fleet REST + the initial /ws/fleet
-   * push on connect) can reflect an ALREADY-pending dialog. Without this, a
+   * so a one-shot fleet assembly (the /api/fleet REST, and the /ws/fleet push
+   * on a connect before this watcher's first broadcast — after it, the cold
+   * frame IS that broadcast, `currentFleet`) can reflect an ALREADY-pending
+   * dialog. Without this, a
    * dialog that appeared before a client connected shows no "needs you" marker
    * on the fleet overview: the initial push omits it and the watcher only
    * re-emits 'fleet' when the JSON *changes*, so an unchanged pending state is
@@ -969,6 +1119,15 @@ export class FleetWatcher {
    */
   currentPending(): Set<string> {
     return new Set(this.dialogIds.keys());
+  }
+
+  /** The fleet this watcher last BROADCAST, or null before its first. A new
+   *  /ws/fleet socket takes it as its cold frame: it is exactly what every
+   *  connected client already holds, and this watcher re-emits only on change,
+   *  so a cold frame assembled apart from it — from state captured at connect,
+   *  or off a registry listing that failed once — was never corrected. */
+  currentFleet(): FleetSession[] | null {
+    return this.lastFleet;
   }
 
   /** Last-seen statuslines — passed into a one-shot fleet assembly (REST +
@@ -1061,7 +1220,10 @@ export class FleetWatcher {
       // `catalogueState` read "up to date" after a failed poll).
       if (this.deps.catalogue && Date.now() - this.lastCatalogueAt >= UPDATE_CATALOGUE_MS) {
         this.lastCatalogueAt = Date.now();
-        void this.deps.catalogue.poll(Date.now()).catch((err: unknown) => {
+        // Plan W3 Task 3: a poll that listed a new tag is decided on the poll's own answer, not a minute later
+        // on the inventory lane — once this process has swept (D-3314).
+        // `pushReleaseAfterPoll` is synchronous and never throws, so the `.catch` still covers the poll alone.
+        void this.deps.catalogue.poll(Date.now()).then(() => { this.pushReleaseAfterPoll(Date.now()); }).catch((err: unknown) => {
           console.warn('ccrc-server: the catalogue poller rejected — this is a bug, poll() should ' +
             `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
         });
@@ -1230,6 +1392,22 @@ export class FleetWatcher {
       // what lets `unmeasuredIds` below be derived FROM `sessions` rather
       // than computed a second, independent way off `records` — see that
       // derivation's own comment (blocking review finding 4).
+      // THE FIRST ASSEMBLY AFTER BOOT WAITS, BOUNDED, FOR THE FIRST HEAD SWEEP
+      // just fired above. Without it the map is always empty here on tick 1 —
+      // the argument below is read before the sweep's first await can resolve
+      // — so the first frame, and the state-cache it writes, shipped the
+      // registry's `.branch` for every row whose pane gave none: the name a
+      // manual checkout leaves stale. Once only, so a sweep that never lands
+      // costs one frame's latency, not every tick's.
+      if (!this.headsBootWaited) {
+        this.headsBootWaited = true;
+        let timer: NodeJS.Timeout | undefined;
+        await Promise.race([
+          this.headsSettled,
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, HEADS_BOOT_WAIT_MS); }),
+        ]);
+        clearTimeout(timer);
+      }
       const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches());
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
@@ -1439,6 +1617,7 @@ export class FleetWatcher {
       const json = JSON.stringify(sessions);
       if (json === this.lastJson) return;
       this.lastJson = json;
+      this.lastFleet = sessions;
       this.bus.emit('fleet', sessions);
     } finally {
       this.ticking = false;
@@ -2319,6 +2498,7 @@ export class FleetWatcher {
       if (transientlyUnread.has(h.project) && !fleetHeads.has(id)) fleetHeads.set(id, h);
     }
     this.headBranches = fleetHeads;
+    this.settleHeads();
     // THE CLAIM EVIDENCE, READ AFTER THE WORKTREE EVIDENCE IT IS WEIGHED
     // AGAINST — and that ordering is the whole reason this is a second listing
     // rather than the one `tick()` already took (D-283's "one listing,
@@ -3904,10 +4084,14 @@ export class FleetWatcher {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, retained: true } : sl);
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, retained: true } : sl);
         } else {
+          // `boxCols` rides with ctxPct, never with identity: it is THIS
+          // tick's width or nothing. A kept width would read an overlay tick
+          // on a pane just narrowed by an attach as still wide — the one
+          // direction the fleet's `narrow` chip must not err in.
           const prev = this.statuslines.get(r.id);
-          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, retained: true });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the

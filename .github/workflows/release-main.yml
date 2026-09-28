@@ -7,8 +7,13 @@
 # in server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
-# before the merge; main's post-merge matrix is a 45-minute re-check that the
-# previous deploy path never waited for either (spec §2, decision 4).
+# before the merge (spec §2, decision 4). There is no post-merge test run to
+# wait for: a push to main runs ci.yml's `refresh` mode, which re-traces the
+# tests the merge affected to keep the dependency map current and gates
+# nothing (design 2026-09-23 §3, §5.4). The full suite runs daily on main and
+# before any promotion to `stable` — release-stable.yml's gate — so what is
+# cut here is a `dev` prerelease, and `stable` is where the full suite is
+# required.
 name: release-main
 
 on:

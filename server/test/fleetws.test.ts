@@ -154,6 +154,84 @@ describe('fleet REST + WS', () => {
     ws.close();
   });
 
+  // The cold-start snapshot is assembled ASYNCHRONOUSLY (tmux, registry reads),
+  // but this socket is subscribed to `fleet` broadcasts from the moment it
+  // connects. A broadcast that lands while the snapshot is still assembling
+  // reaches the client first; the snapshot, built from watcher state captured
+  // at CONNECT time, then arrived after it and replaced it. And because the
+  // watcher re-emits only on change (`lastJson`), nothing corrected the client
+  // until some other fleet field moved.
+  it('a broadcast that lands while the cold snapshot is still assembling is not overwritten by it', async () => {
+    let hold = false;
+    let held = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    // A real coord store, so the handler sends its cold `runs` frame in the same
+    // `.then` straight after the fleet decision: the frame after release is
+    // `runs` exactly when no second `fleet` was sent, with no timing involved.
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps = { ...testDeps(home, async () => {
+      if (hold) { held++; await gate; }
+      return { code: 1, stdout: '', stderr: '' };
+    }), coord };
+    const bus = new Bus();
+    app = await buildServer(deps, bus);
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+
+    hold = true;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const next = collect(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    expect((await next()).type).toBe('hello');
+    // The snapshot is parked inside its tmux read, not finished.
+    await vi.waitFor(() => expect(held).toBeGreaterThan(0));
+
+    const newer = [{ id: 'from-the-broadcast' }];
+    bus.emit('fleet', newer as never);
+    expect(await next()).toEqual({ type: 'fleet', sessions: newer });
+
+    hold = false;
+    release();
+    expect((await next()).type).toBe('runs');
+
+    ws.close();
+  });
+
+  // The other half of the same rule, measured by review: a cold frame that
+  // lands FIRST but differs from the watcher's last broadcast was never
+  // corrected either. A registry listing that fails once at connect made the
+  // assembled snapshot `fleet: []`, and the watcher — whose own tick still
+  // matched `lastJson` — never broadcast again to repair it.
+  it("once the watcher has broadcast, a new socket's first fleet is that broadcast — not a cold read that failed", async () => {
+    let failListing = false;
+    const io: FleetIO = { ...localIO, readdir: async (p) => (failListing ? null : localIO.readdir(p)) };
+    const deps: Deps = { ...testDeps(home), io };
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    app = await buildServer(deps, bus, watcher);
+    await watcher.tick();   // broadcasts the one-session fleet
+
+    failListing = true;     // the registry cannot be listed at the moment of connect
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+    const next = collect(ws, { dropDivergence: true });
+    await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+
+    expect((await next()).type).toBe('hello');
+    const cold = await next();
+    expect(cold.type).toBe('fleet');
+    expect(cold.sessions.map((s: { id: string }) => s.id)).toEqual(['claude-a-MekWarLive']);
+
+    ws.close();
+  });
+
   it('a NEW /ws/fleet client sees an ALREADY-pending dialog on connect', async () => {
     const menuPane = [
       'Which fix?',
@@ -189,6 +267,8 @@ describe('fleet REST + WS', () => {
     const s = snapshot.sessions.find((x: { id: string }) => x.id === 'claude-a-MekWarLive');
     // The bug: this was `false` — the initial push omitted pendingDialogs, so the
     // "needs you" marker never showed on the fleet overview for a pre-existing dialog.
+    // The watcher has ticked, so this cold frame is its last broadcast
+    // (`currentFleet`); `currentPending()` now feeds only a connect before it.
     expect(s.dialogPending).toBe(true);
     ws.close();
   });

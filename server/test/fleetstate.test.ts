@@ -14,7 +14,7 @@ const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
   workspace: null, name: null, status: 'idle', statusUpdatedAt: null, limits: null,
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
-  branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
+  branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
   started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' },
@@ -368,7 +368,21 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(await loadSnapshot(cachePath)).toBeNull();
   });
 
-  it('revives `spawnState` — absent is null, and an unknown token rejects rather than launders', async () => {
+  it('revives `paneCols` as null — a snapshot is never THIS tick — and a non-number still rejects', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const absent = (await loadSnapshot(cachePath))?.sessions[0];
+    expect(absent?.paneCols).toBeNull();
+    expect(Object.keys(absent ?? {})).toContain('paneCols');
+    // A persisted width is DISCARDED: served in degraded mode it would quiet a
+    // `narrow` chip over a pane nobody is measuring.
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), paneCols: 150 }]);
+    expect((await loadSnapshot(cachePath))?.sessions[0]?.paneCols).toBeNull();
+    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), paneCols: 'wide' }]);
+    expect(await loadSnapshot(cachePath)).toBeNull();
+  });
+
+  it('revives `spawnState` — absent is null, a word this build cannot name is `unrecognised`, a non-string rejects', async () => {
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
     const absent = (await loadSnapshot(cachePath))?.sessions[0];
@@ -378,11 +392,16 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'blocked' }]);
     expect((await loadSnapshot(cachePath))?.sessions[0]?.spawnState).toBe('blocked');
 
-    // Unlike an unrecognised RC (which becomes `unrecognised` in L0), an
-    // unrecognised STRING off a cache an older-or-newer build wrote rejects the
-    // whole session — the same rule `lifecycle`/`bucket`/`hookState` already follow.
-    writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 'spawnstate' }]);
-    expect(await loadSnapshot(cachePath)).toBeNull();
+    // A word a NEWER build wrote — `narrow` was one, to every build before
+    // #174 — revives as the designated-ignorance member, so a rollback keeps
+    // the rest of the snapshot instead of discarding it whole.
+    writeRaw(cachePath, [
+      { ...v1Session('claude-quiet-basin'), spawnState: 'some-future-word' },
+      v1Session('claude-calm-cove'),
+    ]);
+    const revived = await loadSnapshot(cachePath);
+    expect(revived?.sessions.map((s) => s.spawnState)).toEqual(['unrecognised', null]);
+    // The wrong TYPE is still malformed, and still rejects.
     writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), spawnState: 3 }]);
     expect(await loadSnapshot(cachePath)).toBeNull();
   });

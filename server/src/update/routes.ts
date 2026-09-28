@@ -383,6 +383,10 @@ export function registerUpdateRoutes(
     }
     const state: CatalogueState = await deps.catalogue.poll(now);
     await reproject(req);
+    // Plan W3 Task 3: *Check now* polls here, outside `tick()`, so a release this poll listed is decided in this
+    // request rather than a minute later on the inventory run. Synchronous and never throws; the answer is the
+    // catalogue state whatever it decides (with no watcher — a test's `open()` — there is nothing to decide).
+    watcher?.pushReleaseAfterPoll(Date.now());
     return state;
   });
 

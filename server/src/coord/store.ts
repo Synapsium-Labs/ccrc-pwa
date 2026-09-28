@@ -251,6 +251,20 @@ export type ClearRefusalsResult =
   | { ok: true; cleared: number }
   | { ok: false; why: 'unknown-node' };
 
+/** Design 2026-09-20 §13 (W3). `markReleaseNotified`'s answers. `bad-tag` is
+ *  decided before any SQL. `already-notified` carries the value that STANDS —
+ *  the first marker's, which this call did not change — so a caller that lost
+ *  the race knows when the tag was announced; `unknown-release` means no
+ *  catalogue row carries the tag. Both are read back after the zero-change
+ *  write, inside its transaction. The C2 warning `setAccountPools` carries
+ *  applies: the type system will NOT stop a caller discarding this value, so
+ *  bind it and discriminate `.ok` before anything is sent. */
+export type MarkReleaseNotifiedResult =
+  | { ok: true; notifiedAt: number }
+  | { ok: false; why: 'bad-tag'; tag: string }
+  | { ok: false; why: 'unknown-release'; tag: string }
+  | { ok: false; why: 'already-notified'; notifiedAt: number };
+
 /** The columns `releases()` reads, as SQLite hands them back. */
 interface RawReleaseRow {
   tag: string; version: string; channel: string; publishedAt: number; commitSha: string | null;
@@ -5853,8 +5867,9 @@ export class CoordStore {
   // `releases`' catalogue columns have ONE writer, `applyReleaseListing`
   // (D-3180): the yank mark is a statement about the
   // whole listing, which a per-row upsert cannot make without a second writer
-  // on the group. `notifiedAt` is W3's `markReleaseNotified`, and nothing here
-  // names it. A node's verdict on a release is a `node_release_refusals` row,
+  // on the group. `notifiedAt` is the notification group's, and only
+  // `markReleaseNotified` (W3, the last public method of this section) names
+  // it. A node's verdict on a release is a `node_release_refusals` row,
   // keyed by node — never a column on `releases` (decision 16). Every
   // signature below is ONE line: Task 7's writer-group scan walks back from
   // each statement to its method the way `mail-hardening.test.ts`'s `SIG`
@@ -6011,6 +6026,38 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT nodeId, tag, at, detail FROM node_release_refusals WHERE nodeId = ? ORDER BY at, tag',
     ).all(nodeId) as unknown as RefusalRow[];
+  }
+
+  /** The notification group's ONE writer (design 2026-09-20 §6, §13; W3).
+   *  Stamps `notifiedAt` on one catalogue row, ONCE: the guard is the
+   *  statement's own `WHERE … AND notifiedAt IS NULL`, so a second marker —
+   *  the other lane in the same tick, or a restarted process over the same
+   *  `coord.db` — changes nothing and is told the value that stands. The
+   *  caller (`FleetWatcher.pushRelease`) starts a send only after this
+   *  returns ok, which is what makes the release push at-most-once per tag
+   *  (D-3295). Writes `notifiedAt` and nothing else,
+   *  and no method sets it back to NULL. `at` is a caller's clock: a value
+   *  that is not a non-negative safe integer throws, because SQLite binds
+   *  NaN as NULL — the row would stay unmarked while this answered ok, and
+   *  the next sweep would push the tag again. */
+  markReleaseNotified(tag: string, at: number): MarkReleaseNotifiedResult {
+    if (!Number.isSafeInteger(at) || at < 0) {
+      throw new RangeError(`markReleaseNotified: at must be a non-negative integer ms timestamp, got ${String(at)}`);
+    }
+    if (!isReleaseTag(tag)) return { ok: false, why: 'bad-tag', tag };
+    return tx(this.db, (): MarkReleaseNotifiedResult => {
+      const res = this.db.prepare('UPDATE releases SET notifiedAt = ? WHERE tag = ? AND notifiedAt IS NULL')
+        .run(at, tag);
+      if (Number(res.changes) > 0) return { ok: true, notifiedAt: at };
+      // The `why` of a zero-change write, read back after it in the same
+      // IMMEDIATE transaction: a row that exists failed the IS NULL guard, so
+      // its notifiedAt is the first marker's, never NULL.
+      const row = this.db.prepare('SELECT notifiedAt FROM releases WHERE tag = ?')
+        .get(tag) as { notifiedAt: number } | undefined;
+      return row === undefined
+        ? { ok: false, why: 'unknown-release', tag }
+        : { ok: false, why: 'already-notified', notifiedAt: row.notifiedAt };
+    });
   }
 
   /** Any `nodes` row with this id, superseded included — the read a

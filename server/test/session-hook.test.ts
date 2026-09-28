@@ -8301,6 +8301,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   the delta). Still not `:5644`, so the entry stays 1 -> 1.
       //   Task 5 (the `RunRefuseCode` paragraph for `workspace-spent`/`spent-unmeasured`): `:5844` -> `:5860`,
       //   still not `:5644`, so the entry stays 1 -> 1.
+      //   #174's pane-read follow-ups (`FleetSession.paneCols`, `paneWidth`,
+      //   `UnnamedSpawnWord`): `git diff --numstat origin/main -- shared/api.ts`
+      //   reads `68 12`, every hunk above `:5644` (the lowest is
+      //   `@@ -3042 +3098 @@`), so the `RoutingArm` referent, measured by the
+      //   same bytes, goes `:5860` -> `:5916`. Still not `:5644`, so the entry
+      //   stays 1 -> 1. Before this branch was rebased onto `b501698a` the same
+      //   shift slid a `null`-bearing line under `:5644` and the entry read 0,
+      //   a coincidental pass and never a repair; main's own inserts moved it
+      //   off again. The whole failure set was diffed against `origin/main`'s:
+      //   identical, 195 = 195.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that

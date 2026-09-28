@@ -507,9 +507,30 @@ role is `CCRC_ROLE` from the environment; absent or invalid, it is derived from 
 says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/intent`, `/api/updates/refresh`
 (once a minute) and `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is now a view of the inventory rows. Not yet: no apply or rollback route, no
-fleet-side projection reader, no release notification, no settings screen — and an `auto` other than `off` is
-refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. Not yet: no
+apply or rollback route and no fleet-side projection reader — and an `auto` other than `off` is refused
+(`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`.
+
+**Settings, the update banner and release pushes (update-management W3).** The fleet header's **Settings**
+door opens `/settings`, which reads `GET /api/updates` once a minute and whenever the page is shown again.
+Updates: the fleet's channel (stable or dev); auto-install (off; stable releases only and every release on
+my channel — the latter two disabled, naming the nodes, until every node lists `update-gate`); **Check
+now** (`POST /api/updates/refresh`); and the catalogue line — how long ago GitHub was last reached, amber
+with the reason when it could not be, `never checked` until the server's first poll since it started, and
+never "up to date" while nothing was reached. Then the release list (newest first by version; `verified`
+only when a node runs that tag and its bundle verified — a listed bundle alone reads `bundle listed`;
+notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
+and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
+that would move a node — Install, Roll back, Update, Update all — is shown disabled until the next
+release. A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+address. On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
+`/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
+whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
+has answered since the server started. A `server` or `both` box sends at most one Web Push per release tag,
+for the newest tag its release-notification setting (on my channel, stable only, off) selects, recorded in
+`coord.db` before it is sent: a restart never repeats it, a failed send is not retried, and a tag every
+measured node already runs is recorded without a push. It has no session, so an open app does not suppress
+it; tapping it opens `/settings`.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
@@ -1268,6 +1289,18 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this classifier; a blank pane no longer blinds the rescue, and the `auto-rescue` line says
   ` via=transcript` when the pane alone would not have fired. The pane regex is deliberately not
   widened (D-2364).
+- **Auth loss is stuck too (D-3522).** Claude Code 2.1.280 renders every final banner four rows
+  above the prompt box, out of the rescue's pane window, so a 401 (`Invalid API key`, `Please run
+  /login`) reached no detector at all. The transcript arm now reads it in `stuck` mode:
+  `error:"authentication_failed"` with `apiErrorStatus:401`, written at or after the pane's tmux
+  `session_created` — a swap carries the transcript, so an earlier process's 401 is not evidence about
+  this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
+  marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
+  session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
+  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
+  feared.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -2579,8 +2612,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7555-7557`), each with an operator sentence of its own at `:7595`,
-`:7603` and `:7616`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7611-7613`), each with an operator sentence of its own at `:7651`,
+`:7659` and `:7672`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2618,8 +2651,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21202`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:19989-19991`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21428`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20180-20182`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a

@@ -136,6 +136,32 @@ describe('ctx pressure survives only the tick that measured it (D-2012)', () => 
     expect(afterCtxOnly?.retained, 'identity this tick did not measure is marked kept').toBe(true);
   });
 
+  it('boxCols is only ever THIS tick\'s width — a tick that cannot see the prompt box reads none, identity kept or not', async () => {
+    const home = mkTmp('ccrc-ctx-');
+    seed(home);
+    const w = new FleetWatcher(testDeps(home, run), new Bus(), 2000);
+    const boxed = (row: string): string => ['─'.repeat(220), '❯\u00a0', '─'.repeat(220), row].join('\n');
+
+    paneOut = boxed(FULL_PANE(82));
+    await w.tick();
+    expect(w.currentStatuslines().get(ID)?.boxCols, 'the fixture must first measure a width').toBe(220);
+
+    // An overlay hides the row: identity is kept (D-2012), the width is not.
+    paneOut = DIALOG_PANE;
+    await w.tick();
+    expect(w.currentStatuslines().get(ID)?.model).toBe('Sonnet 5');
+    expect(w.currentStatuslines().get(ID)?.boxCols, 'a kept width reads an unseen pane as wide').toBeUndefined();
+
+    // A ctx-only row under a 130-column box merges THIS tick's width.
+    paneOut = boxed(CTX_ONLY_PANE(91));
+    await w.tick();
+    expect(w.currentStatuslines().get(ID)?.boxCols).toBe(220);
+    paneOut = ['─'.repeat(130), CTX_ONLY_PANE(91)].join('\n');
+    await w.tick();
+    expect(w.currentStatuslines().get(ID)?.boxCols).toBe(130);
+    expect(w.currentStatuslines().get(ID)?.retained).toBe(true);
+  });
+
   it('a dead pane deletes the WHOLE entry, not just ctxPct — distinguishable from the two misses above', async () => {
     const home = mkTmp('ccrc-ctx-');
     seed(home);
