@@ -1944,7 +1944,8 @@ already running).
             remove ccrc's own files in ~/.cc-sessions, ~/ccrc and the
             executables. PRESERVES ~/.ccrc, the session registry rows,
             worktrees and ~/ccrc-backups. Refuses while live sessions
-            exist. [--force] proceeds anyway; [--purge] also removes
+            exist, or while an update holds ~/.ccrc/update.lock.
+            [--force] proceeds anyway; [--purge] also removes
             ~/.ccrc's config (roster, identity) and ~/ccrc-backups — but
             still PRESERVES ~/.ccrc/memory (every project's durable memory:
             since 'ccrc memory --apply' it is the SOLE live copy, and a
@@ -17678,6 +17679,33 @@ cmd_uninstall() {
     _ccrc_die "this box holds $count live ccd session(s) ($sessions) — uninstalling under them orphans every supervisor. Stop them first (ccd list, then ccd stop each), or run: ccrc uninstall --force"
   fi
 
+  # ── THE UPDATE LOCK, SECOND (D-3453) ─────
+  # The sweep in `_uninst_tree_bins` removes ~/ccrc-versions and
+  # ~/ccrc.migrating, which every other writer touches only under
+  # ~/.ccrc/update.lock (`ccrc versions --prune` takes `_upd_lock`, the
+  # migration finish `_ver_lock_try`). An update or rollback in flight — a
+  # `--detach` one runs in a transient unit `_uninst_units` never stops —
+  # could be placing into, or flipping to, a version this removes, and its
+  # rename would then re-create ~/ccrc pointing at nothing. So it is asked
+  # HERE, before anything is removed: refusing halfway would leave a box
+  # neither installed nor not. A PROBE, never an acquire (this run removes the
+  # lock file itself), and its four answers are never folded (ruling R16's
+  # rule for wave 4's callers, applied to this one): 0 free; 1 held; 3, or any
+  # rc it does not define, UNMEASURED, refused with its own sentence; and 2,
+  # no `flock`, proceeds, because no updater that takes this lock runs
+  # without one (`_upd_lock` dies first). `--force` skips it, as it passes
+  # the live-session gate. Not closed: D-3251's window between a detaching
+  # parent's probe and its child's acquire.
+  local lrc=0
+  if [ "$force" -eq 0 ]; then
+    _upd_lock_probe || lrc=$?
+    case "$lrc" in
+      0|2) : ;;
+      1) _ccrc_die "an update holds ~/.ccrc/update.lock ($(_upd_lock_holder)) — uninstalling under it would remove the version it is placing or flipping to. Wait for it to finish, or run: ccrc uninstall --force — nothing on this box was removed" ;;
+      *) _ccrc_die "~/.ccrc/update.lock could not be measured (probe rc $lrc) — refusing to uninstall past a lock this box cannot see. Run ccrc uninstall --force to proceed anyway — nothing on this box was removed" ;;
+    esac
+  fi
+
   _uninst_units
   _uninst_hooks
   _uninst_wrappers
@@ -17968,8 +17996,58 @@ _uninst_graphify_skills() {
 # directory entry until this process exits — which is why this step needs no
 # staging dance on the way down.
 _uninst_tree_bins() {
+  # On a versioned box (W6) `$BOX_TREE_DIR` is the LINK `~/ccrc ->
+  # ~/ccrc-versions/<name>`, and `rm` handed a path with no trailing slash
+  # never follows a symlink: this removes the link only, and the sweep below
+  # takes the versions. With a trailing slash GNU rm empties the pointed-at
+  # version THROUGH the link, answers 0 and leaves the link standing —
+  # measured 2026-09-23 (coreutils 9.4); the uninstall suite's linked case
+  # pins this spelling.
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
+  # THE VERSIONS ROOT (spec §11's audit: `cmd_uninstall` "gains a sweep of
+  # ~/ccrc-versions/"). Every kept version goes, the one the link named
+  # included: an uninstalled box runs none of them, and GC is a verb of the
+  # ccrc this step removes, so a tree left here is disk nothing reclaims.
+  # Counted first, by `_ver_list`, so the line counts the names VER_NAME_RE
+  # admits; a legacy target's `.<tag>.incoming.<pid>` staging directory goes
+  # with the root and is never counted as a kept tree. Something at that name
+  # that is not a real directory (a file, a link elsewhere) is not a root this
+  # ccrc made: it is left where it is, and the line says so.
+  local vsaid="; no ~/ccrc-versions" msaid="" nsaid=""
+  if [ -d "$BOX_VERSIONS_ROOT" ] && [ ! -L "$BOX_VERSIONS_ROOT" ]; then
+    _ver_list || :   # rc 1 = the ORDER is unknown (Task 5); VER_NAMES is still filled, and a count needs no order
+    vsaid="; ~/ccrc-versions removed (${#VER_NAMES[@]} kept tree(s))"
+    rm -rf -- "$BOX_VERSIONS_ROOT" \
+      || _ccrc_die "removing $BOX_VERSIONS_ROOT failed"
+  elif [ -e "$BOX_VERSIONS_ROOT" ] || [ -L "$BOX_VERSIONS_ROOT" ]; then
+    vsaid="; ~/ccrc-versions left in place — it is not a directory ccrc made"
+  fi
+  # A STRAY PRE-VERSIONED TREE (D-3452). The
+  # one-time migration keeps `~/ccrc.migrating` until a health gate passes,
+  # and no gate runs on a box being uninstalled. Left behind, it and its
+  # `~/.ccrc/migrating-to` marker (removed with the node files below) would
+  # hand a later install a migration pair it could only refuse.
+  if [ -e "$BOX_MIGRATING_DIR" ] || [ -L "$BOX_MIGRATING_DIR" ]; then
+    rm -rf -- "$BOX_MIGRATING_DIR" \
+      || _ccrc_die "removing $BOX_MIGRATING_DIR failed"
+    msaid="; ~/ccrc.migrating removed"
+  fi
+  # A STAGED FLIP LEFT BEHIND (D-3452).
+  # `_plat_ln_swap` (W6 Task 1) stages `~/ccrc.new` with `ln -sfn` and renames
+  # it over `~/ccrc`; a process killed between the two leaves the staged
+  # link, which only the NEXT flip replaces — and an uninstalled box flips
+  # nothing, so it would stand in $HOME pointing into the root removed above.
+  # A LINK only, the one shape that helper makes (its second arm refuses to
+  # flip over anything else): something else at that name is not ccrc's, and
+  # it is left where it is, named.
+  if [ -L "$BOX_TREE_DIR.new" ]; then
+    rm -f -- "$BOX_TREE_DIR.new" \
+      || _ccrc_die "removing $BOX_TREE_DIR.new failed"
+    nsaid="; ~/ccrc.new removed"
+  elif [ -e "$BOX_TREE_DIR.new" ]; then
+    nsaid="; ~/ccrc.new left in place — it is not a link ccrc made"
+  fi
   rm -f -- "$BOX_INSTALLED_FILE" \
     || _ccrc_die "removing $BOX_INSTALLED_FILE failed"
   # The node's three files are install-state, not config (design 2026-09-20
@@ -17981,8 +18059,10 @@ _uninst_tree_bins() {
   # an uninstalled box has no update in flight, no baseline to restore to and
   # no spine step to classify.
   # The control plane's projection goes with them (W4 Task 8): a box with no tree follows nothing.
+  # The migration's target marker goes with them (W6 Task 6): no migration
+  # survives an uninstall, so nothing is left for it to name.
   rm -f -- "$BOX_PREVIOUS_FILE" "$BOX_INSTALL_STEP_FILE" "$BOX_UPDATE_JSON" "$BOX_UPDATE_LOCK" \
-    "$BOX_INTENT_FILE" \
+    "$BOX_INTENT_FILE" "$BOX_MIGRATION_FILE" \
     || _ccrc_die "removing the node's update state files failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
@@ -18030,7 +18110,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-update-sync" \
     "$HOME/.local/bin/ccgpt-proxy.py" "$HOME/.local/bin/ccgpt-usage.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
