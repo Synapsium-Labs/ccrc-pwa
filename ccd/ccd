@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ccacb60c304d9813d4ac045bef3ec5c541487e19fdda50b056673b1270efe4c0
+# ccrc:generated 1 sha256=1c3cbb929dd0b9fd6d03f786e472b043ca6278cfac551a2db6fbd1de3a0ddbea
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -156,6 +156,70 @@ _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
     mv -f -- "$1" "$2"
   else
     mv -fT -- "$1" "$2"
+  fi
+}
+
+# `ln -sfn` + GNU `mv -fT`: repoint a symlink in ONE rename(2) — the flip.
+#
+# THE FLIP OF `$HOME/ccrc` (versioned installs, spec 2026-09-20 §11): the
+# tree is a symlink `$HOME/ccrc -> $HOME/ccrc-versions/<name>`, and moving a
+# box onto another version is repointing it. The spec spells that
+# `ln -sfn <target> ~/ccrc.new && mv -T ~/ccrc.new ~/ccrc`, and THE LINUX ARM
+# BELOW IS THAT ARGV, VERBATIM — measured 2026-09-23 under strace on GNU
+# coreutils 9.4 as `renameat2(…, RENAME_NOREPLACE) = -1 EEXIST` and then
+# `renameat("<link>.new", "<link>") = 0`, with no `unlink` anywhere. A reader
+# that resolves `<link>` at any instant sees the old target or the new one,
+# never nothing.
+#
+# THE TWO SHORTER SPELLINGS ARE WRONG, each measured on the same coreutils:
+#   • `ln -sfn <target> <link>` straight onto the live name is unlink +
+#     symlink, the window `_inst_graphify_engine`'s pip-shim swap names ("a
+#     session that types `graphify` in that window gets ENOENT") — and this
+#     name is every unit's ExecStart and the launcher's `exec`;
+#   • `mv -f` without `-T` FOLLOWS a symlink-to-directory destination: it
+#     moves `<link>.new` INSIDE the old version and answers 0 with `<link>`
+#     unchanged — D-2187's shape, the one `_plat_mv_notdir` above exists for.
+#
+# THE DARWIN ARM IS python3's `os.replace`, NOT `_plat_mv_notdir`. BSD `mv`
+# has no `-T`, and `_plat_mv_notdir`'s Darwin arm makes up for it by `rm`-ing
+# a symlink-to-directory destination BEFORE its `mv` — a window in which
+# `<link>` does not exist, which is the one thing this helper is for.
+# `os.replace` is one rename(2) on every POSIX platform and replaces a symlink
+# rather than following it; `ccd/ccd-pool-sync`'s header gives the same reason
+# for its `os.rename` install. python3 comes with the Xcode Command Line
+# Tools, Homebrew's own prerequisite (D-3419).
+#
+# THE CONTRACT: 0 iff `<link>` is now a symlink whose value is exactly
+# `<target>`, placed by ONE rename over the symlink that stood there, or over
+# nothing. 1 otherwise, with nothing at `<link>` changed:
+#   • something that is not a symlink stands at `<link>`. A real directory
+#     there is the one-time migration's case, never this helper's, and it is
+#     refused rather than renamed into or over. One that appears after the
+#     test is refused by the rename itself (`mv -T`: "cannot overwrite
+#     directory"; `os.replace`: IsADirectoryError), so the test is not the
+#     only thing standing between a flip and a real tree;
+#   • something that is not a symlink stands at `<link>.new`. A stale LINK
+#     under the staged name needs nothing from this function: `ln -sfn`
+#     replaces it by itself (`-f`, and `-n` so a link to a directory is
+#     replaced rather than entered — GNU does it as symlink-to-a-temp-name +
+#     rename). But `-f` would DELETE a file there that this function did not
+#     make, and a real directory there would take the new link INSIDE it, so
+#     anything that is not a link is refused before `ln` runs;
+#   • `ln` fails, or the rename fails, and the staged `<link>.new` is removed.
+# `<target>` is written verbatim (callers pass an absolute path); it prints
+# nothing, never dies, and the caller owns the sentence. NOTHING serializes
+# the staged `<link>.new` (the spec's `$HOME/ccrc.new`): an update flips under
+# its lock, a plain install under none, so two flips can interleave and each
+# rc then describes the other's flip (D-3424).
+_plat_ln_swap() {   # <target> <link> -> 0 iff <link> is now a symlink to <target>
+  if [ ! -L "$2" ] && [ -e "$2" ]; then return 1; fi
+  if [ ! -L "$2.new" ] && [ -e "$2.new" ]; then return 1; fi
+  ln -sfn -- "$1" "$2.new" 2>/dev/null || return 1
+  if [ "$CCD_OS" = darwin ]; then
+    python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$2.new" "$2" 2>/dev/null \
+      || { rm -f -- "$2.new"; return 1; }
+  else
+    mv -fT -- "$2.new" "$2" 2>/dev/null || { rm -f -- "$2.new"; return 1; }
   fi
 }
 
