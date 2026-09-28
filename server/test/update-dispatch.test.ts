@@ -494,6 +494,46 @@ describe('planDispatch — the order under partial eligibility (D-3381, Review F
   });
 });
 
+describe('planDispatch — a fleet row that REFUSED its standing request holds nothing (D-3409, D-3378)', () => {
+  // D-3378: a provenance refusal does not halt, and the request stands (decision 7) but can never move
+  // (refused-by-node; auto cannot take over, D-3396). D-3381's hold must not treat that dead request as an
+  // outstanding one, or a provenance refusal would halt every server move in practice.
+  const provenanceFailed = (o: Partial<DispatchRow> = {}): DispatchRow =>
+    fleet({ ...ask('v0.0.10'), updateState: 'failed', updateDetail: `${PROVENANCE_DETAIL_PREFIX} signature does not verify`, ...o });
+
+  it('fleet failed provenance on the tag it was asked for: a server REQUEST for that tag moves', () => {
+    const p = plan(view(provenanceFailed(), 'off', ['v0.0.10']), view(server(ask('v0.0.10'))));
+    expect(p.gate.haltedBy).toEqual([]);
+    expect(p.move).toMatchObject({ nodeId: SERVER_ID, target: 'v0.0.10', source: 'request' });
+    expect(p.refusals).toEqual([]);
+  });
+
+  it('fleet failed provenance on a request, server on AUTO: the server auto-moves', () => {
+    const p = plan(view(provenanceFailed({ desiredTag: 'v0.0.10' }), 'stable', ['v0.0.10']), view(server({ desiredTag: 'v0.0.10' }), 'stable'));
+    expect(p.move).toMatchObject({ nodeId: SERVER_ID, source: 'auto' });
+  });
+
+  it('a request the fleet row has NOT refused still holds the server (refusal is per tag): the fleet moves first', () => {
+    const p = plan(view(provenanceFailed(), 'off', ['v0.0.11']), view(server(ask('v0.0.10'))));
+    expect(p.move).toMatchObject({ nodeId: FLEET_ID });
+    expect(words(p)).toEqual([[SERVER_ID, 'waiting-for-fleet']]);
+  });
+
+  it('an unreachable or capability-refused fleet row with a request still holds the server (D-3381 unchanged)', () => {
+    for (const o of [{ reachable: false }, { caps: W4_CAPS.filter((c) => c !== DETACH_CAP) }] as Partial<DispatchRow>[]) {
+      const p = plan(view(fleet({ ...ask('v0.0.10'), ...o }), 'off', ['v0.0.11']), view(server(ask('v0.0.10'))));
+      expect(p.move, JSON.stringify(o)).toBeNull();
+      expect(p.refusals.at(-1)).toMatchObject({ nodeId: SERVER_ID, refusal: 'waiting-for-fleet' });
+    }
+  });
+
+  it('a fleet row whose auto desiredTag it has refused does not hold a server auto move (D-3402 side)', () => {
+    const f = fleet({ desiredTag: 'v0.0.10', updateState: 'failed', updateDetail: `${PROVENANCE_DETAIL_PREFIX} x` });
+    const p = plan(view(f, 'stable', ['v0.0.10']), view(server({ desiredTag: 'v0.0.10' }), 'stable'));
+    expect(p.move).toMatchObject({ nodeId: SERVER_ID, source: 'auto' });
+  });
+});
+
 describe('planDispatch — an auto server move waits for a fleet row auto has not converged (D-3402)', () => {
   const serverAuto = view(server({ desiredTag: 'v0.0.10' }), 'stable');
 

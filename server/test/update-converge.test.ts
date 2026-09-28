@@ -562,6 +562,33 @@ describe('runDispatch — refusal notes (Review Focus 5)', () => {
   });
 });
 
+describe('runDispatch — a FLEET node that refused its request on provenance holds no server move (D-3409, D-3378)', () => {
+  it('the fleet node fails `provenance: …` on the tag it was asked for: its request stands, and the server dispatches (the mirror of the server-row case above, §18 "a provenance refusal does not halt")', async () => {
+    const h = harness();
+    seedFleet(h);
+    seedServer(h);
+    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r1.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    const verdict = 'provenance: the bundle signature did not verify';
+    const swept = sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 9000,
+      report: { phase: 'failed', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 9000, detail: verdict },
+    }));
+    expect(swept.lease).toMatchObject({ kind: 'release', to: 'failed' });
+    expect(swept.refuse).toMatchObject({ tag: 'v0.0.10' });
+    // The request STANDS (decision 7) — it is the very row D-3381 would have counted as outstanding.
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'failed', requestedTag: 'v0.0.10' });
+    expect(h.store.node(FLEET_ID)?.updateDetail).toMatch(/^provenance:/);
+    const fleetBefore = h.store.node(FLEET_ID);
+    const r2 = ran(await runDispatch(h.deps, T0 + 11_000));
+    expect(r2.plan.gate.haltedBy).toEqual([]);
+    expect(r2.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
+    expect(h.sent).toHaveLength(1);
+    expect(h.store.node(FLEET_ID)).toEqual(fleetBefore);
+  });
+});
+
 describe('dispatchViewsFor — the one builder of the dispatcher\'s input (the routes read the same views)', () => {
   it('carries every live row, its resolved auto, and only THIS node\'s refused tags', () => {
     const h = harness();

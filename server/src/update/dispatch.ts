@@ -125,6 +125,10 @@ function currentOf(row: Pick<DispatchRow, 'stampRead' | 'currentVersion'>): Curr
   return isReleaseTag(row.currentVersion) ? { kind: 'versioned', tag: row.currentVersion } : { kind: 'unread' };
 }
 
+/** THE refusal source: this node's own refused tags (D-3394) — `moveRefusal`'s `refused-by-node` and, D-3409, the
+ *  fleet-hold's exclusion of a row that refused its standing request both ask it. */
+const refusedByNode = (v: DispatchNodeView, tag: string): boolean => v.refusedTags.has(tag);
+
 type Intended = { kind: RequestKind; target: string; source: 'request' | 'auto' };
 /** A request outranks auto — the operator's tap is the stronger intent. A request this build cannot read (a
  *  kind token outside RequestKind reads null, D-3181) moves NOTHING and auto does not take over: the request
@@ -173,7 +177,7 @@ export function moveRefusal(view: DispatchNodeView, move: { kind: RequestKind; t
   } else if (known === undefined) {
     return 'unknown-tag';
   }
-  if (view.refusedTags.has(move.target)) return 'refused-by-node';
+  if (refusedByNode(view, move.target)) return 'refused-by-node';
   if (!row.caps.includes(DETACH_CAP)) return 'no-detach-cap';
   if (move.kind === 'rollback' && !row.caps.includes(ROLLBACK_CAP)) return 'no-rollback-cap';
   if (move.source === 'auto' && !row.caps.includes(UPDATE_GATE_CAP)) return 'no-update-gate';
@@ -245,17 +249,22 @@ function moveDetail(row: DispatchRow, m: Intended): string {
  *  with auto permitting and a desiredTag. For each, in compareDispatchOrder: a request an IDLE row already runs
  *  is `met`; otherwise moveRefusal decides, and a node it clears whose rank is not fleet's (1 or 2) is deferred
  *  `waiting-for-fleet` while any live fleet-role row holds a request — whatever that row's state or
- *  reachability (D-3381) — and, when its own move is AUTO, while any live fleet-role row
+ *  reachability (D-3381), unless it is a request that row has itself refused (D-3409) — and, when its own move is AUTO, while any live fleet-role row
  *  is one auto has not converged: auto permits it and it has a desiredTag (a converged row's is NULL), whatever
- *  its state, reachability or refusal (D-3402; a request is never held by it). The
+ *  its state or reachability, unless the row has refused that tag (D-3402, D-3409; a request is never held by it). The
  *  move is the first cleared node, unless a lease is held (one node at a time, fleet-wide); a cleared node after
  *  it waits its turn un-noted. */
 export function planDispatch(input: DispatchInput): DispatchPlan {
   const gate = fleetGate(input.nodes.map((v) => v.row));
   const ordered = [...input.nodes].sort((a, b) => compareDispatchOrder(a.row, b.row));
-  const fleetAsk = ordered.find((v) => dispatchRank(v.row.role) === 0 && v.row.requestedTag !== null) ?? null;
+  // D-3409: a fleet row whose standing request (or auto desiredTag) is one THIS node has refused on a provenance
+  // verdict can never move it (refused-by-node, D-3396) — it is not an outstanding move, so it holds nothing;
+  // else D-3378's non-halting refusal would hold every server move until an ack.
+  const fleetAsk = ordered.find((v) =>
+    dispatchRank(v.row.role) === 0 && v.row.requestedTag !== null && !refusedByNode(v, v.row.requestedTag)) ?? null;
   const fleetAuto = ordered.find((v) =>
-    dispatchRank(v.row.role) === 0 && autoPermits(v.auto, v.row.channel) && v.row.desiredTag !== null) ?? null;
+    dispatchRank(v.row.role) === 0 && autoPermits(v.auto, v.row.channel) && v.row.desiredTag !== null
+    && !refusedByNode(v, v.row.desiredTag)) ?? null;
   const haltedRow = gate.haltedBy.length > 0 ? ordered.find((v) => v.row.nodeId === gate.haltedBy[0]) ?? null : null;
   const met: MetRequest[] = [];
   const refusals: PlannedRefusal[] = [];
