@@ -212,7 +212,7 @@ Record, for the tasks that read them:
 - Consumes: `die()` (prints `ccd: $*` on stderr, exits 1); `$REG` (`$HOME/.cc-sessions`); wave 3's reader of `$REG/reclaim-paused` inside `ws-reclaim`.
 - Produces: the bash function `cmd_reclaim_pause()` (argv exactly `--state on|off`; stdout `paused` or `running`, exit 0; every refusal is `die`, exit 1; the ONLY effect is creating or removing `$REG/reclaim-paused`); the dispatcher verb `reclaim-pause`; the `cmd_caps` lines `reclaim-pause` (verb) and `reclaim-pause-v1` (capability token). Task 3 consumes the token and the verb; Task 6's route reaches the verb through `CCD_ARGV.reclaimPause`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/ccd-child-reclaim-pause.test.ts`:
 
@@ -419,13 +419,13 @@ describe('ccd reclaim-pause', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-pause.test.ts`
 
 Expected: FAIL, 12 of 12 (11 of 11 plus one skipped when run as root). The ten verb cases die with `cmd_reclaim_pause: command not found` (exit 127) — `h.sh` throws, and the `shFail` cases see stderr without the expected sentence; the caps case fails `expected [ … ] to contain 'reclaim-pause'`; the dispatcher case fails on its first `expect(on.code).toBe(0)` (the `*)` arm answers the usage line at exit 1); the path case fails `cmd_reclaim_pause is not defined at column 0: expected -1 to be greater than -1`.
 
-- [ ] **Step 3: Write the verb**
+- [x] **Step 3: Write the verb**
 
 In `ccd/ccd`, insert directly AFTER `cmd_ls`'s closing brace — i.e. after the `}` that ends `cmd_ls` and its blank line, directly above `cmd_attach() {`, followed by one blank line of its own. NOT beside `cmd_coord_pause`: that function sits above the frozen compaction-card corpus's highest anchor into `ccd/ccd` (`:19131`, contract §8 R9′'s figure and grep — Global Constraints), and every line added above it is a permanent move of anchors neither corpus document may re-point (contract §7 R9). And NOT directly above `cmd_ls() {`, between `cmd_forget` and `cmd_ls`: `server/test/ccd-refusal-scan.test.ts` slices `cmd_forget() {` … `cmd_ls() {` as `cmd_forget`'s body, and this function's three `die`s — none of them an `_lc_refuse`/`_lc_fail`, by `cmd_coord_pause`'s design — would read as three unrecorded refusals in a destructive verb. Placement is free for a bash function (the dispatcher resolves it at call time), so the whole function — its argument included — goes after `cmd_ls`. Measure the place first:
 
@@ -498,7 +498,7 @@ cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower th
 }
 ```
 
-- [ ] **Step 4: Advertise it, and wire the dispatcher**
+- [x] **Step 4: Advertise it, and wire the dispatcher**
 
 (a) In `cmd_caps`'s verb heredoc, insert `reclaim-pause` on its own line between `project-pool` and `route` (the heredoc is alphabetical there). The `old_string` for the Edit is the two unindented lines `project-pool` / `route`; confirm first that the pair occurs once: `grep -c -x 'project-pool' ccd/ccd` must print `1` (the heredoc line; the dispatcher arm is indented).
 
@@ -531,7 +531,7 @@ grep -c '|coord-pause|reclaim-pause|' ccd/ccd
 
 Expected: `1`.
 
-- [ ] **Step 5: Teach the caps parity test the token — by APPENDING**
+- [x] **Step 5: Teach the caps parity test the token — by APPENDING**
 
 In `server/test/ccd-archive.test.ts`, `KNOWN_CAPABILITY_TOKENS` (at planning line 154) carries ten tokens plus whatever waves 1 and 3 appended (`child-argv-v1`, `reclaim-v1`). **Insert `'reclaim-pause-v1'` into the existing array; never rewrite the array from this plan** — the terminal-drawer wave rewrote it from a stale plan once and silently dropped `route-v1`, which re-classified that token as a VERB and red the parity check (D-2777). After the edit:
 
@@ -541,7 +541,7 @@ grep -n "KNOWN_CAPABILITY_TOKENS = \[" server/test/ccd-archive.test.ts
 
 Expected: one line containing `'reclaim-pause-v1'` AND every token that was there before this step.
 
-- [ ] **Step 6: Re-stamp ccd, run the tests to verify they pass**
+- [x] **Step 6: Re-stamp ccd, run the tests to verify they pass**
 
 ```bash
 node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; \
@@ -554,7 +554,7 @@ cd server && ./node_modules/.bin/vitest run test/ccd-child-reclaim-pause.test.ts
 
 Expected: PASS — `ccd-child-reclaim-pause` 12/12 (11 + 1 skipped as root); `ccd-refusal-scan` green with NO edit, its case count unchanged — `cmd_forget`'s slice (`cmd_forget() {` … `cmd_ls() {`) still holds only `cmd_forget`, so its coverage floor and its bare-`die` scan see nothing new, and no other `VERBS` slice reaches past `cmd_ls` (Step 3's measurement); `ccd-coord-pause` unchanged and green; `ccd-archive`'s parity sees `reclaim-pause` on both sides and `reclaim-pause-v1` in the known set; `caps-token-shape` picks up `echo reclaim-pause-v1` through `parseCcdCaps`; `ownership` proves the re-stamp landed; `ccd-reg-get-census` green with NO edit — this task adds no `_reg_get` call (contract §7 R10), and that census is what would say otherwise.
 
-- [ ] **Step 7: Pay the citation-corpus tax (S6-R11)**
+- [x] **Step 7: Pay the citation-corpus tax (S6-R11)**
 
 This step runs AFTER the re-stamp and AFTER every `ccd/ccd` edit of this task. `ccd/ccd` gained two lines inside `cmd_caps` (above the frozen anchors), and the function after `cmd_ls`, the dispatcher arm and the usage word (below them); the two above shift every cited anchor below them.
 
@@ -588,7 +588,7 @@ change each dump's file name `before-` → `after-`, run (a) again, and diff eac
 
 (d) Replace each failing census value with its `after-*.json` value, pasted IN THE INSTRUMENT'S ORDER (`toEqual` on an array is order-sensitive), and beside it add ONE comment naming the composition — which refs entered, which left, and the one cause: "child-reclamation wave 4 Task 2: two lines above the frozen anchors — `reclaim-pause` in `cmd_caps`'s verb heredoc and `echo reclaim-pause-v1` at its tail; `cmd_reclaim_pause` itself sits below `:19131`, the frozen corpus's highest `ccd/ccd` anchor, and moves nothing; no rule changed. No D-number (S6-R11)." (A committed comment: it names the reason, never the contract section — contract §8 R23.) **Never adjust a number to make it green, and never widen the rule.** Re-run (a): PASS.
 
-- [ ] **Step 8: Mutation check, then commit**
+- [x] **Step 8: Mutation check, then commit**
 
 Five mutations, each restored and re-stamped before the next:
 

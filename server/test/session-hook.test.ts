@@ -9130,6 +9130,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // out of the set. Neither corpus document changed (byte-identical to
         // `origin/main` at this tree, measured), so nothing was re-pointed
         // either. S6-R11 covers the re-measurement, so no D-number.
+        // RE-MEASURED at child-reclamation wave 4 (Task 2), 53 -> 54: ONE ENTERS
+        // (`:13573-13575`, a second site) and NONE LEAVES, measured by running
+        // this audit against the pre-Task-2 tree and diffing the two failure
+        // lists rather than inferring it. THE CAUSE: `cmd_caps`'s verb heredoc
+        // line (`reclaim-pause`) and its token tail (`echo reclaim-pause-v1`)
+        // are the task's only two lines above the frozen corpus's highest
+        // anchor (`:19131`); `cmd_reclaim_pause` itself sits below `:19131`,
+        // after `cmd_ls`, and moves nothing. That `+2` shift slides a different
+        // `ccd/ccd` line under the row's second `:13573-13575` site, so the row
+        // now fails there a second time (it already failed there once, above,
+        // at this same key — two distinct sites sharing one anchor). Neither
+        // corpus document changed (byte-identical to `origin/main` at this
+        // tree, measured), so nothing was re-pointed. A coincidental fail is
+        // not new rot; Task 11 still owns the re-anchor. S6-R11 covers the
+        // re-measurement, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9171,6 +9186,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
@@ -9291,6 +9307,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // wording change at `:3400`/`:3401` lies inside the already-stale
       // `spec:2209 ccd/ccd:3390-3402` / `:3401` entries below, unmoved.
       // Neither corpus document changed. S6-R11, no D-number.
+      // RE-MEASURED at child-reclamation wave 4 (Task 2), FROM THE SAME RUN as
+      // the row-pass set above: 36 -> 37, ONE ENTERS (`spec:2210
+      // ccd/ccd:13573-13575`) and NONE LEAVES, measured against the pre-Task-2
+      // tree and diffing the two failure lists. Same cause as the row-pass set
+      // above — `cmd_caps`'s two bare lines, the task's only insertion above
+      // the corpus's highest anchor — sliding a different `ccd/ccd` line under
+      // this row's second `:13573-13575` site so it now also appears here.
+      // Neither corpus document changed. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',
         'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
@@ -9322,6 +9346,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/session-hook.sh:993',
         'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3050',

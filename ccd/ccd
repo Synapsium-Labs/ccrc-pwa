@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ccacb60c304d9813d4ac045bef3ec5c541487e19fdda50b056673b1270efe4c0
+# ccrc:generated 1 sha256=a7f19d960a23cd416109f5b54f3cc30a6cfee99795d7115a5bc5a878f1b85adf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8210,6 +8210,7 @@ pr-open
 pr-state
 prefer
 project-pool
+reclaim-pause
 route
 start
 stop
@@ -8375,6 +8376,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
+  echo reclaim-pause-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -23541,6 +23543,55 @@ cmd_ls() {
   echo "(open $CLAUDE_AI_BASE in the matching account and pick the session whose name == ID)"
 }
 
+cmd_reclaim_pause() {   # ccd reclaim-pause --state on|off — raise or lower the
+  # fleet-wide RECLAIM kill-switch (child-reclamation spec §5.8). While
+  # `$REG/reclaim-paused` exists, nothing reclaims a child workspace: the
+  # server's sweep skips, the server's close path skips, and — the reader that
+  # matters — `ws-reclaim` itself refuses `paused` at its rung 3 and again on
+  # resume, because a gate only the server evaluates fails open into deletion
+  # the moment the pause lands mid-flight, the server's snapshot is one tick
+  # stale, or a crashed reclaim resumes. Pausing stops reclamation and nothing
+  # else; lowering it lets the sweep drain what waited.
+  #
+  # A COPY OF `cmd_coord_pause` IN EVERY RESPECT, and granted on its argument: a
+  # registry-file write/unlink, non-destructive and idempotent, that widens
+  # nothing that deletes — it can only STOP a deletion. CHECKED on both arms,
+  # for `cmd_ws_hold`'s reason: ccd runs `set -uo pipefail` with NO `-e`, so an
+  # unchecked `touch` that failed would fall straight through to the echo and
+  # tell the phone reclamation had stopped while the sweep kept deleting — the
+  # one polarity on this verb that may never be false. Journals nothing, for
+  # `cmd_coord_pause`'s reason.
+  #
+  # It lives HERE, not beside `cmd_coord_pause`, because that neighbourhood is
+  # above the frozen citation corpus's anchors into this file (line 19131);
+  # and after `cmd_ls`, not before it, because `ccd-refusal-scan.test.ts` reads
+  # everything from `cmd_forget` to `cmd_ls` as `cmd_forget`'s body;
+  # `cmd_caps` carries its two lines — the verb and the token — bare, for the
+  # same reason, so the token's argument is this paragraph: `reclaim-pause-v1`
+  # says this ccd has this verb, and the server gates its route on
+  # `capSupported(state,'reclaim-pause-v1')` — no evidence REFUSES, the opposite
+  # of `verbSupported`'s default, which is right for verbs that have always
+  # existed and wrong for one that never did: a phone toggle sent to a box
+  # without this verb would come back as a usage error, not a 501.
+  #
+  # The echoed word is for a human reading a journal. NOTHING parses it: the
+  # server learns the state by listing $REG (`emitCoord`'s `reclaim` field).
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd reclaim-pause --state on|off"
+  local state=$2
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  local marker="$REG/reclaim-paused"
+  if [[ $state == on ]]; then
+    touch -- "$marker" || die "could not raise the reclaim pause marker — reclamation is NOT paused"
+    echo "paused"
+  else
+    if [[ -e $marker ]]; then
+      rm -f -- "$marker" || die "could not clear the reclaim pause marker — reclamation is STILL paused"
+    fi
+    echo "running"
+  fi
+}
+
 cmd_attach() {   # create-on-demand, then exec tmux attach
   local wrapper="${1:?usage: ccd attach <wrapper> <project>}" project="${2:?}"
   local id; id=$(_id "$wrapper" "$project")
@@ -26608,6 +26659,7 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -26615,6 +26667,6 @@ case "${1:-}" in
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
