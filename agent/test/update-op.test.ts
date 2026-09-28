@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { readInFlightReport, realUpdateSpawn, type RunningAgent, type UpdateSpawn } from '../src/server.js';
 import { EXEC_COMMANDS, FORBIDDEN_COMMANDS, isExecAllowed } from '../src/whitelist.js';
 import {
-  UPDATE_SPAWN_TIMEOUT_MS, updateLauncherPath, updateSpawnArgv, type AgentReady,
+  UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, updateLauncherPath, updateSpawnArgv, type AgentReady,
 } from '../../shared/agent-protocol.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 
@@ -230,6 +230,21 @@ describe('the update op', () => {
       expect(rec.calls).toEqual([]);
     });
 
+    it('a busy detail built from an in-flight report is bounded to UPDATE_OP_DETAIL_MAX (D-3391)', async () => {
+      // `isReleaseTag` has no length cap on the numeric components, so a
+      // report whose target is a release tag with a ~1000-digit major
+      // component still passes it and would otherwise blow the sentence past
+      // the op's one detail bound.
+      const { c, rec, home } = await up();
+      const p = reportPath(home);
+      writeFileSync(p, reportLine({ target: `v${'1'.repeat(1000)}.0.0` }));
+      const res = await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' });
+      expect(res).toMatchObject({ ok: false, err: 'busy' });
+      expect(res.detail).toBeDefined();
+      expect(res.detail!.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+      expect(rec.calls).toEqual([]);
+    });
+
     it('a finished report is not busy — done, failed and reverted all spawn', async () => {
       const { c, rec, home } = await up();
       const p = reportPath(home);
@@ -297,6 +312,25 @@ describe('the update op', () => {
         .toEqual({ t: 'res', id: 1, ok: true, accepted: true });
       expect(await c.req<Res>(3, { op: 'update', tag: 'v0.0.9' })).toMatchObject({ ok: true, accepted: true });
       expect(rec.calls).toHaveLength(2);
+    });
+
+    it('the gate is checked and set with no await between — two ops sent back to back on ONE connection allow only one spawn', async () => {
+      const rec = recorder();
+      const { c } = await up(rec);
+      rec.park();
+      const DETAIL = 'an update op is already spawning on this agent';
+      // No await between these two sends: id 2 must land while id 1's
+      // synchronous gate-check-and-set stretch has already run to completion,
+      // not while it is still pending on some await inserted before the flag
+      // is set (which would let both ops pass the gate and both spawn).
+      c.send({ t: 'req', id: 1, op: 'update', tag: 'v0.0.9' });
+      c.send({ t: 'req', id: 2, op: 'update', tag: 'v0.0.9' });
+      expect(await c.waitFor<Res>((m) => (m as Res).t === 'res' && (m as Res).id === 2))
+        .toEqual({ t: 'res', id: 2, ok: false, err: 'busy', detail: DETAIL });
+      expect(rec.calls).toHaveLength(1);
+      rec.release();
+      expect(await c.waitFor<Res>((m) => (m as Res).t === 'res' && (m as Res).id === 1))
+        .toEqual({ t: 'res', id: 1, ok: true, accepted: true });
     });
   });
 

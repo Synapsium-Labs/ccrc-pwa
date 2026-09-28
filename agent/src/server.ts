@@ -31,7 +31,7 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
+  UPDATE_OP_DETAIL_MAX, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, updateLauncherPath, updateSpawnArgv,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
@@ -549,8 +549,13 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       const home = ctx.cfg.home;
       const inFlight = readInFlightReport(home);
       if (inFlight !== null) {
+        // D-3391: the agent bounds its own details. `target` is only ever
+        // `isReleaseTag`-shaped, which has no length cap, so an operator (or
+        // a hostile report) can still make this sentence long — cut it to the
+        // op's one detail bound, same as `firstStderrLine`'s.
         send(ws, failUpdate(req.id, 'busy',
-          `update.json says ${inFlight.phase} (target ${inFlight.target ?? 'none'}, started ${inFlight.startedAtS ?? 'unknown'})`));
+          `update.json says ${inFlight.phase} (target ${inFlight.target ?? 'none'}, started ${inFlight.startedAtS ?? 'unknown'})`
+            .slice(0, UPDATE_OP_DETAIL_MAX)));
         return;
       }
       const file = updateLauncherPath(home);
