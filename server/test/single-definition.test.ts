@@ -435,33 +435,33 @@ describe('Build 7 nouns', () => {
   // the mechanism it claimed to be standing on.
   //
   // Same shape as the terminal-trio scan below, and for the same reason: the
-  // shipped list is BUILT by interpolation from the three exported constants, so
+  // shipped list is BUILT by interpolation from the four exported constants, so
   // this scanner sees no literal at all in the real source, and any hand-written
   // SQL list of the SET scores a hit. Any order, because a copy written from
-  // memory is as likely to land in any of the three's six permutations.
+  // memory is as likely to land in any of the four's twenty-four permutations.
   //
   // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
   it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
-    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound)';
-    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,2}\\)`);
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound|child workspace reclaimed)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,3}\\)`);
     expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
     expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
-    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound')")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound','child workspace reclaimed')")).toBe(true);
     expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
     const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
     expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the three named constants, so
+    // …and the one definition is still built from the four named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}','\$\{MAIL_CHILD_RECLAIMED_ERROR\}'\)`/);
     for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
-                        'MAIL_REBIND_SUPERSEDED_ERROR']) {
+                        'MAIL_REBIND_SUPERSEDED_ERROR', 'MAIL_CHILD_RECLAIMED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
@@ -2928,7 +2928,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(25);
+    expect(LIFECYCLE_ACTS.length).toBe(26);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -3084,7 +3084,7 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
 });
 
 // ── D-2375: the scratch-slug predicate ─────────────────────────────────────
-describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+describe('one scratch-slug predicate — four prefixes and one infix, three bash sites, one mirror', () => {
   // "Did the harness mint this slug for a throwaway directory?" is asked at
   // three sites that cannot share a function between them:
   //
@@ -3111,7 +3111,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
   // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
   // records why it does not. If that is ever revisited, this list shrinks to
   // two — a deliberate edit, not a drift.
-  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*|*--cc-tmp-*';
 
   /** The guard line at one site, found by the one token no other line in
    *  these tools carries. Exactly one per file, or the row that reads it is
@@ -3181,7 +3181,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
   // neither the equality row (it reads three sites by name) nor the narrowing
   // row (it looks for the old `case` spelling). Nothing here scans for an
   // arbitrary re-implementation of the question.
-  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes and one infix', () => {
     // Three suites state fixture preconditions against this rule and none can
     // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
     // they share. The first cut of D-2375 put a copy in each suite and pinned
@@ -3190,9 +3190,15 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
     const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
     expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
     const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
-    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    const arms = PRED.split('|'), infix = arms.pop() ?? '';   // A4: the infix has its own list, below
     expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
-    expect(mirror).toEqual(shipped);
+    expect(mirror).toEqual(arms.map((p) => p.replace(/\*$/, '')).sort());
+    // A4: stripping only a TRAILING `*` leaves the infix's leading one on, so
+    // `arms.map` above cannot fold it in — `SCRATCH_INFIXES` is its own list.
+    const im = /export const SCRATCH_INFIXES = \[([^\]]*)\]/.exec(src);
+    expect(im, 'scratchSlugs.ts declares no SCRATCH_INFIXES').toBeTruthy();
+    const infixMirror = [...(im?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]);
+    expect(infixMirror).toEqual([infix.replace(/^\*/, '').replace(/\*$/, '')]);
   });
 
   it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
@@ -3206,7 +3212,7 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
       // the bare needle read the regex literal in the row above and reported
       // THIS file as a second holder (measured). A declaration is what the
       // row claims anyway.
-      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_(?:PREFIXES|INFIXES)\s*=/m
         .test(readFileSync(f, 'utf8')))
       .map(rel)
       .sort();

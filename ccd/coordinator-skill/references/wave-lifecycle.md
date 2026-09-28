@@ -26,7 +26,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
 | `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
 | `workspace-spent` | the `sessionId` you passed is a CHILD workspace — one carrying the `$REG/<id>.child` marker, ordinarily minted for a run — whose branch has already had a PR (open, draft, merged or closed); `pr` names it. A child carries at most one PR | open the wave again WITHOUT `sessionId`; its dispatch mints a fresh child (§5, "One PR per child"). Nothing was opened and nothing was held |
-| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. Nothing was opened and nothing was held |
+| `spent-unmeasured` | the `sessionId` you passed may be a spent child and the server could not tell: the child marker, the PR ledger, the registry listing or the live PR lookup did not answer; `detail` says which. An UNLISTABLE registry (`detail` `the registry could not be listed`) answers this for ANY `sessionId`, marked or not — without the listing the server cannot tell a child from any other workspace | retry the same open. It is NOT `workspace-spent` — the evidence was unreadable, not absent — so do not drop `sessionId` on its account. If it repeats, stop and report. When the repeated `detail` shows the child's branch or tip does not resolve (a hand rename), the next run opens on a fresh child rather than retrying this one. Nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
 | `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
@@ -790,9 +790,11 @@ whole time, which is the only prevention this ordering rule buys.
 `POST /api/runs/:id/close` `{"fingerprint":{…},"final":true}` on the last
 wave's run — re-measures, closes this run `done`, and releases the hold
 (`ws-release`) **only when no other open run names this session**. The response
-carries `released`. `released: true` means the claim is gone — this workspace is
-an ordinary unheld, unclaimed row again, and nothing archives it: it stays live
-and supervised until a human archives it. `released: false` means the
+carries `released`. `released: true` means the claim is gone. A workspace that
+is not a child — your own, or any workspace dispatch did not mint — is an
+ordinary unheld, unclaimed row again; nothing archives it, and it stays live
+and supervised until a human cleans it up. A child is reclaimed instead (below).
+`released: false` means the
 claim was **handed over**, not dropped: another run still owns this workspace,
 so the hold was rewritten with that run's own reason and nothing was archived.
 That is not an error — it is the ordinary consequence of opening wave N+1
@@ -804,11 +806,48 @@ picks which notice to push: a workspace whose hold is absent but whose run is
 still open is announced as **still claimed**, naming that run. Releasing a hold
 by hand only changes which of the two notices the next sweep sends.
 
-Neither notice archives anything, and nothing else does either. A merged
-workspace stays where it is — live, supervised, its PR merged — until a human
-archives it, and when a human does, its manifest carries the whole PR lineage.
+Neither notice archives anything, and nothing else touches a workspace that is
+not a child. Such a merged workspace stays where it is — live, supervised, its
+PR merged — until a human archives it, and when a human does, its manifest
+carries the whole PR lineage. A child the close has finished with is the one
+exception, and the server's, not yours (below).
 You do not reap, ever (clause 3); cleanup is the operator's ceremony
 in the PWA.
+
+**A child is reclaimed; your own workspace is not.** A CHILD is a workspace
+dispatch minted for one of your runs — the box marks it with the run that
+minted it, and the server holds the same run as having minted it; both must
+agree, or it is not a child. When a close FINISHES with a child — a `final`
+close, an abandon (`state:'failed'`), a close of a child whose branch opened
+a PR after it was created, or a close that leaves your program with no open
+run — the server
+RELEASES it rather than holding it for a next wave, and the close response
+carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
+on the child's own queue: it commits anything left uncommitted on the child's
+branch as a WIP commit — except a secret-shaped file, which is never
+committed and is deleted with the tree — pins every commit and stash in the
+attic, writes a tombstone, and then removes the pane, the worktree, the
+branch, the clips directory and the child's temp directory. Its outcome
+lands in the feed — reclaimed, deferred with its reason, refused with its
+sentence, or failed — and never in a reply to you. A child that another open
+run still names, or that the operator is looking at, is deferred and picked
+up later; nothing you do speeds it or stops it. Otherwise
+the response carries `"childReclaim":"not-queued"` and `childReclaimWhy`
+says why: `not-a-child`, `marker-unreadable`, `siblings-open`,
+`siblings-unreadable`, `review-report-live` or `not-finished` — the last is
+the ordinary non-final close holding a child for wave N+1. No
+`childReclaimWhy` at all means the child was eligible but the hand-off did
+not start; it is reached regardless. **A review run's reviewer
+is a child too, but it is kept while the run it reviewed is open**: its
+clips directory holds the report you cite by path in every `fix-round` mail.
+If the run it reviewed is still open when the review run closes, that close
+releases the reviewer and answers `review-report-live`; if the reviewed run
+is by then already terminal, the review close finishes the reviewer
+directly instead, with no `review-report-live` deferral. Either way, the
+reviewer is reclaimed only after the run it reviewed has closed. Nothing
+changes in how you read or cite the report (SKILL.md step 6). Your own
+workspace, and any workspace dispatch did not mint, is never reclaimed — it
+stays until a human cleans it up.
 
 ## What happened to a workspace that is gone
 

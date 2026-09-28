@@ -20,8 +20,9 @@ get wrong when editing `src/whitelist.ts`.
 - **Boot-refusal asymmetry:** refuse to boot for OVER-permission (forbidden/undeclared key, over-granting or
   empty prefix, ungrantable verb, gated verb missing its flag). NEVER refuse for UNDER-permission (a declared
   command missing an entry → loud non-fatal; one route answers 502).
-- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv
-  is built from model output with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+- **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv is
+  built from model output with no human in the path), `ws-reclaim` requires `--expect` (the child-reclaim token; the
+  server composes it for a child with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail

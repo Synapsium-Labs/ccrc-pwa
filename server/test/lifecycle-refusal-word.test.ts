@@ -24,6 +24,7 @@ const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'flock-unavailable': true, 'lock-unopenable': true, 'is-a-workspace': true,
   'session-live': true, 'session-verdict-unknown': true, 'spawn-failed': true,
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
+  'pin-failed': true, 'unit-still-active': true,
 };
 const TOKENS = Object.keys(ALL_TOKENS) as LcRefusalToken[];
 
@@ -31,7 +32,7 @@ describe('the journal-only refusal vocabulary', () => {
   it.each(TOKENS)('isLcRefusalToken(%s)', (t) => { expect(isLcRefusalToken(t)).toBe(true); });
 
   it('covers the whole union and derives its list from the map', () => {
-    expect(TOKENS.length).toBe(12);
+    expect(TOKENS.length).toBe(14);
     expect([...LC_REFUSAL_TOKENS].sort()).toEqual([...TOKENS].sort());
   });
 
@@ -85,5 +86,43 @@ describe('lcRefusalWord — null is a POSITIVE answer, not a failure', () => {
     // The composition wave 9 writes: `lcRefusalWord(t) ?? refusalSentence(t)`.
     // L0 cannot import wsaudit (it imports nothing), so the fallthrough is the
     // caller's and the null is how L0 says "not mine".
+  });
+});
+
+describe('ws-reclaim’s failure words claim only what is true at EVERY site that emits them (child reclamation, wave 3)', () => {
+  // `pin-failed` and `unit-still-active` ride the fresh arm, the vanished arm
+  // (no worktree at all) and every resumed arm (an earlier attempt may have
+  // removed the worktree or the branch), so neither may promise either is
+  // intact — only that nothing FURTHER was deleted.
+  it.each(['pin-failed', 'unit-still-active'] as const)('%s says nothing further went, and never that anything is intact', (t) => {
+    expect(LC_REFUSAL_WORD[t]).not.toMatch(/intact/);
+    expect(LC_REFUSAL_WORD[t]).toMatch(/anything further/);
+  });
+
+  // The tail answers `unit-still-active` for a unit that did not answer
+  // "stopped" AND for a pane it could not prove gone after the kill (a live
+  // pane, or tmux not answering) — so its word names both, and claims neither
+  // was seen running: "could not prove" is true of every cause.
+  it('unit-still-active names the service AND the terminal pane, and claims only that neither was proven stopped', () => {
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/service/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/pane/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/could not prove/);
+    expect(LC_REFUSAL_WORD['unit-still-active']).toMatch(/tries again/);
+  });
+
+  // Three reap words that ws-reclaim's tail also emits, each widened to be
+  // true of every site: a removal refused because a tree (or a checkout inside
+  // it) could not be PROVEN the workspace's own, not only because git refused;
+  // a branch kept because the record names no commit to delete it at, not only
+  // because it moved; a cleanup record that could not be READ, not only one
+  // that could not be written.
+  it('the three reused reap words name the reclaim tail’s causes too', () => {
+    expect(SENTENCES['worktree-remove-failed']).toMatch(/could not prove that the tree at this workspace’s path — or a checkout inside it — is its own/);
+    // …and it claims no worktree was about to be removed: the reclaim tail
+    // emits it at the `branch` and `artifacts` phases and on the vanished arm,
+    // where an earlier attempt removed the worktree or there never was one.
+    expect(SENTENCES['worktree-remove-failed']).not.toMatch(/before removing a worktree/);
+    expect(SENTENCES['branch-moved']).toMatch(/names no commit to delete it at/);
+    expect(SENTENCES['tombstone-unwritable']).toMatch(/write, update or read/);
   });
 });

@@ -106,7 +106,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason.',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server when that child’s run closes; this session’s own workspace is cleaned up by a human, never by a sweep.',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -207,6 +207,66 @@ describe('the coordinator skill: its contract', () => {
       }
       expect(hits, `${rel} no longer names ${marker} at all`).toBeGreaterThan(0);
     }
+  });
+
+  // Child reclamation, wave 3. Clause 3 gained the fact that a child is the
+  // SERVER's to reclaim — and the verb that does it is never named to this
+  // session anywhere in its corpus, for the reason the case below gives about
+  // `ws-reap`: a skill that names a verb has given a model a reason to reach
+  // for it, and this one is composed by the server alone.
+  it('never names the child-reclaim verb, anywhere in the corpus', () => {
+    expect(allSkillText).not.toContain('ws-reclaim');
+  });
+
+  it('wave-lifecycle §6 says what a child is, when it is reclaimed, and what is not', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const s6 = flat(lifecycle.slice(lifecycle.indexOf('## 6 — Final merge'),
+      lifecycle.indexOf('## What happened to a workspace that is gone')));
+    expect(s6).toContain('**A child is reclaimed; your own workspace is not.**');
+    expect(s6).toContain('`"childReclaim":"queued"`');
+    // Fix round 1, I1: a substring `toContain` over the whole flattened section
+    // binds no subject — `review-report-live` is also said in the review-child
+    // carve-out sentence below, so DELETING it from the `childReclaimWhy` list
+    // alone left this green (measured, task-10-report.md's row 3). Anchor the
+    // assertion to the list itself, and make it SET EQUALITY against the
+    // shipped union — never a hand-kept array — so a seventh word ADDED to
+    // `ChildReclaimNotWhy` is caught too.
+    const LEAD = '`childReclaimWhy` says why:';
+    const lead = s6.indexOf(LEAD);
+    const end = s6.indexOf(' — the last is', lead);
+    expect(lead, 'the childReclaimWhy list lost its lead').toBeGreaterThanOrEqual(0);
+    expect(end, 'the childReclaimWhy list lost its end').toBeGreaterThan(lead);
+    const listed = [...s6.slice(lead + LEAD.length, end).matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
+    const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
+    const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
+    const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(6);
+    expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
+    // Spec §5.7: the report outlives the review close; the coordinator
+    // cites the reviewer's own path, and step 6 is not changed to say otherwise.
+    // This is the carve-out's OWN claim — kept as a separate toContain, distinct
+    // from the list above, because it is a different sentence about the same word.
+    expect(s6).toContain('answers `review-report-live`');
+    expect(s6).toContain('kept while the run it reviewed is open');
+    expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
+    expect(s6).toContain('it stays until a human cleans it up');
+    // The two OLD statements are true only of a workspace that is not a child.
+    // Appending the paragraph above without limiting them would leave the
+    // coordinator reading two contradictory accounts of one final-merge close.
+    expect(s6, 'the unlimited "stays until a human archives it" is back')
+      .not.toContain('nothing archives it: it stays live and supervised until a human archives it');
+    expect(s6, 'the unlimited "nothing else does either" is back').not.toContain('and nothing else does either');
+    expect(s6).toContain('A workspace that is not a child — your own, or any workspace dispatch did not mint — is an ordinary unheld, unclaimed row again');
+    expect(s6).toContain('Neither notice archives anything, and nothing else touches a workspace that is not a child.');
+  });
+
+  // Fix round 1, M3: step 7's own child-reclaim facts were lens-4 claims with
+  // no pin of their own — deleting either sentence stayed green, because only
+  // §6 and the reviewer's own sentence were pinned. Anchor step 7 directly.
+  it('step 7 says a child is queued for server reclaim and names the still-claimed exception', () => {
+    const step7 = flat(skill.slice(skill.indexOf("7. **Final merge:**"), skill.indexOf('## When a wave crosses')));
+    expect(step7).toContain('`"childReclaim":"queued"`');
+    expect(step7).toContain('nothing is reclaimed while it is');
   });
 
   it('names the three destructive verbs ONLY inside the clause that forbids them', () => {

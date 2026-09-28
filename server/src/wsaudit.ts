@@ -45,7 +45,7 @@ export const SENTENCES: Record<string, string> = {
   // checkout is standing on. `update-ref -d` — the CAS this verb deletes with,
   // because `git branch -d` refuses a squash merge — does not make the check
   // `branch -d` makes, so ccd makes it.
-  'branch-elsewhere': 'This workspace is on a branch another checkout is also using. Removing it here would strand that checkout, so nothing is removed.',
+  'branch-elsewhere': 'ccrc deletes a branch only when it is proven to belong to this workspace alone — checked out nowhere else (and, for a reclaim, not the project’s main line) — and here that could not be proven. Nothing is removed.',
   'dirty-tree': 'There are uncommitted or untracked changes here. Commit or move them first.',
   // A read that FAILED, not a tree that was clean. It gets its own sentence
   // rather than borrowing dirty-tree's, because "commit or move them first" is
@@ -113,7 +113,7 @@ export const SENTENCES: Record<string, string> = {
   'reap-interrupted': 'A previous cleanup of this workspace stopped part-way and its worktree is already gone. Finish it from ccd — there is nothing left here to confirm.',
   'state-changed': 'This workspace changed since the list you were shown — nothing was removed.',
   'in-progress': 'Another cleanup of this workspace is already running.',
-  'worktree-remove-failed': 'git refused to remove the worktree. The session is stopped and nothing further was deleted.',
+  'worktree-remove-failed': 'ccrc stopped: git refused to remove a worktree, or ccrc could not prove that the tree at this workspace’s path — or a checkout inside it — is its own. The session is stopped and nothing further was deleted.',
   // Whole-branch review, finding I6: the teardown loop's merge-base
   // pre-probe (`git -C $main merge-base --is-ancestor`) never calls
   // `worktree remove` at all — it is checking, ahead of time, whether
@@ -125,7 +125,7 @@ export const SENTENCES: Record<string, string> = {
   // squash-merge landing at origin before `$main`'s local checkout fetched
   // it, so the remedy is a pull, not a retry.
   'child-branch-unmerged-locally': 'A nested checkout’s branch is merged at origin but not in the local project checkout — run `git pull` in the project checkout, then re-check.',
-  'branch-moved': 'The branch moved while cleaning up — nothing was deleted after the worktree.',
+  'branch-moved': 'The branch moved while cleaning up, or the cleanup record names no commit to delete it at, so it was kept — nothing further was deleted.',
   // Added by Task 7, executing the Task 6 gate's required hardening: a resume
   // whose `reaping` breadcrumb holds a phase ccd never wrote (not one of
   // `worktree|branch|clips`) now refuses here rather than silently skipping
@@ -138,7 +138,7 @@ export const SENTENCES: Record<string, string> = {
   // original run saw. If that rewrite itself fails (a hand-edited or
   // corrupted tombstone), the resume refuses rather than destroy clips a
   // document could not be made to name truthfully.
-  'tombstone-unwritable': 'ccrc could not update this workspace’s cleanup record before finishing, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
+  'tombstone-unwritable': 'ccrc could not write, update or read this workspace’s cleanup record, so it stopped rather than delete anything it could not accurately describe. This needs a human to look at the tombstone file directly.',
   // Final-round confirmation-surface review, the sixteenth instance of the
   // measurement-forgery class. The clips directory EXISTS and ccd could not
   // list what is in it, so the sheet cannot name what the delete would
@@ -195,6 +195,48 @@ export const SENTENCES: Record<string, string> = {
   'has-upstream': 'This branch has already been pushed. Renaming it now would leave the old name on the remote and open a second branch there on the next push.',
   'name-taken-local': 'A branch with that name already exists in this project.',
   'name-taken-origin': 'A branch with that name already exists on the remote.',
+  // ── ws-reclaim (child-workspace reclamation, spec 2026-09-22 §5.5). The
+  // ladder's new words. A CHILD has no human to act on a sentence (rule 4), so
+  // none of these tells anyone to do anything: the retryable ones say the lane
+  // tries again, the terminal ones say what was not proven. The reused tokens
+  // (`no-such-session`, `not-a-workspace`, `held`, `tree-unreadable`,
+  // `no-worktree-record`, `state-changed`, `in-progress`) keep their sentences
+  // UNEDITED: the server only ever shows a TERMINAL token's sentence for a
+  // child — `no-worktree-record`'s ("nothing here is ccrc's to remove") is
+  // true of one and asks nothing of anyone — and
+  // `held`/`state-changed`/`in-progress` — the three whose copy names a human
+  // remedy — are retryable, carried as a deferral's `detail`, never rendered.
+  // `containment-unproven` has several causes in ccd (a nested checkout that is
+  // not a worktree root of this project, or one of another repository that is
+  // dirty, unpushed or holds a hidden-flag edit ccd will not delete unkept; a
+  // workdir that belongs to another repository, that is a symbolic link, that
+  // is not one plain absolute path, or that is not git's own record of that
+  // tree; or that another registry row names, is rooted inside, or is spelled
+  // through it), so its sentence gives them as EXAMPLES rather than an
+  // exhaustive reading — general enough that one more cause need not reopen
+  // it — and claims only what every one of them proves: the tree at that path
+  // is not proven to be the child's own. A read that FAILED is not among
+  // them — ccd answers that unmeasured, and the lane retries it.
+  // `branch-elsewhere` IS reused from ws-reap, but its sentence is WIDENED here
+  // rather than merely kept: ws-reap's own two emitters mean only "another
+  // checkout holds it", while reclaim's ladder also refuses it when the branch
+  // IS the project's main line, or when whether it is could not be told at all
+  // (an unset origin/HEAD) — so the sentence states the general rule, true of
+  // all three, rather than listing them. `tree-busy` is NOT reused: it is new
+  // in wave 3 (reclaim's rung 6 alone; ws-reap has no emitter of this token at
+  // all), and its sentence covers a held `index.lock` FILE standing in the
+  // child's own tree (possibly left by a crash — no command need be holding
+  // it), never only an in-progress git operation.
+  'not-a-child': 'ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees — so it is never reclaimed automatically. Nothing was removed.',
+  'paused': 'Reclamation is paused fleet-wide. Nothing was removed; it resumes when the pause is lifted.',
+  'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
+  'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, or its index is locked (an `index.lock` file is present, possibly left by a crash), so nothing was removed. Reclamation tries again later.',
+  'containment-unproven': 'ccrc cannot prove that the tree at this workspace’s path is its own, so nothing was removed — for example when the path is a symbolic link, is not one plain absolute path, or is not git’s own record of that tree; when the directory belongs to another repository; when a checkout nested inside it is not itself this project’s own worktree, or is one of another repository not proven clean, fully pushed and free of any edit ccd cannot pin elsewhere; or when another session’s record names, sits inside, or is spelled through this same path.',
+  // The flavour pair (spec §5.6): neither verb finishes the other's interrupted
+  // work. `reap-in-progress` is ws-reclaim's refusal of a ws-reap breadcrumb;
+  // `reclaim-in-progress` is ws-reap's refusal of a `reclaim:` one.
+  'reap-in-progress': 'An interrupted clean-up of this workspace belongs to ws-reap, and reclamation never finishes another verb’s work. Nothing was removed.',
+  'reclaim-in-progress': 'An interrupted reclamation of this workspace is waiting to finish, and ws-reap never finishes another verb’s work. Nothing was removed.',
 };
 
 export function refusalSentence(token: string): string {
