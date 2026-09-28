@@ -1497,6 +1497,20 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
   `rm`; a probed account revived
   with no local trace (a transient 401) keeps its marker until the probe's next live answer.
+- **A carried-in banner is not a block (D-3526).** A swap carries the transcript with every row's own
+  timestamp, so the old account's rate-limit row lands on the new account unchanged, and it stays the
+  newest real row when the new process writes nothing. Once `SWAP_COOLDOWN` lapsed the rescue read it
+  as a block on the new account and moved the session again (26 of 259 rescues from 2026-09-08). The
+  rate limit is now dated against the same clock as the 401, the pane's tmux `session_created`: a
+  `rate_limit` row provably older than it is carried in, and `stuck` mode answers rc 3 with the row's
+  epoch. It is not a block on any rung — the pane rungs ask the same read, uncached, before they fire,
+  unless the pane shows an auth failure. The one exception is a process that never came up
+  (`$REG/<id>.spawn` records rc 4 at or after its birth): that session is still moved. Each process
+  logs one `carried-in <id>: via=<transcript|pane|banner> rate-limit row at <epoch> predates this pane's
+  process (born <epoch>) — not a block [wrapper=<w>] [spawn=<rc>]` line in `swap.log`, floored by
+  `$REG/<id>.carriednote`. A pane positive is dated by the transcript's newest real row, so once the
+  process has written a real row nothing is suppressed. Carried: the 30-second `tscan` cache is not
+  keyed on the process.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses

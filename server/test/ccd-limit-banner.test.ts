@@ -58,6 +58,9 @@ const AUTH = () => L.apiError('authentication_failed', 401, 'Invalid API key · 
 /** The row's own clock, as epoch seconds: a `since` above it means the row was
  *  written by an EARLIER process than the pane's current one. */
 const ROW_AT = Math.floor(Date.parse('2026-09-26T10:50:02.000Z') / 1000);
+/** The `banner` row's own clock, as epoch seconds (D-3526). */
+const BANNER_AT = Math.floor(Date.parse('2026-09-10T10:12:21.199Z') / 1000);
+const iso = (epoch: number): string => new Date(epoch * 1000).toISOString();
 const OAUTH = () => L.apiError('authentication_failed', 401, 'Please run /login · API Error: 401 OAuth token has expired. Please obtain a new token or refresh your existing token.');
 const BILLING = () => L.apiError('billing_error', 400, 'Credit balance is too low');
 const OVERLOADED = () => L.apiError('server_error', 529, 'API Error: Repeated 529 Overloaded errors. The API is at capacity — this is not a problem with your account.');
@@ -167,10 +170,16 @@ describe('_transcript_limit_banner stuck mode: auth loss written by this process
       seed(); const p = writeTranscript([L.human(), row()]);
       expect(stuck(p)).toBe('0');
     });
-  it('still reads a rate limit as stuck, with or without a since', () => {
+  it('a rate limit is stuck unless it provably predates the pane (D-3526)', () => {
+    // Was "still reads a rate limit as stuck, with or without a since", written
+    // when only the 401 was dated. Its intent survives in the first two rows:
+    // no since, or a since at or before the row, and the limit counts. The
+    // third row is the rule this pin now carries: a row written before this
+    // pane's process is a carried-in banner, rc 3 — not the rc 0 of a block.
     seed(); const p = writeTranscript([L.banner()]);
-    expect(stuck(p)).toBe('0');
     expect(stuck(p, '')).toBe('0');
+    expect(stuck(p, BANNER_AT)).toBe('0');
+    expect(stuck(p, BANNER_AT + 1)).toBe('3');
   });
   it('the default mode is unchanged: a 401 is not a limit banner, even handed a since', () => {
     seed(); const p = writeTranscript([AUTH()]);
@@ -645,5 +654,247 @@ describe('the banner rung rescues, and the log names WHICH detector fired (D-310
     writeTranscript([L.assistant()]);
     expect(h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?:$HARD_BLOCK_VIA"`))
       .toBe('1:');
+  });
+});
+
+// ── D-3526 — a carried-in rate-limit banner is not a block ─────────────────
+//
+// `cmd_swap` carries the transcript with every row's original timestamp, so
+// the old account's `error:"rate_limit"` row arrives on the new account
+// unchanged. When the new process writes nothing — its TUI never came up, or
+// Claude Code declines to re-drive a turn whose API-error row is six hours old
+// — that row stays the newest real one, and once SWAP_COOLDOWN lapses the
+// rescue read it as a block on the NEW account and moved the session again.
+// Measured since 2026-09-08: 26 of 259 rescues. D-3522 already dates a 401
+// against the pane's tmux `session_created`; this dates the rate limit against
+// the same clock, and answers a distinct rc 3 for "carried in" rather than
+// folding it into "not a limit". The one exception, the operator's ruling: a
+// process that never came up (`.spawn` rc 4 at or after its birth) is still
+// moved, because that move is what got such a landing off a dead target.
+
+describe('_transcript_limit_banner stuck mode: a rate limit written before this process (D-3526)', () => {
+  const read = (p: string, since: string | number, mode = 'stuck'): { rc: string; out: string } => {
+    const raw = h.sh(`out=$(_transcript_limit_banner ${JSON.stringify(p)} ${mode} ${JSON.stringify(String(since))}); rc=$?; printf '%s|%s|' "$rc" "$out"`);
+    const i = raw.indexOf('|');
+    return { rc: raw.slice(0, i), out: raw.slice(i + 1, -1) };
+  };
+  it('the newest real row is a banner older than since: rc 3, and it prints the row epoch', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, BANNER_AT + 60)).toEqual({ rc: '3', out: String(BANNER_AT) });
+  });
+  it('control: equal seconds count as a block (rc 0), as the 401 gate counts them', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, BANNER_AT).rc).toBe('0');
+    // A row stamped on the whole second: `since` equal to it is still this process's.
+    const q = writeTranscript([L.human(), L.banner({ timestamp: iso(BANNER_AT) })]);
+    expect(read(q, BANNER_AT).rc).toBe('0');
+    expect(read(q, BANNER_AT + 1)).toEqual({ rc: '3', out: String(BANNER_AT) });
+  });
+  it('control: no since, or one that is not digits, keeps the positive — never taken away without proof', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(read(p, '').rc).toBe('0');
+    expect(read(p, 'yesterday').rc).toBe('0');
+  });
+  it('control: an unparseable row timestamp cannot be proved older, so it counts', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner({ timestamp: 'soon' })]);
+    expect(read(p, BANNER_AT + 60).rc).toBe('0');
+  });
+  it('control: a fresh banner after the carried one is this process\'s own block (rc 0)', () => {
+    seed(); const p = writeTranscript([L.banner(), L.banner({ timestamp: iso(BANNER_AT + 120) })]);
+    expect(read(p, BANNER_AT + 60)).toEqual({ rc: '0', out: '1789430400\tseven_day' });
+  });
+  it('control: the default mode is byte-for-byte unchanged, handed a since or not', () => {
+    seed(); const p = writeTranscript([L.human(), L.banner()]);
+    expect(detect(p)).toEqual({ rc: '0', out: '1789430400\tseven_day' });
+    expect(read(p, BANNER_AT + 60, "''")).toEqual({ rc: '0', out: '1789430400\tseven_day' });
+  });
+  it('control: a META resume prompt after the carried banner is still "moved on" (rc 1)', () => {
+    seed(); expect(read(writeTranscript([L.banner(), L.metaPrompt()]), BANNER_AT + 60).rc).toBe('1');
+  });
+  it('control: a 401 written before this process stays rc 1 — only a rate limit answers carried-in', () => {
+    seed(); expect(read(writeTranscript([AUTH()]), ROW_AT + 1).rc).toBe('1');
+  });
+});
+
+describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (D-3526)', () => {
+  const PROMPT = '? for shortcuts\n❯ ';
+  const NEW_BANNER = "You've hit your session limit · resets 9:10pm (UTC)\n❯ ";
+  const FOOTER = 'Usage limit reached · continuing automatically at 9:10pm · esc or type to cancel\n❯ ';
+  const API_429 = 'API Error: 429 Too Many Requests\n❯ ';
+  const AUTH_PANE = 'Invalid API key · Please run /login\n❯ ';
+  /** This pane's process was born a minute AFTER the fixture banner was written. */
+  const BORN = BANNER_AT + 60;
+  /** D-2363's stubs, except that `display-message` answers only when
+   *  `TMUX_CREATED` is set — unset is "tmux cannot say", the D-3100 stubs' shape. */
+  const STUBS = (pane: string, target = 'claude2'): string => `
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
+      capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;;
+      display-message) [ -n "\${TMUX_CREATED:-}" ] && echo "$TMUX_CREATED" ;; esac; return 0; };
+    _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
+    _swap_target() { echo ${target}; }; _avail() { return 0; };
+    _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
+  const tick = (pane: string, born: number | null = BORN, target = 'claude2'): void => {
+    h.sh(`${STUBS(pane, target)} _auto_swap_check ${ID}`, born === null ? {} : { TMUX_CREATED: String(born) });
+  };
+  const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
+  const swapLog = (): string => {
+    const f = path.join(h.home, '.cc-sessions', 'swap.log');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  const notes = (): string[] => swapLog().split('\n').filter((l) => l.includes(' carried-in '));
+  const stranded = (): boolean => fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`));
+  const authdead = (): string | null => {
+    const f = path.join(h.home, '.cc-sessions', 'claude-authdead');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+  };
+  const carried = (): void => { seed(); writeTranscript([L.human(), L.banner()]); };
+  const settled = (at: number, rc: number): void => { h.sh(`_reg_set ${ID} spawn "${at} ${rc}"`); };
+
+  it('transcript rung: a banner older than the pane rescues nothing, and says so once per process', () => {
+    carried(); settled(BORN + 30, 0);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([]);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0]).toMatch(new RegExp(
+      `^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d carried-in ${ID}: via=transcript rate-limit row at ${BANNER_AT} `
+      + `predates this pane's process \\(born ${BORN}\\) — not a block \\[wrapper=claude\\] \\[spawn=0\\]$`));
+    expect(h.reg(ID, 'carriednote')).toBe(String(BORN));
+    expect(authdead()).toBeNull();
+    // A second read of the same process (the cache cleared) writes no second line.
+    h.sh(`_reg_set ${ID} tscan ""`);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([]);
+    expect(notes()).toHaveLength(1);
+    // A new process is a new floor.
+    h.sh(`_reg_set ${ID} tscan ""`);
+    tick(PROMPT, BANNER_AT + 90);
+    expect(dispatches()).toEqual([]);
+    expect(notes()).toHaveLength(2);
+    expect(notes()[1]).toContain(`(born ${BANNER_AT + 90})`);
+  });
+  it('the carried-in answer is cached as an ordinary negative — the tscan shape is unchanged', () => {
+    carried(); tick(PROMPT);
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
+  });
+  it('control: a pane born BEFORE the banner is rescued via=transcript, with no carried-in line', () => {
+    carried(); tick(PROMPT, BANNER_AT - 60);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(notes()).toEqual([]);
+  });
+  it('never came up: this process settled rc 4, so the carried banner still moves it — the ruling', () => {
+    carried(); settled(BORN + 900, 4);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=transcript/);
+    expect(notes()).toEqual([]);
+  });
+  it('never came up counts the settle AT the birth second too', () => {
+    carried(); settled(BORN, 4);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+  });
+  it('control: an rc 4 from an EARLIER process (a .spawn older than born) is not "never came up"', () => {
+    carried(); settled(BORN - 10, 4);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([]);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0]).toMatch(/\[spawn=4\]$/);
+  });
+  it('control: a settle of this process that came up (rc 0) is not "never came up"', () => {
+    carried(); settled(BORN + 900, 0);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([]);
+  });
+  it('pane rung (banner): this year\'s limit banner over a carried transcript banner rescues nothing, via=banner', () => {
+    carried(); tick(NEW_BANNER);
+    expect(dispatches()).toEqual([]);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0]).toContain(`carried-in ${ID}: via=banner rate-limit row at ${BANNER_AT}`);
+  });
+  it.each([['an auto-continue footer', FOOTER], ['an API Error: 429 line', API_429]])(
+    'pane rung (pane): %s over a carried transcript banner rescues nothing, via=pane', (_what, pane) => {
+      carried(); tick(pane);
+      expect(dispatches()).toEqual([]);
+      expect(notes()).toHaveLength(1);
+      expect(notes()[0]).toContain(`carried-in ${ID}: via=pane rate-limit row at ${BANNER_AT}`);
+    });
+  it('the pane rung reports its verdict with HARD_BLOCK_VIA cleared', () => {
+    carried();
+    expect(h.sh(`${STUBS(NEW_BANNER)} _session_hard_blocked ${ID} ${JSON.stringify(NEW_BANNER)}; echo "$?:$HARD_BLOCK_VIA"`,
+      { TMUX_CREATED: String(BORN) })).toBe('1:');
+  });
+  it('never came up keeps a pane positive too', () => {
+    carried(); settled(BORN + 900, 4);
+    tick(NEW_BANNER);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/via=banner/);
+  });
+  it('control: a real row after the carried banner means this process wrote something — the pane banner rescues', () => {
+    seed(); writeTranscript([L.banner(), L.assistant()]);
+    tick(NEW_BANNER);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=banner/);
+    expect(notes()).toEqual([]);
+  });
+  it('control: born unknown keeps every pane positive', () => {
+    carried(); tick(NEW_BANNER, null);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(notes()).toEqual([]);
+  });
+  it('control: an auth failure on the pane is not dated against a rate-limit row', () => {
+    carried(); tick(AUTH_PANE);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(notes()).toEqual([]);
+    expect(authdead()).toBeNull();
+  });
+  it('the pane rung\'s dating read is uncached: a cached negative does not decide it', () => {
+    carried();
+    h.sh(`_reg_set ${ID} tscan "$(date +%s) 0"`);
+    tick(NEW_BANNER);
+    expect(dispatches()).toEqual([]);
+    // This process has now written its own limit row: the pane banner is real.
+    writeTranscript([L.human(), L.banner(), L.banner({ timestamp: iso(BANNER_AT + 120) })]);
+    tick(NEW_BANNER);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(h.reg(ID, 'tscan')).toMatch(/^\d+ 0$/);
+  });
+  it('the strand half: a carried banner writes no .stranded', () => {
+    carried();
+    h.sh(`${STUBS(PROMPT)} _strand_clear ${ID}; _tick_strand_undecidable ${ID} wrapper claude`, { TMUX_CREATED: String(BORN) });
+    expect(stranded()).toBe(false);
+    // Control: the same banner, the pane born before it, strands.
+    h.sh(`_reg_set ${ID} tscan ""`);
+    h.sh(`${STUBS(PROMPT)} _tick_strand_undecidable ${ID} wrapper claude`, { TMUX_CREATED: String(BANNER_AT - 60) });
+    expect(stranded()).toBe(true);
+  });
+  it('the no-target strand: a carried banner with nowhere to go strands nothing', () => {
+    carried(); tick(PROMPT, BORN, '');
+    expect(dispatches()).toEqual([]);
+    expect(stranded()).toBe(false);
+  });
+  it('_never_came_up reads a torn .spawn or born as "cannot say", and never evaluates it (D-299)', () => {
+    seed();
+    // Both operands reach bash verbatim: the file is written from here, and
+    // born rides single-quoted, so only `_never_came_up` itself could expand them.
+    const ask = (spawn: string, born: string): string => {
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.spawn`), spawn);
+      return h.sh(`_never_came_up ${ID} '${born}' 2>/dev/null; echo "rc=$?"`);
+    };
+    expect(ask(`${BORN} 4`, String(BORN))).toBe('rc=0');
+    expect(ask(`0${BORN} 4`, String(BORN))).toBe('rc=0');
+    expect(ask(`${BORN} 4`, '')).toBe('rc=1');
+    expect(ask(`${BORN} 4`, 'soon')).toBe('rc=1');
+    expect(ask('4', String(BORN))).toBe('rc=1');
+    const marker = path.join(h.home, 'evaluated');
+    expect(ask(`REG[$(touch ${marker})] 4`, String(BORN))).toBe('rc=1');
+    expect(ask(`${BORN} 4`, `REG[$(touch ${marker})]`)).toBe('rc=1');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+  it('purge: carriednote goes with the row', () => {
+    seed(); h.sh(`_reg_set ${ID} carriednote 5`);
+    expect(h.reg(ID, 'carriednote')).toBe('5');
+    h.sh(`_reg_purge ${ID}`);
+    expect(h.reg(ID, 'carriednote')).toBeNull();
   });
 });

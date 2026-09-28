@@ -73,8 +73,8 @@ Design:
 6. Do NOT touch `_redrive_after_spawn`'s pane stand-down or `_accept_first_run_prompts`' rc 5 (D-2364;
    neither relocates anything; 0 measured firings of the former).
 
-- [ ] Red: the tests below, each measured red before the fix.
-- [ ] Green: design items 1–4.
+- [x] Red: the tests below, each measured red before the fix.
+- [x] Green: design items 1–4.
 - [ ] Re-stamp `ccd/ccd`; confirm or re-measure the citation census; mutation table; full sharded server
   suite plus PWA, agent, build and tsc.
 
@@ -106,7 +106,8 @@ Tests (red first; `BANNER_AT` = the fixture banner's epoch, `TMUX_CREATED` route
   `$REG/<id>.landed`; and a landing whose TUI never came up is still rescued.* Operator ruling
   2026-09-28. Measured on 259 rescues since 2026-09-08, the two carriers suppress the same 26 carried-in
   rescues and none of the 194 fresh ones; `_pane_born` is already shipped and source-pinned, needs no write
-  in `cmd_swap`, no new registry field and no bootstrap for sessions that landed before the deploy, and
+  in `cmd_swap`, no new field for the clock (the one new registry field, `carriednote`, is only the
+  telemetry floor) and no bootstrap for sessions that landed before the deploy, and
   gives the 401 and rate-limit arms one clock. It differs from `.landed` on a same-account restart (an OOM
   kill, a supervisor revival, `ccd stop`/`start`, `ws-restore`, a refused carry's restart): a row written
   before the restart stops counting, and a real block is re-measured by Claude Code's own resume re-drive,
