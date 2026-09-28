@@ -8670,13 +8670,22 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    the tag; nothing is written.
  *    already-notified — `markReleaseNotified` (W3): the tag's `notifiedAt` is
  *                    already set. The first mark stands, and the caller
- *                    sends nothing (design §13: one push per tag). */
+ *                    sends nothing (design §13: one push per tag).
+ *    bad-kind      — `requestNode`/`dispatchNode` (programme wave 5): a kind
+ *                    outside `REQUEST_KINDS`; decided before any SQL.
+ *    no-request    — `dispatchNode`: a rollback with no matching operator
+ *                    rollback request — a move down is never automatic
+ *                    (design decision 8). Nothing is written.
+ *    not-idle      — `noteDispatchRefusal`: the row is not `idle`. A
+ *                    `failed`/`reverted` row's detail is the verdict the halt
+ *                    reads and a busy row's is its lease's; nothing is written. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
   'unknown-release', 'already-notified',
+  'bad-kind', 'no-request', 'not-idle',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {

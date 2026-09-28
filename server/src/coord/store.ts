@@ -388,6 +388,46 @@ export type AckNodeResult =
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'busy'; state: BusyUpdateState };
 
+/** Design 2026-09-20 §6/§12 (programme wave 5). `requestNode`'s answers.
+ *  `replaced` is the request that stood before this one and is now
+ *  overwritten — `null` when none stood; its `kind` is `null` when the stored
+ *  word is one this build cannot name (the reader's fallback, D-3181), never
+ *  folded into a word it is not. `bad-tag`/`bad-kind` are decided before any
+ *  SQL; `unknown-node`/`superseded` are read back after the zero-change
+ *  write. The C2 warning `setAccountPools` carries applies: bind the value and
+ *  discriminate `.ok` before answering the operator. */
+export type RequestNodeResult =
+  | { ok: true; replaced: { tag: string; kind: RequestKind | null } | null }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'bad-tag' }
+  | { ok: false; why: 'bad-kind' };
+
+/** `dispatchNode`'s answers — THE lease acquire (design §10). `busy` names
+ *  the first live row holding a lease (`heldBy`, by nodeId) — this node's own
+ *  or another's: one node at a time, fleet-wide. `no-request` is a rollback
+ *  with no matching operator rollback request
+ *  (D-3376). Every refusal writes nothing. */
+export type DispatchNodeResult =
+  | { ok: true }
+  | { ok: false; why: 'busy'; heldBy: string }
+  | { ok: false; why: 'no-request' }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'bad-tag' }
+  | { ok: false; why: 'bad-kind' };
+
+/** `noteDispatchRefusal`'s answers (D-3375).
+ *  `changed: false` = the row already said this, and nothing was written.
+ *  `not-idle` carries the state that refused the note: a `failed`/`reverted`
+ *  row's detail is the verdict the halt reads, and a busy row's is its
+ *  lease's — neither is the dispatcher's to overwrite. */
+export type NoteDispatchRefusalResult =
+  | { ok: true; changed: boolean }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'not-idle'; state: UpdateState };
+
 /** A partial intent write. `undefined` = leave the field as it stands;
  *  `pinnedTag: null` = CLEAR the pin — two different requests, never folded. */
 export interface UpdateIntentPatch { channel?: UpdateChannel; pinnedTag?: string | null; auto?: AutoMode; notify?: NotifyMode }
@@ -6141,15 +6181,16 @@ export class CoordStore {
   //
   // The node row's writer groups, one method family each (§6): measurement +
   // report (`upsertNodeMeasurement`, `markUnreachable`), identity
-  // (`rekeyNode`), lease (`releaseLease`, `settleNode`, `ackNode`; W4 adds
-  // `dispatchNode`), resolved (`resolveNode`), request (`settleNode` and
-  // `ackNode` clear it; W4's `requestNode` sets it). Every guard is in the
+  // (`rekeyNode`), lease (`dispatchNode` acquires; `releaseLease`,
+  // `settleNode` and `ackNode` release; `noteDispatchRefusal` notes a refusal
+  // on an idle row), resolved (`resolveNode`), request (`requestNode` sets it;
+  // `settleNode` and `ackNode` clear it). Every guard is in the
   // `WHERE`; a zero-change write reads its `why` back AFTER the write; every
   // signature is ONE line, so Task 7's writer-group scan can attribute each
   // statement to its method (`mail-hardening.test.ts`'s `SIG`, the D-2338
-  // precedent). Nothing in W2 calls a lease writer on a real row — no W2 code
-  // acquires a lease — so the release and settle arms are pinned on planted
-  // fixtures for W4's dispatcher to reach.
+  // precedent). W2 pinned the release and settle arms on PLANTED leases;
+  // programme wave 5's `dispatchNode` is the acquire that makes them real
+  // (`update-store-dispatch.test.ts`).
 
   /** The measurement and report groups, plus `role` and `label`, and nothing
    *  else. A row whose id was superseded is never written again: the heir is
@@ -6346,6 +6387,110 @@ export class CoordStore {
       if (row === null) return { ok: false, why: 'unknown-node' };
       if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
       return { ok: false, why: 'busy', state: busyOf(row.updateState) ?? 'unknown' };
+    });
+  }
+
+  /** The request group's SETTER (design §6, §12; programme wave 5): the
+   *  `apply` and `rollback` routes write the operator's one-tap here, and it
+   *  stands until convergence (`settleNode`) or the operator (`ackNode`)
+   *  clears it — a refusal or a drop never does (decision 7). Writes the three
+   *  request columns and nothing else, on a LIVE row; a request on a row that
+   *  holds a lease is written and waits, the lease untouched. The previous
+   *  request is read inside the same IMMEDIATE transaction only to REPORT it
+   *  (`replaced`); the write's own `WHERE` is the guard. `at` is the caller's
+   *  clock: a value that is not a non-negative safe integer throws, because
+   *  SQLite binds NaN as NULL (`markReleaseNotified`'s reason). */
+  requestNode(nodeId: string, tag: string, kind: RequestKind, at: number): RequestNodeResult {
+    if (!Number.isSafeInteger(at) || at < 0) {
+      throw new RangeError(`requestNode: at must be a non-negative integer ms timestamp, got ${String(at)}`);
+    }
+    if (!isReleaseTag(tag)) return { ok: false, why: 'bad-tag' };
+    if (!isRequestKind(kind)) return { ok: false, why: 'bad-kind' };
+    return tx(this.db, (): RequestNodeResult => {
+      const prev = this.db.prepare('SELECT requestedTag, requestedKind FROM nodes WHERE nodeId = ?')
+        .get(nodeId) as { requestedTag: string | null; requestedKind: string | null } | undefined;
+      const res = this.db.prepare(
+        'UPDATE nodes SET requestedTag = ?, requestedKind = ?, requestedAt = ? WHERE nodeId = ? AND supersededBy IS NULL',
+      ).run(tag, kind, at, nodeId);
+      if (Number(res.changes) > 0) {
+        if (prev === undefined || prev.requestedTag === null) return { ok: true, replaced: null };
+        return { ok: true, replaced: { tag: prev.requestedTag,
+          kind: isRequestKind(prev.requestedKind) ? prev.requestedKind : null } };
+      }
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      // The row exists and the only other predicate is `supersededBy IS NULL`.
+      return { ok: false, why: 'superseded', supersededBy: row.supersededBy! };
+    });
+  }
+
+  /** THE lease acquire (design §6, §10; programme wave 5) — the ONE writer
+   *  that moves a settled row to busy. One `UPDATE … WHERE` under `tx`
+   *  (`BEGIN IMMEDIATE`, synchronous), so two sweeps cannot dispatch two
+   *  nodes: the row must be live and settled; NO live row anywhere may hold a
+   *  lease (busy is `NOT IN` settled, so `unknown` and a token this build
+   *  cannot name hold it — W2's stance; a superseded row is invisible here as
+   *  everywhere); and a rollback must match the operator's rollback request
+   *  (D-3376 — a move down is never automatic;
+   *  an update carries no such clause, since an auto-driven update has no
+   *  request). The row's own `IN settled` predicate is subsumed by the
+   *  `NOT EXISTS` (a live row is one of the rows it reads) and is kept as the
+   *  rule's plain statement. Capability, direction and the halt are policy,
+   *  decided by the pure planner (`update/dispatch.ts`) in the same
+   *  synchronous stretch (D-3377). The request columns are
+   *  never written here, and the row reads `pending` until the sweep settles
+   *  or releases it (D-3382). A zero-change write is read
+   *  back in the same transaction only to LABEL the refusal (the `markAcked`
+   *  idiom). `startedAt` is the caller's clock and throws as `requestNode`'s
+   *  `at` does. */
+  dispatchNode(nodeId: string, target: string, kind: RequestKind, startedAt: number, detail: string): DispatchNodeResult {
+    if (!Number.isSafeInteger(startedAt) || startedAt < 0) {
+      throw new RangeError(`dispatchNode: startedAt must be a non-negative integer ms timestamp, got ${String(startedAt)}`);
+    }
+    if (!isReleaseTag(target)) return { ok: false, why: 'bad-tag' };
+    if (!isRequestKind(kind)) return { ok: false, why: 'bad-kind' };
+    return tx(this.db, (): DispatchNodeResult => {
+      const res = this.db.prepare(
+        "UPDATE nodes SET updateState = 'pending', updateTarget = ?, updateStartedAt = ?, updateDetail = ? " +
+        `WHERE nodeId = ? AND supersededBy IS NULL AND updateState IN ${SETTLED_UPDATE_SQL} ` +
+        `AND NOT EXISTS (SELECT 1 FROM nodes b WHERE b.supersededBy IS NULL AND b.updateState NOT IN ${SETTLED_UPDATE_SQL}) ` +
+        "AND (? <> 'rollback' OR (requestedKind = 'rollback' AND requestedTag = ?))",
+      ).run(target, startedAt, detail, nodeId, kind, target);
+      if (Number(res.changes) > 0) return { ok: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      const holder = this.db.prepare(
+        `SELECT nodeId FROM nodes WHERE supersededBy IS NULL AND updateState NOT IN ${SETTLED_UPDATE_SQL} ORDER BY nodeId LIMIT 1`,
+      ).get() as { nodeId: string } | undefined;
+      if (holder !== undefined) return { ok: false, why: 'busy', heldBy: holder.nodeId };
+      // Live, settled, no lease held anywhere, and still refused: the rollback
+      // clause is the only predicate left (an update cannot reach this line).
+      return { ok: false, why: 'no-request' };
+    });
+  }
+
+  /** A refusal the dispatcher planned, written where the operator reads it
+   *  (design §9/§10/§12: a settled, non-halting refusal "shown in
+   *  `updateDetail`"; D-3375). `updateDetail` ONLY, ONLY
+   *  on a live `idle` row, and ONLY when the text differs — the dispatcher
+   *  re-plans every node on every run, so one refusal is written once, not
+   *  every sweep. It never touches a `failed`/`reverted` row, whose detail is
+   *  the verdict `isHalting` reads (the `provenance:` prefix is what keeps a
+   *  provenance verdict non-halting), nor a busy row, whose detail is its
+   *  lease's; and it never touches the request (decision 7). */
+  noteDispatchRefusal(nodeId: string, detail: string): NoteDispatchRefusalResult {
+    return tx(this.db, (): NoteDispatchRefusalResult => {
+      const res = this.db.prepare(
+        'UPDATE nodes SET updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+        "AND updateState = 'idle' AND updateDetail IS NOT ?",
+      ).run(detail, nodeId, detail);
+      if (Number(res.changes) > 0) return { ok: true, changed: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      if (row.updateState !== 'idle') return { ok: false, why: 'not-idle', state: row.updateState };
+      return { ok: true, changed: false };
     });
   }
 
