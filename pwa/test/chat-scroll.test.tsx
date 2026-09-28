@@ -34,13 +34,25 @@ const { ChatList } = await import('../src/session/ChatList');
 const KEY = 'ccrc:chat-item-height';
 const KINDS_KEY = 'ccrc:chat-item-heights';
 
-/** What the list saved for one bucket. The record replaced the single number
- *  because one number could not serve two session shapes — see
- *  `itemHeight.ts`'s own header for the measurement. */
+/** What the list saved for one bucket: the INTERCEPT of its learned line. The
+ *  transcripts below are all one-line turns, so none of them can show a slope
+ *  and every fit reduces to `a = the mean of what was measured` — which is what
+ *  makes the arithmetic in these cases readable. The slope has its own cases in
+ *  `item-height.test.ts`, where the text can be made to vary on purpose. */
 const saved = (bucket: string): number | null => {
   const raw = localStorage.getItem(KINDS_KEY);
   if (raw === null) return null;
-  const n = Number((JSON.parse(raw) as Record<string, unknown>)[bucket]);
+  const m = (JSON.parse(raw) as Record<string, { a?: unknown } | undefined>)[bucket];
+  const n = Number(m?.a);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** The slope, for the one case that asserts a kind did not learn one. */
+const savedSlope = (bucket: string): number | null => {
+  const raw = localStorage.getItem(KINDS_KEY);
+  if (raw === null) return null;
+  const m = (JSON.parse(raw) as Record<string, { b?: unknown } | undefined>)[bucket];
+  const n = Number(m?.b);
   return Number.isFinite(n) ? n : null;
 };
 
@@ -142,13 +154,17 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
     // not a user turn. That is the point of bucketing rather than a wrinkle in
     // this test: 28 turns at 60 plus one at 1200 is 99 for the `user` bucket,
     // and the divider's own 60 is kept apart from it.
-    expect(saved('user')).toBe(99); // (28 x 60 + 1200) / 29
+    // Not rounded on the way in: the stored line is blended again on every
+    // later visit, and rounding a value that is about to be re-blended just
+    // accumulates error. The rounding that matters happens at the render,
+    // where `estimateRow` answers whole pixels.
+    expect(saved('user')).toBeCloseTo(2880 / 29, 6); // (28 x 60 + 1200) / 29
     expect(saved('divider')).toBe(60);
 
     // Comfortably more sightings than the write threshold, so an accumulator
     // that counted them would have persisted a much larger average by now.
     for (let i = 0; i < 60; i++) rendered?.([tall]);
-    expect(saved('user')).toBe(99);
+    expect(saved('user')).toBeCloseTo(2880 / 29, 6);
   });
 
   // THE RESIDUAL PR #191 LEFT. The thumb kept opening at the wrong size because
@@ -215,7 +231,69 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
     cleanup();
     expect(saved('divider')).toBe(40);
     expect(saved('user')).toBe(70);
-    expect(saved('assistant')).toBe(600); // clamped at the top of the band
+    // Taken WHOLE, not clamped: one row of a kind cannot show a slope, so the
+    // measurement lands in the intercept, and a ceiling there would simply
+    // discard a real 900px row the way the old 600px band discarded a real
+    // 1413px turn.
+    expect(saved('assistant')).toBe(900);
+    // …and it learned no slope from a single row, rather than inventing one.
+    expect(savedSlope('assistant')).toBe(0);
+  });
+
+  // THE SEEDED SIZES — the part `defaultItemHeight` structurally cannot do.
+  // That prop is ONE number for every unmeasured row, so it is right either
+  // when nothing is measured or when half is, never both. These ranges are a
+  // per-row prior in virtuoso's own size tree; real measurements arrive on the
+  // same stream and replace them.
+  describe('it seeds virtuoso with a size for EVERY row, not one for all of them', () => {
+    const restored = () =>
+      seen.props?.restoreStateFrom as
+        { ranges: { startIndex: number; endIndex: number; size: number }[]; scrollTop: number } | undefined;
+
+    it('prices each row from its own text, and collapses equal neighbours', () => {
+      localStorage.setItem(KINDS_KEY, JSON.stringify({
+        divider: { a: 35, b: 0 }, user: { a: 50, b: 20 }, assistant: { a: 40, b: 18 },
+      }));
+      // Three one-line asks, then one answer carrying sixty lines.
+      const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n');
+      render(<ChatList id="s" events={[
+        ...Array.from({ length: 3 }, (_, i) => ({ kind: 'user' as const, uuid: `u${i}`, ts: NOW, text: 'ask' })),
+        { kind: 'assistant' as const, uuid: 'a0', ts: NOW, text: long },
+      ]} pending={[]} />);
+
+      // divider(35), three asks at 50 + 20 x 1, then 40 + 18 x 60.
+      expect(restored()?.ranges).toEqual([
+        { startIndex: 0, endIndex: 0, size: 35 },
+        { startIndex: 1, endIndex: 3, size: 70 },
+        { startIndex: 4, endIndex: 4, size: 1120 },
+      ]);
+    });
+
+    it('opens at the bottom UNDER ITS OWN MODEL, so the two openings agree', () => {
+      // Virtuoso routes a restored snapshot through `initialTopMostItemIndex`,
+      // the very prop the list also sets. If they disagreed they would fight
+      // over the opening position; `scrollTop` is the seeded total, which is
+      // the same place `{ index: 'LAST', align: 'end' }` asks for.
+      localStorage.setItem(KINDS_KEY, JSON.stringify({ divider: { a: 35, b: 0 }, user: { a: 60, b: 0 } }));
+      render(<ChatList id="s" events={events(4)} pending={[]} />);
+      const r = restored();
+      expect(r?.scrollTop).toBe(35 + 4 * 60);
+      expect(r?.scrollTop).toBe(r?.ranges.reduce((a, g) => a + g.size * (g.endIndex - g.startIndex + 1), 0));
+      expect(seen.props?.initialTopMostItemIndex).toEqual({ index: 'LAST', align: 'end' });
+    });
+
+    it('hands over the same snapshot every render, never a fresh one', () => {
+      const { rerender } = renderList(50);
+      const first = restored();
+      rerender(<ChatList id="s" events={events(51)} pending={[]} />);
+      expect(seen.renders).toBeGreaterThan(1);
+      expect(Object.is(restored(), first)).toBe(true);
+    });
+
+    it('seeds NOTHING for an empty transcript rather than an empty snapshot', () => {
+      render(<ChatList id="s" events={[]} pending={[]} />);
+      expect(restored()).toBeUndefined();
+    });
   });
 
   // Two properties for two failures. The pixel budget covers ordinary
