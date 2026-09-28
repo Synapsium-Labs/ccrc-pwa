@@ -2397,6 +2397,245 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
     expect(h.git(c.main, 'branch', '--list', 'ws/nested'), 'the nested branch stands').toContain('ws/nested');
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:children');
   }, 90_000);
+
+  // THE CHILD'S OWN GIT DIRECTORY G (`<common>/worktrees/<name>`), which
+  // `git worktree remove` deletes WHOLE, for the child and for each nested
+  // same-repository checkout the tail removes: every commit its per-worktree
+  // refs, its reflogs and its named files (the op heads, the autostash files)
+  // name is kept first, read from the FILES. Each holder below is the ONLY
+  // thing naming its commit — a loose commit no shared ref reaches — and
+  // "kept" is read from git after `git gc --prune=now`. Under the DEFAULT
+  // config git's own gc would already prune a commit only a per-worktree ref
+  // names (measured, git 2.43), so no fixture runs gc before the reclaim.
+  describe('and everything the child’s own git directory names, before `git worktree remove` deletes it (spec §5.5)', () => {
+    const gitDir = (dir: string): string => h.git(dir, 'rev-parse', '--absolute-git-dir');
+    const always = (c: Child): void => { h.git(c.main, 'config', 'core.logAllRefUpdates', 'always'); };
+    /** The CONTROL every case asserts: no ref of the SHARED repository reaches it. */
+    const inNoSharedRef = (c: Child, id: string): void => {
+      expect(h.git(c.main, 'for-each-ref', '--contains', id), `the CONTROL: a shared ref reaches ${id}`).toBe('');
+    };
+    const reclaimed = (c: Child, r: { code: number; stdout: string; stderr: string }): void => {
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(fs.existsSync(c.wt), 'the worktree — and its git directory — went').toBe(false);
+    };
+    /** A fail-closed answer: pin-failed, nothing destroyed. */
+    const pinFailedIntact = (c: Child, r: { code: number; stdout: string; stderr: string }, before: string[] | 'gone', why: string): void => {
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('pin-failed');
+      expect(o.detail).toContain(why);
+      failedPairAgrees(r);
+      intact(c);
+      expect(treeOf(c.wt), 'the tree is byte-identical').toEqual(before);
+      expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch did not move').toBe(c.tip);
+      expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+    };
+
+    it.each([['the default config', false], ['core.logAllRefUpdates=always', true]] as const)(
+      'keeps a commit only `refs/worktree/keep` names, under %s', (_what, logAll) => {
+        const c = makeChild(h);
+        if (logAll) always(c);
+        const [x] = looseCommits(h, c.main, 1, 'worktree keep');
+        h.git(c.wt, 'update-ref', 'refs/worktree/keep', x!);
+        expect(fs.readFileSync(path.join(gitDir(c.wt), 'refs', 'worktree', 'keep'), 'utf8').trim(), 'the CONTROL: a file in G').toBe(x);
+        inNoSharedRef(c, x!);
+        reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+        keptThroughGc(c, x!);
+      }, 120_000);
+
+    it('keeps a commit only `refs/bisect/bad` names', () => {
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'bisect bad');
+      h.git(c.wt, 'update-ref', 'refs/bisect/bad', x!);
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('keeps a commit only a per-worktree ref’s REFLOG names, after the ref moved on (`always`)', () => {
+      const c = makeChild(h);
+      always(c);
+      const [x] = looseCommits(h, c.main, 1, 'per-worktree reflog');
+      h.git(c.wt, 'update-ref', 'refs/worktree/keep', x!);
+      h.git(c.wt, 'update-ref', 'refs/worktree/keep', c.tip);
+      expect(fs.readFileSync(path.join(gitDir(c.wt), 'logs', 'refs', 'worktree', 'keep'), 'utf8'), 'the CONTROL: G’s reflog names it')
+        .toContain(x);
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('the same in a NESTED same-repository checkout the tail removes: its per-worktree ref’s reflog is kept', () => {
+      const c = makeChild(h);
+      always(c);
+      const inner = path.join(c.wt, 'inner');
+      h.git(c.main, 'worktree', 'add', '-b', 'ws/nested', inner);
+      const [x] = looseCommits(h, c.main, 1, 'nested per-worktree reflog');
+      h.git(inner, 'update-ref', 'refs/worktree/keep', x!);
+      h.git(inner, 'update-ref', 'refs/worktree/keep', h.git(inner, 'rev-parse', 'HEAD'));
+      expect(fs.readFileSync(path.join(gitDir(inner), 'logs', 'refs', 'worktree', 'keep'), 'utf8')).toContain(x);
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      expect(fs.existsSync(inner), 'the nested checkout — and its git directory — went').toBe(false);
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('keeps a commit only `logs/ORIG_HEAD` names, as an entry’s OLD side (`always`)', () => {
+      const c = makeChild(h);
+      always(c);
+      const [x] = looseCommits(h, c.main, 1, 'orig head log');
+      h.git(c.wt, 'update-ref', 'ORIG_HEAD', x!);
+      h.git(c.wt, 'update-ref', 'ORIG_HEAD', c.tip);
+      // The entry that CREATED it at x goes, as an expiry leaves it: x is
+      // left only as the value the next entry moved FROM.
+      const log = path.join(gitDir(c.wt), 'logs', 'ORIG_HEAD');
+      const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+      fs.writeFileSync(log, `${lines.filter((l) => l.split(' ')[1] !== x).join('\n')}\n`);
+      expect(fs.readFileSync(log, 'utf8'), 'the CONTROL: x is an old side there').toContain(`${x} ${c.tip} `);
+      expect(h.git(c.wt, 'rev-parse', 'ORIG_HEAD'), 'the CONTROL: ORIG_HEAD itself names the tip').toBe(c.tip);
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('keeps a commit only REVERT_HEAD names — a revert left mid-way, reclaimed with --defer-expired', () => {
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'revert head');
+      h.git(c.wt, 'update-ref', 'REVERT_HEAD', x!);
+      inNoSharedRef(c, x!);
+      const d = evalOf(h, { childOf: String(CHILD_RUN), defer: 1 });
+      expect(d.verdict, d.detail).toBe('reclaimable');
+      reclaimed(c, childReclaimVerb(h, d.token, { extra: '--defer-expired' }));
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('keeps a commit only BISECT_HEAD names — a bisect in progress is no refusal', () => {
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'bisect head');
+      h.git(c.wt, 'update-ref', 'BISECT_HEAD', x!);
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      keptThroughGc(c, x!);
+    }, 120_000);
+
+    it('keeps an AUTOSTASH — `pull --rebase` stopped on a conflict — and the uncommitted edit it holds is reachable from the attic', () => {
+      const c = makeChild(h);
+      fs.writeFileSync(path.join(c.main, 'f1.txt'), 'theirs\n');
+      h.git(c.main, 'add', 'f1.txt'); h.git(c.main, 'commit', '-q', '-m', 'theirs');
+      fs.appendFileSync(path.join(c.wt, 'README.md'), 'an uncommitted edit, set aside\n');
+      const pull = h.run(`GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@x GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@x`
+        + ` git -C "${c.wt}" -c rebase.autoStash=true pull -q --rebase . main`);
+      expect(pull.code, 'the CONTROL: the rebase stopped on its conflict').not.toBe(0);
+      const stash = fs.readFileSync(path.join(gitDir(c.wt), 'rebase-merge', 'autostash'), 'utf8').trim();
+      expect(h.git(c.main, 'show', `${stash}:README.md`), 'the CONTROL: the autostash holds the edit').toContain('set aside');
+      expect(fs.readFileSync(path.join(c.wt, 'README.md'), 'utf8'), 'the CONTROL: the tree does not').not.toContain('set aside');
+      inNoSharedRef(c, stash);
+      const d = evalOf(h, { childOf: String(CHILD_RUN), defer: 1 });
+      expect(d.verdict, d.detail).toBe('reclaimable');
+      reclaimed(c, childReclaimVerb(h, d.token, { extra: '--defer-expired' }));
+      keptThroughGc(c, stash);
+      expect(h.git(c.main, 'show', `${stash}:README.md`)).toContain('an uncommitted edit, set aside');
+    }, 120_000);
+
+    it('the VANISHED arm: a `refs/worktree/` ref and a `logs/ORIG_HEAD` left in the tree’s record are both kept before the record is cleared', () => {
+      const c = makeChild(h);
+      always(c);
+      const [ref, orig] = looseCommits(h, c.main, 2, 'vanished holder');
+      h.git(c.wt, 'update-ref', 'refs/worktree/keep', ref!);
+      h.git(c.wt, 'update-ref', 'ORIG_HEAD', orig!);
+      h.git(c.wt, 'update-ref', 'ORIG_HEAD', c.tip);
+      const g = gitDir(c.wt);
+      fs.rmSync(c.wt, { recursive: true, force: true });
+      expect(fs.readFileSync(path.join(g, 'logs', 'ORIG_HEAD'), 'utf8'), 'the CONTROL: the record’s log names it').toContain(orig);
+      for (const x of [ref!, orig!]) inNoSharedRef(c, x);
+      const r = childReclaimVerb(h, evalOf(h).token);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(tombOf()['worktree'], 'the CONTROL: the vanished arm ran').toBe('absent');
+      expect(fs.existsSync(g), 'the record — and all it held — went').toBe(false);
+      for (const x of [ref!, orig!]) keptThroughGc(c, x);
+    }, 120_000);
+
+    it.each([
+      ['a mode-000 per-worktree REF file — which `for-each-ref` passes at rc 0', 'refs/worktree/keep', false, 'cannot be read'],
+      ['a mode-000 `refs/bisect/` directory', 'refs/bisect', false, 'cannot be listed and searched'],
+      ['a mode-000 per-worktree REFLOG file', 'logs/refs/worktree/keep', true, 'cannot be read'],
+    ] as const)('FAILS pin-failed on %s — the tree, the branch and the row untouched, no breadcrumb', (_what, rel, logAll, why) => {
+      const c = makeChild(h);
+      if (logAll) always(c);
+      const [x] = looseCommits(h, c.main, 1, 'unreadable holder');
+      h.git(c.wt, 'update-ref', rel.includes('bisect') ? 'refs/bisect/bad' : 'refs/worktree/keep', x!);
+      fs.writeFileSync(path.join(c.wt, 'notes.txt'), 'uncommitted work');
+      const target = path.join(gitDir(c.wt), rel);
+      expect(fs.existsSync(target), 'the CONTROL: it stands').toBe(true);
+      const tok = evalOf(h).token;
+      const before = treeOf(c.wt);
+      let r: { code: number; stdout: string; stderr: string };
+      fs.chmodSync(target, 0o000);
+      // Restored only if it still stands: a reclaim that read nothing deletes it with G.
+      try { r = childReclaimVerb(h, tok); } finally {
+        if (fs.existsSync(target)) fs.chmodSync(target, fs.statSync(target).isDirectory() ? 0o755 : 0o644);
+      }
+      pinFailedIntact(c, r, before, `${target} ${why}`);
+    }, 90_000);
+
+    it('reclaims through the residue git leaves — an EMPTY `refs/bisect/` and an empty `logs/refs/worktree/`', () => {
+      const c = makeChild(h);
+      const g = gitDir(c.wt);
+      fs.mkdirSync(path.join(g, 'refs', 'bisect'), { recursive: true });
+      fs.mkdirSync(path.join(g, 'logs', 'refs', 'worktree'), { recursive: true });
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+    }, 120_000);
+
+    it('reclaims through a `refs/worktree/` ref naming an object git no longer has — skipped, never a failure', () => {
+      const c = makeChild(h);
+      const g = gitDir(c.wt);
+      fs.mkdirSync(path.join(g, 'refs', 'worktree'), { recursive: true });
+      fs.writeFileSync(path.join(g, 'refs', 'worktree', 'gone'), `${'d'.repeat(40)}\n`);
+      expect(hasCommit(h, c.main, 'd'.repeat(40)), 'the CONTROL: git has no such object').toBe(false);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+    }, 120_000);
+
+    it('reclaims through a SYMBOLIC ref and a stale empty `.lock` — neither is a ref to read', () => {
+      const c = makeChild(h);
+      const g = gitDir(c.wt);
+      fs.mkdirSync(path.join(g, 'refs', 'worktree'), { recursive: true });
+      fs.writeFileSync(path.join(g, 'refs', 'worktree', 'sym'), `ref: refs/heads/${CHILD_BRANCH}\n`);
+      fs.writeFileSync(path.join(g, 'refs', 'worktree', 'keep.lock'), '');
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+    }, 120_000);
+
+    it('a tree whose `.git` is re-pointed at the SHARED directory after the settle stops step 4 pin-failed — G is only ever a directory under `worktrees/`', () => {
+      // After the settle's re-pin, the tail's ownership proof has already run
+      // and reads git's RECORD of the path, which still stands: only step 4's
+      // keep sees that the tree's git directory is now the common one, whose
+      // refs and reflogs are every session's.
+      const c = makeChild(h);
+      const common = h.git(c.main, 'rev-parse', '--absolute-git-dir');
+      const pre = afterSettle(`printf 'gitdir: %s\\n' "${common}" > "${path.join(c.wt, '.git')}";`);
+      const r = childReclaimVerb(h, evalOf(h).token, { pre });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+      expect(o.failed).toBe('pin-failed');
+      expect(o.detail).toContain(`is ${common}, which is no directory directly under ${common}/worktrees`);
+      expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+      expect(gitDir(c.wt), 'the CONTROL: the tree resolves to the common dir').toBe(common);
+      expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
+      expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays').toBe('reclaim:worktree');
+    }, 90_000);
+
+    it('keeps the COMMIT a per-worktree ref reaches through an annotated TAG', () => {
+      const c = makeChild(h);
+      const [x] = looseCommits(h, c.main, 1, 'tagged');
+      h.git(c.main, 'tag', '-a', '-m', 'a tag object', 'fixture-tag', x!);
+      const tag = h.git(c.main, 'rev-parse', 'refs/tags/fixture-tag');
+      h.git(c.main, 'tag', '-d', 'fixture-tag');
+      h.git(c.wt, 'update-ref', 'refs/worktree/tagged', tag);
+      expect(h.git(c.main, 'cat-file', '-t', tag), 'the CONTROL: it names a tag object').toBe('tag');
+      inNoSharedRef(c, x!);
+      reclaimed(c, childReclaimVerb(h, evalOf(h).token));
+      keptThroughGc(c, x!);
+    }, 120_000);
+  });
 });
 
 describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted in silence (spec §5.5 step 2)', () => {
