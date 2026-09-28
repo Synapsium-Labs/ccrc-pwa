@@ -3727,3 +3727,39 @@ describe('the auto-install gate word is declared once, in L0 (programme wave 3)'
     expect(ALL.filter((f) => LITERAL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
+
+// — design 2026-09-20 §10: the update op's refusal words and its launcher, declared once —
+// APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
+// file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
+describe('the update op — its refusal words and its launcher are declared once', () => {
+  it('UPDATE_OP_ERRORS and UpdateOpError are each declared in exactly one file, shared/agent-protocol.ts', () => {
+    for (const re of [/^\s*export const UPDATE_OP_ERRORS\b/m, /^\s*export type UpdateOpError\b/m]) {
+      const holders = ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders, String(re)).toEqual(['shared/agent-protocol.ts']);
+    }
+  });
+
+  it('the four words are listed together in one file — a second list is a second vocabulary', () => {
+    // The ordered list, not the words alone: `bad-tag` and `busy` are also
+    // route and store words (`UpdateRouteError`, `UPDATE_STORE_REFUSE_CODES`),
+    // and the dispatcher's answer mapping names `spawn-failed` in a `case`.
+    const LIST = /'bad-tag'\s*,\s*'bad-kind'\s*,\s*'busy'\s*,\s*'spawn-failed'/;
+    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it("the launcher's path parts are spelled in one file — the agent and the server-role spawn call updateLauncherPath", () => {
+    const PARTS = /'\.local'\s*,\s*'bin'\s*,\s*'ccrc'/;
+    const holders = ALL.filter((f) => PARTS.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/agent-protocol.ts']);
+  });
+
+  it('no TS root spells the launcher as one quoted path string', () => {
+    // `'…/.local/bin/ccrc'` or `"…/.local/bin/ccrc/…"`. `ccrc-api`'s path
+    // (`coord/envelope.ts`) is a different binary and does not match: the
+    // character after `ccrc` must be a quote or a slash.
+    const QUOTED = /['"][^'"\n]*\/\.local\/bin\/ccrc['"/]/;
+    const holders = ALL.filter((f) => QUOTED.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual([]);
+  });
+});

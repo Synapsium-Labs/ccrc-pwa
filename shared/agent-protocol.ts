@@ -11,6 +11,7 @@
 // and `shared/roster`), and saying otherwise would be a false fact sitting next
 // to a true rule — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
+import { isReleaseTag, isRequestKind, type RequestKind } from './api.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -97,6 +98,7 @@ export interface AgentHello { t: 'hello'; token: string }
 export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
+  /** The one op word defined for this list is `UPDATE_OP` (`'update'`), which programme wave 5's agent sends; `readReadyOps` reads it. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
 }
 
@@ -318,12 +320,23 @@ export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: strin
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
 export interface TailCloseReq{ t: 'req'; id: number; op: 'tailClose'; tailId: number }
 export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: string; cols: number; rows: number }
+/** Design 2026-09-20 §10: ONE member of the existing `req` envelope, not a new
+ *  top-level frame. `kind` absent means `'update'` (the agent's `validateReq`
+ *  fills it in). `tag` passes `isReleaseTag` before any case body sees it — a
+ *  failure answers `bad-tag`, never `bad-request`, which from this op means
+ *  exactly one thing: the agent predates it. */
+export interface UpdateReq { t: 'req'; id: number; op: 'update'; tag: string; kind?: RequestKind }
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
-export interface ResErr { t: 'res'; id: number; ok: false; err: string }
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
+ *  agent can say beyond the word — the `--detach` parent's first stderr line,
+ *  what `update.json` said. Absence permits: every op but `update` sends none,
+ *  and an agent from before the field sends none. Its ONE reader is
+ *  `server/src/remote/client.ts`'s `AgentOpError`. No `FLEET_PROTO` bump. */
+export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
 // readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 // lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
@@ -331,7 +344,104 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 //   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
 //   silence for `regular` — the D-114 shape, in the one direction that matters here, because
 //   `regular` is the only answer that lets a caller condemn anything.
-// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
+// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true}
+
+// ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
+// Everything both ends of the op must agree on is declared here, once. The
+// agent (`agent/src/server.ts`) spawns from these templates. The server's
+// dispatcher spawns its OWN node from the same two calls
+// (`server/src/update/converge.ts`) and maps the same words
+// (`server/src/update/dispatch.ts`'s `classifyOpAnswer`). Bash cannot import this, so `ccd/ccrc`
+// spells its side itself (`UPD_FROM_WORDS`, the `--detach`/`--to` parser), and
+// wave 4's tests hold that side.
+
+/** The op's name — and the one word an agent that answers it lists in `ready.ops`. */
+export const UPDATE_OP = 'update';
+
+/** D-3370 — the ONLY words the agent's `update` case
+ *  answers with. `ResErr.err` has no closed vocabulary (every other op's words
+ *  are free strings), so this op's own are declared here. The dispatcher's
+ *  answer mapping switches over `UpdateOpError` with a `never` arm, so a word
+ *  added on one side alone is a compile error. `bad-request` is deliberately
+ *  NOT a member: it is the envelope's word for an op `validateReq` does not
+ *  know, which from this op means the agent predates it. */
+export const UPDATE_OP_ERRORS = ['bad-tag', 'bad-kind', 'busy', 'spawn-failed'] as const;
+export type UpdateOpError = (typeof UPDATE_OP_ERRORS)[number];
+/** Use THIS, never `UPDATE_OP_ERRORS.includes(x as UpdateOpError)` — `isRunState`'s rule. */
+export function isUpdateOpError(v: unknown): v is UpdateOpError {
+  return typeof v === 'string' && (UPDATE_OP_ERRORS as readonly string[]).includes(v);
+}
+
+/** The `--from` word every console-driven move carries — a member of wave 4's
+ *  `UPD_FROM_WORDS` (`ccd/ccrc`), which refuses any other at exit 2. */
+export const UPDATE_OP_FROM = 'pwa';
+
+/** `$HOME/.local/bin/ccrc` as parts: the installed shim, ABSOLUTE (§18 "the
+ *  spawn argv is absolute"). A systemd user unit's PATH does not carry
+ *  `~/.local/bin` (the reason `resolveSpawnCmd` exists for `ccd`), and a bare
+ *  name would run whatever PATH found first. Spelled here once, and
+ *  `single-definition.test.ts` holds it to this file. */
+export const UPDATE_LAUNCHER_PARTS = ['.local', 'bin', 'ccrc'] as const;
+
+/** `<home>/.local/bin/ccrc`. Throws `RangeError` unless `home` is absolute
+ *  (`/`-led) with no trailing `/`: that is a caller bug (the agent's
+ *  `cfg.home`, the server's own `cfg.home`), never something to spawn. Joined
+ *  by hand because L0 imports no `node:path`. */
+export function updateLauncherPath(home: string): string {
+  if (!home.startsWith('/') || home.endsWith('/')) {
+    throw new RangeError(`updateLauncherPath: home must be absolute with no trailing slash (got ${JSON.stringify(home)})`);
+  }
+  return [home, ...UPDATE_LAUNCHER_PARTS].join('/');
+}
+
+/** THE TWO TEMPLATES (spec §10): `[kind, '--to', tag, '--detach', '--from',
+ *  UPDATE_OP_FROM]`. The spawn is therefore `ccrc update --to <tag> --detach
+ *  --from pwa` or `ccrc rollback --to <tag> --detach --from pwa`, with `tag` the
+ *  only variable token. Throws `RangeError` unless `isRequestKind(kind)` and
+ *  `isReleaseTag(tag)`. The tag guard runs AGAIN here, though the agent's
+ *  `validateReq` ran it first, so an edit that lets an unvalidated tag through
+ *  the shape gate still never reaches `execFile`. Frozen: a caller cannot
+ *  append a flag to a template. */
+export function updateSpawnArgv(kind: RequestKind, tag: string): readonly string[] {
+  if (!isRequestKind(kind)) {
+    throw new RangeError(`updateSpawnArgv: kind must be update or rollback (got ${JSON.stringify(kind)})`);
+  }
+  if (!isReleaseTag(tag)) {
+    throw new RangeError('updateSpawnArgv: tag is not a release tag (vX.Y.Z) — a caller bug; nothing was spawned');
+  }
+  return Object.freeze([kind, '--to', tag, '--detach', '--from', UPDATE_OP_FROM]);
+}
+
+/** D-3374 — the agent's bound on the `--detach` parent, and the
+ *  server-role local spawn's. The parent is not instant: `ccrc rollback
+ *  --detach` asks the release host whether the tag exists before it detaches
+ *  (wave 4 Task 7), within `CCRC_RELEASE_PROBE_MAX_TIME` (`ccd/ccrc`, 15 s by
+ *  default), which wave 4 sized to sit under this value, so a silent release host
+ *  answers as that verb's own refusal, not as this bound's timeout. */
+export const UPDATE_SPAWN_TIMEOUT_MS = 20_000;
+/** The server's `FleetClient.request` deadline for THIS op only (the client's
+ *  default is 15 s). Held strictly above `UPDATE_SPAWN_TIMEOUT_MS` by a test.
+ *  The agent's answer, even "the parent timed out", therefore always arrives
+ *  before the server gives up, so a timeout never releases a lease while a
+ *  node is still starting a run. */
+export const UPDATE_OP_TIMEOUT_MS = 30_000;
+/** The bound on `ResErr.detail`. It is 200, the same as W2's
+ *  `REPORT_DETAIL_MAX` for `update.json`'s own detail. */
+export const UPDATE_OP_DETAIL_MAX = 200;
+
+/** What a `spawn-failed` answer carries (spec §10, D-3372).
+ *  Each line of the `--detach` parent's stderr is cleaned by W2's
+ *  `printableDetail` rule: every run of characters outside printable ASCII
+ *  (0x20–0x7E) becomes one space, then the ends are trimmed. The first line
+ *  with anything left in it is the answer, cut to `UPDATE_OP_DETAIL_MAX`. With
+ *  no such line the answer is `'no message'`, never an empty detail. */
+export function firstStderrLine(stderr: string): string {
+  for (const raw of stderr.split('\n')) {
+    const line = raw.replace(/[^\x20-\x7e]+/g, ' ').trim();
+    if (line !== '') return line.slice(0, UPDATE_OP_DETAIL_MAX);
+  }
+  return 'no message';
+}
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
  *  the ONE vocabulary both ends of this wire fold the op's boolean
