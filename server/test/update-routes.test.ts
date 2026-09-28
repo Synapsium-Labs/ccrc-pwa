@@ -680,8 +680,10 @@ describe('POST /api/updates/refresh', () => {
   // back, v0.0.10 included, so under the OLD shape the confirmed withdrawal
   // was applied straight over the listing's own contradicting evidence.
   // Ruled: the listing wins — v0.0.10 stays `yanked: false`. The sibling
-  // case below keeps the ORIGINAL "withdrawal really applies" shape by
-  // having the listing omit v0.0.10.
+  // case below (C2b) has the listing omit v0.0.10, but it does NOT keep the
+  // original "withdrawal really applies" shape: the yank there is the
+  // listing's own 'complete'-coverage absence judgment, reached without
+  // `applyWithdrawn` (review 149's F5; C2b's own comment says so).
   const listingBody = (rows: readonly ReleaseListingRow[]): string => JSON.stringify(rows.map((r) => ({
     tag_name: r.tag, name: r.tag, draft: false, prerelease: r.channel === 'dev',
     published_at: new Date(r.publishedAt).toISOString(), target_commitish: null, body: null,
@@ -797,14 +799,17 @@ describe('POST /api/updates/refresh', () => {
   });
 
   // Mutations (measured by hand, on a scratch copy): hand-typing
-  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds the derivation case above at
-  // both the exact-value assertion and the door-behaviour assertions (the
-  // second refresh, one minute in, would be admitted, and `p.polls()` would
-  // read 2 where the case expects 1). Dropping B2's own
-  // `listing.tags!.has(pendingK!)` check in `catalogue.ts` (applying every
-  // pending withdrawal unconditionally on a fresh listing, the fix round 2
-  // shape) reds C2 above — v0.0.10 would end `yanked: true` against a
-  // listing that just named it stable.
+  // `REFRESH_MIN_INTERVAL_MS = 60_000` back reds ONE case, the door case
+  // named "REFRESH_MIN_INTERVAL_MS is derived, never hand-typed, …" (above
+  // the C2 pair, not adjacent to this comment since the C2 real-poller case
+  // was inserted between them; P8, wave 5's Task 8A), at both the
+  // exact-value assertion and the door-behaviour assertions (the second
+  // refresh, one minute in, would be admitted, and `p.polls()` would read 2
+  // where the case expects 1); C2 and C2b stay green under it. Making
+  // `listingContradictsPending` (`catalogue.ts`) answer `false` for every
+  // pending (applying every pending withdrawal unconditionally on a fresh
+  // listing, the fix round 2 shape) reds C2 above — v0.0.10 would end
+  // `yanked: true` against a listing that just named it stable.
 });
 
 describe('POST /api/updates/ack', () => {
