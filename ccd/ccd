@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a7f19d960a23cd416109f5b54f3cc30a6cfee99795d7115a5bc5a878f1b85adf
+# ccrc:generated 1 sha256=05712d7a962bcf42da7e535df0d21fb6b0aaeee5f5137074efb055a52f6956a2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21148,6 +21148,12 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     || die "workdir $workdir cannot be entered, or does not resolve to one plain absolute path naming that same directory — nothing was written"
   workdir="$wabs"
   [[ "$workdir" != *\'* ]] || die "workdir must not contain a single quote: $workdir"
+  # NOR UNDER `/proc` (spec §5.5, rung 9): absolute in form, but what a path
+  # there names depends on the process reading it — `/proc/self/cwd/<rel>` is
+  # each reader's own cwd, as a relative spelling is — so no other reader, a
+  # reclaim included, could place it. Asked of the plain path just stored.
+  [[ "$workdir" != /proc && "$workdir" != /proc/* ]] \
+    || die "workdir must not lie under /proc — a path there names whatever the reading process's own cwd or descriptors are: $workdir"
 
   # ── POOL POLICY (§5.5.5), CREATION ONLY ──────────────────────────────────
   # Placed here rather than at the registry-wins block above because `project`
@@ -23930,7 +23936,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
   #                                 `.workdir` would not read, a row's `.workdir` is not absolute,
-  #                                 opens with `//`, or resolves to a path that does, or the child's own
+  #                                 opens with `//`, lies under `/proc`, or resolves to a path opening
+  #                                 with `//`, or the child's own
   #                                 workdir resolves to one (the row cannot be placed) — every case after
   #                                 the listing only when the same pass found no SHARED, NESTED or THROUGH
   #                                 row, which outranks it; a row's value is never printed, only its id
@@ -24012,7 +24019,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # workdir is not compared with a `//` child at all. A row that is literally
   # there skips both resolved-`//` clauses: the chain below always refuses it,
   # and a terminal refusal must never read as a retry.
-  local id="$1" wd="$2" mine names n o w wr rc lit unread='' unplaced='' unmine=''
+  local id="$1" wd="$2" mine names n o w wr rc lit unread='' unplaced='' unmine='' unproc=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
@@ -24025,6 +24032,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( rc == 1 )) && continue   # gone between the listing and the read
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
+    # but `/proc/self/cwd/<rel>` names each reader's own cwd, as a relative
+    # spelling does (`cmd_start` refuses one), so it is unplaced exactly as a
+    # relative row is — collected, and decided after the loop.
+    [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; continue; }
     wr=$(_ws_realpath "$w")
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     (( lit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
@@ -24044,6 +24056,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
   [[ -z "$unplaced" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
+  [[ -z "$unproc" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
@@ -24443,6 +24457,24 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
       _ws_reclaim_gitdir_own "$p" "$mainreal"; rc=$?
       (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_GITDIR_WHY"; return 1; }
       (( rc == 0 )) || { _reap_refuse containment-unproven "$_WS_GITDIR_WHY"; return 1; }
+      # RUNG 6's QUESTION, ASKED OF THE NESTED CHECKOUT TOO (spec §5.5): the pin
+      # copies this tree's index and commits its work exactly as it does the
+      # child's, so a git command mid-write here leaves the copy a state the
+      # tree is leaving, and an operation in progress is work nobody finished.
+      # Deferrals as rung 6's are, and for its reasons: `--defer-expired`
+      # passes both (git replaces an index by rename, so the copy is never
+      # torn, and a lock a crash left must not wedge the child for good). The
+      # index is located, never assumed at `$p/.git/index`: a linked
+      # worktree's lives in its own admin directory.
+      if (( ! defer )); then
+        h=$(git -C "$p" rev-parse --path-format=absolute --git-path index 2>/dev/null) && [[ -n "$h" ]] \
+          || { _ws_reclaim_unmeasured "could not locate the index of the nested checkout at $p"; return 1; }
+        [[ ! -e "$h.lock" && ! -L "$h.lock" ]] \
+          || { _reap_refuse tree-busy "a git command holds the index lock of the nested checkout at $p ($h.lock)"; return 1; }
+        op=$(_ws_child_op "$p") \
+          || { _ws_reclaim_unmeasured "could not probe the nested checkout at $p for an in-progress git operation"; return 1; }
+        [[ -z "$op" ]] || { _reap_refuse tree-busy "$op in progress at the nested checkout at $p"; return 1; }
+      fi
       _ws_reclaim_hidden "$p" || { _ws_reclaim_unmeasured "$_WS_HIDDEN_WHY"; return 1; }
       for hp in ${_WS_HIDDEN_PATHS[@]+"${_WS_HIDDEN_PATHS[@]}"}; do
         RECLAIM_HIDDEN+=("$p/$hp")
@@ -24668,10 +24700,10 @@ _ws_reclaim_index_src() {   # dir -> rc 0 with _WS_INDEX_SRC = dir's own index f
 }
 
 _WS_HIDDEN_PATHS=(); _WS_HIDDEN_MODES=(); _WS_HIDDEN_WHY=''
-declare -A _WS_HIDDEN_STAND=()   # `_ws_reclaim_hidden_absent`'s memo — directory -> 'skip' or
-                                  # 'unmeasured:<why>' — reset once per `_ws_reclaim_hidden_contained` call
-                                  # (below), so many out-of-cone siblings under one missing ancestor share
-                                  # its one walk instead of repeating it.
+declare -A _WS_HIDDEN_STAND=()   # `_ws_reclaim_hidden_absent`'s memo — a MISSING directory -> 'skip' or
+                                  # 'unmeasured:<why>', the verdict for everything under it — reset once per
+                                  # `_ws_reclaim_hidden_contained` call (below), so many out-of-cone siblings
+                                  # under one missing ancestor share its one walk instead of repeating it.
 _ws_reclaim_hidden() {   # dir -> rc 0 with _WS_HIDDEN_PATHS = dir's skip-worktree and assume-unchanged
   #                          paths PRESENT on disk whose content differs from their index blob,
   #                          and _WS_HIDDEN_MODES = each one's index mode, index for index; rc 1
@@ -24708,8 +24740,8 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
   #                                  proven `[[ ! -e "$f" && ! -L "$f" ]]` — a sparse checkout's out-of-cone
   #                                  entries are most of its index (measured: 8.5ms per
   #                                  `_ws_reclaim_absent`-shaped stat), so this walks up from f to the
-  #                                  nearest ancestor that STANDS (`-e || -L`), memoising every level the
-  #                                  walk visits in `_WS_HIDDEN_STAND` (reset once per
+  #                                  nearest ancestor that STANDS (`-e || -L`), memoising every MISSING
+  #                                  directory the walk visits in `_WS_HIDDEN_STAND` (reset once per
   #                                  `_ws_reclaim_hidden_contained` call) so many out-of-cone siblings under
   #                                  one missing directory share its one walk. This is
   #                                  `_ws_reclaim_absent`'s own ancestor walk, with one more verdict that
@@ -24720,14 +24752,30 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
   #                                  non-directory parent fails its `-d` test). Never called on the leaf
   #                                  `_ws_reclaim_absent` proves absent for its OTHER callers, and that
   #                                  function's own answers for them are unchanged.
+  # THE PARENT IS TAKEN WITHOUT A FORK, and the memo is asked about it BEFORE
+  # the disk is. A `$(dirname …)` per flagged path cost a fork each before the
+  # memo could answer (measured: 5000 out-of-cone paths 16.2 s, 20000 up to
+  # 84 s), which can outrun the in-lock budgets and strand a large sparse
+  # child on every attempt. `${up%/*}` is dirname for every spelling this is
+  # handed (`<dir>/<index path>`, never a trailing `/`), with dirname's two
+  # edges spelled out: a path with no `/` has the cwd, `.`, for its parent,
+  # and one directly under the root (the root itself too) has `/`. The memo
+  # is KEYED BY THE MISSING DIRECTORY, never by the leaf: a sibling under a
+  # directory an earlier path already walked is answered by one lookup, with
+  # no test of the disk at all. Only a directory proven missing is ever a key,
+  # and its verdict is its whole subtree's: nothing can stand under a
+  # directory that is not there, and one whose absence could not be proven
+  # leaves everything under it unmeasured too.
   local f="$1" up="$1" parent verdict err c
   local chain=()
   while :; do
-    if [[ -v _WS_HIDDEN_STAND["$up"] ]]; then verdict="${_WS_HIDDEN_STAND[$up]}"; break; fi
-    chain+=("$up")
-    parent=$(dirname -- "$up")
+    case "$up" in
+      */*) parent="${up%/*}"; [[ -n "$parent" ]] || parent=/ ;;
+      *)   parent=. ;;
+    esac
+    if [[ -v _WS_HIDDEN_STAND["$parent"] ]]; then verdict="${_WS_HIDDEN_STAND[$parent]}"; break; fi
     if [[ "$parent" != "$up" && ! -e "$parent" && ! -L "$parent" ]]; then
-      up="$parent"; continue
+      chain+=("$parent"); up="$parent"; continue
     fi
     if [[ -L "$parent" ]]; then
       verdict='skip'   # a link, dangling or not: git's removal never follows it, so nothing git would touch can stand under it
@@ -24747,7 +24795,7 @@ _ws_reclaim_hidden_absent() {   # f -> 0 "skip" — nothing can stand at f, prov
     fi
     break
   done
-  for c in "${chain[@]}"; do _WS_HIDDEN_STAND["$c"]="$verdict"; done
+  for c in ${chain[@]+"${chain[@]}"}; do _WS_HIDDEN_STAND["$c"]="$verdict"; done
   case "$verdict" in
     skip) return 0 ;;
     *) _WS_HIDDEN_WHY="whether the hidden path $f holds an edit is unmeasured: ${verdict#unmeasured:}"; return 1 ;;
@@ -24885,8 +24933,8 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # `-p`: the copy keeps the index's own timestamp. git reads an entry whose
   # file changed in the same second as the index was written as RACY, and
   # compares its content; a copy stamped "now" makes every such entry look
-  # settled, and a same-size edit in that second — a hidden one too — would
-  # be read as unchanged and never staged.
+  # settled, and a same-size edit to a tracked file in that second would be
+  # read as unchanged and never staged (a hidden-flag edit is found by content, step 3).
   cp -p -- "$_WS_INDEX_SRC" "$idx" 2>"$sd/err" \
     || { RECLAIM_WIP_WHY="could not copy the index of $dir: $(head -1 "$sd/err" 2>/dev/null)"; rm -rf "$sd"; return 1; }
   # (1) The copy's staged secrets, back to HEAD.
@@ -25254,7 +25302,7 @@ _ws_reclaim_gitdir_walk() {   # dir kind(ref|reflog) out skip -> 0 with the ids 
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_KEEP_WHY="$_WS_ABSENT_WHY — the ${kind}s under it were never read"; return 1; }
   [[ -d "$d" && ! -L "$d" ]] \
-    || { _WS_KEEP_WHY="$d is neither a directory nor a regular file — the ${kind}s under it were never read"; return 1; }
+    || { _WS_KEEP_WHY="$d is not a directory — the ${kind}s under it were never read"; return 1; }
   lst=$(_plat_mktemp) || { _WS_KEEP_WHY="could not make a scratch file to list $d — the ${kind}s under it were never read"; return 1; }
   err=$(LC_ALL=C find "$d" -mindepth 1 -maxdepth 1 -print0 2>&1 >"$lst"); rc=$?
   if (( rc != 0 )) || [[ -n "$err" ]]; then
@@ -25862,7 +25910,18 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
-  tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
+  # THE KILL IS BOUNDED, as `_session_probe` bounds the same substrate: a
+  # wedged tmux server would otherwise hold this tail — and the lock, and the
+  # verb's caller — for as long as it stays wedged. A kill that runs out of
+  # time answers 124, never 0, so the exit-empty exception below cannot admit
+  # it, and the re-measure stops the tail with the breadcrumb kept. The same
+  # function-vs-binary split `_session_probe` makes, for its reason:
+  # `timeout` execs its argv, and a function stub cannot wedge.
+  if [[ $(type -t tmux) == function ]]; then
+    tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
+  else
+    _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
+  fi
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
   # is still up is exactly the Restart=always hazard this arm exists for (spec

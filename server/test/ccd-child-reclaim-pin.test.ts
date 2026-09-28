@@ -641,7 +641,11 @@ describe('nested checkouts, re-proven and pinned on every call', () => {
     expect(h.git(c.wt, 'reflog', 'show', '--all', '--format=%H'), 'the CONTROL: in no reflog').not.toContain(mergeSide);
     fs.writeFileSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'), `${mergeSide}\n`);
     fs.writeFileSync(path.join(inner, 'dirty.txt'), 'dirty');
-    const p = pinOf(c);
+    // A merge in progress in a nested checkout DEFERS the ladder (`tree-busy`,
+    // rung 6's question asked of it), so the pin reaches it only once the
+    // deferral ceiling has run out — `--defer-expired`, as for the child's own.
+    expect(pinOf(c).rc, 'the CONTROL: without the ceiling the ladder defers, and nothing is pinned').not.toBe('0');
+    const p = pinOf(c, { defer: 1 });
     expect(p.rc, p.why).toBe('0');
     expect(fs.existsSync(h.git(inner, 'rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD')),
       'the nested WIP commit concluded the merge — it moves no ref and no state of the tree').toBe(true);
