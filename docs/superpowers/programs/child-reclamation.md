@@ -19,8 +19,8 @@ removed on 2026-09-10 was not.
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **deployed** v0.0.22 (`37d9da66`, merged 2026-09-24 00:25 UTC, rolled out by 00:33 (rc 3: the server box's known inactive agent unit); run 138 on `plain-river`; reviews 144, 145, 147). Live measurement: an open naming `ccrc-pwa-plain-river` answered `409 workspace-spent pr:178` and left no run row |
-| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **merged** `1ffdf947` 2026-09-28 16:14 UTC (#187; run 148 on `plain-summit`; reviews 170, 171, 172); rollout pending |
-| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | planned; **pre-dispatch amendments written** 2026-09-26 (A1 to A15; dispatches the moment wave 3 merges) |
+| 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | #187 | **deployed** v0.0.33 (`1ffdf947`, merged 2026-09-28 16:14 UTC, rolled out 16:16–16:21, fleet box first, rc 0; run 148 on `plain-summit`; reviews 170, 171, 172). Live: run 148's close reclaimed `plain-summit` in 10 s |
+| 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | — | **dispatched** 2026-09-28 (run 174 on `swift-hollow`; amendments A1 to A17 merged in #188, `6ff4e2e9`) |
 | 5 | the closed run's reclaim chip and its sentences; R25's orphan temp-root collector (R36) | **AGENT-FIRST** (R36 makes it one) | — | planned |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -39,10 +39,31 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**). Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
 
+- **2026-09-28 — wave 3 DEPLOYED (v0.0.33) and measured live; wave 4 dispatched (run 174).**
+  - **Rollout.** `ccrc rollout --to v0.0.33`, 16:16–16:21 UTC: fleet box first, rc 0, both boxes agreed at `1ffdf947`.
+    The server box's doctor now reads 0 failed; its standing agent-unit FAIL is gone. The fleet box's `ccd caps` lists
+    `ws-reclaim` and `reclaim-v1`.
+  - **The first live reclaim.** Run 148's non-final close (`prPhase: merged`) answered `childReclaim: queued`, and the
+    reclaim took about 10 s. The journal shows `release`, then `reclaim intent`, `unsupervise`, `purge` and
+    `reclaim done`. The feed reads "ccrc-pwa-plain-summit, child of run #148, was reclaimed (close). Nothing
+    uncommitted was left."
+    - Gone: the registry rows, the worktree, the local branch and the clips directory.
+    - Kept: the transcripts, and the tombstone `.reaped/ccrc-pwa-plain-summit.json`.
+    - The attic pins the tip `135f1625`, the merge `244a185d`, and the `reflogs` keep ref.
+    - The remote branch was deleted by GitHub's `delete_branch_on_merge` at merge time, not by the reclaim.
+    - Before the close, the coordinator archived the worker's and the reviewers' reports into its own clips
+      (`wave3-archive/`), because the ledger and wave 4's amendments cite them.
+  - **Residue seen.** Three dot-lock files outlive the reclaim: `.reap-<id>.lock`, `.<id>.compactions.lock` and
+    `.prstate-<id>.lock`. Harmless today. But wave 5's R25 collector treats any `$REG` entry named `.<id>.*` as a live
+    row, so a leftover `.compactions.lock` would keep a human-orphaned temp root uncollected. Wave 5 inherits it.
+  - **Wave 4.** Docs PR #188 merged as `6ff4e2e9` (amendments A1 to A17, contract §10). Run 174 opened and was
+    dispatched to a fresh child, `swift-hollow`, with 18 declared items and route Opus·high, subagent Sonnet,
+    workflows off. Its deviation block is twenty numbers, the first of them 3534 and the last 3553 (floor now 3554).
+  - **Run 148 closed** non-final `done`, after wave 4's run opened.
 - **2026-09-28 — review 172 (`135f1625`): no destroy path; wave 3 MERGED as `1ffdf947` (#187).**
   - **The panel.** Four lenses (SAFETY at xhigh) and fifteen refuters; none died. Every mutation row the brief named
     reds, with green controls: F-A ×2, the F-B reader, the three `//` clauses, the writer's `-ef`, F-I and F-G.
@@ -633,6 +654,9 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
     attention list;
   - ccd journaling the failures the mirror never sees: audit-time `unmeasured`, `probe-unmeasured`, pre-lock dies,
     `flock-unavailable` and `lock-unopenable`.
+- **Wave 5 inherits, from wave 3's first live reclaim:** dot-lock files (`.reap-<id>.lock`,
+  `.<id>.compactions.lock`, `.prstate-<id>.lock`) outlive a reclaim. The R25 collector's "no `$REG` entry of any
+  suffix" condition must not read a lock as a live row, or the reclaim's tail must remove them.
 - **Wave 5 inherits:** the PWA's abandon confirmation says the child's workspace will be reclaimed. The ungated
   abandon door (D-282) reaching a destructive act is inside the single-user trust model; it is recorded, not
   changed.
