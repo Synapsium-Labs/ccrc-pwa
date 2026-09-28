@@ -1015,7 +1015,7 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
   const dropRow = (id: string): void => {
     for (const f of ['uuid', 'workdir']) fs.rmSync(path.join(h.home, '.cc-sessions', `${id}.${f}`), { force: true });
   };
-  const UNPLACED = 'name no plain absolute workdir, so ccd cannot place them against this child';
+  const UNPLACED = 'name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child';
 
   it('the reviewer’s shape: a row `quiet-basin/server`, the reclaim’s cwd `$HOME` — unmeasured, never reclaimable, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -1147,6 +1147,44 @@ describe('an OTHER row whose workdir is not absolute cannot be placed — unmeas
     expect(r.detail).toContain(`registry row(s) demo-nested ${UNPLACED}`);
     expect(r.detail, 'the value is never printed').not.toContain(`/${wt}`);
     expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('a PLAIN absolute row that RESOLVES to a `//` spelling — through a link whose target opens with `//` — is not placed either, and `<child>/server` stands', () => {
+    // `$HOME/elsewhere/dslink` -> `/` + `<child>`: the row's value is one plain
+    // path, but `_ws_realpath` (bash's `pwd -P`) resolves it to
+    // `//<child>/server`, no prefix of the child's — it read as outside, and
+    // the verb removed the other session's files (rereview fr171-B-r1 N1,
+    // measured). Whether a platform's `pwd -P` keeps that `//` is read here,
+    // never assumed: where it does (bash on Linux, measured) the row is
+    // unplaced; where it collapses it the row places inside the child and is
+    // refused. Either way nothing of that session's is removed.
+    const { wt } = makeChild(h);
+    fs.mkdirSync(path.join(wt, 'server'));
+    fs.writeFileSync(path.join(wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
+    fs.mkdirSync(path.join(h.home, 'elsewhere'));
+    fs.symlinkSync(`/${wt}`, path.join(h.home, 'elsewhere', 'dslink'));
+    const row = path.join(h.home, 'elsewhere', 'dslink', 'server');
+    const resolved = h.sh(`_ws_realpath "${row}"`);
+    if (process.platform !== 'darwin') expect(resolved, 'bash keeps the link target’s leading `//`').toBe(`/${wt}/server`);
+    otherRow('demo-dslink', row);
+    const r = evalOf(h);
+    if (resolved.startsWith('//')) {
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain(`registry row(s) demo-dslink ${UNPLACED}`);
+    } else {
+      expect(r.verdict, r.detail).toBe('containment-unproven');
+      expect(r.detail).toContain('registry row(s) demo-dslink rooted inside');
+    }
+    expect(r.token).toBe('');
+    expect(r.detail, 'the value is never printed').not.toContain(row);
+    expect(fs.readFileSync(path.join(wt, 'server', 'live.txt'), 'utf8')).toContain('uncommitted');
+    // The CONTROL: the same link with a plain target places inside the child.
+    dropRow('demo-dslink');
+    fs.symlinkSync(wt, path.join(h.home, 'elsewhere', 'plainlink'));
+    otherRow('demo-plainlink', path.join(h.home, 'elsewhere', 'plainlink', 'server'));
+    const c = evalOf(h);
+    expect(c.verdict, c.detail).toBe('containment-unproven');
+    expect(c.detail).toContain('registry row(s) demo-plainlink rooted inside');
   }, 60_000);
 
   it('the CONTROL for `//`: a trailing-`/` row rooted inside the child still refuses containment-unproven, and so does a `///` one', () => {

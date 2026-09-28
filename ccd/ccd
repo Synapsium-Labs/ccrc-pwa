@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c794b538799ea1704e65b2915767fa9b3f050fd96990f6a964b789fdec0bfa56
+# ccrc:generated 1 sha256=959f9399d573e57cb5af49b62be298f2624ef0df3b10cd34590e720917a539d4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -23806,9 +23806,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   #                                 a plain one — each comma-joined
   #                                 ('' = none); rc 2 when that could
   #                                 not be asked (_WS_SHARED_WHY): the registry would not list, a row's
-  #                                 `.workdir` would not read, or a row's `.workdir` is not absolute or
-  #                                 opens with `//` (it cannot be placed) — the last two only when the
-  #                                 same pass found no
+  #                                 `.workdir` would not read, or a row's `.workdir` is not absolute,
+  #                                 opens with `//`, or resolves to a path that does (it cannot be
+  #                                 placed) — the last two only when the same pass found no
   #                                 SHARED, NESTED or THROUGH row, which outranks them; a row's value is
   #                                 never printed, only its id
   # NO SECOND ROW MAY NAME THIS CHILD'S TREE (spec §5.5, rung 9 asked of the
@@ -23817,7 +23817,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # in sight; the pin would then commit that session's work and the tail would
   # remove its tree. Compared twice: the literal path, and the resolved one
   # (`_ws_realpath`, the `pwd -P` of the path), so two spellings of one
-  # directory are one directory. The literal arm is implied by the resolved
+  # directory are one directory — save one that resolves to a `//` spelling,
+  # which is not placed at all (below). The literal arm is implied by the resolved
   # one — one string resolves one way — and stays as the spec's stated form;
   # deleting it alone leaves the suite green, by construction.
   #
@@ -23876,7 +23877,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # so `//<child>/server` resolves to no prefix of the child's path and read as
   # outside: the verb removed the other session's files (measured). An older
   # `ccd start` stored `//` as typed. Three or more slashes collapse to one and
-  # place normally.
+  # place normally. And the RESOLVED spelling is asked the same (its second
+  # fix round): a plain absolute row reached through a link whose target
+  # opens with `//` resolves to `//<child>/server` and read as outside, and
+  # the verb removed that session's files too (measured). `_ws_realpath` is
+  # not edited; its answer is refused here, where it is compared.
   local id="$1" wd="$2" mine names n o w wr rc unread='' unplaced=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
@@ -23891,6 +23896,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     wr=$(_ws_realpath "$w")
+    [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     if [[ "$w" == "$wd" || "$wr" == "$mine" ]]; then
       _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
     elif { [[ "$wr" == "${mine%/}/"* ]] && _ws_reclaim_plain_path "$wr"; } \
@@ -23903,7 +23909,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
   [[ -z "$unread" ]] || _WS_SHARED_WHY="could not read $unread"
   [[ -z "$unplaced" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), or purge its row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unplaced name no plain absolute workdir, or one that resolves to a path opening with //, so ccd cannot place them against this child — stop and restart each (ccd start <id> stores a plain absolute workdir), re-point a link whose target opens with //, or purge its row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
@@ -23917,7 +23923,7 @@ _ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling:
   #                              `ccd start` stored a workdir as typed (relative, with a trailing `/`, or
   #                              with a leading `//`). So the ladder refuses the child's own, and
   #                              `_ws_reclaim_workdir_shared` does not place another row's non-absolute
-  #                              one, or one opening with `//`. The pin phase fails on any other form too (spec §5.5):
+  #                              one, or one opening with, or resolving to, `//`. The pin phase fails on any other form too (spec §5.5):
   #                              `lstat("<link>/")` follows the link, so every leaf test reads the path as
   #                              written and a spelling can walk past it.
   [[ "$1" == /* && "$1" != */ && "$1" != */. && "$1" != */.. \

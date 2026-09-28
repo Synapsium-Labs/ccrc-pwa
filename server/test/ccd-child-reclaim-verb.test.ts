@@ -1292,7 +1292,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
   }, 90_000);
 });
 
-describe('an OTHER row whose workdir is not absolute, or opens with `//`, stops the verb, fresh or resumed — it cannot be placed against the child (spec §5.5, rung 9)', () => {
+describe('an OTHER row whose workdir is not absolute, or opens with or resolves to `//`, stops the verb, fresh or resumed — it cannot be placed against the child (spec §5.5, rung 9)', () => {
   // The review's measured shape, end to end: a row `quiet-basin/server` (what
   // an older `ccd start … quiet-basin/server` stored when typed in
   // `~/worktrees/demo`), read by a reclaim whose cwd is `$HOME`. It resolved
@@ -1311,10 +1311,30 @@ describe('an OTHER row whose workdir is not absolute, or opens with `//`, stops 
   const SPELLINGS: ReadonlyArray<[string, (c: Child) => string]> = [
     ['a relative row `quiet-basin/server`', () => 'quiet-basin/server'],
     ['a row `//<child>/server`', (c) => `/${c.wt}/server`],
+    // A plain absolute row that RESOLVES to `//<child>/server` through a link
+    // whose target opens with `//` (rereview fr171-B-r1 N1): the verb removed
+    // `live.txt` through it too. Where `pwd -P` keeps that `//` (bash on
+    // Linux, measured; the ladder suite reads it per platform) it is unplaced.
+    ['a row through a link whose target opens with `//`', (c) => {
+      fs.mkdirSync(path.join(h.home, 'elsewhere'), { recursive: true });
+      fs.symlinkSync(`/${c.wt}`, path.join(h.home, 'elsewhere', 'dslink'));
+      return path.join(h.home, 'elsewhere', 'dslink', 'server');
+    }],
   ];
   const plantRow = (value: string): void => {
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.uuid'), 'u-nested');
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-nested.workdir'), value);
+  };
+
+  /** Whether the reader cannot place this value ON THIS PLATFORM — read, not
+   *  assumed: a link target's leading `//` survives bash's `pwd -P` on Linux
+   *  (measured), and every spelling here must be unplaceable there. Where a
+   *  platform collapsed it, the row would place inside the child and be
+   *  refused instead — nothing removed either way. */
+  const unplaceable = (value: string): boolean => {
+    const u = !value.startsWith('/') || /^\/\/[^/]/.test(value) || /^\/\/[^/]/.test(h.sh(`_ws_realpath "${value}"`));
+    if (process.platform !== 'darwin') expect(u, `${value} is unplaceable on this platform`).toBe(true);
+    return u;
   };
 
   for (const [label, spell] of SPELLINGS) {
@@ -1323,12 +1343,14 @@ describe('an OTHER row whose workdir is not absolute, or opens with `//`, stops 
       const sub = plantNested(c);
       const tok = evalOf(h).token;
       expect(tok, 'the audit minted a token before the other row existed').toMatch(/^[0-9a-f]{64}$/);
-      plantRow(spell(c));
+      const value = spell(c);
+      plantRow(value);
       const before = treeOf(c.wt);
       const r = childReclaimVerb(h, tok);
       // What is on disk FIRST: a reclaim that went ahead shows here.
       expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
       expect(fs.readFileSync(path.join(sub, 'live.txt'), 'utf8')).toContain('uncommitted');
+      if (!unplaceable(value)) { expect(refusedWith(r)).toBe('containment-unproven'); intact(c); return; }
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as Record<string, unknown>;
       expect(o['failed']).toBe('probe-unmeasured');
@@ -1353,7 +1375,8 @@ describe('an OTHER row whose workdir is not absolute, or opens with `//`, stops 
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
       expect(o.failed).toBe('worktree-remove-failed');
-      expect(o.detail).toContain('registry row(s) demo-nested name no plain absolute workdir');
+      expect(o.detail).toContain(unplaceable(value)
+        ? 'registry row(s) demo-nested name no plain absolute workdir' : 'registry row(s) demo-nested rooted inside');
       expect(o.detail, 'the row’s value is never printed').not.toContain(value);
       expect(h.calls(), 'it stops AFTER the kill: the child’s pane is down, nothing deleted').toContain(KILL);
       failedPairAgrees(r);
