@@ -409,6 +409,13 @@ describe('the coordinator skill: linkage', () => {
       // first half of an invitation.
       'GET /api/coord/caps',
       'POST /api/coord/caps',
+      // CHILD-RECLAMATION wave 4 — the operator-dial shape once more, and the
+      // `POST /api/coord/pause` argument applied to the lane that deletes. A
+      // coordinator told about this route would be told how to stop, or
+      // restart, the reclamation of its OWN children — the act rule 4 takes out
+      // of every session's hands. The forbid-mention case below is what turns
+      // this permission-to-omit into a prohibition.
+      'POST /api/coord/reclaim-pause',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1449,6 +1456,15 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // omission, and this is what forbids the mention. Both halves, because the
     // read is the first half of the invitation.
     expect(allSkillText).not.toContain('/api/coord/caps');
+  });
+
+  it('never names the reclaim switch — a door that would tell a coordinator how to stop its own children being reclaimed', () => {
+    // Child-reclamation wave 4, the caps dial's accounting: EXEMPT only
+    // PERMITS the omission; this is what FORBIDS the mention. Rule 4 takes
+    // the reclamation of a coordinator's children out of every session's
+    // hands and gives it to the server; the one switch over that is the
+    // operator's, from the phone.
+    expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

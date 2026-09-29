@@ -83,8 +83,12 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * AT ALL (this branch's own `NEW_GENERATION` list) still needs a real
  * `verbSupported` call, and widening this past named verbs would let a
  * missing one hide behind an unrelated `capSupported` in the same function.
+ *
+ * `reclaim-pause` joins it (child-reclamation wave 4): its route gates on
+ * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone, for the reason
+ * above — a box that echoes the token necessarily dispatches the verb.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause']);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by

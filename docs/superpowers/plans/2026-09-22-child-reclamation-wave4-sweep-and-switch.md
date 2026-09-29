@@ -1486,7 +1486,7 @@ MSG
 - Consumes: `CCD_ARGV.reclaimPause`, `RECLAIM_PAUSE_CAP` (Task 3); `capSupported` (existing); `deps.runCcd` (existing).
 - Produces: `POST /api/coord/reclaim-pause`, body `{ state: 'on' | 'off' }`. `400 {ok:false,error:'bad-request'}` on any other body; `501 {ok:false,error:'unsupported'}` when `!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)`; `502 {ok:false,stderr}` when the verb fails; `200 {ok:true,requested:'on'|'off'}` otherwise. `requested`, never `paused`: the authoritative answer is the next `{type:'coord'}` frame's `reclaim`. No box token, no `coordMutex`, no `notConfigured` arm. Task 9's client calls it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) Create `server/test/child-reclaim-pause-route.test.ts`:
 
@@ -1644,7 +1644,7 @@ describe('POST /api/coord/reclaim-pause', () => {
   });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-pause-route.test.ts test/auth-gate.test.ts test/coordinator-skill.test.ts
@@ -1652,7 +1652,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-pause-route.test.
 
 Expected: `child-reclaim-pause-route` FAILS 8/8 — every inject answers `404` (the route does not exist); `auth-gate`'s `found the specific registrations` FAILS (`POST /api/coord/reclaim-pause was not found by the scanner`); `coordinator-skill`'s new case PASSES already (nothing names the route yet) — it is a guard for later edits, not red-first, and its mutation row below proves it bites.
 
-- [ ] **Step 3: Write the route**
+- [x] **Step 3: Write the route**
 
 In `server/src/coord/routes.ts`, extend the `../ccdargv.js` import to `CCD_ARGV, RECLAIM_PAUSE_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec` (keep every existing member). Then insert, directly after `POST /api/coord/pause`'s closing `});` and before the `/** \`GET\`/\`POST /api/coord/caps\`` docstring:
 
@@ -1702,7 +1702,7 @@ In `server/src/coord/routes.ts`, extend the `../ccdargv.js` import to `CCD_ARGV,
   });
 ```
 
-- [ ] **Step 4: Move every census the route moves**
+- [x] **Step 4: Move every census the route moves**
 
 (a) `server/test/coord-pause-route.test.ts`: `const SESSION_ONLY = new Set(['/api/coord/caps']);` becomes
 
@@ -1776,7 +1776,7 @@ Expected: `expected 31 to be 30` (`coord/routes.ts`) — and, once that line is 
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231).
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-pause-route.test.ts test/coord-pause-route.test.ts \
@@ -1786,7 +1786,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-pause-route.test.
 
 Expected: PASS — the route 8/8; `coord-pause-route`'s token-gate scan skips the new handler through `SESSION_ONLY`, and its `every SESSION_ONLY route really IS ungated, and really EXISTS` finds it; `coordinator-skill` finds it registered and exempt; `auth-gate` at 51/31/82, with the armed-gate sweep refusing the new route unauthenticated; `verb-gate` finds the call site gated by `capSupported`; `box-token-census` finds `/api/coord/reclaim-pause` named in CLAUDE.md's bullet and carrying no box token.
 
-- [ ] **Step 6: Mutation check, then commit**
+- [x] **Step 6: Mutation check, then commit**
 
 | # | Edit | Command | Expected red |
 |---|---|---|---|
