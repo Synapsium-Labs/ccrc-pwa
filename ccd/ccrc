@@ -16743,13 +16743,22 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
     echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
   fi
   _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
+  local spine_rc="$VER_SPINE_RC"
   case "$frc" in
     0)
       # "Run the gate once more" (design §11) — on the tag it returned to.
       if _upd_gate "$role" "$UPD_PREV_TAG"; then
         UPD_GATE_WHY="$first_why"
-        _upd_phase reverted "arm1: $done_as; $reason"
-        echo "update: REVERTED (arm 1): this box runs $UPD_PREV_TAG again — $where, no download — $reason"
+        # Final review F9: a kept spine that COMPLETED under a failing doctor
+        # (D-3461's `VER_SPINE_RC`) says so, as arm 2's rc-3 arm does — the
+        # report and the line must not read as a clean restore.
+        local doc_rep="" doc_say=""
+        if [ "$spine_rc" -ne 0 ]; then
+          doc_rep=" (its doctor exited $spine_rc)"
+          doc_say=", but its doctor exited $spine_rc ('ccrc doctor' re-reads the FAIL lines)"
+        fi
+        _upd_phase reverted "arm1: $done_as$doc_rep; $reason"
+        echo "update: REVERTED (arm 1): this box runs $UPD_PREV_TAG again — $where, no download$doc_say — $reason"
         return 0
       fi
       why="gate: $UPD_GATE_WHY"

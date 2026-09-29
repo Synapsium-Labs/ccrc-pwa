@@ -8867,6 +8867,30 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(fileText(join(home, '.local', 'bin', 'ccd'))).toContain(CCD_SENTINEL);
   }, 60_000);
 
+  it('arm 1 whose kept spine COMPLETED under a failing doctor still reverts, and the report and the line say the doctor exited N — as arm 2\'s rc-3 arm does (F9; the flip stubbed to VER_SPINE_RC=3, the arm called directly)', () => {
+    const home = freshUpdateBox('ccrc-update-arm1-doctor-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    const r = sourcedCcrc(home, [
+      '_ver_flip_back() { VER_SPINE_RC=3; return 0; }; _upd_gate() { return 0; }',
+      'UPD_VERSION=v3.0.0; UPD_REPORT_TARGET=v3.0.0; UPD_GATE_WHY="the first gate"',
+      'rc=0; _upd_restore_arm1 server "gate: fixture" v2.0.0 1 || rc=$?',
+      'echo "rc=$rc"',
+    ].join('\n'));
+    expect(r.stdout, `stderr: ${r.stderr}`).toContain('update: REVERTED (arm 1): this box runs v1.0.0 again — $HOME/ccrc flipped back to $HOME/ccrc-versions/v1.0.0, no download, but its doctor exited 3 (\'ccrc doctor\' re-reads the FAIL lines) — gate: fixture');
+    expect(r.stdout).toMatch(/^rc=0$/m);
+    expect(lastReport(home)).toMatchObject({ phase: 'reverted', detail: 'arm1: flipped back to v1.0.0 (its doctor exited 3); gate: fixture' });
+    // The clean spine reads as before (the control): no doctor clause.
+    const clean = sourcedCcrc(home, [
+      '_ver_flip_back() { VER_SPINE_RC=0; return 0; }; _upd_gate() { return 0; }',
+      'UPD_VERSION=v3.0.0; UPD_REPORT_TARGET=v3.0.0; UPD_GATE_WHY="the first gate"',
+      '_upd_restore_arm1 server "gate: fixture" v2.0.0 1; echo "rc=$?"',
+    ].join('\n'));
+    expect(clean.stdout, `stderr: ${clean.stderr}`).toContain('update: REVERTED (arm 1): this box runs v1.0.0 again');
+    expect(clean.stdout).not.toContain('its doctor exited');
+  });
+
   it('arm 1 whose own gate fails points ~/ccrc back at the new version and clears the record; arm 3 then voids THAT version\'s kept record, so no later flip returns to its MIXED tree (D-3443, D-3441)', () => {
     const home = onKeptV1('ccrc-update-arm1-fails-arm3-');
     const v1 = join(home, 'ccrc-versions', 'v1.0.0');
