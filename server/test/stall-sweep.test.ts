@@ -441,6 +441,23 @@ describe('sweepStalls: escalation', () => {
     expect(body).not.toContain('recorded in shadow');
   });
 
+  it('r2 reports the stall check\'s own delivery row: its queued, delivered and acked times reach the body', async () => {
+    const { h, coord, w } = await rig();
+    seedRegistry(h.home, COORD, COORD_UUID);
+    seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    const check = operatorMail(coord)[0]!;
+    const d = coord.db.prepare('SELECT id FROM mail_deliveries WHERE mailId = ?').get(check.id) as unknown as { id: number };
+    coord.markDelivered(d.id, R1_AT + 5_000);
+    coord.markAcked(d.id, R1_AT + 60_000);
+    at(R2_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    const r2 = operatorMail(coord)[1]!;
+    expect(mailBody(coord, r2.id))
+      .toContain(`Stall check #${check.id} was queued at 23:56:31Z, delivered at 23:56:36Z, acked at 23:57:31Z.`);
+  });
+
   it('r2 tells a stall check with NO delivery row from one never delivered: the lane hands null, never a row of nulls', async () => {
     // Departure r2-keeps-a-missing-delivery-row: `deliveryTimesFor` answers null for a mail with no delivery row,
     // and `stallReportMail` has a sentence for exactly that. Folding the null into {deliveredAt:null, ackedAt:null}
