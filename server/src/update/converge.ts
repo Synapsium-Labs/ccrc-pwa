@@ -11,11 +11,12 @@
 // above the acquire). The acquire's own WHERE re-checks what SQL can.
 import path from 'node:path';
 import {
-  inFlightReport, type InFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
+  inFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
 } from '../../../shared/api.js';
 import {
-  NODE_FILES, UPDATE_OP, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine, lockHeldBusyDetail,
-  updateLauncherPath, updateSpawnArgv, updateWriterMayLive, type KillProbeOutcome, type ResOk, type UpdateSpawnResult,
+  NODE_FILES, UPDATE_OP, decideKilledSpawn, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
+  lockHeldBusyDetail, updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
+  type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
   DEADLINE_DETAIL, classifyOpAnswer, deadlineExpired, dispatchRefusalDetail, planDispatch,
@@ -30,7 +31,7 @@ import { boundedUpdateSpawn, type BoundedSpawnOpts } from './spawn.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
 import type {
-  DispatchNodeResult, NodeRow, NoteDispatchRefusalResult, RefusalRow, ReleaseLeaseResult, ReleaseRow,
+  DispatchNodeResult, NodeRow, NoteDispatchRefusalResult, NoteLeaseDetailResult, RefusalRow, ReleaseLeaseResult, ReleaseRow,
   SettleNodeResult, UpdateIntentRow,
 } from '../coord/store.js';
 
@@ -58,6 +59,7 @@ export interface ConvergeStore {
   releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult;
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult;
   noteDispatchRefusal(nodeId: string, detail: string): NoteDispatchRefusalResult;
+  noteLeaseDetail(nodeId: string, detail: string, startedAt: number): NoteLeaseDetailResult;
 }
 
 export interface ConvergeDeps {
@@ -75,7 +77,6 @@ export const LINK_DOWN_DETAIL = 'disconnected — the fleet link is down; the re
 export const NO_LOCAL_RUNNER_DETAIL = 'no local runner — this server was started without an update spawner; the request stands';
 /** D-3399: an ok reply that does not say `accepted: true` is a word this build cannot name. */
 export const OK_WITHOUT_ACCEPTED = 'ok-without-accepted';
-export const SPAWN_TIMEOUT_MESSAGE = `the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`;
 /** D-3400: the server-side twin of the agent's `an update op is already spawning on this agent`. */
 export const LOCAL_SPAWNING_DETAIL = 'an update op is already spawning on this server';
 
@@ -101,7 +102,7 @@ function writerMayLive(pid: number | null): boolean {
  *  this node, never a second reading of the intent rows) and this node's refused tags. The routes (Task 6) call
  *  it too, so a route's synchronous 409 and a dispatch run read the same views. */
 export function dispatchViewsFor(
-  store: Omit<ConvergeStore, 'dispatchNode' | 'releaseLease' | 'settleNode' | 'noteDispatchRefusal'>,
+  store: Omit<ConvergeStore, 'dispatchNode' | 'releaseLease' | 'settleNode' | 'noteDispatchRefusal' | 'noteLeaseDetail'>,
 ): DispatchNodeView[] {
   return store.nodes().map((row) => ({
     row,
@@ -143,7 +144,10 @@ async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAns
   if (deps.fleet === null) return { kind: 'transport', why: 'disconnected', message: NO_FLEET_LINK_DETAIL };
   try {
     const res = await deps.fleet.send(move.target, move.kind);
-    return res.accepted === true ? { kind: 'accepted' } : { kind: 'refused', err: OK_WITHOUT_ACCEPTED, detail: null };
+    if (res.accepted !== true) return { kind: 'refused', err: OK_WITHOUT_ACCEPTED, detail: null };
+    // D-3413: arms B and D of the agent's bound ride the ok reply with the words the row will read; an agent that omits
+    // `detail` (every other accepted) keeps the default.
+    return typeof res.detail === 'string' ? { kind: 'accepted', detail: res.detail } : { kind: 'accepted' };
   } catch (e) {
     if (e instanceof AgentOpError) return { kind: 'refused', err: e.code, detail: e.detail };
     const message = e instanceof Error ? e.message : String(e);
@@ -151,19 +155,22 @@ async function linkAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAns
   }
 }
 
-/** `~/.ccrc/update.json` on THIS box, through the one shared parser and W2's BOUNDED node-file reader — the
- *  same `readNodeFile` the inventory sweep reads this file with: lstat to a regular file only, size ≤
- *  NODE_FILE_CAP_BYTES, every step raced against one deadline. It runs AFTER the lease is taken, so an unbounded
- *  read here (a FIFO blocks `open(2)` for good) would leave the row `pending` and the single-flight dispatch run
- *  unsettled, and no later trigger would reach the deadline sweep. Absent, unreadable, non-regular, too large or
- *  not in flight all read "not busy" — the node's own `_upd_lock_probe` (in `_upd_detach`) then decides, the agent's rule
- *  (D-3371; Task 2's `readInFlightReport` is the agent's `O_NONBLOCK` twin). A report that IS in flight comes back with
- *  its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by `localAnswer` (D-3411). */
-async function localInFlight(deps: ConvergeDeps): Promise<InFlightReport | null> {
+/** `~/.ccrc/update.json` on THIS box, through W2's BOUNDED node-file reader — the same `readNodeFile` the inventory
+ *  sweep reads this file with: lstat to a regular file only, size ≤ NODE_FILE_CAP_BYTES, every step raced against one
+ *  deadline. It runs AFTER the lease is taken, so an unbounded read here (a FIFO blocks `open(2)` for good) would leave
+ *  the row `pending` and the single-flight dispatch run unsettled, and no later trigger would reach the deadline sweep.
+ *  The answer keeps absent and unreadable apart (D-3400 amended, D-3413): `absent` on `readNodeFile`'s proven ENOENT,
+ *  `unreadable` for everything else (a failed, non-regular, too-large or late read). ONE read feeds both the in-flight
+ *  check (`inFlightReport` over its text — every non-bytes read is "not busy", and the node's own `_upd_lock_probe`, in
+ *  `_upd_detach`, then decides: the agent's rule, D-3371; Task 2's `readUpdateReport` is the agent's `O_NONBLOCK` twin)
+ *  and the bound's snapshot, and a second read after a kill is compared with it. A report that IS in flight comes back
+ *  with its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by `localAnswer` (D-3411). */
+async function localReport(deps: ConvergeDeps): Promise<UpdateReportRead> {
   const deadline = openPoolReadDeadline(INVENTORY_BUDGET_MS);
   try {
     const read = await readNodeFile(deps.localIo, path.join(deps.ccrcDir, NODE_FILES.report), deadline);
-    return read.ok ? inFlightReport(read.content) : null;
+    if (read.ok) return { kind: 'bytes', text: read.content };
+    return read.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable' };
   } finally {
     deadline?.close();
   }
@@ -180,19 +187,22 @@ async function localInFlight(deps: ConvergeDeps): Promise<InFlightReport | null>
 const spawning = new WeakSet<LocalUpdateSpawn>();
 
 /** The server-role answer: the busy read (D-3384), the spawn gate, then the `--detach`
- *  parent's exit. */
+ *  parent's exit. A parent the bound KILLED is decided by `decideKilledSpawn` over the report read before the spawn and
+ *  the one read after it (D-3400 amended, D-3413), never by the kill alone. */
 async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAnswer> {
   const spawn = deps.runLocal;
   if (spawn === null) return { kind: 'transport', why: 'other', message: NO_LOCAL_RUNNER_DETAIL };
   // D-3411: a report says busy only while its writer lives; a dead writer's is a leftover and the op spawns,
   // and the parent's own lock probe decides. (F2 of review run 175; D-3384 read the file alone.)
-  const busy = await localInFlight(deps);
+  // D-3413: the SAME read is the bound's snapshot.
+  const before = await localReport(deps);
+  const busy = before.kind === 'bytes' ? inFlightReport(before.text) : null;
   if (busy !== null && writerMayLive(busy.pid)) return { kind: 'refused', err: 'busy', detail: inFlightBusyDetail(busy) };
   // Checked and taken with no await between: two runs can never both pass.
   if (spawning.has(spawn)) return { kind: 'refused', err: 'busy', detail: LOCAL_SPAWNING_DETAIL };
   let child: Promise<UpdateSpawnResult>;
   try {
-    child = spawn(move.kind, move.target);   // a non-tag or non-kind throws RangeError here, before anything runs
+    child = spawn(move.kind, move.target);
   } catch (e) {
     return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e) };
   }
@@ -201,7 +211,14 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   child.then(clear, clear);
   try {
     const res = await child;
-    if (res.killed) return { kind: 'transport', why: 'timeout', message: SPAWN_TIMEOUT_MESSAGE };
+    if (res.killed) {
+      const verdict = decideKilledSpawn({
+        before, after: await localReport(deps), stdout: res.stdout, pid: res.pid, tag: move.target,
+      });
+      return verdict.arm === 'A'
+        ? { kind: 'refused', err: 'not-queued', detail: verdict.detail }
+        : { kind: 'accepted', detail: verdict.detail };
+    }
     if (res.code === 0) return { kind: 'accepted' };
     // A launcher that ran, failed and printed nothing would render `firstStderrLine`'s generic 'no message'. Name
     // the one condition this path can actually tell apart: an empty stderr on a non-zero exit means the launcher
@@ -266,6 +283,10 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   const advertised = move.viaLink ? deps.fleet !== null && liveOps(deps.fleet.state).includes(UPDATE_OP) : true;
   const action = classifyOpAnswer(answer, advertised);
   if (action.kind === 'hold') {
+    // D-3413: a hold that carries the node's own words (the bound's arm B or D) writes them where the operator reads
+    // them, on the lease this run acquired (`now`, its identity). A refused note (a report settled the row first, or a
+    // newer lease) is silent: the row's own state already says more than this sentence.
+    if (answer.kind === 'accepted' && answer.detail !== undefined) store.noteLeaseDetail(move.nodeId, action.detail, now);
     deps.onAccepted();
     return done({ nodeId: move.nodeId, result: 'accepted', detail: action.detail });
   }

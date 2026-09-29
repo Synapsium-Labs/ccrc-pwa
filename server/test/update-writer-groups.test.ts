@@ -98,7 +98,7 @@ const WRITER_GROUPS: readonly { table: 'releases' | 'node_release_refusals' | 'n
   { table: 'nodes', group: 'report', columns: ['reportedPhase', 'reportedTarget', 'reportedStartedAt', 'reportedUpdatedAt',
       'reportedDetail'], writers: ['upsertNodeMeasurement'] },
   { table: 'nodes', group: 'lease', columns: ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail'],
-      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal'] },
+      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal', 'noteLeaseDetail'] },
   { table: 'nodes', group: 'resolved', columns: ['channel', 'desiredTag', 'resolveDetail'], writers: ['resolveNode'] },
   { table: 'nodes', group: 'request', columns: ['requestedTag', 'requestedKind', 'requestedAt'],
       writers: ['requestNode', 'settleNode', 'ackNode'] },
@@ -133,10 +133,11 @@ const W3_WRITERS = ['markReleaseNotified'] as const;
 
 /** The programme-wave-5 writers the same floor requires (spec W4's
  *  dispatcher, Task 3): the request group's setter, the lease group's ONE
- *  acquire, and the refusal note on an idle row (D-3375).
+ *  acquire, the refusal note on an idle row (D-3375) and the detail note on a held
+ *  busy row (D-3413).
  *  A list of its own, as W3's is, so each floor entry says which wave put it
  *  there. */
-const W5_WRITERS = ['requestNode', 'dispatchNode', 'noteDispatchRefusal'] as const;
+const W5_WRITERS = ['requestNode', 'dispatchNode', 'noteDispatchRefusal', 'noteLeaseDetail'] as const;
 
 // ── the analyser ─────────────────────────────────────────────────────────────
 

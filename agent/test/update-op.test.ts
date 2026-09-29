@@ -18,7 +18,7 @@
 //    `UPDATE_SPAWN_TIMEOUT_MS`.
 //  - The answer is `accepted` only once the `--detach` parent exited 0.
 //    Anything else is `spawn-failed`, carrying the parent's first stderr line
-//    (D-3372) or the timeout named.
+//    (D-3372); a parent killed at the bound is decided by re-measurement (D-3413).
 //  - The ready frame advertises exactly `['update']`.
 //  - The op reaches no exec path. This is a SOURCE scan, because no behavioural
 //    case can see an extra call whose answer comes out the same.
@@ -218,11 +218,14 @@ describe('the update op', () => {
         .toMatchObject({ ok: false, err: 'spawn-failed', detail: 'ccrc: something else' });
     });
 
-    it('a parent killed at the bound is spawn-failed naming the timeout (Review Focus 4)', async () => {
-      const { c } = await up(recorder({ code: 1, stdout: null, stderr: '', killed: true, pid: 4242 }));
+    // Corrected in fix round 1 (D-3400 amended, D-3413): a parent killed at the bound is no longer a blanket
+    // `spawn-failed` naming the timeout. What it did is re-measured (`update-killed-arms.test.ts` pins every arm); here, with
+    // no update.json at either read and stdout read to EOF, nothing was queued: `not-queued`, which releases idle.
+    it('a parent killed at the bound with nothing queued answers not-queued, never a halting spawn-failed (Review Focus 4, D-3413)', async () => {
+      const { c } = await up(recorder({ code: 137, stdout: '', stderr: '', killed: true, pid: 4242 }));
       expect(await c.req<Res>(1, { op: 'update', tag: 'v0.0.9' })).toEqual({
-        t: 'res', id: 1, ok: false, err: 'spawn-failed',
-        detail: `the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`,
+        t: 'res', id: 1, ok: false, err: 'not-queued',
+        detail: `the --detach parent was stopped at the ${UPDATE_SPAWN_TIMEOUT_MS} ms bound before it queued anything; nothing started`,
       });
     });
 
@@ -424,9 +427,10 @@ describe('the update op', () => {
       const spawnBody = slice(src, 'export function makeUpdateSpawn', /\ninterface PtyEntry/);
       expect(spawnBody).not.toMatch(EXEC_PATH);
       expect(spawnBody).toMatch(/spawn\(file, \[\.\.\.args\], \{ detached: true, stdio: \['ignore', 'pipe', 'pipe'\], env \}\)/);
-      const readBody = slice(src, 'export function readInFlightReport(', /\n\}\n/);
+      const readBody = slice(src, 'export function readUpdateReport(', /\n\}\n/);
       expect(readBody).not.toMatch(EXEC_PATH);
       expect(readBody).toMatch(/NODE_FILES\.report/);
+      expect(slice(src, 'export function readInFlightReport(', /\n\}\n/)).not.toMatch(EXEC_PATH);
     });
 
     it('the exec surface is untouched: ccrc is on neither list, and the exec op refuses the template', () => {

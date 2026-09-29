@@ -315,7 +315,7 @@ const SKEW_DETAIL =
  *  word the NODE said (an AgentOpError, or a non-zero local exit as `spawn-failed`); `transport` is the link or
  *  the spawn failing to answer at all — never a word the node said. */
 export type OpAnswer =
-  | { kind: 'accepted' }
+  | { kind: 'accepted'; detail?: string }
   | { kind: 'refused'; err: string; detail: string | null }
   | { kind: 'transport'; why: 'disconnected' | 'timeout' | 'aborted' | 'other'; message: string };
 
@@ -332,14 +332,21 @@ const said = (text: string | null, none: string): string => (text === null ? non
 /**
  * THE ANSWER MAPPING (spec §10). `advertised` is whether the LIVE `FleetState.agentOps` names the op when the
  * answer arrives (always `true` for the server-role spawn): an agent that advertises the op and still answers
- * `bad-request` HALTS, one that does not is version skew and waits. `busy` and every transport failure release
+ * `bad-request` HALTS, one that does not is version skew and waits. `busy`, `not-queued` (D-3413: the bound's arm A)
+ * and every transport failure release
  * the lease `idle` with the request standing (decision 7: a refusal never consumes it); `bad-tag`, `bad-kind`,
  * `spawn-failed` and any word this build cannot name release it `failed`, which halts until `ack`.
  * Exhaustive over `UpdateOpError`: a word added to UPDATE_OP_ERRORS and not here is a compile error at the
  * `never` below (D-3370).
  */
 export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction {
-  if (a.kind === 'accepted') return { kind: 'hold', detail: ACCEPTED_DETAIL };
+  // An `accepted` that carries a detail is the bound's arm B or D (D-3400 amended, D-3413): the parent was killed at the
+  // bound and the node HOLDS the lease, saying what it measured. Read through `said()` like every node-supplied text. A
+  // plain `accepted` (the parent exited 0, or an agent that omits the field) keeps ACCEPTED_DETAIL.
+  if (a.kind === 'accepted') {
+    const words = said(a.detail ?? null, 'no message');
+    return { kind: 'hold', detail: words === 'no message' ? ACCEPTED_DETAIL : words };
+  }
   if (a.kind === 'transport') {
     const what = a.why === 'other' ? said(a.message, 'no message') : 'the node dropped mid-dispatch';
     return { kind: 'release', to: 'idle', detail: `${a.why} — ${what}; the request stands` };
@@ -356,6 +363,9 @@ export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction
     case 'bad-tag':
     case 'bad-kind': return { kind: 'release', to: 'failed', detail: `agent refused the op: ${err}` };
     case 'spawn-failed': return { kind: 'release', to: 'failed', detail: `spawn-failed — ${said(a.detail, 'no message')}` };
+    // D-3413 (arm A of the bound): the parent was stopped before it queued anything, so nothing started and nobody else is
+    // updating. Not `busy` (another actor) and not `spawn-failed` (a fault, which halts): idle, the request standing.
+    case 'not-queued': return { kind: 'release', to: 'idle', detail: `not-queued — ${said(a.detail, 'the parent was stopped before it queued anything')}` };
     default: {
       const unhandled: never = err;
       return unhandled;

@@ -344,7 +344,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 //   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
 //   silence for `regular` — the D-114 shape, in the one direction that matters here, because
 //   `regular` is the only answer that lets a caller condemn anything.
-// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true}
+// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
 
 // ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
 // Everything both ends of the op must agree on is declared here, once. The
@@ -364,8 +364,15 @@ export const UPDATE_OP = 'update';
  *  answer mapping switches over `UpdateOpError` with a `never` arm, so a word
  *  added on one side alone is a compile error. `bad-request` is deliberately
  *  NOT a member: it is the envelope's word for an op `validateReq` does not
- *  know, which from this op means the agent predates it. */
-export const UPDATE_OP_ERRORS = ['bad-tag', 'bad-kind', 'busy', 'spawn-failed'] as const;
+ *  know, which from this op means the agent predates it.
+ *
+ *  `not-queued` (D-3413, fix round 1 item 2) is the one word the bound's arm A needs across the link: the `--detach`
+ *  parent was stopped at `UPDATE_SPAWN_TIMEOUT_MS` BEFORE it queued anything (the box's `update.json` read the same
+ *  before and after, and the parent's stdout, read to EOF, carried neither the `update.json` WARN nor the `detached`
+ *  line), so nothing started and the server releases the row `idle` with the request standing. It is not `busy`
+ *  (busy means ANOTHER actor is updating, and no one is) and not `spawn-failed` (which halts, and this is no fault).
+ *  No skew hazard: only a wave-5 server ever sends the op, and this word ships inside wave 5. */
+export const UPDATE_OP_ERRORS = ['bad-tag', 'bad-kind', 'busy', 'spawn-failed', 'not-queued'] as const;
 export type UpdateOpError = (typeof UPDATE_OP_ERRORS)[number];
 /** Use THIS, never `UPDATE_OP_ERRORS.includes(x as UpdateOpError)` — `isRunState`'s rule. */
 export function isUpdateOpError(v: unknown): v is UpdateOpError {
@@ -514,6 +521,99 @@ export function lockHeldBusyDetail(line: string): string {
  *  adapter (`probe`) and judged by `updateWriterAlive`. L0 imports nothing, so the adapter is passed in. */
 export function updateWriterMayLive(pid: number | null, probe: (pid: number) => KillProbeOutcome): boolean {
   return pid === null || updateWriterAlive(probe(pid));
+}
+
+// ── the bound's outcome, by attributed re-measurement (D-3400 amended, D-3413; fix round 1 item 2) ──────────
+// A `--detach` parent that outlives `UPDATE_SPAWN_TIMEOUT_MS` is killed (its whole group), and neither role may then
+// GUESS what it did. Each role reads `update.json` BEFORE the spawn and AFTER the kill and hands both reads, the
+// parent's stdout (read to EOF, or `null`), its pid and the lease's tag to `decideKilledSpawn`, the ONE decision.
+
+/** One bounded read of `update.json`, in three values that are never folded: its text, proven absent, or unreadable
+ *  (any other failure, a non-regular file, over the cap, past the deadline). */
+export type UpdateReportRead = { kind: 'bytes'; text: string } | { kind: 'absent' } | { kind: 'unreadable' };
+
+/** The first words of the two stdout lines the `--detach` parent can print BEFORE it is stopped, declared once and
+ *  tied to `ccd/ccrc` by a source scan (`server/test/update-killed-arms.test.ts`): `_upd_phase`'s WARN when it could
+ *  not write `update.json`, and `_upd_detach`'s success line. Either one on stdout means the parent got further than
+ *  arm A may assume (a queued write that WARNed, or a unit that was started), so the outcome cannot be arm A. */
+export const UPDATE_PHASE_WARN_PREFIX = 'update: WARN: could not write ~/.ccrc/update.json';
+export const UPDATE_DETACHED_PREFIX = 'update: detached';
+
+/** The report's WRITER and TARGET, read by name from any one-line JSON object, or `null` when the text is not one.
+ *  Not `inFlightReport`: the killed parent's own report may already be in a non-in-flight phase (`failed`), and it is
+ *  still the parent's. `pid` follows `inFlightReport`'s rule (a positive safe integer, else `null`). */
+function reportWriter(text: string): { pid: number | null; target: string | null } | null {
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return null; }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return null;
+  const d = doc as Record<string, unknown>;
+  return {
+    pid: typeof d.pid === 'number' && Number.isSafeInteger(d.pid) && d.pid > 0 ? d.pid : null,
+    target: isReleaseTag(d.target) ? d.target : null,
+  };
+}
+
+/** The verdict on a KILLED spawn. `A` releases the lease `idle` (the request stands, nothing started): it travels as
+ *  `not-queued`. `B` and `D` HOLD it (as `accepted`); the detail is what the row reads. */
+export type KilledSpawnVerdict = { arm: 'A' | 'B' | 'D'; detail: string };
+
+const stdoutHas = (stdout: string, prefix: string): boolean => stdout.split('\n').some((l) => l.startsWith(prefix));
+const clip = (s: string): string => s.slice(0, UPDATE_OP_DETAIL_MAX);
+
+/** D-3400 (amended), D-3413 — the arms, decided A, then B, then D, and only A ever releases:
+ *  A. `before` and `after` are both READABLE and byte-identical (or absent at both), and `stdout`, read to EOF, has
+ *     neither the WARN line nor the `detached` line. The parent was stopped before its `queued` write, which comes
+ *     before `systemd-run`, so nothing was queued or started.
+ *  B. `after` names the killed parent's own `pid` AND the lease's `tag`: it queued (the run may have started).
+ *  D. anything else: unreadable, a change that is not the parent's, the WARN or `detached` line, no EOF. A change that
+ *     is not the parent's cannot prove our unit never started (our own `queued` may be what was overwritten).
+ *  Every detail is one line within `UPDATE_OP_DETAIL_MAX`, and says what happened. */
+export function decideKilledSpawn(i: {
+  before: UpdateReportRead; after: UpdateReportRead; stdout: string | null; pid: number | null; tag: string;
+}): KilledSpawnVerdict {
+  const { before, after, stdout, pid, tag } = i;
+  const bound = `${UPDATE_SPAWN_TIMEOUT_MS} ms`;
+  const warned = stdout !== null && stdoutHas(stdout, UPDATE_PHASE_WARN_PREFIX);
+  const detached = stdout !== null && stdoutHas(stdout, UPDATE_DETACHED_PREFIX);
+  const unchanged =
+    (before.kind === 'absent' && after.kind === 'absent') ||
+    (before.kind === 'bytes' && after.kind === 'bytes' && before.text === after.text);
+  if (unchanged && stdout !== null && !warned && !detached) {
+    return { arm: 'A', detail: `the --detach parent was stopped at the ${bound} bound before it queued anything; nothing started` };
+  }
+  const written = after.kind === 'bytes' ? reportWriter(after.text) : null;
+  if (written !== null && pid !== null && written.pid === pid && written.target === tag) {
+    return { arm: 'B', detail: clip(`the --detach parent was stopped at the ${bound} bound after it queued ${tag} (pid ${pid}); the run may have started, lease held`) };
+  }
+  const seen: string[] = [];
+  if (before.kind === 'unreadable' && after.kind === 'unreadable') seen.push('update.json was unreadable before and after');
+  else if (before.kind === 'unreadable') seen.push('update.json was unreadable before the spawn');
+  else if (after.kind === 'unreadable') seen.push('update.json was unreadable after the stop');
+  // "Changed" is only a fact when the snapshot was readable: an unreadable before compares with nothing.
+  if (after.kind === 'bytes' && before.kind !== 'unreadable' && !unchanged) {
+    seen.push(written === null ? 'update.json changed to something unparseable'
+      : `update.json changed, but not by the parent (pid ${written.pid ?? 'unknown'}, target ${written.target ?? 'none'})`);
+  }
+  if (after.kind === 'absent' && before.kind === 'bytes') seen.push('update.json was removed');
+  if (warned) seen.push('the parent printed the update.json WARN');
+  if (detached) seen.push("the parent printed 'detached'");
+  if (stdout === null) seen.push('its stdout did not reach EOF');
+  // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease)
+  // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted.
+  const head = 'the --detach parent was stopped at the bound; ';
+  const tail = ' - it could not be attributed; lease held until the report or deadline';
+  const budget = UPDATE_OP_DETAIL_MAX - head.length - tail.length;
+  let taken = 0;
+  let text = '';
+  for (const reason of seen) {
+    const next = taken === 0 ? reason : `${text}, ${reason}`;
+    if (next.length + (taken + 1 < seen.length ? ` (+${seen.length - taken - 1} more)`.length : 0) > budget) break;
+    text = next;
+    taken += 1;
+  }
+  if (taken === 0) text = seen[0]!.slice(0, budget);
+  else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
+  return { arm: 'D', detail: head + text + tail };
 }
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —

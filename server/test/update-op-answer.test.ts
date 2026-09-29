@@ -19,12 +19,27 @@ describe('classifyOpAnswer — accepted never settles (§18 "`accepted` does not
   });
 });
 
+describe('classifyOpAnswer — an accepted that carries the bound\'s words holds with them (D-3400 amended, D-3413)', () => {
+  it.each([true, false])('accepted WITH a detail holds (advertised=%s) and says the node\'s words, as one printable line', (advertised) => {
+    expect(classifyOpAnswer({ kind: 'accepted', detail: 'stopped at the bound\nafter it queued v0.0.9' }, advertised))
+      .toEqual({ kind: 'hold', detail: 'stopped at the bound' });
+    expect(classifyOpAnswer({ kind: 'accepted', detail: 'x'.repeat(500) }, advertised))
+      .toEqual({ kind: 'hold', detail: 'x'.repeat(200) });
+  });
+  it('an accepted whose detail is empty of printable text falls back to the default words, never an empty detail', () => {
+    expect(classifyOpAnswer({ kind: 'accepted', detail: '\u0000' }, true))
+      .toEqual({ kind: 'hold', detail: 'accepted — the node queued a detached run' });
+  });
+});
+
 describe('classifyOpAnswer — every UpdateOpError word (D-3370)', () => {
   const EXPECTED: Record<UpdateOpError, AnswerAction> = {
     'bad-tag': { kind: 'release', to: 'failed', detail: 'agent refused the op: bad-tag' },
     'bad-kind': { kind: 'release', to: 'failed', detail: 'agent refused the op: bad-kind' },
     busy: { kind: 'release', to: 'idle', detail: `busy — ${LOCK}` },
     'spawn-failed': { kind: 'release', to: 'failed', detail: `spawn-failed — ${LOCK}` },
+    // D-3413: the bound's arm A. Not `busy` (nobody else is updating) and not `spawn-failed` (no fault, nothing halts).
+    'not-queued': { kind: 'release', to: 'idle', detail: `not-queued — ${LOCK}` },
   };
 
   it('has a row for exactly the words the op answers with', () => {
@@ -33,13 +48,15 @@ describe('classifyOpAnswer — every UpdateOpError word (D-3370)', () => {
 
   for (const err of UPDATE_OP_ERRORS) {
     for (const advertised of [true, false]) {
-      it(`${err} (advertised=${advertised}) — busy never halts; bad-tag, bad-kind and spawn-failed do`, () => {
+      it(`${err} (advertised=${advertised}) — busy and not-queued never halt; bad-tag, bad-kind and spawn-failed do`, () => {
         expect(classifyOpAnswer(refused(err, LOCK), advertised)).toEqual(EXPECTED[err]);
       });
     }
   }
 
-  it('a missing detail reads as its own words, never an empty dash', () => {
+  it('a missing detail reads as its own words, never an empty dash — not-queued too (D-3413)', () => {
+    expect(classifyOpAnswer(refused('not-queued'), true))
+      .toEqual({ kind: 'release', to: 'idle', detail: 'not-queued — the parent was stopped before it queued anything' });
     expect(classifyOpAnswer(refused('busy'), true))
       .toEqual({ kind: 'release', to: 'idle', detail: 'busy — the node gave no detail' });
     expect(classifyOpAnswer(refused('spawn-failed'), true))

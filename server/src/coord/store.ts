@@ -428,6 +428,16 @@ export type NoteDispatchRefusalResult =
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'not-idle'; state: UpdateState };
 
+/** `noteLeaseDetail`'s answers (D-3413). `stale-lease` = the row holds a busy lease that is not the one the caller
+ *  acquired (`updateStartedAt` names the one it holds); `not-busy` = a report or the deadline already settled the row,
+ *  and its verdict is not the dispatcher's to overwrite. Every refusal writes nothing. */
+export type NoteLeaseDetailResult =
+  | { ok: true }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'not-busy'; state: UpdateState }
+  | { ok: false; why: 'stale-lease'; updateStartedAt: number | null };
+
 /** A partial intent write. `undefined` = leave the field as it stands;
  *  `pinnedTag: null` = CLEAR the pin — two different requests, never folded. */
 export interface UpdateIntentPatch { channel?: UpdateChannel; pinnedTag?: string | null; auto?: AutoMode; notify?: NotifyMode }
@@ -6511,6 +6521,28 @@ export class CoordStore {
       if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
       if (row.updateState !== 'idle') return { ok: false, why: 'not-idle', state: row.updateState };
       return { ok: true, changed: false };
+    });
+  }
+
+  /** What the node said about a lease it now HOLDS (D-3413; the bound's arms B and D): `updateDetail` ONLY, ONLY on a
+   *  live BUSY row, and ONLY while that row's `updateStartedAt` is the lease the caller acquired (`startedAt` — the
+   *  acquire's ms clock value, the same identity `releaseLease`'s guard reads). The state stays as it is, `pending`,
+   *  and the request is untouched: a hold releases nothing. It never writes over a settled row (a report or the
+   *  deadline got there first, and a `failed` row's detail is the verdict the halt reads) nor over a newer lease. */
+  noteLeaseDetail(nodeId: string, detail: string, startedAt: number): NoteLeaseDetailResult {
+    return tx(this.db, (): NoteLeaseDetailResult => {
+      const res = this.db.prepare(
+        'UPDATE nodes SET updateDetail = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
+        `AND updateState NOT IN ${SETTLED_UPDATE_SQL} AND updateStartedAt IS ?`,
+      ).run(detail, nodeId, startedAt);
+      if (Number(res.changes) > 0) return { ok: true };
+      const row = this.nodeLeaseRow(nodeId);
+      if (row === null) return { ok: false, why: 'unknown-node' };
+      if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+      if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
+        return { ok: false, why: 'not-busy', state: row.updateState };
+      }
+      return { ok: false, why: 'stale-lease', updateStartedAt: row.updateStartedAt };
     });
   }
 

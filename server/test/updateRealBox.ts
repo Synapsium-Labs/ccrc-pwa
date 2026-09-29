@@ -6,7 +6,8 @@
 // CONTAINMENT, structural — the env the caller hands the spawner is built FROM SCRATCH, never spread from
 // `process.env`: HOME is the fixture and PATH is `<home>/bin:/usr/local/bin:/usr/bin:/bin`, never the operator's
 // `~/.local/bin`. A poisoned, RECORDING `systemd-run` and `systemctl` sit first on that PATH: each appends its argv to
-// `<home>/<name>-argv` and exits 97, so a lock the harness failed to hold reaches `systemd-run` and the case that
+// `<home>/<name>-argv` and exits 97 (`systemd-run` may instead HANG after recording, and `curl` may instead SLEEP: see
+// `RealBoxOpts`, D-3413's arms B and A), so a lock the harness failed to hold reaches `systemd-run` and the case that
 // asserts the file's absence reds instead of starting a real transient unit. `curl` is a stub that answers 200 and
 // records its argv to `<home>/curl-argv` (the `rollback` kind asks the release host before its lock probe), so
 // nothing here reaches the network.
@@ -35,8 +36,14 @@ function plant(file: string, body: string): void {
   chmodSync(file, 0o755);
 }
 
+/** How the two stubs behave (D-3400 amended, D-3413). `systemdRun: 'hang'` RECORDS its argv and its own pid
+ *  (`<home>/systemd-run-pid`) and then blocks in `sleep` — the real parent has written `queued` and waits in it, the
+ *  state the bound kills; it still never starts a unit. `curl: 'sleep'` records and sleeps past any bound, so a
+ *  `rollback` parent is stopped BEFORE its `queued` write. Neither ever touches the network or a unit manager. */
+export interface RealBoxOpts { systemdRun?: 'poison' | 'hang'; curl?: 'ok' | 'sleep' }
+
 /** Plants the box under `home` and returns the from-scratch env for the spawner. */
-export function plantRealBox(home: string): NodeJS.ProcessEnv {
+export function plantRealBox(home: string, opts: RealBoxOpts = {}): NodeJS.ProcessEnv {
   const bin = path.join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
@@ -45,9 +52,12 @@ export function plantRealBox(home: string): NodeJS.ProcessEnv {
   symlinkSync(CCD_DIR, path.join(home, 'ccrc', 'ccd'));
   plant(path.join(home, '.local', 'bin', 'ccrc'), shimBytes());
   for (const name of ['systemd-run', 'systemctl']) {
-    plant(path.join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-argv"\nexit 97\n`);
+    const hang = name === 'systemd-run' && opts.systemdRun === 'hang';
+    plant(path.join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-argv"\n${
+      hang ? 'echo $$ > "$HOME/systemd-run-pid"\nexec sleep 300' : 'exit 97'}\n`);
   }
-  plant(path.join(bin, 'curl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/curl-argv"\nprintf 200\nexit 0\n');
+  plant(path.join(bin, 'curl'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/curl-argv"\n${
+    opts.curl === 'sleep' ? 'echo $$ > "$HOME/curl-pid"\nexec sleep 300' : 'printf 200\nexit 0'}\n`);
   writeFileSync(path.join(home, '.ccrc', 'update.json'), TERMINAL_REPORT);
   return { HOME: home, PATH: `${bin}:/usr/local/bin:/usr/bin:/bin` };
 }

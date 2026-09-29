@@ -31,9 +31,9 @@ import type {
 } from '../../shared/agent-protocol.js';
 import {
   CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
-  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine, lockHeldBusyDetail,
-  updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
-  type KillProbeOutcome, type UpdateSpawnResult,
+  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
+  lockHeldBusyDetail, updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
+  type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
@@ -637,7 +637,10 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
         return;
       }
       const home = ctx.cfg.home;
-      const inFlight = readInFlightReport(home);
+      // ONE read feeds both the in-flight check and the bound's snapshot (D-3400 amended, D-3413): the report's text, proven
+      // absent, or unreadable. Absent and unreadable stay two values, because arm A needs a readable before.
+      const before = readUpdateReport(home);
+      const inFlight = before.kind === 'bytes' ? inFlightReport(before.text) : null;
       // D-3411: an in-flight report answers busy only while its WRITER lives. A dead writer's report is a
       // leftover (an updater killed mid-run), and the op spawns: the parent's own lock probe then decides.
       // An absent or unreadable pid keeps busy — that writer is unmeasurable, which is not dead. The
@@ -662,7 +665,17 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // process was forked". Everything else is `spawn-failed`, carrying what
       // the parent said.
       if (spawned.killed) {
-        send(ws, failUpdate(req.id, 'spawn-failed', `the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`));
+        // D-3400 (amended), D-3413: the bound killed the parent's whole group, and what it did is MEASURED, never guessed:
+        // re-read update.json and let L0's `decideKilledSpawn` attribute the change (A. nothing queued, B. it queued our tag
+        // as this pid, D. anything else). Only A releases (`not-queued`: idle, the request standing); B and D answer the ok
+        // `accepted` reply carrying their words, so the server HOLDS the lease. The old `spawn-failed` here was a halting
+        // answer for a parent that may well have started the run.
+        const verdict = decideKilledSpawn({
+          before, after: readUpdateReport(home), stdout: spawned.stdout, pid: spawned.pid, tag: req.tag,
+        });
+        send(ws, verdict.arm === 'A'
+          ? failUpdate(req.id, 'not-queued', verdict.detail)
+          : ok(req.id, { accepted: true, detail: verdict.detail }));
         return;
       }
       if (spawned.code !== 0) {
@@ -934,20 +947,32 @@ export function writerMayLive(pid: number | null): boolean {
  * flight" means.
  */
 export function readInFlightReport(home: string): InFlightReport | null {
+  const read = readUpdateReport(home);
+  return read.kind === 'bytes' ? inFlightReport(read.text) : null;
+}
+
+/**
+ * `~/.ccrc/update.json` on THIS box, bounded and measured (D-3400 amended, D-3413): its text, `absent` on a PROVEN ENOENT
+ * at the open, or `unreadable` for every other failure (a non-regular file, over the cap, any other errno). The `update` op
+ * reads it once before the spawn — that read is both the in-flight check's input and the bound's snapshot — and once
+ * after a kill, and the two are compared byte for byte. Same bounds as ever: `O_NONBLOCK` (a FIFO planted at the name
+ * would block `open(2)` and the agent's whole event loop), `fstat` to a regular file of at most `UPDATE_REPORT_READ_MAX`.
+ */
+export function readUpdateReport(home: string): UpdateReportRead {
   let fd: number;
   try {
     fd = openSync(path.join(home, CCRC_DIR_NAME, NODE_FILES.report), fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-  } catch {
-    return null;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable' };
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile() || st.size > UPDATE_REPORT_READ_MAX) return null;
+    if (!st.isFile() || st.size > UPDATE_REPORT_READ_MAX) return { kind: 'unreadable' };
     const buf = Buffer.alloc(st.size);
     const n = readSync(fd, buf, 0, st.size, 0);
-    return inFlightReport(buf.subarray(0, n).toString('utf8'));
+    return { kind: 'bytes', text: buf.subarray(0, n).toString('utf8') };
   } catch {
-    return null;
+    return { kind: 'unreadable' };
   } finally {
     try { closeSync(fd); } catch { /* nothing left to release */ }
   }

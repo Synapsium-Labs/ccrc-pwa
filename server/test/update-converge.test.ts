@@ -20,7 +20,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { AgentOpError } from '../src/remote/client.js';
 import type { Deps } from '../src/server.js';
 import {
-  LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL, SPAWN_TIMEOUT_MESSAGE,
+  LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL,
   dispatchViewsFor, localUpdateSpawnFor, runDispatch,
   type ConvergeDeps, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
 } from '../src/update/converge.js';
@@ -530,7 +530,7 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     expect(h.spawned).toEqual([{ cmd: `${h.home}/.local/bin/ccrc`, args: LAUNCHER_ARGV }]);
   });
 
-  it('a spawn whose parent never exits is answered `timeout` exactly at UPDATE_SPAWN_TIMEOUT_MS, by the runner\'s own kill (Review Focus 4, D-3400, review F3)', async () => {
+  it('a spawn whose parent never exits is answered exactly at UPDATE_SPAWN_TIMEOUT_MS, by the runner\'s own kill: nothing queued (update.json absent at both reads) is arm A, released idle (Review Focus 4, D-3400 amended, D-3413, review F3/F4)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let calls = 0;
     // The FIRST spawn parks; any later one exits 0 at once, as a `--detach` parent does. `boundMs` models the
@@ -555,10 +555,10 @@ describe('runDispatch — the server-role spawn (§18 "the spawn argv is absolut
     await vi.advanceTimersByTimeAsync(0);   // flush the continuation; the clock does not move
     expect(done).toBe(true);
     const r = ran(await running);
-    expect(r.outcome).toEqual({
-      nodeId: SERVER_ID, result: 'released', to: 'idle', detail: 'timeout — the node dropped mid-dispatch; the request stands',
-    });
-    expect(SPAWN_TIMEOUT_MESSAGE).toBe(`the --detach parent did not exit within ${UPDATE_SPAWN_TIMEOUT_MS} ms`);
+    // F4: the row says what happened, and it is NOT the old "the node dropped mid-dispatch" (nothing dropped).
+    const armA = `not-queued — the --detach parent was stopped at the ${UPDATE_SPAWN_TIMEOUT_MS} ms bound before it queued anything; nothing started`;
+    expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'released', to: 'idle', detail: armA });
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', updateDetail: armA, requestedTag: 'v0.0.10' });
     // The runner killed the parent's group and answered, so the spawn is over: `spawning` left the set when the
     // runner resolved, and the next run starts a fresh parent instead of answering busy for a parent that is gone.
     const second = runDispatch(h.deps, T0 + 61_000);

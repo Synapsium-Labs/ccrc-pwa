@@ -32,8 +32,8 @@ import { AgentOpError, connectFleet, type ConnectedFleet } from '../src/remote/c
 import { TOKEN } from './remoteHelpers.js';
 
 describe('UPDATE_OP_ERRORS — the only words the update op refuses with', () => {
-  it('is exactly the four words, and the op and its --from word are what wave 4 spells', () => {
-    expect([...UPDATE_OP_ERRORS]).toEqual(['bad-tag', 'bad-kind', 'busy', 'spawn-failed']);
+  it('is exactly the five words (D-3413 added `not-queued`), and the op and its --from word are what wave 4 spells', () => {
+    expect([...UPDATE_OP_ERRORS]).toEqual(['bad-tag', 'bad-kind', 'busy', 'spawn-failed', 'not-queued']);
     expect(UPDATE_OP).toBe('update');
     expect(UPDATE_OP_FROM).toBe('pwa');
   });

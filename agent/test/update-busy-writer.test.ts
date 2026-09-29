@@ -14,52 +14,15 @@
 //    here reaches the network.
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { UPDATE_LOCK_HELD_PREFIX, isUpdateLockHeldLine } from '../../shared/agent-protocol.js';
 import type { RequestKind } from '../../shared/api.js';
 import { makeUpdateSpawn, type RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+import { CCRC_SRC, TERMINAL_REPORT, plantRealBox } from './updateRealBox.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const CCD_DIR = path.resolve(here, '..', '..', 'ccd');
-const CCRC_SRC = path.join(CCD_DIR, 'ccrc');
 const linux = process.platform === 'linux';
-
-/** A TERMINAL report: byte-identity after a refused op means something only when there is a report to keep. */
-const TERMINAL = '{"target":"v0.0.5","phase":"done","startedAt":1790000000,"updatedAt":1790000100,"detail":null,"from":"cli","pid":1}\n';
-
-/** The launcher's bytes, out of `_inst_shim`'s own heredoc — the file `ccrc install` places at `~/.local/bin/ccrc`. */
-function shimBytes(): string {
-  const src = readFileSync(CCRC_SRC, 'utf8');
-  const m = /^_inst_shim\(\) \{[^\n]*\n {2}cat <<'CCRC_SHIM'\n([\s\S]*?)\nCCRC_SHIM\n/m.exec(src);
-  if (m === null) throw new Error('_inst_shim\'s heredoc not found in ccd/ccrc');
-  return `${m[1]}\n`;
-}
-
-function plant(file: string, body: string): void {
-  writeFileSync(file, body);
-  chmodSync(file, 0o755);
-}
-
-/** The fixture box: the real launcher, the real script under `~/ccrc/ccd`, the poisoned recorders, the curl stub,
- *  and a terminal `update.json`. Returns the from-scratch env the spawner is handed. */
-function plantBox(home: string): NodeJS.ProcessEnv {
-  const bin = path.join(home, 'bin');
-  mkdirSync(bin, { recursive: true });
-  mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
-  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-  mkdirSync(path.join(home, 'ccrc'), { recursive: true });
-  symlinkSync(CCD_DIR, path.join(home, 'ccrc', 'ccd'));
-  plant(path.join(home, '.local', 'bin', 'ccrc'), shimBytes());
-  for (const name of ['systemd-run', 'systemctl']) {
-    plant(path.join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/${name}-argv"\nexit 97\n`);
-  }
-  plant(path.join(bin, 'curl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/curl-argv"\nprintf 200\nexit 0\n');
-  writeFileSync(path.join(home, '.ccrc', 'update.json'), TERMINAL);
-  return { HOME: home, PATH: `${bin}:/usr/local/bin:/usr/bin:/bin` };
-}
 
 describe.skipIf(!linux)('the update op against the REAL ccrc — a held lock is busy (D-3411, review F1)', () => {
   let agent: RunningAgent | undefined;
@@ -88,7 +51,7 @@ describe.skipIf(!linux)('the update op against the REAL ccrc — a held lock is 
   };
   const up = async (): Promise<{ c: TestClient; home: string; report: string }> => {
     fixture = makeFixture();
-    const env = plantBox(fixture.home);
+    const env = plantRealBox(fixture.home);
     agent = await boot(fixture, { spawnUpdate: makeUpdateSpawn(env) });
     const c = new TestClient(agent.port);
     clients.push(c);
@@ -107,7 +70,7 @@ describe.skipIf(!linux)('the update op against the REAL ccrc — a held lock is 
       expect(res.detail).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(.*\) - a live updater that hangs answers busy on every sweep: ack the row or mend the box$/);
       expect(res.detail!.startsWith(UPDATE_LOCK_HELD_PREFIX)).toBe(true);
       expect(isUpdateLockHeldLine(res.detail!)).toBe(true);
-      expect(readFileSync(report, 'utf8')).toBe(TERMINAL);
+      expect(readFileSync(report, 'utf8')).toBe(TERMINAL_REPORT);
       expect(existsSync(path.join(home, 'systemd-run-argv')), 'a lock the harness failed to hold reached systemd-run').toBe(false);
       expect(existsSync(path.join(home, 'systemctl-argv')), 'the script reached systemctl').toBe(false);
       if (kind === 'rollback') {
