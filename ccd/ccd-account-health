@@ -202,7 +202,6 @@ exec 9>"$LOCK" \
   || { _ah_say 'cannot open the lock at $HOME/.ccrc/account-health.lock — nothing was measured'; exit 1; }
 flock -n 9 || exit 0
 [ -e "$PAUSE" ] && exit 0
-rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
 [ -r "$ROSTER" ] \
   || { _ah_say 'no roster at $HOME/.ccrc/accounts.json — nothing says which accounts exist'; exit 1; }
@@ -215,6 +214,7 @@ if [ "$rc" -ne 0 ]; then
   _ah_say "the roster at \$HOME/.ccrc/accounts.json is invalid — $ROSTER_WHY nothing was measured"
   exit 1
 fi
+rm -f -- "$REG"/*-authdead.tmp.* 2>/dev/null
 
 SUBJECTS="$(_ah_subjects 2>/dev/null)" \
   || { _ah_say 'the roster at $HOME/.ccrc/accounts.json does not parse — nothing was measured'; exit 1; }

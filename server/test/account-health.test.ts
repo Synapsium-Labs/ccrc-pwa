@@ -353,6 +353,7 @@ describe('eligibility is roster-derived', () => {
     fs.writeFileSync(j('.cc-secrets', 'second.env'),
       'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
     fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    fs.writeFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'partial');
     plantCurlSequence([
       { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
       { status: '401', body: '{"error":{"type":"authentication_error"}}' },
@@ -363,6 +364,7 @@ describe('eligibility is roster-derived', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/roster .*duplicate account id "duplicate"/);
     expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.readFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'utf8')).toBe('partial');
     expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
