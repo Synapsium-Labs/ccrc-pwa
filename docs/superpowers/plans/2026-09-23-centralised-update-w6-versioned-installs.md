@@ -101,7 +101,462 @@ Plan-level departures from the spec's literal text, found while planning against
 
 Spec §11's exit criterion, fixture half (D-3421). Task 8 records every command it ran, its exit code and the lines that decide it, verbatim (scratch paths as `$S`/`$H`), then lists the live half's commands for the coordinator, who runs them at rollout.
 
-<!-- REHEARSAL RECORD: task 8 -->
+**Run:** 2026-09-29T04:59Z, on this branch at `12c8e59aac51` (Tasks 1–7 committed). `N` = `v0.0.35` and `N-1` = `v0.0.34`, both measured (Step 1) to ship a verified tarball and bundle and to predate W6; `U` = `untagged-12c8e59aac51`.
+
+**Environment:** Linux 6.8.0-137-generic; node v24.14.1; mv (GNU coreutils) 9.4; rsync  version 3.2.7  protocol version 31. Fixture HOME `$H`, role `server`, loopback port `$PORT`; every command under `env -i` with `PATH=$S/bin:$H/.local/bin:<node>:/usr/local/bin:/usr/bin:/bin`. The stub `systemctl` runs the placed unit's own `ExecStart=`; `loginctl`/`journalctl` are stubs, `curl` is recorded, `tmux`/`ssh`/`gh`/`systemd-run`/`launchctl` are poisoned (Task 8's Interfaces).
+
+**Order of commands:** R1 is `N-1`'s own `install.sh --release`; R2 and R3 this checkout's `ccd/ccrc install`; R2v and R4–R6 this branch's ccrc as placed at `$H/ccrc-versions/$U` (from R4 on, `$H/ccrc` points at a pre-W6 release); R7 the checkout's ccrc (R7c prunes `$U`).
+
+### R1: `v0.0.34` placed as a real directory by its own spine
+
+Command: `bash $REPO/install.sh --release v0.0.34 --role server` — exit `1` (expected 0 or 1).
+
+Deciding lines, verbatim:
+
+```text
+install.sh: verified ccrc-v0.0.34.tar.gz — handing off to the staged 'ccrc install'
+install: tree: placed at $HOME/ccrc
+install: done — every step above converged
+```
+
+- yes — install.sh verified the artifact and handed off
+- yes — the pre-W6 spine placed the tree at the live name
+- yes — the spine reached its landing line
+- yes — ~/ccrc is a real directory
+- yes — /health answers v0.0.34
+- doctor FAIL checks in this transcript: none
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc 
+ccrc-versions:
+previous: (none)
+migrating-to: (none)
+stamp: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+installed: 6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b unsigned 
+ccrc.service: active
+health: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+update.json: (none)
+```
+
+### R2: a crash inside the migration window
+
+Command: `bash $REPO/ccd/ccrc install --role server` — exit `137` (expected 137).
+
+Deciding lines, verbatim:
+
+```text
+install: tree: placed untagged-12c8e59aac51 at $HOME/ccrc-versions/untagged-12c8e59aac51
+install: tree: migrating — $HOME/ccrc is a directory; untagged-12c8e59aac51 is complete at $HOME/ccrc-versions/untagged-12c8e59aac51
+```
+
+- yes — untagged-12c8e59aac51 was placed beside the running tree
+- yes — the migration began
+- yes — the link was never announced
+- yes — no ~/ccrc at all
+- yes — the old tree is at ~/ccrc.migrating
+- yes — ~/.ccrc/migrating-to names untagged-12c8e59aac51
+- yes — the old server still answers v0.0.34 from the moved tree
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-versions 
+  d ccrc.migrating 
+ccrc-versions: untagged-12c8e59aac51[]
+previous: (none)
+migrating-to: untagged-12c8e59aac51
+stamp: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+installed: 6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b unsigned 
+ccrc.service: active
+health: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+update.json: (none)
+```
+
+### R2v: `versions` from the placed version, while the migration is crashed
+
+Command: `bash $H/ccrc-versions/untagged-12c8e59aac51/ccd/ccrc versions` — exit `0` (expected 0).
+
+Deciding lines, verbatim:
+
+```text
+versions: a migration crashed — $HOME/ccrc is absent beside $HOME/ccrc.migrating; run bash $HOME/ccrc-versions/untagged-12c8e59aac51/ccd/ccrc install (or bash install.sh from a ccrc checkout) to complete it — the ccrc on PATH cannot run until then, and deploy.sh would place a second tree beside it
+    untagged-12c8e59aac51  incomplete  kept: nothing is pruned while $HOME/ccrc reads crashed
+```
+
+- yes — the listing names the crash and a remedy that can run
+- yes — untagged-12c8e59aac51 is listed, incomplete (its record is written by the install that completes it)
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-versions 
+  d ccrc.migrating 
+ccrc-versions: untagged-12c8e59aac51[]
+previous: (none)
+migrating-to: untagged-12c8e59aac51
+stamp: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+installed: 6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b unsigned 
+ccrc.service: active
+health: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+update.json: (none)
+```
+
+### R3: the completion
+
+Command: `bash $REPO/ccd/ccrc install --role server` — exit `1` (expected 0 or 1).
+
+Deciding lines, verbatim:
+
+```text
+install: tree: completed a crashed migration — $HOME/ccrc was absent beside $HOME/ccrc.migrating; linked to $HOME/ccrc-versions/untagged-12c8e59aac51 (named by ~/.ccrc/migrating-to)
+install: tree: reinstalled untagged-12c8e59aac51 in place at $HOME/ccrc-versions/untagged-12c8e59aac51 (the version $HOME/ccrc points at; same name, same release)
+install: versions: kept untagged-12c8e59aac51's stamp and install record in $HOME/ccrc-versions/untagged-12c8e59aac51 — what a flip back restores
+install: migration: $HOME/ccrc.migrating kept — ccrc doctor did not pass; the next install or update whose gate passes removes it
+```
+
+- yes — the crashed migration was completed from the marker
+- yes — …before the banner, i.e. before anything else
+- yes — the tree was reinstalled in place
+- yes — the version kept its stamp and record
+- yes — the doctor tail decided ~/ccrc.migrating
+- yes — ~/ccrc -> untagged-12c8e59aac51
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-versions 
+  d ccrc.migrating 
+  l ccrc $H/ccrc-versions/untagged-12c8e59aac51
+ccrc-versions: untagged-12c8e59aac51[stamp,record]
+previous: (none)
+migrating-to: untagged-12c8e59aac51
+stamp: {"version":null,"sha":"12c8e59aac5135d6affb4dc4f56e8290ebfc1d2d"}
+installed: 12c8e59aac5135d6affb4dc4f56e8290ebfc1d2d unsigned 
+ccrc.service: active
+health: {"version":null,"sha":"12c8e59aac5135d6affb4dc4f56e8290ebfc1d2d"}
+update.json: (none)
+```
+
+### R4: one flip — `update --to v0.0.35`, whose spine predates W6
+
+Command: `bash $H/ccrc-versions/untagged-12c8e59aac51/ccd/ccrc update --to v0.0.35` — exit `3` (expected 0 or 3).
+
+Deciding lines, verbatim:
+
+```text
+update: previous: untagged (12c8e59aac5135d6affb4dc4f56e8290ebfc1d2d) — this build carries no release tag, so an automatic restore of it is arm 3 and a bare 'ccrc rollback' refuses (name one with --to)
+update: tree: v0.0.35's spine predates versioned installs and writes through $HOME/ccrc — $HOME/ccrc now points at $HOME/ccrc-versions/v0.0.35 (a copy of untagged-12c8e59aac51) for it to write into
+install: tree: placed at $HOME/ccrc
+update: versions: kept v0.0.35's stamp and install record in $HOME/ccrc-versions/v0.0.35 — what a flip back restores
+update: gate: server answers on v0.0.35 (ccrc.service up, /health at 127.0.0.1:$PORT answers v0.0.35)
+```
+
+- yes — previous records the untagged build it replaces
+- yes — the older spine got a directory named for its own tag
+- yes — v0.0.35's own spine wrote through the link
+- yes — v0.0.35 kept its stamp and record
+- yes — the health gate passed on v0.0.35
+- yes — ~/ccrc -> v0.0.35
+- yes — /health answers v0.0.35
+- yes — no ~/ccrc.migrating once a gate has passed
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.35[stamp,record]
+previous: untagged 12c8e59aac5135d6affb4dc4f56e8290ebfc1d2d 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"cli","detail":"doctor exited 1 - the box moved; its health is ccrc doctor's"}
+```
+
+### R5: a second flip — `update --to v0.0.34 --downgrade`
+
+Command: `bash $H/ccrc-versions/untagged-12c8e59aac51/ccd/ccrc update --to v0.0.34 --downgrade` — exit `3` (expected 0 or 3).
+
+Deciding lines, verbatim:
+
+```text
+update: previous: v0.0.35 (023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa) — the tag a restore or a bare 'ccrc rollback' returns to
+update: tree: v0.0.34's spine predates versioned installs and writes through $HOME/ccrc — $HOME/ccrc now points at $HOME/ccrc-versions/v0.0.34 (a copy of v0.0.35) for it to write into
+update: versions: kept v0.0.34's stamp and install record in $HOME/ccrc-versions/v0.0.34 — what a flip back restores
+update: gate: server answers on v0.0.34 (ccrc.service up, /health at 127.0.0.1:$PORT answers v0.0.34)
+```
+
+- yes — previous records v0.0.35
+- yes — the older spine got a directory named for its own tag
+- yes — v0.0.34 kept its stamp and record
+- yes — the health gate passed on v0.0.34
+- yes — ~/ccrc -> v0.0.34
+- yes — /health answers v0.0.34
+- yes — previous is v0.0.35
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.34
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+installed: 6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b 
+ccrc.service: active
+health: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+update.json: {"phase":"done","target":"v0.0.34","from":"cli","detail":"doctor exited 1 - the box moved; its health is ccrc doctor's"}
+```
+
+### R6: one rollback by arm 1 — bare `rollback`, back to the kept `v0.0.35`
+
+Command: `bash $H/ccrc-versions/untagged-12c8e59aac51/ccd/ccrc rollback` — exit `0` (expected 0).
+
+Deciding lines, verbatim:
+
+```text
+rollback: v0.0.35 is kept at $HOME/ccrc-versions/v0.0.35 — no release-host question and no download
+rollback: flip: $HOME/ccrc -> $HOME/ccrc-versions/v0.0.35; its stamp and install record restored; its own spine re-placed the executables, hooks and units (no release download)
+update: gate: server answers on v0.0.35 (ccrc.service up, /health at 127.0.0.1:$PORT answers v0.0.35)
+rollback: this box runs v0.0.35 again — flipped back to $HOME/ccrc-versions/v0.0.35, no download
+```
+
+- yes — the kept version answered the existence question
+- yes — the flip restored the stamp and record and re-ran the kept spine
+- yes — the gate ran once more, on v0.0.35
+- yes — the rollback closed by flip
+- yes — ~/ccrc -> v0.0.35
+- yes — /health answers v0.0.35
+- yes — update.json closed done, from rollback
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"rolled back by flip to v0.0.35"}
+```
+
+### R7a: `versions`, the listing
+
+Command: `bash $REPO/ccd/ccrc versions` — exit `0` (expected 0).
+
+Deciding lines, verbatim:
+
+```text
+versions: $HOME/ccrc -> $HOME/ccrc-versions/v0.0.35
+  * v0.0.35  complete  kept: pointed-at previous running
+    v0.0.34  complete  kept: newest 3
+    untagged-12c8e59aac51  complete  kept: newest 3
+versions: 3 kept tree(s) under $HOME/ccrc-versions; CCRC_VERSIONS_KEEP=3 plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones
+```
+
+- yes — line 1 names the pointed-at v0.0.35
+- yes — v0.0.35 is marked and kept
+- yes — v0.0.34 is listed
+- yes — untagged-12c8e59aac51 is listed
+- yes — the closing count
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"rolled back by flip to v0.0.35"}
+```
+
+### R7ch: `channel` — what the projection reads before the prune
+
+Command: `bash $REPO/ccd/ccrc channel` — exit `0` (expected 0 or 1).
+
+Deciding lines, verbatim:
+
+```text
+channel: state=none channel=stable desired=none desired-stable=none desired-dev=none auto=off
+```
+
+- yes — the reader answered
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"rolled back by flip to v0.0.35"}
+```
+
+### R7b: `versions --prune`, the default keep
+
+Command: `bash $REPO/ccd/ccrc versions --prune` — exit `0` (expected 0).
+
+Deciding lines, verbatim:
+
+```text
+versions: nothing to prune — 2 complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=3, and none incomplete
+```
+
+- yes — nothing is prunable within the keep, so nothing was measured
+- yes — nothing was pruned
+- yes — v0.0.35 remains
+- yes — v0.0.34 remains
+- yes — untagged-12c8e59aac51 remains
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: untagged-12c8e59aac51[stamp,record] v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"rolled back by flip to v0.0.35"}
+```
+
+### R7ch2: `channel` after the fixture planted an in-force projection (the stand-in for W2's server-role writer)
+
+Not run: R7ch already read an in-force projection, so nothing was planted.
+
+### R7c: `CCRC_VERSIONS_KEEP=1 versions --prune`
+
+Command: `env CCRC_VERSIONS_KEEP=1 bash $REPO/ccd/ccrc versions --prune` — exit `0` (expected 0).
+
+Deciding lines, verbatim:
+
+```text
+versions: pruned $HOME/ccrc-versions/untagged-12c8e59aac51 (complete, not among the newest 1)
+```
+
+- yes — untagged-12c8e59aac51 — complete, unprotected, older — was pruned
+- yes — v0.0.35 (protected) was not
+- yes — v0.0.34 (the newest unprotected) was not
+- yes — v0.0.35 remains, complete
+- yes — v0.0.34 remains, complete
+- yes — untagged-12c8e59aac51 is gone
+- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+
+State after:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"rolled back by flip to v0.0.35"}
+```
+
+### Controls
+
+- the curl recorder is live: R4 fetched from the release host 3 time(s) (a zero here would make the next line vacuous);
+- R6, the rollback by arm 1, asked the release host 0 time(s);
+- the live box (its `~/ccrc`, `~/ccrc-versions`, `~/ccrc.migrating`, `~/.ccrc/build.json`, `~/.ccrc/installed`, `~/.ccrc/previous`) measured identical before R1 and after R7c;
+- poisoned tools (`tmux`, `ssh`, `gh`, `systemd-run`, `launchctl`) were reached 10 time(s), each refused.
+
+**Outcome:** every expectation above held.
+
+### The live half — the coordinator's, at rollout (not run here)
+
+Fleet node first, from a machine holding `~/.ccrc/deploy.env`, each box named by its role. The merge cuts a
+PRERELEASE, so a bare `rollout` would not reach it:
+
+```bash
+W6_TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"; echo "$W6_TAG"
+ccrc rollout --check
+ccrc rollout --to "$W6_TAG"
+ccrc rollout --to "$W6_TAG" --check
+ssh <fleet-box> ccrc versions
+ssh <server-box> ccrc versions
+```
+
+Expected: the second `--check` (run as `ccrc rollout --to "$W6_TAG" --check`: a bare one pins the newest stable release, which the prerelease `W6_TAG` is not) prints `rollout: fleet: <W6_TAG> (<sha8>) → <W6_TAG> [current]` and the same `rollout: server:` line (wave 4's `cmd_rollout` prints no `caps=`; each box's own `ccrc update --check` line carries `versions` in its `caps=`); each box's
+`versions` reads `versions: $HOME/ccrc -> $HOME/ccrc-versions/<W6_TAG>` and then
+`versions: $HOME/ccrc.migrating (the pre-versioned tree) is kept until a health gate passes` — this first move is
+made by each box's pre-W6 updater, which holds `~/.ccrc/update.lock` while the staged W6 spine runs and whose gate
+knows nothing of the migration (D-3431). That parent is also why each box's shape is read
+here, before anything else moves it: a wave-4 parent cannot repair the two shapes D-3438
+names (added by Task 3's review):
+
+```bash
+ssh <fleet-box> "find ~/ccrc ~/ccrc.migrating -maxdepth 0 -printf '%y %p -> %l\n'; cat ~/.ccrc/migrating-to"
+ssh <server-box> "find ~/ccrc ~/ccrc.migrating -maxdepth 0 -printf '%y %p -> %l\n'; cat ~/.ccrc/migrating-to"
+```
+
+Expected: `l <home>/ccrc -> <home>/ccrc-versions/<W6_TAG>` and `d <home>/ccrc.migrating -> `, then `<W6_TAG>`. A `d`
+at `~/ccrc` beside `~/ccrc.migrating` is that departure's first hole (the staged spine killed inside the window,
+then wave 4's arm 3); a box whose `rollout` transcript shows its gate failing and arm 3 running after the
+`install: tree: $HOME/ccrc -> …` line is its second. Either takes the departure's by-hand remedy before the next
+move. The next move, made by the W6 updater, removes `~/ccrc.migrating`:
+
+```bash
+ccrc rollout --to "$W6_TAG" --force
+ssh <fleet-box> ccrc versions
+ssh <server-box> ccrc versions
+```
+
+Expected: each box's transcript carries `update: migration: $HOME/ccrc.migrating removed — the health gate passed`,
+and neither `versions` names `~/ccrc.migrating` any more. No live rollback is part of this unless the operator
+rules one.
 
 ## File structure
 
