@@ -3018,6 +3018,33 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(read(join(home, '.ccrc', 'installed'))).toBe(`${'c'.repeat(40)}\nunsigned\n`);
   });
 
+  it('the same hand repair onto a version that is WRITTEN THROUGH (its digest re-measures unequal): the box stamp names it, but nothing shows those bytes to be that build — the stamp is removed whatever it names, no completed install is recorded, and `ccrc version` does not read `complete` (D-3465 (d); FX-A2 review M1)', () => {
+    const home = mkTmp('ccrc-install-ver-stamp-names-written-through-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    const other = installVersionedTree(home, 'v9.9.1', { link: false, stamp: { sha: 'c'.repeat(40), version: 'v9.9.1' } });
+    healthyDoctorBox(home);
+    // the killed flip's leftovers, exactly as the digestless pin plants them ...
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'), read(join(other, '.ccrc-stamp.json')));
+    // ... but the version was kept WITH a digest and something has written through it since
+    mkdirSync(join(other, 'shared'), { recursive: true });
+    writeFileSync(join(other, 'shared', 'WRITTEN-THROUGH'), 'a deploy.sh rsync through the link\n');
+    expect(keptAnswer(home, 'v9.9.1'), 'the control is broken: the version must read written through').toMatch(/^rc=3 why=its tree is no longer the one that was kept/);
+    const r = runInstall(home, ['install'], {}, { from: vroot(home, 'v9.9.1', 'ccd', 'ccrc') });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(other);
+    expect(r.stdout).toMatch(/^install: stamp: v9\.9\.1's kept stamp is not installed — it is not a kept version \(its tree is no longer the one that was kept/m);
+    expect(r.stdout, 'a stamp over written-through bytes stayed because it names the target').not.toMatch(/already names/);
+    expect(r.stdout).toMatch(/^install: stamp: removed the box's stamp \(it names v9\.9\.1, the version this run moved \$HOME\/ccrc to, but that version's tree was written through since it was kept/m);
+    expect(existsSync(join(home, '.ccrc', 'build.json')), 'the stamp survived over written-through bytes').toBe(false);
+    expect(r.stdout).toMatch(/^install: installed: not recorded — this box has no readable build stamp/m);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'a completed install was recorded over written-through bytes').toBe(false);
+    const v = runInstall(home, ['version'], {}, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(v.stdout).not.toMatch(/^install: complete/m);
+    expect(v.stdout).toMatch(/unstamped/);
+    expect(keptAnswer(home, 'v9.9.1'), 'the run laundered a keep').toMatch(/^rc=3 /);
+  });
+
   it('a launcher migration of a real ~/ccrc whose target directory holds a LEFTOVER kept stamp: the box stamp names the migrated version, so it stays, and no line says "this tree is not a version" of a tree that IS the version by then (D-3465 (d); re-review N1 shape B)', () => {
     const home = mkTmp('ccrc-install-ver-migrate-leftover-');
     const root = installFixtureTree(home, 'ccrc');
@@ -3058,7 +3085,11 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(ra.code, `stderr: ${ra.stderr}\nstdout: ${ra.stdout}`).toBe(0);
     expect(readlinkSync(join(a.home, 'ccrc'))).toBe(a.other);
     expect(ra.stdout).not.toMatch(/removed the box's stamp/);
+    expect(ra.stdout).toMatch(new RegExp(`^install: stamp: the box's stamp already names ${untagged}, the version this run moved \\$HOME/ccrc to — it stays$`, 'm'));
+    expect(ra.stdout, 'a stamp that stays is not "skipped, ccrc version will say unstamped"').not.toMatch(/^install: stamp: skipped/m);
     expect(existsSync(join(a.home, '.ccrc', 'build.json'))).toBe(true);
+    expect(read(join(a.home, '.ccrc', 'build.json')), 'the stamp that names the target changed').toBe(read(join(a.other, '.ccrc-stamp.json')));
+    expect(read(join(a.home, '.ccrc', 'installed')), 'the install was not recorded for the build that runs').toBe(`${'c'.repeat(40)}\nunsigned\n`);
     const u = mk('ccrc-install-ver-stamp-unreadable-');
     writeFileSync(join(u.home, '.ccrc', 'build.json'), 'not json {\n');
     const ru = runInstall(u.home, ['install'], {}, { from: vroot(u.home, untagged, 'ccd', 'ccrc') });
