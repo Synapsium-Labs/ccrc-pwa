@@ -91,6 +91,24 @@ ${when === 'after' ? `[ "$rc" -ne 0 ] || ${move}\n` : ''}exit "$rc"
 `, { mode: 0o755 });
 }
 
+/** Replace the roster after the first successful roster read. The fake delegates
+ *  every read to the real cat, so only the path opened by the probe is a seam. */
+function replaceRosterAfterFirstRead(next: unknown): void {
+  const bin = j('.local', 'bin');
+  const replacement = j('accounts-after-first-read.json');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(replacement, JSON.stringify(next, null, 2));
+  fs.writeFileSync(path.join(bin, 'cat'), `#!/bin/bash
+${JSON.stringify(realBin('cat'))} "$@"
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$#" -eq 2 ] && [ "$1" = -- ] \
+  && [ "$2" = "$HOME/.ccrc/accounts.json" ] && [ -f ${JSON.stringify(replacement)} ]; then
+  ${JSON.stringify(realBin('mv'))} ${JSON.stringify(replacement)} "$HOME/.ccrc/accounts.json"
+fi
+exit "$rc"
+`, { mode: 0o755 });
+}
+
 const token = (id: string, value = 'sk-ant-oat01-FIXTURE'): void => {
   fs.mkdirSync(j('.cc-secrets'), { recursive: true });
   fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`),
@@ -449,6 +467,28 @@ describe('eligibility is roster-derived', () => {
     expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
     expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('one roster read supplies both validation and subject derivation', () => {
+    const replacement = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'late', label: 'late', configDirSuffix: '.late',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/late.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] };
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'late.env'),
+      'touch "$HOME/late-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=LATE\n');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+    replaceRosterAfterFirstRead(replacement);
+
+    const r = run();
+
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(j('late-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(marker('late'))).toBe(false);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
   });
 
