@@ -16126,10 +16126,19 @@ _upd_restore_arm3() {
   _ver_layout
   case "$VER_LAYOUT" in
     linked|migrated)
+      # The line says what THIS run's verdict will say (review 173's F1r: every
+      # write on this path is true): a definite MIXED tree, one that may be, or
+      # — the same build, the same sha, a completed record — content the
+      # backup and the staged install share. The record is voided in all three:
+      # arm 3's copy is best effort, and no flip should return to a tree it
+      # wrote into.
+      local lands="so it will hold a MIXED tree"
+      [ "$same_tag" -eq 1 ] && lands="so it may hold a MIXED tree"
+      [ "$same_build" -eq 1 ] && lands="and nothing is mixed there (the same build), but arm 3's copy is best effort"
       if rm -f -- "$BOX_TREE_DIR/$VER_RECORD_COPY" 2>/dev/null; then
-        echo "update: arm 3: \$HOME/ccrc-versions/$VER_CURRENT is where the copy lands, so it will hold a MIXED tree — its kept install record is removed first, so no flip returns to it"
+        echo "update: arm 3: \$HOME/ccrc-versions/$VER_CURRENT is where the copy lands, $lands — its kept install record is removed first, so no flip returns to it"
       else
-        echo "update: arm 3: could not remove \$HOME/ccrc-versions/$VER_CURRENT's kept install record — a later flip could return to a MIXED tree"
+        echo "update: arm 3: could not remove \$HOME/ccrc-versions/$VER_CURRENT's kept install record — a later flip could return to a tree arm 3 wrote into"
         unrec="$unrec (the kept install record of $VER_CURRENT could not be removed)"
       fi ;;
   esac

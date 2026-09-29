@@ -8631,6 +8631,36 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     expect(linkOf(home)).toBe(v2);
   }, 60_000);
 
+  // W6 Task 8A (review 173's F1r: every write on an arm-3 path is true). On a
+  // versioned box arm 3 says, BEFORE its copy, what it will leave in the
+  // version `~/ccrc` points at — and that line must agree with the verdict it
+  // prints after. A same-tag rerun whose staged sha equals the stamp's used to
+  // print "it will hold a MIXED tree" and then "nothing is mixed".
+  it.each([
+    ['a completed record and the same sha: the same build', true,
+      'and nothing is mixed there (the same build), but arm 3\'s copy is best effort',
+      /nothing is mixed\. Read 'ccrc doctor' for why the gate failed/],
+    ['no record and the same sha: the pre-update tree, which may itself be mixed', false,
+      'so it may hold a MIXED tree',
+      /the PRE-UPDATE tree, which may itself be MIXED\. Read 'ccrc doctor' for its state/],
+  ] as const)('on a versioned box a same-tag arm 3 says what it leaves in the pointed-at version in the words of its own verdict — %s (F1r)', (_what, completed, lands, verdict) => {
+    const home = freshUpdateBox('ccrc-update-arm3-void-line-');
+    const cur = plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    if (!completed) rmSync(join(home, '.ccrc', 'installed'));
+    // `previous` names the target, so arm 1 and arm 2 both skip and arm 3 runs.
+    writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
+    packRelease(home, selfConvergedTree(home, 'v2.0.0', V2_SHA), { tag: 'v2.0.0', latest: false });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--to', 'v2.0.0', '--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toContain(`update: arm 3: $HOME/ccrc-versions/v2.0.0 is where the copy lands, ${lands} — its kept install record is removed first, so no flip returns to it`);
+    expect(r.stdout).toMatch(verdict);
+    expect(existsSync(join(cur, '.ccrc-installed')), 'the pointed-at version still claims completeness').toBe(false);
+    // The two never contradict: a MIXED promise beside a "nothing is mixed" verdict.
+    if (completed) expect(r.stdout).not.toMatch(/will hold a MIXED tree|may hold a MIXED tree/);
+    else expect(r.stdout).not.toMatch(/will hold a MIXED tree|nothing is mixed/);
+  });
+
   it('arm 1 whose own gate fails hands arm 2 the NEW tree and a box that reads incomplete: the restore child re-installs v1.0.0 and its spine flips ~/ccrc off v2.0.0 — it cannot no-op on the stamp and record arm 1 restored (D-3443)', () => {
     const home = onKeptV1('ccrc-update-arm1-fails-arm2-');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
