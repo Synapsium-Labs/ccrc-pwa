@@ -11054,3 +11054,336 @@ describe('"kept" is a statement about the version\'s bytes: a digest in the reco
     expect(readdirSync(join(dirty, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
   }, 120_000);
 });
+
+// ── F1 (review 179, fix round 1 item 1; D-3466): the killed-flip state ───────
+// A `--from cli|pwa` update from a completed, tagged install, killed between
+// `_inst_tree`'s flip and `_inst_stamp`, leaves `~/ccrc` on the NEW version,
+// the stamp on the OLD build, `previous` naming that old build, and no
+// `~/.ccrc/installed` (`cmd_update` removed it before the staged spine). C27
+// refused the watchdog's bare `rollback --from watchdog` there, and the
+// watchdog never retries. The rule (six conditions, measured by ONE function,
+// `_rollback_killed_flip_state`): C27 admits that state, and whenever
+// conditions (1) to (3) hold the rollback may only FLIP — re-measured under
+// the lock, whatever `--to` or `--from` says, detached child included.
+describe('the killed-flip state: C27 admits the one rollback a killed update needs, and only by flip (review 179 F1, D-3466)', () => {
+  /** A kept version's own `ccd/ccrc` that DECLARES its versions root — the probe
+   *  `cmd_update` reads (`^BOX_VERSIONS_ROOT=`) to tell a W6 spine from an older one.
+   *  The sh stub exits before it reaches the line; only its text matters. */
+  const KEPT_SPINE_W6 = `${KEPT_SPINE}# a W6 ccrc declares its versions root; cmd_update's own probe reads this line\nBOX_VERSIONS_ROOT="$HOME/ccrc-versions"\n`;
+  const SENTENCE = /^ccrc: rollback: ~\/\.ccrc\/previous names v1\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v2\.0\.0 while this box's stamp reads v1\.0\.0, so the last move was made by something that does not keep the layout /m;
+  const phasesOf = (home: string): string[] => reportWrites(home).map((w) => String(w['phase']));
+
+  /** The state a killed update leaves, planted from measured facts: v1.0.0 kept
+   *  complete beside `~/ccrc -> v2.0.0` (the flip that happened), the box stamp
+   *  byte-equal to v1.0.0's kept stamp (never restamped), `previous` naming
+   *  v1.0.0, floor at v2.0.0, and NO completed-install record. */
+  function killedFlipBox(prefix: string, o: { oldSpine?: string } = {}): { home: string; v1: string; v2: string } {
+    const home = freshUpdateBox(prefix);
+    const v1 = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    writeFileSync(join(v1, 'ccd', 'ccrc'), o.oldSpine ?? KEPT_SPINE_W6, { mode: 0o755 });
+    keepDigest(v1, home);   // the spine is part of the kept bytes (D-3465)
+    const v2 = installVersionedTree(home, 'v2.0.0', { link: true, stamp: { sha: V2_SHA, version: 'v2.0.0' } });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    copyFileSync(join(v1, '.ccrc-stamp.json'), join(home, '.ccrc', 'build.json'));
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v2.0.0\n');
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=server\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n');
+    return { home, v1, v2 };
+  }
+  /** A published v1.0.0 the run COULD download — so "no re-install ran" below
+   *  measures the run's restraint, not an empty URL space. */
+  const publishV1 = (home: string): void => {
+    packRelease(home, fullTree(home, { version: 'v1.0.0', sha: V1_SHA }), { tag: 'v1.0.0', latest: false });
+  };
+  /** No re-install ran: no rsync, no npm, nothing downloaded past the
+   *  existence question (`SHA256SUMS`), no staged spine, no kept spine, and the
+   *  link where it was. */
+  const expectNoReinstall = (home: string, link: string): void => {
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran — a re-install into a tree the units run').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ran — a re-install into a tree the units run').toBe(false);
+    expect(localUrls(home).filter((u) => !u.endsWith('/SHA256SUMS')), 'a release was downloaded').toEqual([]);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's spine ran").toBe(false);
+    expect(linkOf(home)).toBe(link);
+  };
+  /** Refused with C27's sentence, nothing moved. */
+  const expectRefused = (home: string, r: Result, link: string, reason?: string): void => {
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(SENTENCE);
+    // The reason line, when conditions (1) to (3) held and (4)-(6) did not; none otherwise.
+    if (reason === undefined) expect(r.stderr).not.toContain('the killed-flip state does not hold');
+    else expect(r.stderr).toContain(`rollback: the killed-flip state does not hold — ${reason}`);
+    expect(r.stderr).toContain('Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z');
+    expectNoReinstall(home, link);
+    expect(existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null,
+      'a refused rollback wrote the record').toBe(recordBefore.get(home) ?? null);
+  };
+  const recordBefore = new Map<string, string | null>();
+  const note = (home: string): string => {
+    recordBefore.set(home, existsSync(join(home, '.ccrc', 'installed')) ? fileText(join(home, '.ccrc', 'installed')) : null);
+    return home;
+  };
+  /** After a successful rollback by flip: link, stamp and record agree on v1.0.0. */
+  const expectAgreesOnV1 = (home: string, v1: string): void => {
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(fileText(join(v1, '.ccrc-stamp.json')));
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(fileText(join(v1, '.ccrc-installed')));
+    expect(JSON.parse(fileText(join(home, '.ccrc', 'build.json')))).toMatchObject({ version: 'v1.0.0', sha: V1_SHA });
+    expect(fileText(join(home, '.ccrc', 'previous')), 'a rollback never rewrites previous').toBe(`v1.0.0\n${V1_SHA}\n`);
+    expect(fileText(join(home, '.ccrc', 'floor')), 'the floor never lowers').toBe('v2.0.0\n');
+  };
+
+  // ── the two positive shapes ───────────────────────────────────────────────
+  it('the killed-between-flip-and-stamp shape (planted from the measured leftovers): a bare `rollback --from watchdog` FLIPS back — link, stamp and record then agree on the old build, no release-host question, no download, no re-install', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-killed-flip-');
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');   // a run that asks the host is refused at exit 2
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the fixture must be the state: no record').toBe(false);
+    const r = rollbackRun(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(r.stdout).toContain('rollback: this box runs v1.0.0 again — flipped back to $HOME/ccrc-versions/v1.0.0, no download');
+    expect(localUrls(home)).toEqual([]);
+    expectAgreesOnV1(home, v1);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine did not run").toBe(true);
+    expect(existsSync(join(home, 'rsync-argv'))).toBe(false);
+    expect(existsSync(join(home, 'npm-argv'))).toBe(false);
+    expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'watchdog' });
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+  });
+
+  it('the same shape produced by a REAL killed update — the staged spine and its updater SIGKILLed at `_inst_stamp`, after `_inst_tree`\'s flip — then the watchdog\'s bare rollback: the state the real code leaves is the state the rule admits', () => {
+    const home = onKeptV1('ccrc-fx-b-killed-real-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    const v2 = join(home, 'ccrc-versions', 'v2.0.0');
+    const keptStamp = fileText(join(v1, '.ccrc-stamp.json'));
+    const keptRec = fileText(join(v1, '.ccrc-installed'));
+    // v2.0.0's own spine, made to die where OOM would kill the run: at the
+    // start of `_inst_stamp`. It takes its parent (the updater) with it — a
+    // unit's cgroup kill takes both. Only the release copy is patched.
+    const tree = fullTree(home, { version: 'v2.0.0', sha: V2_SHA });
+    const spine = join(tree, 'ccd', 'ccrc');
+    const src = fileText(spine);
+    expect(src.match(/^_inst_stamp\(\) \{/gm), 'the fixture patch anchor is gone').toHaveLength(1);
+    writeFileSync(spine, src.replace(/^_inst_stamp\(\) \{/m, () => '_inst_stamp() { kill -9 "$PPID" "$$"; '));
+    rmSync(join(tree, 'MANIFEST'));
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0' });
+    const up = runUpdate(home, ['--from', 'cli']);
+    expect(up.code, `the update must have been killed — stdout: ${up.stdout}`).not.toBe(0);
+    // The leftovers, measured: link on the new version, the stamp still the old build's, no record.
+    expect(linkOf(home), 'the flip did not happen before the kill').toBe(v2);
+    expect(fileText(join(home, '.ccrc', 'build.json')), 'the stamp moved before the kill').toBe(keptStamp);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the record survived').toBe(false);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'rsync-argv', 'npm-argv']) rmSync(join(home, f), { force: true });
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home, ['--from', 'watchdog']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(localUrls(home)).toEqual([]);
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    expect(fileText(join(home, '.local', 'bin', 'ccd')), "v1.0.0's own spine re-placed its ccd").toContain(CCD_SENTINEL);
+  }, 120_000);
+
+  it('the arm-1-then-arm-3 shape, produced by a REAL failed update (arm 1 flips back and its gate fails, ~/ccrc points at the new version again, arm 2 refuses, arm 3 restores no stamp), then a bare rollback typed by hand (`--from cli`): it flips back to the kept previous version', () => {
+    const home = onKeptV1('ccrc-fx-b-arm1-arm3-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    const v2 = join(home, 'ccrc-versions', 'v2.0.0');
+    const keptStamp = fileText(join(v1, '.ccrc-stamp.json'));
+    const keptRec = fileText(join(v1, '.ccrc-installed'));
+    // v1.0.0 is no longer published, so arm 2 refuses and arm 3 runs.
+    rmSync(join(home, 'releases', 'download', 'v1.0.0'), { recursive: true, force: true });
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\nv1.0.0\n');
+    const up = runUpdate(home);
+    expect(up.code, `stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(4);
+    expect(up.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    // The leftovers, measured.
+    expect(linkOf(home), 'arm 1 leaves ~/ccrc on the new version').toBe(v2);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'arm 3 removed the record').toBe(false);
+    expect(fileText(join(home, '.ccrc', 'build.json')), 'arm 3 restores no stamp: arm 1\'s restore of v1.0.0\'s stays').toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'previous')).split('\n')[0]).toBe('v1.0.0');
+    // The gate answers for v1.0.0 again, and no release is asked or downloaded.
+    rmSync(join(home, 'fixture-health-deny'));
+    for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls', 'rsync-argv', 'npm-argv']) rmSync(join(home, f), { force: true });
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home);   // bare, --from cli (the default)
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(localUrls(home)).toEqual([]);
+    expect(linkOf(home)).toBe(v1);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(keptStamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(keptRec);
+  }, 120_000);
+
+  // ── the controls: each refuses with C27's sentence and runs no re-install ─
+  it('control (the pre-W4 detour): previous disagrees with the layout and the killed-flip state does NOT hold — refused, and no re-install even with the release published', () => {
+    const home = freshUpdateBox('ccrc-fx-b-prew4-');
+    plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.1.0', 'c'.repeat(40)));
+    writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0', latest: false });
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v2\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v1\.0\.0 while this box's stamp reads v1\.1\.0, /m);
+    expectNoReinstall(home, join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(localUrls(home)).toEqual([]);
+  });
+
+  it('control (condition 2): a `deploy.sh`-shaped hot-fix — the box stamped at previous\'s tag over the newer version, with ~/.ccrc/installed PRESENT — is refused, bare from cli and from the watchdog', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-deploysh-');
+    publishV1(home);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${V2_SHA}\n`);   // the record deploy.sh never touched
+    note(home);
+    for (const from of [['--from', 'cli'], ['--from', 'watchdog']]) {
+      expectRefused(home, rollbackRun(home, from), v2);
+    }
+  });
+
+  it('control (condition 4): the killed-flip state whose target is NOT kept (its kept record is gone) — refused bare, and `--to` it dies under the lock with the same sentence, downloading nothing', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-notkept-');
+    rmSync(join(v1, '.ccrc-installed'));
+    publishV1(home);
+    note(home);
+    const why = 'the target is not kept complete (no kept install record)';
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+    expect(lastReport(home), 'a --to run under the lock closes its report').toMatchObject({ phase: 'failed', from: 'rollback', target: 'v1.0.0' });
+  });
+
+  it('under the lock the state\'s OWN re-measurement decides the flip: a target the pre-lock read found not kept but that the locked re-measure finds kept (the world changed between the two — `_ver_kept` answers 2 once, then truthfully) is flipped to, never re-installed', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-race-');
+    publishV1(home);
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, CCRC_UPDATE_HEALTH_S: '0' };
+    delete env['CCRC_UPDATE_LOCK_HELD'];
+    replantDoctorStubs(home);
+    const script = [
+      '. "$1"',
+      'eval "$(declare -f _ver_kept | sed "1s/_ver_kept/_real_ver_kept/")"',
+      'n=0',
+      '_ver_kept() { n=$((n+1)); if [ "$n" -eq 1 ]; then VER_WHY="fixture: not yet"; return 2; fi; _real_ver_kept "$@"; }',
+      'cmd_rollback --to v1.0.0 --from pwa',
+    ].join('\n');
+    const r = spawnSync(BASH, ['-c', script, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc')], { env, encoding: 'utf8' });
+    expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(v1);
+    expect(existsSync(join(home, 'kept-spine-argv')), "the kept version's own spine ran").toBe(true);
+    expect(existsSync(join(home, 'rsync-argv')), 'a re-install ran').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'a re-install ran').toBe(false);
+    expect(localUrls(home).filter((u) => !u.endsWith('/SHA256SUMS')), 'a release was downloaded').toEqual([]);
+  });
+
+  it('control (condition 4 is item 2\'s answer): the killed-flip state whose target was WRITTEN THROUGH since it was kept (deploy.sh\'s rsync through the link, the record untouched) — refused bare, and `--to` it dies under the lock: the record file alone does not make it kept', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-writtenthrough-');
+    appendFileSync(join(v1, 'server', 'dist', 'server', 'src', 'index.js'), '// a working tree, rsynced through the link\n');
+    expect(verKeptAnswer(home)).toMatch(/^rc=3 why=its tree is no longer the one that was kept/);
+    publishV1(home);
+    note(home);
+    for (const args of [[], ['--to', 'v1.0.0']]) {
+      const r = rollbackRun(home, args);
+      expectRefused(home, r, v2, "the target was written through since it was kept (its tree is no longer the one that was kept — something wrote through it since (deploy.sh, an older ccrc's spine, or a restore copy))");
+    }
+  });
+
+  it('control (condition 5): the killed-flip state whose target\'s kept stamp has another sha — refused bare, and `--to` it dies under the lock', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-othersha-');
+    writeFileSync(join(v1, '.ccrc-stamp.json'), `${JSON.stringify({ sha: 'e'.repeat(40), ref: 'main', builtAt: '2026-09-23T00:00:00Z', dirty: false, version: 'v1.0.0' })}\n`);
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (5) refuses').toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's kept stamp is not this box's stamp (another build's sha)";
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+  });
+
+  it('control (condition 6): the killed-flip state whose target is a KEPT pre-W6 version (its ccd/ccrc has no BOX_VERSIONS_ROOT — its own spine would `npm ci` in ~/ccrc, which the units run) — refused bare, and `--to` it dies under the lock', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-prew6-', { oldSpine: KEPT_SPINE });
+    expect(verKeptAnswer(home), 'the control is broken: the version must still be KEPT, so only (6) refuses').toBe('rc=0 why=');
+    publishV1(home);
+    note(home);
+    const why = "the target's own ccd/ccrc predates versioned installs, so its spine would npm ci in the tree the units run";
+    expectRefused(home, rollbackRun(home), v2, why);
+    expectRefused(home, rollbackRun(home, ['--to', 'v1.0.0']), v2, why);
+  });
+
+  it('control (condition 1): the target is not the stamp\'s version — the stamp reads v3.0.0 over the kept v1.0.0\'s sha — refused', () => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-target-');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v3.0.0', V1_SHA));
+    publishV1(home);
+    note(home);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v1\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v2\.0\.0 while this box's stamp reads v3\.0.0, /m);
+    expectNoReinstall(home, v2);
+  });
+
+  it('control (condition 3): ~/ccrc already names the target and its install did not complete, the target NOT kept, the release published — `rollback --to` it re-installs IN PLACE as it always did (D-3426): the run goes on to update\'s own path, never the killed-flip refusal', () => {
+    const home = freshUpdateBox('ccrc-fx-b-samename-');
+    plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    rmSync(join(home, '.ccrc', 'installed'));
+    rmSync(join(home, 'ccrc-versions', 'v1.0.0', '.ccrc-installed'));   // not kept
+    publishV1(home);
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.stderr).not.toContain('the killed-flip state');
+    expect(r.stdout).toContain('rollback: returning this box to v1.0.0 (named by --to; asked by --from cli) — update\'s own path');
+    expect(existsSync(join(home, 'rsync-argv')), 'the re-install did not run — the control proves nothing').toBe(true);
+  });
+
+  it('control (unreadable stamp): keeps today\'s behaviour — no verdict from C27, so the run proceeds (the kept version flips back)', () => {
+    const { home, v1 } = killedFlipBox('ccrc-fx-b-unreadable-');
+    writeFileSync(join(home, '.ccrc', 'build.json'), 'not json\n');
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(linkOf(home)).toBe(v1);
+  });
+
+  it('control (the detached child): `rollback --to v1.0.0 --detach --from pwa` in the killed-flip state with the target NOT kept — the parent hands the run on, and the CHILD (which gets `--to` and never runs C27) dies with C27\'s sentence: no rsync, no npm, nothing downloaded, the report closed `failed`', () => {
+    const { home, v1, v2 } = killedFlipBox('ccrc-fx-b-detached-');
+    rmSync(join(v1, '.ccrc-installed'));
+    publishV1(home);
+    const parent = rollbackRun(home, ['--to', 'v1.0.0', '--detach', '--from', 'pwa']);
+    expect(parent.code, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    const argv = fileText(join(home, 'systemd-run-argv')).split('\n').filter((l) => l !== '');
+    expect(argv).toEqual([expect.stringMatching(/ ccrc-detach rollback --to v1\.0\.0 --from pwa$/)]);
+    expect(lastReport(home)).toMatchObject({ phase: 'queued', from: 'pwa' });
+    // The recorder does not run the child: run its argv, as the unit would.
+    const child = rollbackRun(home, ['--to', 'v1.0.0', '--from', 'pwa']);
+    expect(child.code, `stderr: ${child.stderr}\nstdout: ${child.stdout}`).toBe(1);
+    expect(child.stderr).toMatch(SENTENCE);
+    expect(child.stderr).toContain('rollback: the killed-flip state does not hold — the target is not kept complete (no kept install record)');
+    expectNoReinstall(home, v2);
+    expect(lastReport(home)).toMatchObject({ phase: 'failed', from: 'rollback', target: 'v1.0.0' });
+  });
+
+  // ── flip-only: the rule keys on the state, not on C27 having run ─────────
+  it.each([
+    ['bare, --from cli', [] as string[]],
+    ['bare, --from watchdog', ['--from', 'watchdog']],
+    ['`--to` the tag, --from pwa (C27 never runs)', ['--to', 'v1.0.0', '--from', 'pwa']],
+    ['`--to` the tag, --from cli', ['--to', 'v1.0.0']],
+  ])('flip-only: in the killed-flip state a flip that cannot be made (the one rename refused) dies with C27\'s sentence and NEVER falls through to `update --to … --downgrade`, whose re-install would rsync --delete and `npm ci` into the tree the units run — %s', (_what, args) => {
+    const { home, v2 } = killedFlipBox('ccrc-fx-b-fliponly-');
+    publishV1(home);
+    mkdirSync(join(home, 'ccrc.new'));   // `_plat_ln_swap` refuses to clear it: the flip cannot be made
+    note(home);
+    const r = rollbackRun(home, args);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(SENTENCE);
+    expect(r.stderr).toContain('rollback: the killed-flip state holds, so this rollback may only flip, and the flip could not be made (the one rename that points $HOME/ccrc at $HOME/ccrc-versions/v1.0.0 failed) — it does not fall back to a re-install');
+    expect(r.stdout).not.toContain('rolling back by re-install instead');
+    expectNoReinstall(home, v2);
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    if (args.includes('--from') && args[args.indexOf('--from') + 1] !== 'cli') {
+      expect(lastReport(home)['phase'], 'the report was left non-terminal').toBe('failed');
+    }
+  });
+});
