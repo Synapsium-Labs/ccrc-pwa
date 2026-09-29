@@ -3777,7 +3777,7 @@ describe('the update op — its refusal words and its launcher are declared once
     }
   });
 
-  it('the four words are listed together in one file, in any order or quote style — a second list is a second vocabulary', async () => {
+  it('the five words are listed together in one file, in any order or quote style — a second list is a second vocabulary', async () => {
     // The words alone don't prove a copy: `bad-tag` and `busy` are also
     // route and store words (`UpdateRouteError`, `UPDATE_STORE_REFUSE_CODES`),
     // and the dispatcher's answer mapping names `spawn-failed` in a `case`.

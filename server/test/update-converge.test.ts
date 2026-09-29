@@ -675,7 +675,11 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
       // The poisoned systemd-run answers 97: the parent dies after its `queued` write, with its own sentence.
       expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'released', to: 'failed' });
       expect((r.outcome as { detail: string }).detail).toMatch(/could not start the detached run \(systemd-run exited 97\)/);
-      expect(readFileSync(path.join(h.home, 'systemd-run-argv'), 'utf8')).toContain(`ccrc-detach ${argv[0]} --to ${tag} --from pwa`);
+      const runArgv = readFileSync(path.join(h.home, 'systemd-run-argv'), 'utf8');
+      expect(runArgv).toContain(`ccrc-detach ${argv[0]} --to ${tag} --from pwa`);
+      // Exactly ONE invocation: the recorder appends a line per call, so a second `systemd-run` (a retried start, a
+      // second unit) is a second line and reds here — `toContain` alone would read it as the same answer.
+      expect(runArgv.split('\n').filter((l) => l !== ''), 'systemd-run was invoked more than once').toHaveLength(1);
     });
   }
 
