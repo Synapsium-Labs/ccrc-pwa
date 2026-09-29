@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { itLinux, itDarwin, platformContrast, python3ProgramArm } from './platformFixtures.js';
-import { installVersionedTree } from './installTreeFixture.js';
+import { installVersionedTree, keepDigest } from './installTreeFixture.js';
 import { IN_FLIGHT_UPDATE_PHASES, UPDATE_PHASES } from '../../shared/api.js';
 // Fix round 1 item 3 / review 155 C31: W2's OWN reader (never a hand copy),
 // the same import pattern `update-intent-cross-side.test.ts` already uses.
@@ -8614,6 +8614,9 @@ function keptVersion(home: string, name: string, sha: string, opts: { unsigned?:
   const root = installVersionedTree(home, name, { link: false, stamp: { sha, version: name } });
   if (opts.unsigned === true) writeFileSync(join(root, '.ccrc-installed'), `${sha}\nunsigned\n`);
   writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+  // The spine is part of the version's bytes: the digest is taken AFTER it is
+  // planted, through the shipped helper, so this version reads kept (D-3465).
+  keepDigest(root, home);
   return root;
 }
 
@@ -8656,6 +8659,10 @@ function onKeptV1(prefix: string): string {
   const envFile = join(home, '.ccrc', 'ccrc.env');
   writeFileSync(envFile, fileText(envFile).split('\n').filter((l) => !l.startsWith('CCRC_ROLE=')).join('\n'));
   appendFileSync(join(v1, 'ccd/ccd'), CCD_SENTINEL);
+  // The sentinel is a byte the keep never saw: re-record the digest through the
+  // shipped helper, so v1.0.0 still reads kept (D-3465) and the sentinel is
+  // what "kept" now describes.
+  keepDigest(v1, home);
   for (const f of ['curl-argv', 'update-json-writes', 'systemctl-calls']) rmSync(join(home, f), { force: true });
   return home;
 }
@@ -8733,6 +8740,7 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // `fixture-health-version` so that, once the kept stamp is back, /health
     // answers the box's stamp (v2.0.0) and not the release just "installed".
     writeFileSync(join(cur, 'ccd', 'ccrc'), KEPT_SPINE.replace('#!/bin/sh\n', '#!/bin/sh\nrm -f "$HOME/fixture-health-version"\n'), { mode: 0o755 });
+    keepDigest(cur, home);   // the spine is part of v2.0.0's kept bytes (D-3465)
     // The release older than wave 4: its spine writes THROUGH ~/ccrc (it
     // predates versioned installs, so `_upd_legacy_target` hands it a
     // directory of its own) and places a `ccd/ccrc` that knows neither flag
@@ -9060,7 +9068,10 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
       { what: 'no server build', role: 'server',
         plant: (root) => rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')), says: 'rc=2 why=no server build' },
       { what: 'a fleet box needs no server build', role: 'fleet',
-        plant: (root) => rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')), says: 'rc=0 why=' },
+        // The build is removed BEFORE the digest is taken (D-3465): a tree
+        // that lost a file after its keep reads written through, not kept.
+        plant: (root, home) => { rmSync(join(root, 'server', 'dist', 'server', 'src', 'index.js')); keepDigest(root, home); },
+        says: 'rc=0 why=' },
       { what: 'no agent build', role: 'fleet',
         plant: (root) => rmSync(join(root, 'agent', 'dist', 'agent', 'src', 'index.js')), says: 'rc=2 why=no agent build' },
       { what: 'no kept stamp', role: 'both', plant: (root) => rmSync(join(root, '.ccrc-stamp.json')), says: 'rc=2 why=no kept stamp' },
@@ -9297,6 +9308,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     const home = freshUpdateBox('ccrc-rollback-flip-already-');
     const root = plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
     writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+    keepDigest(root, home);   // the spine is part of the kept bytes (D-3465)
     let r = rollbackRun(home, ['--to', 'v1.0.0']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).toContain(`rollback: this box already runs v1.0.0 (${V1_SHA}) and that install completed — nothing to do (to reinstall it: ccrc update --to v1.0.0 --downgrade --force)`);
@@ -9476,6 +9488,8 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     writeFileSync(join(home, 'fixture-old-stamp.json'), shippedStamp('v1.0.0', NEW_SHA));
     writeFileSync(join(home, 'fixture-on-install'), [
       'if [ -f "$HOME/ccrc/.ccrc-installed" ]; then echo present; else echo absent; fi > "$HOME/old-spine-saw-record"',
+      // D-3465 (e): the digest goes with the record — it describes the bytes this spine is about to rewrite.
+      'if [ -f "$HOME/ccrc/.ccrc-digest" ]; then echo present; else echo absent; fi > "$HOME/old-spine-saw-digest"',
       'mkdir -p "$HOME/ccrc/server" && printf \'written by the older spine\\n\' > "$HOME/ccrc/server/WROTE-BY-OLD-SPINE"',
       'cp "$HOME/fixture-old-stamp.json" "$HOME/.ccrc/build.json"',
     ].join('\n') + '\n');
@@ -9498,12 +9512,18 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     expect(treeDigest(cur), 'the older spine wrote into the version it replaced').toEqual(before);
     expect(existsSync(join(v1, 'server', 'WROTE-BY-OLD-SPINE'))).toBe(true);
     expect(fileText(join(home, 'old-spine-saw-record'))).toBe('absent\n');
+    expect(fileText(join(home, 'old-spine-saw-digest')), 'the copy still carried v2.0.0\'s digest (D-3465 (e))').toBe('absent\n');
     // The copy began as v2.0.0's tree…
     expect(fileText(join(v1, 'ccd/ccd'))).toBe(fileText(join(cur, 'ccd/ccd')));
     // …and is now v1.0.0's, kept complete by cmd_update after that spine.
     expect(fileText(join(v1, '.ccrc-stamp.json'))).toBe(fileText(join(home, '.ccrc', 'build.json')));
     expect(fileText(join(v1, '.ccrc-installed'))).toBe(`${NEW_SHA}\n`);
     expect(r.stdout).toMatch(/^update: versions: kept v1\.0\.0's stamp and install record in \$HOME\/ccrc-versions\/v1\.0\.0/m);
+    // The bytes the older spine wrote were PLACED by this run (D-3465 (b)), so
+    // the keep after it records a fresh digest — the marker is inside it.
+    expect(fileText(join(v1, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(verKeptAnswer(home, 'v1.0.0', ''), 'the copy is not kept on its fresh digest').toBe('rc=0 why=');
+    expect(existsSync(join(cur, '.ccrc-digest')), 'the running version lost its digest').toBe(true);
     expect(dotEntries(home)).toEqual([]);
     expect(lastReport(home)['phase']).toBe('done');
   });
@@ -9520,9 +9540,13 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
     expect(r.stdout).toContain("update: tree: v1.0.0's spine predates versioned installs and writes through $HOME/ccrc — $HOME/ccrc now points at $HOME/ccrc-versions/v1.0.0 (kept) for it to write into");
     expect(linkOf(home)).toBe(v1);
     expect(fileText(join(home, 'old-spine-saw-record')), 'the older spine was handed a directory that still claimed completeness').toBe('absent\n');
+    expect(fileText(join(home, 'old-spine-saw-digest')), 'the older spine was handed a directory that still carried the digest of the bytes it rewrote (D-3465 (e))').toBe('absent\n');
     expect(existsSync(join(v1, 'server', 'WROTE-BY-OLD-SPINE'))).toBe(true);
     expect(treeDigest(cur)).toEqual(before);
     expect(fileText(join(v1, '.ccrc-installed'))).toBe(`${NEW_SHA}\n`);
+    // Kept again on a FRESH digest, because this run's legacy spine placed the bytes.
+    expect(fileText(join(v1, '.ccrc-digest'))).toMatch(/^1:[0-9a-f]{64}\n$/);
+    expect(verKeptAnswer(home, 'v1.0.0', '')).toBe('rc=0 why=');
     expect(dotEntries(home)).toEqual([]);
   });
 
@@ -10752,4 +10776,281 @@ describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and 
       expect(leftovers(control).length, `${name}: the harness could not see a leak`).toBe(1);
     });
   }
+});
+
+/** `_ver_kept <name> <role>` on the fixture box, sourced: `rc=<n> why=<VER_WHY>`
+ *  (D-3465: 0 kept, 1 absent, 2 incomplete or unmeasured, 3 written through). */
+function verKeptAnswer(home: string, name = 'v1.0.0', role = 'both', env: NodeJS.ProcessEnv = {}): string {
+  const r = spawnSync(BASH, ['-c',
+    '. "$1"; rc=0; _ver_kept "$2" "$3" || rc=$?; printf \'rc=%s why=%s\\n\' "$rc" "$VER_WHY"',
+    'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), name, role],
+  { env: { ...updateEnv(home), ...env }, encoding: 'utf8' });
+  return r.stdout.split('\n').find((l) => l.startsWith('rc=')) ?? `no answer: ${r.stderr}`;
+}
+
+// ── F2 (review 179, fix round 1 item 2; D-3465): "kept" is a statement about
+// the version's BYTES ─────────────────────────────────────────────────────────
+// A kept version's record proves an install completed; it says nothing about
+// the tree NOW. `deploy.sh` (rsync through the link, then `stamp_build` last),
+// a pre-W6 updater run from a kept version, and arm 3's copy after a failed
+// record removal all change the bytes without voiding the record. So the kept
+// record carries a digest (`.ccrc-digest`, recipe id 1) and `_ver_kept`
+// re-measures it for every version it is asked about.
+//
+// EVERY write-through case below runs from another version, or with a non-cli
+// `--from`, or on a box whose stamp disagrees, so the `--from cli` pre-check
+// ("already runs … nothing to do") never makes it green for the wrong reason.
+describe('"kept" is a statement about the version\'s bytes: a digest in the record, re-measured by _ver_kept (review 179 F2, D-3465)', () => {
+  const keptAnswer = verKeptAnswer;
+  const HEX = 'f'.repeat(64);
+  const WRITTEN_THROUGH = /^rc=3 why=its tree is no longer the one that was kept — something wrote through it since /;
+
+  interface Row {
+    what: string;
+    plant: (root: string, home: string) => void;
+    says: string | RegExp;
+    link?: boolean;
+  }
+  const rows: Row[] = [
+    { what: 'a clean version, not pointed at', plant: () => {}, says: 'rc=0 why=' },
+    { what: 'a clean version, pointed at', plant: () => {}, says: 'rc=0 why=', link: true },
+    { what: 'a file rewritten after the keep', plant: (root) => appendFileSync(join(root, 'ccd', 'ccrc-doctor-checks'), '\n# written through\n'), says: WRITTEN_THROUGH },
+    { what: 'the same rewrite on the version ~/ccrc points at (the digest is re-measured for EVERY version)',
+      plant: (root) => appendFileSync(join(root, 'ccd', 'ccrc-doctor-checks'), '\n# written through\n'), says: WRITTEN_THROUGH, link: true },
+    { what: 'a file added after the keep', plant: (root) => writeFileSync(join(root, 'agent', 'ADDED'), 'x\n'), says: WRITTEN_THROUGH },
+    { what: 'a file removed after the keep', plant: (root) => rmSync(join(root, 'deploy', 'gen-wrappers.mjs')), says: WRITTEN_THROUGH },
+    { what: 'the executable bit cleared on ccd/ccrc (a mode is part of the bytes: recipe id 1 reads it with [ -x ], never stat)',
+      plant: (root) => {
+        expect(statSync(join(root, 'ccd', 'ccrc')).mode & 0o111, 'the fixture ccd/ccrc must carry an x bit, or this row is vacuous').not.toBe(0);
+        chmodSync(join(root, 'ccd', 'ccrc'), 0o644);
+      },
+      says: WRITTEN_THROUGH },
+    { what: 'the executable bit SET on a plain file',
+      plant: (root, home) => {
+        writeFileSync(join(root, 'shared', 'plain.txt'), 'plain\n');
+        chmodSync(join(root, 'shared', 'plain.txt'), 0o644);
+        keepDigest(root, home);
+        chmodSync(join(root, 'shared', 'plain.txt'), 0o755);
+      },
+      says: WRITTEN_THROUGH },
+    { what: 'a symlink retargeted (a link contributes its TARGET text, not what it points at)',
+      plant: (root, home) => {
+        symlinkSync('one', join(root, 'shared', 'lnk'));
+        keepDigest(root, home);
+        rmSync(join(root, 'shared', 'lnk'));
+        symlinkSync('two', join(root, 'shared', 'lnk'));
+      },
+      says: WRITTEN_THROUGH },
+    // The controls for what the digest does NOT cover.
+    { what: 'control: node_modules at any depth is not covered (npm ci output is not stable bytes)',
+      plant: (root) => {
+        mkdirSync(join(root, 'server', 'node_modules', 'pkg'), { recursive: true });
+        writeFileSync(join(root, 'server', 'node_modules', 'pkg', 'index.js'), 'x\n');
+        mkdirSync(join(root, 'node_modules'), { recursive: true });
+        writeFileSync(join(root, 'node_modules', 'top'), 'x\n');
+      },
+      says: 'rc=0 why=' },
+    { what: 'control: a .DS_Store at any depth is not covered',
+      plant: (root) => { writeFileSync(join(root, '.DS_Store'), 'x\n'); writeFileSync(join(root, 'deploy', '.DS_Store'), 'x\n'); },
+      says: 'rc=0 why=' },
+    { what: 'control: a top-level .ccrc-* name (the record files and their temps) is not covered',
+      plant: (root) => { writeFileSync(join(root, '.ccrc-installed.tmp.4242'), 'x\n'); writeFileSync(join(root, '.ccrc-other'), 'x\n'); },
+      says: 'rc=0 why=' },
+    { what: 'control: only the TOP-LEVEL .ccrc-* names are excluded — a nested one is covered',
+      plant: (root) => writeFileSync(join(root, 'deploy', '.ccrc-nested'), 'x\n'),
+      says: WRITTEN_THROUGH },
+    // Not kept, unmeasured: never folded into kept and never into written through.
+    { what: 'no digest recorded (a version kept before digests existed)',
+      plant: (root) => rmSync(join(root, '.ccrc-digest')),
+      says: 'rc=2 why=no kept digest (this version was kept before digests existed, or its keep never finished)' },
+    { what: 'a recipe id this ccrc does not know',
+      plant: (root) => writeFileSync(join(root, '.ccrc-digest'), `9:${HEX}\n`),
+      says: 'rc=2 why=its recorded digest names recipe 9, which this ccrc does not know' },
+    { what: 'a digest that does not parse',
+      plant: (root) => writeFileSync(join(root, '.ccrc-digest'), 'not a digest\n'),
+      says: 'rc=2 why=its kept digest does not parse' },
+    { what: 'a name holding a newline cannot be measured (refused, never guessed)',
+      plant: (root) => writeFileSync(join(root, 'agent', 'a\nb'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a path holds a newline or a backslash in a name)' },
+    { what: 'a name holding a backslash cannot be measured either',
+      plant: (root) => writeFileSync(join(root, 'agent', 'a\\b'), 'x\n'),
+      says: 'rc=2 why=its digest could not be measured (a path holds a newline or a backslash in a name)' },
+    { what: 'a fifo cannot be measured',
+      plant: (root) => { spawnSync('mkfifo', [join(root, 'agent', 'ff')]); },
+      says: 'rc=2 why=its digest could not be measured (an entry that is neither a regular file, a directory nor a link (agent/ff))' },
+  ];
+  it.each(rows)('_ver_kept: $what', (row) => {
+    const home = freshUpdateBox('ccrc-update-ver-digest-');
+    const root = installVersionedTree(home, 'v1.0.0', { link: row.link === true, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    row.plant(root, home);
+    const said = keptAnswer(home);
+    if (typeof row.says === 'string') expect(said).toBe(row.says);
+    else expect(said).toMatch(row.says);
+  });
+
+  // A box with no such locale has nothing to compare against: the case is SKIPPED
+  // there, visibly, not passed.
+  const utf8 = spawnSync('bash', ['-c', 'locale -a | grep -i "^en_US.utf-\\?8$" | head -1'], { encoding: 'utf8' }).stdout.trim();
+  (utf8 === '' ? it.skip : it)('the digest is the same under LC_ALL=C and under a UTF-8 locale that collates differently (the sort is byte order, whatever the ambient locale says)', () => {
+    // The control must be able to red: under this locale `a` sorts before `B`.
+    const order = spawnSync('bash', ['-c', 'printf "B\\na\\n" | LC_ALL="$1" sort | head -1', 'x', utf8], { encoding: 'utf8' }).stdout.trim();
+    expect(order, `${utf8} does not collate a before B — this control would be vacuous`).toBe('a');
+    const home = freshUpdateBox('ccrc-update-ver-digest-locale-');
+    const root = installVersionedTree(home, 'v1.0.0', { link: false, stamp: { sha: V1_SHA, version: 'v1.0.0' } });
+    mkdirSync(join(root, 'shared', 'zz', 'a.d'), { recursive: true });
+    for (const f of ['B', 'a', 'a-b', 'ab', 'a.b', 'A', 'z z']) writeFileSync(join(root, 'shared', 'zz', f), `${f}\n`);
+    writeFileSync(join(root, 'shared', 'zz', 'a.d', 'f'), 'f\n');
+    const digestUnder = (loc: string): string => {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _ver_digest_of 1 "$2" && printf "%s\\n" "$VER_DIGEST_NOW"', 'x', join(REPO, 'ccd', 'ccrc'), root],
+        { env: { ...updateEnv(home), LC_ALL: loc }, encoding: 'utf8' });
+      return r.stdout.trim();
+    };
+    const c = digestUnder('C');
+    expect(c).toMatch(/^1:[0-9a-f]{64}$/);
+    expect(digestUnder(utf8)).toBe(c);
+  });
+
+  // ── the three shapes, and the flips that must not happen ─────────────────
+  /** A W6 server box on v2.0.0 with v1.0.0 kept beside it (its spine the
+   *  recorder), `previous` naming v1.0.0, and every release-host question
+   *  answering 404 — so a rollback that FLIPS (asks nothing) and one that
+   *  falls to a re-install (asks the host, and is refused at exit 2) end in
+   *  different places. */
+  const flipBox = (prefix: string): { home: string; kept: string } => {
+    const home = freshUpdateBox(prefix);
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    return { home, kept };
+  };
+  const expectNoFlip = (home: string, r: Result): void => {
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v1\.0\.0 is not a published release \(its SHA256SUMS answered 404\)/m);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept (its tree is no longer the one that was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home), 'the release host was not asked').toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept version\'s spine ran — a flip into a written-through tree').toBe(false);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+  };
+
+  it('deploy.sh\'s failed-build shape — the tree written through, the stamp NOT touched: a bare rollback does not flip into it (it asks the release host as for any tag that is not kept)', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-nostamp-');
+    appendFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), '// a working tree, rsynced through the link\n');
+    expectNoFlip(home, rollbackRun(home));
+  });
+
+  it('_ver_flip_back is a belt of its own: called directly on a written-through kept version it refuses with rc 1 BEFORE the flip, the link, the stamp, the record and the kept spine untouched — every caller that reaches it re-asks the bytes (arm 1 and a rollback by flip)', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-flipback-');
+    appendFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), '// written through\n');
+    const stamp = fileText(join(home, '.ccrc', 'build.json'));
+    const record = fileText(join(home, '.ccrc', 'installed'));
+    const r = sourcedCcrc(home,
+      `rc=0; _ver_flip_back v1.0.0 server rollback || rc=$?; printf 'rc=%s why=%s\\n' "$rc" "$VER_WHY"`);
+    const said = r.stdout.split('\n').find((l) => l.startsWith('rc=')) ?? `no answer: ${r.stderr}`;
+    expect(said).toMatch(/^rc=1 why=\$HOME\/ccrc-versions\/v1\.0\.0 was written through since it was kept \(its tree is no longer the one that was kept /);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v2.0.0'));
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(stamp);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(record);
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept version\'s spine ran').toBe(false);
+  });
+
+  it('the pre-W6 updater\'s shape — a kept X received Y\'s bytes (a file replaced, one gone, one added) and the kept copies were never told; the box then moved away from X; `rollback --to X` from a non-cli --from does not flip', () => {
+    const { home, kept } = flipBox('ccrc-fx-a-prew6-');
+    writeFileSync(join(kept, 'server', 'dist', 'server', 'src', 'index.js'), "// Y's server\n");
+    rmSync(join(kept, 'deploy', 'gen-wrappers.mjs'));
+    writeFileSync(join(kept, 'shared', 'FROM-Y'), "Y's\n");
+    expectNoFlip(home, rollbackRun(home, ['--from', 'watchdog', '--to', 'v1.0.0']));
+  });
+
+  it('the restamped shape on the version ~/ccrc points at — deploy.sh reshaped the box stamp and the record is gone — `rollback --to` it does not flip either: the release host is asked', () => {
+    const home = freshUpdateBox('ccrc-fx-a-restamp-cheap-');
+    const root = plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    writeFileSync(join(root, 'ccd', 'ccrc'), KEPT_SPINE, { mode: 0o755 });
+    keepDigest(root, home);
+    writeFileSync(join(root, 'agent', 'MARKER'), 'a working tree X\n');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v9.9.9', '9'.repeat(40)));
+    rmSync(join(home, '.ccrc', 'installed'));
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'kept-spine-argv'))).toBe(false);
+  });
+
+  it('the report\'s reproduction, end to end: a restamped write-through, then `rollback --to` that version — it is NOT kept, the re-install runs (the release is fetched), the marker is GONE afterwards, and the version is kept again on a fresh digest', () => {
+    const home = onKeptV1('ccrc-fx-a-report-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    expect(keptAnswer(home, 'v1.0.0', ''), 'the control is broken: a real update must leave v1.0.0 kept').toBe('rc=0 why=');
+    // deploy.sh's shape: a working tree through the link, the stamp reshaped,
+    // and the completed-install record gone.
+    writeFileSync(join(v1, 'agent', 'WRITTEN-THROUGH'), 'a working tree X\n');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v9.9.9', '9'.repeat(40)));
+    rmSync(join(home, '.ccrc', 'installed'));
+    expect(keptAnswer(home, 'v1.0.0', '')).toMatch(WRITTEN_THROUGH);
+    const r = rollbackRun(home, ['--to', 'v1.0.0']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toContain('rollback: $HOME/ccrc-versions/v1.0.0 was written through since it was kept');
+    expect(r.stdout).not.toMatch(/is kept at|no release-host question/);
+    expect(localUrls(home).some((u) => u.endsWith('/download/v1.0.0/ccrc-v1.0.0.tar.gz')), localUrls(home).join('\n')).toBe(true);
+    expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'the marker survived: nothing was re-installed').toBe(false);
+    expect(keptAnswer(home, 'v1.0.0', '')).toBe('rc=0 why=');
+  }, 120_000);
+
+  it('a FULL gate failure whose previous version was written through does not flip back into it: arm 1 names why and arm 2 re-installs it from its release', () => {
+    const home = onKeptV1('ccrc-fx-a-arm1-');
+    const v1 = join(home, 'ccrc-versions', 'v1.0.0');
+    // The running version, written through with no restamp (deploy.sh's failed build).
+    writeFileSync(join(v1, 'agent', 'WRITTEN-THROUGH'), 'a working tree X\n');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toContain('update: arm 1: $HOME/ccrc-versions/v1.0.0 was written through since it was kept (its tree is no longer the one that was kept');
+    expect(r.stdout).not.toMatch(/flipping back to it|REVERTED \(arm 1\)/);
+    expect(r.stdout).toMatch(/^update: arm 2: re-installing v1\.0\.0 /m);
+    expect(existsSync(join(v1, 'agent', 'WRITTEN-THROUGH')), 'arm 2 did not re-install over the written-through tree').toBe(false);
+  }, 120_000);
+
+  // ── the listing says it; GC's verdicts are exactly today's ───────────────
+  it('`ccrc versions` says `written-through` for a version whose tree is not the one that was kept — and the verdicts, the count and what --prune removes are exactly what they are for the same box with that version clean', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const box = (prefix: string, through: string[]): string => {
+      const home = freshUpdateBox(prefix);
+      NAMES.forEach((n, i) => {
+        const root = installVersionedTree(home, n, { link: i === 0, stamp: { sha: 'b'.repeat(40), version: n } });
+        const t = 1_800_000_000 - i * 100;
+        utimesSync(join(root, '.ccrc-installed'), t, t);
+        if (through.includes(n)) writeFileSync(join(root, 'agent', 'WRITTEN-THROUGH'), 'x\n');
+      });
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp('v1.0.4', 'b'.repeat(40)));
+      writeFileSync(join(home, 'fixture-unit-state'), 'inactive\n');
+      return home;
+    };
+    const versions = (home: string, args: string[] = []): Result => {
+      const env = { ...updateEnv(home), CCRC_VERSIONS_KEEP: '2' };
+      replantDoctorStubs(home);
+      const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'versions', ...args], { env, encoding: 'utf8' });
+      return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    };
+    const clean = box('ccrc-fx-a-gc-clean-', []);
+    const dirty = box('ccrc-fx-a-gc-dirty-', ['v1.0.3', 'v1.0.2', 'v1.0.0']);
+    const cl = versions(clean);
+    const dl = versions(dirty);
+    expect(dl.code).toBe(cl.code);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.3 {2}written-through {2}kept: newest 2$/m);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.2 {2}written-through {2}kept: newest 2$/m);
+    expect(dl.stdout).toMatch(/^ {4}v1\.0\.0 {2}written-through {2}prunable$/m);
+    expect(dl.stdout).toMatch(/^ {2}\* v1\.0\.4 {2}complete {2}kept: pointed-at$/m);
+    // The new word never feeds a verdict: replace it, and the two listings are the same bytes.
+    expect(dl.stdout.replace(/written-through/g, 'complete')).toBe(cl.stdout);
+    const cp = versions(clean, ['--prune']);
+    const dp = versions(dirty, ['--prune']);
+    expect(dp.code).toBe(cp.code);
+    expect(dp.stdout.replace(/written-through/g, 'complete')).toBe(cp.stdout);
+    expect(readdirSync(join(dirty, 'ccrc-versions')).sort()).toEqual(readdirSync(join(clean, 'ccrc-versions')).sort());
+  }, 120_000);
 });
