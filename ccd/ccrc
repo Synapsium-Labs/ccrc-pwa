@@ -13794,6 +13794,9 @@ cmd_rollback() {
     UPD_VERSION="$to"
     UPD_REPORT_TARGET="$to"
     UPD_REPORTING=1
+    # A belt: the resume at the top of this verb already ran, so this one is
+    # masked by it — it exists for a crash made in the migration's window
+    # between the two by a lockless plain install (final review F11).
     _inst_migrate_resume update
     _upd_phase installing "rollback by flip to $to"
     echo "rollback: returning this box to $to (named by $via; asked by --from $from) — a flip of \$HOME/ccrc to its kept version and its own spine, as --from $run_from: below the floor if need be, and the floor itself is never lowered"
