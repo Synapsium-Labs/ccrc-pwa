@@ -338,7 +338,7 @@ export type StallNoticeQueued =
  * (`insertStallObservation`), then the mail from `operator`
  * (`insertSystemMailTx`). If the mail write throws, the row rolls back with it,
  * so a failed send never burns its rung. If the row is a duplicate or the run
- * is gone, no mail is written.
+ * is gone (absent or no longer active, D-3584), no mail is written.
  *
  * NOT `queueSystemMail`'s dedupe. That one sees only OUTSTANDING mail, so an
  * acked stall-check would not stop a second one, and a restart would re-send

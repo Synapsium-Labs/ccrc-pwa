@@ -80,7 +80,7 @@ export const STALL_MARKERS = Object.keys(STALL_MARKER_MAP) as StallMarker[];
 export const STALL_READ_FAILURES = ['run-unreadable', 'mail-unreadable', 'delivery-unreadable'] as const;
 export type StallReadFailure = (typeof STALL_READ_FAILURES)[number];
 /** Why an observation write (or a notice) recorded nothing: the run already holds this exact detail, or the run is
- *  gone. `store.ts` answers with these words. */
+ *  gone, meaning absent or no longer active (D-3584). `store.ts` answers with these words. */
 export const STALL_WRITE_MISSES = ['duplicate', 'run-gone'] as const;
 export type StallWriteMiss = (typeof STALL_WRITE_MISSES)[number];
 

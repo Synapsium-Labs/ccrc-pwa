@@ -74,13 +74,13 @@ The trigger is ordinary: a turn whose last tool call was a Bash — including ev
 `run_in_background` and every `until … sleep` poll, which are normal ccrc workflows.
 
 **Corrected 2026-09-29** (the worker stall watch design, `2026-09-29-worker-stall-watch-design.md`
-§3.1, confirmed in every installed Claude Code from 2.1.277 to 2.1.284): this is not a stuck value.
-Claude Code writes `busy` while the main query runs, and relabels an IDLE main loop `shell` while any
-background shell task — a `run_in_background` Bash, a shell Monitor — still runs; the file is rewritten
-only when the word changes. A foreground Bash call is part of the main query and reads `busy`. So the
-two sessions above had finished their turns with a background shell still alive, and the hook's `done`
-was right. The measurements stand; the reading "wedge" does not. From that design's wave 1 the mail
-gate delivers on `shell`.
+§3.1, confirmed in every installed Claude Code from 2.1.277 to 2.1.284): most likely not a stuck value.
+Those builds write `busy` while the main query runs, a foreground Bash call included, and relabel an
+IDLE main loop `shell` while any background shell task — a `run_in_background` Bash, a shell Monitor —
+still runs; the file is rewritten only when the word changes. So the two sessions above most likely
+had finished their turns with a background shell still alive, and the hook's `done` was right. "Most
+likely", because they ran the 2.1.233-era builds of §1.3, which that design never read. The
+measurements stand; the reading "wedge" does not. From that design's wave 1 the mail gate delivers on `shell`.
 
 ### 1.3 Claude Code writes a fourth status
 

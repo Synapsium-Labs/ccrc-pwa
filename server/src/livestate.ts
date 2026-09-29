@@ -50,6 +50,9 @@ export interface LiveState {
  * ago" on its fleet card while its own terminal showed the spinner, made the
  * two surfaces flap out of sync as a turn alternated between streaming and
  * shelling out, and fired a "Finished — back to idle" push on every shell-out.
+ * That history is of builds before 2.1.277, which nobody read for how they
+ * wrote `shell`; in 2.1.277–2.1.284 `shell` comes only from an idle main loop
+ * (the paragraph at the top of this docstring).
  * A status we don't recognise is far likelier to be new work than new rest.
  */
 export function liveSessionStatus(status: string): SessionStatus {
