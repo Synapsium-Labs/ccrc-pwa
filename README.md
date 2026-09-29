@@ -697,7 +697,9 @@ version's stamp and record, re-runs its own install spine (the executables, hook
 runs the gate once more, falling to arm 2 only when there is no kept version or that fails. `ccrc rollback` to a
 kept version makes the same flip, spine and gate, and asks the release host nothing: below the floor if need be, the
 floor itself never lowered, and exit 3 when the kept spine's doctor fails after the gate passes; a bare one checks
-`previous` against the layout before it trusts it, and admits the one disagreement a killed update leaves (the link on the new version, the stamp on the old build, no install record, the old build kept) to a flip and nothing else (D-3466). A staged release older than this layout is first given a
+`previous` against the layout before it trusts it, and admits the one disagreement a killed update leaves (the link on
+the new version, the stamp on the old build, no install record, the old build kept) to a flip and nothing else
+(D-3466). A staged release older than this layout is first given a
 directory named for its own tag to write into, and `~/ccrc` goes back to the version it named when that spine dies
 before replacing anything. A staged spine that dies having replaced nothing, of any age, has the run put back what
 it cleared before it: the caps file, and the install record only when it was a completed install of the running
