@@ -1497,6 +1497,25 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
   `rm`; a probed account revived
   with no local trace (a transient 401) keeps its marker until the probe's next live answer.
+- **A carried-in banner is not a block (D-3526).** A swap carries the transcript with every row's own
+  timestamp, so the old account's rate-limit row lands on the new account unchanged, and it stays the
+  newest real row when the new process writes nothing. Once `SWAP_COOLDOWN` lapsed the rescue read it
+  as a block on the new account and moved the session again (26 of 259 rescues from 2026-09-08). The
+  rate limit is now dated against the same clock as the 401, the pane's tmux `session_created`: a
+  `rate_limit` row provably older than it answers rc 3 in `stuck` mode, with the row's epoch. It is
+  carried in only if a swap also came after it — `$REG/<id>.lastswap` (stamped by the rescue and
+  affinity dispatches and by the landing, deleted by a refused swap) later than the row — so a
+  same-account restart (an OOM kill, a revival, stop/start) keeps its own account's block: the strand
+  stays, and the session moves when a target frees. A carried-in row is not a block on any rung — the
+  pane rungs ask the same read before they fire, unless the pane shows an auth failure, and cache its
+  answer in `$REG/<id>.tdate` on the pane's birth and the transcript's path, mtime and size, so a
+  stranded pane re-reads nothing until the file changes. The one exception is a process that never came
+  up (`$REG/<id>.spawn` records rc 4 at or after its birth): that session is still moved. Each process
+  logs one `carried-in <id>: via=<transcript|pane|banner> rate-limit row at <epoch> predates this pane's
+  process (born <epoch>) — not a block [wrapper=<w>] [spawn=<rc>]` line in `swap.log`, floored by
+  `$REG/<id>.carriednote`. A pane positive is dated by the transcript's newest real row, so once the
+  process has written a real row nothing is suppressed. Carried: the 30-second `tscan` cache is not
+  keyed on the process, and a dispatch that neither lands nor is refused leaves its `lastswap` stamp.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -2886,7 +2905,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21546`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21564`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
   AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20279-20281`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
