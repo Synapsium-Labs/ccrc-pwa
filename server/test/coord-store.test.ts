@@ -3235,12 +3235,12 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       expect(row?.sessionBornAt).toBe(1_000);
       expect(row?.sessionBornFor).toBe('demo-worker');
       expect(row?.dispatchStartedAt).toBe(5_000);
-      // `childBirthOf` requires `sessionBornAt === dispatchStartedAt`
-      // (R-I1a's closure), so a run whose dispatch was re-stamped by hand
-      // AFTER its birth — never a shape a real dispatch produces, since the
-      // fresh arm always stamps both from one measurement — now reads
-      // unplaceable rather than the birth it recorded first. This is the
-      // fail-closed cost the check accepts: the close would simply hold.
+      // `childBirthOf` requires `sessionBornAt === dispatchStartedAt`, so a
+      // run whose dispatch was re-stamped by hand AFTER its birth — never a
+      // shape a real dispatch produces, since the fresh arm always stamps
+      // both from one measurement — now reads unplaceable rather than the
+      // birth it recorded first. This is the fail-closed cost the check
+      // accepts: the close would simply hold.
       expect(childBirthOf({ ok: true, run: row! }, 'demo-worker')).toEqual({
         kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
       });
@@ -3335,7 +3335,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
           .toEqual({ kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" });
       });
 
-      // R-I1a, the sub-shape the first re-review measured OPEN: a rollback
+      // The redraw shape: a rollback
       // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended
       // across a rollback) leaves `sessionBornFor` matching, since the id
       // never changed — the `sessionBornFor` check alone cannot see it. The
@@ -3343,7 +3343,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       // genuine re-mint — old build or new — always re-stamps
       // `dispatchStartedAt` first (`CoordStore.markDispatchStarted`'s one
       // call site, the fresh-spawn arm).
-      it('the redraw shape (R-I1a): an old-build re-mint of the SAME session id re-stamps dispatchStartedAt, and childBirthOf refuses it', () => {
+      it('the redraw shape: an old-build re-mint of the SAME session id re-stamps dispatchStartedAt, and childBirthOf refuses it', () => {
         const s = store();
         const runId = openOne(s);
         // v15 binds S1 at T1 — a real, paired bind.

@@ -811,7 +811,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
   it('the review’s shape: a row `$HOME/a`, `a -> $HOME/locked/l`, `l -> <child>/server`, `locked` unsearchable OUTSIDE the child — unmeasured, and ws-reclaim leaves `server/live.txt`', () => {
     // `-d` is false on EACCES as on ENOENT, so the walk stopped at `$HOME`,
     // which can be entered, and `_ws_realpath` handed back `$HOME/a` — read as
-    // outside; the verb then removed the other session's tree (review, measured).
+    // outside; the verb then removed the other session's tree (measured).
     const c = makeChild(h);
     const server = path.join(c.wt, 'server');
     fs.mkdirSync(server);
@@ -821,7 +821,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     fs.symlinkSync(server, path.join(locked, 'l'));
     fs.symlinkSync(path.join(locked, 'l'), path.join(h.home, 'a'));
     // The REAL token, taken before the row is planted — the rows are no input to it, so
-    // without the guard the verb would accept it (review: measured, the tree went).
+    // without the guard the verb would accept it (measured: the tree went).
     const tok = evalOf(h).token;
     expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
     otherRowOf('demo-a', path.join(h.home, 'a'));

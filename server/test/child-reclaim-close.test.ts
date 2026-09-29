@@ -404,9 +404,9 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
     // `markDispatchStarted` BEFORE `setSession`, on `dispatch.ts`'s own
-    // fresh-arm order: `childBirthOf` now also requires `sessionBornAt` to
-    // equal `dispatchStartedAt` (R-I1a's closure), so a fixture birth must be
-    // a genuinely paired one, exactly as a real dispatch stamps it.
+    // fresh-arm order: `childBirthOf` also requires `sessionBornAt` to equal
+    // `dispatchStartedAt`, so a fixture birth must be a genuinely paired one,
+    // exactly as a real dispatch stamps it.
     b.deps.coord.markDispatchStarted(id, BIRTH_MS);
     b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));

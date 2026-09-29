@@ -88,7 +88,8 @@ export function CoordBanner({
   // (the marker hasn't moved yet) changes nothing here; the timer below is
   // what eventually gives up on that case. Runs whenever `coord.pause`
   // actually changes VALUE — not on every `coord` frame (keyed on `marker`,
-  // not on the whole `coord` object; see the M4 note below) — including
+  // not on the whole `coord` object, for the same reason the refusal-clearing
+  // effect below is keyed narrowly too) — including
   // ones that land after "unconfirmed" has already been shown — an operator
   // staring at "unconfirmed" for a genuinely-late frame deserves to see it
   // resolve, not stay stale forever.
@@ -107,9 +108,10 @@ export function CoordBanner({
     // object meant a fresh reclaim-row tick or attention-list change gave
     // `coord` a new identity too, which cleared THIS row's refusal though
     // nothing about `pause` had moved: a refusal disappearing while nothing
-    // it was about changed, the exact defect M4 fixed for taps. Keying on
-    // `coord?.pause` alone restores the M4 premise for a frame with more than
-    // one row's facts on it. (Safe against the failure path itself:
+    // it was about changed — the same shape of defect the paragraph above
+    // guards against for the settle effect. Keying on `coord?.pause` alone
+    // keeps that same guarantee for a frame with more than one row's facts
+    // on it. (Safe against the failure path itself:
     // `coordPause`'s rejection sets `error` in a microtask; this effect runs
     // only when `coord.pause` actually changes value, never merely because a
     // tap failed.)

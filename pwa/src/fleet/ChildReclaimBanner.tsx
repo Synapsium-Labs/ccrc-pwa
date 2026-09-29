@@ -58,8 +58,9 @@ export function ChildReclaimBanner({
   };
 
   // A NEW value for THIS row's own marker is a fresh measurement: it retires
-  // an inline refusal about the old one (CoordBanner's M4), and it settles
-  // the outstanding tap ONLY when it reports the value the tap asked for.
+  // an inline refusal about the old one (the same guarantee CoordBanner's
+  // own settle effect keeps), and it settles the outstanding tap ONLY when
+  // it reports the value the tap asked for.
   //
   // Keyed on `marker`, not on `coord` itself: one frame now carries
   // both rows' facts — `pause`/`mail` for the sibling banner, `reclaim`/
@@ -67,10 +68,10 @@ export function ChildReclaimBanner({
   // meant a `pause` flip, or merely a fresh 60s sweep tick changing nothing
   // this row renders but the attention list, gave `coord` a new identity and
   // cleared THIS row's refusal though `reclaim` itself never moved — a
-  // refusal disappearing while nothing it was about changed, the exact
-  // defect M4 fixed for taps. Keying on `marker` (`childReclaimMarker(coord)`,
-  // already computed above from this same `coord`) restores the M4 premise:
-  // this effect now runs only when the RECLAIM switch's own reading changes.
+  // refusal disappearing while nothing it was about changed. Keying on
+  // `marker` (`childReclaimMarker(coord)`, already computed above from this
+  // same `coord`) keeps that same guarantee: this effect now runs only when
+  // the RECLAIM switch's own reading changes.
   useEffect(() => {
     setError(null);
     if (wantedRef.current !== null && marker === wantedRef.current) {

@@ -268,8 +268,8 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
 
 // This case does not depend on chmod argument order at
 // all — it is a static census of which function reads the marker — so
-// running it once per CHMODS entry duplicated it for no reason (3512's
-// "bsd-cases-plus-resume" wording). A plain `describe` runs it once; the
+// running it once per CHMODS entry duplicated it for no reason (the
+// "bsd-cases-plus-resume" shape). A plain `describe` runs it once; the
 // executed test count drops by exactly one (CHMODS has two entries: 2 -> 1).
 describe('_spawn_start is the one function that reads the child marker', () => {
   it('the decision lives in _spawn_start and NOWHERE else — one reader, every spawn path', () => {

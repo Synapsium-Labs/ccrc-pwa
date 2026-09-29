@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1eefacefc858d7615968ebca2415fa946d9fd8225ffd8ee40722e47bfad5200f
+# ccrc:generated 1 sha256=7e455dacbb54a71c0de2a30abcf05daa268894724856a225a04e224b2b31ae07
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24647,7 +24647,7 @@ _ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs
   #                                 follow a linked `logs` and counts none of its reflogs (measured: 1
   #                                 commit, then 0 once `logs` was moved and linked), while `find` lists only
   #                                 the link and `-r` follows it — the count read 0 and the clone's
-  #                                 reflog-only commit went with the tree (review, measured). A link below
+  #                                 reflog-only commit went with the tree (measured). A link below
   #                                 `logs` is followed by git, and refused all the same, as the keep refuses
   #                                 one in the child's own G. `.git`, `refs` and `objects` as links are
   #                                 read through by the count (measured, each 1), so they are not refused.

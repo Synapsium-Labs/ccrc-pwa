@@ -179,6 +179,21 @@ const fixture = (opts: FixtureOpts = {}) => {
   const pass = async (): Promise<void> => {
     await watcher.sweepChildReclaim(await readRegistry(deps.io, cfg), readdirSync(reg));
   };
+  /** Like `pass`, but returns as soon as the decision is MADE, not once it
+   *  has SETTLED: `sweepChildReclaim` has no `await` between its own entry
+   *  and the per-child loop's `queue.run` call, so by the time the call
+   *  below returns (a plain synchronous call, its own promise merely
+   *  captured, never adopted by an enclosing `return`), any enqueue for this
+   *  pass has already happened — real, awaited fs I/O only for the registry
+   *  read ahead of it. The caller gets the still-pending completion back, to
+   *  await once whatever it queued behind can proceed — never blocked on it
+   *  immediately, which would hang forever if the very guard under test had
+   *  failed to guard. */
+  const passDispatched = async (): Promise<{ settle: Promise<void> }> => {
+    const records = await readRegistry(deps.io, cfg);
+    const settle = watcher.sweepChildReclaim(records, readdirSync(reg));
+    return { settle };
+  };
   const advance = (ms: number): void => { clock += ms; };
   const next = (): void => advance(CHILD_RECLAIM_SWEEP_MS + 1);
   /** The lane's own read of one session's attention input row, at `now` —
@@ -190,8 +205,8 @@ const fixture = (opts: FixtureOpts = {}) => {
     return childReclaimJournalRow(gen, childReclaimLatest(gen));
   };
   const entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id);
-  return { home, reg, coord, watcher, bus, calls, requests, plant, openRun, openReview, abandon, journal, pass, next,
-    advance, latestOf, entryOf, now: () => clock,
+  return { home, reg, coord, watcher, bus, calls, requests, plant, openRun, openReview, abandon, journal, pass,
+    passDispatched, next, advance, latestOf, entryOf, now: () => clock,
     // The SAME `KeyedQueue` instance `deps.queue` (and so the release job)
     // runs on — exposed so a test can occupy a child's own queue key BEFORE
     // a pass dispatches, giving deterministic control over exactly when the
@@ -489,10 +504,19 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // a SECOND pass while still in flight
     expect(f.calls.filter((c) => c[0] === 'ws-release'), 'never double-queues while the first release is still in flight')
       .toHaveLength(1);
-    f.next(); await f.pass();                                  // a THIRD (4th overall) pass, still in flight
+    // A THIRD (4th overall) pass, still in flight. Awaiting `f.pass()`
+    // directly here would hang under the very mutation this asserts against:
+    // dropping the in-flight guard makes THIS pass the one that enqueues a
+    // second job behind the still-unresolved first, on the same
+    // `KeyedQueue` key — `sweepChildReclaim` then awaits that second job too,
+    // which cannot settle until `resolveFirst` runs. So the decision (and any
+    // enqueue it makes) is awaited via `passDispatched`, never the settle.
+    f.next();
+    const fourth = await f.passDispatched();
     expect(queueRuns.filter((k) => k === 'demo-a'), 'never re-enqueues demo-a while the first release is still in flight')
       .toHaveLength(1);
     resolveFirst({ code: 1, stdout: '', stderr: 'boom' });      // the release finally fails
+    await fourth.settle;
     await second;
     f.next(); await f.pass();                                  // the very NEXT pass — must NOT retry yet
     expect(f.calls.filter((c) => c[0] === 'ws-release'), 'retried on the pass right after a failure').toHaveLength(1);

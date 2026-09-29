@@ -2831,9 +2831,9 @@ button.proj-card-pool::before {
    filing it under `uncovered` the way a bare `.coord-error { color: … }`
    selector would (hand-computed 6.80 DARK / 5.73 LIGHT against --bg-surface,
    but unmeasured by the automatic gate until this selector named its
-   ancestor). Moved back beside this rule — a child-reclaim wave insertion had
-   pushed it down to sit under `.child-reclaim-who` instead, where it read as
-   that rule's docstring. */
+   ancestor). It stays directly beside `.coord-banner .coord-error` below —
+   not under `.child-reclaim-who`, where it would read as that rule's own
+   docstring instead. */
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
