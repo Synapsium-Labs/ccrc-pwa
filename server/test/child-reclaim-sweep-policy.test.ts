@@ -13,11 +13,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_PRESENCE_DEFERS, childReclaimAttention, childReclaimBackoffMs,
-  childReclaimBackoffOver, childReclaimDeferExpired, childReclaimFailingSentence, childReclaimFirstSighting,
+  childReclaimDeferExpired, childReclaimDue, childReclaimFailingSentence, childReclaimFirstSighting,
   childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
   type ChildReclaimHoldCandidate, type ChildReclaimJournalRow, type ChildReclaimSweepEntry,
-  type ChildReclaimSweepInput, type ChildReclaimTokenKind,
+  type ChildReclaimSweepInput, type ChildReclaimSweepOutcome, type ChildReclaimTokenKind,
 } from '../src/childReclaimSweep.js';
+import {
+  HOLD_NO_REASON, HOLD_UNREADABLE,
+} from '../src/registry.js';
 import {
   LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason,
   type LifecycleAct, type LifecycleOutcome, type MirroredLifecycleEvent,
@@ -249,6 +252,17 @@ describe('childReclaimSweepVerdict', () => {
       expect(skip({ held: { ...accounted, open: { ok: true, count: 0 } }, coordinating: true }))
         .toEqual({ eligible: false, why: 'coordinating' });
     });
+
+    it('the birth fence rules BEFORE the hold is even considered — a postdating minting run under a still-open, accounted programme answers the fence\'s own word', () => {
+      // The hold read is `program(open count 1)`: were the hold checked
+      // first, this would answer `held`. The fence sits earlier, so it does.
+      expect(skip({
+        held: { ...accounted, open: { ok: true, count: 1 } },
+        childBornAt: NOW - 3_600_000,
+        mintingRun: { ok: true, run: { state: 'done', sessionId: 'demo-a', dispatchStartedAt: null,
+          openedAt: NOW - 3_600_000 + SKEW + 1 } },
+      })).toEqual({ eligible: false, why: 'minting-run-postdates-child' });
+    });
   });
 });
 
@@ -289,8 +303,9 @@ describe('childReclaimHoldRead — accounting a hold\'s text against this child\
     expect(read('program:demo wave:02/3 run:1', [candidate()])).toEqual({ kind: 'held', reason: 'program:demo wave:02/3 run:1' });
   });
 
-  it('the registry\'s own unreadable-hold sentinel matches nothing — held', () => {
-    expect(read('HOLD_UNREADABLE', [candidate()])).toEqual({ kind: 'held', reason: 'HOLD_UNREADABLE' });
+  it('the registry\'s own unreadable-hold and empty-hold sentinels match nothing — held', () => {
+    expect(read(HOLD_UNREADABLE, [candidate()])).toEqual({ kind: 'held', reason: HOLD_UNREADABLE });
+    expect(read(HOLD_NO_REASON, [candidate()])).toEqual({ kind: 'held', reason: HOLD_NO_REASON });
   });
 
   it('a matching text from a NON-TERMINAL run is not accounted — held', () => {
@@ -438,9 +453,54 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('a backed-off child waits until exactly its backoff has passed; a child with no failure never waits', () => {
     const failed: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: 1, lastFailedAt: NOW };
-    expect(childReclaimBackoffOver(entry, NOW, PASS)).toBe(true);
-    expect(childReclaimBackoffOver(failed, NOW + 119_999, PASS)).toBe(false);
-    expect(childReclaimBackoffOver(failed, NOW + 120_000, PASS)).toBe(true);
+    expect(childReclaimDue(entry, NOW, PASS)).toBe(true);
+    expect(childReclaimDue(failed, NOW + 119_999, PASS)).toBe(false);
+    expect(childReclaimDue(failed, NOW + 120_000, PASS)).toBe(true);
+  });
+
+  it('every arm except `refused` clears `refusedAt` — a stale one from an earlier refusal does not survive a later failure or deferral', () => {
+    const stale: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
+    expect(childReclaimNextEntry(stale, { kind: 'failed' }, NOW, false)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, NOW, false)).toMatchObject({ refusedAt: null });
+  });
+
+  it("A9's own case — starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
+    const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C };
+    const outcomes: ChildReclaimSweepOutcome[] = [
+      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
+    ];
+    for (const outcome of outcomes) {
+      const next = childReclaimNextEntry(stale, outcome, NOW, false)!;
+      expect(childReclaimDeferExpired(next, NOW), outcome.kind).toBe(false);
+    }
+  });
+
+  describe('childReclaimDue — the lane\'s ONE "may I ask again" question, folding both pacings', () => {
+    it('a never-asked entry is always due', () => {
+      expect(childReclaimDue(entry, NOW, PASS)).toBe(true);
+    });
+
+    it('backs off after a failure exactly as childReclaimBackoffMs says — due at exactly the backoff, not one ms before', () => {
+      for (const k of [1, 2, 3, 4]) {
+        const failed: ChildReclaimSweepEntry = { ...entry, consecutiveFailures: k, lastFailedAt: NOW };
+        const backoff = childReclaimBackoffMs(k, PASS);
+        expect(childReclaimDue(failed, NOW + backoff - 1, PASS), `k=${k}`).toBe(false);
+        expect(childReclaimDue(failed, NOW + backoff, PASS), `k=${k}`).toBe(true);
+      }
+    });
+
+    it('a terminal refusal is not due before the ceiling, and IS due at exactly the ceiling after refusedAt', () => {
+      const refused: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW };
+      expect(childReclaimDue(refused, NOW + C - 1, PASS)).toBe(false);
+      expect(childReclaimDue(refused, NOW + C, PASS)).toBe(true);
+    });
+
+    it('a later non-refusal outcome clears refusedAt, so the child is due on the ordinary backoff alone again', () => {
+      const refused: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
+      const next = childReclaimNextEntry(refused, { kind: 'deferred', why: 'held' }, NOW, false)!;
+      expect(next.refusedAt).toBeNull();
+      expect(childReclaimDue(next, NOW, PASS)).toBe(true);
+    });
   });
 });
 

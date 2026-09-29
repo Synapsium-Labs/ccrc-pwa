@@ -249,17 +249,25 @@ export type ChildReclaimSweepVerdict =
       readonly release: ChildReclaimHoldRelease }
   | { readonly eligible: false; readonly why: Exclude<ChildReclaimSweepSkip, 'hold-retired'> };
 
-const TERMINAL_STATES: readonly string[] = TERMINAL_RUN_STATES;
-
 /** Is this marked child eligible THIS pass? (The twice-observed rule is the
  *  caller's: this answers one pass.) The order is the order of trust — a row
  *  whose child-ness is unknown says nothing else trustworthy, and a hold that
  *  matched no run of this child's own protects UNCONDITIONALLY, decided
- *  before the minting run is even read. Only a hold this build PROVED belongs
- *  to one of this child's own runs is re-examined once the minting run's
- *  status, and the birth fence, are known — because releasing it must never
- *  happen through the orphan branch (a live minting run naming a different
- *  session is not "finished with this workspace", whatever it once claimed). */
+ *  before the minting run is even read: the `held`/`unmeasured` kinds return
+ *  at the SAME early place a bare boolean hold would have, ahead of even
+ *  `minting-run-absent`. That is deliberate, not merely permitted by A9 (only
+ *  the PROVEN `program` kind is required to wait for the minting run) — it is
+ *  fail-shut, because an unaccounted hold protects on its own terms, whatever
+ *  the minting run reads as. Its one cost: after a coordination-database loss
+ *  a child under a non-programme hold answers `held`, not `minting-run-absent`,
+ *  and so produces no absence log line for THAT child on THAT pass — every
+ *  other child still does, and this one is never destroyed by the omission,
+ *  which is the only thing fail-shut requires. Only a hold this build PROVED
+ *  belongs to one of this child's own runs is re-examined once the minting
+ *  run's status, and the birth fence, are known — because releasing it must
+ *  never happen through the orphan branch (a live minting run naming a
+ *  different session is not "finished with this workspace", whatever it once
+ *  claimed). */
 export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclaimSweepVerdict {
   if (i.child.kind === 'none') return { eligible: false, why: 'not-a-child' };
   if (i.child.kind === 'unreadable') return { eligible: false, why: 'marker-unreadable' };
@@ -275,7 +283,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // live ones included. The orphans the first draft reached through absence
   // are reached through the branch below instead.
   if (run === null) return { eligible: false, why: 'minting-run-absent' };
-  if (!TERMINAL_STATES.includes(run.state)) {
+  if (!isTerminalRunState(run.state)) {
     // A live minting run keeps its child unless it provably moved on to a
     // DIFFERENT one — which is what a re-dispatched run that bound the child it
     // did get looks like. Naming this child, or no session, keeps it.
@@ -301,7 +309,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
   // run. Only once both are settled does the hold stop protecting, and even
   // then the verdict below answers `hold-retired`, never plain `eligible`.
   if (i.held.kind === 'program') {
-    if (!TERMINAL_STATES.includes(run.state)) return { eligible: false, why: 'held' };
+    if (!isTerminalRunState(run.state)) return { eligible: false, why: 'held' };
     if (!i.held.open.ok) return { eligible: false, why: 'hold-unmeasured' };
     if (i.held.open.count > 0) return { eligible: false, why: 'held' };
   }
@@ -316,7 +324,7 @@ export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclai
     case 'absent': return { eligible: false, why: 'reviewed-run-absent' };
     case 'unreadable': return { eligible: false, why: 'reviewed-run-unreadable' };
     case 'run':
-      if (!TERMINAL_STATES.includes(i.reviewedRun.state)) return { eligible: false, why: 'review-report-live' };
+      if (!isTerminalRunState(i.reviewedRun.state)) return { eligible: false, why: 'review-report-live' };
       break;
   }
   if (!i.siblings.ok) return { eligible: false, why: 'siblings-unreadable' };
@@ -409,12 +417,35 @@ export function childReclaimBackoffMs(consecutiveFailures: number, passIntervalM
   return Math.min(CHILD_RECLAIM_DEFER_CEILING_MS, passIntervalMs * 2 ** consecutiveFailures);
 }
 
-/** May the lane ask for this child again? Always with no failure on record;
- *  otherwise only once the backoff has passed since the failed attempt's pass —
- *  at EXACTLY the backoff, yes. */
-export const childReclaimBackoffOver = (entry: ChildReclaimSweepEntry, nowMs: number, passIntervalMs: number): boolean =>
+/** Has the failure backoff passed? Always with no failure on record;
+ *  otherwise only once `childReclaimBackoffMs` has elapsed since the failed
+ *  attempt's pass — at EXACTLY the backoff, yes. Private: `childReclaimDue`
+ *  is the one question a caller outside this file asks (spec §5.9's second
+ *  pacing, the terminal-refusal wait, is not a failure and this predicate
+ *  alone cannot see it — see `childReclaimDue`). */
+const childReclaimBackoffOver = (entry: ChildReclaimSweepEntry, nowMs: number, passIntervalMs: number): boolean =>
   entry.lastFailedAt === null
   || nowMs - entry.lastFailedAt >= childReclaimBackoffMs(entry.consecutiveFailures, passIntervalMs);
+
+/** May the lane ask for this child again — THE ONE "may I ask" question a
+ *  caller outside this file uses, folding BOTH pacings this memory tracks
+ *  (spec §5.9): the failure backoff (above), and — separately — a TERMINAL
+ *  refusal's own wait, never sooner than the defer ceiling after `refusedAt`.
+ *  The refusal wait exists because the executor's answer and the lifecycle
+ *  mirror's ingest of the same refusal are two different writers on two
+ *  different clocks: the mirror may not have the line yet, or (a `ws-audit`
+ *  race, a truncated journal write) may never see it at all, so this memory's
+ *  own `refusedAt` is the only thing pacing the re-ask in that window — the
+ *  attention list is not a substitute, since it exists to be READ, not to
+ *  gate anything. `refusedAt` is cleared by every OTHER outcome
+ *  (`childReclaimNextEntry`), so a child that has since failed, been
+ *  deferred, or been reclaimed is due on the ordinary backoff alone, exactly
+ *  as if it had never been refused. Folding both here — rather than leaving
+ *  either for the lane (L4) to compute — is what keeps L4 from ever deciding
+ *  a pacing question itself. */
+export const childReclaimDue = (entry: ChildReclaimSweepEntry, nowMs: number, passIntervalMs: number): boolean =>
+  childReclaimBackoffOver(entry, nowMs, passIntervalMs)
+  && (entry.refusedAt === null || nowMs - entry.refusedAt >= CHILD_RECLAIM_DEFER_CEILING_MS);
 
 /** One row of the mirror read the attention list and the terminal exclusion
  *  share: the LATEST `reclaim` event of one session's CURRENT GENERATION, of
