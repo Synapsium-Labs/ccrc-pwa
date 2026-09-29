@@ -847,6 +847,12 @@ const UNIT_LINES =
 
 /** A sorted recursive listing of `<home>` as `<relpath>\t<size>` lines —
  *  the before/after snapshot the `--check` write-nothing case compares.
+ *  A SYMLINK is recorded as `<relpath> -> <its value>` and not descended
+ *  (W6 Task 7): on a versioned box `~/ccrc` is a link, and `lstat`'s size of
+ *  a link is the length of its target, so a flip between two same-length
+ *  names (`v9.9.1` → `v9.9.0`) left the old `<relpath>\t<size>` line
+ *  byte-identical — measured. `~/ccrc-versions/` is a real directory under
+ *  `<home>` and is walked on its own.
  *  `<home>/tmp/**` is the staging dir TMPDIR points at (update's own
  *  mktemp -d space, cleaned by its EXIT trap but timing-dependent) and
  *  `<home>/curl-argv` and `<home>/curl-full-argv` (fix round 1 item 12) are
@@ -860,7 +866,8 @@ function homeSnapshot(home: string): string[] {
       if (rel === 'tmp' || rel.startsWith('tmp/') || rel === 'curl-argv' || rel === 'curl-full-argv') continue;
       const p = join(d, e);
       const st = lstatSync(p);
-      if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); } else out.push(`${rel}\t${st.size}`);
+      if (st.isSymbolicLink()) out.push(`${rel} -> ${readlinkSync(p)}`);
+      else if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); } else out.push(`${rel}\t${st.size}`);
     }
   };
   walk(home, '');
