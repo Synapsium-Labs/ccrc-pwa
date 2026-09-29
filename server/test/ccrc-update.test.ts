@@ -9943,12 +9943,16 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
 // the evidence the Darwin arm ran at all: Linux flips by `mv -fT` and asks
 // python3 nothing.
 describe('the Darwin arms a Linux leg can measure: the flip gate and flip, and the loaded-not-running GC read (F4, F12)', () => {
+  // The three positive Darwin cases hand `python3 -c` to the REAL interpreter
+  // (`REAL_PYTHON3`, above), so they skip on a box with none — as the stub's
+  // `-c` arm is spread in only when one resolved. The refusal cases below stub
+  // python3 away themselves and run everywhere.
   const PY_PROBE = '-c import os';
   const PY_REPLACE = '-c import os, sys; os.replace(sys.argv[1], sys.argv[2])';
   const pyCalls = (home: string): string[] => (existsSync(join(home, 'python3-argv'))
     ? fileText(join(home, 'python3-argv')).split('\n').filter((l) => l !== '') : []);
 
-  it('_ver_can_flip answers yes on macOS when python3 runs — the positive path of the gate (the probe RAN; Linux never asks)', () => {
+  it.skipIf(REAL_PYTHON3 === '')('_ver_can_flip answers yes on macOS when python3 runs — the positive path of the gate (the probe RAN; Linux never asks)', () => {
     const home = freshUpdateBox('ccrc-update-darwin-canflip-');
     const r = sourcedCcrc(home,
       `for os in darwin linux; do ( CCD_OS=$os; rc=0; _ver_can_flip || rc=$?; printf '%s rc=%s why=[%s]\\n' "$os" "$rc" "$VER_WHY" ); done`);
@@ -9956,7 +9960,7 @@ describe('the Darwin arms a Linux leg can measure: the flip gate and flip, and t
     expect(pyCalls(home), 'the Darwin probe did not run python3').toEqual([PY_PROBE]);
   });
 
-  it('_ver_flip_back flips on macOS through os.replace: the link, the stamp and the record end on the kept version, and its own spine ran', () => {
+  it.skipIf(REAL_PYTHON3 === '')('_ver_flip_back flips on macOS through os.replace: the link, the stamp and the record end on the kept version, and its own spine ran', () => {
     const home = freshUpdateBox('ccrc-update-darwin-flipback-');
     plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
     const kept = keptVersion(home, 'v1.0.0', V1_SHA);
@@ -9973,7 +9977,7 @@ describe('the Darwin arms a Linux leg can measure: the flip gate and flip, and t
     expect(calls.filter((c) => c.startsWith(`${PY_REPLACE} `)), calls.join('\n')).toHaveLength(1);
   });
 
-  it("_upd_legacy_target's success path flips on macOS: ~/ccrc names the tag's directory, and the pointed-at version is never written", () => {
+  it.skipIf(REAL_PYTHON3 === '')("_upd_legacy_target's success path flips on macOS: ~/ccrc names the tag's directory, and the pointed-at version is never written", () => {
     const home = freshUpdateBox('ccrc-update-darwin-legacy-');
     const cur = plantW6Box(home, 'v2.0.0', V2_SHA);
     const before = treeDigest(cur);
