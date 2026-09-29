@@ -8446,6 +8446,10 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // directory of its own) and places a `ccd/ccrc` that knows neither flag
     // arm 2's child needs. It stamps the box as its own release.
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    // v2.0.0 is published too (with its bundle), so that WITHOUT arm 1 arm 2
+    // would go on to run its child — the hazard this pin is for — rather than
+    // refusing at the bundle question.
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
     writeFileSync(join(home, 'fixture-old-stamp.json'), shippedStamp('v1.0.0', V1_SHA));
     writeFileSync(join(home, 'fixture-on-install'), [
       'mkdir -p "$HOME/ccrc/ccd" && cat > "$HOME/ccrc/ccd/ccrc" <<\'PREW4\'',
