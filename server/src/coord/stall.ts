@@ -476,3 +476,227 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   if (input.coordinator === 'unmeasurable') return holdVerdict('coordinator-unmeasurable');
   return r3Verdict(key, 'coordinator-dead');
 }
+
+// ── the notice texts (§4.2 "Mail bodies" and "Push shape") ───────────────────────────────────────────────────
+// Measured facts only:
+// - session ids, workspace ids, programme slugs, run states and mail kinds, each printed only if it matches
+//   STALL_SAFE_RE;
+// - integers;
+// - server-formatted UTC.
+// Never transcript text, a mail subject or a task description (§9.12). A value that fails its pattern prints as
+// STALL_UNPRINTABLE, never quoted or escaped.
+
+const STALL_UNPRINTABLE = '(unprintable)';
+const STALL_SAFE_RE = /^[A-Za-z0-9._-]+$/;
+
+/** A session id, workspace id, programme slug, run state or mail kind, printed only when it matches the id pattern. */
+export function stallSafe(v: string): string {
+  return typeof v === 'string' && STALL_SAFE_RE.test(v) ? v : STALL_UNPRINTABLE;
+}
+
+/** An id, printed only when it is an integer. */
+function stallInt(n: number): string {
+  return Number.isSafeInteger(n) ? String(n) : STALL_UNPRINTABLE;
+}
+
+/** The ONE Date use in this module, and the only shape `stall-vocabulary.test.ts` admits: formatting a measured
+ *  epoch, never reading the clock. It returns null for a value `toISOString` would throw on. */
+function stallIso(ms: number): string | null {
+  return Number.isFinite(ms) && Math.abs(ms) <= 8.64e15 ? new Date(ms).toISOString() : null;
+}
+
+/** `YYYY-MM-DDTHH:MMZ`: the time on a phone line. */
+export function stallUtc(ms: number): string {
+  const iso = stallIso(ms);
+  return iso === null ? STALL_UNPRINTABLE : `${iso.slice(0, 16)}Z`;
+}
+
+/** `YYYY-MM-DDTHH:MM:SSZ`: when a body's quiet began (§4.2's example). */
+function stallUtcSec(ms: number): string {
+  const iso = stallIso(ms);
+  return iso === null ? STALL_UNPRINTABLE : `${iso.slice(0, 19)}Z`;
+}
+
+/** `HH:MM:SSZ`: a mail's time in a body (§4.2's example). */
+function stallClockSec(ms: number): string {
+  const iso = stallIso(ms);
+  return iso === null ? STALL_UNPRINTABLE : `${iso.slice(11, 19)}Z`;
+}
+
+/** `HH:MMZ`, rounded UP to the minute. It is a deadline, so it must never read earlier than the rung it names. */
+function stallDeadline(ms: number): string {
+  const iso = stallIso(Math.ceil(ms / 60_000) * 60_000);
+  return iso === null ? STALL_UNPRINTABLE : `${iso.slice(11, 16)}Z`;
+}
+
+/** `<h>h <m>m`, floored to the minute. A negative span prints as `0h 0m`. */
+function stallSpan(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** `run 67 — demo-program wave 9/9`. */
+function stallRunLabel(run: StallRunRow): string {
+  const wave = run.waveOf === null ? stallInt(run.wave) : `${stallInt(run.wave)}/${stallInt(run.waveOf)}`;
+  return `run ${stallInt(run.id)} — ${stallSafe(run.program)} wave ${wave}`;
+}
+
+/** `#2509 status at 21:17:43Z`, or `none`. The subject is never printed. */
+function stallMailRef(m: StallMailRow | null): string {
+  return m === null ? 'none' : `#${stallInt(m.id)} ${stallSafe(m.kind)} at ${stallClockSec(m.at)}`;
+}
+
+/** When the worker's quiet began. The episode key stands in when the facts carry no quiet start. */
+function stallQuietFrom(facts: StallFacts): number {
+  return facts.quietSince ?? facts.episodeKeyMs;
+}
+
+/** §4.2's "owed" part:
+ *  - "first report" when the worker has not mailed on the run since dispatch;
+ *  - a reply, when mail to it is newer than its own last mail;
+ *  - "next report" otherwise. */
+function stallOwed(facts: StallFacts): string {
+  if (facts.workerLast === null) return 'first report';
+  if (facts.inboundLast !== null && facts.inboundLast.id > facts.workerLast.id) return `reply to #${stallInt(facts.inboundLast.id)}`;
+  return 'next report';
+}
+
+export interface StallNoticeText { readonly subject: string; readonly body: string }
+
+/** The newest stall check to the subject's worker in `input.mail`: the r1 mail. A stall-check subject from anyone
+ *  but the operator role is not a check (`stallMailClass`). */
+export function stallLastCheck(input: StallInput): StallMailRow | null {
+  const worker = input.subject.primary.sessionId;
+  let newest: StallMailRow | null = null;
+  for (const m of input.mail) {
+    if (m.toId !== worker) continue;
+    if (stallMailClass({ fromId: m.fromId, runId: m.runId, subject: m.subject, mailId: m.id }) !== 'check') continue;
+    if (newest === null || m.id > newest.id) newest = m;
+  }
+  return newest;
+}
+
+/** Why a worker that ended its turn to wait may never be woken (§3.2). */
+const STALL_WAKE_LINE = 'Background work you ended your turn to wait for may have finished or died without a notice that can wake you: a task a subagent started reports to that subagent, and a background shell has no deadline.';
+
+/** r1: the stall check. It carries its own protocol, so no skill has to be installed first (§11 decision 3). */
+export function stallCheckMail(input: StallInput, facts: StallFacts, now: number): StallNoticeText {
+  const run = input.subject.primary;
+  const id = stallInt(run.id);
+  const since = stallQuietFrom(facts);
+  const quiet = stallSpan(now - since);
+  const toCoordinator = now + STALL_ESCALATE_MS;
+  const toOperator = toCoordinator + STALL_OPERATOR_MS;
+  const direct = input.coordinationPaused || run.claimedBy === null;
+  const last = direct
+    ? `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the operator is told.`
+    : `No mail from you on run ${id} by ${stallDeadline(toCoordinator)}: the coordinator is told. By ${stallDeadline(toOperator)}: the operator.`;
+  return {
+    subject: `${STALL_CHECK_PREFIX} run ${id} — quiet ${quiet}, owed: ${stallOwed(facts)}`,
+    body: [
+      `stall-check from the ccrc stall watch (server), ${stallRunLabel(run)}.`,
+      `Your main loop has been idle since ${stallUtcSec(since)} (${quiet}). Your last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to you on this run: ${stallMailRef(facts.inboundLast)}.`,
+      STALL_WAKE_LINE,
+      `Before anything else, send ONE mail on run ${id} to toId 'coordinator', kind status:`,
+      `still working — subject beginning "${STALL_REPLY_PREFIX} working", what you are doing and when you report next;`,
+      `waiting on the coordinator — subject beginning "${STALL_REPLY_WAITING_PREFIX}", what you wait for (this hands the run to the coordinator and stops these checks);`,
+      "blocked on a decision — ask it with AskUserQuestion (your skill's question clause); these checks hold while it is open.",
+      last,
+    ].join('\n'),
+  };
+}
+
+/** r2's sentence about r1: what the coordinator needs in order to judge whether the check ever reached the worker. */
+function stallR1Line(r1: StallNotice, check: StallMailRow | null, d: { queuedAt: number; deliveredAt: number | null; ackedAt: number | null } | null): string {
+  const silent = ' The worker has sent no mail on this run since.';
+  if (r1.mode === 'shadow') return `The stall check was recorded in shadow at ${stallClockSec(r1.at)}; no mail was sent to the worker.${silent}`;
+  if (check === null) return `The stall check was recorded at ${stallClockSec(r1.at)}, and no stall-check mail is on this run.${silent}`;
+  if (d === null) return `Stall check #${stallInt(check.id)} was queued at ${stallClockSec(check.at)}, and has no delivery row.${silent}`;
+  const delivered = d.deliveredAt === null ? 'not delivered' : `delivered at ${stallClockSec(d.deliveredAt)}`;
+  const acked = d.ackedAt === null ? 'not acked' : `acked at ${stallClockSec(d.ackedAt)}`;
+  return `Stall check #${stallInt(check.id)} was queued at ${stallClockSec(d.queuedAt)}, ${delivered}, ${acked}.${silent}`;
+}
+
+/** r2: the stall report to the coordinator. It carries its own instruction until wave 3's clause reaches every home. */
+export function stallReportMail(input: StallInput, facts: StallFacts, r1: StallNotice, r1Delivery: { queuedAt: number; deliveredAt: number | null; ackedAt: number | null } | null, now: number): StallNoticeText {
+  const run = input.subject.primary;
+  const since = stallQuietFrom(facts);
+  const quiet = stallSpan(now - since);
+  const check = r1.mode === 'live' ? stallLastCheck(input) : null;
+  const checkWord = STALL_CHECK_PREFIX.slice(0, -1); // the word, never a second quoted kebab literal in server/src/coord
+  const checkRef = check === null ? checkWord : `${checkWord} #${stallInt(check.id)}`;
+  const workspace = run.workspace === null ? 'none' : stallSafe(run.workspace);
+  return {
+    subject: `${STALL_REPORT_PREFIX} run ${stallInt(run.id)} — worker quiet ${quiet}, ${checkRef} unanswered`,
+    body: [
+      `stall from the ccrc stall watch (server), ${stallRunLabel(run)}, state ${stallSafe(run.state)}.`,
+      `Worker ${stallSafe(run.sessionId)} (workspace ${workspace}) has been quiet since ${stallUtcSec(since)} (${quiet}). Its last mail on this run: ${stallMailRef(facts.workerLast)}. Newest mail to it on this run: ${stallMailRef(facts.inboundLast)}.`,
+      stallR1Line(r1, check, r1Delivery),
+      `Ack this, re-measure the run and the worker's last mail, and act once: mail the worker a resume, mail it a subject beginning "${STALL_WAIT_PREFIX}" naming what it waits for, or re-dispatch a dead worker. A stall mail never licenses re-dispatching a live worker.`,
+    ].join('\n'),
+  };
+}
+
+/** r3's cause, in words. A paused coordinator is alive, so the reclaim door is never named for it: reclaim would
+ *  refuse it (§4.2). */
+function stallR3Cause(because: StallR3Cause, coordinator: string, runId: number): string {
+  switch (because) {
+    case 'still-silent': return `The stall check and the report to its coordinator ${coordinator} both went unanswered.`;
+    case 'coordinator-dead': return `Its coordinator ${coordinator} measures dead, so no report went to it. Reclaim the run: POST /api/runs/${stallInt(runId)}/reclaim.`;
+    case 'no-coordinator': return 'The run has no coordinator, so no report went to one.';
+    case 'coordination-paused': return 'Coordination is paused, so no report went to the coordinator. Lift the pause with POST /api/coord/pause.';
+  }
+}
+
+/** Why the limit hold held: only facts the tick measured. */
+function stallLimitFacts(w: StallWorker): string {
+  if (!w.present) return 'the worker is absent';
+  const parts: string[] = [];
+  if (w.limits === null) parts.push('limits unmeasured');
+  else parts.push(`5h ${stallPercent(w.limits.five)}`, `7d ${stallPercent(w.limits.seven)}`);
+  if (w.stranded) parts.push('stranded');
+  if (w.swapBlocked) parts.push('swap blocked');
+  if (w.autoContinueHeldAt !== null) parts.push(`auto-continue held since ${stallUtc(w.autoContinueHeldAt)}`);
+  return parts.join(', ');
+}
+
+function stallPercent(v: number | null): string {
+  if (v === null) return 'unmeasured';
+  return Number.isFinite(v) ? `${Math.round(v)}%` : STALL_UNPRINTABLE;
+}
+
+/** The operator pushes: r3 and the three caps. `<ws>` is the run's workspace, or its session when it has none. */
+export function stallPushText(input: StallInput, facts: StallFacts, n: StallNotify, now: number): { readonly title: string; readonly body: string } {
+  if (n.to !== 'operator') throw new RangeError(`stallPushText: rung ${n.rung} of ${n.arm} goes to the ${n.to} as mail, never as a push`);
+  const run = input.subject.primary;
+  const ws = stallSafe(run.workspace ?? run.sessionId);
+  const worker = stallSafe(run.sessionId);
+  const coordinator = run.claimedBy === null ? 'none' : stallSafe(run.claimedBy);
+  const label = stallRunLabel(run);
+  switch (n.arm) {
+    case 'quiet': {
+      const since = stallQuietFrom(facts);
+      return {
+        title: `⚠ stalled › ${ws}`,
+        body: `${label}: worker ${worker} quiet since ${stallUtc(since)} (${stallSpan(now - since)}). ${stallR3Cause(n.because, coordinator, run.id)}`,
+      };
+    }
+    case 'dialog-cap':
+      return {
+        title: `⚠ stalled › ${ws} (dialog)`,
+        body: `${label}: worker ${worker} shows a dialog with no question behind it; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Neither the worker nor its coordinator can be mailed while it shows: answer or dismiss it on the pane.`,
+      };
+    case 'limit-cap':
+      return {
+        title: `⚠ limit › ${ws}`,
+        body: `${label}: worker ${worker} has been held by a usage limit past the ${stallSpan(LIMIT_HOLD_CAP_MS)} cap; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Measured: ${stallLimitFacts(input.worker)}.`,
+      };
+    case 'coord-ball': {
+      const last = facts.lastExchangeAt ?? n.key;
+      return {
+        title: `⚠ waiting › ${ws}`,
+        body: `${label}: worker ${worker} handed the run to its coordinator ${coordinator}, and no mail has passed on the run since ${stallUtc(last)} (${stallSpan(now - last)}).`,
+      };
+    }
+  }
+}
