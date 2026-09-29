@@ -79,6 +79,10 @@ Design:
 
 **Found implementing (corrections to the design above, same commit):**
 
+- The health probe's whole-roster preflight first validated `accounts.json` and then reopened that path
+  with jq to derive subjects. `ccrc account` replaces the roster atomically, so a valid snapshot could pass
+  while a duplicate-id or multiple-upstream snapshot drove marker mutation. The probe now copies the roster
+  once under its lock, validates and derives subjects from that immutable snapshot, and removes it on exit.
 - Item 1's third arm (a config dir's `.credentials.json`) first needed a backend gate, so an external lane
   would not be judged by it; round 1 then dropped the arm entirely (below), which subsumes the gate.
 - Item 7 held without the S6-R11 procedure: every edit above `ccd/ccd:21428` is line-neutral (`wc -l`
