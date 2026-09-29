@@ -39,7 +39,7 @@ type Phase = 'idle' | 'pausing' | 'resuming' | 'unconfirmed';
  *  the generic toast") — so that one path, and anything that is not even an
  *  `ApiError`, falls through to the ordinary global toast every other write
  *  in this app already uses. */
-function inlinePauseError(err: unknown): string | null {
+export function inlinePauseError(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
   if (err.status === 501) return COORD_UNSUPPORTED_TEXT;
   // Review, M1: this arm used to read `body.stderr` itself and fall back to

@@ -740,6 +740,31 @@ describe('the coord banner is not a living pane, and its toggle is a real target
   });
 });
 
+// Child-reclamation wave 4: the reclaim row is the pause banner's shape, and
+// holds its discipline — a switch is a STATE, not a living pane.
+describe('the reclaim row is not a living pane, and its toggle is a real target', () => {
+  const SELECTORS = ['.child-reclaim-banner', '.child-reclaim-banner .child-reclaim-glyph', '.child-reclaim-word',
+    '.child-reclaim-toggle', '.child-reclaim-banner .child-reclaim-error', '.child-reclaim-banner .child-reclaim-attention',
+    '.child-reclaim-banner .child-reclaim-who'];
+  it('no .child-reclaim-* rule glows, breathes or animates', () => {
+    for (const sel of SELECTORS) {
+      const rule = norm(stripComments(ruleIn(css, sel)));
+      expect(rule, sel).not.toContain('--glow');
+      expect(rule, sel).not.toContain('animation');
+      expect(rule, sel).not.toContain('box-shadow');
+    }
+  });
+  it('.child-reclaim-toggle and the row clear the tap floor, off the shared token', () => {
+    expect(declValue(ruleFor('.child-reclaim-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleFor('.child-reclaim-banner'), 'min-height')).toBe('var(--tap-min)');
+  });
+  it('.child-reclaim-banner is self-grounded — its own color AND background', () => {
+    const rule = ruleFor('.child-reclaim-banner');
+    expect(declValue(rule, 'color')).not.toBeNull();
+    expect(declValue(rule, 'background')).not.toBeNull();
+  });
+});
+
 // Task 12, spec §4.3: releasing a wedged run is a decision, not a living
 // pane — the same discipline "runs are not living panes" and the coord
 // banner's own block above already hold.

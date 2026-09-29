@@ -4014,7 +4014,7 @@ MSG
 - Consumes: `POST /api/coord/reclaim-pause` (Task 6); `CoordStatus.reclaim` and `CoordStatus.childReclaimAttention` (Task 4); `isMarkerState`, `MarkerState`, `ChildReclaimAttention` (`shared/api.ts`); `COORD_CONFIRM_MS` (`coordWords.ts`); `COORD_UNSUPPORTED_TEXT`, `apiErrorText`, `ApiError` (`lib/api.ts`).
 - Produces: `api.childReclaimPause(state: 'on' | 'off'): Promise<void>`; `CHILD_RECLAIM_MARKER_WORD`, `CHILD_RECLAIM_MARKER_GLYPH: Record<MarkerState, string>`; `childReclaimMarker(coord: unknown): MarkerState | null` (THE ONE READER of `CoordStatus.reclaim` — `null` means the server predates the field); `childReclaimAttentionOf(coord: unknown): ChildReclaimAttention[]` (THE ONE READER of `CoordStatus.childReclaimAttention`); `export function ChildReclaimBanner({ store?, childReclaimPause? }): ReactNode`; `export function inlinePauseError(err: unknown): string | null` (existing body, now exported).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) Create `pwa/test/child-reclaim-banner.test.tsx`:
 
@@ -4279,7 +4279,7 @@ describe('the reclaim row is not a living pane, and its toggle is a real target'
       ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx test/api.test.ts test/fleet-css.test.ts test/tap-targets.test.tsx
@@ -4287,7 +4287,7 @@ cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx test
 
 Expected: `child-reclaim-banner` FAILS at collection (`Failed to resolve import "../src/fleet/ChildReclaimBanner"`); `api` FAILS `api.childReclaimPause is not a function`; `fleet-css`'s three new cases and `tap-targets`' loop FAIL because `ruleIn` finds no `.child-reclaim-*` rule.
 
-- [ ] **Step 3: The client call and the words**
+- [x] **Step 3: The client call and the words**
 
 `pwa/src/lib/api.ts`, directly after the `coordPause` entry:
 
@@ -4357,7 +4357,7 @@ export function childReclaimAttentionOf(coord: unknown): ChildReclaimAttention[]
 
 In `pwa/src/fleet/CoordBanner.tsx`, change `function inlinePauseError(err: unknown): string | null {` to `export function inlinePauseError(err: unknown): string | null {` — one 501/502 inline policy for both rows, not a second copy.
 
-- [ ] **Step 4: The row**
+- [x] **Step 4: The row**
 
 Create `pwa/src/fleet/ChildReclaimBanner.tsx`:
 
@@ -4554,7 +4554,7 @@ export function ChildReclaimBanner({
 .child-reclaim-banner .child-reclaim-who { color: var(--ink-tertiary); }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd pwa && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx \
@@ -4564,7 +4564,7 @@ cd pwa && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run tes
 
 Expected: PASS — `child-reclaim-banner` 16/16; `coord-banner` unchanged; `contrast` finds every new colour rule under a self-grounded ancestor (its `uncovered` census does not grow); `runs-screen`'s banner-order cases still see `.coord-banner` where they expect it.
 
-- [ ] **Step 6: Mutation check, then commit**
+- [x] **Step 6: Mutation check, then commit**
 
 Each run: `cd pwa && ./node_modules/.bin/vitest run test/child-reclaim-banner.test.tsx` unless named.
 

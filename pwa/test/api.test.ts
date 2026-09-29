@@ -349,6 +349,18 @@ describe('coordPause (Task 11, spec §4.2)', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(501);
   });
+
+  it('POSTs {state} as JSON to /api/coord/reclaim-pause — no box token', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, requested: 'on' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.childReclaimPause('on');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/coord/reclaim-pause');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ state: 'on' });
+    expect(new Headers(init.headers).get('x-ccrc-mail-token')).toBeNull();
+  });
 });
 
 // Task 12 review lesson (Task 11's own review, applied ahead of time):
