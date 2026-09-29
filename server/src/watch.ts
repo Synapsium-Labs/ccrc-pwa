@@ -2928,6 +2928,10 @@ export class FleetWatcher {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
+    } catch (err) {
+      // A throw outside the per-subject catch (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
+      // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
       this.stallSweepRunning = false;
     }

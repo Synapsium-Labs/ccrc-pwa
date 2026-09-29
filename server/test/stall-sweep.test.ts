@@ -266,6 +266,23 @@ describe('sweepStalls: gating', () => {
     expect(lines(warn, 'stall-watch')).toBe(0);
     expect(listPanes(h)).toBe(0);
   });
+
+  it('a throw outside the per-subject catch (the arming read) resolves, warns ONCE, and frees the in-flight flag', async () => {
+    // The tick calls `sweepStalls(...).catch(() => {})`, so a throw that escaped the lane would kill it every
+    // minute with no trace. The lane's own outer catch is what leaves one line behind.
+    const { coord, w } = await rig();
+    seedRun(coord, { program: 'demo-program' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bad = Object.assign([] as string[], { includes: (): boolean => { throw new Error('names unreadable'); } });
+    at(R1_AT);
+    await expect(w.sweepStalls([fleetRow(WORKER)], bad)).resolves.toBeUndefined();
+    expect(lines(warn, 'ccrc-server: stall-watch sweep failed (names unreadable) — one bad sweep must not kill the poll')).toBe(1);
+    expect(lines(warn, 'stall-watch')).toBe(1);
+    expect(operatorMail(coord)).toEqual([]);
+    at(R1_AT + STALL_SWEEP_MS);                       // the `finally` still ran: the next sweep is not held in flight
+    await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    expect(operatorMail(coord)).toHaveLength(1);
+  });
 });
 
 describe('sweepStalls: shadow and live (S4)', () => {
