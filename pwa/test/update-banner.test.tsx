@@ -11,10 +11,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FleetHealth, NodeWire, UpdatesView } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
-import { api, MOVE_DISABLED_TEXT } from '../src/lib/api';
+import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { UPDATES_POLL_MS } from '../src/fleet/useUpdatesView';
@@ -101,8 +101,28 @@ describe('UpdateBanner — when it speaks', () => {
     expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
   });
 
+  it("sides are picked from EVERY row, never a pre-filtered subset — two rows share the fleet role, and dropping the unstated one first would change the answer (W5 review 161, F-D)", () => {
+    // Every other case here carries at most ONE row per role, so a caller that
+    // filtered to the rows that vouch (`statedOf`) BEFORE picking sides would
+    // agree with one that did not. Here two LIVE rows are both `role: 'fleet'`:
+    // the first never read its stamp (it occupies the side and renders the
+    // dash), the second is fully stated on v0.0.8. `versionSides` takes the
+    // FIRST fleet row it finds, so the side is the dash; a pre-filter would
+    // drop the first and let the second stand in, naming `v0.0.8`.
+    render(<UpdateBanner updates={view({
+      nodes: [
+        fleetNode({ current: null, stampRead: 'unreadable' }),
+        fleetNode({ nodeId: '7c1d4e9a-3b5f-4a28-8d6e-0f9b2a4c6e81', label: 'fleet-2', current: stamp('v0.0.8') }),
+        serverNode(),
+      ],
+    })} />);
+    expect(screen.getByText('v0.0.9 is out on stable — fleet — · server v0.0.7.')).toBeInTheDocument();
+  });
+
   it('reads a MEASURED but UNREAD stamp as a MISSING side, never as unversioned (D-3307)', () => {
-    // The fleet row WAS measured this sweep, but its stamp did not read (a
+    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161,
+    // F-I: `statedOf` asks "ever measured", never "measured this sweep"), but
+    // its stamp did not read (a
     // local-mode box that cannot read its own build.json). Only the server
     // side is behind, so the banner speaks off the server's arrow alone; the
     // fleet side must still read as missing, not "unversioned" — that word
@@ -269,12 +289,33 @@ describe('UpdateBanner — the D-3313/D-3316 rule (fix round 1, widened fix roun
 });
 
 describe('UpdateBanner — its two buttons', () => {
-  it('renders Update all DISABLED, described by the one W3 sentence (spec §18 "the move controls are disabled in W3")', () => {
-    render(<UpdateBanner updates={view()} />);
+  it("Update all is ENABLED and opens the move sheet: the banner's tag, the nodes in dispatch order, sent as apply {all: true, tag} (spec §13 \"W4 adds\")", async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    const onMoved = vi.fn();
+    render(<UpdateBanner updates={view({ nodes: [serverNode(), fleetNode()] })} onMoved={onMoved} />);
     const all = screen.getByRole('button', { name: 'Update all' });
-    expect(all).toBeDisabled();
-    expect(all).toHaveAccessibleDescription(MOVE_DISABLED_TEXT);
-    expect(screen.getByText(MOVE_DISABLED_TEXT)).toBeInTheDocument();
+    expect(all).not.toBeDisabled();
+    expect(all).not.toHaveAttribute('aria-describedby');
+    fireEvent.click(all);
+    const list = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.7 → v0.0.9',
+      '2. server (server) v0.0.7 → v0.0.9',
+    ]);
+    expect(apply).not.toHaveBeenCalled();   // opening is not confirming
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' }));
+    await waitFor(() => expect(onMoved).toHaveBeenCalledTimes(1));
+    expect(apply.mock.calls).toEqual([[{ all: true, tag: 'v0.0.9' }]]);
+    await waitFor(() => expect(screen.queryByRole('list', { name: 'Nodes this moves, in order' })).toBeNull());
+  });
+
+  it('self-polling, a confirmed Update all re-polls /api/updates itself', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET_ID, SERVER_ID], skipped: [] });
+    render(<UpdateBanner />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update all' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update v0.0.9' }));
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
   });
 
   it("See what's new lands on /settings", () => {

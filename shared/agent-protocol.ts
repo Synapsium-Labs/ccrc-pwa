@@ -11,6 +11,7 @@
 // and `shared/roster`), and saying otherwise would be a false fact sitting next
 // to a true rule — this repo reads its comments as history.
 import type { BuildInfo } from './buildinfo.js';
+import { isReleaseTag, isRequestKind, type InFlightReport, type RequestKind } from './api.js';
 
 export interface AgentHello { t: 'hello'; token: string }
 /** `ccdVerbs` is what `ccd caps` printed on the AGENT's box at start —
@@ -97,6 +98,7 @@ export interface AgentHello { t: 'hello'; token: string }
 export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
+  /** The one op word defined for this list is `UPDATE_OP` (`'update'`), which programme wave 5's agent sends; `readReadyOps` reads it. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
 }
 
@@ -318,12 +320,23 @@ export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: strin
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
 export interface TailCloseReq{ t: 'req'; id: number; op: 'tailClose'; tailId: number }
 export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: string; cols: number; rows: number }
+/** Design 2026-09-20 §10: ONE member of the existing `req` envelope, not a new
+ *  top-level frame. `kind` absent means `'update'` (the agent's `validateReq`
+ *  fills it in). `tag` passes `isReleaseTag` before any case body sees it — a
+ *  failure answers `bad-tag`, never `bad-request`, which from this op means
+ *  exactly one thing: the agent predates it. */
+export interface UpdateReq { t: 'req'; id: number; op: 'update'; tag: string; kind?: RequestKind }
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
-export interface ResErr { t: 'res'; id: number; ok: false; err: string }
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
+ *  agent can say beyond the word — the `--detach` parent's first stderr line,
+ *  what `update.json` said. Absence permits: every op but `update` sends none,
+ *  and an agent from before the field sends none. Its ONE reader is
+ *  `server/src/remote/client.ts`'s `AgentOpError`. No `FLEET_PROTO` bump. */
+export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
 // readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
 // lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
@@ -331,7 +344,285 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 //   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
 //   silence for `regular` — the D-114 shape, in the one direction that matters here, because
 //   `regular` is the only answer that lets a caller condemn anything.
-// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
+// writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}; update → {accepted: true, detail?: string} (D-3413: `detail` only from the bound's arms B and D)
+
+// ── the `update` op (design 2026-09-20 §10) ─────────────────────────────────
+// Everything both ends of the op must agree on is declared here, once. The
+// agent (`agent/src/server.ts`) spawns from these templates. The server's
+// dispatcher spawns its OWN node from the same two calls
+// (`server/src/update/converge.ts`) and maps the same words
+// (`server/src/update/dispatch.ts`'s `classifyOpAnswer`). Bash cannot import this, so `ccd/ccrc`
+// spells its side itself (`UPD_FROM_WORDS`, the `--detach`/`--to` parser), and
+// wave 4's tests hold that side.
+
+/** The op's name — and the one word an agent that answers it lists in `ready.ops`. */
+export const UPDATE_OP = 'update';
+
+/** D-3370 — the ONLY words the agent's `update` case
+ *  answers with. `ResErr.err` has no closed vocabulary (every other op's words
+ *  are free strings), so this op's own are declared here. The dispatcher's
+ *  answer mapping switches over `UpdateOpError` with a `never` arm, so a word
+ *  added on one side alone is a compile error. `bad-request` is deliberately
+ *  NOT a member: it is the envelope's word for an op `validateReq` does not
+ *  know, which from this op means the agent predates it.
+ *
+ *  `not-queued` (D-3413, fix round 1 item 2) is the one word the bound's arm A needs across the link: the `--detach`
+ *  parent was stopped at `UPDATE_SPAWN_TIMEOUT_MS` BEFORE it queued anything (the box's `update.json` read the same
+ *  before and after, and the parent's stdout, read to EOF, carried neither the `update.json` WARN nor the `detached`
+ *  line), so nothing started and the server releases the row `idle` with the request standing. It is not `busy`
+ *  (busy means ANOTHER actor is updating, and no one is) and not `spawn-failed` (which halts, and this is no fault).
+ *  No skew hazard: only a wave-5 server ever sends the op, and this word ships inside wave 5. */
+export const UPDATE_OP_ERRORS = ['bad-tag', 'bad-kind', 'busy', 'spawn-failed', 'not-queued'] as const;
+export type UpdateOpError = (typeof UPDATE_OP_ERRORS)[number];
+/** Use THIS, never `UPDATE_OP_ERRORS.includes(x as UpdateOpError)` — `isRunState`'s rule. */
+export function isUpdateOpError(v: unknown): v is UpdateOpError {
+  return typeof v === 'string' && (UPDATE_OP_ERRORS as readonly string[]).includes(v);
+}
+
+/** The `--from` word every console-driven move carries — a member of wave 4's
+ *  `UPD_FROM_WORDS` (`ccd/ccrc`), which refuses any other at exit 2. */
+export const UPDATE_OP_FROM = 'pwa';
+
+/** `$HOME/.local/bin/ccrc` as parts: the installed shim, ABSOLUTE (§18 "the
+ *  spawn argv is absolute"). A systemd user unit's PATH does not carry
+ *  `~/.local/bin` (the reason `resolveSpawnCmd` exists for `ccd`), and a bare
+ *  name would run whatever PATH found first. Spelled here once, and
+ *  `single-definition.test.ts` holds it to this file. */
+export const UPDATE_LAUNCHER_PARTS = ['.local', 'bin', 'ccrc'] as const;
+
+/** `<home>/.local/bin/ccrc`. Throws `RangeError` unless `home` is absolute
+ *  (`/`-led) with no trailing `/`: that is a caller bug (the agent's
+ *  `cfg.home`, the server's own `cfg.home`), never something to spawn. Joined
+ *  by hand because L0 imports no `node:path`. */
+export function updateLauncherPath(home: string): string {
+  if (!home.startsWith('/') || home.endsWith('/')) {
+    throw new RangeError(`updateLauncherPath: home must be absolute with no trailing slash (got ${JSON.stringify(home)})`);
+  }
+  return [home, ...UPDATE_LAUNCHER_PARTS].join('/');
+}
+
+/** THE TWO TEMPLATES (spec §10): `[kind, '--to', tag, '--detach', '--from',
+ *  UPDATE_OP_FROM]`. The spawn is therefore `ccrc update --to <tag> --detach
+ *  --from pwa` or `ccrc rollback --to <tag> --detach --from pwa`, with `tag` the
+ *  only variable token. Throws `RangeError` unless `isRequestKind(kind)` and
+ *  `isReleaseTag(tag)`. The tag guard runs AGAIN here, though the agent's
+ *  `validateReq` ran it first, so an edit that lets an unvalidated tag through
+ *  the shape gate still never reaches `execFile`. Frozen: a caller cannot
+ *  append a flag to a template. */
+export function updateSpawnArgv(kind: RequestKind, tag: string): readonly string[] {
+  if (!isRequestKind(kind)) {
+    throw new RangeError(`updateSpawnArgv: kind must be update or rollback (got ${JSON.stringify(kind)})`);
+  }
+  if (!isReleaseTag(tag)) {
+    throw new RangeError('updateSpawnArgv: tag is not a release tag (vX.Y.Z) — a caller bug; nothing was spawned');
+  }
+  return Object.freeze([kind, '--to', tag, '--detach', '--from', UPDATE_OP_FROM]);
+}
+
+/** D-3374 — the agent's bound on the `--detach` parent, and the
+ *  server-role local spawn's. The parent is not instant: `ccrc rollback
+ *  --detach` asks the release host whether the tag exists before it detaches
+ *  (wave 4 Task 7), within `CCRC_RELEASE_PROBE_MAX_TIME` (`ccd/ccrc`, 15 s by
+ *  default), which wave 4 sized to sit under this value, so a silent release host
+ *  answers as that verb's own refusal, not as this bound's timeout. */
+export const UPDATE_SPAWN_TIMEOUT_MS = 20_000;
+/** The server's `FleetClient.request` deadline for THIS op only (the client's
+ *  default is 15 s). Held strictly above `UPDATE_SPAWN_TIMEOUT_MS` by a test.
+ *  The agent's answer, even "the parent timed out", therefore always arrives
+ *  before the server gives up, so a timeout never releases a lease while a
+ *  node is still starting a run. */
+export const UPDATE_OP_TIMEOUT_MS = 30_000;
+/** How long, after the `--detach` parent has EXITED, the bounded spawner still waits for its stdout to reach
+ *  EOF before it answers with `stdout: null`. A grandchild that left the parent's process group (setsid) and
+ *  still holds the pipe would otherwise keep `close` from ever firing. The whole answer therefore arrives within
+ *  `UPDATE_SPAWN_TIMEOUT_MS + UPDATE_SPAWN_DRAIN_MS` of the spawn (the drain is ONE deadline, armed by the kill or by
+ *  the exit, whichever comes first — never restarted), and that sum plus the op's bounded reads before and after it must
+ *  stay below `UPDATE_OP_TIMEOUT_MS`, so the agent always answers before the server gives up on the op (a test pins
+ *  the sum). */
+export const UPDATE_SPAWN_DRAIN_MS = 2_000;
+
+/** What the bounded update spawner answers, on both roles (the agent's `makeUpdateSpawn`, the server's
+ *  `localUpdateSpawnFor`). `stdout` is the parent's WHOLE stdout read to EOF, or `null` when EOF was not reached
+ *  within `UPDATE_SPAWN_DRAIN_MS` of the parent's exit, or the capture cap was hit: `null` is "not measured", never
+ *  "empty". `pid` is the spawned parent's pid, null only when the spawn itself failed. `killed` is true when the
+ *  bound fired and the whole process group was sent SIGKILL. */
+export interface UpdateSpawnResult { code: number; stdout: string | null; stderr: string; killed: boolean; pid: number | null }
+/** The bound on `ResErr.detail`. It is 200, the same as W2's
+ *  `REPORT_DETAIL_MAX` for `update.json`'s own detail. */
+export const UPDATE_OP_DETAIL_MAX = 200;
+
+/** What a `spawn-failed` answer carries (spec §10, D-3372).
+ *  Each line of the `--detach` parent's stderr is cleaned by W2's
+ *  `printableDetail` rule: every run of characters outside printable ASCII
+ *  (0x20–0x7E) becomes one space, then the ends are trimmed. The first line
+ *  with anything left in it is the answer, cut to `UPDATE_OP_DETAIL_MAX`. With
+ *  no such line the answer is `'no message'`, never an empty detail. */
+export function firstStderrLine(stderr: string): string {
+  for (const raw of stderr.split('\n')) {
+    const line = raw.replace(/[^\x20-\x7e]+/g, ' ').trim();
+    if (line !== '') return line.slice(0, UPDATE_OP_DETAIL_MAX);
+  }
+  return 'no message';
+}
+
+/** D-3411 — the sentence the `--detach` parent's lock probe dies with, as the PREFIX both roles match. Wave 4's
+ *  `_upd_busy_die` (`ccd/ccrc`) prints `ccrc: update: another update holds ~/.ccrc/update.lock (<holder>)` to
+ *  stderr through `_ccrc_die`, whose `$PROG: ` prefix is part of the line; the parenthesised holder varies. It is
+ *  declared ONCE, here: a parent that exits non-zero with THIS as its first stderr line was refused by a lock
+ *  somebody holds, with nothing on the box changed, so the node is BUSY, not faulted. Every other refusal keeps its
+ *  mapping — `_upd_flock_die` (no `flock`) and the probe's unmeasured arm stay `spawn-failed`, because a box that
+ *  cannot measure its own lock has a fault. `agent/test/update-busy-writer.test.ts` and `server/test/update-converge.test.ts`
+ *  run the real `ccd/ccrc` under a held lock and pin this prefix to the line it prints. */
+export const UPDATE_LOCK_HELD_PREFIX = 'ccrc: update: another update holds ~/.ccrc/update.lock';
+/** True iff `line` — the parent's FIRST stderr line, as `firstStderrLine` cleans it — is the lock-held sentence. */
+export function isUpdateLockHeldLine(line: string): boolean {
+  return line.startsWith(UPDATE_LOCK_HELD_PREFIX);
+}
+
+/** What one `process.kill(pid, 0)` did: it returned, or it threw with this errno code (`null`: a throw without a
+ *  string code). Each ROLE supplies the adapter that makes one — L0 imports nothing, not even `node:*`. */
+export type KillProbeOutcome = { threw: false } | { threw: true; code: string | null };
+
+/** D-3411 — THE liveness rule, over the outcome of `kill(pid, 0)`. A call that returns is a live writer, and so is
+ *  `EPERM` (the process exists and is somebody else's). Only `ESRCH` is dead. Any OTHER failure proves nothing about
+ *  the writer, so it reads alive: today's `busy`, the direction that never spawns a second updater onto a run this
+ *  box could not measure. A report whose pid is absent or unreadable never reaches this function; its caller keeps
+ *  `busy`. A pid the kernel has REUSED reads alive (D-3411 names the cost). */
+export function updateWriterAlive(outcome: KillProbeOutcome): boolean {
+  return !outcome.threw || outcome.code !== 'ESRCH';
+}
+
+/** D-3411 — the way out a `busy` detail ends with, on both roles: a live updater (or a lock holder that writes no
+ *  report, a hung `versions --prune`) answers busy on every sweep, so the exit is to ack the row or mend the box
+ *  (ruling (b)). ONE constant, ONE cutter (`withBusyAdvice`): a `busy` detail is never built without it. */
+const BUSY_ADVICE = ' - a live updater that hangs answers busy on every sweep: ack the row or mend the box';
+/** `head` cut to fit, then the advice: the FRONT is cut so the advice at the end is never the part that is lost, and
+ *  the whole stays within `UPDATE_OP_DETAIL_MAX`. */
+function withBusyAdvice(head: string): string {
+  return head.slice(0, UPDATE_OP_DETAIL_MAX - BUSY_ADVICE.length) + BUSY_ADVICE;
+}
+
+/** D-3411 — the busy sentence for an in-flight report, built ONCE for both roles (the agent's `update` op and the
+ *  server-role local spawn). It names the phase, target, start second and the WRITER's pid, then says what the
+ *  operator can do (`withBusyAdvice`). A `target` has no length cap on its numeric parts, so the FRONT is cut. */
+export function inFlightBusyDetail(r: InFlightReport): string {
+  return withBusyAdvice(`update.json says ${r.phase} (target ${r.target ?? 'none'}, started ${r.startedAtS ?? 'unknown'}, writer pid ${r.pid ?? 'unknown'})`);
+}
+
+/** The busy sentence for a LOCK-held refusal: the parent's lock line (`isUpdateLockHeldLine` true) with the same way
+ *  out. A holder that hangs without ever writing a report (a hung watchdog hold, `versions --prune`) answers busy on
+ *  every sweep, so the line alone would leave the operator with no exit named. The line's tail is cut, never the advice. */
+export function lockHeldBusyDetail(line: string): string {
+  return withBusyAdvice(line);
+}
+
+/** D-3411 — whether an in-flight report's writer may still be running, the ONE composition both roles use: a `null`
+ *  pid (absent or unreadable) is not dead, so it may, and a readable pid is asked through the role's own `kill(pid, 0)`
+ *  adapter (`probe`) and judged by `updateWriterAlive`. L0 imports nothing, so the adapter is passed in. */
+export function updateWriterMayLive(pid: number | null, probe: (pid: number) => KillProbeOutcome): boolean {
+  return pid === null || updateWriterAlive(probe(pid));
+}
+
+// ── the bound's outcome, by attributed re-measurement (D-3400 amended, D-3413; fix round 1 item 2) ──────────
+// A `--detach` parent that outlives `UPDATE_SPAWN_TIMEOUT_MS` is killed (its whole group), and neither role may then
+// GUESS what it did. Each role reads `update.json` BEFORE the spawn and AFTER the kill and hands both reads, the
+// parent's stdout (read to EOF, or `null`), its pid and the lease's tag to `decideKilledSpawn`, the ONE decision.
+
+/** One bounded read of `update.json`, in three values that are never folded: its text, proven absent, or unreadable
+ *  (any other failure, a non-regular file, over the cap, past the deadline). */
+export type UpdateReportRead = { kind: 'bytes'; text: string } | { kind: 'absent' } | { kind: 'unreadable' };
+
+/** The first words of the two stdout lines the `--detach` parent can print BEFORE it is stopped, declared once and
+ *  tied to `ccd/ccrc` by a source scan (`server/test/update-killed-arms.test.ts`): `_upd_phase`'s WARN when it could
+ *  not write `update.json`, and `_upd_detach`'s success line. Either one on stdout means the parent got further than
+ *  arm A may assume (a queued write that WARNed, or a unit that was started), so the outcome cannot be arm A. */
+export const UPDATE_PHASE_WARN_PREFIX = 'update: WARN: could not write ~/.ccrc/update.json';
+export const UPDATE_DETACHED_PREFIX = 'update: detached';
+
+/** The report's WRITER and TARGET, read by name from any one-line JSON object, or `null` when the text is not one.
+ *  Not `inFlightReport`: the killed parent's own report may already be in a non-in-flight phase (`failed`), and it is
+ *  still the parent's. `pid` follows `inFlightReport`'s rule (a positive safe integer, else `null`). */
+function reportWriter(text: string): { pid: number | null; target: string | null } | null {
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return null; }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return null;
+  const d = doc as Record<string, unknown>;
+  return {
+    pid: typeof d.pid === 'number' && Number.isSafeInteger(d.pid) && d.pid > 0 ? d.pid : null,
+    target: isReleaseTag(d.target) ? d.target : null,
+  };
+}
+
+/** The verdict on a KILLED spawn. `A` releases the lease `idle` (the request stands, nothing started): it travels as
+ *  `not-queued`. `B` and `D` HOLD it (as `accepted`); the detail is what the row reads. */
+export type KilledSpawnVerdict = { arm: 'A' | 'B' | 'D'; detail: string };
+
+const stdoutHas = (stdout: string, prefix: string): boolean => stdout.split('\n').some((l) => l.startsWith(prefix));
+const clip = (s: string): string => s.slice(0, UPDATE_OP_DETAIL_MAX);
+
+/** D-3400 (amended), D-3413 — the arms, decided A, then B, then D, and only A ever releases:
+ *  A. `before` and `after` are both READABLE and byte-identical (or absent at both), and `stdout`, read to EOF, has
+ *     neither the WARN line nor the `detached` line. The parent was stopped before its `queued` write, which comes
+ *     before `systemd-run`, so nothing was queued or started.
+ *  B. `after` names the killed parent's own `pid` AND the lease's `tag`: it queued (the run may have started).
+ *  D. anything else: unreadable, a change that is not the parent's, the WARN or `detached` line, no EOF. A change that
+ *     is not the parent's cannot prove our unit never started (our own `queued` may be what was overwritten).
+ *  Every detail is one line within `UPDATE_OP_DETAIL_MAX`, and says what happened. */
+export function decideKilledSpawn(i: {
+  before: UpdateReportRead; after: UpdateReportRead; stdout: string | null; pid: number | null; tag: string;
+}): KilledSpawnVerdict {
+  const { before, after, stdout, pid, tag } = i;
+  const bound = `${UPDATE_SPAWN_TIMEOUT_MS} ms`;
+  const warned = stdout !== null && stdoutHas(stdout, UPDATE_PHASE_WARN_PREFIX);
+  const detached = stdout !== null && stdoutHas(stdout, UPDATE_DETACHED_PREFIX);
+  const unchanged =
+    (before.kind === 'absent' && after.kind === 'absent') ||
+    (before.kind === 'bytes' && after.kind === 'bytes' && before.text === after.text);
+  if (unchanged && stdout !== null && !warned && !detached) {
+    return { arm: 'A', detail: `the --detach parent was stopped at the ${bound} bound before it queued anything; nothing started` };
+  }
+  const written = after.kind === 'bytes' ? reportWriter(after.text) : null;
+  if (written !== null && pid !== null && written.pid === pid && written.target === tag) {
+    return { arm: 'B', detail: clip(`the --detach parent was stopped at the ${bound} bound after it queued ${tag} (pid ${pid}); the run may have started, lease held`) };
+  }
+  const seen: string[] = [];
+  if (before.kind === 'unreadable' && after.kind === 'unreadable') seen.push('update.json was unreadable before and after');
+  else if (before.kind === 'unreadable') seen.push('update.json was unreadable before the spawn');
+  else if (after.kind === 'unreadable') seen.push('update.json was unreadable after the stop');
+  // "Changed" is only a fact when the snapshot was readable: an unreadable before compares with nothing.
+  if (after.kind === 'bytes' && before.kind !== 'unreadable' && !unchanged) {
+    // The parent's OWN pid with another target is the parent's report for another move (arm B took our tag), never
+    // "not by the parent" — that sentence is for a pid that is not the parent's (or that could not be compared).
+    seen.push(written === null ? 'update.json changed to something unparseable'
+      : pid !== null && written.pid === pid
+        ? `update.json changed to the parent's report for another target (${written.target ?? 'none'})`
+        : `update.json changed, but not by the parent (pid ${written.pid ?? 'unknown'}, target ${written.target ?? 'none'})`);
+  }
+  if (after.kind === 'absent' && before.kind === 'bytes') seen.push('update.json was removed');
+  if (warned) seen.push('the parent printed the update.json WARN');
+  if (detached) seen.push("the parent printed 'detached'");
+  if (stdout === null) seen.push('its stdout did not reach EOF');
+  // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease, naming the move)
+  // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted. The head
+  // is short so an ordinary tag and pid fit whole; a reason that still cannot fit (the longest tag the ingress admits,
+  // twice) is cut only with `...`, never mid-token unmarked, and the count of those left out rides after it.
+  const head = 'stopped at the bound; ';
+  const tail = ` - it could not be attributed; lease for ${tag} held until the report or deadline`;
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - head.length - tail.length);
+  let taken = 0;
+  let text = '';
+  for (const reason of seen) {
+    const next = taken === 0 ? reason : `${text}, ${reason}`;
+    if (next.length + (taken + 1 < seen.length ? ` (+${seen.length - taken - 1} more)`.length : 0) > budget) break;
+    text = next;
+    taken += 1;
+  }
+  if (taken === 0) {
+    const more = seen.length > 1 ? ` (+${seen.length - 1} more)` : '';
+    text = `${seen[0]!.slice(0, Math.max(0, budget - more.length - 3))}...${more}`;
+  } else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
+  return { arm: 'D', detail: head + text + tail };
+}
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
  *  the ONE vocabulary both ends of this wire fold the op's boolean

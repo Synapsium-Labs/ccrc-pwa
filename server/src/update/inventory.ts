@@ -29,7 +29,7 @@
 // sweep's own clock.
 import path from 'node:path';
 import {
-  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
+  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
   type TagFileRead,
 } from '../../../shared/api.js';
@@ -52,13 +52,6 @@ import { openPoolReadDeadline, type PoolReadDeadline } from '../pools.js';
 export const NODE_FILE_CAP_BYTES = 65536;
 /** §8: "`reportedDetail` is cut to 200 printable-ASCII characters". */
 export const REPORT_DETAIL_MAX = 200;
-/** A seconds stamp names a whole second: `startedAt = s` covers
- *  [s*1000, s*1000 + 999] ms. The precedence below compares the LATEST instant
- *  the report's run could have started with the lease's ms stamp, so a run
- *  dispatched at s*1000 + 500 whose node wrote `startedAt = s` is the current
- *  run, not a previous one (D-3199). Skew between the
- *  two boxes' clocks beyond this second is not covered, and not claimed. */
-export const REPORT_TIME_RESOLUTION_MS = 1000;
 /** One node's seven reads, in total. Over the agent each read is three round
  *  trips (lstat, stat, read), all seven in parallel. */
 export const INVENTORY_BUDGET_MS = 10_000;
@@ -363,12 +356,6 @@ function sameReport(row: NodeRow, r: NodeReport): boolean {
     && row.reportedUpdatedAt === r.updatedAt && row.reportedDetail === r.detail;
 }
 
-/** The latest ms instant the report's run could have started (see
- *  REPORT_TIME_RESOLUTION_MS); NULL when the report carries no start. */
-function latestStartOf(r: NodeReport): number | null {
-  return r.startedAt === null ? null : r.startedAt + REPORT_TIME_RESOLUTION_MS - 1;
-}
-
 function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport): LeaseAction {
   if (row === null || !BUSY.has(row.updateState)) return { kind: 'none', why: 'not-busy' };
   // fix round 1, D-3214 (item 12): a report that names no start at all
@@ -377,12 +364,52 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
   // it never announced starting, whenever the row holds one (it does here,
   // BUSY having just been proven).
   if (r.startedAt === null) return { kind: 'none', why: 'stale-report' };
-  // PRECEDENCE (§8): a report whose run started before this lease belongs to
-  // a previous run and never moves it — the round-2 race, where a stale
-  // `done` released a lease acquired seconds earlier. The store's WHERE
-  // carries the same guard (Task 5); this plan never asks it to be tested.
-  const latest = latestStartOf(r)!;
-  if (row.updateStartedAt !== null && latest < row.updateStartedAt) return { kind: 'none', why: 'stale-report' };
+  // FRESHNESS IS CHANGE, NOT CLOCK (W4 review 155, C33, D-3405). A report's own
+  // `startedAt` is the NODE's clock, in whole seconds; `row.updateStartedAt`
+  // is the SERVER's clock, in ms, stamped at `dispatchNode`'s acquire — the
+  // two boxes' clocks are never ordered against each other here (the
+  // precedence this comment used to name, "a report whose run started
+  // before this lease belongs to a previous run", read a node a few seconds
+  // slow as perpetually reporting a previous run, so its lease never
+  // settled and the failed deadline halted the fleet). What makes a report
+  // belong to THIS lease is that it DIFFERS from the report the row already
+  // held — `sameReport`, in this function's one caller (`sweepPlanFor`),
+  // above — a report identical to the row's own is the previous run's
+  // leftover and never reaches here at all. The store's write carries the
+  // matching guard, by the lease's IDENTITY (`updateStartedAt` unchanged
+  // since this plan was read), never by comparing a timestamp.
+  //
+  // BUT CHANGE ALONE IS NOT ENOUGH (D-3405, fix round following C33, review of the
+  // window C33 opened): between `dispatchNode`'s acquire and THIS lease's
+  // own `queued` write — the op in transit over the fleet link, the
+  // `--detach` parent's lock probe, rollback's release-host probe — a sweep
+  // can read a PREVIOUS run's report that still DIFFERS from what the row
+  // held at acquire (a stale `installing`/`done` from a CLI run, or the
+  // UNKNOWN fold left by a prior unreadable sweep) and would settle a fresh
+  // lease — clearing the operator's request and freeing the lease while the
+  // node's real run is still proceeding — or halt it on a stale failure,
+  // before this lease's own run has written anything at all. IDENTITY closes
+  // that window: every report a DISPATCHED run writes carries the lease's
+  // OWN tag — `_upd_detach`'s queued, `cmd_update`'s --to/UPD_VERSION,
+  // `cmd_rollback` (itself `cmd_update --to`), the restore arms'
+  // restoring/reverted (which keep the PARENT's target throughout, never the
+  // restore child's own), the watchdog's own `_upd_phase` writes (which keep
+  // the report's own target) and the server-role local spawn (the same argv)
+  // — so a report naming a tag OTHER than `row.updateTarget` is provably
+  // another run's, whatever it says and however its own clock reads.
+  // The one writer that is NOT a dispatched run is the `cmd_rollback --from
+  // watchdog` the watchdog LAUNCHES: its reports name the PREVIOUS tag, never
+  // the lease's (D-3405 amended, review 175 F6). They read stale-report here,
+  // on purpose — a watchdog revert never writes `reverted`, and settling on
+  // its `done <prev>` would record a revert as a success — so the lease waits
+  // for the deadline, whose words then say the watchdog reverted the box
+  // (`deadlineDetail`, dispatch.ts; read at converge.ts's deadline step).
+  // What this cannot tell apart is a PREVIOUS run of the SAME tag: that can
+  // only spuriously settle a node already AT that tag (a no-op the next
+  // sweep's own stamp confirms) or spuriously halt (safe — the operator sees
+  // failed/reverted and acks).
+  // No column, no clock: the one field a report and a lease both carry.
+  if (row.updateTarget !== null && r.target !== row.updateTarget) return { kind: 'none', why: 'stale-report' };
   if (IN_FLIGHT.has(r.phase)) return { kind: 'none', why: 'in-flight' };
   switch (r.phase) {
     case 'done':
@@ -417,7 +444,7 @@ export function sweepPlanFor(row: NodeRow | null, m: NodeMeasurement): SweepPlan
   const r = m.report;
   if (r === null) return { lease: { kind: 'none', why: 'no-report' }, refuse: null };
   if (row !== null && sameReport(row, r)) return { lease: { kind: 'none', why: 'unchanged-report' }, refuse: null };
-  const refuse = r.phase === 'failed' && r.target !== null && r.detail !== null && r.detail.startsWith('provenance:')
+  const refuse = r.phase === 'failed' && r.target !== null && r.detail !== null && r.detail.startsWith(PROVENANCE_DETAIL_PREFIX)
     ? { tag: r.target, detail: r.detail }
     : null;
   return { lease: leaseActionFor(row, m, r), refuse };
@@ -428,8 +455,8 @@ export interface InventoryStore {
   upsertNodeMeasurement(m: NodeMeasurement): UpsertNodeResult;
   markUnreachable(label: string, role: NodeRole, at: number): MarkUnreachableResult;
   rekeyNode(label: string, nodeId: string): RekeyNodeResult;
-  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, reportStartedAt: number | null): ReleaseLeaseResult;
-  settleNode(nodeId: string, detail: string, reportStartedAt: number | null): SettleNodeResult;
+  releaseLease(nodeId: string, to: SettledUpdateState, detail: string, expectedStartedAt: number | null): ReleaseLeaseResult;
+  settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult;
   refuseRelease(nodeId: string, tag: string, at: number, detail: string): RefuseReleaseResult;
   node(nodeId: string): NodeRow | null;
   nodeByLabel(label: string): NodeRow | null;
@@ -583,12 +610,27 @@ function applyMeasurement(store: InventoryStore, measured: NodeMeasurement, unme
     const r = store.refuseRelease(m.nodeId, plan.refuse.tag, now, plan.refuse.detail);
     refused = r.ok && r.inserted;
   }
-  const latest = m.report === null ? null : latestStartOf(m.report);
+  // C33 (W4 review 155): the store's write re-checks the lease's IDENTITY,
+  // not the report's clock — `preRow.updateStartedAt`, read above before
+  // this sweep wrote anything, is what `dispatchNode` last stamped this
+  // row's lease with (the acquire's own ms clock value, not a unique lease
+  // id — a second dispatch in the same millisecond would stamp the same
+  // number, which the target check above, not this guard, is what tells
+  // apart). Passing it back is DEFENCE IN DEPTH: this whole function runs in
+  // one synchronous stretch from `preRow`'s read to the write below — the
+  // `node:sqlite` handle is synchronous and this process is single-threaded,
+  // and nothing between the two awaits (there IS no await between them) — so
+  // no other write to this row's `updateStartedAt` can land inside that
+  // stretch, and the guard cannot actually fire today. It stays because nothing
+  // enforces that invariant AT this call site if the function is ever split
+  // or an await is introduced between the read and the write; it is not
+  // protecting against a live race this build can produce.
+  const expectedStartedAt = preRow === null ? null : preRow.updateStartedAt;
   let lease: LeaseAction['kind'] = 'none';
   if (plan.lease.kind === 'settle') {
-    if (store.settleNode(m.nodeId, plan.lease.detail, latest).ok) lease = 'settle';
+    if (store.settleNode(m.nodeId, plan.lease.detail, expectedStartedAt).ok) lease = 'settle';
   } else if (plan.lease.kind === 'release') {
-    if (store.releaseLease(m.nodeId, plan.lease.to, plan.lease.detail, latest).ok) lease = 'release';
+    if (store.releaseLease(m.nodeId, plan.lease.to, plan.lease.detail, expectedStartedAt).ok) lease = 'release';
   }
   return { label, result: collision ? 'node-id-collision' : 'measured', nodeId: m.nodeId, lease, refused };
 }

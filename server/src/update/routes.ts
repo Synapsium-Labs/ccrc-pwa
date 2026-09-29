@@ -3,16 +3,25 @@ import type { Deps } from '../server.js';
 import type { FleetWatcher } from '../watch.js';
 import type { GateDecision } from '../auth/gate.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from '../coord/token.js';
-import { NODE_ID_RE, type NodeRow, type ReleaseRow, type SetIntentResult, type UpdateIntentPatch, type UpdateIntentRow } from '../coord/store.js';
+import {
+  NODE_ID_RE, type CoordStore, type NodeRow, type ReleaseRow, type RequestNodeResult, type SetIntentResult,
+  type UpdateIntentPatch, type UpdateIntentRow,
+} from '../coord/store.js';
 import { autoGateBlockers, isIngestibleReleaseTag, renderProjection, resolveNodeIntent } from './resolve.js';
 import {
   CATALOGUE_MAX_REQUESTS_PER_POLL, CATALOGUE_POLL_INTERVAL_MS, UNAUTHENTICATED_HOURLY_REQUEST_BUDGET,
 } from './catalogue.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
+import { dispatchViewsFor } from './converge.js';
 import {
-  isAutoMode, isNotifyMode, isUpdateChannel,
-  type AckAnswer, type CatalogueState, type IntentWriteAnswer, type NodeWire, type ReleaseWire,
+  DETACH_CAP, ROLLBACK_CAP, dispatchRefusalDetail, fleetGate, isHalting, moveRefusal, type DispatchNodeView, type FleetGate,
+} from './dispatch.js';
+import { UPDATE_OP } from '../../../shared/agent-protocol.js';
+import {
+  isAutoMode, isNotifyMode, isReleaseTag, isUpdateChannel, compareDispatchOrder, dispatchRank, SETTLED_UPDATE_STATES, UPDATE_GATE_CAP,
+  type AckAnswer, type CatalogueState, type DispatchRefusal, type IntentWriteAnswer, type MoveRequestAnswer,
+  type MoveSkip, type MoveSkipWhy, type NodeWire, type ReleaseWire, type RequestKind,
   type UpdateIntentWire, type UpdateRouteRefusal, type UpdatesView,
 } from '../../../shared/api.js';
 
@@ -24,13 +33,13 @@ import {
  * `renderProjection`'s. What is decided here is only HTTP: which refusal maps to
  * which status.
  *
- * THE CREDENTIALS. Four routes are session-only and carry NO box-token check at
+ * THE CREDENTIALS. Six routes are session-only and carry NO box-token check at
  * all (decision 15: the box token is one shared secret every fleet session
  * holds, so a box-token write would let any session on the box steer the
  * fleet's updates). They need no gate code: `installGate` fronts every route and
- * none of the four is named in `auth/gate.ts`'s EXEMPT table, so armed they sit
+ * none of the six is named in `auth/gate.ts`'s EXEMPT table, so armed they sit
  * behind the passkey and, being non-GET, the origin check; dark they are open,
- * as every route is (`gate.ts`'s unarmed-exposure note). The fifth, the
+ * as every route is (`gate.ts`'s unarmed-exposure note). The seventh, the
  * projection read, is EXEMPT-BUT-AUTHENTICATED in `GET /api/pools/epoch`'s exact
  * shape — session first, the box token as the fallback, and BEFORE
  * `not-configured` or `unknown-node`, so an anonymous caller learns nothing —
@@ -227,9 +236,285 @@ function parseAckBody(body: unknown): { ok: true; nodeId: string } | { ok: false
   return typeof nodeId === 'string' && nodeId !== '' ? { ok: true, nodeId } : { ok: false, field: 'nodeId' };
 }
 
+/** `POST /api/updates/apply`'s keys (design 2026-09-20 §12, update-management wave 5). */
+export const APPLY_BODY_KEYS = ['nodeId', 'all', 'tag'] as const;
+/** `POST /api/updates/rollback`'s keys (§12). */
+export const ROLLBACK_BODY_KEYS = ['nodeId', 'to'] as const;
+
+type TagField = { ok: true; tag: string | null } | { ok: false; error: 'bad-tag' | 'bad-request'; field: string };
+
+/** An OPTIONAL tag field through the one guard: absent → null; a string `isIngestibleReleaseTag` accepts → itself; any
+ *  other string → `bad-tag` (§12's own answer); anything else — `null` included, because absence is spelled by
+ *  leaving the key out — → `bad-request` naming the field. */
+function tagField(o: Record<string, unknown>, field: string): TagField {
+  if (!(field in o)) return { ok: true, tag: null };
+  const v = o[field];
+  if (typeof v !== 'string') return { ok: false, error: 'bad-request', field };
+  if (!isIngestibleReleaseTag(v)) return { ok: false, error: 'bad-tag', field };   // D-3216: the intent route's pin guard, one predicate
+  return { ok: true, tag: v };
+}
+
+export type ParsedApplyBody =
+  | { ok: true; target: { nodeId: string } | { all: true }; tag: string | null }
+  | { ok: false; error: 'bad-tag' | 'bad-request'; field: string };
+
+/** The apply body: EXACTLY ONE of `nodeId` (a non-empty string) and `all` (`true`, and nothing truthy in its
+ *  place) names what moves — both is ambiguous and names the extra key, `all`; neither names `nodeId`. An
+ *  unknown key is `bad-request` naming it, the `parseIntentBody` rule. */
+export function parseApplyBody(body: unknown): ParsedApplyBody {
+  const bad = (field: string): ParsedApplyBody => ({ ok: false, error: 'bad-request', field });
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return bad('body');
+  const o = body as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (!(APPLY_BODY_KEYS as readonly string[]).includes(k)) return bad(k);
+  }
+  const hasNode = 'nodeId' in o;
+  const hasAll = 'all' in o;
+  if (hasNode === hasAll) return bad(hasNode ? 'all' : 'nodeId');
+  let target: { nodeId: string } | { all: true };
+  if (hasAll) {
+    if (o.all !== true) return bad('all');
+    target = { all: true };
+  } else {
+    const nodeId = o.nodeId;
+    if (typeof nodeId !== 'string' || nodeId === '') return bad('nodeId');
+    target = { nodeId };
+  }
+  const tag = tagField(o, 'tag');
+  if (!tag.ok) return tag;
+  return { ok: true, target, tag: tag.tag };
+}
+
+export type ParsedRollbackBody =
+  | { ok: true; nodeId: string; to: string | null }
+  | { ok: false; error: 'bad-tag' | 'bad-request'; field: string };
+
+/** The rollback body: a `nodeId`, and an optional `to` through the one guard. */
+export function parseRollbackBody(body: unknown): ParsedRollbackBody {
+  const bad = (field: string): ParsedRollbackBody => ({ ok: false, error: 'bad-request', field });
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return bad('body');
+  const o = body as Record<string, unknown>;
+  for (const k of Object.keys(o)) {
+    if (!(ROLLBACK_BODY_KEYS as readonly string[]).includes(k)) return bad(k);
+  }
+  const nodeId = o.nodeId;
+  if (typeof nodeId !== 'string' || nodeId === '') return bad('nodeId');
+  const to = tagField(o, 'to');
+  if (!to.ok) return to;
+  return { ok: true, nodeId, to: to.tag };
+}
+
+/** A column that should hold a tag, read through the one guard — a value off the shape names no move. */
+const tagOrNull = (v: string | null): string | null => (isReleaseTag(v) ? v : null);
+
+/** The fleet's halt SET ASIDE: `{all: true}` asks each node only the per-node question — would the dispatcher
+ *  refuse THIS node this move whatever the rest of the fleet is doing. The halt itself is the dispatcher's to
+ *  enforce at dispatch time, and a request written while the fleet is halted waits for the `ack`. */
+const NO_HALT: FleetGate = { haltedBy: [], leaseHeldBy: null };
+
+type MoveRouteWord = Exclude<DispatchRefusal, 'no-update-gate' | 'waiting-for-fleet'>;
+
+/** A dispatcher refusal as a route word. `moveRefusal` never answers `no-update-gate` for an operator request
+ *  (that is auto's), and `waiting-for-fleet` is `planDispatch`'s, never `moveRefusal`'s — so either one here
+ *  means the dispatcher's contract changed, and it is thrown (a 500 naming it), never folded into another word. */
+function routeWord(r: DispatchRefusal): MoveRouteWord {
+  if (r === 'no-update-gate' || r === 'waiting-for-fleet') {
+    throw new Error(`update: moveRefusal answered ${r} for an operator request — the dispatcher's contract changed`);
+  }
+  return r;
+}
+
+/** The same, for `{all: true}`'s skip list: under `NO_HALT` an update move is never `halted`, never asked for
+ *  the rollback cap, and never auto's `no-update-gate`. */
+function skipWord(r: DispatchRefusal): MoveSkipWhy {
+  if (r === 'halted' || r === 'no-update-gate' || r === 'no-rollback-cap' || r === 'waiting-for-fleet') {
+    throw new Error(`update: moveRefusal answered ${r} for an unhalted update request — the dispatcher's contract changed`);
+  }
+  return r;
+}
+
+type SkipSentence = (view: DispatchNodeView, target: string) => string;
+/** `{all: true}`'s note for a node it did NOT request, in the PAST tense (spec §12 keeps it on the row through
+ *  `updateDetail`). `dispatchRefusalDetail`'s sentences are the dispatcher's, in the present tense — "waits", "has no
+ *  detach" — and are re-planned and rewritten every run while the condition holds; this note is written ONCE, at the
+ *  request, and nothing clears it, so a present-tense sentence would go on claiming a state the node has left. Each
+ *  says what was measured when the request was made. One Record over the words `moveRefusal` can answer, spelled
+ *  from the dispatcher's own vocabulary (`DETACH_CAP`, `ROLLBACK_CAP`, `UPDATE_GATE_CAP`, `UPDATE_OP`), so a word
+ *  added to `DISPATCH_REFUSALS` without its sentence is a compile error here, as it is in `REFUSAL_SENTENCE`. */
+const SKIP_SENTENCE: Record<DispatchRefusal, SkipSentence> = {
+  'unknown-tag': (v, t) => `${t} was not a release ${v.row.label} could be moved to (no eligible catalogue row for it)`,
+  'not-newer': (v, t) => `${t} was not newer than ${v.row.label}'s ${v.row.currentVersion ?? 'version'}`,
+  'refused-by-node': (v, t) => `${v.row.label} had refused ${t} on a provenance verdict`,
+  'stamp-unread': (v) => `${v.row.label}'s build stamp read ${v.row.stampRead}, so its version was unknown`,
+  'floor-unread': (v) => `${v.row.label}'s floor had not been measured`,
+  'no-detach-cap': (v) => `${v.row.label}'s ccrc-caps had no ${DETACH_CAP}`,
+  'no-update-gate': (v) => `${v.row.label}'s ccrc-caps had no ${UPDATE_GATE_CAP}`,
+  'no-rollback-cap': (v) => `${v.row.label}'s ccrc-caps had no ${ROLLBACK_CAP}`,
+  'agent-predates-update-op': (v) => `${v.row.label}'s agent did not advertise the ${UPDATE_OP} op`,
+  halted: (v, t) => `a failed or reverted node was halting every move, so ${v.row.label} was not asked for ${t}`,
+  'waiting-for-fleet': (v, t) => `a fleet node was holding a request, so ${v.row.label} was not asked for ${t}`,
+};
+
+/** `not requested: ${word} — ${what was measured}`. The one builder of a `{all: true}` skip note. */
+function skipDetail(refusal: DispatchRefusal, view: DispatchNodeView, target: string): string {
+  return `not requested: ${refusal} — ${SKIP_SENTENCE[refusal](view, target)}`;
+}
+
+type SingleMove =
+  | { ok: true; target: string }
+  | { ok: false; code: number; body: Omit<UpdateRouteRefusal, 'ok'> };
+
+/**
+ * THE SINGLE-NODE PREDICATE a move route answers with (spec §12: "the route evaluates the dispatcher's own
+ * predicates synchronously … and answers the 409 the dispatcher would"). In order: the row (404, 409
+ * superseded); the target — the named tag, else the resolved `desiredTag` for an update (409 no-desired, with
+ * the resolver's sentence) or the measured `previousVersion` for a rollback (409 no-previous: never fetched);
+ * the node's OWN lease (409 busy, D-3386 — another node's lease is a turn, not a
+ * refusal); then `moveRefusal` over the views the dispatcher itself plans from (`dispatchViewsFor`), with the
+ * catalogue through `resolveInputFor` — W2's one mapping of the releases table — so a route 409 and the
+ * dispatcher's refusal are one function's answer, never two copies of it. `halted` names the halting rows;
+ * every other word carries the dispatcher's own sentence.
+ */
+function singleNodeMove(coord: CoordStore, nodeId: string, kind: RequestKind, named: string | null): SingleMove {
+  const row = coord.node(nodeId);
+  if (row === null) return { ok: false, code: 404, body: { error: 'unknown-node' } };
+  if (row.supersededBy !== null) return { ok: false, code: 409, body: { error: 'superseded', detail: row.supersededBy } };
+  const target = named ?? tagOrNull(kind === 'rollback' ? row.previousVersion : row.desiredTag);
+  if (target === null) {
+    if (kind === 'rollback') return { ok: false, code: 409, body: { error: 'no-previous', ...(row.previousRead === 'unmeasured' ? { detail: 'the previous release has not been measured yet — name one with to' } : {}) } };   // D-3495 (D-3213: NULL is "none" only when previousRead is absent)
+    return {
+      ok: false, code: 409,
+      body: row.resolveDetail === null ? { error: 'no-desired' } : { error: 'no-desired', detail: row.resolveDetail },
+    };
+  }
+  if (!(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
+    return { ok: false, code: 409, body: { error: 'busy', detail: row.updateState } };
+  }
+  const views = dispatchViewsFor(coord);
+  const view = views.find((v) => v.row.nodeId === nodeId);
+  if (view === undefined) return { ok: false, code: 404, body: { error: 'unknown-node' } };
+  const gate = fleetGate(views.map((v) => v.row));
+  const refusal = moveRefusal(view, { kind, target, source: 'request' }, resolveInputFor(coord, row).releases, gate);
+  if (refusal === null) return { ok: true, target };
+  const error = routeWord(refusal);
+  const detail = error === 'halted' ? gate.haltedBy.join(', ') : dispatchRefusalDetail(error, view, target);
+  return { ok: false, code: 409, body: { error, detail } };
+}
+
+/** `requestNode`'s refusals as HTTP. Every arm is unreachable past `singleNodeMove` in the same synchronous
+ *  stretch, and each is mapped anyway, so a store that learns a refusal answers its word rather than a 500. */
+function requestRefusal(r: Exclude<RequestNodeResult, { ok: true }>, tagKey: 'tag' | 'to'): { code: number; body: Omit<UpdateRouteRefusal, 'ok'> } {
+  switch (r.why) {
+    case 'unknown-node': return { code: 404, body: { error: 'unknown-node' } };
+    case 'superseded': return { code: 409, body: { error: 'superseded', detail: r.supersededBy } };
+    case 'bad-tag': return { code: 400, body: { error: 'bad-tag', field: tagKey } };
+    case 'bad-kind': return { code: 400, body: { error: 'bad-request', field: 'kind' } };
+  }
+}
+
+/**
+ * `{all: true}` — every live node, in DISPATCH order (`compareDispatchOrder`, fleet first), so `requested`
+ * reads in the order the dispatcher will move them. A request is written only for a node the move can take
+ * FORWARD: with no tag named and no `desiredTag`, it is skipped `no-desired`; a node whose OWN lease is already
+ * busy is skipped `busy` BEFORE `moveRefusal` is even asked (D-3406) — `settleNode` clears a row's request
+ * unconditionally the moment that running move settles, so a request written here would be erased under the
+ * operator's own newer tap, and the single-node route already answers `409 busy` for the same row rather than
+ * writing a doomed request; otherwise it is skipped with the dispatcher's own refusal of that node, the fleet's
+ * halt set aside (`NO_HALT`) — `not-newer`, `stamp-unread` (D-3385), `floor-unread` (a floor never measured, W2
+ * D-3213), or a word the node cannot outgrow by waiting, `no-detach-cap` and the rest (D-3401: a request the
+ * dispatcher can only refuse stands until `ack`, and on a fleet row it would hold every server move behind it,
+ * D-3381). Always 202 (§12).
+ *
+ * A ROW THAT IS ITSELF HALTING IS SKIPPED FIRST (D-3408): `isHalting(row)` — a `failed`/
+ * `reverted` row that is not a provenance verdict — is checked BEFORE `moveRefusal`, `why: 'halted'`, with no
+ * request and no note written. The only door out of a halt is `ack`, and `ackNode` clears the request columns
+ * in the same transaction — a request written onto a halting row here would be silently erased by that same
+ * `ack`, exactly the hazard D-3406 already names for a busy row's own lease. Its `updateDetail` is already the
+ * verdict `isHalting` reads, so nothing is noted either. A halt caused by ANOTHER row is a different thing
+ * entirely — the fleet's halt is enforced at dispatch time, not here (`NO_HALT` is passed to `moveRefusal` on
+ * purpose), so a row that is not itself halting still gets its request even while the fleet is halted by some
+ * other row.
+ *
+ * THE SERVER NEVER MOVES AHEAD OF A SKIPPED FLEET ROW (D-3408): while ANY live fleet-role row
+ * (`dispatchRank(row.role) === 0`) was skipped in this same call for its OWN lease (`busy`) or its OWN halt
+ * (`halted`) — never for a capability word or `not-newer`, which do not block the row's peers — every row whose
+ * rank is not fleet's is skipped `waiting-for-fleet` instead of being asked anything else, with no request and
+ * no note. `compareDispatchOrder` sorts fleet rows first, so this is decided as the loop reaches them: without
+ * it, a request written on the server in the same breath as a skipped fleet row would move the server AHEAD of
+ * the fleet node the operator's tap could not reach, inverting the fleet-first order D-3381 already holds for a
+ * halt caused by another row.
+ *
+ * A SKIP IS SAID ON THE ROW, not only in the reply (§12: "reports per-node refusals through `updateDetail`").
+ * A skipped node gets no request, so `planDispatch` never considers it and the dispatcher's own note never
+ * reaches it — the route notes the refusal itself, through the dispatcher's writer and its own PAST-tense
+ * sentence (`noteDispatchRefusal`, `skipDetail`): the note is written once and nothing clears it, so it says what was
+ * measured when the request was made, never a state the node may since have left. That writer answers `not-idle` for a `failed`/`reverted`/
+ * busy row (a verdict or a lease keeps its detail) and `changed: false` for a repeated text. `not-newer` is not
+ * noted: that node was not refused a capability — it already runs the tag or a newer one, or it was rolled back
+ * below a floor at or above the tag (D-3403) — and its row already reads what it runs
+ * and its floor; the 202's `skipped` says it. A `busy` skip is likewise never noted: `noteDispatchRefusal`
+ * refuses a busy row anyway (D-3375), and the row's own lease detail already says what it is doing. Neither is
+ * `halted` or `waiting-for-fleet` (above): the first's detail is already the verdict, and the second names no
+ * refusal of the row at all.
+ */
+function requestAll(coord: CoordStore, tag: string | null, now: number): MoveRequestAnswer {
+  const requested: string[] = [];
+  const skipped: MoveSkip[] = [];
+  const views = new Map(dispatchViewsFor(coord).map((v) => [v.row.nodeId, v] as const));
+  // Set once any live fleet-role row is skipped THIS call for its own lease or its own halt — read only for a
+  // rank!=0 row, and only fleet rows (sorted first by compareDispatchOrder) ever set it.
+  let fleetSelfSkipped = false;
+  for (const row of [...coord.nodes()].sort(compareDispatchOrder)) {
+    const view = views.get(row.nodeId);
+    if (view === undefined) {
+      throw new Error(`update: live node ${row.nodeId} has no dispatch view in the same synchronous read`);
+    }
+    const isFleetRow = dispatchRank(row.role) === 0;
+    if (isHalting(row)) {
+      skipped.push({ nodeId: row.nodeId, why: 'halted' });
+      if (isFleetRow) fleetSelfSkipped = true;
+      continue;
+    }
+    if (!isFleetRow && fleetSelfSkipped) {
+      skipped.push({ nodeId: row.nodeId, why: 'waiting-for-fleet' });
+      continue;
+    }
+    const target = tag ?? tagOrNull(row.desiredTag);
+    if (target === null) {
+      skipped.push({ nodeId: row.nodeId, why: 'no-desired' });
+      continue;
+    }
+    // D-3406: this row's OWN lease, checked BEFORE moveRefusal — a request written beside it is erased,
+    // unconditionally, the instant that running move settles (`settleNode`), so it is never written.
+    if (!(SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
+      skipped.push({ nodeId: row.nodeId, why: 'busy' });
+      if (isFleetRow) fleetSelfSkipped = true;
+      continue;
+    }
+    const refusal = moveRefusal(view, { kind: 'update', target, source: 'request' }, resolveInputFor(coord, row).releases, NO_HALT);
+    if (refusal !== null) {
+      const why = skipWord(refusal);
+      skipped.push({ nodeId: row.nodeId, why });
+      if (why !== 'not-newer') {
+        const noted = coord.noteDispatchRefusal(row.nodeId, skipDetail(refusal, view, target));
+        if (!noted.ok && noted.why !== 'not-idle') {
+          throw new Error(`update: noteDispatchRefusal refused live node ${row.nodeId} (${noted.why}) in the same synchronous read`);
+        }
+      }
+      continue;
+    }
+    const written = coord.requestNode(row.nodeId, target, 'update', now);
+    if (!written.ok) {
+      throw new Error(`update: requestNode refused live node ${row.nodeId} (${written.why}) in the same synchronous read`);
+    }
+    requested.push(row.nodeId);
+  }
+  return { ok: true, requested, skipped };
+}
+
 export function registerUpdateRoutes(
   app: FastifyInstance, deps: Deps,
-  /** `buildServer`'s `sessionAuth` — read by the projection read alone; the four
+  /** `buildServer`'s `sessionAuth` — read by the projection read alone; the six
    *  session-only routes leave the session to the gate. */
   sessionAuth: (req: FastifyRequest) => GateDecision,
   watcher?: FleetWatcher,
@@ -347,6 +632,9 @@ export function registerUpdateRoutes(
       return refuse(reply, code, body);
     }
     await reproject(req);
+    // A request is not the only write that makes a node dispatchable: an `auto` write does
+    // too, once the resolution above has stored its `desiredTag` (spec §10's triggers).
+    watcher?.triggerDispatch();
     // The epoch RE-MEASURED after the write, the `POST /api/pools/accounts/:id`
     // idiom: the answer reports the store, not the write's own return value.
     const answer: IntentWriteAnswer = { ok: true, intent: toIntentWire(written.row), epoch: deps.coord.updateEpoch().epoch };
@@ -411,6 +699,65 @@ export function registerUpdateRoutes(
     if (row === null) return refuse(reply, 404, { error: 'unknown-node' });
     const answer: AckAnswer = { ok: true, node: toNodeWire(row) };
     return answer;
+  });
+
+  /**
+   * THE ONE-TAP (spec §12, update-management wave 5). A REQUEST, not a dispatch: the request columns are
+   * written (`requestNode`), and the dispatcher is asked to run in the same turn. When no run is in flight,
+   * `triggerDispatch()` starts one synchronously and it acquires the lease before its first await (Task 5), so a
+   * node the dispatcher can move already reads `pending` when this reply is read; when a run IS in flight,
+   * `dispatchNow` JOINS it and the one follow-up runs only after it settles (up to the ~30 s op deadline), so the
+   * node may still read `idle` with its request standing when the reply is read. The result is learned by
+   * re-measurement (the inventory sweep), never from this answer. Session-only: no box-token check at all,
+   * not in EXEMPT (decision 15). A single named node answers the dispatcher's own 409 synchronously
+   * (`singleNodeMove`); `{all: true}` always answers 202, with what it skipped and why, each refusal also
+   * noted on its node's row (`requestAll`).
+   */
+  app.post('/api/updates/apply', async (req, reply) => {
+    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    const parsed = parseApplyBody(req.body);
+    if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
+    const now = Date.now();
+    if ('all' in parsed.target) {
+      const all = requestAll(deps.coord, parsed.tag, now);
+      if (all.requested.length > 0) watcher?.triggerDispatch();
+      return reply.code(202).send(all);
+    }
+    const { nodeId } = parsed.target;
+    const move = singleNodeMove(deps.coord, nodeId, 'update', parsed.tag);
+    if (!move.ok) return refuse(reply, move.code, move.body);
+    const written = deps.coord.requestNode(nodeId, move.target, 'update', now);
+    if (!written.ok) {
+      const { code, body } = requestRefusal(written, 'tag');
+      return refuse(reply, code, body);
+    }
+    watcher?.triggerDispatch();
+    const answer: MoveRequestAnswer = { ok: true, requested: [nodeId], skipped: [] };
+    return reply.code(202).send(answer);
+  });
+
+  /**
+   * MOVING DOWN is its own verb (decision 8): an explicit request, never a resolver outcome — which is why the
+   * store's lease acquire for a rollback also requires this request (D-3376).
+   * `to` defaults to the MEASURED `previousVersion` (409 no-previous when there is none — never fetched), and
+   * must be a releases row (yanked permitted) this node has not refused, so a forged or mistyped body cannot
+   * send a node fetching an arbitrary tag (§12). The same single-node predicate as apply, so it also answers
+   * the op's own words, `no-detach-cap` and `agent-predates-update-op` (D-3387).
+   */
+  app.post('/api/updates/rollback', async (req, reply) => {
+    if (!deps.coord) return refuse(reply, 501, { error: 'not-configured' });
+    const parsed = parseRollbackBody(req.body);
+    if (!parsed.ok) return refuse(reply, 400, { error: parsed.error, field: parsed.field });
+    const move = singleNodeMove(deps.coord, parsed.nodeId, 'rollback', parsed.to);
+    if (!move.ok) return refuse(reply, move.code, move.body);
+    const written = deps.coord.requestNode(parsed.nodeId, move.target, 'rollback', Date.now());
+    if (!written.ok) {
+      const { code, body } = requestRefusal(written, 'to');
+      return refuse(reply, code, body);
+    }
+    watcher?.triggerDispatch();
+    const answer: MoveRequestAnswer = { ok: true, requested: [parsed.nodeId], skipped: [] };
+    return reply.code(202).send(answer);
   });
 
   /**

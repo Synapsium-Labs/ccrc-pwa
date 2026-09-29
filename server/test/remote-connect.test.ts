@@ -41,14 +41,15 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: []`, not absent: a REAL W2 agent sends no `ops` (the field is
-    // W4's), and the client records "ready arrived, no op named" — `[]` — which
-    // is not local mode's `undefined`. When W4's agent starts advertising
-    // `['update']`, this literal is the line that must move with it.
+    // `agentOps: ['update']`: the REAL agent advertises the one op it answers
+    // beyond the closed set (design 2026-09-20 §10, programme wave 5 Task 2),
+    // read through `readReadyOps`. This literal read `[]` while the agent sent
+    // no `ops`; a ready frame that stops sending the word reds HERE — §18 "an
+    // agent without the op is never sent it", on the agent's side.
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: [],
+        agentOps: ['update'],
       }),
       { timeout: 3000 });
   });
