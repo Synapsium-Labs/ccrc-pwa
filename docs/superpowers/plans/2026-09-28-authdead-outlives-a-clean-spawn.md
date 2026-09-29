@@ -30,8 +30,8 @@ socket against a mock that answers 401 to everything):
 - Every Anthropic lane on this fleet authenticates with a setup token from its roster `exec.secretsFile`
   (`.cc-secrets/<id>-oauth.env`); the upstream wrapper sources `.cc-secrets/<upstream>-oauth.env`, as the
   probe does (`ccd/ccd-account-health:87`). `.credentials.json` in a lane's config dir is rewritten often
-  without a re-login (12 of 17 in five days, cause not measured), so it is the source only for a lane the
-  roster gives no secrets file.
+  without a re-login (12 of 17 in five days, cause not measured; round 1 measured 7 of 17 with a ctime
+  0-3 h old), so it is never a credential source: a lane the roster gives no secrets file is unnameable.
 
 ## Task 1: the marker stands until the account's credential changes
 
@@ -52,9 +52,9 @@ Design:
    absolute path or answers rc 1 (unnameable):
    - `_ccrc_secrets_file` defined and answering a path → `$HOME/<path>`;
    - `<w>` is `$CCRC_UPSTREAM` → `$HOME/.cc-secrets/<w>-oauth.env`;
-   - `_ccrc_secrets_file` defined and answering nothing, on a lane that speaks Claude Code's own protocol
-     (`_is_anthropic_backend`) → `$(_cfg_dir <w>)/.credentials.json`;
-   - otherwise (an old `accounts.sh` with no such function) → unnameable.
+   - otherwise → unnameable: a lane whose roster declares no secrets file (a login lane, an external lane),
+     and every lane but the upstream under an old `accounts.sh` with no such function. Never a config
+     dir's `.credentials.json` (round 1, below).
    The candidate must be a regular file and not a symlink (`[[ -f && ! -L ]]`). It is `stat`ed, NEVER
    opened (it holds a secret). Never glob `.cc-secrets/<id>-*`: ids prefix one another on this fleet.
 2. **`_plat_ctime`** in ccd's `_plat_*` block (Darwin `stat -f %c`, else `stat -c %Z`) — and in `ccd/ccrc`'s
@@ -68,7 +68,7 @@ Design:
 5. **The rc-0 arm** keeps `rm -f "$REG/$id.stopped"` and clears the marker only when
    `_authdead_cred_changed` answers 0 or 2. Answer 1 (the credential predates the verdict) keeps it: the
    TUI came up on the same credential that was measured dead. Answer 2 keeps today's rule for a lane ccd
-   cannot see (external lanes; a claude.ai login held in a macOS Keychain; an old `accounts.sh`).
+   cannot see (any lane that declares no secrets file — login lanes, external lanes; an old `accounts.sh`).
 6. **The rescue writer** skips its write when the source is nameable and its ctime ≥ the pane's
    `_pane_born`: the dying process read an older credential than the file now holds.
 7. **Line budget.** `ccd/ccd` line numbers are cited (README anchors, the S6-R11 corpus; highest cited
@@ -79,12 +79,8 @@ Design:
 
 **Found implementing (corrections to the design above, same commit):**
 
-- Item 1's third arm needed a backend gate. As first written, an EXTERNAL lane with no `secretsFile`
-  (the fleet's Codex lanes) would be judged by its config dir's `.credentials.json` — and that file exists in all
-  17 config dirs on the fleet box (measured by the investigation), so the lanes item 5 calls "a lane ccd
-  cannot see" would have been nameable by a file that is not their credential, and a stale one would have
-  kept their marker through every clean spawn. The arm now also requires `_is_anthropic_backend`, so an
-  external lane is unnameable and keeps the old rc-0 clear, as item 5 says.
+- Item 1's third arm (a config dir's `.credentials.json`) first needed a backend gate, so an external lane
+  would not be judged by it; round 1 then dropped the arm entirely (below), which subsumes the gate.
 - Item 7 held without the S6-R11 procedure: every edit above `ccd/ccd:21428` is line-neutral (`wc -l`
   unchanged at 23587 until the new functions were appended after the last cited line), `ccd/ccrc`'s edit
   is line-neutral too, and `session-hook.test.ts`'s census stayed green unchanged.
@@ -98,6 +94,29 @@ Design:
   is bytes off disk, bash reads a leading `0` as octal, and a 25-digit field wraps (measured) — each is
   pinned by a test and a mutation.
 
+**Round 1 (harm-lens review; the orchestrator's rulings, same fix commit):**
+
+- **The `.credentials.json` arm is dropped.** On a lane that declares no secrets file, that file changes
+  for reasons other than a re-login (7 of 17 config dirs had a ctime 0-3 h old, cause unmeasured), so a
+  change between a pane's birth and its 401 made the rescue skip its marker, and any marker written
+  expired at the next change: D-3522's loop, back. Such a lane is now unnameable — the rescue writes its
+  marker as D-3522 did, rc 0 keeps §A.6's clear, and nothing expires on read. Live exposure was none
+  (every generated lane on the fleet box declares a secrets file), but `ccrc account add --method login`
+  writes exactly this shape.
+- **API-key lanes keep the rule; the prose is corrected.** An OpenRouter or compatible lane's secrets file
+  is `.cc-secrets/<id>-<provider>.env`, and `ccd-account-health` sources only `<id>-oauth.env`, so it
+  refuses the lane and never clears its marker. Kept on purpose: an API-key 401 is an invalid key, and a
+  new key file is what ends it (or an operator `rm`). The CARRIED text below had said the probe covers
+  every Linux lane; it now names what the probe covers and what clears a marker elsewhere.
+- **`_authdead`'s expiry re-reads before it removes.** Deciding forks for the source and for `stat`
+  (~7 ms, measured by the review at load ~37); the probe or a rescue can rename a fresh verdict in
+  meanwhile, and a remove by path deleted it and answered "not dead". The marker's first field is now
+  read again (a builtin, behind the same `-f`/`! -L` rungs) and the file is removed only while it still
+  carries the judged epoch; otherwise the answer is "dead" for that decision. The window left is the one
+  between that read and `rm`'s unlink — one fork and exec wide — and is stated in the code.
+  `_authdead_clear_on_spawn`'s rc-0 remove is unchanged: it keeps the window base's unconditional rc-0
+  `rm` always had.
+
 - [x] Red: the tests below, each measured red before the fix.
 - [x] Green: design items 1–6.
 - [ ] Re-stamp `ccd/ccd` (`shared/mark.mjs` `markGenerated`); re-measure the citation census; mutation
@@ -109,8 +128,13 @@ Tests (red first):
 - a clean spawn clears it when the credential changed after the verdict (marker epoch far in the past);
 - a lane with no nameable credential keeps today's rule (the existing "a successful spawn … clears"
   case, retitled — its premise is now a fallback, not evidence);
-- a lane with no `secretsFile` is judged by its config dir's `.credentials.json`; the upstream by
-  `.cc-secrets/<upstream>-oauth.env`; an old `accounts.sh` with no `_ccrc_secrets_file` is unnameable;
+- a lane with no `secretsFile` is unnameable (round 1): a `.credentials.json` rewritten after the verdict
+  expires nothing, rc 0 clears, and a rescue marks even when that file changed after the pane was born;
+  the upstream is judged by `.cc-secrets/<upstream>-oauth.env`; an old `accounts.sh` with no
+  `_ccrc_secrets_file` is unnameable;
+- an API-key lane's marker survives rc 0 and expires when its key file is rewritten (round 1);
+- a fresh verdict renamed in while `_authdead` judges the old one survives, and the account reads dead
+  (round 1, a `_plat_ctime` seam that renames it in); control: the same seam with no rename expires;
 - a re-login expires the marker at the next read, with no spawn (`_swap_target` returns home and the
   marker is gone) — red today; and its control (credential older than the verdict: home still refused);
 - `_ws_least_loaded`'s condemned tier sees the same expiry;
@@ -132,16 +156,25 @@ Tests (red first):
   so `_spawn_settle` rc 0 wiped the marker D-3522's rescue had just written, and the home-recovered arm sent
   the rescued session back: one bounce per wipe, per rescued session. What shipped: the evidence is now the
   credential itself. A marker expires — at `_spawn_settle` rc 0 and at every ccd read — once the account's
-  credential file (roster `exec.secretsFile` through a generated `_ccrc_secrets_file`, the upstream's
-  `<id>-oauth.env`, else — for a lane that speaks Claude Code's own protocol — the config dir's
-  `.credentials.json`) has a ctime at or after the marker's epoch;
-  a clean spawn on an unchanged credential keeps it; a lane whose credential ccd cannot name keeps §A.6's
-  rc-0 clear. The rescue writes no marker when the credential changed after the dying process started.
-  The owners become: the probe (writes on 401, clears on a live answer), the rescue (writes), a credential
-  change (expires), rc 0 on a lane ccd cannot see (clears), and an operator `rm`. CARRIED, not fixed: an
-  account revived with no local trace (a transient API-side 401, an account re-enabled server-side) keeps
-  its marker until the probe's next live answer (Linux) or an operator `rm` (macOS, which has no probe);
-  the account stays eligible at rank 101 and flagged in the PWA meanwhile. A proof-by-reply clear (a real
-  assistant row from a process holding the current credential) would close that and is not built. The
-  keepalive's and the server's readers of the marker do not expire it; they converge when a ccd reader
-  removes the file.
+  credential file (roster `exec.secretsFile` through a generated `_ccrc_secrets_file`, else the upstream's
+  `<id>-oauth.env`) has a ctime at or after the marker's epoch; a clean spawn on an unchanged credential
+  keeps it; a lane whose credential ccd cannot name — any lane that declares no secrets file (a login
+  lane, an external lane; a config dir's `.credentials.json` is never read, because it changes without a
+  re-login), and every lane but the upstream under an older `accounts.sh` — keeps §A.6's rc-0 clear.
+  The rescue writes no marker when the named file changed after the dying process started. The owners
+  become: the probe (writes on 401, clears on a live answer), the rescue (writes), a credential change
+  (expires), rc 0 on a lane ccd cannot name (clears), and an operator `rm`. WHAT THE PROBE COVERS:
+  `ccd-account-health` runs where its systemd timer runs (Linux, any role but `server`; never macOS),
+  over roster accounts with `telemetry: "anthropic"`, sourcing only `.cc-secrets/<id>-oauth.env` — so it
+  measures setup-token lanes and the upstream, and refuses API-key lanes (`<id>-<provider>.env`) and login
+  lanes. On a lane ccd names but the probe cannot measure (an API-key lane anywhere, any lane on macOS) a
+  marker stands until that file is rewritten or an operator `rm` — for an API key, whose 401 means an
+  invalid key, that is the intended owner; on a lane ccd cannot name, until the next rc-0 spawn or an
+  `rm`. CARRIED, not fixed: a probed account revived with no local trace (a transient API-side 401, an
+  account re-enabled server-side) keeps its marker until the probe's next live answer, and a nameable
+  unprobed one until its file changes or an `rm`; the account stays eligible at rank 101 and flagged in
+  the PWA meanwhile. A proof-by-reply clear (a real assistant row from a process holding the current
+  credential) would close that and is not built. `_authdead`'s expiry removes the marker only while it
+  still carries the judged epoch; a rename landing between that re-read and `rm`'s unlink is still
+  deleted. The keepalive's and the server's readers of the marker do not expire it; they converge when a
+  ccd reader removes the file.

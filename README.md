@@ -1483,13 +1483,17 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   Claude Code 2.1.280 shows its prompt on a dead OAuth token, so the old rc-0 clear wiped a rescue's
   fresh marker and the home arm sent the session back into the 401. The account's credential FILE
   decides instead — the roster's `exec.secretsFile` (projected into `accounts.sh` as
-  `_ccrc_secrets_file`), else the upstream's `.cc-secrets/<id>-oauth.env`, else the config dir's
-  `.credentials.json` for an Anthropic lane that declares none. Once its ctime is at or after the
-  marker's epoch, any ccd reader expires the marker, so a re-login revives the account at the next
-  placement or home decision with no spawn. A clean spawn clears the marker only then, or on a lane
-  whose credential ccd cannot name (an external lane, a Keychain login, an older `accounts.sh`); a
-  rescue writes none when the file changed after the pane was born. An account revived with no local
-  trace (a transient 401) keeps its marker until the probe's next live answer or an operator `rm`.
+  `_ccrc_secrets_file`), else the upstream's `.cc-secrets/<id>-oauth.env`. Once its ctime is at or
+  after the marker's epoch, any ccd reader expires the marker, so a re-login revives the account at
+  the next placement or home decision with no spawn. A clean spawn clears the marker only then, or on
+  a lane whose credential ccd cannot name — any lane that declares no `secretsFile` (a login lane, an
+  external lane) or an older `accounts.sh`; a config dir's `.credentials.json` is never read, because
+  it changes without a re-login. A rescue writes none when the named file changed after the pane was
+  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) with
+  `telemetry: "anthropic"` and a `.cc-secrets/<id>-oauth.env` — setup-token lanes and the upstream.
+  On a lane it cannot measure but ccd can name (an API-key lane's `<id>-<provider>.env`, any lane on
+  macOS) the marker stands until that file is rewritten or an operator `rm`; a probed account revived
+  with no local trace (a transient 401) keeps its marker until the probe's next live answer.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses

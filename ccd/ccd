@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c3cbb929dd0b9fd6d03f786e472b043ca6278cfac551a2db6fbd1de3a0ddbea
+# ccrc:generated 1 sha256=672e3d0f0a9a6919a1fdcb83504a56a2cfc60619b46ccca9346c49311a972339
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16343,7 +16343,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # session OFF it would move it straight back after SWAP_COOLDOWN, and a
     # forced call would skip the candidate loop's rank-101 demotion by landing
     # here first. The probe clears the marker on a live answer, and `_authdead`
-    # expires it once the credential file changes (D-3524): a re-login needs no spawn.
+    # expires it once a credential file ccd can name changes (D-3524) — no spawn.
     if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
@@ -26661,12 +26661,23 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # The owners, whole: `ccd-account-health` writes on a 401 and clears on a live
 # 403; a rescue writes (D-3522); a credential change EXPIRES it at any reader
 # here and at rc 0; rc 0 on a lane ccd cannot name a credential for clears it
-# (the old rule — an external lane, a macOS Keychain login, an accounts.sh from
-# before `_ccrc_secrets_file`); and an operator `rm`. CARRIED: an account revived
-# with no local trace (a transient API-side 401) keeps its marker until the
-# probe's next live answer, or an operator `rm` on a box with no probe. The
-# keepalive's and the server's readers of the marker do not expire it; they
-# converge when a reader here removes the file.
+# (the old rule — any lane whose roster declares no secrets file, a login lane or
+# an external one, and every lane under an accounts.sh from before
+# `_ccrc_secrets_file`); and an operator `rm`.
+#
+# WHICH LANES THE PROBE COVERS, exactly: `ccd-account-health` runs only where its
+# systemd timer does (Linux, any role but `server`; macOS has none), reads only
+# roster accounts with `telemetry: "anthropic"`, and sources only
+# `.cc-secrets/<id>-oauth.env` — a setup-token lane and the upstream. It REFUSES
+# the rest: an API-key lane (`.cc-secrets/<id>-<provider>.env`), a login lane (no
+# secrets file). So on a lane ccd can name that the probe cannot measure (an
+# API-key lane anywhere; every lane on macOS), a marker stands until that file is
+# rewritten or an operator `rm` — an API-key 401 is an invalid key, and a new key
+# is what ends it; on a lane ccd cannot name, until the next rc-0 spawn or an `rm`.
+# CARRIED: a probed account revived with no local trace (a transient API-side
+# 401) keeps its marker until the probe's next live answer. The keepalive's and
+# the server's readers of the marker do not expire it; they converge when a
+# reader here removes the file.
 
 _authdead_cred_src() {   # wrapper -> the absolute path of the file that lane's credential lives in; rc 1 = ccd cannot name one (D-3524)
   # IN THIS ORDER, and never a glob over `.cc-secrets/<id>-*`: ids prefix one
@@ -26675,23 +26686,23 @@ _authdead_cred_src() {   # wrapper -> the absolute path of the file that lane's 
   #   1. the roster's `exec.secretsFile`, projected as `_ccrc_secrets_file`;
   #   2. the upstream's `<id>-oauth.env`, which its launcher and the probe
   #      (`_ah_token_file`) both source by convention;
-  #   3. `.credentials.json` in the lane's config dir — Claude Code's own login —
-  #      only when the roster declares NO secrets file and the lane speaks Claude
-  #      Code's protocol: an external lane's credential is not that file;
-  #   4. otherwise nothing. An accounts.sh with no `_ccrc_secrets_file` cannot
+  #   3. otherwise nothing. An accounts.sh with no `_ccrc_secrets_file` cannot
   #      say whether a secrets file was declared, so only rule 2 survives it.
+  # NEVER a config dir's `.credentials.json` (round 1 of D-3524). A lane that
+  # declares no secrets file — a login lane — keeps its login there, but that file
+  # changes without a re-login (7 of 17 on the fleet box had a ctime 0-3 h old,
+  # cause unmeasured), so judging by it skipped the rescue's marker and expired a
+  # standing one within hours: D-3522's loop, back. Such a lane is unnameable —
+  # the rescue marks as D-3522 did, rc 0 clears as §A.6 did, nothing expires here.
   # A regular file and not a symlink, `_authdead`'s own rungs: a link would let
   # any file re-date the verdict, and a FIFO is no credential. STAT'D BY THE
   # CALLER, NEVER OPENED — the file holds a secret.
-  local w="$1" rel="" f="" d
-  local gen=0; declare -F _ccrc_secrets_file >/dev/null 2>&1 && gen=1
-  (( gen )) && rel=$(_ccrc_secrets_file "$w" 2>/dev/null)
+  local w="$1" rel="" f=""
+  declare -F _ccrc_secrets_file >/dev/null 2>&1 && rel=$(_ccrc_secrets_file "$w" 2>/dev/null)
   if [[ -n "$rel" ]]; then
     f="$HOME/$rel"
   elif [[ -n "$w" && "$w" == "${CCRC_UPSTREAM:-}" ]]; then
     f="$HOME/.cc-secrets/$w-oauth.env"
-  elif (( gen )) && _is_anthropic_backend "$w"; then
-    d=$(_cfg_dir "$w"); [[ -n "$d" ]] && f="$d/.credentials.json"
   fi
   [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
   printf '%s\n' "$f"
@@ -26716,8 +26727,24 @@ _authdead_expired() {   # wrapper epoch -> success iff the lane's credential cha
   # `_authdead`'s tail, so every ccd reader — the condemned placement tier, the
   # home-recovered arm, rank 101, the rescue's own check — revives a re-logged-in
   # account at its next decision, with no spawn and no probe.
+  #
+  # REMOVED ONLY WHILE IT IS STILL THE VERDICT THAT WAS JUDGED (round 1). Deciding
+  # forks for the source and for `stat` (~7 ms, the review measured at load ~37); the probe's
+  # `_ah_mark` and a rescue both `mv -f` a FRESH verdict onto this same path; one
+  # landing in that window was deleted by a remove-by-path, which then answered
+  # "not dead" about a credential just measured dead. So the first field is read
+  # again — a builtin, past the same `-f`/`! -L` rungs — and the file goes only
+  # while it still carries the epoch this decision was made on. Anything else (a
+  # newer epoch, a marker gone or no longer a regular file) answers "dead" for this
+  # one decision; the next read judges whatever stands then. STILL OPEN, smaller:
+  # a rename landing between that read and `rm`'s unlink — one fork and exec wide —
+  # is deleted all the same. A claim-by-rename would close it, at the price of an
+  # interval in which every other reader finds no marker at all.
+  local f="$REG/$1-authdead" now=""
   _authdead_cred_changed "$1" "$2" || return 1
-  rm -f -- "$REG/$1-authdead" 2>/dev/null
+  if [[ -f "$f" && ! -L "$f" ]]; then IFS= read -r now 2>/dev/null < "$f"; now="${now%% *}"; fi
+  [[ "$now" == "$2" ]] || return 1
+  rm -f -- "$f" 2>/dev/null
   return 0
 }
 

@@ -376,6 +376,22 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
     expect(authdead()).toMatch(/^\d+ rescue-401$/);
   });
+  it('a lane with no secretsFile still marks when its `.credentials.json` changed after the pane was born — that file is not its credential (D-3524 round 1)', () => {
+    // `claude-b` declares no secretsFile (a login lane). Its config dir's
+    // `.credentials.json` changes for reasons that are not a re-login (7 of 17 on
+    // the fleet box within 0-3 h), so it names nothing: the rescue writes its
+    // marker exactly as D-3522 did, and the home arm keeps refusing the account.
+    seed();
+    h.sh(`_reg_set ${ID} wrapper claude-b; _reg_set ${ID} home claude-b`);
+    writeTranscript([L.human(), AUTH()]);
+    fs.mkdirSync(path.join(h.home, '.claude-b'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.claude-b', '.credentials.json'), '{}\n');   // ctime now; the pane was born at 1
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    const f = path.join(h.home, '.cc-sessions', 'claude-b-authdead');
+    expect(fs.existsSync(f), 'the rescue marked the login lane').toBe(true);
+    expect(fs.readFileSync(f, 'utf8')).toMatch(/^\d+ rescue-401$/);
+  });
   it('a rate-limit rescue marks nothing — a limit is not a dead credential (D-3522)', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);

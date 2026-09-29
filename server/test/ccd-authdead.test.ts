@@ -14,7 +14,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -130,7 +131,9 @@ describe('_authdead', () => {
 // changed at or after the marker's epoch, the verdict is about bytes no longer
 // on disk, and ccd's one reader expires it: so a re-login revives the account at
 // the next placement or home decision, with no spawn and no probe (macOS has no
-// probe at all). The file is stat'ed, never opened — it holds a secret.
+// probe at all). The file is stat'ed, never opened — it holds a secret. Only a
+// file the roster DECLARES (or the upstream's `<id>-oauth.env`) is ever named: a
+// lane with no `secretsFile` is unnameable, and its marker never expires here.
 describe('_authdead expires a marker once the account\'s credential file changes (D-3524)', () => {
   it('a credential changed after the verdict: not dead, the marker is removed, and nothing is printed on either stream', () => {
     cred('.cc-secrets/claude-a-oauth.env');
@@ -168,16 +171,17 @@ describe('_authdead expires a marker once the account\'s credential file changes
     expect(ok('_authdead claude')).toBe(false);
   });
 
-  it('a lane the roster gives no secretsFile is judged by its config dir\'s `.credentials.json`', () => {
+  it('a lane the roster gives no secretsFile is UNNAMEABLE: a `.credentials.json` rewritten after the verdict does not expire it', () => {
+    // Round 1 of D-3524 dropped the config-dir arm. `.credentials.json` changes for
+    // reasons that are not a re-login — 7 of 17 on the fleet box had a ctime 0-3 h
+    // old, on lanes whose credential is not even that file, cause unmeasured — so
+    // judging a login lane by it expired every standing marker within hours and
+    // brought D-3522's loop back. `claude-b` (Anthropic, generated, no secretsFile:
+    // what `ccrc account add --method login` writes) and `gpt` (external) alike.
     cred('.claude-b/.credentials.json', '{}\n');
     mark('claude-b', `${PAST} auth-401`);
-    expect(ok('_authdead claude-b')).toBe(false);
-  });
-
-  it('a lane that does not speak Claude Code\'s own protocol is NOT judged by `.credentials.json` — ccd cannot see its credential', () => {
-    // `gpt` is `external` with `telemetry: none`: its credential lives behind a
-    // launcher ccd does not own, so a `.credentials.json` in its config dir says
-    // nothing about it. Unnameable, so nothing expires.
+    expect(ok('_authdead claude-b')).toBe(true);
+    expect(fs.existsSync(marker('claude-b'))).toBe(true);
     cred('.claude-gpt/.credentials.json', '{}\n');
     mark('gpt', `${PAST} auth-401`);
     expect(ok('_authdead gpt')).toBe(true);
@@ -192,7 +196,8 @@ describe('_authdead expires a marker once the account\'s credential file changes
   it('an old accounts.sh cannot say whether a secrets file was declared, so a config-dir `.credentials.json` is not read either', () => {
     // `claude-a` DECLARES `.cc-secrets/claude-a-oauth.env`; with the projection
     // gone, falling through to its config dir would judge it by a file its
-    // wrapper never authenticates with.
+    // wrapper never authenticates with. No lane is judged by that file at all
+    // since round 1; this pins that the old-accounts.sh path grows no fallback.
     cred('.claude-a/.credentials.json', '{}\n');
     mark('claude-a', `${PAST} auth-401`);
     expect(ok('unset -f _ccrc_secrets_file; _authdead claude-a')).toBe(true);
@@ -220,6 +225,57 @@ describe('_authdead expires a marker once the account\'s credential file changes
     execFileSync('mkfifo', [path.join(home, '.cc-secrets', 'claude-a-oauth.env')]);
     mark('claude-a', `${PAST} auth-401`);
     expect(sh(`timeout 5 bash -c 'source "${CCD}"; _authdead claude-a'; echo "rc=$?"`)).toBe('rc=0');
+  });
+
+  // THE STAT WINDOW (D-3524 round 1). Deciding to expire takes a fork and a
+  // `stat`; the probe's `_ah_mark` and a rescue both `mv -f` a fresh verdict into
+  // the same path, and one can land inside that window. A remove BY PATH then
+  // deleted the fresh verdict and answered "not dead" about a credential just
+  // measured dead. `_plat_ctime` is the seam inside the window, so an override
+  // that renames a fresh marker into place before it stats replays the
+  // interleaving deterministically. `real_ctime` is the shipped body, copied.
+  const inWindow = (move: boolean): string =>
+    `eval "real_ctime() $(declare -f _plat_ctime | tail -n +2)"
+     _plat_ctime() { ${move ? 'mv -f "$HOME/fresh-marker" "$REG/claude-a-authdead";' : ''} real_ctime "$@"; }
+     _authdead claude-a && echo dead || echo live`;
+
+  it('a fresh verdict renamed in while the old one is judged SURVIVES, and the account reads dead', () => {
+    cred('.cc-secrets/claude-a-oauth.env');
+    mark('claude-a', `${PAST} auth-401`);            // the old verdict: the credential changed after it
+    const fresh = `${future()} auth-401`;
+    fs.writeFileSync(path.join(home, 'fresh-marker'), fresh);
+    expect(sh(inWindow(true))).toBe('dead');
+    expect(fs.readFileSync(marker('claude-a'), 'utf8')).toBe(fresh);
+  });
+
+  it('a FIFO renamed in inside the window is never opened — the re-read answers dead without blocking', () => {
+    // The re-read keeps `_authdead`'s `-f` rung: an open of a FIFO with no writer
+    // never returns, and this runs inside account loops on the 5-second tick.
+    cred('.cc-secrets/claude-a-oauth.env');
+    mark('claude-a', `${PAST} auth-401`);
+    execFileSync('mkfifo', [path.join(home, 'fresh-marker')]);
+    expect(sh(`timeout 5 bash -c 'source "${CCD}"; ${inWindow(true)}'; echo "rc=$?"`)).toBe('dead\nrc=0');
+  });
+
+  it('a SYMLINK renamed in carrying the judged epoch is not read through, and not removed', () => {
+    // And its `! -L` rung: a link would let any file answer for the marker, and
+    // the `rm` would then take the link on the strength of another file's bytes.
+    cred('.cc-secrets/claude-a-oauth.env');
+    mark('claude-a', `${PAST} auth-401`);
+    const foreign = path.join(home, 'outside-the-registry');
+    fs.writeFileSync(foreign, `${PAST} auth-401`);
+    fs.symlinkSync(foreign, path.join(home, 'fresh-marker'));
+    expect(sh(inWindow(true))).toBe('dead');
+    expect(fs.lstatSync(marker('claude-a')).isSymbolicLink()).toBe(true);
+  });
+
+  it('CONTROL: the same seam with nothing renamed in still expires the old verdict', () => {
+    // Without this the case above is equally consistent with an override that
+    // broke the expiry outright — same seam, same file, only the rename differs.
+    cred('.cc-secrets/claude-a-oauth.env');
+    mark('claude-a', `${PAST} auth-401`);
+    expect(sh(inWindow(false))).toBe('live');
+    expect(fs.existsSync(marker('claude-a'))).toBe(false);
   });
 });
 
@@ -480,7 +536,8 @@ describe('a clean spawn clears the marker only when the credential changed, or c
   // session back to the 401. The evidence is now the credential FILE: rc 0 keeps
   // a marker whose account's credential predates it, clears one whose credential
   // changed since, and keeps TODAY'S rule — clear — for a lane ccd cannot name a
-  // credential for (an external lane, a macOS Keychain login, an old accounts.sh).
+  // credential for (any lane whose roster declares no secretsFile — a login lane,
+  // an external lane — or an old accounts.sh).
   //
   // rc 0 ONLY, still. `cmd_start` clears `swapblocked` on the ATTEMPT
   // (ccd/ccd:13258) because a swap refusal is a stale banner an operator
@@ -544,15 +601,42 @@ describe('a clean spawn clears the marker only when the credential changed, or c
     expect(fs.existsSync(marker('claude'))).toBe(false);
   });
 
-  it('a lane with no secretsFile is judged by its config dir\'s `.credentials.json`', () => {
+  it('a lane with no secretsFile is unnameable, so rc 0 clears — even while its `.credentials.json` predates the marker', () => {
+    // Round 1: `.credentials.json` is never a credential source (it changes
+    // without a re-login), so a login lane keeps §A.6's rc-0 clear whole.
     seedOn('claude-demo', 'claude-b');
     cred('.claude-b/.credentials.json', '{}\n');
     mark('claude-b', `${future()} rescue-401`);
     settle('claude-demo', 0);
-    expect(fs.existsSync(marker('claude-b'))).toBe(true);
-    mark('claude-b', `${PAST} rescue-401`);
-    settle('claude-demo', 0);
     expect(fs.existsSync(marker('claude-b'))).toBe(false);
+  });
+
+  it('an API-key lane\'s marker survives a clean spawn, and expires when its key file is rewritten — no probe measures it', () => {
+    // `ccrc account add` writes an OpenRouter or compatible lane as `generated`,
+    // telemetry `anthropic`, secretsFile `.cc-secrets/<id>-<provider>.env`.
+    // `ccd-account-health` only ever sources `.cc-secrets/<id>-oauth.env`, so it
+    // REFUSES this lane and never clears its marker: what ends one is a rewrite of
+    // the key file, or an operator `rm`. A 401 on an API key is an invalid key.
+    seedAccountsSh(home, { ...DEFAULT_TEST_ROSTER, accounts: [...DEFAULT_TEST_ROSTER.accounts, {
+      id: 'orl', label: 'orl', configDirSuffix: '.claude-orl',
+      exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/orl-openrouter.env' },
+      homeAble: true, hue: 'amber', telemetry: 'anthropic',
+    }] });
+    seedOn('claude-demo', 'orl');
+    const key = cred('.cc-secrets/orl-openrouter.env', 'export ANTHROPIC_AUTH_TOKEN=fixture\n');
+    const verdict = ctimeS(key) + 1;                  // written after the key, as a rescue's would be
+    mark('orl', `${verdict} rescue-401`);
+    settle('claude-demo', 0);
+    expect(fs.existsSync(marker('orl')), 'a clean spawn is no evidence on an API key either').toBe(true);
+    expect(ok('_authdead orl')).toBe(true);
+    // The key is replaced the way `ccrc account credential` does it (tmp + rename),
+    // strictly after the verdict's second.
+    while (Date.now() < verdict * 1000 + 50) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    const tmp = path.join(home, '.cc-secrets', 'orl-openrouter.env.tmp');
+    fs.writeFileSync(tmp, 'export ANTHROPIC_AUTH_TOKEN=fixture-2\n');
+    fs.renameSync(tmp, key);
+    expect(ok('_authdead orl')).toBe(false);
+    expect(fs.existsSync(marker('orl'))).toBe(false);
   });
 
   it('an old accounts.sh with no `_ccrc_secrets_file` is unnameable for a generated lane, so rc 0 clears', () => {
