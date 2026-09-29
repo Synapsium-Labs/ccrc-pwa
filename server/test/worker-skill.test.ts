@@ -160,8 +160,8 @@ describe('the worker skill: its contract', () => {
   // Child reclamation, wave 3 (spec 2026-09-22 §6): NOT a clause — clause 8 is
   // unchanged and the count stays fifteen — but a sentence in the reporting
   // section, because it is the fact a worker needs at the moment it reports.
-  it('says, in its reporting section, that this workspace ends when its run closes', () => {
-    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when its run closes.**');
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
     expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting a wave-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));

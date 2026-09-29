@@ -70,8 +70,8 @@ describe('the reviewer skill: its contract', () => {
   // Child reclamation, wave 3 (spec 2026-09-22 §6): not a clause — the count
   // stays ten — but the reporting section's own fact: this workspace, and the
   // report directory in it, end when the run closes.
-  it('says, in its reporting section, that this workspace ends when its run closes', () => {
-    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when its run closes.**');
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
     expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
     expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting review-done'));
     expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));

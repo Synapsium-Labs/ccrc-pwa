@@ -370,9 +370,10 @@ not after.
      which is why, when wave N+1 builds on wave N's code, it dispatches only
      once wave N's PR is proven merged, exactly as §5's "One PR per child"
      requires. An UNMARKED producer — every workspace minted without a
-     marker: by a box whose ccd did not yet mark children, or by a dispatch that journaled
-     `child-omitted` — is never refused this way; dropping its `sessionId`
-     anyway is still safe and follows the same one-PR rule. The same-project
+     marker: by a box whose ccd did not yet mark children, or by a
+     dispatch that journaled `child-omitted` — is never refused this way;
+     dropping its `sessionId` anyway is still safe and follows the same
+     one-PR rule. The same-project
      arm is for a producer whose workspace opened no PR.
      **Same project:** open wave N+1 first with this producer's `sessionId`, close
      the producer with `final:false` so its hold transfers to the already-open

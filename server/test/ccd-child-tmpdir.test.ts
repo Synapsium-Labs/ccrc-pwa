@@ -272,25 +272,25 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
 // "bsd-cases-plus-resume" wording). A plain `describe` runs it once; the
 // executed test count drops by exactly one (CHMODS has two entries: 2 -> 1).
 describe('_spawn_start is the one function that reads the child marker', () => {
-    it('the decision lives in _spawn_start and NOWHERE else — one reader, every spawn path', () => {
-      // Every launcher funnels through `_spawn_start` (`ccd-spawn-split.test.ts`
-      // pins that caller list), so one call there covers ws-add, ws-restore,
-      // start, ensure, swap and both `_supervised_start` fallbacks. A second
-      // call site would be a second decision free to disagree with the first.
-      const out = h.sh(
-        'fns=$(declare -F | sed "s/^declare -f //");'
-        + ' printf "COUNT=%s\\n" "$(printf %s "$fns" | grep -c .)";'
-        + ' while read -r f; do [[ "$f" == _child_tmpdir ]] && continue;'
-        + ' type "$f" 2>/dev/null | grep -q "_child_tmpdir" && echo "$f"; done'
-        + ' <<< "$fns" | sort; :');
-      const lines = out.split('\n').filter(Boolean);
-      const count = Number((lines.shift() ?? '').replace('COUNT=', ''));
-      expect(count, 'the function walk was truncated — a failed measurement, not a short list')
-        .toBeGreaterThan(100);
-      expect(lines).toEqual(['_spawn_start']);
-      // And its ONE input is the marker.
-      expect(h.sh('type _child_tmpdir')).toContain('_reg_get "$id" child');
-    });
+  it('the decision lives in _spawn_start and NOWHERE else — one reader, every spawn path', () => {
+    // Every launcher funnels through `_spawn_start` (`ccd-spawn-split.test.ts`
+    // pins that caller list), so one call there covers ws-add, ws-restore,
+    // start, ensure, swap and both `_supervised_start` fallbacks. A second
+    // call site would be a second decision free to disagree with the first.
+    const out = h.sh(
+      'fns=$(declare -F | sed "s/^declare -f //");'
+      + ' printf "COUNT=%s\\n" "$(printf %s "$fns" | grep -c .)";'
+      + ' while read -r f; do [[ "$f" == _child_tmpdir ]] && continue;'
+      + ' type "$f" 2>/dev/null | grep -q "_child_tmpdir" && echo "$f"; done'
+      + ' <<< "$fns" | sort; :');
+    const lines = out.split('\n').filter(Boolean);
+    const count = Number((lines.shift() ?? '').replace('COUNT=', ''));
+    expect(count, 'the function walk was truncated — a failed measurement, not a short list')
+      .toBeGreaterThan(100);
+    expect(lines).toEqual(['_spawn_start']);
+    // And its ONE input is the marker.
+    expect(h.sh('type _child_tmpdir')).toContain('_reg_get "$id" child');
+  });
 });
 
 describe('the BSD-order shim is the chmod ccd resolves, and it refuses a trailing --', () => {
