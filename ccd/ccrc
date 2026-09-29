@@ -13158,6 +13158,17 @@ cmd_update() {
   # layout change lies between the two reads) — so the moved=0 arm below can
   # flip back when that spine dies without replacing anything.
   local legacy_from=""
+  # D-3462: the two files this run clears below, held as they are NOW so a
+  # death that replaced nothing can put them back (`_upd_unwind`). Whole
+  # bodies, `read -d ''` keeping the trailing newline: the record has a second
+  # line (its provenance word) and the caps file has one word per line.
+  local old_rec_body="" old_rec_kept=0 old_caps_body="" old_caps_kept=0
+  if [ "$old_completed" -eq 1 ] && [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then
+    IFS= read -r -d '' old_rec_body < "$BOX_INSTALLED_FILE" 2>/dev/null; old_rec_kept=1
+  fi
+  if [ -f "$BOX_CAPS_FILE" ] && [ -r "$BOX_CAPS_FILE" ]; then
+    IFS= read -r -d '' old_caps_body < "$BOX_CAPS_FILE" 2>/dev/null; old_caps_kept=1
+  fi
   _ver_layout
   if ! grep -q '^BOX_VERSIONS_ROOT=' "$UPD_TREE/ccd/ccrc" 2>/dev/null; then
     case "$VER_LAYOUT" in
@@ -13178,8 +13189,12 @@ cmd_update() {
   # reason — after the staged install its presence must mean THIS run's
   # spine wrote it. A marker left by an earlier failed `ccrc install` would
   # otherwise classify this run's death as that run's step.
-  rm -f -- "$BOX_INSTALL_STEP_FILE" \
-    || _ccrc_die "cannot clear ~/.ccrc/install-step before the staged install — a stale marker would misclassify a spine that dies. Nothing was installed; remove it by hand and re-run"
+  if ! rm -f -- "$BOX_INSTALL_STEP_FILE"; then
+    # D-3459 amended: nothing was installed, and the legacy flip (if it
+    # happened) and the cleared record go back first.
+    _upd_unwind "$legacy_from" "$old_rec_kept" "$old_rec_body" 0 ""
+    _ccrc_die "cannot clear ~/.ccrc/install-step before the staged install — a stale marker would misclassify a spine that dies. Nothing was installed${UPD_UNWIND_SAID}; remove it by hand and re-run"
+  fi
   # D-3147: caps cleared beside the marker. A pre-W1 staged spine writes
   # only the one-line marker and never touches caps, so if this run's
   # staged install does not reach `_inst_caps` (an old spine, or one that
@@ -13266,7 +13281,7 @@ cmd_update() {
       # `_inst_enable` may already have restarted the unit onto new code.
       # The report says `spine died at <step>` and nothing else, so the die
       # below must not overwrite it (`_ccrc_die`'s report hook, Task 1).
-      local step step_desc moved=0 place="before _inst_tree: nothing was replaced"
+      local step step_desc moved=0 replaced_unknown=0 place="before _inst_tree: nothing was replaced"
       step="$(_upd_spine_step)"
       step_desc="$step"
       if [ "$step" = none ]; then
@@ -13284,6 +13299,7 @@ cmd_update() {
         else
           step_desc="an unrecorded step (no step marker; a spine older than W4 writes none)"
           place="and whether the tree was replaced is not known (the stamp, written only after _inst_tree, did not move)"
+          replaced_unknown=1
         fi
       elif _upd_step_moved "$step"; then
         moved=1
@@ -13316,13 +13332,15 @@ cmd_update() {
         # replaces was never written. The directory named for the older tag
         # stays (GC reads it incomplete). The moved=1 path is the gate's and
         # the restore arms', unchanged.
-        if [ -n "$legacy_from" ]; then
-          if _plat_ln_swap "$BOX_VERSIONS_ROOT/$legacy_from" "$BOX_TREE_DIR"; then
-            place="$place; \$HOME/ccrc points back at \$HOME/ccrc-versions/$legacy_from"
-          else
-            place="$place; \$HOME/ccrc still points at \$HOME/ccrc-versions/$UPD_VERSION, and flipping it back to $legacy_from failed"
-          fi
-        fi
+        # D-3462: the completed-install record and the caps this run cleared
+        # go back too — but only when the death PROVED nothing was replaced;
+        # a marker-less spine whose stamp did not move proves nothing, and a
+        # record restored over a tree that may have been replaced would
+        # vouch for the wrong build.
+        local put_rec=0 put_caps=0
+        if [ "$replaced_unknown" -eq 0 ]; then put_rec="$old_rec_kept"; put_caps="$old_caps_kept"; fi
+        _upd_unwind "$legacy_from" "$put_rec" "$old_rec_body" "$put_caps" "$old_caps_body"
+        place="$place$UPD_UNWIND_SAID"
         UPD_REPORTING=0
         _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — spine died at $step_desc, $place; read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
       fi
@@ -15641,6 +15659,51 @@ _upd_tree_untouched() {   # <pre_layout> <pre_current>
       return 0 ;;
   esac
   return 1
+}
+
+# `_upd_unwind <legacy_from> <put_rec> <rec_body> <put_caps> <caps_body>`
+# (D-3462; D-3459 amended) — undo what `cmd_update` did BEFORE its staged
+# spine, for a run that replaced nothing. Sets `UPD_UNWIND_SAID` to the
+# clauses for the die sentence, each led by `; ` (empty when nothing was
+# done). Never dies.
+#   - `legacy_from`, when `_upd_legacy_target` flipped `~/ccrc`, is the
+#     version it named before: the link goes back (D-3459's mechanism and
+#     sentences), or the next restart runs a voided older version.
+#   - `put_rec` / `put_caps` (1) rewrite the completed-install record and the
+#     caps file the run removed, from the bodies it held: tmp + one rename,
+#     mode 644, as the spine writes them. A failed write names itself, since
+#     the box then reads `install: incomplete` and loses the cap word the
+#     control plane's resolver needs.
+_upd_unwind() {
+  local legacy_from="$1" put_rec="$2" rec_body="$3" put_caps="$4" caps_body="$5"
+  local ok="" bad="" tmp
+  UPD_UNWIND_SAID=""
+  if [ -n "$legacy_from" ]; then
+    if _plat_ln_swap "$BOX_VERSIONS_ROOT/$legacy_from" "$BOX_TREE_DIR"; then
+      UPD_UNWIND_SAID="; \$HOME/ccrc points back at \$HOME/ccrc-versions/$legacy_from"
+    else
+      UPD_UNWIND_SAID="; \$HOME/ccrc still points at \$HOME/ccrc-versions/$UPD_VERSION, and flipping it back to $legacy_from failed"
+    fi
+  fi
+  if [ "$put_rec" -eq 1 ]; then
+    tmp="$BOX_INSTALLED_FILE.tmp.$$"
+    if printf '%s' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then
+      ok="completed-install record"
+    else
+      rm -f -- "$tmp" 2>/dev/null; bad="completed-install record"
+    fi
+  fi
+  if [ "$put_caps" -eq 1 ]; then
+    tmp="$BOX_CAPS_FILE.tmp.$$"
+    if printf '%s' "$caps_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" 2>/dev/null; then
+      ok="${ok:+$ok, }caps"
+    else
+      rm -f -- "$tmp" 2>/dev/null; bad="${bad:+$bad, }caps"
+    fi
+  fi
+  [ -z "$ok" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; put back as they were: $ok"
+  [ -z "$bad" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; could NOT be put back: $bad (the box reads install: incomplete until the next install)"
+  return 0
 }
 
 # ── _upd_health_version — what the server on THIS box says it runs ───────

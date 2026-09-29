@@ -626,6 +626,19 @@ function plantCoordDb(home: string): void {
   db.close();
 }
 
+/** The two files an update clears before its staged spine (`~/.ccrc/installed`,
+ *  the completed-install record; `~/.ccrc/ccrc-caps`), planted as a box that
+ *  finished an install of `plantOldBox`'s build has them — the record's line 1
+ *  is that build's sha, line 2 the provenance word. Returns both bodies. */
+function plantCompletedRecord(home: string): { installed: string; caps: string } {
+  const installed = 'oldsha0000000000000000000000000000000000\nunsigned\n';
+  const caps = 'os linux\nupdate-gate\nrollback-flip\n';
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'installed'), installed);
+  writeFileSync(join(home, '.ccrc', 'ccrc-caps'), caps);
+  return { installed, caps };
+}
+
 // ── The release fixture (install-sh.test.ts's local:// URL space) ─────────
 
 const sha256 = (p: string): string =>
@@ -1398,6 +1411,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     rmSync(join(home, 'ccrc'), { recursive: true, force: true });
     installVersionedTree(home, 'v1.0.0', { stamp: { sha: '1'.repeat(40), version: 'v1.0.0' } });
     plantCoordDb(home);
+    const planted = plantCompletedRecord(home);
     packRelease(home, fullTree(home, {
       version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
     }), { tag: 'v2.0.0' });
@@ -1409,7 +1423,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
       '#!/bin/sh\necho "npm ERR! code ENOTFOUND registry.npmjs.org" >&2\nexit 1\n', { mode: 0o755 });
     const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, before its flip: nothing was replaced \(\$HOME\/ccrc still points at \$HOME\/ccrc-versions\/v1\.0\.0\); read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
+    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_tree, before its flip: nothing was replaced \(\$HOME\/ccrc still points at \$HOME\/ccrc-versions\/v1\.0\.0\); put back as they were: completed-install record, caps; read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
     expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);
@@ -1420,6 +1434,11 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
     expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0')),
       'the running version was written into').toEqual(before);
+    // D-3462: the run cleared the record and the caps before its spine, and a
+    // death that replaced nothing puts both back as they were.
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8'), 'the completed-install record was left removed')
+      .toBe(planted.installed);
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8'), 'the caps were left removed').toBe(planted.caps);
   });
 
   it('a REAL-DIRECTORY (pre-W6) box whose staged npm ci fails replaced nothing either: exit 1 BEFORE the gate, no restore, and the directory byte-unchanged (D-3458)', () => {
@@ -1433,6 +1452,7 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     const home = freshUpdateBox('ccrc-update-directory-npmfail-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
+    const planted = plantCompletedRecord(home);
     packRelease(home, fullTree(home, {
       version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
     }), { tag: 'v2.0.0' });
@@ -1444,7 +1464,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toContain('spine died at _inst_tree, before its flip: nothing was replaced '
       + '($HOME/ccrc is still the pre-versioned directory; the migration did not leave it moved); '
-      + 'read its lines above.');
+      + 'put back as they were: completed-install record, caps; read its lines above.');
+    // D-3462: the record and the caps the run cleared before its spine are back, byte for byte.
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(planted.installed);
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(planted.caps);
     expect(readFileSync(join(home, '.ccrc', 'install-step'), 'utf8')).toBe('_inst_tree\n');
     expect(r.stdout, 'a death that replaced nothing was gated').not.toMatch(/^update: gate/m);
     expect(r.stdout, 'a death that replaced nothing was restored').not.toMatch(/^update: (arm|REVERTED)/m);
@@ -9545,6 +9568,22 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
       expect(r.stderr).toContain('$HOME/ccrc still points at $HOME/ccrc-versions/v1.0.0, and flipping it back to v2.0.0 failed');
       expect(r.stderr).not.toContain('points back at');
       expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    });
+
+    it('a die BETWEEN the legacy flip and the staged spine flips back too (D-3459 amended): a directory squatting on ~/.ccrc/install-step refuses the marker clear, nothing is installed, and ~/ccrc is on the version it named before', () => {
+      const { home, cur, before } = dyingBox('ccrc-update-legacy-back-clear-', false);
+      mkdirSync(join(home, '.ccrc', 'install-step'), { recursive: true });
+      const r = runUpdate(home, ['--to', 'v1.0.0', '--downgrade']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      // The flip really happened first (the spine's directory was made) ...
+      expect(r.stdout).toContain("update: tree: v1.0.0's spine predates versioned installs and writes through $HOME/ccrc");
+      expect(r.stderr).toContain('cannot clear ~/.ccrc/install-step before the staged install');
+      // ... and the die put it back, and said so.
+      expect(r.stderr).toContain('Nothing was installed; $HOME/ccrc points back at $HOME/ccrc-versions/v2.0.0; put back as they were: completed-install record; remove it by hand and re-run');
+      expect(existsSync(join(home, '.ccrc', 'installed')), 'the cleared record was not put back').toBe(true);
+      expect(linkOf(home), 'the legacy flip was left in place').toBe(cur);
+      expect(existsSync(join(home, 'staged-ccrc-argv')), 'a spine ran').toBe(false);
+      expect(treeDigest(cur)).toEqual(before);
     });
 
     it('the moved=1 path is unchanged: a spine that dies AT or AFTER _inst_tree is gated, not flipped back (the control)', () => {

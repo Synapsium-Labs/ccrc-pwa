@@ -1520,6 +1520,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // 2 restore `previous` instead of falling straight to arm 3.
       'if [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
       'IFS= read -r old_rec < "$BOX_INSTALLED_FILE" 2>/dev/null || old_rec=""',
+      // cmd_update (D-3462): the record's whole body, held before the run clears
+      // it, so a death that replaced nothing can put it back (`_upd_unwind`).
+      'if [ "$old_completed" -eq 1 ] && [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
+      'IFS= read -r -d \'\' old_rec_body < "$BOX_INSTALLED_FILE" 2>/dev/null; old_rec_kept=1',
       // cmd_update (D-3114): cleared right before the staged install, so its
       // presence afterwards means this run's spine completed — the one fact
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
@@ -1564,6 +1568,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // round 1 I2): the same-tag arm above now `return`s unconditionally,
       // so this is no longer its `elif`.
       'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // `_upd_unwind` (D-3462): rewrites the record cmd_update cleared, tmp + one rename.
+      'tmp="$BOX_INSTALLED_FILE.tmp.$$"',
+      'if printf \'%s\' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
