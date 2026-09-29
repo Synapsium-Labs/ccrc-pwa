@@ -740,9 +740,8 @@ whole time, which is the only prevention this ordering rule buys.
    box whose ccd did not yet mark children, or by a dispatch that journaled
    `child-omitted` (§2) — is never refused this way; dropping its `sessionId`
    anyway is still safe and follows the same one-PR rule. The same-project arm
-   is for a producer whose workspace
-   opened no PR — a research or measurement wave —
-   and only for that. Naming a spent workspace is refused `workspace-spent`,
+   is for a producer whose workspace opened no PR — a research or measurement
+   wave — and only for that. Naming a spent workspace is refused `workspace-spent`,
    with `pr` naming the PR, and nothing is opened; `spent-unmeasured` means
    the server could not read the evidence either way — retry the same open,
    and do not drop `sessionId` on its account. If the PR lands after you
@@ -824,8 +823,7 @@ run — the server
 RELEASES it rather than holding it for a next wave, and the close response
 carries `"childReclaim":"queued"`. The reclaim itself runs after the answer,
 on the child's own queue: it records anything left uncommitted as a WIP
-commit pinned in the attic (it moves no branch) — except a secret-shaped
-file, which is never
+commit (it moves no branch) — except a secret-shaped file, which is never
 committed and is deleted with the tree — pins every commit and stash in the
 attic, writes a tombstone, and then removes the pane, the worktree, the
 branch, the clips directory and the child's temp directory. Its outcome

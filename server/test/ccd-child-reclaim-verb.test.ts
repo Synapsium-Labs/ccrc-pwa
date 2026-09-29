@@ -12,8 +12,9 @@
 // shared fixtures live in `childReclaimVerbHelpers.ts`. This file (part 1 of
 // 3) keeps the fresh/resumed reclaim, the refusal ladder, containment via a
 // LINK or an OTHER ROW, the workdir-leaf re-judge, failures after the act
-// started, the Darwin `.svcfailed` arm and tmux presence — continued by
-// `ccd-child-reclaim-verb-tail.test.ts` and `-reflogs.test.ts`.
+// started, the Darwin `.svcfailed` arm, tmux presence and the settle (a late
+// write between the pin phase and the kill, plain or in a nested checkout) —
+// continued by `ccd-child-reclaim-verb-tail.test.ts` and `-reflogs.test.ts`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -801,4 +802,3 @@ describe('the settle', () => {
     expect(nestedLine?.split('\t')[2], 'the record names the head the branch was deleted at').toBe(nestedTip);
   }, 90_000);
 });
-

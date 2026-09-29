@@ -486,9 +486,11 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
   // queue the reclaim of a child that is not actually finished.
   it('(v) verifyDone measured a line for a DIFFERENT session — never reused, fetches fresh, HOLDS', async () => {
     // Same branch name and a row dated to THIS incarnation — if the id check
-    // were dropped, this line would be reused as-is and would RELEASE
-    // (see the mutation table). Its `id` is a stranger's, which is the one
-    // fact the check exists to notice.
+    // in `close.ts`'s `childGateAtClose` were dropped (its
+    // `verifiedLine.id === sessionId` conjunct removed, so any measured line
+    // is reused regardless of whose session it belongs to), this line would
+    // be reused as-is and would RELEASE. Its `id` is a stranger's, which is
+    // the one fact the check exists to notice.
     const foreignRow = prRow({ createdAt: iso(BIRTH_MS + HOUR) });
     const foreignLine = JSON.stringify({ id: 'demo-other', rows: [foreignRow], baseShort: 'main',
       branch: `ws/${ID}`, ahead: 1, tip: TIP, checkedAt: 1 });

@@ -467,6 +467,18 @@ describe('sweepChildReclaim — what reaches the executor', () => {
         return { code: 1, stdout: '', stderr: 'boom again' };
       },
     });
+    // `ws-release` only fires once the release job actually RUNS, so while
+    // the first job is still in flight (unresolved), counting `ws-release`
+    // calls cannot tell a real re-entrancy guard from a second job merely
+    // parked behind the first on the same `KeyedQueue` key. Spy on
+    // `f.queue.run` itself — the enqueue point — to catch a double-queue the
+    // moment it happens, not only once it eventually executes.
+    const queueRuns: string[] = [];
+    const realQueueRun = f.queue.run.bind(f.queue);
+    vi.spyOn(f.queue, 'run').mockImplementation(((key: string, fn: () => Promise<unknown>) => {
+      queueRuns.push(key);
+      return realQueueRun(key, fn);
+    }) as typeof f.queue.run);
     const r1 = f.openRun(); f.abandon(r1);
     const reason = holdReason(r1.program, 2, null, null);
     f.plant('demo-a', { child: String(r1.id), hold: reason });
@@ -476,6 +488,9 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     await vi.waitFor(() => expect(f.calls.filter((c) => c[0] === 'ws-release')).toHaveLength(1));
     f.next(); await f.pass();                                  // a SECOND pass while still in flight
     expect(f.calls.filter((c) => c[0] === 'ws-release'), 'never double-queues while the first release is still in flight')
+      .toHaveLength(1);
+    f.next(); await f.pass();                                  // a THIRD (4th overall) pass, still in flight
+    expect(queueRuns.filter((k) => k === 'demo-a'), 'never re-enqueues demo-a while the first release is still in flight')
       .toHaveLength(1);
     resolveFirst({ code: 1, stdout: '', stderr: 'boom' });      // the release finally fails
     await second;
@@ -591,8 +606,20 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next();
     let releaseQueue!: () => void;
     const occupied = f.queue.run('demo-a', () => new Promise<void>((resolve) => { releaseQueue = resolve; }));
+    // A bounded real-time wait here could pass vacuously if the deciding
+    // pass had not yet reached its enqueue when the timer fired — spy on
+    // `f.queue.run` itself so the await resolves exactly when the job for
+    // `demo-a` is queued (behind the occupier), never on a guessed delay.
+    const realRun = f.queue.run.bind(f.queue);
+    let queued!: () => void;
+    const releaseQueued = new Promise<void>((resolve) => { queued = resolve; });
+    vi.spyOn(f.queue, 'run').mockImplementation(((key: string, fn: () => Promise<unknown>) => {
+      const p = realRun(key, fn);
+      if (key === 'demo-a') queued();          // the deciding pass decided hold-retired and queued the job, on OLD evidence
+      return p;
+    }) as typeof f.queue.run);
     const second = f.pass();                                   // 2nd — queues the release BEHIND the occupier
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    await releaseQueued;                                       // replaces the 100 ms wait
     writeFileSync(path.join(f.reg, 'demo-a.hold'), 'a human wrote this over it');
     releaseQueue();
     await occupied;
@@ -616,8 +643,18 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next();
     let releaseQueue!: () => void;
     const occupied = f.queue.run('demo-a', () => new Promise<void>((resolve) => { releaseQueue = resolve; }));
+    // See (iv)'s own comment: an event-driven wait on the enqueue itself,
+    // never a bounded real-time guess that could pass vacuously.
+    const realRun = f.queue.run.bind(f.queue);
+    let queued!: () => void;
+    const releaseQueued = new Promise<void>((resolve) => { queued = resolve; });
+    vi.spyOn(f.queue, 'run').mockImplementation(((key: string, fn: () => Promise<unknown>) => {
+      const p = realRun(key, fn);
+      if (key === 'demo-a') queued();          // the deciding pass decided hold-retired and queued the job, on OLD evidence
+      return p;
+    }) as typeof f.queue.run);
     const second = f.pass();                                   // 2nd — queues the release BEHIND the occupier
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    await releaseQueued;                                       // replaces the 100 ms wait
     const r2raw = f.coord.openRun({ program: r1.program, title: r1.program, project: 'demo', wave: 2, waveOf: null,
       claimedBy: 'demo-coord' });
     if (!('id' in r2raw)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2raw)}`);

@@ -1353,4 +1353,3 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     expect(h.reg(CHILD_ID, 'uuid')).toBeNull();
   }, 90_000);
 });
-

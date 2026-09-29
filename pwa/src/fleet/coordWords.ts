@@ -6,12 +6,11 @@
 // markers (`pause`, `mail` and, since child-reclamation wave 4, `reclaim` —
 // plus `childReclaimAttention`, not a marker at all, `shared/api.ts`), and
 // `MarkerState` types all three — but only `coord.pause` is ever rendered
-// through THESE tables (`CoordBanner` is their one reader; corrected fix
-// round 1, controller carry — this paragraph used to say `CoordBanner` was
-// the frame's only reader, which stopped being true the moment
-// `ChildReclaimBanner` became a SECOND reader of `coord`, through its own
-// `childReclaimWords.ts` tables). The words below ("paused", "not paused")
-// are written for the `pause` marker specifically, not as a marker-generic
+// through THESE tables (`CoordBanner` is their one reader — this paragraph
+// used to say `CoordBanner` was the frame's only reader, which stopped being
+// true the moment `ChildReclaimBanner` became a SECOND reader of `coord`,
+// through its own `childReclaimWords.ts` tables). The words below ("paused",
+// "not paused") are written for the `pause` marker specifically, not as a marker-generic
 // vocabulary. A future surface reading `coord.mail` through these same
 // tables would get wording that reads wrong for it (`unmeasurable`'s
 // sentence names "dispatch", which is a `pause`-specific consequence) — it

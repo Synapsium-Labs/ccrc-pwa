@@ -48,7 +48,9 @@ export function childReclaimMarker(coord: unknown): MarkerState | null {
 // requiring them would under-report the moment a future server dropped the
 // grep-only `token` or a computed `at` for one member: a row worth showing
 // would silently vanish over a field this row never displays.
-const isAttention = (a: unknown): a is ChildReclaimAttention => {
+type RenderedAttention = Pick<ChildReclaimAttention, 'sessionId' | 'runId' | 'sentence'>;
+
+const isAttention = (a: unknown): a is RenderedAttention => {
   if (typeof a !== 'object' || a === null) return false;
   const o = a as Record<string, unknown>;
   return typeof o.sessionId === 'string' && typeof o.sentence === 'string'
@@ -59,7 +61,7 @@ const isAttention = (a: unknown): a is ChildReclaimAttention => {
  *  shape-checked only at FRAME level (`stores/fleet.ts`), so an absent field
  *  (an older server) reads as no items, and a malformed member is dropped on
  *  its own rather than taking the list with it. */
-export function childReclaimAttentionOf(coord: unknown): ChildReclaimAttention[] {
+export function childReclaimAttentionOf(coord: unknown): RenderedAttention[] {
   if (typeof coord !== 'object' || coord === null) return [];
   const list = (coord as { childReclaimAttention?: unknown }).childReclaimAttention;
   return Array.isArray(list) ? list.filter(isAttention) : [];

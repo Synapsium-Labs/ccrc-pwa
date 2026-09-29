@@ -951,7 +951,7 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
 });
 ```
 
-- [x] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 2: Run the tests to verify they fail** (substituted by the mutation table)
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/single-definition.test.ts

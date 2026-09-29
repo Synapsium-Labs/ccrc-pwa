@@ -209,8 +209,10 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
-   *  kickoff` is the natural second member — a coordination WRITE that is
-   *  session-gated only — and it is ABSENT here because this file scans
+   *  kickoff` is the natural next member — SESSION_ONLY already holds two
+   *  (`/api/coord/caps`, `/api/coord/reclaim-pause`), so kickoff would be its
+   *  third — a coordination WRITE that is session-gated only — and it is
+   *  ABSENT here because this file scans
    *  `coord/routes.ts` alone and that route is registered in `server.ts`. Its
    *  absence is therefore not a judgement that it belongs elsewhere; it is the
    *  scanner's reach, and the difference matters: dodging a pin by placement is

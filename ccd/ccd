@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=58a77d9343bc7ca5a52bf4eefda4730163616a39d1a87ae28001d54f1c306c90
+# ccrc:generated 1 sha256=190f185d627a58ac0f7f98d9d807183808a257d4cbf3a1a48dc8cf70637602a5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19600,12 +19600,22 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 #                                                            loose
 #                                                            (`for-each-ref`)
 #                                 `branch ws/<slug>/ (a directory holds its
-#                                   path)`                  a child ref git
+#                                   path)`                  a directory
+#                                                            stands where a
+#                                                            child ref would: a
+#                                                            child ref git
 #                                                            CANNOT list (the
 #                                                            child itself
 #                                                            unreadable, so
 #                                                            `for-each-ref`
-#                                                            finds nothing)
+#                                                            finds nothing), an
+#                                                            EMPTY directory
+#                                                            (git itself would
+#                                                            remove one and
+#                                                            succeed), or one
+#                                                            holding only a
+#                                                            stale `x.lock` and
+#                                                            no ref
 #                                 `path <wt>`                something at the
 #                                                            worktree path
 #                                 `worktree <wt>`            a registered
