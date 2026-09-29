@@ -1,3 +1,4 @@
+import { REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT, isRunState, isSessionLifecycle, lifecycleIsDead } from '../../../shared/api.js';
 /**
  * The worker stall watch's pure half (design 2026-09-29 §4.2, wave 1). L1: clock-free, fs-free, fastify-free and
  * store-free. `stall-vocabulary.test.ts` pins that, and the coord-ring scan in `single-definition.test.ts` forbids
@@ -217,5 +218,251 @@ const STALL_KEBABS: ReadonlySet<string> = new Set<string>([
 
 /** True for every kebab token the watch spells in `server/src/coord`. It is derived, never a hand list. */
 export function isStallKebab(token: string): boolean {
-  return STALL_KEBABS.has(token);
+  return STALL_VERDICT_KEBABS.has(token) || STALL_KEBABS.has(token);
+}
+
+// ===========================================================================
+// Task 5: the verdict. Spec §4.2 and §10's evaluation order, the wave-1
+// subset. First match wins: (1) a run this build cannot name; (2) a worker
+// absent from the tick, then any unmeasured input; (3) lifecycle; (4) hold
+// 2a, then 2b; (5) the limit hold, capped; (6) the coordinator's ball;
+// (7) the worker's ball and its ladder. Pure: every clock is `now`, and every
+// fact arrives in `StallInput`. The lane (watch.ts) applies the answer and
+// decides nothing.
+// ===========================================================================
+
+/** r1 falls due after this much quiet. Spec §10: the census replay; the 1–2 h band is almost all legit. */
+export const STALL_QUIET_MS = 2 * 3_600_000;
+/** r2 falls due this long after r1, or after the word last turned idle: coordinator reply p90 is 1.56 h. */
+export const STALL_ESCALATE_MS = 3_600_000;
+/** r3 falls due this long after r2, on the same re-timing rule. */
+export const STALL_OPERATOR_MS = 3_600_000;
+/** The limit hold's cap: the longest of 19 legit limit waits. Past it, one `limit-cap` push per episode. */
+export const LIMIT_HOLD_CAP_MS = 12.5 * 3_600_000;
+/** An auto-continue hold begun within this window is a limit hold. *Chosen*: the mail replay cadence. */
+export const AUTO_CONTINUE_RECENT_MS = 10 * 60_000;
+/** The coordinator's ball has a cap, above the 28.7 h legit maximum (§11 decision 9). */
+export const COORD_BALL_CAP_MS = 30 * 3_600_000;
+/** Hold 2a: a hookstate ask stamped no earlier than the live dialog's stamp minus this is that dialog's
+ *  question, however old it is (planning departure ask-hold-correlates-the-dialog). */
+export const ASK_DIALOG_SLACK_MS = 60_000;
+
+/** The worker's RAW live word. The lane reads it itself (tmux pane pid, config dir, then the measured
+ *  live-state read), never `FleetSession.status`, which is a collapse. Every `ok: false` reason is hold 1. */
+export type LiveWordRead =
+  | { readonly ok: true; readonly word: string; readonly since: number | null }
+  | { readonly ok: false; readonly reason: 'no-pane' | 'no-config-dir' | 'no-state' | 'unmeasured' };
+/** Total over the unread reasons: `isStallKebab` derives them, and a new reason is a compile error here. */
+const LIVE_WORD_UNREAD_MAP: Record<Extract<LiveWordRead, { ok: false }>['reason'], string> = {
+  'no-pane': 'tmux gave no pane pid: a gone pane and a tmux that did not answer fold here',
+  'no-config-dir': 'the wrapper config dir did not resolve',
+  'no-state': 'no live file for the pane pid',
+  unmeasured: 'the live file could not be read',
+};
+
+/** The hookstate ask, read identity-gated but NOT aged (the lane's unaged hookstate read). */
+export type HookAskFact = { readonly kind: 'ask'; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
+/** The worker's newest asks row. */
+export type AskRowFact = { readonly kind: 'row'; readonly state: string; readonly at: number } | { readonly kind: 'none' } | { readonly kind: 'unmeasured' };
+export type StallWorker =
+  | { readonly present: false }
+  | { readonly present: true; readonly unmeasured: boolean; readonly lifecycle: string | null;
+      readonly limits: { readonly five: number | null; readonly seven: number | null } | null;
+      readonly dialogPending: boolean; readonly stranded: boolean; readonly swapBlocked: boolean;
+      readonly live: LiveWordRead; readonly hookAsk: HookAskFact; readonly askRow: AskRowFact;
+      /** The START of the newest auto-continue hold (nextAttemptAt − MAIL_ARMED_HOLD_MS, computed in watch.ts), or null. */
+      readonly autoContinueHeldAt: number | null };
+export type CoordinatorState = 'alive' | 'dead' | 'unmeasurable';
+export interface StallInput {
+  readonly subject: StallSubject;
+  readonly worker: StallWorker;
+  readonly mail: readonly StallMailRow[];      // every mail row on subject.runs' ids
+  readonly notices: readonly StallNotice[];     // parsed from runEvents(subject.primary.id)
+  readonly arming: StallArming;
+  readonly coordinationPaused: boolean;         // $REG/coordinator-paused in the tick's listing
+  readonly coordinator: CoordinatorState | null; // null = not measured this pass
+}
+export type StallR3Cause = 'still-silent' | 'coordinator-dead' | 'no-coordinator' | 'coordination-paused';
+/** Total over the r3 causes, for `isStallKebab`. */
+const STALL_R3_CAUSE_MAP: Record<StallR3Cause, string> = {
+  'still-silent': 'the coordinator was told at r2, and the worker is still silent an hour later',
+  'coordinator-dead': 'r2 skipped: the claimant measured dead, so the reclaim door applies',
+  'no-coordinator': 'r2 skipped: the run has no claimant, and no door is named',
+  'coordination-paused': 'r2 skipped: coordination is paused; the pause route lifts it',
+};
+export type StallNotify =
+  | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 1; readonly key: number; readonly to: 'worker' }
+  | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 2; readonly key: number; readonly to: 'coordinator'; readonly coordinatorId: string }
+  | { readonly act: 'notify'; readonly arm: 'quiet'; readonly rung: 3; readonly key: number; readonly to: 'operator'; readonly because: StallR3Cause }
+  | { readonly act: 'notify'; readonly arm: 'limit-cap' | 'dialog-cap' | 'coord-ball'; readonly rung: 1; readonly key: number; readonly to: 'operator' };
+export type StallVerdict =
+  | { readonly act: 'none' }
+  | { readonly act: 'hold'; readonly why: StallHold }
+  | { readonly act: 'measure-coordinator'; readonly coordinatorId: string }
+  | StallNotify;
+/** Total over the verdict's acts, for `isStallKebab` (planning departure r2-measures-on-demand). */
+const STALL_ACT_MAP: Record<StallVerdict['act'], string> = {
+  none: 'nothing is due',
+  hold: 'a hold defers every rung and cancels none',
+  'measure-coordinator': 'r2 is due: the lane measures the claimant and asks again',
+  notify: 'a rung or a cap fires',
+};
+/** This block's kebab words, derived from its three total Records, never a hand list. */
+const STALL_VERDICT_KEBABS: ReadonlySet<string> = new Set([
+  ...Object.keys(LIVE_WORD_UNREAD_MAP), ...Object.keys(STALL_R3_CAUSE_MAP), ...Object.keys(STALL_ACT_MAP),
+]);
+
+/** Exported for tests and for the bodies (Task 6): the derived facts the verdict used. */
+export interface StallFacts { readonly ball: 'worker' | 'coordinator'; readonly episodeKeyMs: number; readonly quietSince: number | null;
+  readonly workerLast: StallMailRow | null; readonly inboundLast: StallMailRow | null; readonly lastExchangeAt: number | null }
+
+const VERDICT_NONE: StallVerdict = { act: 'none' };
+
+function holdVerdict(why: StallHold): StallVerdict {
+  return { act: 'hold', why };
+}
+
+function capVerdict(arm: 'limit-cap' | 'dialog-cap' | 'coord-ball', key: number): StallVerdict {
+  return { act: 'notify', arm, rung: 1, key, to: 'operator' };
+}
+
+function r3Verdict(key: number, because: StallR3Cause): StallVerdict {
+  return { act: 'notify', arm: 'quiet', rung: 3, key, to: 'operator', because };
+}
+
+function newestMail(rows: readonly StallMailRow[], pick: (m: StallMailRow) => boolean): StallMailRow | null {
+  let best: StallMailRow | null = null;
+  for (const m of rows) if (pick(m) && (best === null || m.id > best.id)) best = m;
+  return best;
+}
+
+/** The watch's own notices (a stall-check to the worker, a stall report to the coordinator) are not mail
+ *  on the run. Counting them would restart the clock the notice reports. A reply is the worker's mail. */
+function isWatchNotice(m: StallMailRow): boolean {
+  const c = stallMailClass({ fromId: m.fromId, runId: m.runId, subject: m.subject, mailId: m.id });
+  return c === 'check' || c === 'report';
+}
+
+function isIdleWord(word: string): boolean {
+  return word === 'idle' || word === 'shell';
+}
+
+/** Whose turn it is, read from the newest mail between the worker and anyone but the watch (spec §4.2).
+ *  The worker's own mail hands over the ball only as a question, a done claim (subject EQUAL, never a
+ *  prefix, and kind status) or a stall-check reply declaring a wait. Mail TO the worker hands over the
+ *  ball only as a coordinator's wait:, so the server's rejections keep the ball with the worker. */
+function ballToCoordinator(m: StallMailRow, workerId: string, coordinatorIds: ReadonlySet<string>): boolean {
+  if (m.fromId === workerId) {
+    if (m.kind === 'question') return true;
+    if (m.kind === 'status' && (m.subject === WAVE_DONE_SUBJECT || m.subject === REVIEW_DONE_SUBJECT)) return true;
+    return m.subject.startsWith(STALL_REPLY_WAITING_PREFIX);
+  }
+  return coordinatorIds.has(m.fromId) && m.subject.startsWith(STALL_WAIT_PREFIX);
+}
+
+export function stallFacts(input: StallInput): StallFacts {
+  const { primary, runs } = input.subject;
+  const workerId = primary.sessionId;
+  const coordinatorIds = new Set<string>(['coordinator']);
+  for (const r of runs) if (r.claimedBy !== null) coordinatorIds.add(r.claimedBy);
+  const relevant = input.mail.filter((m) => !isWatchNotice(m) && (m.fromId === workerId || m.toId === workerId));
+  const workerLast = newestMail(relevant, (m) => m.fromId === workerId);
+  const inboundLast = newestMail(relevant, (m) => m.toId === workerId);
+  const waitLast = newestMail(relevant, (m) => m.fromId !== workerId && coordinatorIds.has(m.fromId) && m.subject.startsWith(STALL_WAIT_PREFIX));
+  const last = newestMail(relevant, () => true);
+  const lastExchangeAt = relevant.reduce<number | null>((max, m) => (max === null || m.at > max ? m.at : max), null);
+  const ball = last !== null && ballToCoordinator(last, workerId, coordinatorIds) ? 'coordinator' : 'worker';
+  const episodeKeyMs = Math.max(workerLast?.at ?? 0, waitLast?.at ?? 0, primary.dispatchedAt ?? 0);
+  const w = input.worker;
+  const quietSince = w.present && w.live.ok && isIdleWord(w.live.word) && w.live.since !== null
+    ? Math.max(w.live.since, workerLast?.at ?? 0, inboundLast?.at ?? 0, primary.dispatchedAt ?? 0)
+    : null;
+  return { ball, episodeKeyMs, quietSince, workerLast, inboundLast, lastExchangeAt };
+}
+
+/** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. */
+function capQuietSince(input: StallInput, f: StallFacts): number {
+  const w = input.worker;
+  const liveSince = w.present && w.live.ok ? w.live.since ?? 0 : 0;
+  return Math.max(liveSince, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
+}
+
+function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
+  if (arm !== 'quiet') return 'operator';
+  if (rung === 1) return 'worker';
+  return rung === 2 ? 'coordinator' : 'operator';
+}
+
+/** Planning departure shadow-rung-accounting. A rung is DONE when a live row exists for it, or when a
+ *  shadow row exists and the rung's delivery is still shadow under the current markers, so arming
+ *  mid-episode sends the pending rung once. Its time is its EARLIEST LIVE row when one exists, else its
+ *  earliest row: a rung re-sent live is timed from the notice its recipient actually got, so the next
+ *  rung waits the hour the r1 body promises (spec §4.2, "r2 at r1 + 1 h … r3 at r2 + 1 h"), and a rung
+ *  standing in shadow is timed from its shadow row. Not done: null. */
+function rungDoneAt(input: StallInput, arm: StallArm, rung: 1 | 2 | 3, key: number): number | null {
+  const rows = input.notices.filter((n) => n.arm === arm && n.rung === rung && n.key === key);
+  const liveRow = rows.some((n) => n.mode === 'live');
+  const shadowStands = rows.some((n) => n.mode === 'shadow') && stallDelivery(rungRecipient(arm, rung), input.arming) === 'shadow';
+  if (!liveRow && !shadowStands) return null;
+  const live = rows.filter((n) => n.mode === 'live');
+  const timed = live.length > 0 ? live : rows;
+  return timed.reduce((earliest, n) => Math.min(earliest, n.at), Number.POSITIVE_INFINITY);
+}
+
+export function stallVerdict(input: StallInput, now: number): StallVerdict {
+  const p = input.subject.primary;
+  // (1) a run this build cannot name
+  if (!isRunState(p.state) || p.state === 'unknown') return holdVerdict('run-unnamed');
+  if (p.kind !== 'work' && p.kind !== 'review') return holdVerdict('run-unnamed');
+  // (2) a worker absent from this tick (planning departure absent-worker-holds), then any unmeasured input
+  const w = input.worker;
+  if (!w.present) return holdVerdict('absent');
+  const live = w.live;
+  const lc = w.lifecycle;
+  if (w.unmeasured) return holdVerdict('unmeasured');
+  if (!live.ok) return holdVerdict('unmeasured');
+  if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
+  if (p.dispatchedAt === null) return holdVerdict('unmeasured');
+  if (isIdleWord(live.word) && live.since === null) return holdVerdict('unmeasured');
+  const dialogShaped = live.word === 'waiting' || w.dialogPending;
+  if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
+  // (3) lifecycle: restarting and the dead words hold; unsupervised and unclaimed are judged as running
+  if (lc === 'restarting' || lifecycleIsDead(lc)) return holdVerdict('lifecycle');
+  const f = stallFacts(input);
+  const key = f.episodeKeyMs;
+  const capQuiet = now - capQuietSince(input, f);
+  // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode)
+  const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
+  const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
+  if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
+  if (dialogShaped) return capQuiet >= STALL_QUIET_MS && rungDoneAt(input, 'dialog-cap', 1, key) === null ? capVerdict('dialog-cap', key) : holdVerdict('dialog');
+  // (5) the limit hold, capped once per episode; a null limits or a null window is neither at the ceiling nor unmeasured
+  const lim = w.limits;
+  const atCeiling = lim !== null && ((lim.five !== null && lim.five >= 100) || (lim.seven !== null && lim.seven >= 100));
+  const autoContinueRecent = w.autoContinueHeldAt !== null && w.autoContinueHeldAt > now - AUTO_CONTINUE_RECENT_MS;
+  if (atCeiling || w.stranded || w.swapBlocked || autoContinueRecent) {
+    return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, key) === null ? capVerdict('limit-cap', key) : holdVerdict('limit');
+  }
+  // (6) the coordinator's ball: none below its cap (planning departure coord-ball-below-cap-is-none)
+  if (f.ball === 'coordinator') {
+    const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
+    return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
+  }
+  // (7) the worker's ball. Quiet gates r1 only: a later rung re-runs on r1's inputs except quiet, and its
+  // hour runs from the later of the previous rung and the quiet clock, so a busy spell re-times it.
+  if (live.word === 'busy') return holdVerdict('busy');
+  if (!isIdleWord(live.word) || f.quietSince === null) return holdVerdict('unmeasured');
+  const since = f.quietSince;
+  const r1At = rungDoneAt(input, 'quiet', 1, key);
+  if (r1At === null) return now - since >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
+  if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
+  const r2At = rungDoneAt(input, 'quiet', 2, key);
+  if (r2At !== null) return now >= Math.max(r2At, since) + STALL_OPERATOR_MS ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
+  if (now < Math.max(r1At, since) + STALL_ESCALATE_MS) return VERDICT_NONE;
+  if (input.coordinationPaused) return r3Verdict(key, 'coordination-paused');
+  if (p.claimedBy === null) return r3Verdict(key, 'no-coordinator');
+  if (input.coordinator === null) return { act: 'measure-coordinator', coordinatorId: p.claimedBy };
+  if (input.coordinator === 'alive') return { act: 'notify', arm: 'quiet', rung: 2, key, to: 'coordinator', coordinatorId: p.claimedBy };
+  if (input.coordinator === 'unmeasurable') return holdVerdict('coordinator-unmeasurable');
+  return r3Verdict(key, 'coordinator-dead');
 }
