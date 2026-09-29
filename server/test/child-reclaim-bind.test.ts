@@ -51,7 +51,8 @@ const mintingRun = (answer: ChildBirthRunRead | null = null) => {
     run: (id) => {
       asked.push(id);
       if (answer !== null) return answer;
-      return { ok: true, run: id === 5 ? { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: ID } : null };
+      return { ok: true, run: id === 5
+        ? { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: ID, dispatchStartedAt: BIRTH_MS } : null };
     },
   };
   return { runs, asked };
@@ -194,13 +195,23 @@ describe('childBindGate — incarnation placement', () => {
     ['the minting run row is unreadable', { ok: false, detail: 'integer out of range' }],
     ['the minting run row is absent', { ok: true, run: null }],
     ['the minting run recorded no birth for this session',
-      { ok: true, run: { sessionId: ID, sessionBornAt: null, sessionBornFor: null } }],
+      { ok: true, run: { sessionId: ID, sessionBornAt: null, sessionBornFor: null, dispatchStartedAt: null } }],
     ['the minting run is bound to ANOTHER session (a retry orphan)',
-      { ok: true, run: { sessionId: 'demo-retry', sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-retry' } }],
+      { ok: true, run: { sessionId: 'demo-retry', sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-retry',
+                          dispatchStartedAt: BIRTH_MS } }],
     ['the minting run is bound to no session yet',
-      { ok: true, run: { sessionId: null, sessionBornAt: BIRTH_MS, sessionBornFor: null } }],
-    ["the birth belongs to an EARLIER occupant (a cross-build rollback's stale pairing)",
-      { ok: true, run: { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-earlier-occupant' } }],
+      { ok: true, run: { sessionId: null, sessionBornAt: BIRTH_MS, sessionBornFor: null,
+                          dispatchStartedAt: BIRTH_MS } }],
+    ["the birth belongs to an earlier occupant under a DIFFERENT id (a cross-build rollback's stale pairing)",
+      { ok: true, run: { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-earlier-occupant',
+                          dispatchStartedAt: BIRTH_MS } }],
+    // A cross-build rollback followed by a SAME-id redraw (spec §5.5's
+    // recycled slug, extended across a rollback): `sessionBornFor` still
+    // matches, since the id never changed, but a genuine re-mint re-stamps
+    // `dispatchStartedAt` first.
+    ['the birth belongs to an earlier occupant under the SAME id (a cross-build rollback + a redrawn slug)',
+      { ok: true, run: { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: ID,
+                          dispatchStartedAt: BIRTH_MS + HOUR } }],
   ] as const)('an unplaceable birth — %s — refuses a pre-birth row: workspace-spent', async (_what, answer) => {
     put('child', '5');
     expect(await gate(harness(localIO, inheritedOnly, mintingRun(answer as ChildBirthRunRead)), ID))
@@ -213,6 +224,10 @@ describe('childBindGate — incarnation placement', () => {
     const opened = coord.openRun({ program: 'build4', title: 'Child reclamation', project: 'demo',
       wave: 1, waveOf: 3, claimedBy: 'demo-coordinator' });
     if (!('id' in opened)) throw new Error(`fixture run not opened: ${JSON.stringify(opened)}`);
+    // `markDispatchStarted` BEFORE `setSession`, on `dispatch.ts`'s own fresh-arm
+    // order: the new equality check requires `dispatchStartedAt` to agree with
+    // the birth this bind stamps.
+    coord.markDispatchStarted(opened.id, BIRTH_MS);
     coord.setSession(opened.id, ID, BIRTH_MS);
     coord.markDispatched(opened.id, ID, ID, `ws/${ID}`, false, BIRTH_MS + 30_000);
     put('child', String(opened.id));

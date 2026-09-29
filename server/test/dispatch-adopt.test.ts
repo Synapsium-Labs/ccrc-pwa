@@ -575,10 +575,10 @@ describe('T2 — sessionBornAt: the write-once birth', () => {
     expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
   });
 
-  // Fix round 1, Minor-3: "ONE MEASUREMENT, SPENT TWICE" was asserted in
-  // `dispatch.ts`'s own comment but unpinned — every case above runs under a
-  // frozen fake `Date`, so a second `Date.now()` read at the `setSession` call
-  // would stay green too. This advances the clock from INSIDE the stubbed
+  // "ONE MEASUREMENT, SPENT TWICE" is asserted in `dispatch.ts`'s own comment
+  // but was unpinned — every case above runs under a frozen fake `Date`, so a
+  // second `Date.now()` read at the `setSession` call would stay green too.
+  // This advances the clock from INSIDE the stubbed
   // `ws-add` — the one vantage point between the stamp `dispatchStartedAt`
   // takes and the `setSession` call that would read a second one — so a
   // regression that reads `Date.now()` again at the bind reds here even

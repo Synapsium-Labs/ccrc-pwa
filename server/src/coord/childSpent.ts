@@ -86,21 +86,25 @@ export function placeChildRow(createdAt: unknown, birth: ChildBirth): ChildRowPl
   return 'unplaced';
 }
 
-/** The minting run's row as the birth reads it — the three columns it needs
+/** The minting run's row as the birth reads it — the four columns it needs
  *  out of `CoordStore.run`'s answer, which satisfies this type structurally,
  *  so a caller hands the store's own read over unchanged. Its three answers
  *  stay three: a row, no row, and a row that could not be read.
- *  `sessionBornAt`, never `dispatchStartedAt`: the latter moves on every
- *  fresh-spawn attempt, including retries, and so cannot say which attempt the
- *  CURRENT occupant belongs to. `sessionBornFor` names the session the birth
- *  was recorded for — a cross-build rollback (an older build's `clearSession`
- *  or two-argument `setSession` never touches either column) can leave a
- *  stale birth on a row whose `sessionId` has since moved past it; only a
- *  birth still bound to its own occupant is placeable. */
+ *  `sessionBornAt`, never used alone for the placed instant: the latter half
+ *  of `childBirthOf`'s check reads `dispatchStartedAt` too, which moves on
+ *  every fresh-spawn attempt, including retries — a genuine re-mint of the
+ *  SAME session id (a recycled slug, spec §5.5, redrawn under a workspace's
+ *  own former name) re-stamps it, and a stale `sessionBornAt` no longer
+ *  agrees. `sessionBornFor` names the session the birth was recorded for — a
+ *  cross-build rollback (an older build's `clearSession` or two-argument
+ *  `setSession` never touches any of these three columns) can leave a stale
+ *  birth on a row whose `sessionId` has since moved past it; only a birth
+ *  still bound to its own occupant, and still dated to its own occupant's own
+ *  dispatch, is placeable. */
 export type ChildBirthRunRead =
   | { readonly ok: true;
       readonly run: { readonly sessionId: string | null; readonly sessionBornAt: number | null;
-                       readonly sessionBornFor: string | null } | null }
+                       readonly sessionBornFor: string | null; readonly dispatchStartedAt: number | null } | null }
   | { readonly ok: false; readonly detail: string };
 
 /**
@@ -111,10 +115,31 @@ export type ChildBirthRunRead =
  * unbound run, an adopted spawn, or a predecessor's birth nulled by a later
  * re-bind), when its `sessionId` is not this session (a run whose retry
  * minted another workspace, leaving this one an orphan the stamp does not
- * describe), or when `sessionBornFor` does not equal `sessionId` (the birth
- * belongs to an earlier occupant — a cross-build rollback can rebind
- * `sessionId` without moving either birth column, which would otherwise date
- * a genuinely new occupant to a stranger's mint).
+ * describe), when `sessionBornFor` does not equal `sessionId` (the birth
+ * belongs to an earlier occupant under a DIFFERENT id — a cross-build
+ * rollback can rebind `sessionId` without moving either birth column, which
+ * would otherwise date a genuinely new occupant to a stranger's mint), or
+ * when `sessionBornAt` does not equal `dispatchStartedAt` (the birth belongs
+ * to an earlier occupant under the SAME recycled id — a cross-build rollback
+ * followed by a same-slug redraw leaves `sessionId`/`sessionBornFor` both
+ * matching, since the id never changed, but a genuine re-mint always
+ * re-stamps `dispatchStartedAt` first, so a birth still dated to the earlier
+ * occupant no longer agrees with it).
+ *
+ * TWO conditions, both required, and NEITHER subsumes the other: the
+ * `sessionBornFor` check catches a rollback that hands the run to a
+ * DIFFERENT id; the `dispatchStartedAt` check catches one that redraws the
+ * SAME id (spec §5.5's recycled slug, extended across a rollback — the case
+ * `sessionBornFor` cannot see, because the id never changed). No further
+ * residual is known: every writer of `sessionId` also writes
+ * `dispatchStartedAt` on a genuine fresh mint (`CoordStore.markDispatchStarted`,
+ * the fresh-spawn arm's only caller), on every build this repository has ever
+ * shipped, migration 5 onward — so a birth that survives both checks is
+ * provably this occupant's own. The accepted liveness cost: a bound run whose
+ * `dispatchStartedAt` moves for a reason OTHER than a fresh mint — there is
+ * none in this codebase today, `markDispatchStarted`'s own docstring names its
+ * one call site — would read unplaceable too, and the close would simply hold
+ * rather than reclaim; fail-closed, never fail-open.
  */
 export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildBirth {
   if (!read.ok) return { kind: 'unplaceable', detail: `the minting run could not be read: ${read.detail}` };
@@ -127,6 +152,9 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
   }
   if (read.run.sessionBornFor !== read.run.sessionId) {
     return { kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" };
+  }
+  if (read.run.sessionBornAt !== read.run.dispatchStartedAt) {
+    return { kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth" };
   }
   return { kind: 'at', ms: read.run.sessionBornAt };
 }

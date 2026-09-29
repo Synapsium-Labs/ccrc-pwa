@@ -640,11 +640,13 @@ async function childGateAtClose(
   if (!decision.reclaim && decision.why === 'not-finished' && read.found && minting.kind === 'row') {
     // The minting row is guaranteed present here — `childReclaimDecision`
     // only answers `not-finished` past its own `minting.kind==='row'` check —
-    // so `minting.sessionBornAt`/`minting.sessionBornFor` are this child's
-    // birth, read once, never a second `coord.run` query.
+    // so `minting.sessionBornAt`/`minting.sessionBornFor`/
+    // `minting.dispatchStartedAt` are this child's birth, read once, never a
+    // second `coord.run` query.
     const birth = childBirthOf(
       { ok: true, run: { sessionId: minting.sessionId, sessionBornAt: minting.sessionBornAt,
-                          sessionBornFor: minting.sessionBornFor } },
+                          sessionBornFor: minting.sessionBornFor,
+                          dispatchStartedAt: minting.dispatchStartedAt } },
       sessionId);
     let spent = await childSpent(deps, read.record, birth);
     // A2/P6: a fast-path spent (registry `.prnumber` or `.prhistory`, always
@@ -673,7 +675,8 @@ function mintingRowOf(coord: CoordStore, runId: number): ChildReclaimMinting {
   if (!r.ok) return { kind: 'unreadable' };
   return r.run === null ? { kind: 'absent' }
     : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews,
-        sessionBornAt: r.run.sessionBornAt, sessionBornFor: r.run.sessionBornFor };
+        sessionBornAt: r.run.sessionBornAt, sessionBornFor: r.run.sessionBornFor,
+        dispatchStartedAt: r.run.dispatchStartedAt };
 }
 
 /** The run a REVIEW child's minting run reviews (spec §5.7) — `none` when the

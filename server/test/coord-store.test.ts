@@ -3193,7 +3193,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       expect(row?.sessionBornFor).toBeNull();
     });
 
-    it('a bound session, then a direct markDispatchStarted: sessionBornAt/sessionBornFor unchanged and dispatchStartedAt moves', () => {
+    it('a bound session, then a direct markDispatchStarted: sessionBornAt/sessionBornFor unchanged and dispatchStartedAt moves — and childBirthOf now reads it as unplaceable (the accepted liveness cost)', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
@@ -3202,6 +3202,15 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       expect(row?.sessionBornAt).toBe(1_000);
       expect(row?.sessionBornFor).toBe('demo-worker');
       expect(row?.dispatchStartedAt).toBe(5_000);
+      // `childBirthOf` requires `sessionBornAt === dispatchStartedAt`
+      // (R-I1a's closure), so a run whose dispatch was re-stamped by hand
+      // AFTER its birth — never a shape a real dispatch produces, since the
+      // fresh arm always stamps both from one measurement — now reads
+      // unplaceable rather than the birth it recorded first. This is the
+      // fail-closed cost the check accepts: the close would simply hold.
+      expect(childBirthOf({ ok: true, run: row! }, 'demo-worker')).toEqual({
+        kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+      });
     });
 
     it('setSession forwards bornAt exactly as bindSession would — the two-argument form (the open route\'s) omits it', () => {
@@ -3241,31 +3250,39 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       expect(toRunSummary(row)).not.toHaveProperty('sessionBornFor');
     });
 
-    // Fix round 1, Important-1: a cross-build rollback across this migration
-    // can leave a stale birth on a row an OLDER build has since rebound —
-    // that build's `clearSession`/two-argument `setSession` never touch
-    // either birth column, so a roll-forward finds `sessionId` moved on while
-    // `sessionBornAt`/`sessionBornFor` still name the outgoing occupant.
-    // `childBirthOf` catches it by requiring `sessionBornFor === sessionId`.
-    describe('childBirthOf and the cross-build rollback (fix round 1, Important-1)', () => {
-      it('the normal path: sessionBornFor equals the current sessionId, so the birth places', () => {
+    // A cross-build rollback across this migration can leave a stale birth on
+    // a row an OLDER build has since rebound — that build's `clearSession`/
+    // two-argument `setSession` never touch any of the three birth-adjacent
+    // columns, so a roll-forward can find `sessionId` moved on while
+    // `sessionBornAt`/`sessionBornFor` still name the outgoing occupant
+    // (a DIFFERENT id — `sessionBornFor` catches this), or find `sessionId`
+    // redrawn back to the SAME id (spec §5.5's recycled slug, extended across
+    // a rollback — `sessionBornFor` cannot see this, since the id never
+    // changed, but `dispatchStartedAt` moves on every genuine re-mint, so the
+    // `sessionBornAt === dispatchStartedAt` check catches it instead).
+    describe('childBirthOf and the cross-build rollback', () => {
+      it('the normal path: both checks agree, so the birth places', () => {
         const s = store();
         const runId = openOne(s);
+        // `markDispatchStarted` first, on `dispatch.ts`'s own fresh-arm order —
+        // a real bind always pairs the two stamps.
+        s.markDispatchStarted(runId, 1_000);
         s.bindSession(runId, 'demo-s1', 1_000);
         const row = okRun(s.run(runId))!;
         expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
       });
 
-      it('a same-session keep still places — sessionBornFor was never touched', () => {
+      it('a same-session keep still places — neither column was touched', () => {
         const s = store();
         const runId = openOne(s);
+        s.markDispatchStarted(runId, 1_000);
         s.bindSession(runId, 'demo-s1', 1_000);
         s.bindSession(runId, 'demo-s1');   // omitted bornAt, same session: keep
         const row = okRun(s.run(runId))!;
         expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
       });
 
-      it('the rollback shape: an OLD-BUILD rebind leaves the birth pointing at the outgoing occupant, and childBirthOf refuses it', () => {
+      it('the rollback shape: an OLD-BUILD rebind to a DIFFERENT id leaves the birth pointing at the outgoing occupant, and childBirthOf refuses it', () => {
         const s = store();
         const runId = openOne(s);
         // v15 binds S1 on run R, birth T1.
@@ -3283,6 +3300,41 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
         expect(row.sessionBornFor).toBe('demo-s1');
         expect(childBirthOf({ ok: true, run: row }, 'demo-s2'))
           .toEqual({ kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" });
+      });
+
+      // R-I1a, the sub-shape the first re-review measured OPEN: a rollback
+      // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended
+      // across a rollback) leaves `sessionBornFor` matching, since the id
+      // never changed — the `sessionBornFor` check alone cannot see it. The
+      // `sessionBornAt === dispatchStartedAt` check closes it, because every
+      // genuine re-mint — old build or new — always re-stamps
+      // `dispatchStartedAt` first (`CoordStore.markDispatchStarted`'s one
+      // call site, the fresh-spawn arm).
+      it('the redraw shape (R-I1a): an old-build re-mint of the SAME session id re-stamps dispatchStartedAt, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 at T1 — a real, paired bind.
+        s.markDispatchStarted(runId, 1_000);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back: an OLDER build's `clearSession` — `sessionId` (plus
+        // `workspace`/`branch`) alone, never the birth-adjacent columns.
+        s.db.prepare(
+          'UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ?',
+        ).run(runId);
+        // S1's workspace is fully removed and later redrawn for a DIFFERENT
+        // workspace under the SAME id (`_ws_slug_new`'s 12×12 pool, ccd/ccd) —
+        // an older build's fresh dispatch re-stamps `dispatchStartedAt` and
+        // binds `sessionId` with its own two-argument (birth-blind) write.
+        s.db.prepare('UPDATE runs SET sessionId = ?, dispatchStartedAt = ? WHERE id = ?')
+          .run('demo-s1', 2_000, runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s1');
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');   // matches — the id never changed
+        expect(row.dispatchStartedAt).toBe(2_000);    // re-stamped — the re-mint is real
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({
+          kind: 'unplaceable', detail: "the minting run's dispatch was re-stamped after this session's birth",
+        });
       });
     });
   });

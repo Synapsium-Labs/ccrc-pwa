@@ -359,6 +359,11 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
+    // `markDispatchStarted` BEFORE `setSession`, on `dispatch.ts`'s own
+    // fresh-arm order: `childBirthOf` now also requires `sessionBornAt` to
+    // equal `dispatchStartedAt` (R-I1a's closure), so a fixture birth must be
+    // a genuinely paired one, exactly as a real dispatch stamps it.
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
     b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);   // keeps the programme open
@@ -372,6 +377,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
     b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);
@@ -386,6 +392,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
     b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1
@@ -407,6 +414,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
     b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1, always 'unplaced'

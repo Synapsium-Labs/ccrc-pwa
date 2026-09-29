@@ -1231,9 +1231,8 @@ describe('coord.db: migration 15 — runs.sessionBornAt / runs.sessionBornFor (c
   // carries a `spawn-adopted:` event — an adopted winner may be an earlier
   // attempt's workspace, so a backfilled guess would date it wrong. An
   // unbound row is left NULL by the `WHERE sessionId IS NOT NULL` clause
-  // alone. Edited IN PLACE onto this same slot (fix round 1, controller
-  // ruling on Important-1): this migration has never shipped, so
-  // `sessionBornFor` joins it here rather than opening a slot 16.
+  // alone. Edited IN PLACE onto this same slot: this migration has never
+  // shipped, so `sessionBornFor` joins it here rather than opening a slot 16.
   describe('the backfill', () => {
     /** A database at exactly user_version 14, carrying three `runs` rows and
      *  one `run_events` row, built with RAW SQL — never `CoordStore` — so the

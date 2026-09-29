@@ -429,19 +429,21 @@ describe('parseChildReclaimResult', () => {
 describe('childReclaimDecision — has the coordinator finished with this child?', () => {
   const OPEN_NONE: OpenSiblingsResult = { ok: true, siblings: [] };
   // Every `ChildReclaimMinting` row fixture carries `sessionBornAt`/
-  // `sessionBornFor` (migration 15; controller ruling P7) — a plain literal
-  // here, since the pure decision reads only `reviews`/`sessionId`, never
-  // these columns; Task 9 is the one that places a fast-path spent verdict
-  // against them before it decides.
+  // `sessionBornFor`/`dispatchStartedAt` (migration 15/migration 5; controller
+  // ruling P7) — a plain literal here, since the pure decision reads only
+  // `reviews`/`sessionId`, never these columns; Task 9 is the one that places
+  // a fast-path spent verdict against them before it decides.
   const base: ChildReclaimDecisionInput = {
     mark: { kind: 'child', runId: 7 },
-    minting: { kind: 'row', sessionId: ID, reviews: null, sessionBornAt: 1_000, sessionBornFor: ID },
+    minting: { kind: 'row', sessionId: ID, reviews: null, sessionBornAt: 1_000, sessionBornFor: ID,
+               dispatchStartedAt: 1_000 },
     sessionId: ID,
     siblings: OPEN_NONE, reviewed: { kind: 'none' }, final: false, state: 'done', spent: { kind: 'unasked' },
     retiresProgram: false,
   };
   /** A REVIEW child (spec §5.7, "A review child is finished later than its own run"): minted by review run 7, which reviews work run 5. */
-  const REVIEW_MINTED = { kind: 'row', sessionId: ID, reviews: 5, sessionBornAt: 1_000, sessionBornFor: ID } as const;
+  const REVIEW_MINTED = { kind: 'row', sessionId: ID, reviews: 5, sessionBornAt: 1_000, sessionBornFor: ID,
+                           dispatchStartedAt: 1_000 } as const;
   it.each<[string, Partial<ChildReclaimDecisionInput>, ReturnType<typeof childReclaimDecision>]>([
     ['a final close', { final: true }, { reclaim: true }],
     ['an abandon', { state: 'failed' }, { reclaim: true }],
@@ -469,11 +471,11 @@ describe('childReclaimDecision — has the coordinator finished with this child?
       { reclaim: false, why: 'not-a-child' }],
     ['a minting run bound to ANOTHER session',
       { minting: { kind: 'row', sessionId: 'demo-other', reviews: null, sessionBornAt: 1_000,
-                    sessionBornFor: 'demo-other' }, final: true },
+                    sessionBornFor: 'demo-other', dispatchStartedAt: 1_000 }, final: true },
       { reclaim: false, why: 'not-a-child' }],
     ['a minting run bound to NO session',
-      { minting: { kind: 'row', sessionId: null, reviews: null, sessionBornAt: 1_000, sessionBornFor: null },
-        final: true },
+      { minting: { kind: 'row', sessionId: null, reviews: null, sessionBornAt: 1_000, sessionBornFor: null,
+                    dispatchStartedAt: 1_000 }, final: true },
       { reclaim: false, why: 'not-a-child' }],
     // Spec §5.7 — a review child is kept while the run it reviewed is open:
     // the coordinator cites the report in its clips BY PATH in fix-round mail.

@@ -1141,25 +1141,34 @@ export const MIGRATIONS: readonly string[] = [
   // ever carried is placed against the SESSION's own birth, not against
   // whichever attempt most recently touched `dispatchStartedAt`.
   //
-  // `runs.sessionBornFor` (fix round 1, review Important-1: a cross-build
-  // rollback fail-open) rides beside it — the session the birth was recorded
-  // FOR. This build's `CoordStore.bindSession` is the only writer that keeps
-  // both columns honest across a rebind; an OLDER build's `clearSession`/
-  // two-argument `setSession` unbind or rebind `sessionId` without touching
-  // either, so a roll-forward after a roll-back-then-forward across this
-  // migration can leave a row whose `sessionId` has moved on while its birth
-  // still names the PREVIOUS occupant. `childBirthOf` refuses to place a
-  // birth unless `sessionBornFor` still equals the row's own `sessionId`, so
-  // that stale pairing reads as unplaceable rather than as a too-early date on
-  // the new occupant. This column has no migration of its own — this slot has
-  // never shipped, so it is edited in place rather than adding a slot 16 for
-  // a fix to a slot nothing has run yet.
+  // `runs.sessionBornFor` — a cross-build rollback can leave a stale birth on
+  // a row, which is why this column rides beside `sessionBornAt` — names the
+  // session the birth was recorded FOR. This build's `CoordStore.bindSession`
+  // is the only writer that keeps both columns honest across a rebind; an
+  // OLDER build's `clearSession`/two-argument `setSession` unbind or rebind
+  // `sessionId` without touching either, so a roll-forward after a
+  // roll-back-then-forward across this migration can leave a row whose
+  // `sessionId` has moved on while its birth still names the PREVIOUS
+  // occupant. `childBirthOf` refuses to place a birth unless `sessionBornFor`
+  // still equals the row's own `sessionId`, so that stale pairing reads as
+  // unplaceable rather than as a too-early date on the new occupant.
+  // `childBirthOf` ALSO requires `sessionBornAt` to equal `dispatchStartedAt`
+  // (migration 5) — the `sessionBornFor` check alone cannot see a rollback
+  // followed by a SAME-id redraw (a recycled slug, spec §5.5, extended across
+  // a rollback: the id never changes, so `sessionBornFor` still matches), but
+  // every genuine re-mint re-stamps `dispatchStartedAt` first, so a birth
+  // still dated to an earlier occupant no longer agrees with it either. Both
+  // columns have no migration of their own — this slot has never shipped, so
+  // they are edited in place rather than adding a slot 16 for a fix to a slot
+  // nothing has run yet.
   //
   // The backfill dates every row that already carries a bound session to the
   // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
   // with `sessionBornFor` set to that same row's own `sessionId` (never a
-  // second read: the row already carries both), and ONE exception: a row
-  // whose `run_events` trail carries a `spawn-adopted:` event bound to an
+  // second read: the row already carries both). Setting `sessionBornAt` FROM
+  // `dispatchStartedAt` also means the equality check above is trivially
+  // satisfied for every backfilled row — no separate write is needed. ONE
+  // exception: a row whose `run_events` trail carries a `spawn-adopted:` event bound to an
   // EARLIER attempt's workspace, never this session's own mint (`dispatch.ts`'s
   // fresh arm: an adopted winner binds with a NULL birth, because the
   // workspace it adopted may be an earlier attempt's, and a backfilled guess
