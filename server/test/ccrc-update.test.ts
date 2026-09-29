@@ -2981,14 +2981,14 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
   // is raised inside the staged spine, before the health gate, and a restore
   // never lowers it (spec §9 stands) — so a failed update that restored
   // leaves the floor above the running release. The refusal a later move
-  // meets names the update that raised it, read from the last run's report,
+  // meets names the last update (to the floor's tag, its gate failed and it was restored), read from the last run's report,
   // and names the floor alone when that report does not say so.
   const REVERTED_REPORT = (target: string): string =>
     `{"target":"${target}","phase":"reverted","startedAt":1,"updatedAt":2,"detail":"arm1: flipped back to v1.0.0; gate: fixture","from":"cli","pid":1}\n`;
   const RAISED_BY = (floor: string): string =>
-    ` — the update that raised it, to ${floor}, failed its health gate and was restored, so the floor stands above the release this box runs`;
+    ` — the last update, to ${floor}, failed its health gate and was restored, so the floor stands above the release this box runs`;
 
-  it('END TO END: a real update whose gate failed and restored leaves the floor above the running release, and the next move below it is refused naming the update that raised it (C28\'s root)', () => {
+  it('END TO END: a real update whose gate failed and restored leaves the floor above the running release, and the next move below it is refused naming the last update, restored after its gate failed (C28\'s root)', () => {
     const home = onKeptV1('ccrc-update-floor-restored-');
     packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
     writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\n');
@@ -8908,6 +8908,11 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v2\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v1\.0\.0 while this box's stamp reads v1\.1\.0, /m);
     expect(r.stderr).toContain('name the target: ccrc rollback --to vX.Y.Z');
+    // What the check measures is only that the link and the stamp disagree,
+    // so the sentence claims no history: it names two possible movers and
+    // says previous MAY not be the build before the last update.
+    expect(r.stderr).toContain("so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed");
+    expect(r.stderr).not.toContain('older than versioned installs moved it forward');
     expect(localUrls(home), 'the refusal asked the release host').toEqual([]);
     expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
     expect(existsSync(join(home, '.ccrc', 'update.json')), 'a refusal before the lock wrote a report').toBe(false);
