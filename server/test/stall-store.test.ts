@@ -5,7 +5,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { queueSystemMail } from '../src/coord/rundefs.js';
+import { insertSystemMailTx, queueStallNotice, queueSystemMail } from '../src/coord/rundefs.js';
 import { STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallDetail } from '../src/coord/stall.js';
 import { WAVE_DONE_SUBJECT, type MailKind, type RunState } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -337,5 +337,131 @@ describe('insertStallObservation / recordStallObservation: the durable, deduped 
     expect(() => tx(s.db, () => s.recordStallObservation(run, stallDetail('live', 'quiet', 2, S4_STATUS_AT), S4_R1_AT)))
       .toThrow(/transaction/i);
     expect(stallRows(s, run)).toHaveLength(1);
+  });
+});
+
+describe('insertSystemMailTx: queueSystemMail\'s body, extracted with no transaction of its own', () => {
+  const RUN_FIELDS = { program: 'demo-program', wave: 7, waveOf: 9 };
+
+  it('writes the mail, its delivery and the envelope stamped against the DELIVERY id, inside a caller\'s tx', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const out = tx(s.db, () => insertSystemMailTx(s, RUN_FIELDS, { fromId: 'operator', toId: 'demo-worker', runId: run,
+      kind: 'status', subject: 'fixture subject', body: 'fixture body' }));
+    const env = envelopeOf(s, out.deliveryId);
+    expect(env).toContain(`id: ${out.deliveryId}`);
+    expect(env).toContain('from: operator');
+    expect(env).toContain(`run: ${run} (program:demo-program wave 7/9)`);
+    expect(s.db.prepare('SELECT fromId, fromUuid, toId, runId FROM mail WHERE id = ?').get(out.mailId))
+      .toEqual({ fromId: 'operator', fromUuid: 'operator', toId: 'demo-worker', runId: run });
+  });
+
+  it('THROWS on an unstampable envelope, and under the caller\'s tx nothing it wrote survives', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    s.setDeliveryEnvelope = () => ({ ok: false as const, why: 'absent' as const });
+    expect(() => tx(s.db, () => insertSystemMailTx(s, RUN_FIELDS, { fromId: 'operator', toId: 'demo-worker', runId: run,
+      kind: 'status', subject: 'fixture subject', body: 'fixture body' }))).toThrow(/unstampable: absent/);
+    expect(count(s, 'mail')).toBe(0);
+    expect(count(s, 'mail_deliveries')).toBe(0);
+  });
+
+  it('queueSystemMail still dedupes BEFORE its one transaction, and opens exactly one', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    const m = { fromId: 'coordinator' as const, toId: 'demo-worker', runId: run, kind: 'status' as const,
+                subject: 'wave-brief', body: 'go' };
+    expect(queueSystemMail(s, RUN_FIELDS, m).queued).toBe(true);
+    expect(queueSystemMail(s, RUN_FIELDS, m)).toEqual({ queued: false });
+    expect(() => tx(s.db, () => queueSystemMail(s, RUN_FIELDS, { ...m, subject: 'wave-done-rejected' })))
+      .toThrow(/transaction/i);
+    expect(count(s, 'mail')).toBe(1);
+  });
+});
+
+describe('queueStallNotice: the observation row and the mail, in ONE transaction (§4.2)', () => {
+  /** S4 on a fixture run: the worker's status, then the answer it was handed. */
+  function s4(s: CoordStore): { run: { id: number; program: string; wave: number; waveOf: number }; answer: number } {
+    const id = seedRun(s, { sessionId: 'demo-worker', wave: 9, reach: 'working', at: DISPATCHED_AT });
+    mailAt(s, { fromId: 'demo-worker', toId: 'coordinator', runId: id, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
+    const answer = mailAt(s, { fromId: 'demo-coordinator', toId: 'demo-worker', runId: id, kind: 'answer',
+      subject: 'go on', at: S4_ANSWER_AT });
+    return { run: { id, program: 'demo-program', wave: 9, waveOf: 9 }, answer };
+  }
+  const r1 = (runId: number, answer: number) => ({
+    detail: stallDetail('live', 'quiet', 1, S4_STATUS_AT), at: S4_R1_AT, toId: 'demo-worker', kind: 'status' as const,
+    subject: `${STALL_CHECK_PREFIX} run ${runId} — quiet 2h 0m, owed: reply to #${answer}`,
+    body: 'stall-check from the ccrc stall watch (server)',
+  });
+
+  it('queues an operator mail to the worker and records the rung, answering all three ids', () => {
+    const s = store();
+    const { run, answer } = s4(s);
+    const q = queueStallNotice(s, run, r1(run.id, answer));
+    if (!q.queued) throw new Error(`not queued: ${q.why}`);
+    expect(s.db.prepare('SELECT fromId, toId, runId, kind, subject FROM mail WHERE id = ?').get(q.mailId)).toEqual({
+      fromId: 'operator', toId: 'demo-worker', runId: run.id, kind: 'status', subject: r1(run.id, answer).subject });
+    expect(envelopeOf(s, q.deliveryId)).toContain(`run: ${run.id} (program:demo-program wave 9/9)`);
+    expect(stallRows(s, run.id)).toEqual([{ id: q.eventId, at: S4_R1_AT, fromState: 'working', toState: 'working',
+      causedBy: 'operator', detail: stallDetail('live', 'quiet', 1, S4_STATUS_AT) }]);
+    // The check is what pushNewMail's reply bind will find first.
+    expect(s.firstMailIdWithPrefix(run.id, 'operator', 'demo-worker', STALL_CHECK_PREFIX)).toBe(q.mailId);
+  });
+
+  it('refuses the same rung twice as a duplicate, even after the first was ACKED, which the outstanding-mail dedupe cannot see', () => {
+    const s = store();
+    const { run, answer } = s4(s);
+    const q = queueStallNotice(s, run, r1(run.id, answer));
+    if (!q.queued) throw new Error(`not queued: ${q.why}`);
+    s.markDelivered(q.deliveryId, S4_R1_AT + 5_000);
+    s.markAcked(q.deliveryId, S4_R1_AT + 60_000);
+    expect(queueStallNotice(s, run, { ...r1(run.id, answer), at: S4_R1_AT + 120_000 }))
+      .toEqual({ queued: false, why: 'duplicate' });
+    expect(count(s, 'mail')).toBe(3);                    // the S4 pair and ONE stall-check
+  });
+
+  it('answers run-gone for an absent run, and writes neither a row nor a mail', () => {
+    const s = store();
+    expect(queueStallNotice(s, { id: 424_242, program: 'demo-program', wave: 9, waveOf: 9 }, r1(424_242, 1)))
+      .toEqual({ queued: false, why: 'run-gone' });
+    expect(count(s, 'mail')).toBe(0);
+    expect(stallRows(s, 424_242)).toEqual([]);
+  });
+
+  it('rolls the observation row back when the mail write throws, so a failed send never burns its rung', () => {
+    const s = store();
+    const { run, answer } = s4(s);
+    const real = s.insertMail.bind(s);
+    s.insertMail = () => { throw new Error('boom — simulated coord.db failure'); };
+    expect(() => queueStallNotice(s, run, r1(run.id, answer))).toThrow(/boom/);
+    expect(stallRows(s, run.id)).toEqual([]);
+    s.insertMail = real;
+    expect(queueStallNotice(s, run, r1(run.id, answer)).queued).toBe(true);
+  });
+
+  it('rolls the observation row back when the envelope cannot be stamped', () => {
+    const s = store();
+    const { run, answer } = s4(s);
+    s.setDeliveryEnvelope = () => ({ ok: false as const, why: 'absent' as const });
+    expect(() => queueStallNotice(s, run, r1(run.id, answer))).toThrow(/unstampable: absent/);
+    expect(stallRows(s, run.id)).toEqual([]);
+    expect(count(s, 'mail')).toBe(2);                    // only the S4 pair
+    expect(count(s, 'mail_deliveries')).toBe(0);
+  });
+
+  it('r2 to the coordinator is its own rung on the same run, and the notice cannot be nested in another tx', () => {
+    const s = store();
+    const { run, answer } = s4(s);
+    expect(queueStallNotice(s, run, r1(run.id, answer)).queued).toBe(true);
+    const r2 = { detail: stallDetail('live', 'quiet', 2, S4_STATUS_AT), at: S4_R1_AT + 3_600_000,
+      toId: 'demo-coordinator', kind: 'status' as const, subject: `${STALL_REPORT_PREFIX} run ${run.id} — worker silent 3h`,
+      body: 'stall report from the ccrc stall watch (server)' };
+    expect(() => tx(s.db, () => queueStallNotice(s, run, r2))).toThrow(/transaction/i);
+    const q2 = queueStallNotice(s, run, r2);
+    if (!q2.queued) throw new Error(`not queued: ${q2.why}`);
+    expect(s.db.prepare('SELECT fromId, toId FROM mail WHERE id = ?').get(q2.mailId))
+      .toEqual({ fromId: 'operator', toId: 'demo-coordinator' });
+    expect(stallRows(s, run.id).map((r) => r.detail)).toEqual([
+      stallDetail('live', 'quiet', 1, S4_STATUS_AT), stallDetail('live', 'quiet', 2, S4_STATUS_AT)]);
   });
 });

@@ -4200,9 +4200,11 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to FIVE reachable paths, all in
+   * GUARDED. The three direct callers expand to SIX reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
-   * the system-mail queue's own `tx`, `dispatchRun`'s dispatch `tx` through
+   * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
+   * and `queueStallNotice`, each around `rundefs.ts`'s `insertSystemMailTx`),
+   * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
    * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
    * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
