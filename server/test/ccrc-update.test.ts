@@ -10125,6 +10125,37 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     }
   });
 
+  // F3 (review 179, fix round 1 item 3): the `projection` row above plants a
+  // STALE document, the one word `_ver_protect`'s catch-all arm answers by
+  // name. `unreadable` and `malformed` are two more words with the same
+  // arm, and CLAUDE.md names folding either into `not-configured` as the
+  // forbidden shape ("stale and unreadable ... never folded"), so each is its
+  // OWN case: a loop over rows would show only the first red of a fold. The
+  // `unreadable` row is a `server` box with NO projection file — the shape
+  // no case ran end to end before this one (an absent file on a server/both
+  // box is unreadable, never `not-configured`).
+  const projectionRows: Array<[string, (h: string) => void, string]> = [
+    ['unreadable', (h) => { stopUnits(h); plantRole(h, 'server'); },
+      "the control plane's projection is unreadable (absent) — its desired tags cannot be read"],
+    ['malformed', (h) => { stopUnits(h); plantRole(h, 'server'); plantIntent(h, 'garbage\nend\n'); },
+      "the control plane's projection is malformed (not exactly nine lines) — its desired tags cannot be read"],
+  ];
+  for (const [word, plant, why] of projectionRows) {
+    itLinux(`${word === 'unreadable' ? 'an' : 'a'} ${word} projection prunes nothing, by hand and automatically — its own case, never folded into not-configured (F3)`, () => {
+      const home = versionedBox(`ccrc-versions-unmeasured-proj-${word}-`, ['v1.0.1', 'v1.0.0']);
+      plant(home);
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, `${word}: ${r.stdout}${r.stderr}`).toBe(1);
+      expect(r.stdout).toMatch(new RegExp(`^versions: prune skipped — ${lit(why)}; nothing was removed$`, 'm'));
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: unmeasured$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+      // The automatic GC reads the same input the same way: WARN, rc 1, nothing removed.
+      const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=0; _ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout, a.stderr).toBe(`update: versions: WARN: nothing pruned — ${why}\nrc=1\n`);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    });
+  }
+
   // Both platforms: `_plat_mtime` is `stat -c %Y` or `stat -f %m`, and the
   // shim below fails either spelling the same way. It is not a fifth row of
   // the itLinux table above, so the macOS leg measures it too.
