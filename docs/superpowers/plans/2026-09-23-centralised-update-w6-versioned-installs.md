@@ -124,7 +124,7 @@ install: done — every step above converged
 - yes — the spine reached its landing line
 - yes — ~/ccrc is a real directory
 - yes — /health answers v0.0.34
-- doctor FAIL checks in this transcript: none
+- doctor FAIL checks in this transcript: gh_auth, git_email
 
 State after:
 
@@ -227,7 +227,7 @@ install: migration: $HOME/ccrc.migrating kept — ccrc doctor did not pass; the 
 - yes — the version kept its stamp and record
 - yes — the doctor tail decided ~/ccrc.migrating
 - yes — ~/ccrc -> untagged-12c8e59aac51
-- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+- doctor FAIL checks in this transcript: gh_auth, git_email (not in R1's environment baseline: none)
 
 State after:
 
@@ -268,7 +268,7 @@ update: gate: server answers on v0.0.35 (ccrc.service up, /health at 127.0.0.1:$
 - yes — ~/ccrc -> v0.0.35
 - yes — /health answers v0.0.35
 - yes — no ~/ccrc.migrating once a gate has passed
-- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+- doctor FAIL checks in this transcript: gh_auth, git_email (not in R1's environment baseline: none)
 
 State after:
 
@@ -307,7 +307,7 @@ update: gate: server answers on v0.0.34 (ccrc.service up, /health at 127.0.0.1:$
 - yes — ~/ccrc -> v0.0.34
 - yes — /health answers v0.0.34
 - yes — previous is v0.0.35
-- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+- doctor FAIL checks in this transcript: gh_auth, git_email (not in R1's environment baseline: none)
 
 State after:
 
@@ -346,7 +346,7 @@ rollback: this box runs v0.0.35 again — flipped back to $HOME/ccrc-versions/v0
 - yes — ~/ccrc -> v0.0.35
 - yes — /health answers v0.0.35
 - yes — update.json closed done, from rollback
-- doctor FAIL checks in this transcript: none (not in R1's environment baseline: none)
+- doctor FAIL checks in this transcript: gh_auth, git_email (not in R1's environment baseline: none)
 
 State after:
 
@@ -469,7 +469,7 @@ update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"roll
 
 ### R7ch2: `channel` after the fixture planted an in-force projection (the stand-in for W2's server-role writer)
 
-Not run: R7ch already read an in-force projection, so nothing was planted.
+Not run: R7ch already read an in-force projection — the fixture's own server wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force) — so nothing was planted, and D-3447's absent-projection path was not exercised here (see the note under **Outcome:**).
 
 ### R7c: `CCRC_VERSIONS_KEEP=1 versions --prune`
 
@@ -514,6 +514,8 @@ update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"roll
 - poisoned tools (`tmux`, `ssh`, `gh`, `systemd-run`, `launchctl`) were reached 10 time(s), each refused.
 
 **Outcome:** every expectation above held.
+
+Fixture environment: the fixture's own server (the published build it ran when R7 started) wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force), so R7a printed no `versions: WARN` and R7ch read `state=none`, and R7ch2's plant was skipped by the brief's own rule. D-3447's absent-projection → prune-skipped path was therefore NOT exercised in this rehearsal. The suites carry it by composition: an absent projection reads `unreadable (absent)`, and `_ver_protect`'s `*)` arm, which unreadable and stale share, prunes nothing. No suite case runs an absent projection end to end through `versions --prune`.
 
 ### The live half — the coordinator's, at rollout (not run here)
 
@@ -7804,10 +7806,10 @@ git status --porcelain
 git log --oneline -12
 grep -c '^BOX_VERSIONS_ROOT=' ccd/ccrc
 grep -c '^_plat_ln_swap() {' ccd/ccrc ccd/ccd
-grep -c '<!-- REHEARSAL RECORD: task 8 -->' docs/superpowers/plans/2026-09-23-centralised-update-w6-versioned-installs.md
+grep -cx '<!-- REHEARSAL RECORD: task 8 -->' docs/superpowers/plans/2026-09-23-centralised-update-w6-versioned-installs.md
 gh release list --limit 2 --json tagName,isPrerelease,publishedAt --jq '.[] | "\(.tagName) \(.isPrerelease) \(.publishedAt)"'
 ```
-Expected: no `git status` output; Tasks 1–7's commits in the log; `1`; `ccd/ccrc:1` and `ccd/ccd:1`; `1`; two lines, newest first. `gh release list` only reads. The first line's tag is `N`, the second's `N-1`.
+Expected: no `git status` output; Tasks 1–7's commits in the log; `1`; `ccd/ccrc:1` and `ccd/ccd:1`; `1` (a WHOLE-line count, `grep -cx`: this plan's Task 8 text quotes the marker inside prose and code in several more places, so a substring `grep -c` reads more than 1 and is not the check); two lines, newest first. `gh release list` only reads. The first line's tag is `N`, the second's `N-1`.
 
 Then measure both artifacts (the worker's own shell, real `curl`, into scratch):
 ```bash
@@ -8145,7 +8147,7 @@ cat > "$SCRATCHPAD/w6-record.py" <<'PY'
 Run with env.sh's variables exported (`set -a; . "$S/env.sh"; set +a`). Reads only what run.sh and
 state.sh wrote — every transcript line it quotes is a scrubbed line the run printed, matched by the
 expectations below, never retyped — and replaces the plan's one `<!-- REHEARSAL RECORD: task 8 -->` line
-with $S/logs/header.md followed by the record. Refuses, editing nothing, when the marker is not there exactly once, when a step the
+(matched as a WHOLE line: Task 8's own text quotes the string inside prose and code) with $S/logs/header.md followed by the record. Refuses, editing nothing, when the marker is not there exactly once, when a step the
 record needs was never run, or when the finished text still carries a scratch path, the live home, the
 operator's name or the release host's owner."""
 import os, re, sys, pathlib
@@ -8301,7 +8303,7 @@ out, differs, baseline = [], [], set()
 OPTIONAL = {'R7ch2'}   # run only when R7ch read no in-force projection
 for label, title, rcs, checks in STEPS:
     if label in OPTIONAL and not (LOGS / f'{label}.rc').exists():
-        out += [f'### {label}: {title}', '', 'Not run: R7ch already read an in-force projection, so nothing was planted.', '']
+        out += [f'### {label}: {title}', '', 'Not run: R7ch already read an in-force projection — the fixture\'s own server wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force) — so nothing was planted, and D-3447\'s absent-projection path was not exercised here (see the note under **Outcome:**).', '']
         continue
     log = read(f'{label}.log').split('\n')
     state = read(f'{label}.state').split('\n')
@@ -8327,7 +8329,7 @@ for label, title, rcs, checks in STEPS:
             differs.append(f'{label}: {what}')
     if rc not in rcs:
         differs.append(f'{label}: exit {rc}, expected one of {sorted(rcs)}')
-    fails = sorted({m.group(1) for l in log for m in [re.match(r'^FAIL ([a-z0-9-]+):', l)] if m})
+    fails = sorted({m.group(1) for l in log for m in [re.match(r'^FAIL ([a-z0-9_-]+):', l)] if m})
     if label == 'R1':
         baseline = set(fails)
     newfails = [f for f in fails if f not in baseline]
@@ -8354,6 +8356,8 @@ out += ['### Controls', '',
         f'- poisoned tools (`tmux`, `ssh`, `gh`, `systemd-run`, `launchctl`) were reached {poison} time(s), each refused.', '',
         '**Outcome:** ' + ('every expectation above held.' if not differs else
                            'DIFFERS — ' + '; '.join(differs) + '. Each is a finding this task records under Deviations found or as a Task-N fix before it closes.'), '']
+if not (LOGS / 'R7ch2.rc').exists():
+    out += ['Fixture environment: the fixture\'s own server (the published build it ran when R7 started) wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force), so R7a printed no `versions: WARN` and R7ch read `state=none`, and R7ch2\'s plant was skipped by the brief\'s own rule. D-3447\'s absent-projection → prune-skipped path was therefore NOT exercised in this rehearsal. The suites carry it by composition: an absent projection reads `unreadable (absent)`, and `_ver_protect`\'s `*)` arm, which unreadable and stale share, prunes nothing. No suite case runs an absent projection end to end through `versions --prune`.', '']
 out += [LIVE]
 text = '\n'.join(out)
 for k in ('S', 'H', 'REAL_HOME', 'REAL_USER', 'OWNER', 'REPO'):
@@ -8361,10 +8365,11 @@ for k in ('S', 'H', 'REAL_HOME', 'REAL_USER', 'OWNER', 'REPO'):
         sys.exit(f'REFUSED: the record still carries ${k} verbatim — scrub.sh missed it; nothing written')
 plan = pathlib.Path(sys.argv[1])
 body = plan.read_text()
-if body.count(MARK) != 1:
-    sys.exit(f'REFUSED: {plan} carries the marker {body.count(MARK)} times, want exactly 1')
+LINE = '\n' + MARK + '\n'   # the marker AS A WHOLE LINE: the plan's own Task 8 text quotes the string inside prose and a code block
+if body.count(LINE) != 1:
+    sys.exit(f'REFUSED: {plan} carries the marker as a whole line {body.count(LINE)} times, want exactly 1')
 header = read('header.md').rstrip('\n') + '\n\n'
-plan.write_text(body.replace(MARK, header + text.rstrip('\n')))
+plan.write_text(body.replace(LINE, '\n' + header + text.rstrip('\n') + '\n'))
 print(f'wrote the record into {plan}: {len(STEPS)} steps, {len(differs)} difference(s)')
 for d in differs:
     print('  DIFFERS:', d)
@@ -8538,10 +8543,10 @@ Expected: `inactive`; `live box untouched`; the per-step `curl` counts; `R4 rele
 . "$SCRATCHPAD/w6-rehearsal/env.sh"
 PLAN=docs/superpowers/plans/2026-09-23-centralised-update-w6-versioned-installs.md
 (set -a; . "$S/env.sh"; set +a; python3 "$SCRATCHPAD/w6-record.py" "$PLAN")
-grep -c '<!-- REHEARSAL RECORD: task 8 -->' "$PLAN"
+grep -cx '<!-- REHEARSAL RECORD: task 8 -->' "$PLAN"
 git diff --stat
 ```
-Expected: `wrote the record into …: 12 steps, <k> difference(s)`, with each `DIFFERS:` line printed under it; `0`; one file changed, whose one deletion is the marker line and whose insertions are the record. The script refuses, writing nothing, when any scratch path, the live home, the operator's name or the release owner survives the scrub.
+Expected: `wrote the record into …: 12 steps, <k> difference(s)`, with each `DIFFERS:` line printed under it; `0` (the whole-line count, `grep -cx`: the marker line is gone, while the quoted copies in Task 8's own text stay, so a substring count is never 0); one file changed, whose one deletion is the marker line and whose insertions are the record. The script refuses, writing nothing, when any scratch path, the live home, the operator's name or the release owner survives the scrub.
 
 Then, from inside `server/`, one call each:
 ```bash
