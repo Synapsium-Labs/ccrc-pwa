@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { autoContinueArmed, hasMenu, parseDialog } from '../pane/dialog.js';
+import { autoContinueArmed, hasMenu, parseDialog, turnRunning } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
 
@@ -19,7 +19,12 @@ export type SendResult =
         // D-2368. The pane's own status line says Claude Code will continue on
         // its own; nothing was pressed. Only reachable when the caller opted
         // in via `holdIfAutoContinueArmed` — see that option's own docstring.
-        | 'auto-continue-armed';
+        | 'auto-continue-armed'
+        // Worker stall watch §4.1. The pane's last 8 rows show a turn running
+        // ("esc to interrupt"), and nothing was pressed. This is reachable only
+        // when the caller opted in via `refuseIfTurnRunning`; see that option's
+        // own docstring.
+        | 'turn-running';
       draft?: string;
       pane?: string;
       /**
@@ -493,13 +498,29 @@ const isStrandedClear = (ansiPane: string): boolean =>
  * `dispatch.ts`'s `/clear` ends the conversation on purpose, so neither of
  * those callers may opt in: this defaults OFF, and the ordinary path types
  * over an armed pane exactly as it always has.
+ *
+ * `refuseIfTurnRunning` (worker stall watch §4.1). A caller that sets this is
+ * stating: "if the pane's last 8 rows show a turn running (`turnRunning`,
+ * "esc to interrupt"), refuse rather than type." ONLY the mail lane sets it,
+ * and only when it is delivering on a live word other than `idle`: the
+ * `shell` word, whose idleness is a rule about Claude Code's own status
+ * file, not a measurement of this pane. It is a drift tripwire, not a proof.
+ * A `--remote-control` pane never renders the phrase and a narrow pane can
+ * wrap it, so passing this check proves nothing about idleness.
+ * It is decided AFTER the auto-continue hold, because an armed limit is the
+ * stronger reason and the mail lane has its own arm for it. It is decided
+ * BEFORE the menu check, over the same 8-row window, so a stale phrase
+ * scrolled above that window never refuses. It defaults OFF: a human's send
+ * from the PWA and `dispatch.ts`'s `/clear` type over a running turn exactly
+ * as they always have.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
   opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
-          clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean } = {},
+          clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean;
+          refuseIfTurnRunning?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -532,6 +553,11 @@ export function sendPrompt(
     // never expire (the sweep's back-off counts no attempt for this error, by design).
     const armWindow = plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');
     if (opts.holdIfAutoContinueArmed && autoContinueArmed(armWindow)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
+    // Worker stall watch §4.1: a turn is running in the pane's last 8 rows. This
+    // comes after the auto-continue hold (the stronger reason, with its own arm in
+    // the mail lane) and before the menu check, over the SAME window, so a stale
+    // "esc to interrupt" in scrollback never refuses. See the option's docstring.
+    if (opts.refuseIfTurnRunning && turnRunning(armWindow)) return { ok: false, error: 'turn-running', pane: plain.slice(-PANE_TAIL) };
     // A menu owns the keyboard and there is no input box to type into — the only
     // `❯` on screen is the cursor resting on the selected OPTION. draftOf would
     // read that row ("1. Forward-fill per class ┌────…") as a half-typed draft
