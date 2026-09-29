@@ -31,7 +31,7 @@ export type DoneVerdict =
       /** The `pr-state` line this verdict measured — SERVER-INTERNAL, never
        *  serialised onto the wire (neither close route ever spreads `verdict`
        *  into a reply; both read `.code`/`.detail` off the `ok:false` arm
-       *  only). Spec 2026-09-22 §5.7 / R-10: the close reuses this line for
+       *  only). Spec 2026-09-22 §5.7: the close reuses this line for
        *  its own child-spent redate instead of asking `pr-state` a second
        *  time inside the same mutex section — the same `CCD_ARGV.prStateSession`
        *  call and the same `parsePrLines`, so a second call would measure
@@ -203,7 +203,7 @@ export async function resolveDoneBranch(
  *    not let a later reader mistake this token for the stronger claim.
  *
  * The `ok:true` verdict also carries the measured `pr-state` `line` itself
- * (spec §5.7, R-10) — not a new measurement, the SAME `CCD_ARGV.prStateSession`
+ * (spec §5.7) — not a new measurement, the SAME `CCD_ARGV.prStateSession`
  * row this function already read to answer `prNumber`/`prPhase`. It exists so
  * the close's own child-spent redate can reuse it instead of asking
  * `pr-state` again inside the same mutex section; it is never put on the wire.

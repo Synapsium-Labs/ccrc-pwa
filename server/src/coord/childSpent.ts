@@ -221,7 +221,7 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * 20 s remote budget, and it runs only for a CHILD with no PR on record —
  * never for a workspace with no marker (`childBindGate` returns before
  * calling this). A caller already holding this session's own measured
- * `pr-state` line (spec §5.7, R-10 — the close reusing `verifyDone`'s line)
+ * `pr-state` line (spec §5.7 — the close reusing `verifyDone`'s line)
  * passes it as `line`, and step 3 makes NO gh call at all: it runs the pure
  * `childSpentLiveFrom` over the line handed in, never `childSpentLive`'s fetch.
  */
@@ -249,7 +249,7 @@ export async function childSpent(
  * this to DATE that PR, and treats only spent/this as finished. It therefore
  * reads no fast path of its own: `rec.prNumber` is ignored here.
  *
- * THE FETCH ONLY (spec §5.7, R-10): a LIVE `ccd pr-state --session <id>` —
+ * THE FETCH ONLY (spec §5.7): a LIVE `ccd pr-state --session <id>` —
  * nothing in this system learns of a PR by push, and the sweep's cadence is
  * minutes while a coordinator opens wave N+1 seconds after the worker's done
  * mail. Gated like every other caller of the verb (`verbSupported`). Every
@@ -284,7 +284,7 @@ export async function childSpentLive(
 }
 
 /**
- * The PURE judgment half of the live rung (spec §5.7, R-10), split out of
+ * The PURE judgment half of the live rung (spec §5.7), split out of
  * `childSpentLive` so a caller already holding this session's own measured
  * `pr-state` line — the close, reusing `verifyDone`'s line — can reach it
  * with no `pr-state` call of its own. `rec` is accepted only so this

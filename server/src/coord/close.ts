@@ -229,9 +229,10 @@ export async function closeRun(
       const siblings = sibRead.siblings;
       // An abandon is FINISHED (spec §5.7), so an eligible child is exactly
       // the no-survivor case below — it is already released, never re-held.
-      // D-49: an abandon never runs `verifyDone` (there is no done-claim to
-      // re-measure), so there is no measured line to reuse — `null` here is
-      // not a decision, it is what "verifyDone did not run" IS on this arm.
+      // An abandon never runs `verifyDone` (there is no done-claim to
+      // re-measure — see step 1 below), so there is no measured line to
+      // reuse — `null` here is not a decision, it is what "verifyDone did not
+      // run" IS on this arm.
       childGate = await childGateAtClose(deps, run, run.sessionId, sibRead, false, 'failed', null);
       const survivor = survivorOf(siblings);
       // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
@@ -319,10 +320,10 @@ export async function closeRun(
   // this step entirely, and `verifiedLine` stays null on that arm — there is
   // nothing to reuse.
   //
-  // R-10 (spec §5.7): `verdict.line` is the exact `pr-state` row this call
-  // already measured for `run.sessionId` — carried past this block so the
-  // child-spent redate below (`childGateAtClose`) can reuse it instead of
-  // asking `pr-state` a second time inside the same mutex section.
+  // Spec §5.7: `verdict.line` is the exact `pr-state` row this call already
+  // measured for `run.sessionId` — carried past this block so the child-spent
+  // redate below (`childGateAtClose`) can reuse it instead of asking
+  // `pr-state` a second time inside the same mutex section.
   let verifiedLine: CcdPrLine | null = null;
   if (state !== 'failed') {
     const verdict = await verifyDone(
@@ -614,7 +615,7 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * the LIVE answer ONLY — `spent`/`this` finishes the child, anything else
  * (unspent, unmeasured, or still `unplaced`) holds it.
  *
- * COST (R-10, spec §5.7 — measured, not the ~40 s an earlier wave accepted by
+ * COST (spec §5.7 — measured, not the ~40 s an earlier wave accepted by
  * design): `verifiedLine` is `verifyDone`'s own measured `pr-state` row for
  * this SAME session, taken moments earlier inside this same mutex section
  * (`state !== 'failed'` is exactly when `verifyDone` ran at all). When its
@@ -625,8 +626,8 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * (`verifyDone`'s own), never two. A line that names a different session, or
  * no line at all (the abandon and review-close arms, which never run
  * `verifyDone`), falls back to fetching fresh, exactly as before this task —
- * R30: the fetch is still a live read taken inside this same mutex section, so
- * a PR opened in the gap can only HOLD the child, never make one vanish.
+ * the fetch is still a live read taken inside this same mutex section, so a
+ * PR opened in the gap can only HOLD the child, never make one vanish.
  */
 async function childGateAtClose(
   deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
@@ -684,11 +685,14 @@ async function childGateAtClose(
                           sessionBornFor: minting.sessionBornFor,
                           dispatchStartedAt: minting.dispatchStartedAt } },
       sessionId);
-    // R-10 (spec §5.7): reuse `verifyDone`'s own measured line for THIS
-    // session — the same argv, the same parser — rather than fetch a second
-    // time. `undefined` (never fetched, and `childSpent`/the redate below
-    // fetch fresh) whenever `verifyDone` did not run or answered for a
-    // different session; the id check is the fail-closed guard R30 names.
+    // Spec §5.7: reuse `verifyDone`'s own measured line for THIS session —
+    // the same argv, the same parser — rather than fetch a second time.
+    // `undefined` (never fetched, and `childSpent`/the redate below fetch
+    // fresh) whenever `verifyDone` did not run or answered for a different
+    // session — `verifyDone`'s own `.find(isFullLine)` is NOT filtered by
+    // session id the way `childSpentLive`'s fetch is (`fingerprint.ts`), so
+    // this check is the fail-closed guard: a line proven to belong to
+    // ANOTHER session must never be trusted for this one's spent verdict.
     const line = verifiedLine !== null && verifiedLine.id === sessionId ? verifiedLine : undefined;
     let spent = await childSpent(deps, read.record, birth, line);
     // A2/P6: a fast-path spent (registry `.prnumber` or `.prhistory`, always

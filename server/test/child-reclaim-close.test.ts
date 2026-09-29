@@ -414,7 +414,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
-    // R-10 (A7): a FAST-PATH MISS (no `.prnumber`, no `.prhistory`) reaches
+    // Spec §5.7: a FAST-PATH MISS (no `.prnumber`, no `.prhistory`) reaches
     // `childSpent`'s own rung 3 with `verifyDone`'s line already in hand, so it
     // never asks `pr-state` a second time — ONE call total, not two.
     expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
@@ -432,7 +432,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-undated' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
-    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // R-10 (A7): a fast-path miss, ONE call
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // spec §5.7: a fast-path miss, ONE call
   });
 
   it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD, not-finished-merge-commit', async () => {
@@ -449,7 +449,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'merged' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-merge-commit' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
-    // R-10 (A7): a RE-DATED FAST-PATH close (rung 1's `.prnumber` answers
+    // Spec §5.7: a RE-DATED FAST-PATH close (rung 1's `.prnumber` answers
     // spent/unplaced, then redated through the live rung) reuses `verifyDone`'s
     // own line for that redate instead of fetching a second time — ONE
     // `pr-state` call total, not two.
@@ -476,7 +476,36 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
     expect(fleetActs(b.acts())).toEqual(['ws-release']);
-    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // R-10 (A7): a re-dated fast-path close, ONE call
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // spec §5.7: a re-dated fast-path close, ONE call
+  });
+
+  // The id check itself (`close.ts`'s `childGateAtClose`): `verifyDone`'s own
+  // `.find(isFullLine)` is NOT filtered by session id, so a line answered for
+  // a DIFFERENT session must never be reused for this one's spent verdict —
+  // reusing it blindly would let a foreign, favourably-dated row release and
+  // queue the reclaim of a child that is not actually finished.
+  it('(v) verifyDone measured a line for a DIFFERENT session — never reused, fetches fresh, HOLDS', async () => {
+    // Same branch name and a row dated to THIS incarnation — if the id check
+    // were dropped, this line would be reused as-is and would RELEASE
+    // (see the mutation table). Its `id` is a stranger's, which is the one
+    // fact the check exists to notice.
+    const foreignRow = prRow({ createdAt: iso(BIRTH_MS + HOUR) });
+    const foreignLine = JSON.stringify({ id: 'demo-other', rows: [foreignRow], baseShort: 'main',
+      branch: `ws/${ID}`, ahead: 1, tip: TIP, checkedAt: 1 });
+    const b = build({ prState: { code: 0, stdout: `${foreignLine}\n`, stderr: '' } });
+    gitBranch(b.home, TIP);
+    const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
+    b.seed(ID, String(id));
+    b.dispatched('demo-next-wave', 2);   // keeps the programme open
+    const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued',
+      childReclaimWhy: 'not-finished-unmeasured' });
+    expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // The id mismatch refused the reuse, so the redate fetched fresh — TWO
+    // `pr-state` calls (`verifyDone`'s own, then the fresh fetch), never one.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(2);
   });
 });
 
