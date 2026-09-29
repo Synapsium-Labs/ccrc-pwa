@@ -11453,27 +11453,43 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # THE RULE, re-measured in the re-review's N1: the stamp is removed only when
 # it does not name the version this run moved TO. Names are compared as
 # `_inst_version_name` makes them — the stamp's `version` when it has one, else
-# `untagged-<sha12>` — against `INST_TREE_NAME`. That name is a tag or an
-# `untagged-<sha12>` when the source was measured (a checkout, a release, a
-# placed version, or a migrated `~/ccrc` that carried a stamp), and
-# `unstamped-<12 hex>` when nothing could be (never equal to a stamp's name, so
-# the stamp goes). A stamp that cannot be read names nothing comparable and goes
+# `untagged-<sha12>` — against `INST_TREE_NAME`. Only three names ever reach
+# this comparison, because it runs only on the two refusals above, which need a
+# source with no usable git and no `build.json` (a checkout or a release takes
+# `_inst_stamp`'s git arm or the shipped-stamp arm, and never gets here): the
+# placed directory's own name (`_inst_version_name` rule 1, a tag or an
+# `untagged-<sha12>`); a migrated pre-versioned `~/ccrc`'s name, which rule 4
+# takes from the box's own stamp with this very expression, so it is always
+# equal; and `unstamped-<12 hex>`, which is never equal to a stamp's name, so
+# the stamp goes. A stamp that cannot be read names nothing comparable and goes
 # too: it could not have been recorded as an install either. A stamp that names
 # the version this run moved to is the box's TRUE stamp — a killed flip's
 # leftover repaired by hand, a migration whose target already held one — and
 # stays, with the line saying so; the caller then returns 0, because nothing
-# is "skipped" and the box does not read unstamped.
-_inst_stamp_unname() {
+# is "skipped" and the box does not read unstamped. ONE exception (A3-1): when
+# `_ver_kept` answered 3 for that version — its tree WRITTEN THROUGH since it
+# was kept — the stamp goes whatever it names, since nothing shows the bytes to
+# be that build; a digestless or unmeasured target (rc 2) keeps the stay.
+_inst_stamp_unname() {   # [krc] — `_ver_kept`'s answer for the target, when this run asked it
   case "$INST_TREE_HOW" in placed|copy) ;; *) return 1 ;; esac
-  local dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""
+  local krc="${1:-}" dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""
   [ -e "$dest" ] || [ -L "$dest" ] || return 1
   if _box_build_fields; then
     sname="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
-    if [ "$sname" = "$INST_TREE_NAME" ]; then
+    if [ "$sname" != "$INST_TREE_NAME" ]; then
+      what="it names $sname, not $INST_TREE_NAME, the version this run moved \$HOME/ccrc to"
+    elif [ "$krc" = 3 ]; then
+      # A3-1 (review of FX-A2, M1): the name matches, but the target's tree is
+      # WRITTEN THROUGH — something changed its bytes after they were kept, so
+      # nothing shows they are the build this stamp names. Recording an install
+      # complete over them is the false reading D-3465 exists to remove. (A
+      # digestless or unmeasured target, rc 2, has no such evidence against it:
+      # its stamp still stays.)
+      what="it names $sname, the version this run moved \$HOME/ccrc to, but that version's tree was written through since it was kept — nothing shows those bytes to be that build"
+    else
       echo "install: stamp: the box's stamp already names $INST_TREE_NAME, the version this run moved \$HOME/ccrc to — it stays"
       return 0
     fi
-    what="it names $sname, not $INST_TREE_NAME, the version this run moved \$HOME/ccrc to"
   fi
   rm -f -- "$dest" \
     || _ccrc_die "cannot remove the box's stamp $dest, which does not name the version this run moved \$HOME/ccrc to — it would be recorded as this install's"
@@ -11515,7 +11531,7 @@ _inst_stamp_shipped() {
     _ver_kept "$kname" "$INST_ROLE" || krc=$?
     if [ "$krc" -ne 0 ]; then
       echo "install: stamp: $kname's kept stamp is not installed — it is not a kept version ($VER_WHY)"
-      _inst_stamp_unname && return 0
+      _inst_stamp_unname "$krc" && return 0
       return 1
     fi
   fi

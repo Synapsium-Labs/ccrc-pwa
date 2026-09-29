@@ -1405,7 +1405,7 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       // after a refused kept-stamp fallback on a run that moved `~/ccrc` onto a
       // version the stamp does not name (re-review N1) — a writer, through one
       // local (`_inst_stamp`'s `dest=` idiom below).
-      'local dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""',
+      'local krc="${1:-}" dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
