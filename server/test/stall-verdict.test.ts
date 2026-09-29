@@ -145,6 +145,7 @@ describe('stallVerdict order: first match wins (spec §10, wave-1 subset)', () =
 
   it.each([
     ['the 5 h window at 100', { limits: { five: 100, seven: 10 } }],
+    ['the 7 d window at 100', { limits: { five: 3, seven: 100 } }],
     ['the 7 d window over 100', { limits: { five: 3, seven: 100.5 } }],
     ['a stranded worker', { stranded: true }],
     ['a swap-blocked worker', { swapBlocked: true }],
@@ -203,6 +204,8 @@ const SLOTS: ReadonlyArray<{ slot: string; base: Partial<PresentWorker>; set: Pa
   { slot: 'a null dispatchedAt', base: {}, set: {}, run: { dispatchedAt: null } },
   { slot: 'idle with a null statusUpdatedAt', base: {}, set: { live: { ok: true, word: 'idle', since: null } } },
   { slot: 'shell with a null statusUpdatedAt', base: { live: { ok: true, word: 'shell', since: NOW - 3 * H } }, set: { live: { ok: true, word: 'shell', since: null } } },
+  { slot: 'waiting with a null statusUpdatedAt', base: WAITING, set: { live: { ok: true, word: 'waiting', since: null } } },
+  { slot: 'busy with a null statusUpdatedAt', base: { live: { ok: true, word: 'busy', since: NOW - 3 * H } }, set: { live: { ok: true, word: 'busy', since: null } } },
   { slot: 'waiting with the hook ask unmeasured', base: WAITING, set: { ...WAITING, hookAsk: { kind: 'unmeasured' } } },
   { slot: 'waiting with the asks row unmeasured', base: WAITING, set: { ...WAITING, askRow: { kind: 'unmeasured' } } },
   { slot: 'a pane menu with the hook ask unmeasured', base: MENU, set: { ...MENU, hookAsk: { kind: 'unmeasured' } } },
@@ -565,6 +568,54 @@ describe('busy deferral: a rung due while the worker reads busy waits, and its h
   });
 });
 
+// Spec §4.2: "r2 at r1 + 1 h ... r3 at r2 + 1 h". A rung is re-timed only when the worker reads busy at its due
+// time, and its hour then runs from the RAW live word turning idle or shell again. The r1 nudge's own turn
+// restamps the worker, and mail after a rung is not a re-timing: worker mail and a coordinator wait: close
+// the episode through the key instead.
+describe('rung timing: an hour from the previous rung, re-timed only by the live word turning idle again after that hour', () => {
+  const K = RUN67_DISPATCHED;
+  const R1 = t('2026-09-29T06:00:00Z');
+  const R2 = R1 + H;
+  const upToR1 = [notice('live', 'quiet', 1, K, R1)];
+  const upToR2 = [...upToR1, notice('live', 'quiet', 2, K, R2)];
+  const v = (live: LiveWordRead, notices: StallNotice[], at: number, mail: StallMailRow[] = []) =>
+    stallVerdict(stallInput({ worker: workerAt({ live }), notices, mail, coordinator: 'alive' }), at);
+
+  it('a: the worker is idle again before r2 is due (the r1 nudge restamped it), and r2 still falls due at exactly r1 + 1 h', () => {
+    const live = liveWord('idle', R1 + 10 * MIN);
+    expect(v(live, upToR1, R1 + H - 1)).toEqual(NONE);
+    expect(v(live, upToR1, R1 + H)).toEqual(r2(K));
+  });
+  it('a: the same for r3, from a restamp inside r2\'s hour', () => {
+    const live = liveWord('idle', R2 + 10 * MIN);
+    expect(v(live, upToR2, R2 + H - 1)).toEqual(NONE);
+    expect(v(live, upToR2, R2 + H)).toEqual(r3(K, 'still-silent'));
+  });
+  it('b: a coordinator\'s ordinary mail to the worker after r2 does not move r3 off r2 + 1 h', () => {
+    const resume = mailRow(6001, R2 + 30 * MIN, COORD, WORKER, 'answer', 'resume');
+    const live = liveWord('idle', R1 - 30 * MIN);
+    expect(v(live, upToR2, R2 + H - 1, [resume])).toEqual(NONE);
+    expect(v(live, upToR2, R2 + H, [resume])).toEqual(r3(K, 'still-silent'));
+  });
+  it('b: the same for r2: an ordinary coordinator mail at r1 + 20 min leaves r2 at r1 + 1 h', () => {
+    const resume = mailRow(6002, R1 + 20 * MIN, COORD, WORKER, 'answer', 'resume');
+    const live = liveWord('idle', R1 - 30 * MIN);
+    expect(v(live, upToR1, R1 + H - 1, [resume])).toEqual(NONE);
+    expect(v(live, upToR1, R1 + H, [resume])).toEqual(r2(K));
+  });
+  it('c: busy at the due time, then idle again at T after it, puts the rung at T + 1 h', () => {
+    const T = R1 + 90 * MIN;
+    expect(v(liveWord('busy', R1 + 50 * MIN), upToR1, R1 + H)).toEqual(hold('busy'));
+    expect(v(liveWord('idle', T), upToR1, T + H - 1)).toEqual(NONE);
+    expect(v(liveWord('idle', T), upToR1, T + H)).toEqual(r2(K));
+  });
+  it('c: the boundary: a stamp at exactly r1 + 1 h is inside the hour, one ms later re-times it', () => {
+    expect(v(liveWord('idle', R1 + H), upToR1, R1 + H)).toEqual(r2(K));
+    expect(v(liveWord('idle', R1 + H + 1), upToR1, R1 + H + H)).toEqual(NONE);
+    expect(v(liveWord('idle', R1 + H + 1), upToR1, R1 + H + 1 + H)).toEqual(r2(K));
+  });
+});
+
 describe('shadow-rung-accounting: arming mid-episode sends the pending rung once, and the next rung waits its hour from the live one', () => {
   const K = RUN67_DISPATCHED;
   const since = t('2026-09-29T00:00:00Z');
@@ -585,7 +636,7 @@ describe('shadow-rung-accounting: arming mid-episode sends the pending rung once
   it('a rung re-sent live is timed from its earliest LIVE row: r2 falls due an hour after the live r1, not after the shadow one', () => {
     const L1 = R1 + 40 * MIN;
     const n = [notice('shadow', 'quiet', 1, K, R1), notice('live', 'quiet', 1, K, L1)];
-    // The quiet clock (since) is older than L1, so r2 is due at max(L1, since) + 1 h = L1 + 1 h.
+    // r2 is due one hour after its previous rung's earliest LIVE row, L1: the live stamp (`since`) is older than L1.
     expect(v(LIVE_ONLY, n, R1 + H)).toEqual(NONE);
     expect(v(LIVE_ONLY, n, L1 + H - 1)).toEqual(NONE);
     expect(v(LIVE_ONLY, n, L1 + H)).toEqual(r2(K));
@@ -663,6 +714,30 @@ describe('the three caps fire once per episode', () => {
     const n = [notice('shadow', 'limit-cap', 1, K, since + LIMIT_HOLD_CAP_MS + 20_000)];
     expect(stallVerdict(stallInput({ worker: limited(), notices: n, arming: LIVE_ONLY }), since + 13 * H)).toEqual(hold('limit'));
     expect(stallVerdict(stallInput({ worker: limited(), notices: n, arming: ARMED }), since + 13 * H)).toEqual(capOf('limit-cap', K));
+  });
+});
+
+describe('two decision filters that no other row binds', () => {
+  it('relevance: the coordinator mailing a THIRD party on the run does not take the ball back from the coordinator', () => {
+    const Q = t('2026-09-12T15:00:00Z'); // chosen
+    const question = mailRow(7001, Q, WORKER, 'coordinator', 'question', 'which base?');
+    const aside = mailRow(7002, Q + H, COORD, PEER, 'status', 'note for the reviewer');
+    const worker = workerAt({ live: liveWord('idle', Q + 2 * MIN) });
+    const input = stallInput({ primary: { dispatchedAt: Q - 6 * H }, mail: [question, aside], worker });
+    expect(stallFacts(input)).toMatchObject({ ball: 'coordinator', workerLast: question, inboundLast: null, lastExchangeAt: Q });
+    expect(stallVerdict(input, Q + 4 * H)).toEqual(NONE);
+  });
+
+  it.each(['limit-cap', 'dialog-cap', 'coord-ball'] as const)('arm: a live %s row on the episode key is not the quiet r1', (arm) => {
+    const rung1 = [notice('live', arm, 1, RUN67_DISPATCHED, NOW - 30 * MIN)];
+    expect(stallVerdict(stallInput({ notices: rung1 }), NOW)).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it('arm: a live quiet r1 row on the episode key does not spend the limit cap', () => {
+    const since = t('2026-09-27T00:00:00Z');
+    const worker = workerAt({ live: liveWord('idle', since), limits: { five: 100, seven: 55 } });
+    const r1Row = [notice('live', 'quiet', 1, RUN67_DISPATCHED, since + STALL_QUIET_MS + 20_000)];
+    expect(stallVerdict(stallInput({ worker, notices: r1Row }), since + LIMIT_HOLD_CAP_MS)).toEqual(capOf('limit-cap', RUN67_DISPATCHED));
   });
 });
 

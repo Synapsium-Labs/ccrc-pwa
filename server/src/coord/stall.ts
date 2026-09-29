@@ -380,11 +380,20 @@ export function stallFacts(input: StallInput): StallFacts {
   return { ball, episodeKeyMs, quietSince, workerLast, inboundLast, lastExchangeAt };
 }
 
-/** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. */
-function capQuietSince(input: StallInput, f: StallFacts): number {
-  const w = input.worker;
-  const liveSince = w.present && w.live.ok ? w.live.since ?? 0 : 0;
+/** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. The caller
+ *  passes a MEASURED stamp: a null one is hold `unmeasured` before this is reached, never a 0. */
+function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
   return Math.max(liveSince, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
+}
+
+/** When a later rung falls due (spec §4.2: "r2 at r1 + 1 h ... r3 at r2 + 1 h"; a rung due while the worker
+ *  reads busy waits, and its hour runs from the word turning idle or shell again). Stateless, on the RAW live
+ *  stamp, never the quiet clock: a stamp inside the previous rung's hour (the rung's own turn restamps the
+ *  worker) changes nothing, so the hour the r1 body promises holds; a stamp past that hour means the word
+ *  turned again after the rung was due, so the hour runs from there. Mail does not re-time a rung: worker
+ *  mail and a coordinator `wait:` close the episode through its key instead. */
+function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
+  return liveSince > rungAt + gap ? liveSince + gap : rungAt + gap;
 }
 
 function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
@@ -423,14 +432,14 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   if (!live.ok) return holdVerdict('unmeasured');
   if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
   if (p.dispatchedAt === null) return holdVerdict('unmeasured');
-  if (isIdleWord(live.word) && live.since === null) return holdVerdict('unmeasured');
+  if (live.since === null) return holdVerdict('unmeasured');
   const dialogShaped = live.word === 'waiting' || w.dialogPending;
   if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
   // (3) lifecycle: restarting and the dead words hold; unsupervised and unclaimed are judged as running
   if (lc === 'restarting' || lifecycleIsDead(lc)) return holdVerdict('lifecycle');
   const f = stallFacts(input);
   const key = f.episodeKeyMs;
-  const capQuiet = now - capQuietSince(input, f);
+  const capQuiet = now - capQuietSince(input, f, live.since);
   // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per episode)
   const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
@@ -448,8 +457,9 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
     const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;
   }
-  // (7) the worker's ball. Quiet gates r1 only: a later rung re-runs on r1's inputs except quiet, and its
-  // hour runs from the later of the previous rung and the quiet clock, so a busy spell re-times it.
+  // (7) the worker's ball. The quiet clock (the live stamp, and any mail) gates r1 only. A later rung falls due
+  // an hour after the previous one on the RAW live stamp (`rungDueAt`), so it re-times only when a busy read
+  // pushed the word's turn to idle past that hour.
   if (live.word === 'busy') return holdVerdict('busy');
   if (!isIdleWord(live.word) || f.quietSince === null) return holdVerdict('unmeasured');
   const since = f.quietSince;
@@ -457,8 +467,8 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   if (r1At === null) return now - since >= STALL_QUIET_MS ? { act: 'notify', arm: 'quiet', rung: 1, key, to: 'worker' } : VERDICT_NONE;
   if (rungDoneAt(input, 'quiet', 3, key) !== null) return VERDICT_NONE;
   const r2At = rungDoneAt(input, 'quiet', 2, key);
-  if (r2At !== null) return now >= Math.max(r2At, since) + STALL_OPERATOR_MS ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
-  if (now < Math.max(r1At, since) + STALL_ESCALATE_MS) return VERDICT_NONE;
+  if (r2At !== null) return now >= rungDueAt(r2At, live.since, STALL_OPERATOR_MS) ? r3Verdict(key, 'still-silent') : VERDICT_NONE;
+  if (now < rungDueAt(r1At, live.since, STALL_ESCALATE_MS)) return VERDICT_NONE;
   if (input.coordinationPaused) return r3Verdict(key, 'coordination-paused');
   if (p.claimedBy === null) return r3Verdict(key, 'no-coordinator');
   if (input.coordinator === null) return { act: 'measure-coordinator', coordinatorId: p.claimedBy };
