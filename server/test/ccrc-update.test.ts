@@ -8720,6 +8720,95 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(lastReport(ok.home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0' });
   });
 
+  // C27 (review 155; W6 Task 8A, the controller's ruling). The stale-`previous`
+  // detour: a box rolls back to a release older than wave 4 (which never
+  // rewrites `previous`), then that release's OWN updater moves it forward.
+  // That updater predates W6, so it writes neither `previous` nor the layout:
+  // `~/ccrc` still names the version directory it wrote through, and the
+  // stamp names where it went. A bare rollback must not trust `previous`.
+  const staleBox = (prefix: string, stamped: string): string => {
+    const home = freshUpdateBox(prefix);
+    // `~/ccrc -> ~/ccrc-versions/v1.0.0`, kept complete; its OWN updater moved
+    // the box on to `stamped` by rewriting the box stamp only.
+    plantW6Box(home, 'v1.0.0', V1_SHA, 'server');
+    writeFileSync(join(home, '.ccrc', 'build.json'), shippedStamp(stamped, 'c'.repeat(40)));
+    writeFileSync(join(home, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
+    // Every release-host question answers 404: a run that gets past the
+    // check ends at exit 2 "not a published release", and one that is
+    // refused by it ends at exit 1 having asked nothing.
+    writeFileSync(join(home, 'fixture-release-http'), '404\n');
+    return home;
+  };
+
+  it('a bare rollback REFUSES when previous disagrees with what the layout records: ~/ccrc points at v1.0.0, the stamp says v1.1.0, previous says v2.0.0 — the refusal names all three, asks for --to, and changes and asks nothing (C27)', () => {
+    const home = staleBox('ccrc-rollback-stale-previous-', 'v1.1.0');
+    // What the box's own state holds: the harness re-plants its stubs under
+    // `.local/bin` on every run, which is not the verb writing.
+    const own = (): string[] => homeSnapshot(home).filter((l) => /^(\.ccrc\/|ccrc)/.test(l));
+    const before = own();
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous names v2\.0\.0, but it cannot be trusted here — \$HOME\/ccrc points at \$HOME\/ccrc-versions\/v1\.0\.0 while this box's stamp reads v1\.1\.0, /m);
+    expect(r.stderr).toContain('name the target: ccrc rollback --to vX.Y.Z');
+    expect(localUrls(home), 'the refusal asked the release host').toEqual([]);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(existsSync(join(home, '.ccrc', 'update.json')), 'a refusal before the lock wrote a report').toBe(false);
+    expect(own()).toEqual(before);
+    // The same words for a --to-less rollback typed by the watchdog: no `to`, no trust.
+    const w = rollbackRun(home, ['--from', 'watchdog']);
+    expect(w.code).toBe(1);
+    expect(w.stderr).toContain('it cannot be trusted here');
+  });
+
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an agreeing layout proceeds (the control — the same box with the stamp on v1.0.0 asks the release host about the never-kept v2.0.0, the common first rollback after the move onto W6), `--to` names its own target, and an unversioned layout keeps wave 4\'s behaviour (C27)', () => {
+    // The control: stamp v1.0.0 agrees with the pointed-at v1.0.0.
+    const agree = staleBox('ccrc-rollback-stale-previous-agree-', 'v1.0.0');
+    let r = rollbackRun(agree);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v2\.0\.0 is not a published release \(its SHA256SUMS answered 404\)/m);
+    // The disagreeing box, told its target: the check is never consulted.
+    const stale = staleBox('ccrc-rollback-stale-previous-to-', 'v1.1.0');
+    r = rollbackRun(stale, ['--to', 'v2.0.0']);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    // An `untagged-<sha12>` name is compared with the stamp's sha12; an
+    // `unstamped-*` name and an unreadable stamp have no verdict.
+    const sha = 'd'.repeat(40);
+    const untagged = staleBox('ccrc-rollback-stale-previous-untagged-', 'v1.1.0');
+    renameSync(join(untagged, 'ccrc-versions', 'v1.0.0'), join(untagged, 'ccrc-versions', `untagged-${sha.slice(0, 12)}`));
+    rmSync(join(untagged, 'ccrc'));
+    symlinkSync(join(untagged, 'ccrc-versions', `untagged-${sha.slice(0, 12)}`), join(untagged, 'ccrc'));
+    writeFileSync(join(untagged, '.ccrc', 'build.json'), `{"sha":"${sha}","ref":"main","builtAt":"2026-08-21T00:00:00Z","dirty":false}\n`);
+    r = rollbackRun(untagged);
+    expect(r.stderr, 'an untagged name whose sha12 the stamp agrees with is not a disagreement').not.toContain('it cannot be trusted here');
+    writeFileSync(join(untagged, '.ccrc', 'build.json'), shippedStamp('v1.1.0', 'e'.repeat(40)));
+    r = rollbackRun(untagged);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain('while this box\'s stamp reads v1.1.0');
+    const unreadable = staleBox('ccrc-rollback-stale-previous-unreadable-', 'v1.1.0');
+    writeFileSync(join(unreadable, '.ccrc', 'build.json'), 'not json\n');
+    r = rollbackRun(unreadable);
+    expect(r.stderr, 'an unreadable stamp is no verdict').not.toContain('it cannot be trusted here');
+    // The commonest case, end to end (a FULL first move onto v1.0.0, whose
+    // migration leaves `previous` naming the pre-migration tag — never a kept
+    // version): its rollback must still proceed.
+    const full = onKeptV1('ccrc-rollback-stale-previous-full-');
+    expect(fileText(join(full, '.ccrc', 'previous')).split('\n')[0]).toBe('v0.9.0');
+    writeFileSync(join(full, 'fixture-release-http'), '404\n');
+    r = rollbackRun(full);
+    expect(r.stderr, 'the first rollback after the move onto W6 was refused').not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    // A real-directory (unversioned) box: wave 4's behaviour, previous trusted.
+    const dirBox = freshUpdateBox('ccrc-rollback-stale-previous-directory-');
+    plantOldBox(dirBox, { version: 'v1.1.0' });
+    writeFileSync(join(dirBox, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
+    writeFileSync(join(dirBox, 'fixture-release-http'), '404\n');
+    r = rollbackRun(dirBox);
+    expect(r.stderr).not.toContain('it cannot be trusted here');
+    expect(r.code, `stderr: ${r.stderr}`).toBe(2);
+  });
+
   it('a box already on the kept tag with its install completed has nothing to do — exit 0, nothing written; one whose install did NOT complete re-runs the kept spine, so D-3264\'s rerun (`ccrc rollback --to <v>`) works on a versioned box', () => {
     const home = freshUpdateBox('ccrc-rollback-flip-already-');
     const root = plantW6Box(home, 'v1.0.0', V1_SHA, 'server');

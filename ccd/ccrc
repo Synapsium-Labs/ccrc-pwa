@@ -13316,6 +13316,43 @@ cmd_update() {
   fi
 }
 
+# `_rollback_previous_agrees_with_layout` (W6 Task 8A, review 155's C27) — a
+# BARE `ccrc rollback` trusts `~/.ccrc/previous` only while the last move was
+# one this ccrc's layout recorded. The stale shape: a box rolls back to a
+# release X older than wave 4 (`cmd_rollback` never rewrites `previous`, by
+# design), and then X's OWN updater moves it forward to Y. That updater
+# predates W6, so it writes neither `previous` nor the layout: its spine
+# rsyncs through `~/ccrc` into the directory named X and restamps
+# `~/.ccrc/build.json` as Y. `previous` then names what was current before
+# the rollback, not the build before the last update, and a bare rollback
+# would return to it on no evidence.
+# What "the layout records as having run" is the pointed-at version's NAME,
+# which a W6 ccrc last placed and flipped to; it is compared with the box's
+# own stamp, named as `_inst_version_name` names a tree (the stamp's `version`,
+# else `untagged-<sha12>`). A tag-shaped name is compared with the stamp's
+# `version`, an `untagged-<sha12>` name with the stamp's sha12. Where the two
+# DISAGREE the last move was made by an updater that does not keep the
+# layout, and this refuses, naming `previous`'s tag, the pointed-at version
+# and the stamp's, and asks for `--to <tag>`. No verdict — proceed as wave 4
+# did — for an unversioned layout (`directory`, `absent`, and a `crashed` or
+# unreadable one, which other code owns), an `unstamped-*` name, or a stamp
+# that cannot be read. The common first rollback after the move onto W6 agrees
+# (the migration names the directory from the stamp) and proceeds. Never
+# consulted for `--to`. Reads only; changes nothing.
+_rollback_previous_agrees_with_layout() {
+  local cur="" stamp_name="" want="" rc=0
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
+  cur="$VER_CURRENT"
+  case "$cur" in unstamped-*) return 0 ;; esac
+  _box_build_fields || rc=$?
+  [ "$rc" -eq 0 ] || return 0
+  stamp_name="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+  if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then want="${BOX_BUILD[4]}"; else want="untagged-${BOX_BUILD[0]:0:12}"; fi
+  [ "$cur" = "$want" ] && return 0
+  _ccrc_die "rollback: ~/.ccrc/previous names $UPD_PREV_TAG, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move onto this build was made by an updater that does not keep the layout (a release older than versioned installs moved it forward after a rollback), and previous is the build before THAT rollback, not before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
+}
+
 # ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
 # `ccrc rollback [--to <tag>] [--detach] [--from <who>]`. The default target
 # is `~/.ccrc/previous` line 1 — the tag `cmd_update` recorded as running just
@@ -13395,7 +13432,8 @@ cmd_rollback() {
   if [ -z "$to" ]; then
     _upd_read_previous || prc=$?
     case "$prc" in
-      0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous" ;;
+      0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous"
+         _rollback_previous_agrees_with_layout ;;
       1) _ccrc_die "rollback: nothing to roll back to — ~/.ccrc/previous is absent (no update has run on this box since W4); name one: ccrc rollback --to vX.Y.Z" ;;
       2) _ccrc_die "rollback: the build before the last update carried no release tag (previous: untagged ${UPD_PREV_SHA:-unstamped}) — name one: ccrc rollback --to vX.Y.Z" ;;
       *) _ccrc_die "rollback: ~/.ccrc/previous is unreadable or malformed (line 1 must be a release tag vX.Y.Z or 'untagged') — fix or remove it by hand, or name one: ccrc rollback --to vX.Y.Z" ;;
