@@ -240,7 +240,7 @@ describe('the coordinator skill: its contract', () => {
     const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
     const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
     const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
-    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(6);
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(10);
     expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
     // Spec §5.7: the report outlives the review close; the coordinator
     // cites the reviewer's own path, and step 6 is not changed to say otherwise.

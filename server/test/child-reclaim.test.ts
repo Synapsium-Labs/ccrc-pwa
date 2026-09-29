@@ -439,6 +439,7 @@ describe('childReclaimDecision — has the coordinator finished with this child?
                dispatchStartedAt: 1_000 },
     sessionId: ID,
     siblings: OPEN_NONE, reviewed: { kind: 'none' }, final: false, state: 'done', spent: { kind: 'unasked' },
+    spentFastPath: false, hasCoordinated: false,
     retiresProgram: false,
   };
   /** A REVIEW child (spec §5.7, "A review child is finished later than its own run"): minted by review run 7, which reviews work run 5. */
@@ -456,14 +457,21 @@ describe('childReclaimDecision — has the coordinator finished with this child?
       { spent: { kind: 'spent', pr: 3, source: 'live', incarnation: 'this' } }, { reclaim: true }],
     ['a spent child whose evidence is UNPLACED — not proven this incarnation, HOLDS on a non-final close',
       { spent: { kind: 'spent', pr: 3, source: 'registry', incarnation: 'unplaced' } },
-      { reclaim: false, why: 'not-finished' }],
+      { reclaim: false, why: 'not-finished-undated' }],
     ['a spent child whose LIVE evidence is undated (still unplaced) — HOLDS the same way',
       { spent: { kind: 'spent', pr: 3, source: 'live', incarnation: 'unplaced' } },
-      { reclaim: false, why: 'not-finished' }],
+      { reclaim: false, why: 'not-finished-undated' }],
     ['the ordinary non-final close', {}, { reclaim: false, why: 'not-finished' }],
     ['an unspent child', { spent: { kind: 'unspent' } }, { reclaim: false, why: 'not-finished' }],
+    // R-2's `-merge-commit` word: a fast-path spent (registry/`.prhistory`)
+    // whose live re-date came back `unspent` — the merge-commit path — holds
+    // with a different word than the ordinary unspent hand-over above.
+    ['an unspent child, but the fast path triggered its re-date',
+      { spent: { kind: 'unspent' }, spentFastPath: true }, { reclaim: false, why: 'not-finished-merge-commit' }],
     ['an UNMEASURED spent verdict — never read as spent', { spent: { kind: 'unmeasured', detail: 'x' } },
-      { reclaim: false, why: 'not-finished' }],
+      { reclaim: false, why: 'not-finished-unmeasured' }],
+    ['a child that has EVER coordinated a run — never reclaimed automatically, even on a final close',
+      { hasCoordinated: true, final: true }, { reclaim: false, why: 'has-coordinated' }],
     ['no marker', { mark: { kind: 'none' }, final: true }, { reclaim: false, why: 'not-a-child' }],
     ['an unreadable marker', { mark: { kind: 'unreadable' }, final: true }, { reclaim: false, why: 'marker-unreadable' }],
     ['an unreadable minting row', { minting: { kind: 'unreadable' }, final: true }, { reclaim: false, why: 'marker-unreadable' }],

@@ -185,17 +185,28 @@ export interface ChildReclaimDeps {
  *  on differently, so none folds into another (carried constraint 2):
  *  `not-a-child` is ordinary; `marker-unreadable` is a box that could not be
  *  read (the sweep retries); `siblings-*` mean another run still has — or may
- *  have — this workspace; `review-report-live` is a REVIEW child kept while the
- *  run it reviewed is not terminal, because the coordinator cites the report
- *  in its clips by path (spec §5.7); `not-finished` is the ordinary
- *  non-final close. */
+ *  have — this workspace; `has-coordinated` is a child that has itself ever
+ *  been named `claimedBy` of a run — the session a reclaim made an heir, the
+ *  session it displaced, or any nested coordinator (spec §1 rules 3-4):
+ *  manual cleanup is reserved for a coordinator's own workspace, never a
+ *  sub-workspace a close may act on; `review-report-live` is a REVIEW child
+ *  kept while the run it reviewed is not terminal, because the coordinator
+ *  cites the report in its clips by path (spec §5.7); the ordinary non-final
+ *  close splits by WHY the spent evidence (spec §5.3) could not finish it:
+ *  `not-finished-undated` — the live rung answered spent, but no dated row
+ *  proves this incarnation; `not-finished-unmeasured` — the spent verdict was
+ *  unmeasured; `not-finished-merge-commit` — a fast-path (registry or
+ *  `.prhistory`) spent answer was re-dated `unspent`; plain `not-finished` is
+ *  the ordinary unspent hand-over. */
 export type ChildReclaimNotWhy =
-  | 'not-a-child' | 'marker-unreadable' | 'siblings-open' | 'siblings-unreadable' | 'review-report-live'
+  | 'not-a-child' | 'marker-unreadable' | 'siblings-open' | 'siblings-unreadable' | 'has-coordinated'
+  | 'review-report-live' | 'not-finished-undated' | 'not-finished-unmeasured' | 'not-finished-merge-commit'
   | 'not-finished';
 
 const CHILD_RECLAIM_NOT_WHY: Readonly<Record<ChildReclaimNotWhy, true>> = {
   'not-a-child': true, 'marker-unreadable': true, 'siblings-open': true, 'siblings-unreadable': true,
-  'review-report-live': true, 'not-finished': true,
+  'has-coordinated': true, 'review-report-live': true, 'not-finished-undated': true,
+  'not-finished-unmeasured': true, 'not-finished-merge-commit': true, 'not-finished': true,
 };
 
 export type ChildReclaimDecision =
@@ -261,6 +272,20 @@ export interface ChildReclaimDecisionInput {
    *  close (amendment A2): the branch name is a recycled slug (spec §5.5),
    *  and unplaced evidence could belong to an earlier workspace that wore it. */
   readonly spent: ChildSpentVerdict | { readonly kind: 'unasked' };
+  /** True exactly when `spent.kind === 'spent' && spent.source !== 'live'`
+   *  triggered the caller's re-date through `childSpentLive` (spec §5.3): the
+   *  fast path (registry `.prnumber` or `.prhistory`) answered spent, never
+   *  trusted alone, and was re-asked live. Carried so a fast-path answer that
+   *  re-dates to `unspent` can still say WHY it is not finished —
+   *  `not-finished-merge-commit` — rather than the ordinary unspent hand-over. */
+  readonly spentFastPath: boolean;
+  /** Whether this session has EVER been named `claimedBy` of a run, or
+   *  displaced a coordinator by a reclaim (`CoordStore.childReclaimCoordinatorIds`,
+   *  spec §1 rules 3-4): a coordinator's own workspace, cleaned up by a human,
+   *  never reclaimed automatically. The caller resolves an unreadable read into
+   *  the existing `siblings-unreadable` itself — this field is never
+   *  "unreadable", only `true` or `false`. */
+  readonly hasCoordinated: boolean;
   /** No OTHER open run of this run's program: `CoordStore.programOpenRunCount`
    *  with this run excluded — D-51's predicate, not a second spelling. */
   readonly retiresProgram: boolean;
@@ -293,7 +318,15 @@ export interface ChildReclaimDecisionInput {
  * live row cannot say WHICH workspace wearing this recycled slug (spec §5.5)
  * the evidence belongs to, and this decision may DESTROY the workspace — so
  * unplaced evidence HOLDS on a non-final close exactly like an unspent child,
- * never reclaims on a guess.
+ * never reclaims on a guess. A close that HOLDS on unproven spent evidence
+ * says why (spec §5.3): `not-finished-undated` (a proven `spent` verdict left
+ * undated), `not-finished-unmeasured` (the verdict itself could not be read)
+ * or `not-finished-merge-commit` (the fast path's own answer was re-dated
+ * `unspent`) — otherwise plain `not-finished`, the ordinary unspent hand-over.
+ *
+ * A child that has EVER coordinated a run (spec §1 rules 3-4) is never
+ * reclaimed automatically, whatever else this close would otherwise decide:
+ * checked beside the sibling read, before any of the above.
  */
 export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildReclaimDecision {
   const no = (why: ChildReclaimNotWhy): ChildReclaimDecision => ({ reclaim: false, why });
@@ -303,13 +336,18 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
   if (input.minting.kind === 'absent' || input.minting.sessionId !== input.sessionId) return no('not-a-child');
   if (!input.siblings.ok) return no('siblings-unreadable');
   if (input.siblings.siblings.length > 0) return no('siblings-open');
+  if (input.hasCoordinated) return no('has-coordinated');
   if (input.minting.reviews !== null) {
     if (input.reviewed.kind === 'unreadable') return no('marker-unreadable');
     if (input.reviewed.kind !== 'row' || !isChildReclaimTerminalState(input.reviewed.state)) return no('review-report-live');
   }
   const finished = input.final || input.state === 'failed' || input.retiresProgram
     || (input.spent.kind === 'spent' && input.spent.incarnation === 'this');
-  return finished ? { reclaim: true } : no('not-finished');
+  if (finished) return { reclaim: true };
+  if (input.spent.kind === 'spent') return no('not-finished-undated');
+  if (input.spent.kind === 'unmeasured') return no('not-finished-unmeasured');
+  if (input.spent.kind === 'unspent' && input.spentFastPath) return no('not-finished-merge-commit');
+  return no('not-finished');
 }
 
 /** `mail-routes.test.ts`'s kebab scanner reads every quoted hyphenated literal

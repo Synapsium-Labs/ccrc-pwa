@@ -630,8 +630,22 @@ async function childGateAtClose(
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
+  // Whether this session has EVER coordinated a run (spec §1 rules 3-4): read
+  // beside the sibling list, the same store call the executor makes for the
+  // same question (`childReclaim.ts`'s own step 2a). An unreadable read is
+  // not "never coordinated" — it folds into the existing `siblings-unreadable`
+  // directly, never reaching the pure decision with a guessed boolean.
+  let hasCoordinated: boolean;
+  try {
+    hasCoordinated = deps.coord.childReclaimCoordinatorIds().has(sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: childReclaimCoordinatorIds() failed at close `
+      + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId} held as siblings-unreadable`);
+    return { decision: { reclaim: false, why: 'siblings-unreadable' }, request: null };
+  }
   const input = {
     mark, minting, sessionId, siblings, reviewed, final, state, spent: { kind: 'unasked' } as const,
+    spentFastPath: false, hasCoordinated,
     // D-51's predicate with THIS run set aside — the retirement check
     // `CoordStore.closeRun` runs after the commit, asked before it.
     retiresProgram: deps.coord.programOpenRunCount(run.program, run.id) === 0,
@@ -653,11 +667,15 @@ async function childGateAtClose(
     // `incarnation:'unplaced'`) is never trusted alone — it is re-dated
     // through the live rung, and the close decides on THAT answer only. A
     // `spent`/`'live'` verdict already IS that live answer (childSpent's own
-    // rung 3), so it is not asked twice.
-    if (spent.kind === 'spent' && spent.source !== 'live') {
+    // rung 3), so it is not asked twice. `spentFastPath` carries WHICH case
+    // this was (spec §5.3), so a re-dated `unspent` answer can still say why
+    // it is not finished (`not-finished-merge-commit`) rather than the
+    // ordinary unspent hand-over.
+    const spentFastPath = spent.kind === 'spent' && spent.source !== 'live';
+    if (spentFastPath) {
       spent = await childSpentLive(deps, read.record, birth);
     }
-    decision = childReclaimDecision({ ...input, spent });
+    decision = childReclaimDecision({ ...input, spent, spentFastPath });
   }
   return {
     decision,

@@ -1850,8 +1850,12 @@ const prRow = (branch: string, state: 'OPEN' | 'CLOSED' | 'MERGED',
   ...(state === 'MERGED' ? { mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } } : {}),
   ...extra,
 });
-const ccdLine = (sessionId: string, branch: string, rows: Record<string, unknown>[]): string =>
-  JSON.stringify({ id: sessionId, rows, baseShort: 'main', branch, ahead: 1, checkedAt: Date.now() });
+// `tip` is optional and OMITTED by default (as it always was here), so every
+// existing call site is unaffected; a caller that needs a genuinely MEASURED
+// branch — the childless-PR fixtures below, which must read as `unspent`
+// rather than "tip unmeasured" (spec §5.3) — passes one explicitly.
+const ccdLine = (sessionId: string, branch: string, rows: Record<string, unknown>[], tip?: string): string =>
+  JSON.stringify({ id: sessionId, rows, baseShort: 'main', branch, ahead: 1, tip, checkedAt: Date.now() });
 
 const TIP = 'a'.repeat(40);
 const OTHER_TIP = 'b'.repeat(40);
@@ -2039,7 +2043,7 @@ describe('POST /api/runs/:id/close', () => {
     ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`,
       [prRow(`ws/${s}`, 'OPEN', { createdAt: new Date(Date.now() + 3_600_000).toISOString() })])}\n`, stderr: '' });
   const PR_NONE = (s: string) =>
-    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`, [])}\n`, stderr: '' });
+    ({ code: 0, stdout: `${ccdLine(s, `ws/${s}`, [], TIP)}\n`, stderr: '' });
   const NONE_CLAIM = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
   const fleetActs = (calls: string[][]) => calls.map((c) => c[0]).filter((v) => v === 'ws-hold' || v === 'ws-release'
     || v === 'ws-archive' || v === 'ws-audit' || v === 'ws-reclaim');

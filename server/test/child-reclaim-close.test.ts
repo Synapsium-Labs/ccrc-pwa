@@ -372,7 +372,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
   });
 
-  it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only', async () => {
+  it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only, not-finished-undated', async () => {
     const row = prRow();   // no createdAt at all — an older ccd's shape
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
@@ -382,11 +382,11 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
-    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-undated' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
   });
 
-  it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD', async () => {
+  it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD, not-finished-merge-commit', async () => {
     const merged = prRow({ state: 'MERGED', createdAt: iso(BIRTH_MS - HOUR),
       mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } });
     const b = build({ prState: { code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
@@ -398,7 +398,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1
     b.dispatched('demo-next-wave', 2);
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'merged' }, final: false }, 'coordinator');
-    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-merge-commit' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
   });
 

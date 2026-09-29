@@ -834,8 +834,18 @@ run still names, or that the operator is looking at, is deferred and picked
 up later; nothing you do speeds it or stops it. Otherwise
 the response carries `"childReclaim":"not-queued"` and `childReclaimWhy`
 says why: `not-a-child`, `marker-unreadable`, `siblings-open`,
-`siblings-unreadable`, `review-report-live` or `not-finished` — the last is
-the ordinary non-final close holding a child for wave N+1. No
+`siblings-unreadable`, `review-report-live`, `has-coordinated`,
+`not-finished-undated`, `not-finished-merge-commit`, `not-finished-unmeasured`
+or `not-finished` — the last is
+the ordinary non-final close holding a child for wave N+1.
+`not-finished-undated`, `-merge-commit` and `-unmeasured` hold a child whose
+spent evidence the server could not use: a PR from its branch that no dated
+row places in this workspace's life, a registry PR number the live read
+dated to an earlier workspace of the same name, or a spent read that did not
+answer. A next wave's bind re-reads it and refuses `workspace-spent` or
+`spent-unmeasured` rather than take a spent child; the server reclaims it
+once your program has no open run. `has-coordinated` means the child has
+coordinated a run, so its workspace is cleaned up by a human. No
 `childReclaimWhy` at all means the child was eligible but the hand-off did
 not start; it is reached regardless. **A review run's reviewer
 is a child too, but it is kept while the run it reviewed is open**: its
