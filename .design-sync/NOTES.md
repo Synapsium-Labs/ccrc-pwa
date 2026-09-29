@@ -90,6 +90,15 @@ ship uncompiled CSS. `[CSS_FROM_STORYBOOK]` picks up the storybook's own compile
 - **The contrast gate does not reach Claude Design.** `pwa/design/audit.mjs` runs over
   this repo's stylesheets; designs the agent produces are outside it. A canvas can show a
   pair the gate would refuse. That is caught at the code step, not the design step.
-- **Wave 2 is unmigrated.** ~45 domain components still live in `pwa/src` and are not in
-  this design system. The next sync after that migration is a much larger first pass for
-  those components, not an incremental one.
+- **Wave 2 landed 2026-09-29 and `legacy.css` is gone.** The call sites now use the
+  primitives directly, so the gate moved `482 -> 462` on purpose: twenty pairs left the
+  census because they were duplicate rules, not because anything regressed. If a future
+  run sees 482 again, something re-introduced a duplicate stylesheet.
+- **`Button`'s reduced-motion handling lives in the cva now, nowhere else.** legacy.css's
+  `prefers-reduced-motion` block used to carry it. Same for the 0.85 opacity pin's
+  measurement, which now exists only as a comment in `status-dot.tsx` — the utility is
+  invisible to a gate that reads stylesheets, so that comment is the record.
+- **Seven scoped descendant rules select on the hook classes** (`.block-screen
+  .btn-primary`, `.acct-list ... .limit-fill`, ...) from `fleet.css`/`chat.css`/
+  `shell.css`, which are imported UNLAYERED and therefore beat `@layer utilities`. Keep
+  `btn-primary`/`btn-ghost`/`limit-fill` on the components.

@@ -73,4 +73,8 @@ in both themes; a utility class that was never compiled silently does nothing.
 
 `window.CcrcUi` also exports helpers that are not components: `toast(message,
 kind, action)` fires a toast into a mounted `ToastHost`; `cn()` merges classes;
-`limitBand()`, `buttonVariants()`, `dotVariants()` expose the variant logic.
+`limitBand()`, `buttonVariants()`, `dotVariants()` and `fillVariants()` expose
+the variant logic, and `LIMIT_TRACK` is the class string for the groove a limit
+fill sits in. Reach for those when your layout differs from the component's own
+— a gauge that puts the label and percentage in different cells still wants
+this bar's exact vocabulary.
