@@ -9685,6 +9685,23 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
     expect(existsSync(join(home, 'ccrc-versions'))).toBe(false);
   });
 
+  it('_ver_flip_back with a stamp that cannot be put back returns 2 with the completed-install record already CLEARED: the box reads incomplete, never current on the old build (F6)', () => {
+    const home = freshUpdateBox('ccrc-update-flip-stamp-fails-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    keptVersion(home, 'v1.0.0', V1_SHA);
+    // A directory at the stamp's own name: `_plat_mv_notdir` refuses to put
+    // the kept stamp over it, after the flip has already happened.
+    rmSync(join(home, '.ccrc', 'build.json'));
+    mkdirSync(join(home, '.ccrc', 'build.json'));
+    const r = sourcedCcrc(home,
+      `rc=0; _ver_flip_back v1.0.0 server rollback || rc=$?; printf 'rc=%s why=%s\\n' "$rc" "$VER_WHY"`);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('rc=')), r.stderr)
+      .toEqual(['rc=2 why=its kept stamp could not be put back as this box\'s stamp']);
+    expect(linkOf(home), 'the flip happened').toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the box still reads current on the old build').toBe(false);
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept spine ran despite the failed stamp').toBe(false);
+  });
+
   it('on macOS without python3 the two flips this ccrc makes OUTSIDE a spine refuse before anything moves, naming python3 — never "the one rename failed" (_ver_can_flip, _ver_flip_back, _upd_legacy_target; CCD_OS forced, sourced; D-3419, amended by Task 4)', () => {
     // From this assignment on the sourced shell has builtins only.
     const NOPY = 'PATH="$HOME/no-such-bin"';

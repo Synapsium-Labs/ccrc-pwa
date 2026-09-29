@@ -16628,14 +16628,18 @@ _ver_flip_back() {   # <name> <role> <prefix>
     VER_WHY="the one rename that points \$HOME/ccrc at \$HOME/ccrc-versions/$name failed"
     return 1
   fi
+  # THE RECORD AND CAPS GO FIRST (final review F6): rc 2 promises "the box
+  # reads `incomplete`", and a stamp restore that died before this clear
+  # left the OLD build's record beside the flipped link — a box that reads
+  # `current` on a tree nobody finished installing.
+  if ! rm -f -- "$rec" "$BOX_CAPS_FILE"; then
+    VER_WHY="the completed-install record could not be cleared before its spine ran"
+    return 2
+  fi
   if ! { mkdir -p -- "${stamp%/*}" && cp -- "$vdir/$VER_STAMP_COPY" "$stamp.tmp.$$" \
            && chmod 644 "$stamp.tmp.$$" && _plat_mv_notdir "$stamp.tmp.$$" "$stamp"; }; then
     rm -f -- "$stamp.tmp.$$"
     VER_WHY="its kept stamp could not be put back as this box's stamp"
-    return 2
-  fi
-  if ! rm -f -- "$rec" "$BOX_CAPS_FILE"; then
-    VER_WHY="the completed-install record could not be cleared before its spine ran"
     return 2
   fi
   echo "$say: flip: \$HOME/ccrc -> \$HOME/ccrc-versions/$name (one rename); its kept stamp restored — running its own spine: bash \$HOME/ccrc/ccd/ccrc install${role:+ --role $role}"
