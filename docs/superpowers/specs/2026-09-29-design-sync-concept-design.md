@@ -168,8 +168,14 @@ Three properties of it are deliberate:
 
 1. `ui` build script + `tsconfig.build.json` + `.design-sync/config.json`; first sync;
    `projectId` recorded. **On wave 1's 7 primitives**, not after wave 2: a small first
-   pass surfaces every converter trap cheaply, and wave 2's ~45 components then arrive as
-   an incremental re-sync where verified components cost nothing.
+   pass surfaces every converter trap cheaply, and wave 2 then arrives as an incremental
+   re-sync where verified components cost nothing.
+
+   (The "~45 components" this paragraph originally named was wrong — see the wave 2
+   plan's measured scope. Wave 2 turned out to add no components to the design system at
+   all: it migrated CALL SITES onto the existing seven, so the re-sync re-verified seven
+   and added none. The ordering argument held anyway, and for a better reason than the
+   one given: the traps a first sync surfaces are per-repo, not per-component.)
 2. `docs/design/` — brief template, `CANVASES.md` register.
 3. The two skill clauses + the guard test. **AGENT-FIRST**: anything under `ccd/` ships to
    the fleet host before the server.
