@@ -4,7 +4,9 @@
 // `update.json` so byte-identity means something.
 //
 // CONTAINMENT, structural — the env the caller hands the spawner is built FROM SCRATCH, never spread from
-// `process.env`: HOME is the fixture and PATH is `<home>/bin:/usr/local/bin:/usr/bin:/bin`, never the operator's
+// `process.env`, and `plantRealBox` hands back the SPAWNER built over it (`RealBox.spawn`): `spawn.ts` falls back to
+// `process.env` when no env is passed, so a test that planted the real launcher and built its own
+// `localUpdateSpawnFor(home)` would run it under the live HOME. No real-box spawn is built without this env: HOME is the fixture and PATH is `<home>/bin:/usr/local/bin:/usr/bin:/bin`, never the operator's
 // `~/.local/bin`. A poisoned, RECORDING `systemd-run` and `systemctl` sit first on that PATH: each appends its argv to
 // `<home>/<name>-argv` and exits 97 (`systemd-run` may instead HANG after recording, and `curl` may instead SLEEP: see
 // `RealBoxOpts`, D-3413's arms B and A), so a lock the harness failed to hold reaches `systemd-run` and the case that
@@ -15,6 +17,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { localUpdateSpawnFor, type LocalUpdateSpawn } from '../src/update/converge.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const CCD_DIR = path.resolve(here, '..', '..', 'ccd');
@@ -42,8 +45,13 @@ function plant(file: string, body: string): void {
  *  `rollback` parent is stopped BEFORE its `queued` write. Neither ever touches the network or a unit manager. */
 export interface RealBoxOpts { systemdRun?: 'poison' | 'hang'; curl?: 'ok' | 'sleep' }
 
-/** Plants the box under `home` and returns the from-scratch env for the spawner. */
-export function plantRealBox(home: string, opts: RealBoxOpts = {}): NodeJS.ProcessEnv {
+/** The planted box: the from-scratch `env`, and `spawn`, the REAL bounded `localUpdateSpawnFor` already bound to `home`
+ *  and to that env (`timeoutMs` shrinks the bound). The one way to spawn against the box; a caller that runs the script
+ *  itself (the watchdog's cases) takes `env` alone. */
+export interface RealBox { env: NodeJS.ProcessEnv; spawn: (timeoutMs?: number) => LocalUpdateSpawn }
+
+/** Plants the box under `home`. */
+export function plantRealBox(home: string, opts: RealBoxOpts = {}): RealBox {
   const bin = path.join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
@@ -59,7 +67,8 @@ export function plantRealBox(home: string, opts: RealBoxOpts = {}): NodeJS.Proce
   plant(path.join(bin, 'curl'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/curl-argv"\n${
     opts.curl === 'sleep' ? 'echo $$ > "$HOME/curl-pid"\nexec sleep 300' : 'printf 200\nexit 0'}\n`);
   writeFileSync(path.join(home, '.ccrc', 'update.json'), TERMINAL_REPORT);
-  return { HOME: home, PATH: `${bin}:/usr/local/bin:/usr/bin:/bin` };
+  const env: NodeJS.ProcessEnv = { HOME: home, PATH: `${bin}:/usr/local/bin:/usr/bin:/bin` };
+  return { env, spawn: (timeoutMs) => localUpdateSpawnFor(home, timeoutMs === undefined ? { env } : { env, timeoutMs }) };
 }
 
 const lockPath = (home: string): string => path.join(home, '.ccrc', 'update.lock');

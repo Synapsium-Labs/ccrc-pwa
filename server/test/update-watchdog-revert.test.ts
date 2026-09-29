@@ -253,7 +253,7 @@ interface WatchdogBox { home: string; env: NodeJS.ProcessEnv }
  *  `/health` to X for the whole run, so the rollback's own gate fails (`_upd_rollback_no_restore`). */
 function watchdogBox(prefix: string, o: { gateFails?: true } = {}): WatchdogBox {
   const home = mkTmp(prefix);
-  const base = plantRealBox(home);
+  const { env: base } = plantRealBox(home);
   // The launcher case's link to the live checkout is not this file's: remove the LINK, never what it points at.
   const link = join(home, 'ccrc', 'ccd');
   if (lstatSync(link).isSymbolicLink()) rmSync(link);

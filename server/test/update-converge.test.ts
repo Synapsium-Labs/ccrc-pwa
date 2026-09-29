@@ -618,8 +618,7 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
   for (const { kind, tag, argv } of kinds) {
     itLinux(`${kind}: the lock held by a real flock answers busy with the lock line, update.json is byte-identical, and nothing reached systemd-run`, async () => {
       const h = harness();
-      const env = plantRealBox(h.home);
-      h.deps.runLocal = localUpdateSpawnFor(h.home, { env });
+      h.deps.runLocal = plantRealBox(h.home).spawn();
       expect(h.store.upsertNodeMeasurement(serverMeas()).ok).toBe(true);
       expect(h.store.requestNode(SERVER_ID, tag, kind, T0).ok).toBe(true);
       holders.push(holdLock(h.home));
@@ -637,8 +636,7 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
 
     itLinux(`${kind} (control): with the lock FREE the script goes on to the poisoned systemd-run, so the absence above is a measurement`, async () => {
       const h = harness();
-      const env = plantRealBox(h.home);
-      h.deps.runLocal = localUpdateSpawnFor(h.home, { env });
+      h.deps.runLocal = plantRealBox(h.home).spawn();
       expect(h.store.upsertNodeMeasurement(serverMeas()).ok).toBe(true);
       expect(h.store.requestNode(SERVER_ID, tag, kind, T0).ok).toBe(true);
       expect(lockFree(h.home)).toBe(true);

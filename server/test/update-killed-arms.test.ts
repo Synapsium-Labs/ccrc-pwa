@@ -7,6 +7,8 @@
 //     script prints, on stdout; `_upd_phase queued` sits after the lock probe and before `systemd-run` (so a parent
 //     stopped before it has queued nothing, arm A's premise); the report's pid is the writing process's own (arm B's);
 //  3. the SERVER role's arms through `runDispatch`, against the row's OWN `updateState`/`updateDetail` and the lease;
+//  3b. the FLEET role's rows, through the same `runDispatch`: the agent's arm A (`not-queued`) and arms B and D (an ok reply
+//     carrying `detail`) reach the fleet row's OWN `updateState`/`updateDetail`;
 //  4. the one-lease invariant across a server-role timeout followed by a fleet request;
 //  5. END TO END, the real `ccd/ccrc` behind the real launcher in a fixture HOME (`updateRealBox.ts`'s containment: an env
 //     from scratch, a stub `systemd-run` that only RECORDS and HANGS, a stub `curl` that SLEEPS, nothing ever starts a
@@ -20,9 +22,10 @@ import {
 } from '../../shared/agent-protocol.js';
 import type { RequestKind } from '../../shared/api.js';
 import type { ExecResult } from '../src/exec.js';
+import { AgentOpError } from '../src/remote/client.js';
 import { runDispatch, localUpdateSpawnFor } from '../src/update/converge.js';
 import {
-  FLEET_ID, SERVER_ID, T0, TAG, harness, hang, plant, ran, reportFile, seedFleet, seedServer, serverMeas, type Harness,
+  ACCEPTED, FLEET_ID, SERVER_ID, T0, TAG, harness, hang, plant, ran, reportFile, seedFleet, seedServer, serverMeas, type Harness,
 } from './updateKilledHarness.js';
 import { CCRC_SRC, TERMINAL_REPORT, plantRealBox, type RealBoxOpts } from './updateRealBox.js';
 import { itLinux } from './platformFixtures.js';
@@ -247,6 +250,71 @@ describe('the server role: arm A releases idle, B and D hold — each asserting 
   });
 });
 
+// ── the fleet role, through runDispatch (the agent's answers, in the words its own L0 decision builds) ───────────────
+// The harness's fleet link always answers a bare ACCEPTED, so these replace `send`. The sentences come from
+// `decideKilledSpawn` (the ONE decision the agent calls), not a copy; each case pins the verdict's arm first, so a
+// sentence built for the wrong arm cannot stand in for the right one.
+
+describe('the fleet role: the agent\'s arm A releases idle, arms B and D hold — each asserting the FLEET row\'s own words (I1)', () => {
+  const verdict = (i: Partial<Parameters<typeof decideKilledSpawn>[0]>): ReturnType<typeof decideKilledSpawn> =>
+    decideKilledSpawn({ before: bytes(TERMINAL_REPORT), after: bytes(TERMINAL_REPORT), stdout: '', pid: FAKE_SPAWN_PID, tag: TAG, ...i });
+  /** A fleet request through `runDispatch` with the link answering `answer`; a server request is queued behind it so a
+   *  held lease shows as a server move that did not happen. */
+  function fleetRun(answer: () => Promise<{ t: 'res'; id: number; ok: true; accepted: true; detail?: string }>): { h: Harness; sends: number[] } {
+    const h = harness({ run: hang });
+    const sends: number[] = [];
+    h.deps.fleet = { ...h.deps.fleet!, send: async () => { sends.push(sends.length); return answer(); } };
+    seedFleet(h);
+    seedServer(h);
+    return { h, sends };
+  }
+
+  it('B: an ok reply carrying the arm-B sentence: the fleet row is pending with EXACTLY that updateDetail, and the lease holds the server back', async () => {
+    const v = verdict({ after: bytes(reportText()) });
+    expect(v.arm).toBe('B');
+    const { h, sends } = fleetRun(async () => ({ ...ACCEPTED, detail: v.detail }));
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'accepted', detail: v.detail });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: v.detail, requestedTag: TAG, updateStartedAt: T0 + 1000 });
+    expect(h.accepted()).toBe(1);
+    const next = ran(await runDispatch(h.deps, T0 + 2000));
+    expect(next.plan.gate.leaseHeldBy).toBe(FLEET_ID);
+    expect(next.outcome).toBeNull();
+    expect(sends).toHaveLength(1);
+    expect(h.spawned, 'the server moved while the fleet row holds the lease').toBe(0);
+    expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'idle', requestedTag: TAG });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: v.detail });
+  });
+
+  it('D: an ok reply carrying the arm-D sentence: the same, with the sentence that says it could not be attributed', async () => {
+    const v = verdict({ stdout: null });
+    expect(v.arm).toBe('D');
+    expect(v.detail).toBe(armD('its stdout did not reach EOF'));
+    const { h, sends } = fleetRun(async () => ({ ...ACCEPTED, detail: v.detail }));
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'accepted', detail: v.detail });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: v.detail, requestedTag: TAG });
+    const next = ran(await runDispatch(h.deps, T0 + 2000));
+    expect(next.plan.gate.leaseHeldBy).toBe(FLEET_ID);
+    expect(next.outcome).toBeNull();
+    expect(sends).toHaveLength(1);
+    expect(h.spawned).toBe(0);
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: v.detail });
+  });
+
+  it('A: a `not-queued` AgentOpError carrying the arm-A sentence: the fleet row is released idle, says `not-queued — <sentence>`, and the request stands', async () => {
+    const v = verdict({});
+    expect(v.arm).toBe('A');
+    const { h } = fleetRun(async () => { throw new AgentOpError('not-queued', v.detail); });
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'released', to: 'idle', detail: `not-queued — ${v.detail}` });
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'idle', updateDetail: `not-queued — ${v.detail}`, requestedTag: TAG, requestedKind: 'update',
+    });
+    expect(h.accepted()).toBe(0);
+  });
+});
+
 describe('one lease, fleet-wide, across a server-role timeout followed by a fleet request', () => {
   it('arm B: the server row\'s lease stays held, and the run moves NOTHING else', async () => {
     const h = harness({ boundMs: 20, run: () => { plant(h, reportText()); return hang(h.home, []); } });
@@ -305,8 +373,7 @@ describe('the bound against the REAL ccrc, through the real bounded localUpdateS
   }
   function real(opts: RealBoxOpts, boundMs: number, kind: RequestKind = 'update', tag = TAG): Harness {
     const h = harness({});
-    const env = plantRealBox(h.home, opts);
-    h.deps.runLocal = localUpdateSpawnFor(h.home, { env, timeoutMs: boundMs });
+    h.deps.runLocal = plantRealBox(h.home, opts).spawn(boundMs);
     expect(h.store.upsertNodeMeasurement(serverMeas()).ok).toBe(true);
     expect(h.store.requestNode(SERVER_ID, tag, kind, T0).ok).toBe(true);
     return h;
@@ -320,7 +387,10 @@ describe('the bound against the REAL ccrc, through the real bounded localUpdateS
     expect(report).toMatchObject({ phase: 'queued', target: TAG });
     expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'accepted', detail: armB(report.pid) });
     expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'pending', updateDetail: armB(report.pid), requestedTag: TAG });
-    expect(readFileSync(path.join(h.home, 'systemd-run-argv'), 'utf8').trim().split('\n')).toHaveLength(1);
+    const runArgv = readFileSync(path.join(h.home, 'systemd-run-argv'), 'utf8').trim().split('\n');
+    expect(runArgv).toHaveLength(1);
+    // The unit the killed parent asked for is OUR tag under the pwa's name (the agent twin asserts the same words).
+    expect(runArgv[0]).toContain(`ccrc-detach update --to ${TAG} --from pwa`);
     expect(existsSync(path.join(h.home, 'systemctl-argv'))).toBe(false);
     expect(await untilDead(Number(readFileSync(path.join(h.home, 'systemd-run-pid'), 'utf8').trim())), 'the hanging systemd-run stub survived').toBe(true);
     expect(await untilDead(report.pid), 'the killed parent survived').toBe(true);
