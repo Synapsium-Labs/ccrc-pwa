@@ -25,7 +25,9 @@ import {
   type ConvergeDeps, type DispatchRunResult, type LocalUpdateSpawn, type SendUpdateOp,
 } from '../src/update/converge.js';
 import { AGENT_REJECTED_DETAIL, DEADLINE_DETAIL, LINK_FAILED_HOLD_PREFIX, linkFailedHoldDetail } from '../src/update/dispatch.js';
-import { FLEET_LABEL, SERVER_LABEL, sweepPlanFor, type SweepPlan } from '../src/update/inventory.js';
+import {
+  FLEET_LABEL, SERVER_LABEL, sweepInventory, sweepPlanFor, type InventoryDeps, type SweepPlan,
+} from '../src/update/inventory.js';
 import { FleetWatcher } from '../src/watch.js';
 import { testDeps } from './helpers.js';
 import { CCRC_SRC, TERMINAL_REPORT, deadPid, holdLock, lockFree, plantRealBox } from './updateRealBox.js';
@@ -71,6 +73,11 @@ const fleetMeas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement => ({
 /** The server's own row: spawned locally, `agentOps` NULL by construction (decision 11). */
 const serverMeas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement =>
   fleetMeas({ nodeId: SERVER_ID, role: 'server', label: SERVER_LABEL, agentOps: null, ...over });
+/** Fix round 1 (review 178 F1, case ii): an io that answers `absent` at once, the same idiom as
+ *  `update-inventory.test.ts`'s `NOTHING_IO` — used for the SERVER's own local read so the fleet fixture files
+ *  planted below (same `ccrcDir`, the remote-arm simulation both files share) are never mistaken for this box's
+ *  own report. */
+const NOTHING_IO: FleetIO = { ...localIO, lstatMeasured: async () => ({ ok: false as const, reason: 'absent' as const }) };
 
 /** What W2's inventory sweep does with ONE measurement, in its own order (`applyMeasurement`: plan against the
  *  pre-upsert row → upsert → refuse → lease), through W2's own writers — so a lease this task acquired is
@@ -984,9 +991,10 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     expect(after.expired).toEqual([FLEET_ID]);
     expect(h.store.node(FLEET_ID)).toMatchObject({
       updateState: 'failed',
-      updateDetail: 'deadline — the fleet link failed mid-op and no run of v0.0.10 was reported',
+      updateDetail: "deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10",
       requestedTag: 'v0.0.10',
     });
+    expect(h.store.node(FLEET_ID)?.updateDetail).not.toContain('was reported');
     expect(after.plan.gate.haltedBy).toEqual([FLEET_ID]);
     expect(h.spawned).toEqual([]);
     expect(h.store.ackNode(FLEET_ID).ok).toBe(true);
@@ -1007,8 +1015,9 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     expect(after.expired).toEqual([FLEET_ID]);
     expect(h.store.node(FLEET_ID)).toMatchObject({
       updateState: 'failed',
-      updateDetail: 'deadline — the fleet link failed mid-op and no run of v0.0.10 was reported',
+      updateDetail: "deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10",
     });
+    expect(h.store.node(FLEET_ID)?.updateDetail).not.toContain('was reported');
   });
 
   it('a report of the tag itself gets the qualified words at the deadline, halting', async () => {
@@ -1027,6 +1036,68 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
       updateDetail: "deadline — the fleet link failed mid-op; the row's last report names v0.0.10, which may be an earlier run's",
     });
     expect(after.plan.gate.haltedBy).toEqual([FLEET_ID]);
+  });
+
+  it("a later writer's report replaces this run's own — the deadline still says only what the row's LAST report "
+    + 'proves, never a history it cannot see (fix round 1, review 178 F1, case i)', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); } });
+    seedFleet(h);
+    ran(await runDispatch(h.deps, T0 + 1000));
+    // This lease's OWN run reports in: `installing v0.0.10`, the lease's own target — a genuine report of it.
+    expect(sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 2000,
+      report: { phase: 'installing', target: 'v0.0.10', startedAt: T0 + 2000, updatedAt: T0 + 3000, detail: null },
+    })).lease).toEqual({ kind: 'none', why: 'in-flight' });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ reportedPhase: 'installing', reportedTarget: 'v0.0.10' });
+    // A LATER writer's report of the PREVIOUS release replaces it on the row — the genuine report of this lease's
+    // own run is gone, overwritten by a stale report of a run this lease never made.
+    expect(sweepOnce(h.store, fleetMeas({
+      measuredAt: T0 + 4000,
+      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 + 3500, updatedAt: T0 + 3900, detail: null },
+    })).lease).toEqual({ kind: 'none', why: 'stale-report' });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ reportedPhase: 'done', reportedTarget: 'v0.0.9' });
+    const after = ran(await runDispatch(h.deps, T0 + 3900 + DEADLINE + 1));
+    expect(after.expired).toEqual([FLEET_ID]);
+    const detail = h.store.node(FLEET_ID)?.updateDetail;
+    expect(detail).toBe("deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10");
+    expect(detail).not.toContain('was reported');
+  });
+
+  it("D-3214's stamp-unmeasured override (`inventory.ts`) writes the row's own PREVIOUS report back over a "
+    + "genuine one — the deadline still says only what the row's LAST report proves (fix round 1, review 178 F1, "
+    + 'case ii)', async () => {
+    const h = harness({ send: async () => { throw new Error('timeout'); }, localIo: NOTHING_IO });
+    // A REAL previous release is already recorded on this row before the lease for v0.0.10 is even acquired.
+    seedFleet(h, 'v0.0.10', {
+      report: { phase: 'done', target: 'v0.0.9', startedAt: T0 - 100_000, updatedAt: T0 - 90_000, detail: null },
+    });
+    ran(await runDispatch(h.deps, T0 + 1000));
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'pending', reportedPhase: 'done', reportedTarget: 'v0.0.9',
+    });
+    // The node's own update.json now says `done v0.0.10` — a genuine report of THIS lease's run — but its build
+    // stamp cannot be read on this sweep (no build.json planted). D-3214's override (`inventory.ts:603-605`)
+    // restores the row's OWN previous report rather than storing the new one, so `reportedTarget` stays v0.0.9
+    // even though the node reported v0.0.10 done. Read through the REAL sweep (`sweepInventory`), not this file's
+    // `sweepOnce` shortcut, which deliberately skips this override (see its own doc comment above).
+    mkdirSync(h.deps.ccrcDir, { recursive: true });
+    writeFileSync(path.join(h.deps.ccrcDir, 'node-id'), `${FLEET_ID}\n`);
+    writeFileSync(path.join(h.deps.ccrcDir, 'update.json'), `${JSON.stringify({
+      target: 'v0.0.10', phase: 'done', startedAt: 1_790_000_002, updatedAt: 1_790_000_100, detail: null, from: 'cli',
+    })}\n`);
+    const invDeps: InventoryDeps = {
+      store: h.store, localIo: NOTHING_IO, ccrcDir: h.deps.ccrcDir, role: 'server', fleet: { io: localIO, state: h.state },
+    };
+    const [, fleet] = await sweepInventory(invDeps, T0 + 2000);
+    expect(fleet).toMatchObject({ label: FLEET_LABEL, result: 'measured', nodeId: FLEET_ID, lease: 'none' });
+    expect(h.store.node(FLEET_ID)).toMatchObject({
+      updateState: 'pending', reportedPhase: 'done', reportedTarget: 'v0.0.9', stampRead: 'absent',
+    });
+    const after = ran(await runDispatch(h.deps, T0 + 2000 + DEADLINE + 1));
+    expect(after.expired).toEqual([FLEET_ID]);
+    const detail = h.store.node(FLEET_ID)?.updateDetail;
+    expect(detail).toBe("deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10");
+    expect(detail).not.toContain('was reported');
   });
 });
 

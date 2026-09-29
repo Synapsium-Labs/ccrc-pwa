@@ -11,6 +11,7 @@ import { runDispatch, localUpdateSpawnFor } from '../src/update/converge.js';
 import { boundedUpdateSpawn } from '../src/update/spawn.js';
 import { T0, SERVER_ID, TAG, harness, ran, seedServer } from './updateKilledHarness.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
+import { itLinux } from './platformFixtures.js';
 
 describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected promise does not', () => {
   it.each([['a relative HOME', 'relative/home'], ['a trailing-slash HOME', '/tmp/somewhere/']])(
@@ -71,7 +72,11 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
     expect(next.plan.gate.haltedBy).toEqual([SERVER_ID]);
   });
 
-  it('premise (b): only the synchronous arm rejects — a 3 MiB single argument throws E2BIG before anything execs', async () => {
+  // PLATFORM-ONLY: this premise is Linux kernel behaviour (`execve`'s ARG_MAX rejection is synchronous only on
+  // Linux; the plan's own Task 4 Step 2 contingency, fix round 1, review 178 F2). On macOS the promise RESOLVES
+  // instead of rejecting — measured `test-macos 1/2`, run 36552172708: `{ code: 1, stderr: 'could not start the
+  // launcher (ENOENT)' }` — so a darwin arm has nothing to assert here.
+  itLinux('premise (b): only the synchronous arm rejects — a 3 MiB single argument throws E2BIG before anything execs', async () => {
     await expect(boundedUpdateSpawn('/bin/true', ['x'.repeat(3 * 1024 * 1024)], { env: { PATH: '/nonexistent' } }))
       .rejects.toMatchObject({ code: 'E2BIG' });
   });

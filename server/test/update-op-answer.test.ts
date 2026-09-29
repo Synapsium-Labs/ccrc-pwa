@@ -137,20 +137,42 @@ describe('classifyOpAnswer — any other word, and the transport', () => {
       expect(detail.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
       expect(detail.startsWith(LINK_FAILED_HOLD_PREFIX)).toBe(true);
     });
+
+    it('why=other says the op MAY have reached the link; the three named post-send arms keep "reached" '
+      + '(fix round 1, review 178 O1)', () => {
+      const other = linkFailedHoldDetail('other', 'EPIPE');
+      expect(other).toContain('the op may have reached the fleet link');
+      for (const why of ['disconnected', 'timeout', 'aborted'] as const) {
+        const detail = linkFailedHoldDetail(why, why);
+        expect(detail).toContain('the op reached the fleet link');
+        expect(detail).not.toContain('may have reached');
+      }
+    });
+
+    it('a 500-character other message still fits UPDATE_OP_DETAIL_MAX and keeps its tail (fix round 1, review 178, '
+      + 'item 3 — the cap is on the MESSAGE, never on the sentence\'s own end)', () => {
+      const detail = linkFailedHoldDetail('other', 'x'.repeat(500));
+      expect(detail.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+      expect(detail.startsWith(LINK_FAILED_HOLD_PREFIX)).toBe(true);
+      expect(detail.endsWith('the lease holds until its report or the deadline')).toBe(true);
+    });
   });
 });
 
 describe("linkFailedDeadlineDetail — D-3555's deadline words", () => {
   const held = linkFailedHoldDetail('timeout', 'timeout');
 
-  it('no report of the tag at all: "no run was reported"', () => {
-    expect(linkFailedDeadlineDetail({ updateDetail: held, updateTarget: 'v0.0.10', reportedTarget: null }))
-      .toBe('deadline — the fleet link failed mid-op and no run of v0.0.10 was reported');
+  it('no report of the tag at all: "the row\'s last report does not name v0.0.10" (fix round 1, review 178 F1 — '
+    + 'the row\'s last report is all this column can prove)', () => {
+    const detail = linkFailedDeadlineDetail({ updateDetail: held, updateTarget: 'v0.0.10', reportedTarget: null });
+    expect(detail).toBe("deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10");
+    expect(detail).not.toContain('was reported');
   });
 
-  it('a report naming a DIFFERENT tag reads the same', () => {
-    expect(linkFailedDeadlineDetail({ updateDetail: held, updateTarget: 'v0.0.10', reportedTarget: 'v0.0.9' }))
-      .toBe('deadline — the fleet link failed mid-op and no run of v0.0.10 was reported');
+  it('a report naming a DIFFERENT tag reads the same (fix round 1, review 178 F1)', () => {
+    const detail = linkFailedDeadlineDetail({ updateDetail: held, updateTarget: 'v0.0.10', reportedTarget: 'v0.0.9' });
+    expect(detail).toBe("deadline — the fleet link failed mid-op; the row's last report does not name v0.0.10");
+    expect(detail).not.toContain('was reported');
   });
 
   it('a report naming the SAME tag gets the qualified sentence', () => {
