@@ -2697,6 +2697,13 @@ button.proj-card-pool::before {
   font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
   color: var(--ink-secondary);
 }
+/* Task 9 fix round 1, Minor 6: the switch readout (glyph, word, toggle,
+   error) is its OWN flex context, carrying `role="status"` in the markup, so
+   only ITS changes enter a live region — the attention list below is a
+   separate sibling and never re-announces its sentences on every sweep tick.
+   `flex: 1` so it still claims the row's spare width exactly as its three
+   children did as direct flex items of `.child-reclaim-banner` before. */
+.child-reclaim-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; }
 .child-reclaim-banner .child-reclaim-glyph { color: var(--ink-tertiary); flex: none; }
 .child-reclaim-word { flex: 1; min-width: 0; }
 .child-reclaim-toggle {
@@ -2726,13 +2733,6 @@ button.proj-card-pool::before {
 }
 .child-reclaim-banner .child-reclaim-item { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
 .child-reclaim-banner .child-reclaim-who { color: var(--ink-tertiary); }
-/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
-   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
-   can actually recover a ground for this pair and measure it, rather than
-   filing it under `uncovered` the way a bare `.coord-error { color: … }`
-   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
-   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
-   until this selector named its ancestor). */
 /* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
    way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
    recover a ground and measure the contrast — a colourless rule lands in
@@ -2825,6 +2825,15 @@ button.proj-card-pool::before {
   overflow: hidden;
 }
 
+/* Named-ancestor descendant of `.coord-banner` (self-grounded, above) — same
+   idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
+   can actually recover a ground for this pair and measure it, rather than
+   filing it under `uncovered` the way a bare `.coord-error { color: … }`
+   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
+   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
+   until this selector named its ancestor). Task 9 fix round 1: moved back
+   beside this rule — a child-reclaim wave insertion had pushed it down to sit
+   under `.child-reclaim-who` instead, where it read as that rule's docstring. */
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;

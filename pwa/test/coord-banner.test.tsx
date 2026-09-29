@@ -94,6 +94,13 @@ describe('the coord banner', () => {
     act(() => { store.setState({ coord: coord({ pause: 'clear' }) }); });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
 
+    // Fix round 1: the settle effect now keys on `coord?.pause` alone
+    // (Minor 2), so a frame whose `pause` value CHANGES but still is not the
+    // value the tap asked for ('set') must not settle either — the guard is
+    // `coord?.pause === wantedRef.current`, never merely "pause changed".
+    act(() => { store.setState({ coord: coord({ pause: 'unmeasurable' }) }); });
+    expect(screen.getByText('pausing…')).toBeInTheDocument();
+
     // The CONFIRMING frame lands.
     act(() => { store.setState({ coord: coord({ pause: 'set' }) }); });
     expect(await screen.findByText('Resume')).toBeInTheDocument();
@@ -214,6 +221,27 @@ describe('the coord banner', () => {
     expect(screen.queryByText('the fleet host needs the newer ccd')).toBeNull();
     expect(document.querySelector('.coord-error')).toBeNull();
     expect(screen.getByText(MARKER_WORD.set)).toBeInTheDocument();
+  });
+
+  // Fix round 1, Minor 2 (the reviewer's probe, this row's own direction): the
+  // frame now also carries `reclaim`/`childReclaimAttention` (child-reclamation
+  // wave 4). A frame that changes only the RECLAIM row's fields must not clear
+  // THIS banner's inline refusal — `pause` itself never moved.
+  it("an inline refusal survives a frame that changes only the reclaim row's fields — pause did not move", async () => {
+    const store = makeStore();
+    act(() => { store.setState({ coord: coord({ pause: 'clear' }), coordFrameSeen: true }); });
+    const coordPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<CoordBanner store={store} coordPause={coordPause} />);
+
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+
+    // A frame lands that differs ONLY in `reclaim` — this banner's own field,
+    // `pause`, is unchanged.
+    act(() => { store.setState({ coord: coord({ pause: 'clear', reclaim: 'set' }) }); });
+
+    expect(screen.getByText('the fleet host needs the newer ccd')).toBeInTheDocument();
+    expect(document.querySelector('.coord-error')).not.toBeNull();
   });
 
   it('a generic (non-501/502) failure falls through to the ordinary toast, not the inline banner', async () => {

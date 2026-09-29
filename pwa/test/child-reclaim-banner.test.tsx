@@ -79,6 +79,17 @@ describe('the reclaim row', () => {
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.unmeasurable)).toBeInTheDocument();
   });
 
+  // Fix round 1, Important 1: the server sends `reclaim` unconditionally, even
+  // from a fleet box that lacks the reclaim capabilities — where the sweep
+  // does nothing and the route answers 501. `clear` must claim only the
+  // SWITCH's own state, never that reclamation is actually running, so a
+  // capability-less box's honesty comes from the tap's own inline 501, not
+  // from this word overclaiming what the frame cannot back.
+  it("the 'clear' word claims only the switch's state — never that reclamation is running", () => {
+    expect(CHILD_RECLAIM_MARKER_WORD.clear).toBe('reclaim not paused');
+    expect(CHILD_RECLAIM_MARKER_WORD.clear).not.toMatch(/reclaimed when|runs close|is running/i);
+  });
+
   it("taps call childReclaimPause('on') and show pausing… — the word does NOT flip", async () => {
     const store = makeStore();
     seen(store, coord({ reclaim: 'clear' }));
@@ -99,6 +110,31 @@ describe('the reclaim row', () => {
     expect(childReclaimPause).toHaveBeenCalledWith('off');
   });
 
+  // Fix round 1, Minor 7 (test gap): the 'off' direction's own busy label —
+  // only the 'on' direction's 'pausing…' had a case.
+  it("a resume tap shows resuming… — the word does NOT flip either", async () => {
+    const store = makeStore();
+    seen(store, coord({ reclaim: 'set' }));
+    const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
+    render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Resume reclaim' }));
+    expect(childReclaimPause).toHaveBeenCalledWith('off');
+    expect(await screen.findByText('resuming…')).toBeInTheDocument();
+    expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
+  });
+
+  // Fix round 1, Minor 7 (test gap): `marker !== 'set'` reads `'unmeasurable'`
+  // as "not set" too, so a tap on it asks `'on'` — the fail direction of the
+  // one control is STOP deletion, never resume it, even from doubt.
+  it("a tap on 'unmeasurable' asks childReclaimPause('on') — doubt fails toward stopping deletion", () => {
+    const store = makeStore();
+    seen(store, { ...coord(), reclaim: 'quarantined' });
+    const childReclaimPause = vi.fn(() => new Promise<void>(() => {}));
+    render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(childReclaimPause).toHaveBeenCalledWith('on');
+  });
+
   it('settles only when a LATER frame reports the value the tap asked for', async () => {
     const store = makeStore();
     seen(store, coord({ reclaim: 'clear' }));
@@ -106,6 +142,12 @@ describe('the reclaim row', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(await screen.findByText('pausing…')).toBeInTheDocument();
     seen(store, coord({ reclaim: 'clear', childReclaimAttention: [item()] }));   // a frame, still disagreeing
+    expect(screen.getByText('pausing…')).toBeInTheDocument();
+    // Fix round 1: the settle effect now keys on `marker` alone (Minor 2), so
+    // a frame whose `reclaim` value CHANGES but still is not the value the tap
+    // asked for ('set') must not settle either — the guard is `marker ===
+    // wantedRef.current`, never merely "marker changed".
+    seen(store, { ...coord(), reclaim: 'quarantined' });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
     seen(store, coord({ reclaim: 'set' }));
     expect(await screen.findByText('Resume reclaim')).toBeInTheDocument();
@@ -149,6 +191,19 @@ describe('the reclaim row', () => {
     expect(document.querySelector('.toast')).toBeNull();
   });
 
+  // Fix round 1, Minor 7 (test gap): `inlinePauseError` has no `bad-request`
+  // arm — a 400 must fall through to the ordinary toast like CoordBanner's own.
+  it('a 400 (bad-request) falls through to the ordinary toast, not the inline banner', async () => {
+    const store = makeStore();
+    seen(store, coord());
+    const childReclaimPause = vi.fn().mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-request' }));
+    render(<><ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} /><ToastHost /></>);
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText(/bad-request/i)).toBeInTheDocument();
+    expect(document.querySelector('.toast')).not.toBeNull();
+    expect(document.querySelector('.child-reclaim-error')).toBeNull();
+  });
+
   it('lists each child a terminal refusal left standing, with the SERVER\'s sentence and its run', () => {
     const store = makeStore();
     const a = item();
@@ -164,8 +219,10 @@ describe('the reclaim row', () => {
     expect(rows[1]!.textContent).not.toContain('run #');
     // The PWA maps no token: the token itself is never the rendered text.
     expect(rows[0]!.textContent).not.toContain('tree-unreadable');
-    // A report, not a tap: the only button on the row is the switch.
-    expect(screen.getAllByRole('button')).toHaveLength(1);
+    // A report, not a tap: the only INTERACTIVE element on the row is the
+    // switch — buttons AND links, so a future remedy link on a row would fail
+    // this too (fix round 1, Minor 7: the old assertion counted buttons only).
+    expect([...screen.queryAllByRole('button'), ...screen.queryAllByRole('link')]).toHaveLength(1);
   });
 
   it('renders no list when nothing is standing', () => {
@@ -173,6 +230,38 @@ describe('the reclaim row', () => {
     seen(store, coord());
     render(<ChildReclaimBanner store={store} />);
     expect(document.querySelector('.child-reclaim-attention')).toBeNull();
+  });
+
+  // Fix round 1, Minor 6: `role="status"` wraps the switch readout ALONE —
+  // a changing attention list must not spam a live region with every
+  // standing child's sentence on each sweep tick.
+  it('role="status" covers the switch readout only, not the attention list', () => {
+    const store = makeStore();
+    seen(store, coord({ childReclaimAttention: [item()] }));
+    render(<ChildReclaimBanner store={store} />);
+    const status = screen.getByRole('status');
+    expect(status.querySelector('.child-reclaim-attention')).toBeNull();
+    expect(status.textContent).toContain(CHILD_RECLAIM_MARKER_WORD.clear);
+    expect(document.querySelector('.child-reclaim-attention')).not.toBeNull();
+  });
+
+  // Fix round 1, Minor 2 (the reviewer's probe, this row's own direction): the
+  // frame now carries both rows' facts. A frame that changes only the PAUSE
+  // row's fields (`pause`/`mail`) must not clear THIS row's inline refusal —
+  // `reclaim` itself never moved, so nothing this row measured changed.
+  it('an inline refusal survives a frame that changes only the pause row\'s fields — reclaim did not move', async () => {
+    const store = makeStore();
+    seen(store, coord());
+    const childReclaimPause = vi.fn().mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    render(<ChildReclaimBanner store={store} childReclaimPause={childReclaimPause} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(await screen.findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
+
+    // A frame lands that differs ONLY in `pause` — this row's own field,
+    // `reclaim`, is unchanged.
+    seen(store, coord({ pause: 'set' }));
+    expect(screen.getByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
+    expect(document.querySelector('.child-reclaim-error')).not.toBeNull();
   });
 
   it('mounts on /runs, after the pause banner, and nowhere else', () => {
@@ -203,5 +292,28 @@ describe('the two tolerant readers', () => {
     const good = item();
     expect(childReclaimAttentionOf({ childReclaimAttention: [good, { sessionId: 7 }, null, { ...good, runId: '41' }] }))
       .toEqual([good]);
+  });
+
+  // Fix round 1, Minor 1 (test gap): the case above never isolates any ONE of
+  // `isAttention`'s three checks — `{sessionId: 7}` fails BOTH the sessionId
+  // and (lacking `sentence`) the sentence check at once, so deleting either
+  // alone would still pass it. Each bad member below is wrong in exactly one
+  // field, valid in the rest, so each pins its own check.
+  it("childReclaimAttentionOf drops a member wrong in exactly ONE field — sessionId, sentence, or runId — each on its own", () => {
+    const good = item();
+    const badSessionId = { ...good, sessionId: 7 };
+    const badSentence = { sessionId: good.sessionId, runId: good.runId };   // no `sentence` at all
+    const badRunId = { ...good, runId: '41' };
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSessionId] })).toEqual([good]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSentence] })).toEqual([good]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badRunId] })).toEqual([good]);
+  });
+
+  // Fix round 1, Minor 5: only the fields the renderer reads are required —
+  // a member with no `token` (or `at`) still reports, rather than an under-
+  // count the moment a future server dropped a field this row never shows.
+  it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {
+    const bare = { sessionId: 'ccrc-pwa-bare-item', runId: null, sentence: 'a sentence with no token or at' };
+    expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([bare]);
   });
 });

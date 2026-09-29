@@ -86,20 +86,33 @@ export function CoordBanner({
   // Settles the outstanding tap the moment a `coord` frame reports the value
   // it asked for — and ONLY then. A frame that arrives but still disagrees
   // (the marker hasn't moved yet) changes nothing here; the timer below is
-  // what eventually gives up on that case. Runs on every `coord` change,
-  // including ones that land after `unconfirmed` has already been shown —
-  // an operator staring at "unconfirmed" for a genuinely-late frame deserves
-  // to see it resolve, not stay stale forever.
+  // what eventually gives up on that case. Runs whenever `coord.pause`
+  // actually changes VALUE — not on every `coord` frame (fix round 1,
+  // Minor 2: see the M4 note below) — including ones that land after
+  // "unconfirmed" has already been shown — an operator staring at
+  // "unconfirmed" for a genuinely-late frame deserves to see it resolve, not
+  // stay stale forever.
   useEffect(() => {
     // Review, M4: an inline refusal describes the tap that produced it, and a
-    // NEW `coord` frame is a fresh measurement of the very thing that refusal
-    // was about. Cleared only on the next tap, a 501 ("the fleet host needs
-    // the newer ccd") sat under a banner that had since flipped to "paused"
-    // off a real frame — two statements about one fleet that cannot both be
-    // current. Cleared here, the refusal lives exactly as long as the reading
-    // it belongs to. (Safe against the failure path itself: `coordPause`'s
-    // rejection sets `error` in a microtask; this effect runs only when
-    // `coord` actually changes identity, never merely because a tap failed.)
+    // NEW value for `coord.pause` is a fresh measurement of the very thing
+    // that refusal was about. Cleared only on the next tap, a 501 ("the fleet
+    // host needs the newer ccd") sat under a banner that had since flipped to
+    // "paused" off a real frame — two statements about one fleet that cannot
+    // both be current. Cleared here, the refusal lives exactly as long as the
+    // reading it belongs to.
+    //
+    // Fix round 1, Minor 2 (was keyed on `coord` itself): the frame now also
+    // carries `reclaim` and `childReclaimAttention` (child-reclamation wave
+    // 4) — fields this banner never renders. Keying on the whole `coord`
+    // object meant a fresh reclaim-row tick or attention-list change gave
+    // `coord` a new identity too, which cleared THIS row's refusal though
+    // nothing about `pause` had moved: a refusal disappearing while nothing
+    // it was about changed, the exact defect M4 fixed for taps. Keying on
+    // `coord?.pause` alone restores the M4 premise for a frame with more than
+    // one row's facts on it. (Safe against the failure path itself:
+    // `coordPause`'s rejection sets `error` in a microtask; this effect runs
+    // only when `coord.pause` actually changes value, never merely because a
+    // tap failed.)
     setError(null);
     if (wantedRef.current !== null && coord?.pause === wantedRef.current) {
       wantedRef.current = null;
@@ -107,7 +120,7 @@ export function CoordBanner({
       setPhase('idle');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coord]);
+  }, [coord?.pause]);
 
   useEffect(() => () => clearTimer(), []);
 

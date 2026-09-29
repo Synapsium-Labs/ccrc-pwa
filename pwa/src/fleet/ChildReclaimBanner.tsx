@@ -57,18 +57,29 @@ export function ChildReclaimBanner({
     }
   };
 
-  // A NEW frame is a fresh measurement: it retires an inline refusal about the
-  // old one (CoordBanner's M4), and it settles the outstanding tap ONLY when it
-  // reports the value the tap asked for.
+  // A NEW value for THIS row's own marker is a fresh measurement: it retires
+  // an inline refusal about the old one (CoordBanner's M4), and it settles
+  // the outstanding tap ONLY when it reports the value the tap asked for.
+  //
+  // Fix round 1, Minor 2 (was keyed on `coord` itself): one frame now carries
+  // both rows' facts — `pause`/`mail` for the sibling banner, `reclaim`/
+  // `childReclaimAttention` for this one. Keying on the whole `coord` object
+  // meant a `pause` flip, or merely a fresh 60s sweep tick changing nothing
+  // this row renders but the attention list, gave `coord` a new identity and
+  // cleared THIS row's refusal though `reclaim` itself never moved — a
+  // refusal disappearing while nothing it was about changed, the exact
+  // defect M4 fixed for taps. Keying on `marker` (`childReclaimMarker(coord)`,
+  // already computed above from this same `coord`) restores the M4 premise:
+  // this effect now runs only when the RECLAIM switch's own reading changes.
   useEffect(() => {
     setError(null);
-    if (wantedRef.current !== null && childReclaimMarker(coord) === wantedRef.current) {
+    if (wantedRef.current !== null && marker === wantedRef.current) {
       wantedRef.current = null;
       clearTimer();
       setPhase('idle');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coord]);
+  }, [marker]);
 
   useEffect(() => () => clearTimer(), []);
 
@@ -104,13 +115,19 @@ export function ChildReclaimBanner({
     : marker === 'set' ? 'Resume reclaim' : 'Pause reclaim';
 
   return (
-    <div className="child-reclaim-banner" role="status">
-      <span className="child-reclaim-glyph" aria-hidden="true">{CHILD_RECLAIM_MARKER_GLYPH[marker]}</span>
-      <span className="child-reclaim-word">{CHILD_RECLAIM_MARKER_WORD[marker]}</span>
-      <button type="button" className="child-reclaim-toggle" disabled={busy} onClick={onToggle}>
-        {toggleLabel}
-      </button>
-      {error !== null && <p className="child-reclaim-error">{error}</p>}
+    <div className="child-reclaim-banner">
+      {/* Fix round 1, Minor 6: `role="status"` covers the switch readout
+          ALONE (glyph, word, toggle, error) — never the attention list below,
+          whose own changes must not re-announce every standing child's
+          sentence through this live region. */}
+      <div className="child-reclaim-status" role="status">
+        <span className="child-reclaim-glyph" aria-hidden="true">{CHILD_RECLAIM_MARKER_GLYPH[marker]}</span>
+        <span className="child-reclaim-word">{CHILD_RECLAIM_MARKER_WORD[marker]}</span>
+        <button type="button" className="child-reclaim-toggle" disabled={busy} onClick={onToggle}>
+          {toggleLabel}
+        </button>
+        {error !== null && <p className="child-reclaim-error">{error}</p>}
+      </div>
       {attention.length > 0 && (
         <ul className="child-reclaim-attention" aria-label="children reclamation could not clean up">
           {attention.map((a) => (
