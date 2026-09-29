@@ -11307,7 +11307,7 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
     const { home, v1 } = killedFlipBox('ccrc-fx-b-race-');
     publishV1(home);
     mkdirSync(join(home, 'tmp'), { recursive: true });
-    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, CCRC_UPDATE_HEALTH_S: '0' };
+    const env: NodeJS.ProcessEnv = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases`, CCRC_UPDATE_HEALTH_S: '0' };
     delete env['CCRC_UPDATE_LOCK_HELD'];
     replantDoctorStubs(home);
     const script = [
