@@ -393,13 +393,21 @@ function leaseActionFor(row: NodeRow | null, m: NodeMeasurement, r: NodeReport):
   // OWN tag — `_upd_detach`'s queued, `cmd_update`'s --to/UPD_VERSION,
   // `cmd_rollback` (itself `cmd_update --to`), the restore arms'
   // restoring/reverted (which keep the PARENT's target throughout, never the
-  // restore child's own), the watchdog's restart (keeps the report's own
-  // target) and the server-role local spawn (the same argv) — so a report
-  // naming a tag OTHER than `row.updateTarget` is provably another run's,
-  // whatever it says and however its own clock reads. What this cannot tell
-  // apart is a PREVIOUS run of the SAME tag: that can only spuriously settle
-  // a node already AT that tag (a no-op the next sweep's own stamp confirms)
-  // or spuriously halt (safe — the operator sees failed/reverted and acks).
+  // restore child's own), the watchdog's own `_upd_phase` writes (which keep
+  // the report's own target) and the server-role local spawn (the same argv)
+  // — so a report naming a tag OTHER than `row.updateTarget` is provably
+  // another run's, whatever it says and however its own clock reads.
+  // The one writer that is NOT a dispatched run is the `cmd_rollback --from
+  // watchdog` the watchdog LAUNCHES: its reports name the PREVIOUS tag, never
+  // the lease's (D-3405 amended, review 175 F6). They read stale-report here,
+  // on purpose — a watchdog revert never writes `reverted`, and settling on
+  // its `done <prev>` would record a revert as a success — so the lease waits
+  // for the deadline, whose words then say the watchdog reverted the box
+  // (`deadlineDetail`, dispatch.ts; read at converge.ts's deadline step).
+  // What this cannot tell apart is a PREVIOUS run of the SAME tag: that can
+  // only spuriously settle a node already AT that tag (a no-op the next
+  // sweep's own stamp confirms) or spuriously halt (safe — the operator sees
+  // failed/reverted and acks).
   // No column, no clock: the one field a report and a lease both carry.
   if (row.updateTarget !== null && r.target !== row.updateTarget) return { kind: 'none', why: 'stale-report' };
   if (IN_FLIGHT.has(r.phase)) return { kind: 'none', why: 'in-flight' };

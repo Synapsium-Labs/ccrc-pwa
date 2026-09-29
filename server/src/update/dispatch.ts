@@ -12,11 +12,13 @@
 // RangeError on a non-tag, and a row carries whatever an older build and a
 // same-user writer left in it.
 import {
-  SETTLED_UPDATE_STATES, UPDATE_GATE_CAP, compareDispatchOrder, dispatchRank, isReleaseTag,
+  SETTLED_UPDATE_STATES, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, compareDispatchOrder, dispatchRank, isReleaseTag, isUpdatePhase,
   type AutoMode, type DispatchRefusal, type NodeRole, type RequestKind, type StampRead, type TagFileRead, type UpdateChannel,
-  type UpdateState,
+  type UpdatePhase, type UpdateState,
 } from '../../../shared/api.js';
-import { UPDATE_OP, firstStderrLine, isUpdateOpError, type UpdateOpError } from '../../../shared/agent-protocol.js';
+import {
+  UPDATE_OP, UPDATE_OP_DETAIL_MAX, firstStderrLine, isUpdateOpError, type UpdateOpError,
+} from '../../../shared/agent-protocol.js';
 import { isNewerTag } from '../../../shared/semver.js';
 import { floorOf, type EligibilityRow } from './resolve.js';
 
@@ -371,4 +373,56 @@ export function classifyOpAnswer(a: OpAnswer, advertised: boolean): AnswerAction
       return unhandled;
     }
   }
+}
+
+// ── the deadline's verdict (D-3405 amended, fix round 1 item 4 / review 175 F6) ─────────────────────────────────
+
+/** What a `~/.ccrc/update.json` text says about WHO wrote it and what it says, read by name from any one-line JSON
+ *  object, or `null` when the text is not one. `updatedAt` is converted to epoch ms exactly as W2's `reportFrom`
+ *  reads it (a positive safe integer of unix SECONDS within UNIX_SECONDS_MAX, else `null`, never divided) and `from`
+ *  is the one field W2's reader drops. THE one parse of these five: L1 owns it (rather than L0's update block)
+ *  because it needs nothing from L0 but a guard and a bound this file already imports, and a second reader of
+ *  `from` in `shared/` would put the watchdog's word where the PWA bundles it. */
+export interface ReportOrigin {
+  from: string | null; phase: UpdatePhase; target: string | null; updatedAt: number | null; detail: string | null;
+}
+export function parseReportOrigin(text: string): ReportOrigin | null {
+  let doc: unknown;
+  try { doc = JSON.parse(text); } catch { return null; }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return null;
+  const d = doc as Record<string, unknown>;
+  const at = d.updatedAt;
+  return {
+    from: typeof d.from === 'string' ? d.from : null,
+    phase: isUpdatePhase(d.phase) ? d.phase : 'unknown',
+    target: isReleaseTag(d.target) ? d.target : null,
+    updatedAt: typeof at === 'number' && Number.isSafeInteger(at) && at > 0 && at <= UNIX_SECONDS_MAX ? at * 1000 : null,
+    detail: typeof d.detail === 'string' ? d.detail : null,
+  };
+}
+
+/** The `updateDetail` an expired lease is released `failed` with: `DEADLINE_DETAIL`, plus — for the SERVER-ROLE row only
+ *  (`agentOps` NULL: the watchdog runs on `server`/`both` boxes and nowhere else) — what THIS box's own report says
+ *  when the watchdog wrote it after the lease began. `own` is that box's `update.json`, parsed.
+ *
+ *  Comparing the report's `updatedAt` with the lease's `updateStartedAt` is sound HERE and only here: both are read
+ *  off the SAME box's clock (the report is written by that box's `date +%s`, the lease by this server process), so no
+ *  two clocks are ordered against each other — which is what D-3405 refuses for a fleet node. The report's seconds are
+ *  truncated, so a revert inside the acquire's own second reads as not later and keeps the plain word: the safe side.
+ *
+ *  This is a WORDING of a verdict the deadline already reached; it settles nothing. A `--from watchdog` run never
+ *  writes `reverted`: a successful revert ends `done <prev>` and a failed one ends `failed` (through
+ *  `_upd_rollback_no_restore`), so a report-driven settle would record a revert as a success. The identity clause of
+ *  `leaseActionFor` marks both `stale-report` (their target is the previous tag, not the lease's), and the row waits for
+ *  the deadline, which this sentence then explains. Any other report — another writer's, an earlier run's, a phase the
+ *  watchdog does not end on, a target that is not a tag — keeps the plain word. The whole detail stays within
+ *  UPDATE_OP_DETAIL_MAX; it is the node's own words that are cut. */
+export function deadlineDetail(row: Pick<DispatchRow, 'agentOps' | 'updateStartedAt'>, own: ReportOrigin | null): string {
+  if (row.agentOps !== null || own === null || row.updateStartedAt === null) return DEADLINE_DETAIL;
+  if (own.from !== 'watchdog' || own.target === null) return DEADLINE_DETAIL;
+  if (own.updatedAt === null || own.updatedAt <= row.updateStartedAt) return DEADLINE_DETAIL;
+  if (own.phase === 'done') return `${DEADLINE_DETAIL} — the watchdog reverted this box to ${own.target}`.slice(0, UPDATE_OP_DETAIL_MAX);
+  if (own.phase !== 'failed') return DEADLINE_DETAIL;
+  const head = `${DEADLINE_DETAIL} — the watchdog's rollback to ${own.target} failed: `;
+  return (head + said(own.detail, 'no message').slice(0, Math.max(0, UPDATE_OP_DETAIL_MAX - head.length))).slice(0, UPDATE_OP_DETAIL_MAX);
 }

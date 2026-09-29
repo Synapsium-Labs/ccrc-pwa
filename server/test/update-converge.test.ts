@@ -747,7 +747,19 @@ describe('converge.ts — nothing yields between the plan and the lease (D-3377)
     expect(body.split('.dispatchNode(').length - 1).toBe(1);
     const lease = body.indexOf('.dispatchNode(');
     expect(body.indexOf('planDispatch(')).toBeLessThan(lease);
-    expect(body.slice(0, lease)).not.toMatch(/\bawait\b/);
+    // Fix round 1 item 4: the ONE await above the acquire is the server's own report, read BEFORE the stretch. The stretch
+    // starts at the deadline sweep's own row read (`const expired`, whose `for` reads `store.nodes()` next) and must hold
+    // no yield at all up to the acquire; the text above it holds exactly that read and nothing else. Comments are
+    // stripped: they may name the word.
+    const code = body.replace(/\/\/.*$/gm, '');
+    const stretchAt = code.indexOf('const expired');
+    expect(stretchAt).toBeGreaterThan(-1);
+    expect(code.indexOf('.dispatchNode(')).toBeGreaterThan(stretchAt);
+    expect(code.slice(stretchAt, code.indexOf('.dispatchNode('))).not.toMatch(/\bawait\b/);
+    expect(code.slice(0, stretchAt).match(/\bawait\b/g)).toEqual(['await']);
+    expect(code.slice(0, stretchAt)).toMatch(/await ownReportOrigin\(deps\)/);
+    // ... and the stretch's own first row read is the one after it: no `store.nodes()` between the await and `const expired`.
+    expect(code.slice(code.indexOf('await ownReportOrigin('), stretchAt)).not.toMatch(/store\.nodes\(\)/);
   });
 });
 

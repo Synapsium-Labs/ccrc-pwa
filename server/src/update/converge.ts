@@ -5,10 +5,11 @@
 // what came back onto the lease with W2's writers. The RESULT of a move is never read off the reply: `accepted`
 // holds the lease and asks for a sweep, and only the sweep (or a met request) settles it.
 //
-// ORDER IS THE MECHANISM. Everything from the role gate to the acquire is one synchronous stretch (`node:sqlite`
-// is synchronous and this process is single-threaded), so no other run, route or sweep changes a row between
-// the plan and the lease (D-3377; `update-converge.test.ts` scans `runDispatch` for a yield
-// above the acquire). The acquire's own WHERE re-checks what SQL can.
+// ORDER IS THE MECHANISM. Everything from the deadline sweep's own row read to the acquire is one synchronous stretch
+// (`node:sqlite` is synchronous and this process is single-threaded), so no other run, route or sweep changes a row
+// between the plan and the lease (D-3377; `update-converge.test.ts` scans `runDispatch` for a yield inside that
+// stretch). The one await above it — the server's own report, read for the deadline's words — is taken BEFORE the
+// stretch's first row read and handed in (fix round 1 item 4). The acquire's own WHERE re-checks what SQL can.
 import path from 'node:path';
 import {
   inFlightReport, type NodeRole, type RequestKind, type SettledUpdateState,
@@ -19,8 +20,8 @@ import {
   type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
-  DEADLINE_DETAIL, classifyOpAnswer, deadlineExpired, dispatchRefusalDetail, planDispatch,
-  type DispatchMove, type DispatchNodeView, type DispatchPlan, type OpAnswer,
+  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, parseReportOrigin, planDispatch,
+  type DispatchMove, type DispatchNodeView, type DispatchPlan, type OpAnswer, type ReportOrigin,
 } from './dispatch.js';
 import { resolveNodeIntent } from './resolve.js';
 import { resolveInputFor } from './project.js';
@@ -176,6 +177,14 @@ async function localReport(deps: ConvergeDeps): Promise<UpdateReportRead> {
   }
 }
 
+/** This box's own `update.json`, parsed for who wrote it (`parseReportOrigin`): `null` for anything but readable bytes of
+ *  one JSON object. Absent and unreadable fold to `null` HERE and nowhere else, because the only question asked is whether
+ *  the watchdog wrote it, and no answer is the plain `deadline`. */
+async function ownReportOrigin(deps: ConvergeDeps): Promise<ReportOrigin | null> {
+  const read = await localReport(deps);
+  return read.kind === 'bytes' ? parseReportOrigin(read.text) : null;
+}
+
 /** D-3400: the server-role spawns whose `--detach` parent has not exited yet, by capability
  *  (one `LocalUpdateSpawn` per process in production — `index.ts` builds it once — and one per harness in a
  *  test). The bounded runner (`spawn.ts`) kills the parent's whole process group at UPDATE_SPAWN_TIMEOUT_MS and
@@ -238,7 +247,8 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
 }
 
 /**
- * One dispatch run (design 2026-09-20 §10). In order, in one synchronous stretch: the role gate; the deadline
+ * One dispatch run (design 2026-09-20 §10). The role gate and, only when a server-role lease is about to fail, one bounded
+ * read of this box's own report; then, in one synchronous stretch: the deadline
  * sweep; the plan over rows read after it; the met settles; the refusal notes; a move that cannot be sent,
  * noted; THE lease. Then, and only then, the op or the spawn — and the answer decides only what happens to
  * the lease: hold (and ask for a sweep), or release it idle/failed in this same run.
@@ -246,11 +256,22 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
 export async function runDispatch(deps: ConvergeDeps, now: number): Promise<DispatchRunResult> {
   if (deps.role !== 'server' && deps.role !== 'both') return { ran: false, why: 'not-server-role' };
   const { store } = deps;
+  // (0) The ONE await that precedes the synchronous stretch (fix round 1 item 4, D-3405 amended): when a SERVER-ROLE row
+  // (`agentOps` NULL) is about to fail the deadline, this box's own `update.json` is read — through `localReport`'s
+  // bounded reader — so the failed row can say the watchdog reverted the box (`deadlineDetail`). The read is async and
+  // D-3377 forbids a yield between the rows the plan reads and the acquire, so it is taken HERE, BEFORE the stretch's own
+  // first `store.nodes()`, and only handed in. The decision to read is synchronous over rows read a moment earlier; the
+  // stretch then re-reads every row itself, so a row that changed in between is judged on its own fresh state and only
+  // ever loses the sentence (a `null` here, or a report that does not fit, yields the plain `deadline`) — never a
+  // wrong verdict. The scan in `update-converge.test.ts` pins the stretch from `const expired` to the acquire.
+  const ownReport = store.nodes().some((r) => r.agentOps === null && deadlineExpired(r, now, deps.deadlineMs))
+    ? await ownReportOrigin(deps)
+    : null;
   // (1) The deadline: a busy lease its node has not written to for deadlineMs fails, and failed halts.
   const expired: string[] = [];
   for (const row of store.nodes()) {
     if (!deadlineExpired(row, now, deps.deadlineMs)) continue;
-    if (store.releaseLease(row.nodeId, 'failed', DEADLINE_DETAIL, null).ok) expired.push(row.nodeId);
+    if (store.releaseLease(row.nodeId, 'failed', deadlineDetail(row, ownReport), null).ok) expired.push(row.nodeId);
   }
   // (2) The plan, over rows read after those writes.
   const views = dispatchViewsFor(store);
