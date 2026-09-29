@@ -201,12 +201,12 @@ describe('readLiveStateMeasured — the distinction readLiveState folds', () => 
       .toEqual({ ok: false, reason: 'no-state' });
   });
 
-  it('readLiveState still folds all of them, so its four indifferent callers are untouched', async () => {
+  it('readLiveState still folds all of them, so its three indifferent callers are untouched', async () => {
     // The derivation, measured rather than assumed: the three fixtures the
     // cases above tell apart read back as one `null` through the legacy form.
     // This is the pin that keeps this task a WIDENING and not a change —
-    // `liveStatus`, `commands.ts`'s cwd lookup and both of `watch.ts`'s
-    // already-fail-shut gates go on seeing exactly what they saw before.
+    // `liveStatus`, `commands.ts`'s cwd lookup and `watch.ts`'s mail gate
+    // (through `mailTurnIdle`) go on seeing exactly what they saw before.
     const absent = seedLive(base);
     expect(await readLiveState(localIO, absent.configDir, 9999)).toBeNull();
 

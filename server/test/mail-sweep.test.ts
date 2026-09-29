@@ -1867,10 +1867,12 @@ describe('sweepMail: the /clear a dispatch stranded', () => {
 // wave — and the session that needed to know is the one that sent it.
 //
 // A DURABLE FEED ROW AND A PUSH, NOT A `run_events` ROW (operator-accepted
-// deviation from §4.5). `advanceInner` is the only writer of `run_events` and
-// its own docstring says so; every insert there is paired with a state
-// transition validated against `RUN_TRANSITIONS`, which has no self-transition
-// for any state. A park is not a run transition. `pushOne` already records
+// deviation from §4.5). `advanceInner` is the only TRANSITION writer of
+// `run_events`: every insert there is paired with a state transition validated
+// against `RUN_TRANSITIONS`, which has no self-transition for any state. The
+// other writers (`recordRunEvent`, the stall watch's `insertStallObservation`)
+// write `fromState === toState` observation rows, which the notify lane skips.
+// A park is not a run transition. `pushOne` already records
 // into the durable feed archive at exactly the right point, which is the
 // durability the spec was asking for.
 describe('sweepMail: a blocked delivery reaches its SENDER', () => {

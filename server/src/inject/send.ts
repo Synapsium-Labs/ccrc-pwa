@@ -1037,7 +1037,12 @@ export function answerDialog(
  * and an RC-off pane does render it, but the same marker can sit under (or
  * beside) a dialog painted over it — either way pane-based busy detection
  * would report the wrong thing, and the live status file is the one signal
- * that also sees subagents.
+ * that also sees subagents. The mail lane's `turnRunning` (`pane/dialog.ts`)
+ * does read that marker — for exactly these reasons, only as a best-effort
+ * tripwire behind the live file, never as the reading. And `isBusy` is
+ * `liveSessionStatus`'s collapse (`fleet.ts`'s `liveStatus`): `shell` and
+ * `waiting` read busy too, as does an idle main loop whose background agents
+ * still run, so this can send Escape to a session with no turn in flight.
  */
 export function interrupt(
   d: SendDeps,

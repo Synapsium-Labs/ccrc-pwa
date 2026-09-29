@@ -277,7 +277,10 @@ const MAIL_SWEEP_MS = 10_000;
  *  own `COMPACT_QUIET` (`ccd/ccd:142`), taken rather than re-derived: this is
  *  the same judgement about the same panes, and two numbers for one policy is
  *  two numbers to get out of step. Measured from `statusUpdatedAt`, which
- *  Claude Code ticks on every busy<->idle transition (`ccd/ccd:7047-7048`). */
+ *  Claude Code rewrites only when the live word changes: under `idle` or
+ *  `shell` the main loop has been idle at least that long (the worker stall
+ *  watch design's §3.1), which is all this quiet needs. `mailTurnIdle`
+ *  (`turnidle.ts`) applies it. */
 const MAIL_QUIET_MS = 60_000;
 
 /** The ask-release lane's own self-throttle (RULING F4, task-7-brief). Not how
@@ -2025,12 +2028,13 @@ export class FleetWatcher {
   private pushOne(e: {
     kind: NotifyEvent['kind']; sessionId: string; project: string; title: string; body: string;
     /** WHICH RUN this push is about, when the lane raising it knows one
-     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: four of
-     *  this method's seven call sites are about a session and about no run at
-     *  all, and an omitted field and an explicit `null` are the SAME fact for
-     *  this one field — "about no run" — which is why folding them costs
-     *  nothing. The three lanes that know a run pass the one they already
-     *  have: the mail lane, the run lane, and the blocked-sender lane. */
+     *  (`NotifyEvent.runId`). OPTIONAL here and REQUIRED on the wire: most of
+     *  this method's call sites are about a session and about no run at all
+     *  (no count here — the last one went stale at "seven"), and an omitted
+     *  field and an explicit `null` are the SAME fact for this one field —
+     *  "about no run" — which is why folding them costs nothing. The lanes
+     *  that know a run pass the one they already have: the mail lane, the run
+     *  lane, the blocked-sender lane and the stall lane (`sweepStalls`). */
     runId?: number | null;
     actions?: PushPayload['actions'];
     /** Overrides the default `${kind}-${sessionId}` collapse key. Mail MUST
@@ -3306,8 +3310,13 @@ export class FleetWatcher {
    *      `hookstate.ts:149-154`) is NON-BLOCKING here: idle authority moved
    *      wholly to conjunct 5 below, so a resumed long-idle worker, or one
    *      whose `/clear` emitted no registered hook, is still deliverable;
-   *   5. the live status file says AFFIRMATIVELY idle and `statusUpdatedAt` is
-   *      at least `MAIL_QUIET_MS` old — the SOLE idle authority. Affirmatively,
+   *   5. `mailTurnIdle` (`turnidle.ts`) reads the RAW live word as a finished
+   *      turn — `idle`, or `shell` (an idle main loop over a background shell)
+   *      unless `$REG/mail-gate-strict` is listed — and `statusUpdatedAt` is at
+   *      least `MAIL_QUIET_MS` old (`COORD_QUIET_MS` for a coordinator): the
+   *      SOLE turn-idle authority. A `shell` delivery also asks `sendPrompt`
+   *      to refuse a pane showing `esc to interrupt` (`turn-running`), a
+   *      tripwire only. It never asks `liveStatus`,
    *      because `liveStatus` answers `'idle'` for a missing pid, a missing
    *      config dir and an unreadable file (`fleet.ts:118-131`) —
    *      the deleted `archiveSafety`'s rule ("MUST NOT collapse `unknown` to
@@ -3920,12 +3929,15 @@ export class FleetWatcher {
          * plus `NOTIFY_KINDS`, and every older client renders `undefined`.
          *
          * AND A DURABLE FEED ROW, NOT A `run_events` ROW (operator-accepted
-         * deviation from §4.5). `advanceInner` is the only writer of
-         * `run_events` and its own docstring says so; every insert there is
-         * paired with a transition validated against `RUN_TRANSITIONS`, which
-         * has no self-transition for any state. A park is not a run
-         * transition, so writing one would either invent a second writer or
-         * lie about the run's state. `pushOne` mirrors into
+         * deviation from §4.5). `advanceInner` is the only TRANSITION writer
+         * of `run_events`: every insert there is paired with a transition
+         * validated against `RUN_TRANSITIONS`, which has no self-transition
+         * for any state. The other writers (`recordRunEvent`, the stall
+         * watch's `insertStallObservation`) write `fromState === toState`
+         * observation rows, which `pushNewRuns` skips, so they push nothing.
+         * A park is not a run transition, so a transition row would lie about
+         * the run's state and an observation row would never reach the
+         * sender. `pushOne` mirrors into
          * `CoordStore.recordFeedEvent` — the durable archive behind the feed —
          * at exactly this point, which is the durability that was wanted.
          */
