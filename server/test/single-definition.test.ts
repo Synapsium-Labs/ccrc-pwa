@@ -3888,3 +3888,47 @@ describe('the dispatcher refusal words and the dispatch order are declared once,
     expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
+
+// WORKER STALL WATCH, WAVE 1 (design 2026-09-29 §4.2, "Spelled once"). APPENDED, not nested, for the reason stated
+// at this file's other appended describes: `session-hook.test.ts`'s citation audit cites this file by line.
+// The needles are anchored on BOTH sides by the same quote, single or double, for three reasons:
+// - `stall-check:` must not be found inside `re stall-check:`;
+// - `review-done` must not be found inside the review-rejection subject `close.ts` spells;
+// - `stall` must not be found inside `stall-shadow`.
+// KNOWN WIDTH: a copy written in backticks, or as the head of a longer template, is not seen. Backticks are left out
+// ON PURPOSE: docstrings name these prefixes in backticks, and a pin that fired on a comment would be a false red.
+describe('the stall watch spells its prefixes, its detail heads and the review-done subject once (design 2026-09-29 §4.2)', () => {
+  const quoted = (needle: string): RegExp => {
+    const escaped = needle.replace(/[.*+?^$()|[\]\\{}]/g, (c) => `\\${c}`);
+    return new RegExp(`(['"])${escaped}\\1`);
+  };
+  const ONE_HOME: ReadonlyArray<readonly [string, string]> = [
+    ['stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check:', 'server/src/coord/stall.ts'],
+    ['re stall-check: waiting', 'server/src/coord/stall.ts'],
+    ['stall:', 'server/src/coord/stall.ts'],
+    ['wait:', 'server/src/coord/stall.ts'],
+    ['stall', 'server/src/coord/stall.ts'],
+    ['stall-shadow', 'server/src/coord/stall.ts'],
+    ['review-done', 'shared/api.ts'],
+  ];
+
+  it('CONTROL: a quote-anchored needle finds either quote, and never a longer sibling or a backticked mention', () => {
+    expect(quoted('stall-check:').test(`x = 're stall-check:'`)).toBe(false);
+    expect(quoted('re stall-check:').test(`x = 're stall-check: waiting'`)).toBe(false);
+    expect(quoted('review-done').test(`subject: 'review-done-rejected'`)).toBe(false);
+    expect(quoted('stall').test(`'stall-shadow'`)).toBe(false);
+    expect(quoted('stall-check:').test(`"stall-check:"`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:'`)).toBe(true);
+    expect(quoted('stall-check:').test(`'stall-check:"`)).toBe(false);
+    expect(quoted('wait:').test('a docstring naming `wait:`')).toBe(false);
+  });
+
+  for (const [needle, home] of ONE_HOME) {
+    it(`'${needle}' is a quoted literal in exactly one source file, ${home}`, () => {
+      const re = quoted(needle);
+      const holders = ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(holders).toEqual([home]);
+    });
+  }
+});

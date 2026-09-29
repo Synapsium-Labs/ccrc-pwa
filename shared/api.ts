@@ -8841,3 +8841,11 @@ export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: Mov
  *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
  *  the refusal by it. */
 export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
+
+/** Design 2026-09-14: the subject a reviewer's done-claim mail carries (`kind: 'status'`). It is the review run's
+ *  sibling of `WAVE_DONE_SUBJECT`, and it is compared by EQUALITY, never as a prefix: `close.ts`'s review rejection
+ *  subject begins with the same characters and means the opposite. ONE spelling: the stall watch
+ *  (`server/src/coord/stall.ts`) reads it to hand the ball to the coordinator, and the reviewer skill quotes it
+ *  (`stall-vocabulary.test.ts` pins the two together). It is appended at the end of this file, not beside
+ *  `WAVE_DONE_SUBJECT`, because an insertion there would move README's citation anchors into this file. */
+export const REVIEW_DONE_SUBJECT = 'review-done';
