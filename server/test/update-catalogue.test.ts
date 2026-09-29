@@ -483,6 +483,10 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
      *  streamed-cap case reads genuine bytes off the wire rather than one
      *  buffered `.end()` call (which Node would auto-length). */
     chunkedBody?: unknown;
+    /** A real conditional GET (item 11's pin): when set, this answer (a 304, normally) goes ONLY to a request whose
+     *  `If-None-Match` equals its own `etag`; any other request, including one that sent none, gets `otherwise` — as
+     *  GitHub answers a request that does not carry the current validator. */
+    otherwise?: Exclude<Answer, 'hang'>;
   } | 'hang';
   let server: Server;
   let base: string;
@@ -541,6 +545,7 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       const queue = isLatest ? scriptLatest : isWithdrawn ? scriptWithdrawn : script;
       const a = queue.shift() ?? (isLatest ? { status: 404 } : isWithdrawn ? { status: 500 } : { status: 500, body: 'fixture: no answer scripted' });
       if (a === 'hang') return;   // never answered — the deadline's case
+      if (a.otherwise !== undefined && req.headers['if-none-match'] !== a.etag) { respond(res, a.otherwise); return; }
       respond(res, a);
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -2843,6 +2848,73 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       } finally {
         warn.mockRestore();
       }
+    });
+    // Item 11 (fix round 1, D-3405 amended): the scout's "separate path" — a 200 arm's throw borrows T (`lastLatestTag = T`,
+    // `kNeedsReread`) but was thought to leave `latestEtag` at K's etag, so a later `/latest` 304 to that etag would keep T
+    // borrowed for good, `keepTags = [T]` would keep a DELETED T un-yanked, and K (in the window, absent from the listing)
+    // would be yanked while `newestUnyankedStable()` answered T. REASONED, then MEASURED: it does not happen on the code as
+    // it stands, because the throw arm cannot be reached with a live etag. `currentK()` reads the store only while
+    // `lastLatestTag` is null or `kNeedsReread` is set, and `latestEtag` is written only beside `lastLatestTag` (set together
+    // at the end of the 200 arm, nulled together on the 404 arm) — so a throw on the 200 arm always finds `latestEtag` null,
+    // and poll 2 below, with K remembered from poll 1, never reads the store at all (`reads` stays at poll 1's one). It takes
+    // the ordinary older-tag arm instead: the tag check of K fails (unscripted 500), nothing moves, K stays the kept tag.
+    // Poll 3's 304 then answers a still-remembered K, and the fresh newest-page listing yanks the deleted T (T is not kept)
+    // and keeps K. The mutation that DOES make the path reachable — `currentK()` reading the store on every call — reds it.
+    it('item 11: a K remembered from a healthy 200, then an older T while the store would throw, then a 304 to K\'s etag: T is not borrowed, the deleted T is yanked and K stays the newest un-yanked stable (mutation: currentK() always reads the store)', async () => {
+      const { store, port, calls } = fixture();
+      let reads = 0;
+      let throwNext = false;
+      const throwsOnce: CatalogueStore = {
+        applyReleaseListing: (listing, now, coverage, keepTags, withdrawTag) =>
+          port.applyReleaseListing(listing, now, coverage, keepTags, withdrawTag),
+        newestUnyankedStable: () => {
+          reads += 1;
+          if (throwNext) { throwNext = false; throw new Error('coord.db is locked'); }
+          return store.newestUnyankedStable();
+        },
+      };
+      const p = poller(throwsOnce);
+      const k = rel('v0.0.9', '2026-08-20T00:00:00Z');
+      const t = rel('v0.0.5', '2026-08-10T00:00:00Z');
+      // A full page (30) of dev noise older than both K and T: K and T sit INSIDE the window whenever they are absent, so the
+      // listing's own newest-page absence judgment covers them. `withK` lists K on the page (poll 1); the last page omits both.
+      const noise = Array.from({ length: 29 }, (_, i) =>
+        rel(`v0.8.${i + 1}`, new Date(Date.UTC(2026, 7, 1 + (i % 9), i)).toISOString(), { prerelease: true }));
+      const pageWithK = [...noise, k];
+      const pageWithoutKOrT = [...noise, rel('v0.8.30', '2026-08-02T12:00:00Z', { prerelease: true })];
+      expect(pageWithK).toHaveLength(RELEASES_PER_PAGE);
+      expect(pageWithoutKOrT).toHaveLength(RELEASES_PER_PAGE);
+      script = [
+        { status: 200, etag: '"eL1"', body: pageWithK },
+        { status: 500 },                                    // poll 2: the listing fails
+        { status: 200, etag: '"eL3"', body: pageWithoutKOrT },
+      ];
+      scriptLatest = [
+        { status: 200, etag: '"eK"', body: k },
+        { status: 200, etag: '"eT"', body: t },            // poll 2: /latest names the older T
+        { status: 304, etag: '"eK"', otherwise: { status: 200, etag: '"eK"', body: k } },   // poll 3: K is latest again
+      ];
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await p.poll(1000);
+        expect(reads, 'poll 1 read the store once, to learn K').toBe(1);
+        throwNext = true;   // armed for poll 2: the read the scout's path needs
+        await p.poll(2000);
+        expect(reads, 'poll 2 never read the store: K is remembered, so no throw arm is reachable').toBe(1);
+        expect(throwNext, 'the armed throw was never taken').toBe(true);
+        expect(seenWithdrawn.map((w) => w.url), 'the older-tag arm asked for K').toEqual(['/repos/fixture-owner/fixture-repo/releases/tags/v0.0.9']);
+        await p.poll(3000);
+      } finally {
+        warn.mockRestore();
+      }
+      // Poll 3's request carried K's own etag and got the 304, as in the scout's path.
+      expect(seenLatest.map((s) => s.headers['if-none-match'])).toEqual([undefined, '"eK"', '"eK"']);
+      const listingCalls = calls.filter((c) => c.coverage === 'newest-page');
+      expect(listingCalls).toHaveLength(2);
+      expect(listingCalls[1]!.keepTags, 'poll 3 keeps K, never a borrowed T').toEqual(['v0.0.9']);
+      expect(store.releases().find((r) => r.tag === 'v0.0.5'), 'the deleted T reads yanked').toMatchObject({ yanked: true });
+      expect(store.releases().find((r) => r.tag === 'v0.0.9')).toMatchObject({ yanked: false });
+      expect(store.newestUnyankedStable()).toBe('v0.0.9');
     });
   });
 
