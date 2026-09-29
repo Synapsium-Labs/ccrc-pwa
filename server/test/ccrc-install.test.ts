@@ -5250,6 +5250,10 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
     // The transcript names the same words, in the same order, as the file.
     expect(r.stdout).toMatch(new RegExp(`^install: caps: ${CAPS_HERE.join(' ')} \\(os ${os}; `, 'm'));
+    // F6 (review 167): the line names the file as `~/.ccrc/ccrc-caps`, and the
+    // fixture's absolute home appears nowhere in the line a rollout would relay.
+    expect(r.stdout).toMatch(/^install: caps: .* \(os \w+; ~\/\.ccrc\/ccrc-caps — /m);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
   it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
@@ -5281,10 +5285,13 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
         'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
-      ].join('\n')], { encoding: 'utf8' });
+      ].join('\n')], { encoding: 'utf8', env: { ...process.env, HOME: home } });
       expect(p.status, `${os}: ${p.stderr}`).toBe(0);
       expect(readFileSync(caps, 'utf8'), os).toBe(`os ${os}\n${words.join('\n')}\n`);
-      expect(p.stdout, os).toBe(`install: caps: ${words.join(' ')} (os ${os}; ${caps} — what this install's ccrc can do, read by the server)\n`);
+      // W6 Task 8A, F6: the path is the box's own home, so it is spelled `~` —
+      // never the absolute fixture home this run wrote under.
+      expect(p.stdout, os).toBe(`install: caps: ${words.join(' ')} (os ${os}; ~/.ccrc/ccrc-caps — what this install's ccrc can do, read by the server)\n`);
+      expect(p.stdout, os).not.toContain(home);
     }
   });
 

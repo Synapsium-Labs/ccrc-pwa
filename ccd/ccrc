@@ -11210,7 +11210,14 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${cw[@]}"; } > "$tmp" \
     && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" \
     || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_CAPS_FILE failed"; }
-  echo "install: caps: ${cw[*]} (os $CCD_OS; $BOX_CAPS_FILE — what this install's ccrc can do, read by the server)"
+  # REDACTED AT THE SOURCE (W6 Task 8A, review 167's F6): this line reaches an
+  # operator's terminal on the OTHER machine — `ccrc rollout` relays the remote
+  # `ccrc update`'s output, and this is the staged spine's own line — and it
+  # carried this box's absolute home. Only the box that wrote the path knows
+  # its own home (`_upd_redact` reads `$HOME`), so the substitution is made
+  # here, not in `cmd_rollout`'s relay, which knows only the rollout machine's.
+  # Every other line of this transcript already spells the path `~/.ccrc/…`.
+  echo "install: caps: ${cw[*]} (os $CCD_OS; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
