@@ -47,9 +47,10 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
 import {
-  parseStallDetail, stallArmingOf, stallCheckMail, stallDelivery, stallDetail, stallFacts, stallLastCheck,
-  stallPushText, stallReportMail, stallSubjects, stallVerdict, type AskRowFact, type HookAskFact, type LiveWordRead,
-  type StallArming, type StallInput, type StallNotice, type StallNotify, type StallSubject, type StallWorker,
+  STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf, stallCheckMail, stallDelivery, stallDetail,
+  stallFacts, stallLastCheck, stallMailClass, stallPushText, stallReportMail, stallSubjects, stallVerdict,
+  type AskRowFact, type HookAskFact, type LiveWordRead, type StallArming, type StallInput, type StallNotice,
+  type StallNotify, type StallSubject, type StallWorker,
 } from './coord/stall.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
@@ -1900,20 +1901,39 @@ export class FleetWatcher {
    * question the hold exists to keep off it, defeating the deferral it was
    * built to implement — the watermark still advances for these rows
    * exactly like every other, so this is a push-only exemption, not a skip.
+   *
+   * The stall watch's own mail follows the same rule (spec 2026-09-29 §4.2, "Push shape"), classified
+   * by `stallMailClass`:
+   * - A `check` (the watch's r1 to a worker) is recorded, never pushed.
+   * - A `reply` is recorded, never pushed, and only when it is BOUND: from the run's own worker, on that run,
+   *   and newer than the first check on it. The bind is read from the store only for a `re stall-check:`
+   *   subject. Any other mail wearing that prefix is pushed as ordinary mail, so no box-token holder can use
+   *   the prefix to keep a mail off the phone.
+   * - A `report` (the watch's r2 to the coordinator) is pushed under its own title, `⚠ stall › <run
+   *   workspace>`. The lane never pushes r2 itself, so this is its only push.
    */
   private pushNewMail(projects: Set<string>, sessionProjects: Map<string, string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     for (const m of coord.mailQueuedSince(this.lastMailNotifyId)) {
       const project = m.project ?? sessionProjects.get(m.toId) ?? '';
+      const bind = m.subject.startsWith(STALL_REPLY_PREFIX)
+        ? {
+          runSessionId: m.runSessionId,
+          runId: m.runId,
+          firstCheckId: m.runId === null ? null
+            : coord.firstMailIdWithPrefix(m.runId, 'operator', m.fromId, STALL_CHECK_PREFIX),
+        }
+        : undefined;
+      const stall = stallMailClass(m, bind);
       this.pushOne({
         kind: 'mail', sessionId: m.toId, project,
-        title: `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
+        title: stall === 'report' ? `⚠ stall › ${m.workspace ?? m.toId}` : `✉ ${m.kind} › ${m.workspace ?? m.toId}`,
         body: m.subject,
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || stall === 'check' || stall === 'reply' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
