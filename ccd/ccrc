@@ -11428,23 +11428,45 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # the same parser, the same census line — and the transcript says which of
 # the two it was (D-3428).
 # D-3465 (d), review 179 I1: the refusal above leaves the box with no stamp of
-# this tree's own. When THIS run flipped `~/ccrc` onto another version
-# (`_inst_tree`'s `placed`, or a copy), the stamp already on the box names the
-# build the box just LEFT, and `_inst_installed` would record it as a completed
-# install of a build that is not running (`update --check` then converges on
-# the old build, `/health` answers it, and a rollback to it answers "nothing to
-# do"). It is removed, so the box reads unstamped and `_inst_installed` takes
-# its no-stamp arm. A `running` run (the launcher) did not move `~/ccrc`: the
-# stamp there names the version it still points at, and stays.
+# this tree's own. When THIS run moved `~/ccrc` onto another version
+# (`_inst_tree`'s `placed`, or a copy), a stamp already on the box that names a
+# DIFFERENT build would be recorded by `_inst_installed` as a completed install
+# of a build that is not running (`update --check` then converges on the old
+# build, `/health` answers it, and a rollback to it answers "nothing to do").
+# It is removed, so the box reads unstamped and `_inst_installed` takes its
+# no-stamp arm. A `running` run (the launcher) did not move `~/ccrc`: the stamp
+# there names the version it still points at, and stays.
+#
+# THE RULE, re-measured in the re-review's N1: the stamp is removed only when
+# it does not name the version this run moved TO. Names are compared as
+# `_inst_version_name` makes them — the stamp's `version` when it has one, else
+# `untagged-<sha12>` — against `INST_TREE_NAME`. That name is a tag or an
+# `untagged-<sha12>` when the source was measured (a checkout, a release, a
+# placed version, or a migrated `~/ccrc` that carried a stamp), and
+# `unstamped-<12 hex>` when nothing could be (never equal to a stamp's name, so
+# the stamp goes). A stamp that cannot be read names nothing comparable and goes
+# too: it could not have been recorded as an install either. A stamp that names
+# the version this run moved to is the box's TRUE stamp — a killed flip's
+# leftover repaired by hand, a migration whose target already held one — and
+# stays, with the line saying so; the caller then returns 0, because nothing
+# is "skipped" and the box does not read unstamped.
 _inst_stamp_unname() {
-  case "$INST_TREE_HOW" in placed|copy) ;; *) return 0 ;; esac
-  local dest="$BOX_STAMP_FILE" left="unreadable"
-  [ -e "$dest" ] || [ -L "$dest" ] || return 0
-  if _box_build_fields; then left="${BOX_BUILD[0]:0:12}"; fi
+  case "$INST_TREE_HOW" in placed|copy) ;; *) return 1 ;; esac
+  local dest="$BOX_STAMP_FILE" what="it could not be read, so it cannot be shown to name a version this box is on" sname=""
+  [ -e "$dest" ] || [ -L "$dest" ] || return 1
+  if _box_build_fields; then
+    sname="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
+    if [ "$sname" = "$INST_TREE_NAME" ]; then
+      echo "install: stamp: the box's stamp already names $INST_TREE_NAME, the version this run moved \$HOME/ccrc to — it stays"
+      return 0
+    fi
+    what="it names $sname, not $INST_TREE_NAME, the version this run moved \$HOME/ccrc to"
+  fi
   rm -f -- "$dest" \
-    || _ccrc_die "cannot remove the box's stamp $dest, which names the build this box just left — it would be recorded as this install's"
+    || _ccrc_die "cannot remove the box's stamp $dest, which does not name the version this run moved \$HOME/ccrc to — it would be recorded as this install's"
   BOX_BUILD=()
-  echo "install: stamp: removed the box's stamp (it named $left, the build this box just left) — ccrc version will say unstamped"
+  echo "install: stamp: removed the box's stamp ($what) — ccrc version will say unstamped"
+  return 1
 }
 
 _inst_stamp_shipped() {
@@ -11466,14 +11488,21 @@ _inst_stamp_shipped() {
     # run at all) is not a version.
     local kname="$INST_TREE_NAME" krc=0
     if { [ "$INST_TREE_HOW" != running ] && [ "$INST_TREE_HOW" != placed ]; } || [ -z "$kname" ]; then
-      echo "install: stamp: the kept stamp beside this tree is not installed — this tree is not a version under \$HOME/ccrc-versions"
-      _inst_stamp_unname
+      if [ "$INST_TREE_HOW" = copy ]; then
+        # `copy` was measured BEFORE a migration made the copy the version
+        # `~/ccrc` points at, so "not a version" would be false of a tree that
+        # is one by now; what is true is what the run did (re-review N1, B).
+        echo "install: stamp: the kept stamp beside this tree is not installed — this run placed the tree by copy, and only a version already placed under \$HOME/ccrc-versions is read for its kept stamp"
+      else
+        echo "install: stamp: the kept stamp beside this tree is not installed — this tree is not a version under \$HOME/ccrc-versions"
+      fi
+      _inst_stamp_unname && return 0
       return 1
     fi
     _ver_kept "$kname" "$INST_ROLE" || krc=$?
     if [ "$krc" -ne 0 ]; then
       echo "install: stamp: $kname's kept stamp is not installed — it is not a kept version ($VER_WHY)"
-      _inst_stamp_unname
+      _inst_stamp_unname && return 0
       return 1
     fi
   fi
