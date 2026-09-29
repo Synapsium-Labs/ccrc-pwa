@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=769535a420e13984026c9f13af969007eed2ef80e8a0922ccd66c7f281772639
+# ccrc:generated 1 sha256=25a981f8ba577de63a62f7adf1e200cc3febe80dc9dbde7a7d6436425c2e8097
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22287,15 +22287,23 @@ _limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3
   # change to clear it. Born unknown, or a file stat cannot measure, reads
   # uncached — today's answer. A record for any other key, or a torn one, is
   # read past, never trusted: the regex admits digits and the path only.
-  local id="$1" f="$2" born="$3" m s key="" rec out rc
+  local id="$1" f="$2" born="$3" m s key="" rec out rc cached_key cached_rc cached_row cached_path
   local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) (.+)$'
   m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
   [[ "$born" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] && key="$born $m $s"
   if [[ -n "$key" ]]; then
     rec=$(_reg_get "$id" tdate)
-    if [[ "$rec" =~ $re && "${BASH_REMATCH[1]}" == "$key" && "${BASH_REMATCH[4]}" == "$f" ]]; then
-      [[ "${BASH_REMATCH[2]}" == 3 ]] && printf '%s\n' "${BASH_REMATCH[3]}"
-      return "${BASH_REMATCH[2]}"
+    if [[ "$rec" =~ $re ]]; then
+      cached_key="${BASH_REMATCH[1]}"; cached_rc="${BASH_REMATCH[2]}"
+      cached_row="${BASH_REMATCH[3]}"; cached_path="${BASH_REMATCH[4]}"
+      # An rc 3 has a dated row; rc 0/1 has no row. A record that mixes the
+      # two is torn, not a safe cached verdict.
+      if [[ "$cached_key" == "$key" && "$cached_path" == "$f" ]] \
+        && { [[ "$cached_rc" == 3 && "$cached_row" =~ ^[0-9]+$ ]] \
+          || [[ "$cached_rc" =~ ^[01]$ && "$cached_row" == - ]]; }; then
+        [[ "$cached_rc" == 3 ]] && printf '%s\n' "$cached_row"
+        return "$cached_rc"
+      fi
     fi
   fi
   out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
@@ -22313,11 +22321,13 @@ _limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3
 _never_came_up() {   # id born -> 0 iff this pane's process settled with no live TUI: `.spawn` reads "<epoch> 4" with epoch >= born (D-3526)
   # Both operands are bytes off disk or out of tmux: the regex goes FIRST, so
   # the arithmetic never sees an unvalidated field (D-299), and `10#` keeps a
-  # leading zero from reading as octal.
-  local st at rc
+  # leading zero from reading as octal. The whole two-token record is grammar:
+  # a torn suffix must not turn an undecidable settle into a reason to relocate.
+  local st at
   st=$(_reg_get "$1" spawn)
-  at="${st%% *}"; rc="${st##* }"
-  [[ "$at" =~ ^[0-9]+$ && "${2:-}" =~ ^[0-9]+$ && "$rc" == 4 ]] && (( 10#$at >= 10#$2 ))
+  [[ "$st" =~ ^([0-9]+)\ 4$ ]] || return 1
+  at="${BASH_REMATCH[1]}"
+  [[ "${2:-}" =~ ^[0-9]+$ ]] && (( 10#$at >= 10#$2 ))
 }
 
 _pane_carried_in() {   # id via pane-text -> 0 iff a pane rung's positive is a carried-in banner, not a block (D-3526)

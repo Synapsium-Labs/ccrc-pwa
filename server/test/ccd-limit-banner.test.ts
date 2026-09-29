@@ -907,6 +907,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     expect(ask(`${BORN} 4`, '')).toBe('rc=1');
     expect(ask(`${BORN} 4`, 'soon')).toBe('rc=1');
     expect(ask('4', String(BORN))).toBe('rc=1');
+    expect(ask(`${BORN} 4 4`, String(BORN))).toBe('rc=1');
     const marker = path.join(h.home, 'evaluated');
     expect(ask(`REG[$(touch ${marker})] 4`, String(BORN))).toBe('rc=1');
     expect(ask(`${BORN} 4`, `REG[$(touch ${marker})]`)).toBe('rc=1');
@@ -1084,6 +1085,19 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     expect(reads()).toBe(1);
     // A torn record for this key: ignored too.
     h.sh(`_reg_set ${ID} tdate "${BORN} ${m} ${s} 9 - ${p}"`);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(2);
+  });
+  it('an rc-inconsistent cache record is torn and cannot turn a carried banner back into a block', () => {
+    carried();
+    const p = h.sh(`_transcript_path ${ID}`);
+    const m = Math.floor(fs.statSync(p).mtimeMs / 1000); const s = fs.statSync(p).size;
+    // rc 3 must carry the dated row's epoch, not the no-row sentinel.
+    h.sh(`_reg_set ${ID} tdate "${BORN} ${m} ${s} 3 - ${p}"`);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(1);
+    // Likewise, an rc 1 record cannot carry a row epoch.
+    h.sh(`_reg_set ${ID} tdate "${BORN} ${m} ${s} 1 ${BANNER_AT} ${p}"`);
     expect(verdict(NEW_BANNER)).toBe('1:');
     expect(reads()).toBe(2);
   });
