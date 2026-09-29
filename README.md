@@ -2528,7 +2528,22 @@ by nothing in the tree: `stall-watch-disabled` stops the lane; with no
 `stall-watch-live` every rung is SHADOW (a `stall-shadow:` row and a
 `ccrc-server: stall-watch shadow` log line, nothing sent); `stall-watch-live`
 sends the notices addressed to the worker; `stall-watch-escalate` sends the
-coordinator mails and the operator pushes too.
+coordinator mails and the operator pushes too. The quiet clock restarts on ANY
+mail to the worker on the run that is not the watch's own, so a session that
+mails the worker there at least every 2 h keeps r1 from ever falling due. The
+guarantee that no box-token holder can keep a mail off the phone covers the
+`re stall-check:` prefix only (a reply is kept off the phone only when it is
+bound to a check); nothing limits who may mail the worker and so hold off the
+ladder. Each `re stall-check: working` reply is worker mail, so it opens a new
+episode: a worker in a long legitimate wait draws a check about every 2 h, and
+each one costs a worker turn and a coordinator turn. Shadow cannot show that
+cost, because in shadow no check is sent and no reply comes back; once
+`stall-watch-live` is touched, the armed r1 rate per worker per day is the
+number to watch. Runbook: whenever `mail-disabled` is touched, touch
+`stall-watch-disabled` too. Otherwise the lane keeps queuing checks and reports
+that nothing delivers, and a coordinator's answer left undelivered still hands
+the worker the ball (the ball passes when a mail is queued), so the worker is
+checked for mail it never received.
 
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
@@ -3303,9 +3318,11 @@ the turn* on `shell` — Claude Code relabels an IDLE main loop `shell` while a
 background shell or Monitor it started still runs, so a turn that ended with
 one running reads `"status":"shell"` for as long as that shell lives (measured
 twice on one day; one session held it 1h55m while its hook had written `done`
-5.7s after the file's last write). That is a finished turn, not the wedge this
-paragraph once called it (the worker stall watch design's §3.1), and the mail
-gate delivers on it. The live file is also blind to a session waiting on
+5.7s after the file's last write). That was most likely a finished turn, not
+the wedge this paragraph once called it: the worker stall watch design's §3.1
+reads the 2.1.277–2.1.284 binaries, and that day's sessions (2026-08-17) ran a
+2.1.233-era build nobody read for it. The mail gate delivers on `shell`. The
+live file is also blind to a session waiting on
 subagents, and reads `idle` when it is missing, unreadable, or behind an
 unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
 `statusUpdatedAt`: a newer hook `done` unseats a stale `busy` (except

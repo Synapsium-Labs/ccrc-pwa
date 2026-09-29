@@ -290,7 +290,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
 - **The mail gate's idle includes `shell`, and a stall watch backs it** (design
   `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md`). `mailTurnIdle` (`server/src/turnidle.ts`) delivers
-  on live `idle` or `shell` — an idle main loop over a background shell — unless `$REG/mail-gate-strict` exists.
+  on live `idle`, and on `shell` — an idle main loop over a background shell — unless `$REG/mail-gate-strict` exists.
   `sweepStalls` (its verdict the pure `server/src/coord/stall.ts`) mails a silent run worker a `stall-check:`, then its
   coordinator a `stall:`, then pushes the operator; each rung is a `run_events` observation row first, so a restart never
   re-sends, and it never closes, reclaims or re-dispatches. `stall-watch-disabled`, `stall-watch-live` and
