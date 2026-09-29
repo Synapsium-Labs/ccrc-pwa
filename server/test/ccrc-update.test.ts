@@ -2977,6 +2977,70 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(reportWrites(home).map((w) => w['phase'])).toEqual(['resolving', 'failed']);
   });
 
+  // W6 Task 8A (the floor's refusal after a restore; C28's root). The floor
+  // is raised inside the staged spine, before the health gate, and a restore
+  // never lowers it (spec §9 stands) — so a failed update that restored
+  // leaves the floor above the running release. The refusal a later move
+  // meets names the update that raised it, read from the last run's report,
+  // and names the floor alone when that report does not say so.
+  const REVERTED_REPORT = (target: string): string =>
+    `{"target":"${target}","phase":"reverted","startedAt":1,"updatedAt":2,"detail":"arm1: flipped back to v1.0.0; gate: fixture","from":"cli","pid":1}\n`;
+  const RAISED_BY = (floor: string): string =>
+    ` — the update that raised it, to ${floor}, failed its health gate and was restored, so the floor stands above the release this box runs`;
+
+  it('END TO END: a real update whose gate failed and restored leaves the floor above the running release, and the next move below it is refused naming the update that raised it (C28\'s root)', () => {
+    const home = onKeptV1('ccrc-update-floor-restored-');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: V2_SHA }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-deny'), 'v2.0.0\n');
+    const up = runUpdate(home);
+    expect(up.code, `stderr: ${up.stderr}\nstdout: ${up.stdout}`).toBe(4);
+    expect(fileText(join(home, '.ccrc', 'floor'))).toBe('v2.0.0\n');
+    expect(lastReport(home)).toMatchObject({ phase: 'reverted', target: 'v2.0.0' });
+    // v1.0.0 is what runs, and it is below the floor: a forced reinstall
+    // is a move down, and the refusal says why the floor stands where it does.
+    const r = runUpdate(home, ['--to', 'v1.0.0', '--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain(`v1.0.0 (resolved by --to v1.0.0) is below this box's floor v2.0.0 (`);
+    expect(r.stderr).toContain(`${RAISED_BY('v2.0.0')} — moving down is a typed act: ccrc update --to v1.0.0 --downgrade. Nothing on this box was changed`);
+  }, 60_000);
+
+  it.each([
+    ['a report that says the update to the floor tag was restored', REVERTED_REPORT('v3.0.0'), true],
+    ['a restored update to some OTHER tag', REVERTED_REPORT('v2.5.0'), false],
+    ['a report of a COMPLETED update to the floor tag', REVERTED_REPORT('v3.0.0').replace('"reverted"', '"done"'), false],
+    ['an absent report', null, false],
+    ['a report that is not JSON', 'reverted v3.0.0\n', false],
+    ['a report whose target is not a tag', REVERTED_REPORT('v3.0.0').replace('"v3.0.0"', '"v3.0.0; rm -rf"'), false],
+  ] as const)('the floor\'s refusal names the restored update only when the last report says so — %s (floor-only otherwise, exactly as before)', (_what, report, named) => {
+    const home = freshUpdateBox('ccrc-update-floor-named-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    if (report !== null) writeFileSync(join(home, '.ccrc', 'update.json'), report);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0 \(\S+: the highest version this box completed an install of\)/);
+    if (named) {
+      expect(r.stderr).toContain(`${RAISED_BY('v3.0.0')} — moving down is a typed act: ccrc update --to v2.0.0 --downgrade`);
+    } else {
+      expect(r.stderr).not.toContain('failed its health gate and was restored');
+      expect(r.stderr).toMatch(/the highest version this box completed an install of\) — moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade\. Nothing on this box was changed/);
+    }
+  });
+
+  it('a report reached through a SYMLINK is unsafe to read and names nothing: the refusal is the floor alone (the one shared guard)', () => {
+    const home = freshUpdateBox('ccrc-update-floor-named-link-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    writeFileSync(join(home, 'elsewhere.json'), REVERTED_REPORT('v3.0.0'));
+    symlinkSync(join(home, 'elsewhere.json'), join(home, '.ccrc', 'update.json'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('is below this box\'s floor v3.0.0');
+    expect(r.stderr).not.toContain('failed its health gate and was restored');
+  });
+
   it('--to below the floor is refused the same way, naming --to', () => {
     const home = freshUpdateBox('ccrc-update-floor-to-');
     plantOldBox(home, { version: 'v3.0.0' });

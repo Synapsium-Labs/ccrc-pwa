@@ -1642,6 +1642,8 @@ UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
+UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (the floor's refusal names a restored update by it)
+UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
 UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
 UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by _upd_backup_pairs
 # The report's state (design §10), at file scope for the same `set -u`
@@ -12844,6 +12846,9 @@ cmd_update() {
   # install path only — --check returned above: it measures, it moves
   # nothing. BEFORE UPD_REPORTING, so a run refused here reports nothing.
   _upd_lock
+  # The PREVIOUS run's report, read before this run's first `_upd_phase`
+  # replaces it (`resolving` is written before the floor is checked).
+  _upd_last_report
 
   # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
   # writes ~/.ccrc/update.json, and `_ccrc_die` makes every refusal a
@@ -15603,6 +15608,26 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
   return 1
 }
 
+# `_upd_last_report` (W6 Task 8A, the floor's refusal after a restore) — the
+# phase and target the PREVIOUS run left in `~/.ccrc/update.json`, into
+# UPD_LAST_PHASE / UPD_LAST_TARGET. `cmd_update` calls it right after taking
+# the lock and before this run writes anything, because this run's own first
+# report (`resolving`) replaces the file before `_upd_floor_check` runs. Every
+# field is shape-checked (the file is same-user-writable by every session on
+# the box); anything unreadable — absent, unsafe, no jq, not an object —
+# leaves both empty, which the floor's refusal reads as "no such update", never
+# as a guess. Reads only; the one shared guard (`_upd_report_readable`) first.
+_upd_last_report() {
+  local out="" a="" b=""
+  UPD_LAST_PHASE=""; UPD_LAST_TARGET=""
+  _upd_report_readable && command -v jq >/dev/null 2>&1 || return 0
+  out="$(jq -r 'if type == "object" then "\(if (.phase | type) == "string" then .phase else "-" end) \(if (.target | type) == "string" then .target else "-" end)" else empty end' -- "$BOX_UPDATE_JSON" 2>/dev/null)" || out=""
+  read -r a b <<<"$out"
+  [[ "$a" =~ ^[a-z-]{1,32}$ ]] && UPD_LAST_PHASE="$a"
+  [[ "$b" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && UPD_LAST_TARGET="$b"
+  return 0
+}
+
 # ── _upd_floor_check <via> <downgrade> <from> — never below the floor by accident ─
 # (design 2026-09-20 §9, decision 8). Checked against the RESOLVED version,
 # whichever way it was resolved — `--to`, or `latest/download` — because a
@@ -15649,7 +15674,18 @@ _upd_floor_check() {
     echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
     return 0
   fi
-  _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
+  # The floor is raised inside the staged spine, BEFORE the health gate (spec
+  # §9's placement stands), and a restore never lowers it — so a failed
+  # update that restored leaves the floor above the release the box runs.
+  # When the last run's report says exactly that — a `reverted` phase whose
+  # target is the floor's own tag — the refusal names the update that raised
+  # it, so the operator sees why `--downgrade` is being asked for. Anything
+  # else, including an unreadable or absent report, names the floor alone.
+  local raised=""
+  if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
+    raised=" — the update that raised it, to $floor, failed its health gate and was restored, so the floor stands above the release this box runs"
+  fi
+  _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
