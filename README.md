@@ -701,11 +701,11 @@ flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/c
 update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
 dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
 running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
-stay. An input that cannot be read prunes nothing, and only `--prune` removes an incomplete tree. `deploy.sh` still
+stay. An input that cannot be read prunes nothing (a `CCRC_VERSIONS_KEEP` that is not a whole number from 0 to 9999 is one), a dead process's `.pruning-`/`.incoming.` leftover is swept once per prune, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
-directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
+directory shape, pruned to the newest `CCRC_BACKUP_KEEP` (0 to 9999) timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
 unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
 takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
