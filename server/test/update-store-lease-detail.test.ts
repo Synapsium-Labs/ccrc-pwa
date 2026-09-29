@@ -59,7 +59,7 @@ describe('noteLeaseDetail (D-3413)', () => {
     expect(s.releaseLease(UUID_A, 'idle', 'released', null).ok).toBe(true);
     expect(s.dispatchNode(UUID_A, 'v0.0.10', 'update', T0 + 9, 'requested update from v0.0.9 to v0.0.10')).toEqual({ ok: true });
     const w = writes(s);
-    expect(s.noteLeaseDetail(UUID_A, 'words for the OLD lease', T0 + 5)).toEqual({ ok: false, why: 'stale-lease', updateStartedAt: T0 + 9 });
+    expect(s.noteLeaseDetail(UUID_A, 'words for the OLD lease', T0 + 5)).toEqual({ ok: false, why: 'stale-report', updateStartedAt: T0 + 9 });
     expect(writes(s)).toBe(w);
     expect(s.node(UUID_A)!.updateDetail).toBe('requested update from v0.0.9 to v0.0.10');
   });

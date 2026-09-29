@@ -428,7 +428,7 @@ export type NoteDispatchRefusalResult =
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'not-idle'; state: UpdateState };
 
-/** `noteLeaseDetail`'s answers (D-3413). `stale-lease` = the row holds a busy lease that is not the one the caller
+/** `noteLeaseDetail`'s answers (D-3413). `stale-report` = the row holds a busy lease that is not the one the caller
  *  acquired (`updateStartedAt` names the one it holds); `not-busy` = a report or the deadline already settled the row,
  *  and its verdict is not the dispatcher's to overwrite. Every refusal writes nothing. */
 export type NoteLeaseDetailResult =
@@ -436,7 +436,7 @@ export type NoteLeaseDetailResult =
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'not-busy'; state: UpdateState }
-  | { ok: false; why: 'stale-lease'; updateStartedAt: number | null };
+  | { ok: false; why: 'stale-report'; updateStartedAt: number | null };
 
 /** `handOffLease`'s answers (D-3412). The heir's arms are read back first: `unknown-node`, `superseded` (the heir
  *  itself was retired again) and `halted` (a row that HALTS — `reverted`, or `failed` whose detail does not begin
@@ -6605,7 +6605,7 @@ export class CoordStore {
       if ((SETTLED_UPDATE_STATES as readonly string[]).includes(row.updateState)) {
         return { ok: false, why: 'not-busy', state: row.updateState };
       }
-      return { ok: false, why: 'stale-lease', updateStartedAt: row.updateStartedAt };
+      return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt };
     });
   }
 

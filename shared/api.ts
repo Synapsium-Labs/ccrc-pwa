@@ -8686,7 +8686,7 @@ export const UPDATE_STORE_REFUSE_CODES = [
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
   'unknown-release', 'already-notified',
-  'bad-kind', 'no-request', 'not-idle',
+  'bad-kind', 'no-request', 'not-idle', 'no-lease-to-hand',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
