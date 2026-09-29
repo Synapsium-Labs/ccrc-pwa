@@ -105,33 +105,54 @@ whole of "podczas pisania zadań".
 Restraint is the design here. `CLAUDE.md` forbids new `ccd` verbs for coordination, and
 the wire is additive-only with `FLEET_PROTO` pinned at 1. None of that needs to move.
 
-**1. A line in the plan task** — prose, zero code:
+**1. A section in the plan** — prose, zero code. Two shapes were tried; the first was
+wrong. A per-task `Design:` line does not fit: plans list tasks as bullets under
+`## Tasks` (`- [x] **Task 4 — ...**`), and an inline field there reads as noise. The
+declaration is therefore per PLAN, in the same section vocabulary the plans already have
+beside `## Deviations found` and `## Measurements`:
 
 ```markdown
-### Task 7: SessionLine → props
-Design: required            # required | offer | none
-Brief: docs/design/briefs/session-line.md
+## Design
+
+**Posture:** required            # required | offer | none
+**Brief:** docs/design/briefs/session-line.md
 ```
 
-**2. A clause in each skill.** The coordinator reads `Design:` before dispatching a wave:
+**2. A clause in each skill — and it turns out neither needs one.** The worker's clause 6
+already reads *"Your requirements are the brief plus the plan file it names"*, so a design
+brief named in the wave brief is already binding. What was missing was on the
+coordinator's side, and it belongs in the wave lifecycle's dispatch step rather than in
+the pinned contract: read the posture before `POST /api/runs/:id/dispatch`.
 
-- `required` → the wave brief must carry the brief path; the worker's wave-done must name
-  a `CANVASES.md` line
-- `offer` → the coordinator raises an ask (`POST /api/asks`) and waits. This is
-  deliberately the ask lane and not a mail note: asks are one of the four **ungated**
-  operator doors (D-282), so the question still reaches the operator's phone when the box
-  token is gone — which is exactly the wedge a design gate could otherwise create.
-- `none` → silence
+- `required` → the brief path from that section goes INTO the wave brief
+- `offer` → **ask with the AskUserQuestion tool** and wait. The first draft of this spec
+  said `POST /api/asks`; that route does not exist, and `coordinator-skill.test.ts`'s
+  route-linkage check caught it. Asks are *created* by the tool through the session hook,
+  not posted. The reasoning survives the correction intact and is in fact stronger: an ask
+  reaches the operator's phone and needs no box token to answer, so a design gate cannot
+  become a wedge with no door.
+- `none` → dispatch says nothing about design
 
-Both skills' clauses are pinned verbatim by `coordinator-skill.test.ts` and
-`worker-skill.test.ts`, so a softened clause is already a red suite. That protection is
-free; it comes from where the text lives.
+Adding no clause means the pinned `CONTRACT` arrays and their count-word check do not
+move, which is the cheapest possible diff for this lane.
 
-**3. A guard test.** *"A comment is a request; a red suite is a mechanism."* A scan over
-`docs/superpowers/plans/`: a task whose text names a path under `pwa/src/**/*.tsx` or
-`ui/src/**` and carries no `Design:` line goes red. This is the only thing in lane C that
-makes the policy a mechanism rather than a preference, and it ships with the mutation
-test that goes red when it is deleted.
+**3. A guard test.** *"A comment is a request; a red suite is a mechanism."*
+`server/test/design-declaration.test.ts` scans `docs/superpowers/plans/` and reds a plan
+that names `ui/src/**` or a `pwa/src/**.tsx` and carries no `## Design` section with a
+valid posture.
+
+Three properties of it are deliberate:
+
+- It checks that the question was **answered**, never which answer was given. `none`
+  passes exactly as `required` does. A guard that demanded canvases would be a guard that
+  lies about what it measures.
+- The floor is a **filename date** (`2026-09-29`), not an exemption list. 101 plans
+  predate the convention and none will grow the section; a list of 101 names would rot,
+  a date is a boundary anyone can see.
+- Three of its six cases are the guards-the-guard: today no in-scope UI plan exists, so
+  the corpus scan passes vacuously, and fixtures carry the real assertions. The scan half
+  was mutation-checked separately — an in-scope UI plan with no section reds and names
+  itself in the failure.
 
 ## What this design deliberately does NOT build
 
