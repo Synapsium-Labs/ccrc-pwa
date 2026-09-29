@@ -3118,7 +3118,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(unbinds[0]!.index!).toBeGreaterThan(clearAt);
     expect(unbinds[0]!.index!).toBeLessThan(src.indexOf('\n  }\n', clearAt));
     // The one that remains sits inside bindSession — the funnel, not a caller.
-    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
+    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string, bornAt?: number | null)');
     const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
     expect(bindAt).toBeGreaterThan(-1);
     expect(updates[0]!.index!).toBeGreaterThan(bindAt);
@@ -3135,6 +3135,94 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // Premise: the widened regex recognises what it forbids — it finds the
     // funnel's own statement.
     expect(updates[0]![0]).toContain('sessionId');
+  });
+
+  // R33 (migration 15, child-reclamation spec §5.1, §5.3): the child's BIRTH
+  // is write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
+  // is where the logic lives — `setSession` only forwards — so these cases
+  // drive `bindSession` directly, on the describe's own idiom above.
+  describe('sessionBornAt (migration 15, R33) — the write-once birth', () => {
+    it('an explicit bornAt on a first bind writes it', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+    });
+
+    it('an explicit NULL bornAt (the adopted arm) writes null, not "unset"', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', null);
+      expect(okRun(s.run(runId))?.sessionId).toBe('demo-worker');
+      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+    });
+
+    it('two stamps, T1 then T2, with the bind on the second: sessionBornAt is T2', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker', 2_000);
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(2_000);
+    });
+
+    it('omitting bornAt on a SAME-session re-bind leaves the birth untouched', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-worker');
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+    });
+
+    it('omitting bornAt on a DIFFERENT-session re-bind nulls the birth — a birth dated to the outgoing occupant is not the heir\'s', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.bindSession(runId, 'demo-heir');
+      expect(okRun(s.run(runId))?.sessionId).toBe('demo-heir');
+      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+    });
+
+    it('a bound session, then a direct markDispatchStarted: sessionBornAt is unchanged and dispatchStartedAt moves', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      s.markDispatchStarted(runId, 5_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.dispatchStartedAt).toBe(5_000);
+    });
+
+    it('setSession forwards bornAt exactly as bindSession would — the two-argument form (the open route\'s) omits it', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.setSession(runId, 'demo-worker', 1_000);
+      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+      s.setSession(runId, 'demo-heir');
+      expect(okRun(s.run(runId))?.sessionId).toBe('demo-heir');
+      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+    });
+
+    it('clearSession nulls sessionBornAt alongside sessionId', () => {
+      // `clearSession` only writes a `planned` row (its own docstring) —
+      // `openOne` leaves the run exactly there, so no `advance` is needed.
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const cleared = s.clearSession(runId, 42);
+      expect(cleared).toEqual({ ok: true, cleared: true });
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBeNull();
+      expect(row?.sessionBornAt).toBeNull();
+    });
+
+    it('toRunSummary strips sessionBornAt off the wire, alongside coordProject and prLineage', () => {
+      const s = store();
+      const runId = openOne(s);
+      s.bindSession(runId, 'demo-worker', 1_000);
+      const row = okRun(s.run(runId))!;
+      expect(row.sessionBornAt).toBe(1_000);
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+    });
   });
 });
 

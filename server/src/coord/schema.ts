@@ -1129,6 +1129,36 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE update_epoch (id INTEGER PRIMARY KEY CHECK (id = 1), epoch INTEGER NOT NULL, issuedAt INTEGER NOT NULL);
   INSERT INTO update_epoch (id, epoch, issuedAt) VALUES (1, 0, 0);
   `,
+  // ── 15: user_version 14 -> 15 ─────────────────────────────────────────────
+  // Child reclamation (design 2026-09-22 §5.1, §5.3): `runs.sessionBornAt`, the
+  // child's BIRTH — write-once per BOUND session, never a first stamp per run.
+  // `dispatchStartedAt` (migration 5) keeps its every-attempt meaning: it
+  // moves on every fresh-spawn dispatch attempt, retries included, and the
+  // spawn-in-flight render still reads it unchanged. `sessionBornAt` answers a
+  // narrower question — "when was THIS occupant's tenancy of this workspace
+  // minted" — and `childBirthOf` (`coord/childSpent.ts`) moves onto this
+  // column in the same task that adds it, so every PR row a child's branch has
+  // ever carried is placed against the SESSION's own birth, not against
+  // whichever attempt most recently touched `dispatchStartedAt`.
+  //
+  // The backfill dates every row that already carries a bound session to the
+  // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
+  // with one exception: a row whose `run_events` trail carries a
+  // `spawn-adopted:` event bound to an EARLIER attempt's workspace, never this
+  // session's own mint (`dispatch.ts`'s fresh arm: an adopted winner binds
+  // with a NULL birth, because the workspace it adopted may be an earlier
+  // attempt's, and a backfilled guess would date it to the wrong attempt). An
+  // unbound row (`sessionId IS NULL`) is left NULL by the `WHERE` clause
+  // alone, matching a run nothing has ever dispatched.
+  //
+  // MIGRATIONS[0..13] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  `
+  ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;
+  UPDATE runs SET sessionBornAt = dispatchStartedAt
+    WHERE sessionId IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

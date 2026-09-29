@@ -91,8 +91,16 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * made, kept here for the board-placement policy to read server-side. It is
  * NOT one of the design's two wire additions, so it stays off `RunSummary`
  * and gets stripped by `toRunSummary` alongside `prLineage`.
+ *
+ * `sessionBornAt` (child-reclamation spec §5.1, §5.3): the child's BIRTH,
+ * write-once per BOUND session — `bindSession` below is its one writer, on
+ * `coordProject`'s idiom of a server-side measurement nothing on the wire
+ * needs. `childBirthOf` (`coord/childSpent.ts`) reads it, never
+ * `dispatchStartedAt`, which keeps its own every-attempt meaning unchanged.
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
+export interface RunRow extends RunSummary {
+  prLineage: PrLineageEntry[]; coordProject: string | null; sessionBornAt: number | null;
+}
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -125,9 +133,10 @@ export type { CoordPlacementStamp };
  *  server-side, and NOT one of that design's two wire additions — see
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
- *  rather than each holding its own copy of the strip. */
+ *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
+ *  (migration 15) on the same idiom: a server-only measurement, never sent. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt, ...summary } = row;
   return summary;
 };
 
@@ -691,6 +700,7 @@ interface RunRowDb {
   briefQueued: number | null;
   clearError: string | null;
   coordProject: string | null;
+  sessionBornAt: number | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -710,7 +720,7 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -2338,11 +2348,29 @@ export class CoordStore {
    * later SQLite failure rolls the binding, re-issued delivery and event back
    * together (D-2505).
    */
-  bindSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  bindSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     const row = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?')
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
+    // R33: the child's BIRTH is write-once PER BOUND SESSION, never a first
+    // stamp per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads
+    // this column, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
+    // fresh-spawn dispatch arm passes one, because it alone knows whether this
+    // spawn is genuinely new or an adoption of an earlier attempt's workspace —
+    // wins outright, adopted or not (a `null` birth is a deliberate answer:
+    // unplaceable, so `childBirthOf` refuses to date anything against it).
+    // Omitting the argument means this bind is not the moment of birth: a
+    // same-session re-statement leaves it untouched, and an occupant change
+    // nulls it, because a birth dated to a session that no longer holds this
+    // run is not this session's birth. Neither statement below names
+    // `sessionId` in its SET list, so the one-writer scan above still counts
+    // exactly one write of that column per statement.
+    if (bornAt !== undefined) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = ? WHERE id = ?').run(bornAt, runId);
+    } else if (predecessor !== sessionId) {
+      this.db.prepare('UPDATE runs SET sessionBornAt = NULL WHERE id = ?').run(runId);
+    }
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -2374,7 +2402,7 @@ export class CoordStore {
    * sentence in the paragraph above is still true of what this method DOES;
    * what changed is only where the statement lives.
    */
-  setSession(runId: number, sessionId: string): { rebound: boolean; reissued: number } {
+  setSession(runId: number, sessionId: string, bornAt?: number | null): { rebound: boolean; reissued: number } {
     // Delegated, not re-implemented: `bindSession` above is the writer of this
     // column. Its answer is RETURNED, not dropped (D-2351; PR #75 review
     // round 1, store-2): the open route is a live RE-bind path — a retried open of a
@@ -2382,7 +2410,13 @@ export class CoordStore {
     // predecessor — and records what it was told on the run's trail. The
     // fresh-spawn arm (`dispatch.ts`) binds a run that names no session yet,
     // where the answer is always `{rebound:false, reissued:0}` and is ignored.
-    return this.bindSession(runId, sessionId);
+    //
+    // `bornAt` (migration 15) is forwarded as-is, undefined included:
+    // `bindSession` is where R33's write-once-birth logic lives, on both the
+    // explicit and the omitted arm, so this method adds nothing of its own.
+    // The open route (`routes.ts`) calls the two-argument form, never naming a
+    // birth — it re-binds an already-dispatched wave, not a fresh spawn.
+    return this.bindSession(runId, sessionId, bornAt);
   }
 
   /**
@@ -2418,8 +2452,13 @@ export class CoordStore {
       const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
         .get(runId) as { sessionId: string | null } | undefined;
       if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
+      // `sessionBornAt` clears alongside `sessionId` (migration 15): the spent
+      // occupant's birth belongs to nobody once the run names no session, and
+      // the next dispatch's fresh-spawn arm mints a fresh birth for whichever
+      // session it binds.
       this.db.prepare(
-        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL WHERE id = ? AND state = 'planned'",
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, sessionBornAt = NULL " +
+        "WHERE id = ? AND state = 'planned'",
       ).run(runId);
       this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
       return { ok: true as const, cleared: true };
@@ -3163,6 +3202,14 @@ export class CoordStore {
       // this stays off the wire (`toRunSummary` strips it alongside
       // `prLineage`).
       coordProject: row.coordProject,
+      // The child's BIRTH (migration 15, child-reclamation spec §5.1, §5.3),
+      // read straight through on `coordProject`'s idiom directly above: a
+      // server-side measurement, `bindSession`'s one writer, stripped off the
+      // wire by `toRunSummary` the same way. NULL means no fresh-spawn bind has
+      // ever stamped a birth for the CURRENT occupant of `sessionId` — an
+      // unbound run, an adopted spawn (deliberately unplaceable), or a
+      // predecessor's birth nulled by a later re-bind.
+      sessionBornAt: row.sessionBornAt,
     };
   }
 

@@ -640,10 +640,10 @@ async function childGateAtClose(
   if (!decision.reclaim && decision.why === 'not-finished' && read.found && minting.kind === 'row') {
     // The minting row is guaranteed present here — `childReclaimDecision`
     // only answers `not-finished` past its own `minting.kind==='row'` check —
-    // so `minting.dispatchStartedAt` is this child's birth, read once, never
+    // so `minting.sessionBornAt` is this child's birth, read once, never
     // a second `coord.run` query.
     const birth = childBirthOf(
-      { ok: true, run: { sessionId: minting.sessionId, dispatchStartedAt: minting.dispatchStartedAt } }, sessionId);
+      { ok: true, run: { sessionId: minting.sessionId, sessionBornAt: minting.sessionBornAt } }, sessionId);
     let spent = await childSpent(deps, read.record, birth);
     // A2/P6: a fast-path spent (registry `.prnumber` or `.prhistory`, always
     // `incarnation:'unplaced'`) is never trusted alone — it is re-dated
@@ -670,7 +670,7 @@ function mintingRowOf(coord: CoordStore, runId: number): ChildReclaimMinting {
   const r = coord.run(runId);
   if (!r.ok) return { kind: 'unreadable' };
   return r.run === null ? { kind: 'absent' }
-    : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews, dispatchStartedAt: r.run.dispatchStartedAt };
+    : { kind: 'row', sessionId: r.run.sessionId, reviews: r.run.reviews, sessionBornAt: r.run.sessionBornAt };
 }
 
 /** The run a REVIEW child's minting run reviews (spec §5.7) — `none` when the

@@ -359,7 +359,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
-    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);   // keeps the programme open
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
@@ -372,7 +372,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
-    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     b.dispatched('demo-next-wave', 2);
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
@@ -386,7 +386,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
-    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1
     b.dispatched('demo-next-wave', 2);
@@ -407,7 +407,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const b = build({ prState: { code: 0, stdout: `${prLine([row])}\n`, stderr: '' } });
     gitBranch(b.home, TIP);
     const id = b.dispatched(ID, 1);
-    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
     b.seed(ID, String(id));
     writeFileSync(path.join(b.reg, `${ID}.prnumber`), '42');   // the fast path: rung 1, always 'unplaced'
     b.dispatched('demo-next-wave', 2);                         // keeps the programme open — the spent verdict decides

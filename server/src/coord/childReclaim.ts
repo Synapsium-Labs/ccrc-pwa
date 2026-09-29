@@ -204,14 +204,15 @@ export type ChildReclaimDecision =
 /** The minting run's row, read by the id the marker names — the SERVER's half
  *  of spec §5.1's two authorities. Three answers, never two. `reviews` is the
  *  row's own column: the work run a REVIEW run reads, `null` on a work run.
- *  `dispatchStartedAt` is the same column `childBirthOf` reads (`childSpent.ts`)
- *  — carried here so the close (Task 9) can place a fast-path spent verdict's
- *  evidence against this child's own birth before it decides; it plays no
- *  part in `childReclaimDecision`'s own logic, which reads only `spent.kind`
- *  and `spent.incarnation`, already resolved by the caller. */
+ *  `sessionBornAt` (migration 15, R33) is the same column `childBirthOf` reads
+ *  (`childSpent.ts`), never `dispatchStartedAt` — carried here so the close
+ *  (Task 9) can place a fast-path spent verdict's evidence against this
+ *  child's own birth before it decides; it plays no part in
+ *  `childReclaimDecision`'s own logic, which reads only `spent.kind` and
+ *  `spent.incarnation`, already resolved by the caller. */
 export type ChildReclaimMinting =
   | { readonly kind: 'row'; readonly sessionId: string | null; readonly reviews: number | null;
-      readonly dispatchStartedAt: number | null }
+      readonly sessionBornAt: number | null }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable' };
 

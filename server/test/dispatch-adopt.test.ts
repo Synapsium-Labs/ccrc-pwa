@@ -530,6 +530,52 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
   });
 });
 
+// R33 (child-reclamation spec §5.1, §5.3; migration 15): the child's BIRTH is
+// write-once per BOUND session, spent from the SAME `startedAt` this arm
+// stamps onto `dispatchStartedAt` above — never a second `Date.now()` read,
+// which could date the two columns apart for no reason a reader could
+// recover. A CLEAN spawn binds its stamp; an ADOPTED spawn binds NULL,
+// because the workspace it adopted may be an earlier attempt's — `childBirthOf`
+// must never place a PR row against a birth this call cannot vouch for.
+describe('T2 — sessionBornAt (R33): the write-once birth', () => {
+  const NOW = 1_756_000_000_000;
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a CLEAN spawn binds its stamp — sessionBornAt equals dispatchStartedAt', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: false });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBe(NOW);
+    expect(row.sessionBornAt).toBe(row.dispatchStartedAt);
+  });
+
+  it("an ADOPTED spawn binds a NULL birth — the workspace may be an earlier attempt's", async () => {
+    const h = await harness({ ccd: { ok: false, killed: true, stderr: '' },
+                              after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }] });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBeNull();
+    // `dispatchStartedAt` is STILL stamped — the two columns' whole point is
+    // that an adoption is exactly where they diverge.
+    expect(row.dispatchStartedAt).toBe(NOW);
+  });
+
+  it('reaches the WIRE only as `dispatchStartedAt` — toRunSummary strips sessionBornAt, never sends it', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+    });
+    await h.dispatch();
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.sessionBornAt).toBe(NOW);
+    expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+  });
+});
+
 // Routing spec §6 "Arms" (fix round 1, finding #1). §1.5's adoption path is the
 // exact case that falsifies "the arm gate can read `res.ok`": `cmd_ws_add`
 // writes the worktree and every registry row FIRST and blocked LAST, so the
