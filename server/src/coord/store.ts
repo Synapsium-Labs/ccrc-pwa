@@ -438,6 +438,17 @@ export type NoteLeaseDetailResult =
   | { ok: false; why: 'not-busy'; state: UpdateState }
   | { ok: false; why: 'stale-lease'; updateStartedAt: number | null };
 
+/** `handOffLease`'s answers (D-3412). The heir's arms are read back first: `unknown-node`, `superseded` (the heir
+ *  itself was retired again) and `halted` (a `failed`/`reverted` row keeps its verdict — a lease is never written
+ *  over one). `no-lease-to-hand` = the donor is not a BUSY row of the heir's label that was retired TOWARD the heir
+ *  (absent, live, settled, retired toward another node, or another box's row). Every refusal writes nothing. */
+export type HandOffLeaseResult =
+  | { ok: true }
+  | { ok: false; why: 'unknown-node' }
+  | { ok: false; why: 'superseded'; supersededBy: string }
+  | { ok: false; why: 'halted'; state: UpdateState }
+  | { ok: false; why: 'no-lease-to-hand' };
+
 /** A partial intent write. `undefined` = leave the field as it stands;
  *  `pinnedTag: null` = CLEAR the pin — two different requests, never folded. */
 export interface UpdateIntentPatch { channel?: UpdateChannel; pinnedTag?: string | null; auto?: AutoMode; notify?: NotifyMode }
@@ -893,6 +904,10 @@ const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
  *  here, beside the one writer that re-keys by it; the inventory's validator
  *  (`update/inventory.ts`, Task 11) imports it. */
 export const NODE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** `rekeyNode`'s release of a revived busy row that another box's lease displaces (D-3412): the request stands, and
+ *  the detail names the rekey — the reader learns why a row they saw busy reads idle. */
+const REKEY_RELEASE_DETAIL = 'released on a rekey: the node-id came back while another node held the lease; the request stands';
 
 /** `ackNode`'s `updateDetail`: the row went back to idle because a person
  *  said so, not because anything converged. */
@@ -6283,11 +6298,20 @@ export class CoordStore {
    *  point at each other and both read as superseded forever. Then every
    *  OTHER live row carrying the label under a different id is superseded
    *  too: the same connection answering a new id is a re-installed box, and
-   *  its old identity is retired (D-3193). One transaction; idempotent. */
+   *  its old identity is retired (D-3193). A REVIVED row's lease then follows
+   *  the label, not its frozen columns (D-3412, `leaseFollowsLabel`): one box,
+   *  one lease. One transaction; idempotent. */
   rekeyNode(label: string, nodeId: string): RekeyNodeResult {
     if (!NODE_ID_RE.test(nodeId)) return { ok: false, why: 'bad-node-id' };
     return tx(this.db, (): RekeyNodeResult => {
       let how: 'rekeyed' | 'superseded' | 'no-label-row' = 'no-label-row';
+      // D-3412: the lease a revive must not lose. Read BEFORE either supersede below — the busy same-label live row
+      // this rekey is about to retire (the run the box is actually doing) — and only when a revive is possible.
+      const heir = this.nodeLeaseRow(nodeId);
+      const donor = heir === null || heir.supersededBy === null ? undefined : this.db.prepare(
+        'SELECT nodeId FROM nodes WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? ' +
+        `AND updateState NOT IN ${SETTLED_UPDATE_SQL} ORDER BY updateStartedAt IS NULL, updateStartedAt DESC, nodeId LIMIT 1`,
+      ).get(label, nodeId) as { nodeId: string } | undefined;
       const sup = this.db.prepare(
         'UPDATE nodes SET supersededBy = ? WHERE nodeId = ? AND supersededBy IS NULL ' +
         'AND EXISTS (SELECT 1 FROM nodes WHERE nodeId = ?)',
@@ -6309,8 +6333,31 @@ export class CoordStore {
       const retired = this.db.prepare(
         'UPDATE nodes SET supersededBy = ? WHERE label = ? AND supersededBy IS NULL AND nodeId <> ? AND nodeId <> ?',
       ).run(nodeId, label, nodeId, label);
+      if (revived) this.leaseFollowsLabel(label, nodeId, donor === undefined ? null : donor.nodeId);
       return { ok: true, how, retired: Number(retired.changes), revived };
     });
+  }
+
+  /** `rekeyNode`'s lease step for a REVIVED row (D-3412), AFTER every same-label row this rekey retires is
+   *  retired: one box, one lease. The revived row's lease columns are frozen at the day it was retired, so they say
+   *  nothing about the box's run now. Decided in this order:
+   *  - a HALTED row (`failed`/`reverted`) keeps its verdict and its halt — `handOffLease` and `releaseLease` each
+   *    refuse it in their own `WHERE`, so nothing is written whatever else is busy (the halt stops every other move;
+   *    the retired row's lease is W2's gap); a settled `idle` row is handed a lease but is never released;
+   *  - a same-label row this rekey retired that held a busy lease HANDS it over (`handOffLease`) — it is the run the
+   *    box is doing, so it is never dropped, and it replaces whatever the revived row froze;
+   *  - otherwise a revived BUSY row keeps its lease unless a live row with a DIFFERENT label is busy, when it is
+   *    released `idle` (`releaseLease`, its request standing) with a detail naming the rekey.
+   *  It calls only the lease group's writers, and opens no `tx()` — it runs inside `rekeyNode`'s. */
+  private leaseFollowsLabel(label: string, nodeId: string, donorId: string | null): void {
+    const row = this.nodeLeaseRow(nodeId);
+    if (row === null) return;
+    if (donorId !== null && this.handOffLease(donorId, nodeId).ok) return;   // refuses a halted heir in its own WHERE
+    const other = this.db.prepare(
+      `SELECT nodeId FROM nodes WHERE label <> ? AND supersededBy IS NULL AND updateState NOT IN ${SETTLED_UPDATE_SQL} LIMIT 1`,
+    ).get(label) as { nodeId: string } | undefined;
+    if (other === undefined) return;
+    this.releaseLease(nodeId, 'idle', `${REKEY_RELEASE_DETAIL} (${other.nodeId} holds the lease)`, row.updateStartedAt);   // refuses a settled row itself
   }
 
   /** A refusal, a drop, a deadline, or a `failed`/`reverted`/stamp-mismatch
@@ -6544,6 +6591,28 @@ export class CoordStore {
       }
       return { ok: false, why: 'stale-lease', updateStartedAt: row.updateStartedAt };
     });
+  }
+
+  /** The lease follows the label (D-3412; `rekeyNode` is its only caller): the four lease columns of a BUSY row
+   *  this rekey RETIRED toward `toNodeId`, copied onto the heir — the row carrying the same label that was revived.
+   *  Guards, all in the `WHERE`: the heir is live and not halted (a verdict is never written over); the donor is the
+   *  same label's, busy, and retired toward THIS heir. The request columns are not the lease's and are not touched,
+   *  and neither is the donor row. It opens no `tx()`: it runs inside `rekeyNode`'s, like `releaseLease`. */
+  handOffLease(fromNodeId: string, toNodeId: string): HandOffLeaseResult {
+    const res = this.db.prepare(
+      'UPDATE nodes SET updateState = f.updateState, updateTarget = f.updateTarget, ' +
+      'updateStartedAt = f.updateStartedAt, updateDetail = f.updateDetail FROM nodes f ' +
+      'WHERE nodes.nodeId = ? AND nodes.supersededBy IS NULL ' +
+      `AND nodes.updateState NOT IN ${HALTED_UPDATE_SQL} ` +
+      'AND f.nodeId = ? AND f.label = nodes.label AND f.supersededBy = nodes.nodeId ' +
+      `AND f.updateState NOT IN ${SETTLED_UPDATE_SQL}`,
+    ).run(toNodeId, fromNodeId);
+    if (Number(res.changes) > 0) return { ok: true };
+    const row = this.nodeLeaseRow(toNodeId);
+    if (row === null) return { ok: false, why: 'unknown-node' };
+    if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
+    if (haltedOf(row.updateState) !== null) return { ok: false, why: 'halted', state: row.updateState };
+    return { ok: false, why: 'no-lease-to-hand' };
   }
 
   /** Every LIVE node — the inventory every reader starts from; a superseded row

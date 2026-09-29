@@ -217,6 +217,37 @@ describe('runDispatch — one node at a time, fleet first (spec §10 Pins)', () 
     expect(r.expired).toEqual([]);
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', reportedPhase: 'installing' });
   });
+
+  it('U1 -> U2 (busy) -> U1: the lease follows the label, so the server is never dispatched while the fleet box\'s run proceeds (D-3412)', async () => {
+    const h = harness();
+    const FLEET_ID2 = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
+    const busyRows = (): string[] => h.store.nodes().filter((n) => n.updateState !== 'idle').map((n) => n.nodeId);
+    seedFleet(h, null);                                  // U1, idle, no request
+    seedServer(h);                                       // the server, requested
+    // The box's node-id flips to U2 (U1 retired while idle), and U2 is the fleet node the operator moves.
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID2)).toMatchObject({ ok: true, retired: 1, revived: false });
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ nodeId: FLEET_ID2 })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID2, 'v0.0.10', 'update', T0).ok).toBe(true);
+    const r1 = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r1.outcome).toMatchObject({ nodeId: FLEET_ID2, result: 'accepted' });
+    expect(busyRows()).toEqual([FLEET_ID2]);
+    // The identity comes back (a restored snapshot): U1 is revived and U2 retired — the run is the same box's.
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID)).toMatchObject({ ok: true, retired: 1, revived: true });
+    expect(busyRows(), 'exactly one live busy row').toEqual([FLEET_ID]);
+    const r2 = ran(await runDispatch(h.deps, T0 + 2000));
+    expect(r2.outcome).toBeNull();
+    expect(r2.plan.gate.leaseHeldBy).toBe(FLEET_ID);
+    expect(h.spawned, 'the server was dispatched while the fleet box\'s run proceeds').toEqual([]);
+    expect(h.sent).toHaveLength(1);
+    // The run's own report settles the handed lease, and the server moves after it.
+    const swept = sweepOnce(h.store, fleetMeas({
+      currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 60_000,
+      report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 6000, updatedAt: T0 + 50_000, detail: null },
+    }));
+    expect(swept.lease.kind).toBe('settle');
+    const r3 = ran(await runDispatch(h.deps, T0 + 61_000));
+    expect(r3.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+  });
 });
 
 describe('runDispatch — the answer decides only what happens to the lease (§18 "a refusal releases in the same turn", "a refusal does not consume the request")', () => {

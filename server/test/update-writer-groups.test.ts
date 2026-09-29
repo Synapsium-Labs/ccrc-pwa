@@ -98,7 +98,7 @@ const WRITER_GROUPS: readonly { table: 'releases' | 'node_release_refusals' | 'n
   { table: 'nodes', group: 'report', columns: ['reportedPhase', 'reportedTarget', 'reportedStartedAt', 'reportedUpdatedAt',
       'reportedDetail'], writers: ['upsertNodeMeasurement'] },
   { table: 'nodes', group: 'lease', columns: ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail'],
-      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal', 'noteLeaseDetail'] },
+      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal', 'noteLeaseDetail', 'handOffLease'] },
   { table: 'nodes', group: 'resolved', columns: ['channel', 'desiredTag', 'resolveDetail'], writers: ['resolveNode'] },
   { table: 'nodes', group: 'request', columns: ['requestedTag', 'requestedKind', 'requestedAt'],
       writers: ['requestNode', 'settleNode', 'ackNode'] },
@@ -137,7 +137,7 @@ const W3_WRITERS = ['markReleaseNotified'] as const;
  *  busy row (D-3413).
  *  A list of its own, as W3's is, so each floor entry says which wave put it
  *  there. */
-const W5_WRITERS = ['requestNode', 'dispatchNode', 'noteDispatchRefusal', 'noteLeaseDetail'] as const;
+const W5_WRITERS = ['requestNode', 'dispatchNode', 'noteDispatchRefusal', 'noteLeaseDetail', 'handOffLease'] as const;
 
 // ── the analyser ─────────────────────────────────────────────────────────────
 
