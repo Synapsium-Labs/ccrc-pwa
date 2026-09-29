@@ -8,9 +8,13 @@
 // birth fence), and that everything else reaches nothing.
 //
 // A `hold-retired` verdict (spec §5.7's "no hold" conjunct, a hold this build
-// proved was written by one of this child's own runs whose programme has
-// since retired) is asserted here to take NO action at all — no release, no
-// reclaim — exactly like any other ineligible verdict.
+// proved was written by one of this child's own runs whose accounting has
+// since retired) never reaches the ordinary reclaim path directly — it takes
+// no action on its FIRST sighting, and on the SECOND consecutive one queues
+// its own release job (`releaseRetiredChildHold`), which re-reads everything
+// it relies on before it ever composes `ws-release`. Only once that job has
+// actually unheld the row does the child become an ordinary orphan, judged
+// on the ordinary two-pass rule.
 //
 // The executor is stubbed at `Deps.childReclaimExec`, the ONE seam the
 // watcher calls through, so most cases assert on the requests themselves. The
@@ -18,7 +22,7 @@
 // 3's own audit argv through `runCcd`, and the SAME ports the close route
 // composes.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher, CHILD_RECLAIM_MAX_IN_FLIGHT, CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
@@ -63,6 +67,15 @@ interface FixtureOpts {
   visible?: (id: string) => boolean;
   /** Wired into `deps.notifyLog` — the ports-composition case. */
   notifyLog?: NotifyLog;
+  /** false → the fleet host does not advertise `ws-release` — the
+   *  hold-release job's own `verbSupported` gate. Default true. */
+  releaseCap?: boolean;
+  /** The hold-release job's own ccd stub. Default: what `cmd_ws_release`
+   *  actually does — unlink `<id>.hold` and answer `released <id>` if it was
+   *  there, `not held <id>` if it was not (the box's own idempotent design),
+   *  never at ccd's exit 1. Override to simulate a box refusal. */
+  release?: (regDir: string, id: string) =>
+    { code: number; stdout: string; stderr: string } | Promise<{ code: number; stdout: string; stderr: string }>;
 }
 
 const fixture = (opts: FixtureOpts = {}) => {
@@ -74,7 +87,19 @@ const fixture = (opts: FixtureOpts = {}) => {
   mkdirSync(reg, { recursive: true });
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
   const calls: string[][] = [];
-  const run = async (_cmd: string, args: string[]) => { calls.push(args); return { code: 1, stdout: '', stderr: '' }; };
+  const releaseAnswer = opts.release ?? ((regDir: string, id: string) => {
+    const p = path.join(regDir, `${id}.hold`);
+    try { rmSync(p); return { code: 0, stdout: `released ${id}\n`, stderr: '' }; }
+    catch { return { code: 0, stdout: `not held ${id}\n`, stderr: '' }; }
+  });
+  const run = async (_cmd: string, args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'ws-release') {
+      const i = args.indexOf('--session');
+      return releaseAnswer(reg, args[i + 1] ?? '');
+    }
+    return { code: 1, stdout: '', stderr: '' };
+  };
   const coord = opts.coord ?? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
   const answer = opts.outcome ?? ((req: ChildReclaimRequest): ChildReclaimOutcome =>
@@ -86,13 +111,15 @@ const fixture = (opts: FixtureOpts = {}) => {
     // present list does not name), `reclaim-v1` and `reclaim-pause-v1` (both
     // `capSupported`, the lane's own gate — spec §5.8, "the fourth [reader]
     // is the one that matters", so BOTH tokens must be proven before an
-    // automatic reclaim ever runs) and `ws-reclaim` + `actor-flags-v1` (the
-    // act and its dec).
+    // automatic reclaim ever runs), `ws-reclaim` + `actor-flags-v1` (the act
+    // and its dec) and `ws-release` (the hold-release job's own
+    // `verbSupported` gate, the close route's own verb).
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: [
         'ws-audit', 'ws-reclaim',
         ...(opts.cap === false ? [] : [RECLAIM_CAP]),
         ...(opts.pauseCap === false ? [] : [RECLAIM_PAUSE_CAP]),
+        ...(opts.releaseCap === false ? [] : ['ws-release']),
         ACTOR_FLAGS_CAP,
       ] },
     presence: { isVisible: (id: string) => opts.visible?.(id) === true },
@@ -288,13 +315,29 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.plant('demo-a', { child: String(r.id), hold: 'a human wrote this — please wait' });
     f.plant('demo-b', { child: 'not-a-run-id' });
     f.plant('demo-c');
-    await f.pass(); f.next(); await f.pass();
+    // A hand hold shaped like the PWA's own placeholder grammar (spec §5.7:
+    // "the PWA's `program:name wave:2/4` placeholder … writes the grammar on
+    // purpose") protects unconditionally too, whether or not it happens to
+    // name a wave that exists — it is never released, because it never even
+    // reads as `held.kind === 'program'`: no run's own rendering matches it.
+    f.plant('demo-d', { child: String(r.id), hold: 'program:demo wave:2/3 run:8' });
+    // A restored-snapshot hold naming a run this database does not hold
+    // (a `run:<id>` rendering for an id nothing minted here) is doubt about a
+    // programme this build cannot even look up — `held`, never `program`.
+    f.plant('demo-e', { child: String(r.id), hold: holdReason('ghost-programme', 3, null, 999_999) });
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests).toEqual([]);
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'a hold that never proved its own accounting is never released')
+      .toEqual([]);
   });
 
-  it('a program-accounted hold protects while its programme has an open run, and takes NO action once retired (part 1: no release, no reclaim)', async () => {
-    // Contract §8 R1 — the RELEASE job is part 2's; part 1 must not release
-    // AND must not fall through to an ordinary reclaim either.
+  it('a program-accounted hold protects while its programme has an open run (i), then the hold-release job clears it once retired, before the ordinary path ever sees it (ii)', async () => {
+    // Spec §5.7's "no hold" conjunct: a hold this build proved was written by
+    // one of this child's own runs protects only while that run's programme
+    // still has an open run. `ws-reclaim`'s own rung 4 refuses any hold, so
+    // once the programme retires, the hold-release job — never the ordinary
+    // reclaim path directly — is what clears it, on the SECOND consecutive
+    // `hold-retired` sighting.
     const f = fixture();
     const r1 = f.openRun();
     f.abandon(r1);
@@ -306,10 +349,73 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     const r2 = { id: r2raw.id, program: r1.program };
     await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
     expect(f.requests, 'protected while its programme has an open run').toEqual([]);
-    f.abandon(r2);
-    for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
-    expect(f.requests, 'hold-retired takes NO action in part 1').toEqual([]);
-    expect(f.entryOf('demo-a')).toBeUndefined();
+    expect(f.calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
+
+    f.abandon(r2);                                            // the programme retires
+    f.next(); await f.pass();                                 // a FIRST hold-retired sighting
+    expect(f.requests).toEqual([]);
+    expect(f.calls.filter((c) => c[0] === 'ws-release'), 'released on the first sighting, not the second').toEqual([]);
+    f.next(); await f.pass();                                 // a SECOND — queues the release job
+    expect(f.requests, 'reclaimed before it was ever released').toEqual([]);
+    const released = f.calls.filter((c) => c[0] === 'ws-release');
+    expect(released).toHaveLength(1);
+    expect(released[0]).toEqual(['ws-release', '--session', 'demo-a',
+      '--surface', 'agent', '--actor', `run:${r1.id} reclaim sweep: program ${r1.program} retired`]);
+    expect(existsSync(path.join(f.reg, 'demo-a.hold')), 'the hold file is gone').toBe(false);
+
+    f.next(); await f.pass();                                 // the ordinary path's FIRST eligible sighting
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();                                 // …and its second — only now
+    expect(f.requests).toEqual([
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('a release answered after the NEXT pass began still needs two FRESH unheld passes — the in-flight guard covers the release job too', async () => {
+    let resolveRelease!: (v: { code: number; stdout: string; stderr: string }) => void;
+    const f = fixture({
+      release: (regDir, id) => new Promise((resolve) => {
+        resolveRelease = (v) => {
+          // The box's own effect, applied only when this test tells it to —
+          // the fixture's stub stands in for ccd, which the sweep never
+          // touches directly.
+          if (v.code === 0 && v.stdout.startsWith('released')) {
+            try { rmSync(path.join(regDir, `${id}.hold`)); } catch { /* already gone */ }
+          }
+          resolve(v);
+        };
+      }),
+    });
+    const r1 = f.openRun(); f.abandon(r1);
+    const reason = holdReason(r1.program, 2, null, null);
+    f.plant('demo-a', { child: String(r1.id), hold: reason });
+    await f.pass();                                            // 1st hold-retired sighting
+    f.next();
+    const second = f.pass();                                  // 2nd — queues the release, still unsettled
+    await vi.waitFor(() => expect(f.calls.some((c) => c[0] === 'ws-release')).toBe(true));
+    f.next(); await f.pass();                                 // a pass while the release is still in flight
+    expect(f.requests, 'no re-queue while the release is in flight').toEqual([]);
+    resolveRelease({ code: 0, stdout: 'released demo-a\n', stderr: '' });
+    await second;                                              // the release settles, after the next pass began
+    f.next(); await f.pass();                                  // the ordinary path's FIRST eligible sighting
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();                                  // …and its second — only now
+    expect(f.requests).toEqual([
+      { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('a box that does not advertise ws-release never releases the hold — gated exactly as the close route gates it', async () => {
+    const f = fixture({ releaseCap: false });
+    const r1 = f.openRun();
+    f.abandon(r1);
+    const reason = holdReason(r1.program, 2, null, null);
+    f.plant('demo-a', { child: String(r1.id), hold: reason });
+    const r2raw = f.coord.openRun({ program: r1.program, title: r1.program, project: 'demo', wave: 2, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in r2raw)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2raw)}`);
+    f.abandon({ id: r2raw.id, program: r1.program });
+    for (let i = 0; i < 6; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests).toEqual([]);
+    expect(f.calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
   });
 
   it('a child that has EVER coordinated a run is never reclaimed automatically', async () => {
@@ -642,23 +748,38 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     expect(f.requests).toHaveLength(1);
   });
 
-  it('a throwing mirror read: no request to anyone, and the attention list keeps its LAST value rather than going dark', async () => {
+  it('a throwing mirror read: no request to anyone, the entry is cleared, and the attention list keeps its LAST value rather than going dark', async () => {
     const f = fixture();
     const runId = finishedChild(f);
-    f.journal('demo-a', 'refused', 'tree-unreadable');
-    await f.pass();
+    // A RETRYABLE reclaim row (not terminal), so `childReclaimSessionIds()`
+    // includes this child and the mirror read the try wraps is genuinely
+    // exercised for it: a TERMINAL refusal would make "no request" true
+    // whether or not this read throws, since a terminal child is never due —
+    // the case this replaces asserted exactly that and could not fail.
+    f.journal('demo-a', 'failed', 'pin-failed');
+    await f.pass();                                           // 1st eligible sighting
+    // Read the attention list at the SAME clock this pass just stamped —
+    // `tick()` void-dispatches its own `sweepChildReclaim`, and calling it at
+    // an ALREADY-elapsed clock (after `f.next()`, before the next explicit
+    // pass) would let that unawaited dispatch fire the second, throwing pass
+    // for us, in the background, before the spy below is even installed.
     await f.watcher.tick();
     const before = f.watcher.currentCoord()?.childReclaimAttention;
-    expect(before).toEqual([{
-      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
-    }]);
+    expect(before, 'a failure this fresh has not reached the failing-past-ceiling report yet').toEqual([]);
+    f.next();
+    // Sighted once already — the next ordinary pass would dispatch.
     const spy = vi.spyOn(f.coord, 'lifecycleFor')
       .mockImplementation(() => { throw new Error('mirror unreadable'); });
-    f.next(); await f.pass();
+    await f.pass();
     expect(f.requests).toEqual([]);
-    await f.watcher.tick();
+    expect(f.entryOf('demo-a')).toBeUndefined();
+    await f.watcher.tick();                                   // same clock as the pass just above — no side dispatch
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual(before);
     spy.mockRestore();
+    f.next(); await f.pass();                                 // a first sighting again, not a second
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
   });
 });
 

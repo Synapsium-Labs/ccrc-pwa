@@ -11,8 +11,8 @@ import type { ChildSpentVerdict } from './childSpent.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type LifecycleAct, type LifecycleOutcome, type MarkerState,
-  type MirroredLifecycleEvent, type RunState,
+  CHILD_RUN_ID, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
+  type MarkerState, type MirroredLifecycleEvent, type RunState,
 } from '../../../shared/api.js';
 
 /**
@@ -932,6 +932,146 @@ async function childReclaimAct(
     sweepDec(deps.fleetState, `run:${req.runId} reclaim ${req.trigger}`));
   const res = await deps.runCcd(argv);
   return parseChildReclaimResult(req.sessionId, res.stdout, res.stderr);
+}
+
+// ── the hold-release job ─────────────────────────────────────────────────────
+
+/** A hold this build proved was written by one of a child's own runs, whose
+ *  accounting has since retired — `childReclaimSweepVerdict`'s `hold-retired`
+ *  verdict (`server/src/childReclaimSweep.ts`), and its `release` payload.
+ *  `ws-reclaim`'s own rung 4 refuses any hold, so such a child can never
+ *  become eligible through the ordinary path until its hold is released, and
+ *  a hand-over hold is exactly what THIS build wrote for THIS child, never
+ *  something to guess at by re-deriving it a second time here. */
+export interface ChildReclaimReleaseRequest {
+  readonly sessionId: string;
+  readonly runId: number;
+  readonly reason: string;
+  readonly program: string;
+  readonly accountedRunId: number;
+}
+
+/** `releaseRetiredChildHold`'s answer. `released`/`not-held` are ccd's own two
+ *  documents for `ws-release` — both printed at exit 0, `cmd_ws_release`'s own
+ *  idempotent design (`ccd/ccd`); `changed` is this job's OWN re-read finding
+ *  a condition it relied on no longer holds, decided before ccd is ever
+ *  called; `failed` is a throw, an `ok:false` read, an unsupported box, or a
+ *  non-zero/unreadable ccd exit. */
+export type ChildReclaimReleaseOutcome = 'released' | 'not-held' | 'changed' | 'failed';
+
+/**
+ * Release a hold this build proved belongs to one of a child's own runs, once
+ * that accounting has retired (spec §5.7's "no hold" conjunct). The sweep
+ * queues this on the child's own `KeyedQueue` key after TWO CONSECUTIVE
+ * `hold-retired` passes, never on the first — a transient read glitch must
+ * not fire it. By the time this job runs the deciding pass may be minutes
+ * old, so it re-reads EVERY fact it relied on, in order, before it ever
+ * touches the box:
+ *   1. the row — the marker still names `runId`, and the held text is still
+ *      the exact trimmed bytes this job was queued with;
+ *   2. the accounting — `accountedRunId` is still a TERMINAL run, and its
+ *      CURRENT fields render to the row's CURRENT held text (re-derived
+ *      fresh, never compared against the cached `reason` a second time —
+ *      only against a rendering built from what this re-read just measured);
+ *   3. that run's programme — still zero open runs;
+ *   4. the child's own open runs — still none;
+ *   5. the coordinator read — this child has still never coordinated a run.
+ * A throw or an `ok:false` from any of these answers `failed` and composes no
+ * argv — never a guess standing in for a read this process could not finish.
+ * Only once every one of them agrees does it compose `ws-release`, gated by
+ * `verbSupported` exactly as the close route gates the same verb.
+ *
+ * THE RESIDUAL, ACCEPTED: a hold written between this job's last re-read and
+ * ccd's own unlink is removed anyway — that window is under a second (one
+ * agent exec, ccd startup, its journal write), and a hand hold lost this way
+ * is reclaimed two passes later by the ordinary path, which pins its commits
+ * and uncommitted work but not its pane, clips, temp root or ignored files. A
+ * re-bind inside that same window stays protected by its own open run and is
+ * re-held at its own dispatch. A hand hold byte-identical to the server's own
+ * last-written claim is treated as that claim — this job cannot tell the two
+ * apart, and nothing here tries to: parsing a hold back is exactly what this
+ * whole lane refuses to do (`run-routes.test.ts`'s "NOTHING in the tree
+ * parses one back").
+ *
+ * NEVER PARSES a hold: every comparison below is byte equality against a
+ * RENDERING (`holdReason`), never a scan for structure inside the text
+ * itself.
+ */
+export async function releaseRetiredChildHold(
+  deps: ChildReclaimDeps, req: ChildReclaimReleaseRequest,
+): Promise<ChildReclaimReleaseOutcome> {
+  const { sessionId, runId, reason, program, accountedRunId } = req;
+
+  // 1 — the row: the marker still names this run, and the held text is
+  // still the exact bytes this job was queued with.
+  let read: Awaited<ReturnType<typeof readSessionRecord>>;
+  try {
+    read = await readSessionRecord(deps.io, deps.cfg, sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading ${sessionId}'s row failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (!read.found) return read.reason === 'unlistable' ? 'failed' : 'changed';
+  const mark = read.record.child;
+  if (mark.kind !== 'child' || mark.runId !== runId) return 'changed';
+  if (read.record.held === null || read.record.held.trim() !== reason) return 'changed';
+
+  // 2 — the accounting: `accountedRunId` is still a TERMINAL run, and its
+  // CURRENT fields still render to the CURRENT held text.
+  let accounted: ReturnType<CoordStore['run']>;
+  try {
+    accounted = deps.coord.run(accountedRunId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading run ${accountedRunId} failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (!accounted.ok) return 'failed';
+  const r = accounted.run;
+  if (r === null || !isChildReclaimTerminalState(r.state)) return 'changed';
+  const open = holdReason(r.program, r.wave, r.waveOf, r.id);
+  const close = holdReason(r.program, r.wave + 1, r.waveOf, null);
+  if (reason !== open && reason !== close) return 'changed';
+
+  // 3 — that run's programme, re-counted: still zero open runs.
+  let count: number;
+  try {
+    count = deps.coord.programOpenRunCount(r.program);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-counting ${r.program}'s open runs failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (count > 0) return 'changed';
+
+  // 4 — the child's own open runs: still none.
+  const sib = deps.coord.openRunsForSession(sessionId);
+  if (!sib.ok) return 'failed';
+  if (sib.siblings.length > 0) return 'changed';
+
+  // 5 — the coordinator read: this child has still never coordinated a run.
+  let coordinating: ReadonlySet<string>;
+  try {
+    coordinating = deps.coord.childReclaimCoordinatorIds();
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s coordination history failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (coordinating.has(sessionId)) return 'changed';
+
+  // Only now: the one write this job may ever compose. It deletes nothing
+  // but the hold file (`cmd_ws_release`'s own docstring).
+  const argv = CCD_ARGV.wsRelease(sessionId,
+    sweepDec(deps.fleetState, `run:${runId} reclaim sweep: program ${program} retired`));
+  if (!verbSupported(deps.fleetState, argv)) return 'failed';
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return 'failed';
+  const out = res.stdout.trim();
+  if (out === `released ${sessionId}`) return 'released';
+  if (out === `not held ${sessionId}`) return 'not-held';
+  return 'failed';
 }
 
 // ── the feed row ─────────────────────────────────────────────────────────────

@@ -64,8 +64,9 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
-  type ChildReclaimOutcome, type ChildReclaimRequest,
+  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild, releaseRetiredChildHold,
+  type ChildReclaimOutcome, type ChildReclaimReleaseOutcome, type ChildReclaimReleaseRequest,
+  type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
   childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
@@ -674,6 +675,18 @@ export class FleetWatcher {
    *  `<why> <id>`, because an absent minting run and an absent reviewed run
    *  are two conditions with two sentences. */
   private childReclaimAbsentLogged = new Set<string>();
+  /** Per marked child: has THIS lane already seen a `hold-retired` verdict for
+   *  it once, with no other verdict in between? A `hold-retired` verdict a
+   *  SECOND consecutive pass finds queues the release job; any other verdict
+   *  — eligible or any other ineligibility — clears the entry, so the two
+   *  sightings must be back to back. IN MEMORY ONLY, the `childReclaimSweepState`
+   *  idiom: a restart only delays a release by one more sighting, never causes
+   *  one — the job's own re-reads, and ccd's rung 4, prove everything again
+   *  before anything is written. A child already in `childReclaimInFlight`
+   *  (its release job dispatched, or its ordinary reclaim in flight) is never
+   *  touched here — the lane has no re-entrancy guard beyond that one set, and
+   *  an overlapping pass must not turn "two further passes" into one. */
+  private childReclaimHoldRetiredSeen = new Set<string>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -2780,11 +2793,19 @@ export class FleetWatcher {
    * `tmux attach` on a locked phone would wedge a child forever.
    *
    * A `hold-retired` verdict — a hold this build proved was written by one of
-   * this child's own runs, whose programme has since retired (spec §5.7's
-   * "no hold" conjunct) — takes NO action here: the child is simply not
-   * asked, exactly like any other ineligible verdict. The `!v.eligible`
-   * branch below folds `why: 'hold-retired'` into the generic skip it is;
-   * its `release` payload rides the verdict unread by this lane.
+   * this child's own runs, whose accounting has since retired (spec §5.7's
+   * "no hold" conjunct) — never reaches the ordinary reclaim path directly:
+   * `ws-reclaim`'s own rung 4 refuses any hold. Instead, on the SECOND
+   * consecutive pass this pass answers it, the child's own `release` payload
+   * is queued as its own job (`releaseRetiredChildHold`, `coord/childReclaim.
+   * ts`) on the child's `KeyedQueue` key — which re-proves every fact it
+   * relies on before it ever composes `ws-release`, and whose own outcome
+   * (`released`/`not-held`/`changed`/`failed`) writes back nothing but the
+   * memory this lane already keeps. The now-unheld child is then judged
+   * afresh by the ordinary verdict, on the ordinary two-pass rule, through
+   * `reclaimChild` like any other. The RESIDUAL this accepts: a hold written
+   * between the job's own re-read and ccd's unlink is removed anyway — a
+   * narrow window the job's own docstring states in full.
    *
    * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with
    * `void`.
@@ -2843,6 +2864,7 @@ export class FleetWatcher {
       // a pass that measured nothing.
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
+      this.childReclaimHoldRetiredSeen.clear();
       return;
     }
     const live = new Map<string, number | null>(
@@ -2866,6 +2888,7 @@ export class FleetWatcher {
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
         || names.includes(RECLAIM_PAUSE_MARKER)) {
       this.childReclaimSweepState.clear();
+      this.childReclaimHoldRetiredSeen.clear();
       return;
     }
 
@@ -2888,6 +2911,12 @@ export class FleetWatcher {
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
     const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number }[] = [];
+    // Declared here, not at section FOUR below, so the hold-release job (a
+    // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
+    // pushed onto it from inside this same per-child loop, the instant its
+    // second consecutive sighting fires — it does not wait for the bound or
+    // the fairness sort below, neither of which it is subject to.
+    const acts: Promise<void>[] = [];
     for (const r of records) {
       if (r.child.kind === 'none') continue;
       seen.add(r.id);
@@ -2988,12 +3017,48 @@ export class FleetWatcher {
       });
       if (!v.eligible) {
         this.childReclaimSweepState.delete(r.id);
+        // A hold this build proved belongs to one of this child's own runs,
+        // whose accounting has since retired (spec §5.7's "no hold"
+        // conjunct): `ws-reclaim`'s own rung 4 refuses any hold, so the
+        // ordinary path can never reach this child until the hold is
+        // released. Ahead of the generic ineligible fall-through below —
+        // it is not an ordinary skip, it is a fact this pass acts on. A
+        // child already busy (its release queued, or its ordinary reclaim
+        // in flight) is left untouched: the in-flight set is this lane's
+        // only re-entrancy guard, and touching the twice-observed set here
+        // too would let an overlapping pass turn two sightings into one.
+        if (v.why === 'hold-retired') {
+          if (!this.childReclaimInFlight.has(r.id)) {
+            if (this.childReclaimHoldRetiredSeen.has(r.id)) {
+              this.childReclaimHoldRetiredSeen.delete(r.id);
+              this.childReclaimInFlight.add(r.id);
+              const release = v.release;
+              acts.push(this.execChildReclaimRelease(coord, {
+                sessionId: r.id, runId: v.runId, reason: release.reason, program: release.program,
+                accountedRunId: release.accountedRunId,
+              }).then(
+                () => {},
+                (err: unknown) => {
+                  console.warn(`ccrc-server: sweepChildReclaim: releasing ${r.id}'s retired hold threw `
+                    + `(${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+                },
+              ).finally(() => {
+                this.childReclaimInFlight.delete(r.id);
+              }));
+            } else {
+              this.childReclaimHoldRetiredSeen.add(r.id);
+            }
+          }
+          continue;
+        }
+        this.childReclaimHoldRetiredSeen.delete(r.id);
         this.childReclaimLogAbsence(r, v.why, reviewedId);
         if (v.why === 'minting-run-postdates-child' && mintingRunFull !== null && childBornAt !== null) {
           this.childReclaimLogBirthSkip(r, mintingRunFull.openedAt, childBornAt);
         }
         continue;
       }
+      this.childReclaimHoldRetiredSeen.delete(r.id);
       const entry = this.childReclaimSweepState.get(r.id);
       if (entry === undefined) {
         this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
@@ -3046,7 +3111,6 @@ export class FleetWatcher {
       if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
       return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
     });
-    const acts: Promise<void>[] = [];
     for (const { r, entry, runId } of due.slice(0, freeSlots)) {
       const req: ChildReclaimRequest = {
         sessionId: r.id, runId, trigger: 'sweep',
@@ -3097,6 +3161,9 @@ export class FleetWatcher {
     // A child the registry no longer lists has no twice-observed entry to keep.
     for (const id of [...this.childReclaimSweepState.keys()]) {
       if (!seen.has(id)) this.childReclaimSweepState.delete(id);
+    }
+    for (const id of [...this.childReclaimHoldRetiredSeen]) {
+      if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
     }
     await Promise.all(acts);
   }
@@ -3234,6 +3301,21 @@ export class FleetWatcher {
     // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
     // the sweep queued it.
     return this.deps.queue.run(req.sessionId, () => reclaimChild({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+    }, req));
+  }
+
+  /** The hold-release job's own executor: `releaseRetiredChildHold` on the
+   *  SAME session `KeyedQueue` key `execChildReclaim` uses, so a release and
+   *  a reclaim for the same child never run on the box at once. No test seam
+   *  of its own — nothing in this wave's tests needs to intercept it, since
+   *  the release job's own re-reads are exactly what a test wants to observe,
+   *  so a test runs it for real against a recording `runCcd` instead. */
+  private execChildReclaimRelease(
+    coord: CoordStore, req: ChildReclaimReleaseRequest,
+  ): Promise<ChildReclaimReleaseOutcome> {
+    return this.deps.queue.run(req.sessionId, () => releaseRetiredChildHold({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
     }, req));

@@ -3931,7 +3931,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts tes
 
 Expected: PASS — `child-reclaim-sweep` 32/32 (eighteen executor cases, nine attention cases, three token-kind/import cases, two production-path cases — count them before and after: a smaller green is still green only if nothing was dropped); `child-reclaim-generation` 22/22 (thirteen fence rows, eight latest-event rows and the one-definition scan); `child-reclaim-sweep-policy` 44/44 and `child-reclaim-paused-at-server` 8/8 unchanged; `mail-routes`' kebab scan over `server/src/coord` finds no new literal in `childReclaim.ts`; `divergence-sweep` unchanged (its lane is untouched; `the tick itself` still finds one `setInterval(`); `verb-gate` finds no new `CCD_ARGV.` call site in `watch.ts`.
 
-- [x] **Step 7: Mutation check, then commit** (part 1 of 2; release job pending — see the report's mutation table; the SAFETY review's fix round added the rows the first pass missed)
+- [x] **Step 7: Mutation check, then commit** (the release job's own mutation rows landed in the part-2 report; the SAFETY review's fix round added the rows the first pass missed)
 
 Each run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts` — rows 16–18, 23, 24, 27 and 28 run `test/child-reclaim-generation.test.ts` instead (row 24 both files).
 

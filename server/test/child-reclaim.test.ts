@@ -13,14 +13,15 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_CHILD_RECLAIMED_ERROR, type OpenSiblingsResult } from '../src/coord/store.js';
 import {
   CHILD_RECLAIM_TOKEN_KIND, childReclaimDecision, childReclaimRowListing, isChildReclaimDeferWhy,
-  parseChildReclaimAudit, parseChildReclaimResult, reclaimChild, type ChildReclaimDecisionInput,
-  type ChildReclaimDeps, type ChildReclaimToken,
+  parseChildReclaimAudit, parseChildReclaimResult, reclaimChild, releaseRetiredChildHold,
+  type ChildReclaimDecisionInput, type ChildReclaimDeps, type ChildReclaimReleaseRequest, type ChildReclaimToken,
 } from '../src/coord/childReclaim.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { readSessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
 import { SENTENCES } from '../src/wsaudit.js';
+import { holdReason } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -909,5 +910,211 @@ describe('reclaimChild — the one executor', () => {
     const { notifyLog: _dropped, ...noLog } = s.deps;
     expect((await reclaimChild(noLog, s.req())).kind).toBe('reclaimed');
     expect(s.feed()).toEqual([]);
+  });
+});
+
+// releaseRetiredChildHold — the hold-release job (spec §5.7's "no hold"
+// conjunct, once its accounting has retired). Unit-level, driven straight
+// against the export rather than through the sweep: what is only provable
+// HERE is that the job's OWN re-reads — the row, the accounting, the
+// programme's open-run count, the child's siblings and its coordination
+// history — each independently gate the release, before ccd is ever called.
+// `child-reclaim-sweep.test.ts` proves the SWEEP-side timing (two consecutive
+// passes, the in-flight guard, the ordinary path picking up afterward).
+describe('releaseRetiredChildHold — the hold-release job', () => {
+  const RID = 'demo-quiet-basin';
+
+  /** A minimal registry row plus a real `CoordStore` — no journal, no mirror:
+   *  the job never reads either. `row` defaults to a live one; pass `false`
+   *  to omit it (the "the row is gone" case). */
+  const rrig = async (over: {
+    fleetState?: FleetState;
+    script?: (id: string) => { code: number; stdout: string; stderr?: string };
+    row?: false;
+  } = {}) => {
+    const home = mkTmp('ccrc-child-release-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => {
+      calls.push(args);
+      if (args[0] !== 'ws-release') return { code: 1, stdout: '', stderr: `unscripted ${args[0]}` };
+      const s = over.script?.(RID) ?? { code: 0, stdout: `released ${RID}\n` };
+      return { code: s.code, stdout: s.stdout, stderr: s.stderr ?? '' };
+    };
+    const base = testDeps(home, run);
+    const deps: ChildReclaimDeps = { coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: over.fleetState ?? { connected: true, downSince: null, rosterFp: null, build: null,
+        ccdVerbs: ['ws-release', 'actor-flags-v1'] } };
+    const writeRow = (fields: Record<string, string>): void => {
+      const base2: Record<string, string> = { uuid: `u-${RID}`, wrapper: 'claude', project: 'demo',
+        workdir: `/w/${RID}`, workspace: 'quiet-basin', branch: 'ws/quiet-basin', base: 'origin/main',
+        started: '1', ...fields };
+      for (const [k, v] of Object.entries(base2)) writeFileSync(path.join(reg, `${RID}.${k}`), v);
+    };
+    if (over.row !== false) writeRow({});
+    return { home, reg, coord, deps, calls, writeRow };
+  };
+
+  /** A terminal run of `program`, WAVE 1, its own hold text — the open/dispatch
+   *  claim — and the close-claim rendering `holdReason(program, 2, null, null)`
+   *  the caller ordinarily plants as the row's `.hold` (the non-final close's
+   *  own claim, the shape `childReclaimHoldRead` matches most often). */
+  const terminalRun = (coord: CoordStore, program: string): number => {
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    expect(coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'test', handoffCommit: null,
+      program, viaClosing: false }).ok).toBe(true);
+    return r.id;
+  };
+
+  it('every re-read agrees: composes ws-release and answers released', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
+    expect(f.calls).toEqual([['ws-release', '--session', RID,
+      '--surface', 'agent', '--actor', `run:${runId} reclaim sweep: program demo retired`]]);
+  });
+
+  it('ccd\'s own idempotent no-op — the hold was already gone on the box — answers not-held', async () => {
+    const f = await rrig({ script: () => ({ code: 0, stdout: `not held ${RID}\n` }) });
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('not-held');
+  });
+
+  it('a non-zero ccd exit answers failed, never changed', async () => {
+    const f = await rrig({ script: () => ({ code: 1, stdout: '', stderr: 'boom' }) });
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
+  });
+
+  it('a box that does not advertise ws-release answers failed and never calls ccd — gated exactly as the close route gates it', async () => {
+    const f = await rrig({ fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
+      ccdVerbs: ['actor-flags-v1'] } });
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
+    expect(f.calls).toEqual([]);
+  });
+
+  it('(iv) the hold text changed before the job ran — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    // The row's OWN current text has since moved on — a human overwrote it,
+    // or a fresh dispatch re-held it — after this job was queued with the
+    // OLDER `reason` byte-captured at the deciding pass.
+    writeFileSync(path.join(f.reg, `${RID}.hold`), 'a human wrote this over it');
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls, 'no argv composed once the byte re-check disagreed').toEqual([]);
+  });
+
+  it('(v) a run of that programme opened between the passes — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    // A fresh wave of the SAME programme opened after the deciding pass —
+    // the programme is open again, so the count re-check must catch it even
+    // though the row's held text and the accounted run are both unchanged.
+    const r2 = f.coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 2, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in r2)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2)}`);
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls, 'no argv composed once the count re-check disagreed').toEqual([]);
+  });
+
+  it('(iv′) the accounting re-read catches an accounted run whose own fields moved on, even though the held text on disk is unchanged', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);   // R.wave+1's rendering AT the deciding pass
+    f.writeRow({ child: String(runId), hold: reason });
+    // A terminal run's own wave never actually moves in the live system —
+    // this is engineered specifically to prove the job re-derives the
+    // rendering from R's CURRENT fields rather than trusting the cached
+    // `reason` a second time: with the accounting re-read deleted, a job that
+    // only re-checks BYTES (this test's `reason` is still byte-identical to
+    // the row's current text) would release against evidence that no longer
+    // proves anything once R's own row has moved on.
+    f.coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?').run(5, runId);
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls, 'no argv composed once the re-derived rendering disagreed').toEqual([]);
+  });
+
+  it('(vi) a lost database — the accounted run is absent — answers changed, never released', async () => {
+    const f = await rrig();
+    const reason = 'program:ghost wave:2';
+    f.writeRow({ child: '999', hold: reason });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 999, reason, program: 'ghost', accountedRunId: 999 };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+    expect(f.calls).toEqual([]);
+  });
+
+  it('the marker no longer names this run — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const other = terminalRun(f.coord, 'demo-other');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(other), hold: reason });   // re-bound to a different run since
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+  });
+
+  it('the row is gone entirely — a listable registry that no longer names this session — no release', async () => {
+    const f = await rrig({ row: false });
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 1, reason: 'program:demo wave:2',
+      program: 'demo', accountedRunId: 1 };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+  });
+
+  it('an unlistable registry answers failed, never changed — a read this process could not finish is doubt, not "gone"', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io, readdir: async () => null } };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
+  });
+
+  it('a run still naming this child — the child\'s own open siblings — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const sib = f.coord.openRun({ program: 'demo-other', title: 't', project: 'demo', wave: 1, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in sib)) throw new Error(`openRun sib refused: ${JSON.stringify(sib)}`);
+    f.coord.markDispatched(sib.id, RID, RID, 'ws/quiet-basin', false);
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
+  });
+
+  it('a child that has ever coordinated a run — the coordinator read — no release', async () => {
+    const f = await rrig();
+    const runId = terminalRun(f.coord, 'demo');
+    const reason = holdReason('demo', 2, null, null);
+    f.writeRow({ child: String(runId), hold: reason });
+    const coordRun = f.coord.openRun({ program: 'demo-coordinated', title: 't', project: 'demo', wave: 1,
+      waveOf: null, claimedBy: RID });
+    if (!('id' in coordRun)) throw new Error(`openRun coordRun refused: ${JSON.stringify(coordRun)}`);
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 });

@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the fourteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the fifteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled
@@ -124,6 +124,11 @@ describe('every unattended ccd call site names itself', () => {
     // `CCD_ARGV.wsReclaim(…)` in `coord/childReclaim.ts`, the one destructive
     // argv the server composes with no human in the path, which is exactly the
     // act that must say whose it was.
+    // Fourteen became fifteen with the sweep's hold-release job
+    // (`releaseRetiredChildHold`, `coord/childReclaim.ts`): a SECOND
+    // `CCD_ARGV.wsRelease(…)` site, distinct from `close.ts`'s five and
+    // `dispatch.ts`'s one — no human in this path either, and it is a
+    // different act on a different clock than the reclaim it can precede.
     let n = 0;
     for (const f of FILES) {
       n += readFileSync(path.join(srcRoot, f), 'utf8').split('\n')
@@ -137,7 +142,7 @@ describe('every unattended ccd call site names itself', () => {
 });
 
 /**
- * Fourteen sites — six distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
+ * Fifteen sites — seven distinct labels, plus two that spend `dispatchRun`'s hoisted `dispatchDec` — each identified by the code AROUND
  * the label rather than by the label itself — so a mutation that swaps two
  * valid labels between two valid sites cannot hide by also moving the
  * anchor. `close.ts`'s five `closeRun` sites share one identical label
@@ -225,6 +230,14 @@ const SITES: readonly Site[] = [
   { file: 'coord/childReclaim.ts', what: 'the child-reclaim act (one executor, both triggers)',
     find: /CCD_ARGV\.wsReclaim\(token, req\.runId, req\.sessionId, req\.deferExpired,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\)/,
     label: '`run:${req.runId} reclaim ${req.trigger}`' },
+  // The hold-release job: a SEPARATE `wsRelease` site from `close.ts`'s five
+  // and `dispatch.ts`'s one — this one runs from the sweep, with no human in
+  // the path, on a hold this build proved was its own claim over a programme
+  // that has since retired. The label names the run whose accounting was
+  // released and the programme it belonged to, not `close.ts`'s bare run id.
+  { file: 'coord/childReclaim.ts', what: 'the hold-release job — a retired programme\'s hand-over hold',
+    find: /CCD_ARGV\.wsRelease\(sessionId,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\)\);/,
+    label: '`run:${runId} reclaim sweep: program ${program} retired`' },
   { file: 'coord/routes.ts', what: 'open-then-hold, sessionId reclaim',
     find: /const argv = CCD_ARGV\.wsHold\(\n\s+sessionId, opened\.holdReason,\n\s+sweepDec\(deps\.fleetState, (`[^`]*`)\),\n\s+\);/,
     label: '`run:${opened.id} open`' },
