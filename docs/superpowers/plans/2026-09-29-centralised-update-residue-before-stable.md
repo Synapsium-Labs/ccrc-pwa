@@ -556,14 +556,14 @@ export function leaseHolder(
 
 | # | Guard | Mutation | Must red | Measured |
 |---|---|---|---|---|
-| M1 | the release follows the lease | `converge.ts`: `store.releaseLease(holder, …)` → `store.releaseLease(move.nodeId, …)` | every release-word case | |
-| M2 | the hold's words follow the lease | `converge.ts`: `noteLeaseDetail(holder, …)` → `noteLeaseDetail(move.nodeId, …)` | both hold-word cases | |
-| M3 | the holder is resolved at all | `converge.ts`: `const holder = move.nodeId;` | every release-word and hold-word case | |
-| M4 | the fallback stands | `converge.ts`: `?? move.nodeId` → `!` (a non-null assertion) | the fallback case (`unknown-node`, not `not-busy`) | |
-| M5 | identity includes the label | `leaseHolder`: drop `r.label === label` | lease-holder (b) | |
-| M6 | identity includes the lease's time | `leaseHolder`: drop `r.updateStartedAt === startedAt` | lease-holder (c) | |
-| M7 | only a busy row holds | `leaseHolder`: drop `!isSettled(r.updateState)` | lease-holder (d) | |
-| M8 | exactly one, never a guess | `leaseHolder`: `held.length === 1` → `held.length >= 1` | lease-holder (f) | |
+| M1 | the release follows the lease | `converge.ts`: `store.releaseLease(holder, …)` → `store.releaseLease(move.nodeId, …)` | every release-word case | 9 failed (all 9 release-word cases) |
+| M2 | the hold's words follow the lease | `converge.ts`: `noteLeaseDetail(holder, …)` → `noteLeaseDetail(move.nodeId, …)` | both hold-word cases | 2 failed (both hold-word cases) |
+| M3 | the holder is resolved at all | `converge.ts`: `const holder = move.nodeId;` | every release-word and hold-word case | 11 failed (all 9 release-word + both hold-word cases) |
+| M4 | the fallback stands | `converge.ts`: `?? move.nodeId` → `!` (a non-null assertion) | the fallback case (`unknown-node`, not `not-busy`) | 1 failed (the fallback case only; `why` read `unknown-node`), 77 passed |
+| M5 | identity includes the label | `leaseHolder`: drop `r.label === label` | lease-holder (b) | 1 failed (case (b) only), 77 passed |
+| M6 | identity includes the lease's time | `leaseHolder`: drop `r.updateStartedAt === startedAt` | lease-holder (c) | 1 failed (case (c) only), 77 passed |
+| M7 | only a busy row holds | `leaseHolder`: drop `!isSettled(r.updateState)` | lease-holder (d) | 1 failed (case (d) only), 77 passed |
+| M8 | exactly one, never a guess | `leaseHolder`: `held.length === 1` → `held.length >= 1` | lease-holder (f) | 1 failed (case (f) only), 77 passed |
 | — | the release's `expectedStartedAt: now` | `now` → `null` | nothing: defence in depth, no sequence reaches it; no pin claimed | n/a |
 
 ### Task 4: Item 9's premise, the watchdog box's tmux and gh, wave 5's stale snippets, the glossary (R6) — then the gate and the PR

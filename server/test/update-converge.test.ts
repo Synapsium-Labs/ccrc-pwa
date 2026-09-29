@@ -1029,3 +1029,106 @@ describe('runDispatch — a fleet-link failure after the op was handed holds the
     expect(after.plan.gate.haltedBy).toEqual([FLEET_ID]);
   });
 });
+
+describe('runDispatch — a revive during the op hands the lease to the heir, and the answer lands on the heir (residue R5, review 176 F1)', () => {
+  const FLEET_ID2 = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
+  const notSettled = (n: { updateState: string }): boolean => n.updateState !== 'idle' && n.updateState !== 'reverted' && n.updateState !== 'failed';
+  const busyRows = (h: Harness): string[] => h.store.nodes().filter(notSettled).map((n) => n.nodeId);
+
+  /** The reviewer's interleaving (steps 1-4): U1 idle, rekeyed away to U2, U2 requested and dispatched; the
+   *  harness's `send` then revives U1 BACK — mid-op — before it answers, so the lease U2 acquired is now U1's,
+   *  and asserts that exactly one live busy row remains (U1, holding the acquire's `updateStartedAt`) before
+   *  answering with `tail`. Step 5 (`runDispatch`) is left to the caller so it can inspect the outcome. */
+  const setup = (tail: SendUpdateOp): Harness => {
+    const box: { h?: Harness } = {};
+    const send: SendUpdateOp = async (tag, kind) => {
+      const h = box.h!;
+      expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID)).toMatchObject({ ok: true, revived: true });
+      const busy = h.store.nodes().filter(notSettled);
+      expect(busy.map((n) => n.nodeId)).toEqual([FLEET_ID]);
+      expect(busy[0]?.updateStartedAt).toBe(T0 + 1000);
+      return tail(tag, kind);
+    };
+    const h = harness({ send });
+    box.h = h;
+    seedFleet(h, null);   // U1 = FLEET_ID, idle, no request
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID2)).toMatchObject({ ok: true, retired: 1, revived: false });
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ nodeId: FLEET_ID2 })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID2, 'v0.0.10', 'update', T0).ok).toBe(true);
+    return h;
+  };
+
+  interface ReleaseCase { name: string; answer: SendUpdateOp; to: 'idle' | 'failed'; detail: string }
+  const releaseCases: ReleaseCase[] = [
+    { name: 'busy', answer: async () => { throw new AgentOpError('busy', IN_FLIGHT); }, to: 'idle', detail: `busy — ${IN_FLIGHT}` },
+    {
+      name: 'not-queued', answer: async () => { throw new AgentOpError('not-queued', 'stopped before it queued anything'); },
+      to: 'idle', detail: 'not-queued — stopped before it queued anything',
+    },
+    { name: 'spawn-failed', answer: async () => { throw new AgentOpError('spawn-failed', 'boom'); }, to: 'failed', detail: 'spawn-failed — boom' },
+    { name: 'bad-tag', answer: async () => { throw new AgentOpError('bad-tag', null); }, to: 'failed', detail: 'agent refused the op: bad-tag' },
+    { name: 'bad-kind', answer: async () => { throw new AgentOpError('bad-kind', null); }, to: 'failed', detail: 'agent refused the op: bad-kind' },
+    { name: 'bad-request', answer: async () => { throw new AgentOpError('bad-request', null); }, to: 'failed', detail: AGENT_REJECTED_DETAIL },
+    { name: 'forbidden', answer: async () => { throw new AgentOpError('forbidden', null); }, to: 'failed', detail: 'agent answered forbidden' },
+    { name: 'ok-without-accepted', answer: async () => ({ t: 'res', id: 1, ok: true }), to: 'failed', detail: 'agent answered ok-without-accepted' },
+    {
+      name: 'disconnected (never sent)', answer: async () => { throw new LinkNotSentError('disconnected'); },
+      to: 'idle', detail: 'disconnected — the op never reached the fleet link; the request stands',
+    },
+  ];
+
+  it.each(releaseCases)('every release word lands on the heir, not the id acquired: $name', async ({ answer, to, detail }) => {
+    const h = setup(answer);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'released', to, detail });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: to, updateDetail: detail });
+    expect(busyRows(h), 'no live row is busy').toEqual([]);
+    expect(h.store.node(FLEET_ID2)?.supersededBy).toBe(FLEET_ID);
+    const r2 = ran(await runDispatch(h.deps, T0 + 1000 + DEADLINE + 1));
+    expect(r2.expired, 'no false failed: deadline follows a release').toEqual([]);
+  });
+
+  interface HoldCase { name: string; answer: SendUpdateOp; detail: string }
+  const holdCases: HoldCase[] = [
+    {
+      name: 'an accepted with the bound\'s words',
+      answer: async () => ({ t: 'res', id: 1, ok: true, accepted: true, detail: 'held at the bound: it queued v0.0.10' }),
+      detail: 'held at the bound: it queued v0.0.10',
+    },
+    {
+      name: 'a timeout (Task 2\'s hold: a link failure after the hand-off holds like accepted)',
+      answer: async () => { throw new Error('timeout'); },
+      detail: linkFailedHoldDetail('timeout', 'timeout'),
+    },
+  ];
+
+  it.each(holdCases)('every hold word lands on the heir, not the id acquired: $name', async ({ answer, detail }) => {
+    const h = setup(answer);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, detail });
+    expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: detail });
+    expect(busyRows(h), 'exactly one live busy row remains, and it is FLEET_ID').toEqual([FLEET_ID]);
+  });
+
+  it('the fallback (control): a settled lease has no holder, so the write goes to the id acquired — today\'s behaviour, unchanged', async () => {
+    const box: { h?: Harness } = {};
+    const send: SendUpdateOp = async () => {
+      // U2's own report settles its lease before the answer arrives — no rekey at all.
+      sweepOnce(box.h!.store, fleetMeas({
+        nodeId: FLEET_ID2, currentVersion: 'v0.0.10', highestVersion: 'v0.0.10', measuredAt: T0 + 1500,
+        report: { phase: 'done', target: 'v0.0.10', startedAt: T0 + 1000, updatedAt: T0 + 1400, detail: null },
+      }));
+      throw new AgentOpError('busy', IN_FLIGHT);
+    };
+    const h = harness({ send });
+    box.h = h;
+    seedFleet(h, null);
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID2)).toMatchObject({ ok: true, retired: 1, revived: false });
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ nodeId: FLEET_ID2 })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID2, 'v0.0.10', 'update', T0).ok).toBe(true);
+    const r = ran(await runDispatch(h.deps, T0 + 1000));
+    expect(r.outcome).toEqual({
+      nodeId: FLEET_ID2, result: 'release-refused', to: 'idle', detail: `busy — ${IN_FLIGHT}`, why: 'not-busy',
+    });
+  });
+});

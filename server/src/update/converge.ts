@@ -20,7 +20,7 @@ import {
   type KillProbeOutcome, type ResOk, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../../shared/agent-protocol.js';
 import {
-  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, linkFailedDeadlineDetail, parseReportOrigin,
+  classifyOpAnswer, deadlineDetail, deadlineExpired, dispatchRefusalDetail, leaseHolder, linkFailedDeadlineDetail, parseReportOrigin,
   planDispatch,
   type DispatchMove, type DispatchNodeView, type DispatchPlan, type OpAnswer, type ReportOrigin,
 } from './dispatch.js';
@@ -311,19 +311,24 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   const answer = move.viaLink ? await linkAnswer(deps, move) : await localAnswer(deps, move);
   const advertised = move.viaLink ? deps.fleet !== null && liveOps(deps.fleet.state).includes(UPDATE_OP) : true;
   const action = classifyOpAnswer(answer, advertised);
+  // R5 (review 176 F1, D-3412 amended): the answer is written on the LEASE, found by identity — the live busy row with
+  // this move's label and this run's `now` — never on the id acquired: a revive during the await hands the lease to the
+  // heir. Read and written with no await between. No holder (settled, or dropped by a no-revive supersede, R2): the id
+  // acquired, whose own guards name what happened.
+  const holder = leaseHolder(store.nodes(), view.row.label, now) ?? move.nodeId;
   if (action.kind === 'hold') {
     // D-3413: the bound's arms B/D carry the node's words; D-3555: a link failure after the hand-off
     // carries the server's. Either is written on the lease this run acquired (`now`, its identity); a refused note
     // is silent (a report settled the row first, or a newer lease).
     if ((answer.kind === 'accepted' && answer.detail !== undefined) || answer.kind === 'transport') {
-      store.noteLeaseDetail(move.nodeId, action.detail, now);
+      store.noteLeaseDetail(holder, action.detail, now);
     }
     deps.onAccepted();
-    return done({ nodeId: move.nodeId, result: answer.kind === 'transport' ? 'held' : 'accepted', detail: action.detail });
+    return done({ nodeId: holder, result: answer.kind === 'transport' ? 'held' : 'accepted', detail: action.detail });
   }
-  const released = store.releaseLease(move.nodeId, action.to, action.detail, null);
+  const released = store.releaseLease(holder, action.to, action.detail, now);
   if (!released.ok) {
-    return done({ nodeId: move.nodeId, result: 'release-refused', to: action.to, detail: action.detail, why: released.why });
+    return done({ nodeId: holder, result: 'release-refused', to: action.to, detail: action.detail, why: released.why });
   }
-  return done({ nodeId: move.nodeId, result: 'released', to: action.to, detail: action.detail });
+  return done({ nodeId: holder, result: 'released', to: action.to, detail: action.detail });
 }

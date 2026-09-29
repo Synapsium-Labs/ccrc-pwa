@@ -464,3 +464,18 @@ export function linkFailedDeadlineDetail(row: LinkHoldRow): string | null {
     : `${DEADLINE_DETAIL} — the fleet link failed mid-op; the row's last report names ${target}, which may be an earlier run's`;
   return text.slice(0, UPDATE_OP_DETAIL_MAX);
 }
+
+// ── the answer follows the lease, not the node id (D-3412 amended, residue R5) ───────────────────────────────────
+
+/** R5 (review 176 F1; D-3412 amended): the LIVE row that holds the lease a dispatch run acquired — the same `label`, the
+ *  same `updateStartedAt` (the acquire's `now`, which `handOffLease` copies onto a revived heir), still busy. A revive
+ *  during the op hands the lease to the heir, so the heir is found here and the retired donor (not live) is not. `null`
+ *  unless EXACTLY one row matches — none (a report or the deadline settled it first, or R2's no-revive supersede dropped
+ *  it) or two (a state the one-lease invariant forbids) — and the caller then writes to the id it acquired, whose own
+ *  guards name what happened. `rows` are `nodes()`'s: live rows only. */
+export function leaseHolder(
+  rows: readonly Pick<DispatchRow, 'nodeId' | 'label' | 'updateState' | 'updateStartedAt'>[], label: string, startedAt: number,
+): string | null {
+  const held = rows.filter((r) => r.label === label && r.updateStartedAt === startedAt && !isSettled(r.updateState));
+  return held.length === 1 ? held[0]!.nodeId : null;
+}
