@@ -670,6 +670,7 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
   ];
 
   for (const { kind, tag, argv } of kinds) {
+    // PLATFORM-ONLY: `--detach` is Linux-only (design decision 17: `_upd_detach_os_check` refuses it on darwin before any lock probe or systemd-run), so a darwin arm has nothing to assert.
     itLinux(`${kind}: the lock held by a real flock answers busy with the lock line, update.json is byte-identical, and nothing reached systemd-run`, async () => {
       const h = harness();
       h.deps.runLocal = plantRealBox(h.home).spawn();
@@ -688,6 +689,7 @@ describe('runDispatch — the server-role spawn against the REAL ccrc: a held lo
       if (kind === 'rollback') expect(readFileSync(path.join(h.home, 'curl-argv'), 'utf8')).toContain(`/download/${tag}/SHA256SUMS`);
     });
 
+    // PLATFORM-ONLY: `--detach` is Linux-only (design decision 17: `_upd_detach_os_check` refuses it on darwin before any lock probe or systemd-run), so a darwin arm has nothing to assert.
     itLinux(`${kind} (control): with the lock FREE the script goes on to the poisoned systemd-run, so the absence above is a measurement`, async () => {
       const h = harness();
       h.deps.runLocal = plantRealBox(h.home).spawn();

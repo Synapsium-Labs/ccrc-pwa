@@ -433,6 +433,7 @@ describe('the bound against the REAL ccrc, through the real bounded localUpdateS
     return h;
   }
 
+  // PLATFORM-ONLY: `--detach` is Linux-only (design decision 17: `_upd_detach_os_check` refuses it on darwin before any lock probe or systemd-run), so a darwin arm has nothing to assert.
   itLinux('arm B: the real parent queued and blocks in a hanging systemd-run; the row holds the lease and names the report\'s own pid (the spawner\'s pid IS the report\'s)', async () => {
     const h = real({ systemdRun: 'hang' }, 6000);
     stubs.push({ home: h.home, file: 'systemd-run-pid' });
