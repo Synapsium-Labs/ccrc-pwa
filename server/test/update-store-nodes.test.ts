@@ -399,6 +399,45 @@ describe('rekeyNode — the lease follows the label (D-3412)', () => {
     }
   });
 
+  it('a revived `failed: provenance:` row does NOT halt (isHalting), so it receives the retired row\'s lease — the box\'s real run is never left unleased (I1, D-3412)', () => {
+    const s = boxes();
+    expect(s.dispatchNode(UUID_A, 'v0.0.10', 'update', T1, 'dispatched')).toEqual({ ok: true });
+    expect(s.releaseLease(UUID_A, 'failed', 'provenance: unsigned bundle', T1)).toEqual({ ok: true, state: 'failed' });
+    flipToB(s);                                                                                       // A retired, B is the box's node
+    expect(s.dispatchNode(UUID_B, 'v0.0.10', 'update', T2, 'the box\'s real run')).toEqual({ ok: true });
+    expect(s.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: true });
+    expect(busy(s), 'the revived row carries the run the box is doing').toEqual([UUID_A]);
+    expect(s.node(UUID_A)).toMatchObject({ updateState: 'pending', updateTarget: 'v0.0.10', updateStartedAt: T2, updateDetail: 'the box\'s real run' });
+    const gate = fleetGate(s.nodes());
+    expect(gate.haltedBy).toEqual([]);
+    expect(gate.leaseHeldBy, 'no dispatch may move beside that run').toBe(UUID_A);
+  });
+
+  it('the heir guard IS `isHalting`: over every settled state and a spread of details, a revived row is handed the lease exactly when it does not halt (I1)', () => {
+    const details: (string | null)[] = [null, '', 'the installer died', 'provenance:', 'provenance: unsigned bundle', 'Provenance: x',
+      'PROVENANCE: x', ' provenance: x', 'x provenance: y'];
+    for (const state of ['idle', 'failed', 'reverted'] as const) {
+      for (const detail of details) {
+        const s = boxes();
+        plantLease(s, UUID_A, state, T1);
+        s.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run(detail, UUID_A);
+        flipToB(s);
+        expect(s.dispatchNode(UUID_B, 'v0.0.10', 'update', T2, 'the run')).toEqual({ ok: true });
+        const verdict = s.node(UUID_A)!;
+        const halts = isHalting(verdict);
+        expect(s.rekeyNode('fleet', UUID_A)).toEqual({ ok: true, how: 'no-label-row', retired: 1, revived: true });
+        const label = `${state} / ${JSON.stringify(detail)}`;
+        if (halts) {
+          expect(s.node(UUID_A), label).toMatchObject({ updateState: state, updateDetail: detail, updateStartedAt: T1 });
+          expect(fleetGate(s.nodes()).haltedBy, label).toEqual([UUID_A]);
+        } else {
+          expect(s.node(UUID_A), label).toMatchObject({ updateState: 'pending', updateStartedAt: T2, updateDetail: 'the run' });
+          expect(busy(s), label).toEqual([UUID_A]);
+        }
+      }
+    }
+  });
+
   it('only a REVIVE moves a lease: an idempotent rekey of a live busy row beside another busy row (a planted, invariant-breaking fixture) releases nothing', () => {
     const s = boxes();
     expect(s.dispatchNode(UUID_A, 'v0.0.10', 'update', T1, 'dispatched')).toEqual({ ok: true });
@@ -460,6 +499,30 @@ describe('handOffLease — the lease group\'s hand-off writer (D-3412)', () => {
       expect(t.handOffLease(UUID_B, UUID_A), state).toEqual({ ok: false, why: 'halted', state });
       expect(writes(t), state).toBe(n);
     }
+  });
+
+  it('the heir guard refuses a row that HALTS and only that: `failed: provenance:` is not one (isHalting), a `reverted` row with the same detail is', () => {
+    const s = heirAndDonor();
+    plantLease(s, UUID_A, 'failed', T0 + 1);
+    s.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run('provenance: unsigned bundle', UUID_A);
+    expect(s.handOffLease(UUID_B, UUID_A)).toEqual({ ok: true });
+    expect(s.node(UUID_A)).toMatchObject({ updateState: 'pending', updateStartedAt: T1, updateDetail: 'the run' });
+    const t = heirAndDonor();
+    plantLease(t, UUID_A, 'failed', T0 + 1);
+    t.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run('the installer died', UUID_A);
+    const n = writes(t);
+    expect(t.handOffLease(UUID_B, UUID_A)).toEqual({ ok: false, why: 'halted', state: 'failed' });
+    expect(writes(t)).toBe(n);
+    const u = heirAndDonor();
+    plantLease(u, UUID_A, 'reverted', T0 + 1);
+    u.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run('provenance: unsigned bundle', UUID_A);
+    expect(u.handOffLease(UUID_B, UUID_A)).toEqual({ ok: false, why: 'halted', state: 'reverted' });
+    // The read-back names `halted` by the same notion: a non-halting heir refused for another reason is not called halted.
+    const v = heirAndDonor();
+    plantLease(v, UUID_A, 'failed', T0 + 1);
+    v.db.prepare('UPDATE nodes SET updateDetail = ? WHERE nodeId = ?').run('provenance: unsigned bundle', UUID_A);
+    v.db.prepare('UPDATE nodes SET supersededBy = NULL WHERE nodeId = ?').run(UUID_B);
+    expect(v.handOffLease(UUID_B, UUID_A)).toEqual({ ok: false, why: 'no-lease-to-hand' });
   });
 
   it('refuses every other shape, each writing nothing: an unknown or superseded heir, and a donor that is not a busy same-label row this heir replaced', () => {

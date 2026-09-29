@@ -12,7 +12,7 @@
 // RangeError on a non-tag, and a row carries whatever an older build and a
 // same-user writer left in it.
 import {
-  SETTLED_UPDATE_STATES, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, compareDispatchOrder, dispatchRank, isReleaseTag, isUpdatePhase,
+  PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, UNIX_SECONDS_MAX, UPDATE_GATE_CAP, compareDispatchOrder, dispatchRank, isReleaseTag, isUpdatePhase,
   type AutoMode, type DispatchRefusal, type NodeRole, type RequestKind, type StampRead, type TagFileRead, type UpdateChannel,
   type UpdatePhase, type UpdateState,
 } from '../../../shared/api.js';
@@ -29,8 +29,9 @@ export const ROLLBACK_CAP = 'rollback';
 /** Spec §10, verbatim: the lease detail for an update to a node whose stamp reads but names no version. */
 export const UNVERSIONED_DETAIL = 'unversioned box — any eligible release is newer';
 /** The word W2's `sweepPlanFor` tests before it records a node's refusal of a release: a `failed` row whose
- *  detail begins with it is a verdict on the RELEASE, and does not halt (D-3378). */
-export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
+ *  detail begins with it is a verdict on the RELEASE, and does not halt (D-3378). Declared ONCE in `shared/api.ts`
+ *  (D-3412: the store's heir guard reads the same word), re-exported here for the callers that import it from L1. */
+export { PROVENANCE_DETAIL_PREFIX };
 /** Spec §10's `failed: deadline` — the detail `runDispatch` (Task 5) releases an expired lease with. */
 export const DEADLINE_DETAIL = 'deadline';
 /** D-3407 — `reportedUpdatedAt` is the NODE's clock (bounded only by UNIX_SECONDS_MAX) and `dispatchNode` never

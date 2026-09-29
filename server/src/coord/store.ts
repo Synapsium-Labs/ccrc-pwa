@@ -33,7 +33,7 @@ import {
   isReleaseTag, isUpdateChannel,
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
   BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
-  isUpdatePhase, isUpdateState, SETTLED_UPDATE_STATES, validCapWords,
+  isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
   // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
@@ -439,8 +439,8 @@ export type NoteLeaseDetailResult =
   | { ok: false; why: 'stale-lease'; updateStartedAt: number | null };
 
 /** `handOffLease`'s answers (D-3412). The heir's arms are read back first: `unknown-node`, `superseded` (the heir
- *  itself was retired again) and `halted` (a `failed`/`reverted` row keeps its verdict — a lease is never written
- *  over one). `no-lease-to-hand` = the donor is not a BUSY row of the heir's label that was retired TOWARD the heir
+ *  itself was retired again) and `halted` (a row that HALTS — `reverted`, or `failed` whose detail does not begin
+ *  `provenance:` — keeps its verdict; a lease is never written over one). `no-lease-to-hand` = the donor is not a BUSY row of the heir's label that was retired TOWARD the heir
  *  (absent, live, settled, retired toward another node, or another box's row). Every refusal writes nothing. */
 export type HandOffLeaseResult =
   | { ok: true }
@@ -897,6 +897,20 @@ const SETTLED_UPDATE_SQL = `('${SETTLED_UPDATE_STATES.join("','")}')`;
 const HALTED_UPDATE_STATES = SETTLED_UPDATE_STATES.filter(
   (s): s is Exclude<SettledUpdateState, 'idle'> => s !== 'idle');
 const HALTED_UPDATE_SQL = `('${HALTED_UPDATE_STATES.join("','")}')`;
+
+/** The rows that actually HALT dispatch — `isHalting`'s (`update/dispatch.ts`) own notion, in SQL (D-3412): a settled
+ *  state but `idle`, EXCEPT a `failed` row whose detail begins `PROVENANCE_DETAIL_PREFIX` (a verdict on the release,
+ *  not a fault of the node). `HALTED_UPDATE_SQL` above is the STATE list only and is wider: `settleNode` refuses
+ *  every `failed` row whatever its detail, which is its own rule. The prefix is compared by `substr`, byte for byte
+ *  like `startsWith` — `LIKE` folds ASCII case. A NULL detail makes the comparison NULL, so the whole halting test is
+ *  NULL and the guard `AND NOT` it refuses: a `failed` row with no detail halts, as `isHalting` says. */
+const haltingRowSql = (t: string): string =>
+  `(${t}.updateState IN ${HALTED_UPDATE_SQL} AND NOT (${t}.updateState = 'failed' AND ` +
+  `substr(${t}.updateDetail, 1, ${PROVENANCE_DETAIL_PREFIX.length}) = '${PROVENANCE_DETAIL_PREFIX}'))`;
+/** The same notion over a read-back row (`handOffLease`'s `why`). A state this build cannot name reads `unknown`,
+ *  which is busy and never halts. */
+const rowHalts = (state: UpdateState, detail: string | null): boolean =>
+  haltedOf(state) !== null && !(state === 'failed' && detail !== null && detail.startsWith(PROVENANCE_DETAIL_PREFIX));
 
 /** The shape of a node id: the lowercase uuid `_inst_node_id` mints
  *  (`ccd/ccrc:9494-9513`) and nothing else, so an uppercase, padded or
@@ -6341,9 +6355,11 @@ export class CoordStore {
   /** `rekeyNode`'s lease step for a REVIVED row (D-3412), AFTER every same-label row this rekey retires is
    *  retired: one box, one lease. The revived row's lease columns are frozen at the day it was retired, so they say
    *  nothing about the box's run now. Decided in this order:
-   *  - a HALTED row (`failed`/`reverted`) keeps its verdict and its halt — `handOffLease` and `releaseLease` each
-   *    refuse it in their own `WHERE`, so nothing is written whatever else is busy (the halt stops every other move;
-   *    the retired row's lease is W2's gap); a settled `idle` row is handed a lease but is never released;
+   *  - a row that HALTS (`isHalting`'s notion, `haltingRowSql`: `reverted`, or `failed` whose detail does not begin
+   *    `provenance:`) keeps its verdict — `handOffLease` and `releaseLease` each refuse it in their own `WHERE`, so
+   *    nothing is written whatever else is busy (the halt blocks every other move until `ack`; the retired row's
+   *    lease is dropped, W2's gap); every other settled row — `idle`, and a `failed: provenance:` row, whose verdict
+   *    survives in `node_release_refusals` — is handed a lease but is never released;
    *  - a same-label row this rekey retired that held a busy lease HANDS it over (`handOffLease`) — it is the run the
    *    box is doing, so it is never dropped, and it replaces whatever the revived row froze;
    *  - otherwise a revived BUSY row keeps its lease unless a live row with a DIFFERENT label is busy, when it is
@@ -6352,7 +6368,7 @@ export class CoordStore {
   private leaseFollowsLabel(label: string, nodeId: string, donorId: string | null): void {
     const row = this.nodeLeaseRow(nodeId);
     if (row === null) return;
-    if (donorId !== null && this.handOffLease(donorId, nodeId).ok) return;   // refuses a halted heir in its own WHERE
+    if (donorId !== null && this.handOffLease(donorId, nodeId).ok) return;   // refuses a heir that halts, in its own WHERE
     const other = this.db.prepare(
       `SELECT nodeId FROM nodes WHERE label <> ? AND supersededBy IS NULL AND updateState NOT IN ${SETTLED_UPDATE_SQL} LIMIT 1`,
     ).get(label) as { nodeId: string } | undefined;
@@ -6595,7 +6611,8 @@ export class CoordStore {
 
   /** The lease follows the label (D-3412; `rekeyNode` is its only caller): the four lease columns of a BUSY row
    *  this rekey RETIRED toward `toNodeId`, copied onto the heir — the row carrying the same label that was revived.
-   *  Guards, all in the `WHERE`: the heir is live and not halted (a verdict is never written over); the donor is the
+   *  Guards, all in the `WHERE`: the heir is live and does not HALT (`haltingRowSql`, `isHalting`'s own notion: a
+   *  verdict is never written over, but a `failed: provenance:` row halts nothing and receives the lease); the donor is the
    *  same label's, busy, and retired toward THIS heir. The request columns are not the lease's and are not touched,
    *  and neither is the donor row. It opens no `tx()`: it runs inside `rekeyNode`'s, like `releaseLease`. */
   handOffLease(fromNodeId: string, toNodeId: string): HandOffLeaseResult {
@@ -6603,7 +6620,7 @@ export class CoordStore {
       'UPDATE nodes SET updateState = f.updateState, updateTarget = f.updateTarget, ' +
       'updateStartedAt = f.updateStartedAt, updateDetail = f.updateDetail FROM nodes f ' +
       'WHERE nodes.nodeId = ? AND nodes.supersededBy IS NULL ' +
-      `AND nodes.updateState NOT IN ${HALTED_UPDATE_SQL} ` +
+      `AND NOT ${haltingRowSql('nodes')} ` +
       'AND f.nodeId = ? AND f.label = nodes.label AND f.supersededBy = nodes.nodeId ' +
       `AND f.updateState NOT IN ${SETTLED_UPDATE_SQL}`,
     ).run(toNodeId, fromNodeId);
@@ -6611,7 +6628,7 @@ export class CoordStore {
     const row = this.nodeLeaseRow(toNodeId);
     if (row === null) return { ok: false, why: 'unknown-node' };
     if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
-    if (haltedOf(row.updateState) !== null) return { ok: false, why: 'halted', state: row.updateState };
+    if (rowHalts(row.updateState, row.updateDetail)) return { ok: false, why: 'halted', state: row.updateState };
     return { ok: false, why: 'no-lease-to-hand' };
   }
 
@@ -6642,12 +6659,12 @@ export class CoordStore {
 
   /** The lease-state read a zero-change node write takes its `why` from —
    *  AFTER the write, never before it. `null` = no row with this id. */
-  private nodeLeaseRow(nodeId: string): { updateState: UpdateState; updateStartedAt: number | null; supersededBy: string | null } | null {
-    const r = this.db.prepare('SELECT updateState, updateStartedAt, supersededBy FROM nodes WHERE nodeId = ?')
-      .get(nodeId) as { updateState: string; updateStartedAt: number | null; supersededBy: string | null } | undefined;
+  private nodeLeaseRow(nodeId: string): { updateState: UpdateState; updateStartedAt: number | null; updateDetail: string | null; supersededBy: string | null } | null {
+    const r = this.db.prepare('SELECT updateState, updateStartedAt, updateDetail, supersededBy FROM nodes WHERE nodeId = ?')
+      .get(nodeId) as { updateState: string; updateStartedAt: number | null; updateDetail: string | null; supersededBy: string | null } | undefined;
     if (r === undefined) return null;
     return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
-             updateStartedAt: r.updateStartedAt, supersededBy: r.supersededBy };
+             updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail, supersededBy: r.supersededBy };
   }
 
   /** Whether a request was outstanding, for `clearedRequest` — a report,

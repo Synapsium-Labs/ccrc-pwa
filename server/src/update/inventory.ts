@@ -29,7 +29,7 @@
 // sweep's own clock.
 import path from 'node:path';
 import {
-  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
+  BUSY_UPDATE_STATES, IN_FLIGHT_UPDATE_PHASES, PROVENANCE_DETAIL_PREFIX, UNIX_SECONDS_MAX, isReleaseTag, isUpdatePhase, validCapWords,
   type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type SettledUpdateState, type StampRead,
   type TagFileRead,
 } from '../../../shared/api.js';
@@ -444,7 +444,7 @@ export function sweepPlanFor(row: NodeRow | null, m: NodeMeasurement): SweepPlan
   const r = m.report;
   if (r === null) return { lease: { kind: 'none', why: 'no-report' }, refuse: null };
   if (row !== null && sameReport(row, r)) return { lease: { kind: 'none', why: 'unchanged-report' }, refuse: null };
-  const refuse = r.phase === 'failed' && r.target !== null && r.detail !== null && r.detail.startsWith('provenance:')
+  const refuse = r.phase === 'failed' && r.target !== null && r.detail !== null && r.detail.startsWith(PROVENANCE_DETAIL_PREFIX)
     ? { tag: r.target, detail: r.detail }
     : null;
   return { lease: leaseActionFor(row, m, r), refuse };

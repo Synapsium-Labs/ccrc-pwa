@@ -248,6 +248,29 @@ describe('runDispatch — one node at a time, fleet first (spec §10 Pins)', () 
     const r3 = ran(await runDispatch(h.deps, T0 + 61_000));
     expect(r3.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
   });
+
+  it('a revived `failed: provenance:` row does not halt, so it receives the box\'s lease and the server is never dispatched beside that run (I1, D-3412)', async () => {
+    const h = harness();
+    const FLEET_ID2 = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
+    const busyRows = (): string[] => h.store.nodes().filter((n) => n.updateState !== 'idle' && n.updateState !== 'failed').map((n) => n.nodeId);
+    seedFleet(h);                                        // U1, requested
+    seedServer(h);                                       // the server, requested
+    expect(ran(await runDispatch(h.deps, T0 + 1000)).outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    // U1's node refuses the release: a verdict on the release (D-3378), not a fault, so it does not halt.
+    expect(h.store.releaseLease(FLEET_ID, 'failed', 'provenance: unsigned bundle', T0 + 1000)).toEqual({ ok: true, state: 'failed' });
+    // The box's node-id flips to U2; U2 is the fleet node the operator moves, and its run is the box's real one.
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID2)).toMatchObject({ ok: true, retired: 1, revived: false });
+    expect(h.store.upsertNodeMeasurement(fleetMeas({ nodeId: FLEET_ID2 })).ok).toBe(true);
+    expect(h.store.requestNode(FLEET_ID2, 'v0.0.10', 'update', T0).ok).toBe(true);
+    expect(ran(await runDispatch(h.deps, T0 + 2000)).outcome).toMatchObject({ nodeId: FLEET_ID2, result: 'accepted' });
+    // U1 comes back: it does not halt, so it takes the lease U2 held.
+    expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID)).toMatchObject({ ok: true, retired: 1, revived: true });
+    expect(busyRows(), 'exactly one live busy row').toEqual([FLEET_ID]);
+    const r = ran(await runDispatch(h.deps, T0 + 3000));
+    expect(r.plan.gate).toMatchObject({ haltedBy: [], leaseHeldBy: FLEET_ID });
+    expect(r.outcome).toBeNull();
+    expect(h.spawned, 'the server moved beside the fleet box\'s run').toEqual([]);
+  });
 });
 
 describe('runDispatch — the answer decides only what happens to the lease (§18 "a refusal releases in the same turn", "a refusal does not consume the request")', () => {
