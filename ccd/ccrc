@@ -1613,6 +1613,10 @@ BOX_HEALTH_WHY=""
 VER_LAYOUT=""
 VER_CURRENT=""
 VER_WHY=""
+# `_ver_flip_back`'s second out-parameter (D-3461): the exit of the kept
+# version's own spine, whose last step is its trailing doctor. 0 on every
+# path where that spine did not run; the spine's own rc after it did.
+VER_SPINE_RC=0
 # `ccrc versions` and the GC (W6 Task 5), declared at file scope for the
 # `set -u` reason the arrays above are. The two ASSOCIATIVE arrays,
 # VER_PROTECT (<name> -> the words that keep it) and VER_VERDICT (<name> ->
@@ -13584,8 +13588,26 @@ cmd_rollback() {
         _upd_phase restarting
         _upd_unlock
         _upd_sweep
-        if _upd_report_is_mine; then _upd_phase done "rolled back by flip to $to"; else echo "rollback: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep"; fi
+        # D-3461: the kept spine COMPLETED (its record is written) but its
+        # trailing doctor exited non-zero — wave 4's D-3114 reading, which
+        # `cmd_update` and its re-install rollback already make: the gate
+        # passed, the box IS on <to>, and the exit is 3. The terminal `done`
+        # report is written either way, as `cmd_update` writes it for 3.
+        local doctor_rc="$VER_SPINE_RC"
+        if _upd_report_is_mine; then
+          if [ "$doctor_rc" -ne 0 ]; then
+            _upd_phase done "doctor exited $doctor_rc - the box moved; its health is ccrc doctor's"
+          else
+            _upd_phase done "rolled back by flip to $to"
+          fi
+        else
+          echo "rollback: report: skipped — ~/.ccrc/update.json no longer names this run's pid (${UPD_REPORT_PID:-$$}); a newer update took the lock this run released before the sweep"
+        fi
         echo "rollback: this box runs $to again — flipped back to \$HOME/ccrc-versions/$to, no download"
+        if [ "$doctor_rc" -ne 0 ]; then
+          echo "rollback: the kept spine completed (its record is written) but its trailing doctor exited $doctor_rc — this box IS on $to; the FAIL lines above are the box's health, not the rollback's"
+          return 3
+        fi
         return 0 ;;
       1)
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
@@ -16216,12 +16238,17 @@ _ver_can_flip() {   # -> 0 can flip; 1 cannot (VER_WHY)
 # one is never promoted. The caps file is cleared beside it (D-3147's
 # reason). The lock descriptor is closed for the spine as `cmd_update`
 # closes it for its staged one. Main shell only.
+#   D-3461: rc 0 does not say the spine's trailing doctor was clean — the
+# spine's own exit is left in `VER_SPINE_RC` (0 where it did not run), so the
+# caller that owns the exit table can read a completed spine under a failing
+# doctor as D-3114's 3. The 0/1/2 return contract is unchanged.
 _ver_flip_back() {   # <name> <role> <prefix>
   local name="$1" role="$2" say="$3" vdir="$BOX_VERSIONS_ROOT/$1" krc=0 src=0 m1="" m2=""
   local stamp="$BOX_STAMP_FILE"
   local rec="$BOX_INSTALLED_FILE"
   local -a spine=(bash "$BOX_TREE_DIR/ccd/ccrc" install)
   local -a spine_env=(env -u CCRC_UPDATE_LOCK_HELD -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_SPINE)
+  VER_SPINE_RC=0
   _ver_can_flip || return 1
   _ver_kept "$name" "$role" || krc=$?
   case "$krc" in
@@ -16252,6 +16279,7 @@ _ver_flip_back() {   # <name> <role> <prefix>
   else
     "${spine_env[@]}" "${spine[@]}" || src=$?
   fi
+  VER_SPINE_RC="$src"
   if [ ! -f "$rec" ]; then
     VER_WHY="its own spine exited $src without writing its completed-install record"
     return 2

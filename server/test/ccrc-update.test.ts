@@ -8220,7 +8220,10 @@ const KEPT_SPINE = [
   'printf \'verified=%s held=%s lockfd=%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" "${CCRC_UPDATE_LOCK_HELD:-unset}" "$fd" > "$HOME/kept-spine-env"',
   'printf \'app.ccrc.ccrc.plist\\napp.ccrc.ccrc-agent.plist\\n\' >> "$HOME/launchctl-loaded"',
   'code=0; [ -f "$HOME/fixture-kept-spine-exit" ] && IFS= read -r code < "$HOME/fixture-kept-spine-exit"',
-  'if [ "$code" = 0 ]; then cp "$HOME/ccrc/.ccrc-installed" "$HOME/.ccrc/installed" || exit 1; fi',
+  // D-3461: `fixture-kept-spine-completes` is D-3114's shape — the spine
+  // COMPLETED (its record is written) and its trailing doctor is what exits
+  // non-zero. Without the file, a non-zero exit is a spine that died.
+  'if [ "$code" = 0 ] || [ -f "$HOME/fixture-kept-spine-completes" ]; then cp "$HOME/ccrc/.ccrc-installed" "$HOME/.ccrc/installed" || exit 1; fi',
   'exit "$code"',
 ].join('\n') + '\n';
 
@@ -8680,6 +8683,41 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(fileText(join(home, 'kept-spine-env'))).toMatch(/^verified=unset held=unset /);
     expect(fileText(join(home, '.ccrc', 'installed'))).toBe(`${V1_SHA}\nunsigned\n`);
+  });
+
+  // D-3461 (controller ruling, found reviewing Task 8's rehearsal R6): a
+  // rollback by flip returned 0 after its gate passed even when the kept
+  // spine's trailing doctor exited non-zero, while an update exits 3 on the
+  // same FAILs and the Global Constraints' exit table reads `ccrc rollback`
+  // the same way (D-3114). The table governs.
+  it('a rollback by flip whose kept spine COMPLETED under a failing doctor exits 3, not 0: the gate passed, the box IS on the kept version, the terminal `done` report and the sweep still happen — and the same rollback under a passing doctor exits 0 (D-3461)', () => {
+    const { home, kept } = flipBox('ccrc-rollback-flip-doctor3-');
+    writeFileSync(join(home, 'fixture-kept-spine-exit'), '1\n');
+    writeFileSync(join(home, 'fixture-kept-spine-completes'), 'yes\n');
+    withSweep(home);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    expect(r.stdout).toContain("update: gate: server answers on v1.0.0");
+    expect(r.stdout).toContain("rollback: flip: v1.0.0's spine completed (its record is written) but its trailing doctor exited 1 — the FAIL lines above are the box's health; the gate decides");
+    expect(r.stdout).toContain('rollback: this box runs v1.0.0 again — flipped back to $HOME/ccrc-versions/v1.0.0, no download');
+    expect(r.stdout).toContain("rollback: the kept spine completed (its record is written) but its trailing doctor exited 1 — this box IS on v1.0.0; the FAIL lines above are the box's health, not the rollback's");
+    expect(linkOf(home)).toBe(kept);
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(fileText(join(kept, '.ccrc-installed')));
+    // The terminal report is written either way, as wave 4's update writes it for 3.
+    expect(lastReport(home)).toMatchObject({
+      phase: 'done', detail: "doctor exited 1 - the box moved; its health is ccrc doctor's", target: 'v1.0.0', from: 'rollback',
+    });
+    expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'done']);
+    if (process.platform === 'linux') {
+      expect(calls(home), 'a moved box is swept, exit 3 or not').toContain('--user try-restart claude-session@*');
+    }
+    // The control: the same box under a passing doctor.
+    const ok = flipBox('ccrc-rollback-flip-doctor0-');
+    withSweep(ok.home);
+    const r0 = rollbackRun(ok.home);
+    expect(r0.code, `stderr: ${r0.stderr}\nstdout: ${r0.stdout}`).toBe(0);
+    expect(r0.stdout).not.toMatch(/trailing doctor exited/);
+    expect(lastReport(ok.home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0' });
   });
 
   it('a box already on the kept tag with its install completed has nothing to do — exit 0, nothing written; one whose install did NOT complete re-runs the kept spine, so D-3264\'s rerun (`ccrc rollback --to <v>`) works on a versioned box', () => {
