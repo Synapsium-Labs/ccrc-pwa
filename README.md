@@ -1489,10 +1489,13 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   a lane whose credential ccd cannot name — any lane that declares no `secretsFile` (a login lane, an
   external lane) or an older `accounts.sh`; a config dir's `.credentials.json` is never read, because
   it changes without a re-login. A rescue writes none when the named file changed after the pane was
-  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) with
-  `telemetry: "anthropic"` and a `.cc-secrets/<id>-oauth.env` — setup-token lanes and the upstream.
-  On a lane it cannot measure but ccd can name (an API-key lane's `<id>-<provider>.env`, any lane on
-  macOS) the marker stands until that file is rewritten or an operator `rm`; a probed account revived
+  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) whose
+  `telemetry: "anthropic"` credential identity is an OAuth setup token: an upstream lane's declared
+  `exec.secretsFile` (or its legacy `.cc-secrets/<id>-oauth.env`) and a generated Anthropic lane with a
+  declared setup-token file. API-key and login lanes are refused before a stale guessed OAuth file can
+  answer for them. On a lane it cannot measure but ccd can name (an API-key lane's
+  `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
+  `rm`; a probed account revived
   with no local trace (a transient 401) keeps its marker until the probe's next live answer.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).

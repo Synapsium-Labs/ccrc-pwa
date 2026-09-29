@@ -31,7 +31,8 @@ const ROSTER = {
     { id: 'claude', label: 'claude', configDirSuffix: '.claude',
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
     { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
-      exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' },
+      homeAble: true, hue: 'violet', telemetry: 'anthropic' },
     { id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
       exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
   ],
@@ -77,6 +78,13 @@ const token = (id: string, value = 'sk-ant-oat01-FIXTURE'): void => {
   fs.mkdirSync(j('.cc-secrets'), { recursive: true });
   fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`),
     `export CLAUDE_CODE_OAUTH_TOKEN=${value}\n`, { mode: 0o600 });
+};
+
+// An API-key file must not be evaluated by the OAuth-only health probe.
+const providerKey = (id: string, provider: string): void => {
+  fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+  fs.writeFileSync(j('.cc-secrets', `${id}-${provider}.env`),
+    `touch "$HOME/${id}-provider-file-was-sourced"\nexport ANTHROPIC_AUTH_TOKEN=fixture\n`, { mode: 0o600 });
 };
 
 /** An env file whose exact bytes are the subject — non-empty on disk, but not
@@ -233,6 +241,87 @@ describe('eligibility is roster-derived', () => {
     expect(fs.existsSync(marker('other-one'))).toBe(true);
   });
 
+  it('uses an upstream OAuth credential declared outside the legacy filename', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.private'), { recursive: true });
+    fs.writeFileSync(j('.private', 'claude-setup.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=DECLARED\n', { mode: 0o600 });
+    token('claude', 'LEGACY');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    expect(run().status).toBe(0);
+    expect(fs.readFileSync(j('curl-stdin'), 'utf8')).toContain('DECLARED');
+    expect(fs.readFileSync(j('curl-stdin'), 'utf8')).not.toContain('LEGACY');
+    expect(fs.existsSync(marker('claude'))).toBe(true);
+  });
+
+  it('refuses an invalid declared path without falling back to a stale legacy OAuth file', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/../outside.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] }));
+    fs.writeFileSync(j('outside.env'), 'touch "$HOME/invalid-path-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    token('claude', 'LEGACY');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/claude: refused — invalid declared setup-token credential path/);
+    expect(fs.existsSync(marker('claude'))).toBe(false);
+    expect(fs.existsSync(j('invalid-path-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('refuses an API-key lane even when a stale guessed OAuth file answers live', () => {
+    // D-3524: ccd can name the provider key, but the OAuth usage endpoint has
+    // no authority over it. A retained `<id>-oauth.env` must not turn a 403
+    // scope reply into a false marker clear.
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'orl', label: 'orl', configDirSuffix: '.claude-orl',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/orl-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry: 'anthropic' },
+    ] }));
+    providerKey('orl', 'openrouter');
+    rawToken('orl', 'touch "$HOME/orl-stale-oauth-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    fs.writeFileSync(marker('orl'), '1757203200 rescue-401');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/orl: refused — OAuth usage probe does not measure an API-key lane/);
+    expect(fs.existsSync(marker('orl'))).toBe(true);
+    expect(fs.existsSync(j('orl-provider-file-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('orl-stale-oauth-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('refuses a login lane even when a stale guessed OAuth file answers dead', () => {
+    // A login lane deliberately has no `exec.secretsFile`; `.credentials.json`
+    // is its credential and never becomes a D-3524 source. A leftover OAuth
+    // file must not let this probe write a replacement verdict either.
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'login', label: 'login', configDirSuffix: '.claude-login',
+        exec: { kind: 'generated', provider: 'anthropic' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] }));
+    rawToken('login', 'touch "$HOME/login-stale-oauth-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/login: refused — OAuth usage probe has no declared setup-token credential/);
+    expect(fs.existsSync(marker('login'))).toBe(false);
+    expect(fs.existsSync(j('login-stale-oauth-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
   it('refuses the whole pass when the roster cannot be read', () => {
     fs.rmSync(j('.ccrc', 'accounts.json'));
     plantCurl('403');
@@ -365,8 +454,8 @@ describe('pass discipline', () => {
     // in the body reads stdin today, which is exactly why this cannot be asserted
     // behaviourally — and exactly why it would regress unnoticed.
     const src = fs.readFileSync(PROBE, 'utf8');
-    const read = /while IFS= read -r id <&(\d)/.exec(src);
-    const feed = /done (\d)<<< "\$IDS"/.exec(src);
+    const read = /while IFS=\$'\\t' read -r id subject rel <&(\d)/.exec(src);
+    const feed = /done (\d)<<< "\$SUBJECTS"/.exec(src);
     expect(read, 'the loop must read from an explicit fd, not stdin').not.toBeNull();
     expect(feed, 'the here-string must be attached to that same explicit fd').not.toBeNull();
     expect(read![1]).toBe(feed![1]);

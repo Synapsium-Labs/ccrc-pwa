@@ -103,11 +103,13 @@ Design:
   marker as D-3522 did, rc 0 keeps §A.6's clear, and nothing expires on read. Live exposure was none
   (every generated lane on the fleet box declares a secrets file), but `ccrc account add --method login`
   writes exactly this shape.
-- **API-key lanes keep the rule; the prose is corrected.** An OpenRouter or compatible lane's secrets file
-  is `.cc-secrets/<id>-<provider>.env`, and `ccd-account-health` sources only `<id>-oauth.env`, so it
-  refuses the lane and never clears its marker. Kept on purpose: an API-key 401 is an invalid key, and a
-  new key file is what ends it (or an operator `rm`). The CARRIED text below had said the probe covers
-  every Linux lane; it now names what the probe covers and what clears a marker elsewhere.
+- **API-key lanes keep the rule; the probe selects by credential identity.** An OpenRouter or compatible
+  lane's secrets file is `.cc-secrets/<id>-<provider>.env`; the OAuth usage probe selects only an upstream
+  lane's declared `exec.secretsFile` (or its legacy `<id>-oauth.env`) and a generated Anthropic lane with
+  a declared setup-token file. API-key and login lanes are refused before any file is sourced, even if a
+  stale `<id>-oauth.env` remains. Kept on purpose: an API-key 401 is an invalid key, and a new key file is
+  what ends it (or an operator `rm`). The CARRIED text below had said the probe covers every Linux lane;
+  it now names what the probe covers and what clears a marker elsewhere.
 - **`_authdead`'s expiry re-reads before it removes.** Deciding forks for the source and for `stat`
   (~7 ms, measured by the review at load ~37); the probe or a rescue can rename a fresh verdict in
   meanwhile, and a remove by path deleted it and answered "not dead". The marker's first field is now
@@ -165,9 +167,11 @@ Tests (red first):
   become: the probe (writes on 401, clears on a live answer), the rescue (writes), a credential change
   (expires), rc 0 on a lane ccd cannot name (clears), and an operator `rm`. WHAT THE PROBE COVERS:
   `ccd-account-health` runs where its systemd timer runs (Linux, any role but `server`; never macOS),
-  over roster accounts with `telemetry: "anthropic"`, sourcing only `.cc-secrets/<id>-oauth.env` — so it
-  measures setup-token lanes and the upstream, and refuses API-key lanes (`<id>-<provider>.env`) and login
-  lanes. On a lane ccd names but the probe cannot measure (an API-key lane anywhere, any lane on macOS) a
+  over roster accounts with `telemetry: "anthropic"` whose credential identity is an OAuth setup token:
+  an upstream lane's declared `exec.secretsFile` (or its legacy `.cc-secrets/<id>-oauth.env`) and a
+  generated Anthropic lane with a declared setup-token file. It refuses API-key lanes
+  (`<id>-<provider>.env`) and login lanes before sourcing a stale guessed OAuth file. On a lane ccd names
+  but the probe cannot measure (an API-key lane anywhere, any lane on macOS) a
   marker stands until that file is rewritten or an operator `rm` — for an API key, whose 401 means an
   invalid key, that is the intended owner; on a lane ccd cannot name, until the next rc-0 spawn or an
   `rm`. CARRIED, not fixed: a probed account revived with no local trace (a transient API-side 401, an

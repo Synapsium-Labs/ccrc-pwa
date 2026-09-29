@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=672e3d0f0a9a6919a1fdcb83504a56a2cfc60619b46ccca9346c49311a972339
+# ccrc:generated 1 sha256=f63251272d0617a842867e2656b55ec7bfb80add4d81976ec9543db607245ce8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -26666,14 +26666,14 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # `_ccrc_secrets_file`); and an operator `rm`.
 #
 # WHICH LANES THE PROBE COVERS, exactly: `ccd-account-health` runs only where its
-# systemd timer does (Linux, any role but `server`; macOS has none), reads only
-# roster accounts with `telemetry: "anthropic"`, and sources only
-# `.cc-secrets/<id>-oauth.env` — a setup-token lane and the upstream. It REFUSES
-# the rest: an API-key lane (`.cc-secrets/<id>-<provider>.env`), a login lane (no
-# secrets file). So on a lane ccd can name that the probe cannot measure (an
-# API-key lane anywhere; every lane on macOS), a marker stands until that file is
-# rewritten or an operator `rm` — an API-key 401 is an invalid key, and a new key
-# is what ends it; on a lane ccd cannot name, until the next rc-0 spawn or an `rm`.
+# systemd timer does (Linux, any role but `server`; macOS has none), starts at
+# roster accounts with `telemetry: "anthropic"` and selects only OAuth credentials:
+# an upstream's declared `exec.secretsFile` or legacy `.cc-secrets/<id>-oauth.env`
+# fallback, or a declared generated Anthropic setup-token file. It REFUSES API-key,
+# login, external, Codex and malformed launcher shapes before a guessed OAuth file
+# can answer for them. So on a lane ccd can name that the probe cannot measure
+# (API-key anywhere; every lane on macOS), a marker stands until its file is rewritten
+# or an operator `rm` (an API-key 401 needs a new key); otherwise the next spawn ends it.
 # CARRIED: a probed account revived with no local trace (a transient API-side
 # 401) keeps its marker until the probe's next live answer. The keepalive's and
 # the server's readers of the marker do not expire it; they converge when a
@@ -26684,8 +26684,8 @@ _authdead_cred_src() {   # wrapper -> the absolute path of the file that lane's 
   # another on a real fleet (an `x` beside an `x-corp`), so a glob reads
   # another account's file.
   #   1. the roster's `exec.secretsFile`, projected as `_ccrc_secrets_file`;
-  #   2. the upstream's `<id>-oauth.env`, which its launcher and the probe
-  #      (`_ah_token_file`) both source by convention;
+  #   2. the upstream's `<id>-oauth.env`, the legacy fallback `_ah_subjects`
+  #      selects only when that upstream has no declared `exec.secretsFile`;
   #   3. otherwise nothing. An accounts.sh with no `_ccrc_secrets_file` cannot
   #      say whether a secrets file was declared, so only rule 2 survives it.
   # NEVER a config dir's `.credentials.json` (round 1 of D-3524). A lane that
