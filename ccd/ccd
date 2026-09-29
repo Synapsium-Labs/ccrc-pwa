@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=acbf5876c6b067557dca61f5ac0daf94a16683bf7849af38e61e69b9161e86d9
+# ccrc:generated 1 sha256=e1578e8178fb6a3e6774ffefa0155f5ccce90aeff472a508a41d18128dadd560
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -24099,11 +24099,14 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   return 0
 }
 
-_ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path exactly: the longest prefix of it
-  #                              that is a directory (its own walk, fork-free) can be entered, and the
+_ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path: the longest prefix of it that
+  #                              is a directory (its own walk, fork-free) can be entered, and the
   #                              component below that prefix is PROVEN absent (`_ws_reclaim_absent`); 1
   #                              otherwise — `_ws_realpath` then answers something that is not where path
-  #                              leads. `-d` is false on EACCES as on ENOENT, so a component that stands
+  #                              leads. Its `cd` is LOGICAL: `<link>/..` is the link's parent, not its
+  #                              target's (the kernel's answer). That is the answer that matters here,
+  #                              because the pane's own shell enters the workdir the same way (`cd
+  #                              '$workdir'`, logical), so the session lives where `_ws_realpath` says. `-d` is false on EACCES as on ENOENT, so a component that stands
   #                              but cannot be followed (a link across an unsearchable directory, or one
   #                              that cannot be looked at) stops that walk as if it were missing. A path
   #                              holding a control character is never resolvable: `_ws_realpath`'s
@@ -24292,6 +24295,14 @@ _ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs
   #                                 of its common directory reads (a directory searchable too), absent
   #                                 counting as none; 1 (_WS_LOGSREAD_WHY) otherwise. The listing answers,
   #                                 never a test before it: `find`'s status and stderr, as the keep reads G.
+  #                                 NO LINK, at `logs` or under it: git 2.43's `rev-list --reflog` does not
+  #                                 follow a linked `logs` and counts none of its reflogs (measured: 1
+  #                                 commit, then 0 once `logs` was moved and linked), while `find` lists only
+  #                                 the link and `-r` follows it — the count read 0 and the clone's
+  #                                 reflog-only commit went with the tree (review, measured). A link below
+  #                                 `logs` is followed by git, and refused all the same, as the keep refuses
+  #                                 one in the child's own G. `.git`, `refs` and `objects` as links are
+  #                                 read through by the count (measured, each 1), so they are not refused.
   local p="$1" gd cm d e lst err rc
   _WS_LOGSREAD_WHY=''
   gd=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
@@ -24301,13 +24312,15 @@ _ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs
     _ws_reclaim_absent "$d"; rc=$?
     (( rc != 0 )) || continue
     (( rc != 2 )) || { _WS_LOGSREAD_WHY="$_WS_ABSENT_WHY — the reflogs of the checkout at $p were never read"; return 1; }
+    [[ ! -L "$d" ]] || { _WS_LOGSREAD_WHY="$d is a symbolic link, which git's reflog count does not follow — the commits the reflogs of the checkout at $p name are unknown"; return 1; }
     lst=$(_plat_mktemp) || { _WS_LOGSREAD_WHY="could not make a scratch file to list $d"; return 1; }
     err=$(LC_ALL=C find "$d" -print0 2>&1 >"$lst"); rc=$?
     if (( rc != 0 )) || [[ -n "$err" ]]; then
       rm -f "$lst"; _WS_LOGSREAD_WHY="$d cannot be listed (find answered $rc: ${err%%$'\n'*}) — the reflogs of the checkout at $p were never read"; return 1
     fi
     while IFS= read -r -d '' e; do
-      if [[ -d "$e" && ! -L "$e" ]]; then [[ -r "$e" && -x "$e" ]]; else [[ -r "$e" ]]; fi \
+      [[ ! -L "$e" ]] || { rm -f "$lst"; _WS_LOGSREAD_WHY="$e is a symbolic link — ccd never follows one, so the commits the reflogs of the checkout at $p name are unknown"; return 1; }
+      if [[ -d "$e" ]]; then [[ -r "$e" && -x "$e" ]]; else [[ -r "$e" ]]; fi \
         || { rm -f "$lst"; _WS_LOGSREAD_WHY="$e cannot be read — the commits the reflogs of the checkout at $p name are unknown"; return 1; }
     done < "$lst"
     rm -f "$lst"
@@ -24788,7 +24801,7 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # would land outside the child's repository. GIT_NAMESPACE, not on that
   # list, scopes every ref read and write, so it goes too. The GIT_CONFIG_*
   # entries stay: they are this function's own mechanism, and a caller's are
-  # kept by design (above). So the OUTERMOST containment unsets them all, and does not put
+  # kept by design (above). GIT_NO_REPLACE_OBJECTS is not unset but SET (below). So the OUTERMOST containment unsets them all, and does not put
   # them back: nothing a reclaim runs wants its caller's repository, and a
   # restore would re-arm it for everything after. Unset, never shadowed —
   # measured, bash 5.2: a `local` of an exported name, set or unset, still
@@ -24802,9 +24815,14 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
     local _ws_u
     for _ws_u in 1 2 3 4; do
       unset -v GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
-        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
+        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
     done
   fi
+  # And every read sees the REAL object graph: a replace ref substitutes one
+  # commit's history for another's in every reachability read (rung 9's
+  # count, `branch --contains`), so replacement is switched OFF, never merely
+  # left to an inherited value.
+  local -x GIT_NO_REPLACE_OBJECTS=1
   local _WS_RECLAIM_CONTAINED=1
   "$@"
 }

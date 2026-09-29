@@ -423,6 +423,59 @@ describe('rung 9’s count never reads an unreadable reflog as zero (spec §5.5)
     } finally { fs.chmodSync(heads, 0o755); fs.chmodSync(path.join(ext, 'logs', 'HEAD'), 0o644); }
   }, 60_000);
 
+  /** A clean, pushed clone at `<wt>/vendor/other` with its git directory INSIDE it, whose `.git/logs`
+   *  is moved to `$HOME/extlogs` and LINKED back, after a commit made and reset away. */
+  const linkedLogsClone = (wt: string): { clone: string; ext: string } => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    h.git(h.home, 'init', '--bare', '-q', '-b', 'main', origin);
+    const seed = path.join(h.home, 'seed-other');
+    h.git(h.home, 'init', '-q', '-b', 'main', seed);
+    fs.writeFileSync(path.join(seed, 'r'), 'r');
+    h.git(seed, 'add', 'r'); h.git(seed, 'commit', '-q', '-m', 'r');
+    h.git(seed, 'remote', 'add', 'origin', origin); h.git(seed, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    h.git(h.home, 'clone', '-q', origin, clone);
+    fs.writeFileSync(path.join(clone, 'x'), 'x');
+    h.git(clone, 'add', 'x'); h.git(clone, 'commit', '-q', '-m', 'local only, then reset away');
+    h.git(clone, 'reset', '-q', '--hard', 'HEAD~1');
+    const ext = path.join(h.home, 'extlogs');
+    fs.renameSync(path.join(clone, '.git', 'logs'), ext);
+    fs.symlinkSync(ext, path.join(clone, '.git', 'logs'));
+    return { clone, ext };
+  };
+
+  it('a LINKED `logs`, readable — git’s count does not follow it and reads 0 — is unmeasured', () => {
+    const { wt } = makeChild(h);
+    const { clone } = linkedLogsClone(wt);
+    expect(h.git(clone, 'rev-list', '--count', '--all', '--reflog', '--not', '--remotes'), 'the CONTROL: git counts none').toBe('0');
+    expect(h.git(clone, 'reflog', 'show', '--format=%s', 'HEAD'), 'the CONTROL: the reflog still names it').toContain('local only');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.token).toBe('');
+    expect(r.detail).toContain(`${path.join(clone, '.git', 'logs')} is a symbolic link, which git's reflog count does not follow`);
+  }, 60_000);
+
+  it('a LINKED `logs` whose reflog files are mode 000 is unmeasured too; and a link BELOW `logs` is refused', () => {
+    const { wt } = makeChild(h);
+    const { clone, ext } = linkedLogsClone(wt);
+    const files = [path.join(ext, 'HEAD'), path.join(ext, 'refs', 'heads', 'main')];
+    for (const f of files) fs.chmodSync(f, 0o000);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain('is a symbolic link');
+    } finally { for (const f of files) fs.chmodSync(f, 0o644); }
+    // Put `logs` back, and link one directory below it instead.
+    fs.rmSync(path.join(clone, '.git', 'logs'));
+    fs.renameSync(ext, path.join(clone, '.git', 'logs'));
+    const refs = path.join(clone, '.git', 'logs', 'refs');
+    fs.renameSync(refs, path.join(h.home, 'extrefs'));
+    fs.symlinkSync(path.join(h.home, 'extrefs'), refs);
+    const b = evalOf(h);
+    expect(b.verdict, b.detail).toBe('unmeasured');
+    expect(b.detail).toContain(`${refs} is a symbolic link — ccd never follows one`);
+  }, 60_000);
+
   it('any word on git’s stderr but the pruned-commit warning is unmeasured', () => {
     const { wt } = makeChild(h);
     const { clone, ext } = externalClone(wt);
@@ -570,7 +623,7 @@ describe('containment drops an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FI
   /** Every other variable that selects a repository, its objects, refs or history: `git rev-parse
    *  --local-env-vars` on git 2.43 less the GIT_CONFIG_* entries, plus GIT_NAMESPACE. */
   const OTHERS = ['GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE',
-    'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE'];
+    'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE'];
 
   it('the outermost containment unsets all three for everything beneath it; a nested one keeps ccd’s own', () => {
     const out = h.sh('export GIT_DIR=/elsewhere/.git GIT_WORK_TREE=/elsewhere GIT_INDEX_FILE=/elsewhere/index;'
@@ -592,6 +645,19 @@ describe('containment drops an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FI
     expect(out.split('\n')).toEqual(OTHERS.map(() => 'unset'));
     expect(h.sh(`printf '%s' "$GIT_OBJECT_DIRECTORY"`, env), 'the CONTROL: they were exported').toBe('/elsewhere/GIT_OBJECT_DIRECTORY');
   });
+
+  it('replacement is switched OFF for every read — GIT_NO_REPLACE_OBJECTS=1 whatever was inherited, and a replace ref substitutes no history', () => {
+    const show = `bash -c 'printf "%s" "\${GIT_NO_REPLACE_OBJECTS-unset}"'`;
+    expect(h.sh(`_ws_reclaim_contained ${show}`)).toBe('1');
+    expect(h.sh(`_ws_reclaim_contained ${show}`, { GIT_NO_REPLACE_OBJECTS: '' })).toBe('1');
+    const c = makeChild(h);
+    // A replace ref grafting the child's tip onto nothing: with replacement honoured, its history is 1 commit.
+    const orphan = h.git(c.main, 'commit-tree', `${c.tip}^{tree}`, '-m', 'a replacement with no parents');
+    h.git(c.main, 'replace', c.tip, orphan);
+    const count = (s: string): string => h.sh(`${s} git -C "${c.main}" rev-list --count ${c.tip}`);
+    expect(count(''), 'the CONTROL: the replace ref shortens history').toBe('1');
+    expect(Number(count('_ws_reclaim_contained')), 'contained, the real history').toBeGreaterThan(1);
+  }, 60_000);
 
   it('`ws-audit --reclaim` run with another repository’s GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE exported answers as without them', () => {
     const c = makeChild(h);
@@ -754,6 +820,10 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     fs.mkdirSync(locked);
     fs.symlinkSync(server, path.join(locked, 'l'));
     fs.symlinkSync(path.join(locked, 'l'), path.join(h.home, 'a'));
+    // The REAL token, taken before the row is planted — the rows are no input to it, so
+    // without the guard the verb would accept it (review: measured, the tree went).
+    const tok = evalOf(h).token;
+    expect(tok, 'the CONTROL: without the row the ladder passes').toMatch(/^[0-9a-f]{64}$/);
     otherRowOf('demo-a', path.join(h.home, 'a'));
     const control = evalOf(h);
     expect(control.verdict, `the CONTROL: searchable, it places inside the child — ${control.detail}`).toBe('containment-unproven');
@@ -761,12 +831,15 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     fs.chmodSync(locked, 0o600);
     try {
       expect(h.sh(`_ws_realpath "${path.join(h.home, 'a')}"`), 'the CONTROL: `_ws_realpath` answers the link itself').toBe(path.join(h.home, 'a'));
+      // The VERB first, with the real token, so its half is asserted on its own.
+      const v = childReclaimVerb(h, tok);
+      expect(v.stdout, 'the verb reclaimed the child').not.toContain('"reclaimed"');
+      expect(fs.existsSync(path.join(server, 'live.txt')), 'the verb removed the other session’s file').toBe(true);
+      expect(v.stdout).toContain('demo-a');
       const r = evalOf(h);
       expect(r.verdict, r.detail).toBe('unmeasured');
       expect(r.token).toBe('');
       expect(r.detail).toContain(`registry row(s) demo-a ${UNRESOLVED}`);
-      const v = childReclaimVerb(h, '0'.repeat(64));
-      expect(v.stdout, 'nothing was reclaimed').not.toContain('"reclaimed"');
     } finally { fs.chmodSync(locked, 0o755); }
     expect(fs.existsSync(c.wt), 'the child stands').toBe(true);
     expect(fs.readFileSync(path.join(server, 'live.txt'), 'utf8')).toContain('uncommitted');
