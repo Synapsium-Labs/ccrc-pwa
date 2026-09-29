@@ -184,6 +184,28 @@ Each departure from the spec's literal text, by number and slug:
   `../inject/send.js`, and admits it to `mail-routes.test.ts`'s scan with a `NOT_CODES` entry, the `enter-ignored`
   precedent.
 
+**Found while executing** (minted 2026-09-29 at the task reviews, each a controller ruling):
+
+- **D-3579** `rung-due-on-the-raw-stamp` (Task 5 review): r2 and r3 fall due at the previous rung plus its hour, or at
+  the RAW live stamp plus the hour when that stamp is later. That later stamp means the worker read busy when the rung
+  fell due and went idle again after. The plan timed them from `max(previousRung, quietSince)`, so any restamp or inbound
+  mail re-timed them, including the turn the r1 nudge itself starts. Spec §4.2 says "r2 at r1 + 1 h", "busy when r2 or
+  r3 falls due defers the rung", and "an open episode is not reset".
+- **D-3580** `any-null-stamp-holds` (Task 5 review): an ok live read whose `statusUpdatedAt` is null holds `unmeasured`
+  whatever the word. The plan held only for `idle`/`shell`. Under `waiting`, the null silently broke hold 2a's
+  correlation, and folded to 0 in the cap clock, which fired a false `dialog-cap`. This is the overloaded-null rule.
+- **D-3581** `r1-body-states-its-arming` (Task 6 review): the r1 body's last line promises escalation only when
+  escalation is armed. While `stall-watch-escalate` is absent, as it is in §11 decision 3's first 48 h and after its kill
+  rule, the body says that nobody else is told, and still asks for the mail. The spec's example line assumed arming.
+- **D-3582** `r2-r3-span-from-the-episode` (Task 6 review): the r2 subject and body, and the r3 push, measure the
+  silence from the episode key (the worker's own last mail, a coordinator `wait:`, or dispatch), and name it as time
+  since the worker's last mail. The plan used `quietSince`, which r1's own delivery restamps, so a 4 h stall read as
+  about 2 h. §3.4: only the worker's own mail is immune to restamps.
+- **D-3583** `r3-reports-what-was-measured` (Task 6 review): r3's `still-silent` text states measured facts. It gives
+  when the stall check and the stall report went out, to whom the report went (its own recipient, not today's
+  claimant), and whether and when a coordinator last mailed the worker after it. The plan asserted "both went
+  unanswered", which is false whenever the coordinator obeyed r2 and sent a resume.
+
 ## File structure
 
 | File | Ring | Responsibility | Task |
