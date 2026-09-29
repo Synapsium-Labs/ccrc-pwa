@@ -38,7 +38,7 @@ export type ChildSpentVerdict =
 /**
  * A child's BIRTH: the instant its CURRENT occupant's session was bound to
  * this run, which every PR row on its branch is dated against. It is the
- * MINTING run's `sessionBornAt` (migration 15, R33) — the server's own clock,
+ * MINTING run's `sessionBornAt` (migration 15) — the server's own clock,
  * stamped once by the fresh-spawn dispatch arm and write-once per bound
  * session (`CoordStore.bindSession`), never `dispatchStartedAt`, which moves
  * on every fresh-spawn attempt including retries and so cannot say which
@@ -86,16 +86,21 @@ export function placeChildRow(createdAt: unknown, birth: ChildBirth): ChildRowPl
   return 'unplaced';
 }
 
-/** The minting run's row as the birth reads it — the two columns it needs
+/** The minting run's row as the birth reads it — the three columns it needs
  *  out of `CoordStore.run`'s answer, which satisfies this type structurally,
  *  so a caller hands the store's own read over unchanged. Its three answers
  *  stay three: a row, no row, and a row that could not be read.
- *  `sessionBornAt` (migration 15, R33), never `dispatchStartedAt`: the latter
- *  moves on every fresh-spawn attempt, including retries, and so cannot say
- *  which attempt the CURRENT occupant belongs to. */
+ *  `sessionBornAt`, never `dispatchStartedAt`: the latter moves on every
+ *  fresh-spawn attempt, including retries, and so cannot say which attempt the
+ *  CURRENT occupant belongs to. `sessionBornFor` names the session the birth
+ *  was recorded for — a cross-build rollback (an older build's `clearSession`
+ *  or two-argument `setSession` never touches either column) can leave a
+ *  stale birth on a row whose `sessionId` has since moved past it; only a
+ *  birth still bound to its own occupant is placeable. */
 export type ChildBirthRunRead =
   | { readonly ok: true;
-      readonly run: { readonly sessionId: string | null; readonly sessionBornAt: number | null } | null }
+      readonly run: { readonly sessionId: string | null; readonly sessionBornAt: number | null;
+                       readonly sessionBornFor: string | null } | null }
   | { readonly ok: false; readonly detail: string };
 
 /**
@@ -103,10 +108,13 @@ export type ChildBirthRunRead =
  * (spec §5.1: the marker names the MINTING run). UNPLACEABLE — each in its own
  * words — when the row could not be read, when there is no such row, when its
  * `sessionBornAt` is null (no birth was ever recorded for this occupant — an
- * unbound run, an adopted spawn, deliberately unplaceable under R33, or a
- * predecessor's birth nulled by a later re-bind), or when its `sessionId` is
- * not this session: a run whose retry minted another workspace, leaving this
- * one an orphan the stamp does not describe.
+ * unbound run, an adopted spawn, or a predecessor's birth nulled by a later
+ * re-bind), when its `sessionId` is not this session (a run whose retry
+ * minted another workspace, leaving this one an orphan the stamp does not
+ * describe), or when `sessionBornFor` does not equal `sessionId` (the birth
+ * belongs to an earlier occupant — a cross-build rollback can rebind
+ * `sessionId` without moving either birth column, which would otherwise date
+ * a genuinely new occupant to a stranger's mint).
  */
 export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildBirth {
   if (!read.ok) return { kind: 'unplaceable', detail: `the minting run could not be read: ${read.detail}` };
@@ -116,6 +124,9 @@ export function childBirthOf(read: ChildBirthRunRead, sessionId: string): ChildB
   }
   if (read.run.sessionId !== sessionId) {
     return { kind: 'unplaceable', detail: 'the minting run is bound to another session' };
+  }
+  if (read.run.sessionBornFor !== read.run.sessionId) {
+    return { kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" };
   }
   return { kind: 'at', ms: read.run.sessionBornAt };
 }

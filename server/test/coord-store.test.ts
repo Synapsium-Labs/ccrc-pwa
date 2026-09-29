@@ -13,6 +13,7 @@ import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
          MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
+import { childBirthOf } from '../src/coord/childSpent.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason,
@@ -3137,58 +3138,69 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     expect(updates[0]![0]).toContain('sessionId');
   });
 
-  // R33 (migration 15, child-reclamation spec §5.1, §5.3): the child's BIRTH
-  // is write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
+  // Migration 15, child-reclamation spec §5.1, §5.3: the child's BIRTH is
+  // write-once PER BOUND SESSION, never a first stamp per run. `bindSession`
   // is where the logic lives — `setSession` only forwards — so these cases
   // drive `bindSession` directly, on the describe's own idiom above.
-  describe('sessionBornAt (migration 15, R33) — the write-once birth', () => {
-    it('an explicit bornAt on a first bind writes it', () => {
+  describe('sessionBornAt / sessionBornFor (migration 15) — the write-once birth', () => {
+    it('an explicit bornAt on a first bind writes it, and sessionBornFor names the bound session', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
-      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
     });
 
-    it('an explicit NULL bornAt (the adopted arm) writes null, not "unset"', () => {
+    it('an explicit NULL bornAt (the adopted arm) writes null, not "unset" — and nulls sessionBornFor too, since there is no birth to attribute', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', null);
-      expect(okRun(s.run(runId))?.sessionId).toBe('demo-worker');
-      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-worker');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
     });
 
-    it('two stamps, T1 then T2, with the bind on the second: sessionBornAt is T2', () => {
+    it('two stamps, T1 then T2, with the bind on the second: sessionBornAt is T2, sessionBornFor stays the same session', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
       s.bindSession(runId, 'demo-worker', 2_000);
-      expect(okRun(s.run(runId))?.sessionBornAt).toBe(2_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(2_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
     });
 
-    it('omitting bornAt on a SAME-session re-bind leaves the birth untouched', () => {
+    it('omitting bornAt on a SAME-session re-bind leaves both birth columns untouched', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
       s.bindSession(runId, 'demo-worker');
-      expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
+      const row = okRun(s.run(runId));
+      expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
     });
 
-    it('omitting bornAt on a DIFFERENT-session re-bind nulls the birth — a birth dated to the outgoing occupant is not the heir\'s', () => {
+    it('omitting bornAt on a DIFFERENT-session re-bind nulls both birth columns — a birth dated to the outgoing occupant is not the heir\'s', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
       s.bindSession(runId, 'demo-heir');
-      expect(okRun(s.run(runId))?.sessionId).toBe('demo-heir');
-      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
     });
 
-    it('a bound session, then a direct markDispatchStarted: sessionBornAt is unchanged and dispatchStartedAt moves', () => {
+    it('a bound session, then a direct markDispatchStarted: sessionBornAt/sessionBornFor unchanged and dispatchStartedAt moves', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
       s.markDispatchStarted(runId, 5_000);
       const row = okRun(s.run(runId));
       expect(row?.sessionBornAt).toBe(1_000);
+      expect(row?.sessionBornFor).toBe('demo-worker');
       expect(row?.dispatchStartedAt).toBe(5_000);
     });
 
@@ -3198,11 +3210,13 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       s.setSession(runId, 'demo-worker', 1_000);
       expect(okRun(s.run(runId))?.sessionBornAt).toBe(1_000);
       s.setSession(runId, 'demo-heir');
-      expect(okRun(s.run(runId))?.sessionId).toBe('demo-heir');
-      expect(okRun(s.run(runId))?.sessionBornAt).toBeNull();
+      const row = okRun(s.run(runId));
+      expect(row?.sessionId).toBe('demo-heir');
+      expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
     });
 
-    it('clearSession nulls sessionBornAt alongside sessionId', () => {
+    it('clearSession nulls both birth columns alongside sessionId', () => {
       // `clearSession` only writes a `planned` row (its own docstring) —
       // `openOne` leaves the run exactly there, so no `advance` is needed.
       const s = store();
@@ -3213,15 +3227,63 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
       const row = okRun(s.run(runId));
       expect(row?.sessionId).toBeNull();
       expect(row?.sessionBornAt).toBeNull();
+      expect(row?.sessionBornFor).toBeNull();
     });
 
-    it('toRunSummary strips sessionBornAt off the wire, alongside coordProject and prLineage', () => {
+    it('toRunSummary strips both birth columns off the wire, alongside coordProject and prLineage', () => {
       const s = store();
       const runId = openOne(s);
       s.bindSession(runId, 'demo-worker', 1_000);
       const row = okRun(s.run(runId))!;
       expect(row.sessionBornAt).toBe(1_000);
+      expect(row.sessionBornFor).toBe('demo-worker');
       expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+      expect(toRunSummary(row)).not.toHaveProperty('sessionBornFor');
+    });
+
+    // Fix round 1, Important-1: a cross-build rollback across this migration
+    // can leave a stale birth on a row an OLDER build has since rebound —
+    // that build's `clearSession`/two-argument `setSession` never touch
+    // either birth column, so a roll-forward finds `sessionId` moved on while
+    // `sessionBornAt`/`sessionBornFor` still name the outgoing occupant.
+    // `childBirthOf` catches it by requiring `sessionBornFor === sessionId`.
+    describe('childBirthOf and the cross-build rollback (fix round 1, Important-1)', () => {
+      it('the normal path: sessionBornFor equals the current sessionId, so the birth places', () => {
+        const s = store();
+        const runId = openOne(s);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('a same-session keep still places — sessionBornFor was never touched', () => {
+        const s = store();
+        const runId = openOne(s);
+        s.bindSession(runId, 'demo-s1', 1_000);
+        s.bindSession(runId, 'demo-s1');   // omitted bornAt, same session: keep
+        const row = okRun(s.run(runId))!;
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s1')).toEqual({ kind: 'at', ms: 1_000 });
+      });
+
+      it('the rollback shape: an OLD-BUILD rebind leaves the birth pointing at the outgoing occupant, and childBirthOf refuses it', () => {
+        const s = store();
+        const runId = openOne(s);
+        // v15 binds S1 on run R, birth T1.
+        s.bindSession(runId, 'demo-s1', 1_000);
+        // Roll back, then forward: simulate an OLDER build's rebind — it knows
+        // only `sessionId`, so it writes that column alone, exactly as
+        // `clearSession`/two-argument `setSession` did before this migration.
+        s.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run('demo-s2', runId);
+        const row = okRun(s.run(runId))!;
+        expect(row.sessionId).toBe('demo-s2');
+        // The birth columns are UNTOUCHED by the simulated old-build write —
+        // still S1's, dated T1 — which is exactly the stale pairing the guard
+        // exists to catch.
+        expect(row.sessionBornAt).toBe(1_000);
+        expect(row.sessionBornFor).toBe('demo-s1');
+        expect(childBirthOf({ ok: true, run: row }, 'demo-s2'))
+          .toEqual({ kind: 'unplaceable', detail: "the minting run's birth does not belong to its current session" });
+      });
     });
   });
 });

@@ -1141,21 +1141,47 @@ export const MIGRATIONS: readonly string[] = [
   // ever carried is placed against the SESSION's own birth, not against
   // whichever attempt most recently touched `dispatchStartedAt`.
   //
+  // `runs.sessionBornFor` (fix round 1, review Important-1: a cross-build
+  // rollback fail-open) rides beside it — the session the birth was recorded
+  // FOR. This build's `CoordStore.bindSession` is the only writer that keeps
+  // both columns honest across a rebind; an OLDER build's `clearSession`/
+  // two-argument `setSession` unbind or rebind `sessionId` without touching
+  // either, so a roll-forward after a roll-back-then-forward across this
+  // migration can leave a row whose `sessionId` has moved on while its birth
+  // still names the PREVIOUS occupant. `childBirthOf` refuses to place a
+  // birth unless `sessionBornFor` still equals the row's own `sessionId`, so
+  // that stale pairing reads as unplaceable rather than as a too-early date on
+  // the new occupant. This column has no migration of its own — this slot has
+  // never shipped, so it is edited in place rather than adding a slot 16 for
+  // a fix to a slot nothing has run yet.
+  //
   // The backfill dates every row that already carries a bound session to the
   // ONLY birth this build has ever recorded for it — `dispatchStartedAt` —
-  // with one exception: a row whose `run_events` trail carries a
-  // `spawn-adopted:` event bound to an EARLIER attempt's workspace, never this
-  // session's own mint (`dispatch.ts`'s fresh arm: an adopted winner binds
-  // with a NULL birth, because the workspace it adopted may be an earlier
-  // attempt's, and a backfilled guess would date it to the wrong attempt). An
-  // unbound row (`sessionId IS NULL`) is left NULL by the `WHERE` clause
-  // alone, matching a run nothing has ever dispatched.
+  // with `sessionBornFor` set to that same row's own `sessionId` (never a
+  // second read: the row already carries both), and ONE exception: a row
+  // whose `run_events` trail carries a `spawn-adopted:` event bound to an
+  // EARLIER attempt's workspace, never this session's own mint (`dispatch.ts`'s
+  // fresh arm: an adopted winner binds with a NULL birth, because the
+  // workspace it adopted may be an earlier attempt's, and a backfilled guess
+  // would date it to the wrong attempt). An unbound row (`sessionId IS NULL`)
+  // is left NULL by the `WHERE` clause alone, matching a run nothing has ever
+  // dispatched. The exclusion OVER-REACHES in one narrow, fail-closed way,
+  // accepted rather than special-cased: a row whose CURRENT occupant is a
+  // clean re-dispatch — `clearSession` unbound the adopted occupant, then a
+  // fresh `ws-add` bound a new one — still carries the OLD `spawn-adopted:`
+  // event on its trail from the earlier occupant, so the backfill leaves it
+  // NULL too, even though the current occupant's own mint was clean. A row in
+  // that shape reaches `sessionBornAt`/`childBirthOf`'s live write path on its
+  // NEXT dispatch regardless, since `bindSession` — not the backfill — is
+  // this build's own ongoing writer; the backfill only ever dates history the
+  // live path has not yet had a chance to.
   //
   // MIGRATIONS[0..13] are frozen: `db.ts:182` iterates from the live
   // `user_version`, so an edit to an applied entry never runs.
   `
   ALTER TABLE runs ADD COLUMN sessionBornAt INTEGER;
-  UPDATE runs SET sessionBornAt = dispatchStartedAt
+  ALTER TABLE runs ADD COLUMN sessionBornFor TEXT;
+  UPDATE runs SET sessionBornAt = dispatchStartedAt, sessionBornFor = sessionId
     WHERE sessionId IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'spawn-adopted:%');
   `,

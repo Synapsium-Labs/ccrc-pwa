@@ -72,8 +72,8 @@ const recordOf = async (deps: ChildSpentDeps): Promise<SessionRecord> => {
   if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
   return r.record;
 };
-/** This child's birth — its minting run's `sessionBornAt` (migration 15, R33)
- *  — for every case that does not test placement itself. The rows of those cases carry
+/** This child's birth — its minting run's `sessionBornAt` (migration 15) — for
+ *  every case that does not test placement itself. The rows of those cases carry
  *  no `createdAt` (an older ccd's shape), so they place `unplaced` whatever
  *  the birth, and every `spent` they answer says so. */
 const BIRTH_MS = Date.parse('2026-09-24T12:00:00Z');
@@ -505,15 +505,16 @@ describe('childSpent — incarnation placement', () => {
   });
 });
 
-// A child's birth is its MINTING run's `sessionBornAt` (migration 15, R33;
-// spec §5.1: the marker names the minting run). Every way that cannot be read
-// is its own `unplaceable` answer — and the bind cannot tell some of them
-// apart from a placed birth (a null stamp read as 0 would place every row
-// `this`, which a bind refuses just the same), so they are pinned here, where
-// they differ.
-describe('childBirthOf — the minting run row, read three ways', () => {
-  const row = (over: { sessionId?: string | null; sessionBornAt?: number | null } = {}) =>
-    ({ ok: true as const, run: { sessionId: ID, sessionBornAt: BIRTH_MS, ...over } });
+// A child's birth is its MINTING run's `sessionBornAt` (migration 15; spec
+// §5.1: the marker names the minting run). Every way that cannot be read is
+// its own `unplaceable` answer — and the bind cannot tell some of them apart
+// from a placed birth (a null stamp read as 0 would place every row `this`,
+// which a bind refuses just the same), so they are pinned here, where they
+// differ.
+describe('childBirthOf — the minting run row, read four ways', () => {
+  const row = (over: { sessionId?: string | null; sessionBornAt?: number | null;
+                        sessionBornFor?: string | null } = {}) =>
+    ({ ok: true as const, run: { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: ID, ...over } });
 
   it("the minting run's birth, when the run minted THIS session", () => {
     expect(childBirthOf(row(), ID)).toEqual({ kind: 'at', ms: BIRTH_MS });
@@ -523,10 +524,18 @@ describe('childBirthOf — the minting run row, read three ways', () => {
     ['the row could not be read', { ok: false as const, detail: 'integer out of range' },
       'the minting run could not be read: integer out of range'],
     ['there is no such row', { ok: true as const, run: null }, 'the minting run is absent'],
-    ['its birth is null', row({ sessionBornAt: null }), 'the minting run recorded no birth for this session'],
+    ['its birth is null', row({ sessionBornAt: null, sessionBornFor: null }),
+      'the minting run recorded no birth for this session'],
     ['it is bound to another session (a retry orphan)', row({ sessionId: 'demo-retry' }),
       'the minting run is bound to another session'],
     ['it is bound to no session yet', row({ sessionId: null }), 'the minting run is bound to another session'],
+    // Fix round 1, Important-1: a cross-build rollback can leave a birth that
+    // still names an EARLIER occupant while `sessionId` has since moved on —
+    // an older build's `clearSession`/two-argument `setSession` never touch
+    // `sessionBornFor`.
+    ['the birth belongs to an earlier occupant (a cross-build rollback\'s stale pairing)',
+      row({ sessionBornFor: 'demo-earlier-occupant' }),
+      "the minting run's birth does not belong to its current session"],
   ] as const)('unplaceable when %s', (_what, read, detail) => {
     expect(childBirthOf(read, ID)).toEqual({ kind: 'unplaceable', detail });
   });

@@ -41,8 +41,7 @@ const renameShapeLine = JSON.stringify(
 
 /** The minting run's row, as the gate's birth port reads it: run 5 — every
  *  fixture's `.child` — minted THIS session with a birth at `BIRTH_MS`
- *  (migration 15, R33). A case that needs another answer passes its own
- *  `runs`. */
+ *  (migration 15). A case that needs another answer passes its own `runs`. */
 const BIRTH_MS = Date.parse('2026-09-24T12:00:00Z');
 const HOUR = 3_600_000;
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -52,7 +51,7 @@ const mintingRun = (answer: ChildBirthRunRead | null = null) => {
     run: (id) => {
       asked.push(id);
       if (answer !== null) return answer;
-      return { ok: true, run: id === 5 ? { sessionId: ID, sessionBornAt: BIRTH_MS } : null };
+      return { ok: true, run: id === 5 ? { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: ID } : null };
     },
   };
   return { runs, asked };
@@ -154,9 +153,9 @@ describe('childBindGate', () => {
 
 // Incarnation placement at the bind (child-reclamation spec §5.3; a slug is
 // recycled, §5.5). The gate reads the child's BIRTH — its minting run's
-// `sessionBornAt` (migration 15, R33) — through its own port over the run row
-// its marker names, and refuses on a spent answer of EITHER incarnation. Only
-// a row proven to predate the birth stops counting.
+// `sessionBornAt` (migration 15) — through its own port over the run row its
+// marker names, and refuses on a spent answer of EITHER incarnation. Only a
+// row proven to predate the birth stops counting.
 describe('childBindGate — incarnation placement', () => {
   const line = (rows: Record<string, unknown>[]) => `${JSON.stringify({ id: ID, rows: rows.map((r) => ({
     number: 7, state: 'MERGED', headRefName: `ws/${ID}`, baseRefName: 'main', isCrossRepository: false,
@@ -194,10 +193,14 @@ describe('childBindGate — incarnation placement', () => {
   it.each([
     ['the minting run row is unreadable', { ok: false, detail: 'integer out of range' }],
     ['the minting run row is absent', { ok: true, run: null }],
-    ['the minting run recorded no birth for this session', { ok: true, run: { sessionId: ID, sessionBornAt: null } }],
+    ['the minting run recorded no birth for this session',
+      { ok: true, run: { sessionId: ID, sessionBornAt: null, sessionBornFor: null } }],
     ['the minting run is bound to ANOTHER session (a retry orphan)',
-      { ok: true, run: { sessionId: 'demo-retry', sessionBornAt: BIRTH_MS } }],
-    ['the minting run is bound to no session yet', { ok: true, run: { sessionId: null, sessionBornAt: BIRTH_MS } }],
+      { ok: true, run: { sessionId: 'demo-retry', sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-retry' } }],
+    ['the minting run is bound to no session yet',
+      { ok: true, run: { sessionId: null, sessionBornAt: BIRTH_MS, sessionBornFor: null } }],
+    ["the birth belongs to an EARLIER occupant (a cross-build rollback's stale pairing)",
+      { ok: true, run: { sessionId: ID, sessionBornAt: BIRTH_MS, sessionBornFor: 'demo-earlier-occupant' } }],
   ] as const)('an unplaceable birth — %s — refuses a pre-birth row: workspace-spent', async (_what, answer) => {
     put('child', '5');
     expect(await gate(harness(localIO, inheritedOnly, mintingRun(answer as ChildBirthRunRead)), ID))

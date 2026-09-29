@@ -663,8 +663,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
     // node_release_refusals, nodes, update_intent, update_epoch — centralised
-    // update management W2 Task 3) and MIGRATIONS[14] (runs.sessionBornAt —
-    // child-reclamation R33, wave 4 Task 4b).
+    // update management W2 Task 3) and MIGRATIONS[14] (runs.sessionBornAt /
+    // runs.sessionBornFor — child-reclamation spec §5.1, §5.3).
     expect(COORD_SCHEMA_VERSION).toBe(15);
     expect(MIGRATIONS.length).toBe(15);
   });
@@ -722,8 +722,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
     // 15 since MIGRATIONS[13] (the update control plane, centralised update
-    // management W2 Task 3) and MIGRATIONS[14] (runs.sessionBornAt, child-
-    // reclamation R33); the migration above is still entry 11.
+    // management W2 Task 3) and MIGRATIONS[14] (runs.sessionBornAt/
+    // sessionBornFor, child-reclamation spec §5.1, §5.3); the migration above
+    // is still entry 11.
     expect(COORD_SCHEMA_VERSION).toBe(15);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
@@ -1180,7 +1181,7 @@ describe('coord.db: migration 14 — the update control plane (design 2026-09-20
   });
 });
 
-describe('coord.db: migration 15 — runs.sessionBornAt (child-reclamation R33)', () => {
+describe('coord.db: migration 15 — runs.sessionBornAt / runs.sessionBornFor (child-reclamation)', () => {
   interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
   const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
@@ -1199,15 +1200,20 @@ describe('coord.db: migration 15 — runs.sessionBornAt (child-reclamation R33)'
     const db = openCoordDb(p);                    // must migrate 14 -> current
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
     expect(columnOf(db, 'runs', 'sessionBornAt')).toBeDefined();
+    expect(columnOf(db, 'runs', 'sessionBornFor')).toBeDefined();
     db.close();
   });
 
-  it('is INTEGER, nullable, with no default — an older row predates the stamp', () => {
+  it('sessionBornAt is INTEGER, sessionBornFor is TEXT, both nullable with no default — an older row predates the stamp', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-mig15-null-')));
-    const col = columnOf(db, 'runs', 'sessionBornAt')!;
-    expect(col.type).toBe('INTEGER');
-    expect(col.notnull).toBe(0);
-    expect(col.dflt_value).toBeNull();
+    const at = columnOf(db, 'runs', 'sessionBornAt')!;
+    expect(at.type).toBe('INTEGER');
+    expect(at.notnull).toBe(0);
+    expect(at.dflt_value).toBeNull();
+    const forCol = columnOf(db, 'runs', 'sessionBornFor')!;
+    expect(forCol.type).toBe('TEXT');
+    expect(forCol.notnull).toBe(0);
+    expect(forCol.dflt_value).toBeNull();
     db.close();
   });
 
@@ -1220,15 +1226,19 @@ describe('coord.db: migration 15 — runs.sessionBornAt (child-reclamation R33)'
     db.close();
   });
 
-  // The backfill (A5): `sessionBornAt = dispatchStartedAt` for every bound row
-  // EXCEPT one whose `run_events` trail carries a `spawn-adopted:` event — an
-  // adopted winner may be an earlier attempt's workspace, so a backfilled
-  // guess would date it wrong (R33). An unbound row is left NULL by the
-  // `WHERE sessionId IS NOT NULL` clause alone.
+  // The backfill: `sessionBornAt = dispatchStartedAt`, `sessionBornFor =
+  // sessionId` for every bound row EXCEPT one whose `run_events` trail
+  // carries a `spawn-adopted:` event — an adopted winner may be an earlier
+  // attempt's workspace, so a backfilled guess would date it wrong. An
+  // unbound row is left NULL by the `WHERE sessionId IS NOT NULL` clause
+  // alone. Edited IN PLACE onto this same slot (fix round 1, controller
+  // ruling on Important-1): this migration has never shipped, so
+  // `sessionBornFor` joins it here rather than opening a slot 16.
   describe('the backfill', () => {
     /** A database at exactly user_version 14, carrying three `runs` rows and
      *  one `run_events` row, built with RAW SQL — never `CoordStore` — so the
-     *  migration under test is the only thing that can move `sessionBornAt`. */
+     *  migration under test is the only thing that can move
+     *  `sessionBornAt`/`sessionBornFor`. */
     const plantedAt14 = (prefix: string): string => {
       const p = dbPathIn(mkTmp(prefix));
       mkdirSync(path.dirname(p), { recursive: true });
@@ -1257,14 +1267,16 @@ describe('coord.db: migration 15 — runs.sessionBornAt (child-reclamation R33)'
       return p;
     };
 
-    it('backfills a bound row, leaves an unbound row null, and leaves a spawn-adopted row null', () => {
+    it('backfills a bound row (both columns), leaves an unbound row null, and leaves a spawn-adopted row null', () => {
       const db = openCoordDb(plantedAt14('ccrc-mig15-backfill-'));
-      const rows = db.prepare('SELECT sessionId, dispatchStartedAt, sessionBornAt FROM runs ORDER BY id')
-        .all() as { sessionId: string | null; dispatchStartedAt: number | null; sessionBornAt: number | null }[];
+      const rows = db.prepare(
+        'SELECT sessionId, dispatchStartedAt, sessionBornAt, sessionBornFor FROM runs ORDER BY id',
+      ).all() as { sessionId: string | null; dispatchStartedAt: number | null;
+                    sessionBornAt: number | null; sessionBornFor: string | null }[];
       expect(rows).toEqual([
-        { sessionId: 'demo-bound', dispatchStartedAt: 1_000, sessionBornAt: 1_000 },
-        { sessionId: null, dispatchStartedAt: null, sessionBornAt: null },
-        { sessionId: 'demo-adopted', dispatchStartedAt: 2_000, sessionBornAt: null },
+        { sessionId: 'demo-bound', dispatchStartedAt: 1_000, sessionBornAt: 1_000, sessionBornFor: 'demo-bound' },
+        { sessionId: null, dispatchStartedAt: null, sessionBornAt: null, sessionBornFor: null },
+        { sessionId: 'demo-adopted', dispatchStartedAt: 2_000, sessionBornAt: null, sessionBornFor: null },
       ]);
       db.close();
     });
@@ -1294,10 +1306,10 @@ describe('coord.db: migration 15 — runs.sessionBornAt (child-reclamation R33)'
       raw.close();
 
       const db = openCoordDb(p);
-      expect(db.prepare('SELECT sessionBornAt FROM runs WHERE sessionId = ?').get('demo-other'))
-        .toEqual({ sessionBornAt: 3_000 });
-      expect(db.prepare('SELECT sessionBornAt FROM runs WHERE sessionId = ?').get('demo-adopted-elsewhere'))
-        .toEqual({ sessionBornAt: null });
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?').get('demo-other'))
+        .toEqual({ sessionBornAt: 3_000, sessionBornFor: 'demo-other' });
+      expect(db.prepare('SELECT sessionBornAt, sessionBornFor FROM runs WHERE sessionId = ?')
+        .get('demo-adopted-elsewhere')).toEqual({ sessionBornAt: null, sessionBornFor: null });
       db.close();
     });
   });

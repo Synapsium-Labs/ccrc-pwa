@@ -530,14 +530,14 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
   });
 });
 
-// R33 (child-reclamation spec §5.1, §5.3; migration 15): the child's BIRTH is
+// Child-reclamation spec §5.1, §5.3; migration 15: the child's BIRTH is
 // write-once per BOUND session, spent from the SAME `startedAt` this arm
 // stamps onto `dispatchStartedAt` above — never a second `Date.now()` read,
 // which could date the two columns apart for no reason a reader could
 // recover. A CLEAN spawn binds its stamp; an ADOPTED spawn binds NULL,
 // because the workspace it adopted may be an earlier attempt's — `childBirthOf`
 // must never place a PR row against a birth this call cannot vouch for.
-describe('T2 — sessionBornAt (R33): the write-once birth', () => {
+describe('T2 — sessionBornAt: the write-once birth', () => {
   const NOW = 1_756_000_000_000;
   beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
   afterEach(() => { vi.useRealTimers(); });
@@ -573,6 +573,32 @@ describe('T2 — sessionBornAt (R33): the write-once birth', () => {
     const row = okRun(h.coord.run(h.runId))!;
     expect(row.sessionBornAt).toBe(NOW);
     expect(toRunSummary(row)).not.toHaveProperty('sessionBornAt');
+  });
+
+  // Fix round 1, Minor-3: "ONE MEASUREMENT, SPENT TWICE" was asserted in
+  // `dispatch.ts`'s own comment but unpinned — every case above runs under a
+  // frozen fake `Date`, so a second `Date.now()` read at the `setSession` call
+  // would stay green too. This advances the clock from INSIDE the stubbed
+  // `ws-add` — the one vantage point between the stamp `dispatchStartedAt`
+  // takes and the `setSession` call that would read a second one — so a
+  // regression that reads `Date.now()` again at the bind reds here even
+  // though it would pass every other case in this file.
+  it('spends ONE Date.now() for both columns — a slow ws-add must not date sessionBornAt later than dispatchStartedAt', async () => {
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }],
+      // The spawn takes 42 s of wall clock, exactly T1's "is NEVER cleared"
+      // case's idiom — the only thing that moves the clock between the two
+      // stamps is this line.
+      onWsAdd: () => { vi.setSystemTime(NOW + 42_000); },
+    });
+    expect(await h.dispatch()).toMatchObject({ ok: true, adopted: false });
+    const row = okRun(h.coord.run(h.runId))!;
+    expect(row.dispatchStartedAt).toBe(NOW);
+    // A second `Date.now()` at `setSession` would read NOW + 42_000 — the
+    // clock the double just advanced — so this is the assertion a stray
+    // re-read reds.
+    expect(row.sessionBornAt).toBe(NOW);
   });
 });
 

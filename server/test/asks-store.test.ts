@@ -21,10 +21,10 @@ describe('the asks table', () => {
     // MIGRATIONS[12] (`pool_edges`/`pool_epoch`, account-pool membership wave 1
     // Task 6), MIGRATIONS[13] (the update control plane's five tables,
     // centralised update management W2 Task 3) and MIGRATIONS[14]
-    // (`runs.sessionBornAt`, child-reclamation R33, wave 4 Task 4b). None
-    // touches the asks table. This pin only needs the CURRENT total — it
-    // asserts "no migration after the one this test knows about has changed
-    // the asks table's columns", not anything about any of the five.
+    // (`runs.sessionBornAt`/`sessionBornFor`, child-reclamation spec §5.1,
+    // §5.3). None touches the asks table. This pin only needs the CURRENT
+    // total — it asserts "no migration after the one this test knows about
+    // has changed the asks table's columns", not anything about any of the five.
     expect(COORD_SCHEMA_VERSION).toBe(15);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();

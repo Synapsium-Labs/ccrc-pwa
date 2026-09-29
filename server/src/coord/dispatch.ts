@@ -593,7 +593,7 @@ export async function dispatchRun(
     // written once `runCcd` resolves would be null for the entire window it
     // exists to describe. Nothing clears it; `state` ends the render.
     //
-    // ONE MEASUREMENT, SPENT TWICE (R33, child-reclamation spec §5.1): this
+    // ONE MEASUREMENT, SPENT TWICE (child-reclamation spec §5.1): this
     // same instant is this attempt's `dispatchStartedAt` AND — only if the
     // winner below turns out to be a clean spawn, never an adoption — this
     // session's `sessionBornAt`. A second `Date.now()` at the `setSession`
@@ -699,7 +699,7 @@ export async function dispatchRun(
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
     // before the hold, which can still fail two steps below.
     //
-    // R33's adopted arm (child-reclamation spec §5.1): a NULL birth on
+    // The adopted arm (child-reclamation spec §5.1): a NULL birth on
     // adoption, deliberately — the workspace `winner` names may be an EARLIER
     // attempt's, and `dispatch.ts`'s own BEFORE read above tolerates an
     // unlistable registry as empty, which is what makes such a false-new

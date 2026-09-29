@@ -93,13 +93,21 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * and gets stripped by `toRunSummary` alongside `prLineage`.
  *
  * `sessionBornAt` (child-reclamation spec §5.1, §5.3): the child's BIRTH,
- * write-once per BOUND session — `bindSession` below is its one writer, on
- * `coordProject`'s idiom of a server-side measurement nothing on the wire
- * needs. `childBirthOf` (`coord/childSpent.ts`) reads it, never
- * `dispatchStartedAt`, which keeps its own every-attempt meaning unchanged.
+ * write-once per BOUND session — `bindSession` below is the one writer of a
+ * NON-NULL birth (`clearSession` and migration 15's backfill also touch the
+ * column, both only ever to NULL or to seed it), on `coordProject`'s idiom of
+ * a server-side measurement nothing on the wire needs. `childBirthOf`
+ * (`coord/childSpent.ts`) reads it, never `dispatchStartedAt`, which keeps its
+ * own every-attempt meaning unchanged. `sessionBornFor` rides beside it: the
+ * session the birth was recorded FOR, so a cross-build rollback that rebinds
+ * `sessionId` through an older build's `clearSession`/`setSession` — which
+ * never touch either column — leaves a birth `childBirthOf` can prove is no
+ * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
+ * across a rollback).
  */
 export interface RunRow extends RunSummary {
-  prLineage: PrLineageEntry[]; coordProject: string | null; sessionBornAt: number | null;
+  prLineage: PrLineageEntry[]; coordProject: string | null;
+  sessionBornAt: number | null; sessionBornFor: string | null;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -134,9 +142,11 @@ export type { CoordPlacementStamp };
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
  *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
  *  rather than each holding its own copy of the strip. Strips `sessionBornAt`
- *  (migration 15) on the same idiom: a server-only measurement, never sent. */
+ *  and `sessionBornFor` (migration 15) on the same idiom: server-only
+ *  measurements, never sent. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
+          sessionBornFor: _sessionBornFor, ...summary } = row;
   return summary;
 };
 
@@ -701,6 +711,7 @@ interface RunRowDb {
   clearError: string | null;
   coordProject: string | null;
   sessionBornAt: number | null;
+  sessionBornFor: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -720,7 +731,8 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
+  'r.sessionBornFor';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -2353,23 +2365,33 @@ export class CoordStore {
       .get(runId) as { sessionId: string | null } | undefined;
     const predecessor = row?.sessionId ?? null;
     this.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(sessionId, runId);
-    // R33: the child's BIRTH is write-once PER BOUND SESSION, never a first
-    // stamp per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads
-    // this column, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
+    // The child's BIRTH is write-once PER BOUND SESSION, never a first stamp
+    // per run (child-reclamation spec §5.1, §5.3 — `childBirthOf` reads these
+    // two columns, `coord/childSpent.ts`). An EXPLICIT `bornAt` — only the
     // fresh-spawn dispatch arm passes one, because it alone knows whether this
     // spawn is genuinely new or an adoption of an earlier attempt's workspace —
-    // wins outright, adopted or not (a `null` birth is a deliberate answer:
-    // unplaceable, so `childBirthOf` refuses to date anything against it).
+    // wins outright: a real stamp writes `sessionBornFor = sessionId` beside
+    // it, and an explicit `null` (the adopted arm) writes `sessionBornFor =
+    // NULL` too — there is no birth to attribute, so nothing is attributed.
     // Omitting the argument means this bind is not the moment of birth: a
-    // same-session re-statement leaves it untouched, and an occupant change
-    // nulls it, because a birth dated to a session that no longer holds this
-    // run is not this session's birth. Neither statement below names
-    // `sessionId` in its SET list, so the one-writer scan above still counts
-    // exactly one write of that column per statement.
+    // same-session re-statement leaves BOTH columns untouched (this call is
+    // outside a `tx()` on the fresh-spawn arm — see below — so the invariant
+    // `sessionId IS NULL ⇒ sessionBornAt IS NULL` is what keeps a crash
+    // between the two UPDATEs fail-closed: the predecessor there is always
+    // NULL, never a bound session whose birth this branch could leave
+    // orphaned), and an occupant change nulls both, because a birth dated to
+    // a session that no longer holds this run is not this session's birth —
+    // `sessionBornFor` is how `childBirthOf` catches a birth an OLDER build
+    // left stale across a rollback (a build that predates this column rebinds
+    // `sessionId` through `clearSession`/two-argument `setSession` without
+    // touching either). Neither statement below names `sessionId` in its SET
+    // list, so the one-writer scan above still counts exactly one write of
+    // that column per statement.
     if (bornAt !== undefined) {
-      this.db.prepare('UPDATE runs SET sessionBornAt = ? WHERE id = ?').run(bornAt, runId);
+      this.db.prepare('UPDATE runs SET sessionBornAt = ?, sessionBornFor = ? WHERE id = ?')
+        .run(bornAt, bornAt === null ? null : sessionId, runId);
     } else if (predecessor !== sessionId) {
-      this.db.prepare('UPDATE runs SET sessionBornAt = NULL WHERE id = ?').run(runId);
+      this.db.prepare('UPDATE runs SET sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ?').run(runId);
     }
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
@@ -2412,7 +2434,7 @@ export class CoordStore {
     // where the answer is always `{rebound:false, reissued:0}` and is ignored.
     //
     // `bornAt` (migration 15) is forwarded as-is, undefined included:
-    // `bindSession` is where R33's write-once-birth logic lives, on both the
+    // `bindSession` is where the write-once-birth logic lives, on both the
     // explicit and the omitted arm, so this method adds nothing of its own.
     // The open route (`routes.ts`) calls the two-argument form, never naming a
     // birth — it re-binds an already-dispatched wave, not a fresh spawn.
@@ -2452,13 +2474,13 @@ export class CoordStore {
       const row = this.db.prepare("SELECT sessionId FROM runs WHERE id = ? AND state = 'planned'")
         .get(runId) as { sessionId: string | null } | undefined;
       if (row === undefined || row.sessionId === null) return { ok: true as const, cleared: false };
-      // `sessionBornAt` clears alongside `sessionId` (migration 15): the spent
-      // occupant's birth belongs to nobody once the run names no session, and
-      // the next dispatch's fresh-spawn arm mints a fresh birth for whichever
-      // session it binds.
+      // `sessionBornAt`/`sessionBornFor` clear alongside `sessionId` (migration
+      // 15): the spent occupant's birth belongs to nobody once the run names no
+      // session, and the next dispatch's fresh-spawn arm mints a fresh birth
+      // for whichever session it binds.
       this.db.prepare(
-        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, sessionBornAt = NULL " +
-        "WHERE id = ? AND state = 'planned'",
+        "UPDATE runs SET sessionId = NULL, workspace = NULL, branch = NULL, " +
+        "sessionBornAt = NULL, sessionBornFor = NULL WHERE id = ? AND state = 'planned'",
       ).run(runId);
       this.recordRunEvent(runId, 'coordinator', `session-unbound: ${row.sessionId} (workspace-spent #${pr})`);
       return { ok: true as const, cleared: true };
@@ -3235,12 +3257,20 @@ export class CoordStore {
       coordProject: row.coordProject,
       // The child's BIRTH (migration 15, child-reclamation spec §5.1, §5.3),
       // read straight through on `coordProject`'s idiom directly above: a
-      // server-side measurement, `bindSession`'s one writer, stripped off the
-      // wire by `toRunSummary` the same way. NULL means no fresh-spawn bind has
-      // ever stamped a birth for the CURRENT occupant of `sessionId` — an
-      // unbound run, an adopted spawn (deliberately unplaceable), or a
-      // predecessor's birth nulled by a later re-bind.
+      // server-side measurement, `bindSession`'s one writer of a NON-NULL
+      // value, stripped off the wire by `toRunSummary` the same way. NULL
+      // means no fresh-spawn bind has ever stamped a birth for the CURRENT
+      // occupant of `sessionId` — an unbound run, an adopted spawn
+      // (deliberately unplaceable), or a predecessor's birth nulled by a
+      // later re-bind.
       sessionBornAt: row.sessionBornAt,
+      // The session the birth above was recorded FOR (migration 15), read
+      // through on the same idiom. `childBirthOf` refuses to place a birth
+      // unless this equals `sessionId` — the guard against a cross-build
+      // rollback leaving a stale birth on a row an older build has since
+      // rebound (spec §5.3's recycled-slug hazard, extended across a
+      // rollback).
+      sessionBornFor: row.sessionBornFor,
     };
   }
 
