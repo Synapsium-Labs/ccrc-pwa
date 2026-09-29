@@ -25,7 +25,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type RunSummary } from '../../../shared/api';
 import { RUN_WORD } from './runWords';
-import { Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
 import './fleet.css';
 
@@ -212,16 +212,16 @@ export function AbandonSheet({
   return (
     <Sheet open onClose={onClose} title="Abandon this run?">
       <div className="abandon-sheet">
-        <p className="qc-consequence">
+        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
           {`Abandon run ${run.id} — ${ws}? A release destroys nothing: the worktree survives, the record stays.`}
         </p>
-        <div className="qc-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={confirm}>
+        <div className="qc-actions grid gap-2">
+          <Button variant="primary" disabled={busy} onClick={confirm}>
             {busy ? 'Abandoning…' : 'Abandon'}
-          </button>
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          </Button>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

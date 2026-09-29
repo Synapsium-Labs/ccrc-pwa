@@ -11,16 +11,17 @@
 // own — the design gate's stylesheet list is discovered from disk and pinned
 // exactly (pwa/test/contrast.test.ts), so a new file here is a test to update
 // for no reason when app.tsx already owns shell.css and mounts this beside
-// it. `.btn-primary` (styles/legacy.css) is already in the bundle via ToastHost.
+// it. The accent button is `<Button>` from @ccrc/ui, already in the bundle.
 import type { ReactNode } from 'react';
+import { Button } from '@ccrc/ui';
 
 export function BlockScreen(): ReactNode {
   return (
     <div className="block-screen" role="alert">
       <p className="block-screen-copy">This app build is too old for the fleet server. Updating…</p>
-      <button type="button" className="btn-primary" onClick={() => location.reload()}>
+      <Button variant="primary" onClick={() => location.reload()}>
         Reload
-      </button>
+      </Button>
     </div>
   );
 }

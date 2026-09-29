@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ReapResult, WsAudit, WsAuditChild } from '../../../shared/api';
-import { Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 // Pre-merge fix round, finding 6: byte-for-byte identical to the local
 // `bytes()` this file used to define — one shared formatter, imported,
@@ -377,11 +377,11 @@ export function ReapSheet({
                   </span>
                 )}
                 {shown.ignored !== null && shown.ignored.length > 3 && (
-                  <button type="button" className="btn-ghost" onClick={() => setShowAll(!expanded)}>
+                  <Button variant="ghost" onClick={() => setShowAll(!expanded)}>
                     {/* The collapsed label carries the total, so the size of
                         what is hidden is never itself hidden. */}
                     {expanded ? 'show fewer' : `show all ${shown.ignored.length}`}
-                  </button>
+                  </Button>
                 )}
                 {/* The count and the total are NEVER truncated: the judgement
                     this whole design rests on is a human reading a filename.
@@ -566,10 +566,10 @@ export function ReapSheet({
                     </ul>
                     {/* The ONLY affordance a refusal ever gets, because the
                         remedy is to move these files. There is no override. */}
-                    <button type="button" className="btn-ghost"
+                    <Button variant="ghost"
                             onClick={() => { void navigator.clipboard?.writeText((shown.sensitive ?? []).join('\n')); toast('Paths copied', 'info'); }}>
                       Copy paths
-                    </button>
+                    </Button>
                   </>
                 )}
               </>
@@ -594,21 +594,21 @@ export function ReapSheet({
               </p>
             )}
             {shown.verdict === 'reapable' && result === null && session.held === null && (
-              <button type="button" className="btn-primary reap-go" disabled={busy} onClick={confirm}>
+              <Button variant="primary" className="reap-go" disabled={busy} onClick={confirm}>
                 {/* The confirm this whole design exists to protect: it must
                     say "unknown size", never a number `du` could not stand
                     behind (finding F). `sizeText` rather than a third spelling
                     of the same ternary, so an ABSENT figure refuses here too
                     instead of reaching the button as `NaN B`. */}
                 {`Remove ${slug} · ${sizeText(shown.worktreeBytes, 'unknown size')}`}
-              </button>
+              </Button>
             )}
 
             {result !== null && result.sentence !== '' && (
               <p className="reap-refusal">{result.sentence}</p>
             )}
             {result?.refused !== undefined && (
-              <button type="button" className="btn-ghost" onClick={load}>Re-check</button>
+              <Button variant="ghost" onClick={load}>Re-check</Button>
             )}
           </>
         )}

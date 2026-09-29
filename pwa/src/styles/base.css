@@ -20,7 +20,6 @@
 @import '@ccrc/ui/styles/reset.css' layer(base);
 /* Transitional — see the file's own header. Layered BELOW utilities so it
    styles hand-written classes without shadowing migrated components. */
-@import './legacy.css' layer(components);
 
 /* Tailwind's scanner is rooted where the stylesheet that configures it lives —
    inside the ui package — so this app's own class names have to be named. */

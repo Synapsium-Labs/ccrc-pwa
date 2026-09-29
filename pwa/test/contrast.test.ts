@@ -745,9 +745,14 @@ describe('the gate fails a mutated tree', () => {
   });
 
   it('a registered fade is deepened past the floor of a pair it composites', () => {
-    const o = expectFail('src/styles/legacy.css', (s) =>
-      s.replace('    opacity: 0.85;', '    opacity: 0.7;'));
-    expect(o).toMatch(/unregistered fade legacy\.css/);
+    // Retargeted in wave 2: this mutated legacy.css's 0.85 dot fade, and that
+    // file retired when its rules became utilities. The mechanism is unchanged
+    // — deepen a REGISTERED fade and the registry no longer vouches for the
+    // measured value, so it reads as unregistered — so the case moves to the
+    // one registered fade left in the audited set rather than being dropped.
+    const o = expectFail('src/session/chat.css', (s) =>
+      s.replace('  opacity: 0.6;\n  cursor: default;', '  opacity: 0.4;\n  cursor: default;'));
+    expect(o).toMatch(/unregistered fade chat\.css \.pending-actions \.pending-send-it:disabled 0\.4/);
   });
 
   it('an unregistered @keyframes opacity trough is introduced', () => {
@@ -1123,7 +1128,6 @@ describe('every stylesheet under src/ is audited', () => {
       'src/fleet/fleet.css',
       'src/session/chat.css',
       'src/styles/base.css',
-      'src/styles/legacy.css',
       'src/styles/shell.css',
     ]);
   });

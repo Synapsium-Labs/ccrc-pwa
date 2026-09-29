@@ -5,7 +5,7 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { Skeleton, toast } from '@ccrc/ui';
+import { Button, Skeleton, toast } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
@@ -736,9 +736,9 @@ export function FleetScreen({
             Start Claude on one of your projects and drive it from here — from any device,
             wherever you are.
           </p>
-          <button type="button" className="btn-primary" onClick={newSession}>
+          <Button variant="primary" onClick={newSession}>
             Start a session
-          </button>
+          </Button>
         </section>
       ) : (
         <>

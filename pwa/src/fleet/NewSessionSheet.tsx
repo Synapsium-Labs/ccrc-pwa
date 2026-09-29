@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Sheet, Skeleton, toast } from '@ccrc/ui';
+import { Button, Sheet, Skeleton, toast } from '@ccrc/ui';
 import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
@@ -417,9 +417,8 @@ export function NewSessionSheet({
             Unset fields take the coordinator row (Opus · ultracode, Sonnet subagents, workflows on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
-          <button
-            type="button"
-            className="btn-primary sheet-confirm"
+          <Button
+            variant="primary" className="sheet-confirm"
             disabled={project === null || starting}
             onClick={() => void start()}
           >
@@ -428,7 +427,7 @@ export function NewSessionSheet({
               : project === null
                 ? 'Choose a project'
                 : `Start ${project.name} on ${accountLabel(roster, wrapper)}`}
-          </button>
+          </Button>
         </>
       )}
     </Sheet>

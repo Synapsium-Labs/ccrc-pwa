@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { Skeleton, toast } from '@ccrc/ui';
+import { Button, Skeleton, toast } from '@ccrc/ui';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge } from '../fleet/formatReset';
@@ -590,9 +590,9 @@ function AuthSection(): ReactNode {
         enrolled passkeys are unaffected. To end every session at once, rotate the passphrase with
         <code> ccrc passwd</code> on the box.
       </p>
-      <button type="button" className="btn-primary" disabled={busy} onClick={() => void signOut()}>
+      <Button variant="primary" disabled={busy} onClick={() => void signOut()}>
         {busy ? 'Signing out…' : 'Sign out'}
-      </button>
+      </Button>
       {signOutNote !== null && <p className="accounts-fresh" role="status">{signOutNote}</p>}
     </section>
   );
@@ -696,9 +696,9 @@ function AuthSection(): ReactNode {
           needs only Level 1. A browser that can sign in with a key enrolled on a
           phone but cannot create one gets the list and no Add button. */}
       {passkeyEnrollSupported() && (
-        <button type="button" className="btn-primary" disabled={busy} onClick={() => void enroll()}>
+        <Button variant="primary" disabled={busy} onClick={() => void enroll()}>
           {busy ? 'Waiting for the authenticator…' : 'Add a passkey on this device'}
-        </button>
+        </Button>
       )}
       {note !== null && <p className="accounts-fresh" role="status">{note}</p>}
     </section>

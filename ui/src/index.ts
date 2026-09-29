@@ -11,7 +11,7 @@
 // the order is load-bearing.
 export { Button, buttonVariants, type ButtonProps } from './primitives/button';
 export { StatusDot, dotVariants, type StatusDotProps } from './primitives/status-dot';
-export { LimitBar, limitBand, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
+export { LimitBar, limitBand, fillVariants, TRACK as LIMIT_TRACK, type LimitBand, type LimitBarProps } from './primitives/limit-bar';
 export { Skeleton, type SkeletonProps } from './primitives/skeleton';
 export { Sheet, type SheetProps } from './primitives/sheet';
 export { QuickConfirm, type QuickConfirmProps } from './primitives/confirm';

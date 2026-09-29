@@ -15,7 +15,16 @@ export function limitBand(pct: number): LimitBand {
   return 'ok';
 }
 
-const fillVariants = cva(
+/** The track a fill sits in. Exported beside `fillVariants` because the two are
+ *  one unit — a fill with no track has no height to fill. */
+export const TRACK = 'limit-track block h-1 overflow-hidden rounded-full bg-limit-track';
+
+/** Exported for the same reason `buttonVariants` is: a call site whose LAYOUT
+ *  differs from `LimitBar`'s own row — `SwapSheet`'s account gauge puts the
+ *  label and percentage in different cells — still needs THIS bar's vocabulary,
+ *  including the `limit-fill`/`limit-fill--*` hook classes that `fleet.css`'s
+ *  disabled-row override selects on. A second copy would drift. */
+export const fillVariants = cva(
   'limit-fill block h-full rounded-full transition-[width,background-color] duration-bar ease-swift motion-reduce:transition-none',
   {
     variants: {
@@ -34,7 +43,7 @@ function Row({ label, value }: { label: string; value: number | null }): ReactNo
   return (
     <div className="limit-row grid grid-cols-[20px_1fr_40px] items-center gap-2 font-mono text-2xs font-regular leading-none tabular-nums text-ink-tertiary">
       <span>{label}</span>
-      <span className="limit-track block h-1 overflow-hidden rounded-full bg-limit-track">
+      <span className={TRACK}>
         {pct !== null && (
           <span className={fillVariants({ band: limitBand(pct) })} style={{ width: `${pct}%` }} />
         )}

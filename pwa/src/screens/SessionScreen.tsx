@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { QuickConfirm, Skeleton, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Skeleton, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';
@@ -521,24 +521,23 @@ export function SessionScreen({
               : "Can't read the fleet host right now"}
           </span>
           <span className="banner-path">{missingFile ?? file ?? ''}</span>
-          <button type="button" className="btn-ghost" onClick={openTerminal}>
+          <Button variant="ghost" onClick={openTerminal}>
             Open terminal
-          </button>
+          </Button>
         </div>
       )}
 
       {dead && (
         <div className="chat-banner chat-banner--dead" role="status">
           <span className="banner-copy">Not running — the chat is read-only.</span>
-          <button
-            type="button"
-            className="btn-ghost"
+          <Button
+            variant="ghost"
             onClick={() => void restart()}
             disabled={restarting || fault !== null}
             title={faultTitle}
           >
             {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+          </Button>
         </div>
       )}
 

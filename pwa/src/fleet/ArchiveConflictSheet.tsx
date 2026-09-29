@@ -25,7 +25,7 @@
 // mean it".
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Sheet } from '@ccrc/ui';
+import { Button, Sheet } from '@ccrc/ui';
 import { ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
 
@@ -169,27 +169,27 @@ export function ArchiveConflictSheet({
   return (
     <Sheet open onClose={onClose} title="This workspace is claimed">
       <div className="archive-conflict-sheet">
-        <p className="qc-consequence">
+        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
           {named === null
             ? 'A run is still open on this workspace'
             : named.length === 1
               ? `${runPhrase(named[0]!)} is still open on this workspace.`
               : `${named.map(runPhrase).join('; ')} are still open on this workspace.`}
         </p>
-        <p className="qc-consequence">
+        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
           Archiving stops the session and puts the worktree away. Nothing is deleted, but the
           run loses the workspace it is working in.
         </p>
-        <div className="qc-actions">
-          <button type="button" className="btn-primary" disabled={busy} onClick={force}>
+        <div className="qc-actions grid gap-2">
+          <Button variant="primary" disabled={busy} onClick={force}>
             {busy ? 'Archiving…' : 'Archive anyway'}
-          </button>
+          </Button>
           {/* Two buttons, not three — see the `onOpenRun` note on
               `ArchiveConflictSheetProps` for the affordance that was here and
               why it went. */}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>

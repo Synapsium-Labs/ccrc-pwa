@@ -29,7 +29,8 @@ export const TYPE_MS = 28;
  * would owe `contrast.test.ts`'s `KEYFRAME_TROUGHS` a registered opacity trough
  * — for a mark on screen for at most `text.length * TYPE_MS` ms. Its own
  * rendering is still a deliberate rule, not an inherited accident:
- * `.typed-caret` (`styles/legacy.css`, loaded globally by base.css).
+ * `.typed-caret` (`fleet.css` — it moved there when legacy.css retired in
+ * wave 2; it was never a primitive, and fleet is its only consumer).
  *
  * ACCESSIBLE NAME: `aria-label` on the root carries the FULL target text from
  * the first frame; `shown` and the caret are `aria-hidden` underneath it. The

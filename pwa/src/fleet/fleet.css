@@ -2802,8 +2802,8 @@ button.proj-card-pool::before {
    recover a ground for and measure, rather than a bare `.abandon-error {
    color: … }` selector it would file under `uncovered` (the exact defect
    `.coord-banner .coord-error`'s own docstring names and fixes, one
-   component over). `.qc-consequence`/`.qc-actions`/`.btn-primary`/
-   `.btn-ghost` (styles/legacy.css) are reused as-is for the consequence line
+   component over). The consequence line and actions take the same utilities
+   `QuickConfirm` uses, and the buttons are `<Button>` (@ccrc/ui), reused
    and the two buttons — not reinvented, and already carry their own
    `var(--tap-min)` floor. */
 /* `.archive-conflict-sheet` (Build 8 Wave 2) is GROUPED with it rather than
@@ -3309,4 +3309,18 @@ button.proj-card-pool::before {
   margin: 0;
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
+
+/* ------------------------------------------------------------------ *
+ *  Typing caret (TypedLabel.tsx) — a plain glyph, never a blinking    *
+ *  stylesheet rule: an animated one would owe KEYFRAME_TROUGHS a      *
+ *  registered opacity trough for a mark on screen for at most a few   *
+ *  hundred ms (see the component's own comment for why). This rule    *
+ *  exists so the glyph's rendering is a decision recorded once,       *
+ *  rather than an accident of whichever mount point's ancestor it     *
+ *  happens to inherit from — it paints in the ambient ink and         *
+ *  (`user-select: none`) never joins a copy of the label text.        *
+ * ------------------------------------------------------------------ */
+.typed-caret {
+  color: currentColor;
+  user-select: none;
 }

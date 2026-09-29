@@ -107,7 +107,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
-import { Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';
@@ -317,16 +317,15 @@ export function DialogSheet({ id, store, onOpenTerminal, raise }: DialogSheetPro
         </p>
         <pre className="well dlg-raw">{shown.raw}</pre>
         <div className="dlg-actions">
-          <button
-            type="button"
-            className="btn-primary"
+          <Button
+            variant="primary"
             onClick={() => {
               hide();
               onOpenTerminal?.();
             }}
           >
             Open terminal to answer
-          </button>
+          </Button>
           <button type="button" className="dlg-later" onClick={close}>
             Not now
           </button>
@@ -645,9 +644,9 @@ function EnvelopeSheet({
   };
   const terminalCta = !canAnswer && (
     <div className="dlg-actions">
-      <button type="button" className="btn-primary" onClick={openTerminal}>
+      <Button variant="primary" onClick={openTerminal}>
         Open terminal to answer
-      </button>
+      </Button>
       <button type="button" className="dlg-later" onClick={close}>
         Not now
       </button>
@@ -668,16 +667,15 @@ function EnvelopeSheet({
             </p>
           )}
           <div className="dlg-actions">
-            <button
-              type="button"
-              className="btn-primary"
+            <Button
+              variant="primary"
               disabled={!canAnswer || busy}
               aria-busy={allowing || undefined}
               onClick={() => onSelectOption(1)}
             >
               Allow
               {allowing && <span className="opt-wait"> answering…</span>}
-            </button>
+            </Button>
             <button
               type="button"
               className="dlg-later"

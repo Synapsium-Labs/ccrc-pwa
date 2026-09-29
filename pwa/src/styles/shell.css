@@ -281,7 +281,7 @@
   max-width: 40ch;
   font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
 }
-/* .btn-primary defaults to width:100% for its usual sheet-flow home; here it
+/* `<Button>` defaults to w-full for its usual sheet-flow home; here it
    sits alone on an open screen, so it gets its own width back. */
 .block-screen .btn-primary {
   width: auto;

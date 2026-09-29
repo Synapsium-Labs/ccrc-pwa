@@ -13,7 +13,7 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { AccountUsage, FleetSession, RosterWire } from '../../../shared/api';
-import { limitBand, QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { LIMIT_TRACK, QuickConfirm, Sheet, fillVariants, limitBand, toast } from '@ccrc/ui';
 import { accountHue, accountLabel, accountPool, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { projectPoolOf, splitByPool } from '../lib/pools';
@@ -278,12 +278,9 @@ function Gauge({ label, value, rolledOver }: {
   return (
     <span className="acct-gauge">
       <span>{label}</span>
-      <span className="limit-track">
+      <span className={LIMIT_TRACK}>
         {pct !== null && (
-          <span
-            className={`limit-fill limit-fill--${limitBand(pct)}`}
-            style={{ width: `${pct}%` }}
-          />
+          <span className={fillVariants({ band: limitBand(pct) })} style={{ width: `${pct}%` }} />
         )}
       </span>
       <span className="acct-gauge-pct">

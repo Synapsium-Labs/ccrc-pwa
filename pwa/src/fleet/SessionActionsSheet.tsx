@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
-import { QuickConfirm, Sheet, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
 
 /**
@@ -292,10 +292,10 @@ export function SessionActionsSheet({
     <>
       <Sheet open={open} onClose={onClose} title={label} eyebrow={session.project}>
         <div className="sess-sheet">
-          <button type="button" className="btn-ghost" onClick={() => void restart()}
+          <Button variant="ghost" onClick={() => void restart()}
                   disabled={restarting || fault !== null} title={faultTitle}>
             {restarting ? 'Restarting…' : 'Restart session'}
-          </button>
+          </Button>
 
           {/* §4.4: "what would revive it" is a sentence the row can print and
               a button the operator already has. The button above posts
@@ -397,22 +397,22 @@ export function SessionActionsSheet({
             </p>
           )}
 
-          <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}
+          <Button variant="ghost" onClick={() => setSwapOpen(true)}
                   disabled={fault !== null} title={faultTitle}>
             Swap account
-          </button>
+          </Button>
 
           {session.workspace !== null && session.archivedAt === null && (
-            <button type="button" className="btn-ghost" disabled={archBusy || fault !== null}
+            <Button variant="ghost" disabled={archBusy || fault !== null}
                     title={faultTitle} onClick={() => void archiveNow()}>
               {archBusy ? 'Archiving…' : 'Archive workspace'}
-            </button>
+            </Button>
           )}
           {session.workspace !== null && session.archivedAt !== null && (
-            <button type="button" className="btn-ghost" disabled={archBusy}
+            <Button variant="ghost" disabled={archBusy}
                     onClick={() => void restoreNow()}>
               {archBusy ? 'Restoring…' : 'Restore workspace'}
-            </button>
+            </Button>
           )}
 
           {/* Hold/Release — workspace-only and archived refuses too, the same
@@ -431,10 +431,10 @@ export function SessionActionsSheet({
               disambiguation between two same-named buttons. */}
           {session.workspace !== null && session.archivedAt === null
             && session.held === null && !holdOpen && (
-            <button type="button" className="btn-ghost"
+            <Button variant="ghost"
                     onClick={() => { setHoldOpen(true); setHoldError(null); }}>
               Hold
-            </button>
+            </Button>
           )}
           {session.workspace !== null && session.archivedAt === null
             && session.held === null && holdOpen && (
@@ -458,23 +458,23 @@ export function SessionActionsSheet({
               {/* Client-side refusal, ccd's own sentence — see `confirmHold`. */}
               {holdError !== null && <p className="sess-hold-error">{holdError}</p>}
               <div className="sess-hold-actions">
-                <button type="button" className="btn-primary" disabled={holdBusy}
+                <Button variant="primary" disabled={holdBusy}
                         onClick={() => void confirmHold()}>
                   {holdBusy ? 'Holding…' : 'Confirm'}
-                </button>
-                <button type="button" className="btn-ghost"
+                </Button>
+                <Button variant="ghost"
                         onClick={() => { setHoldOpen(false); setHoldReason(''); setHoldError(null); }}>
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {session.held !== null && (
             <>
-              <button type="button" className="btn-ghost" onClick={() => setReleaseConfirmOpen(true)}>
+              <Button variant="ghost" onClick={() => setReleaseConfirmOpen(true)}>
                 Release
-              </button>
+              </Button>
               {/* The reason is already the fleet chip's whole job (SessionLine's
                   `.sess-held`) — repeated here because the actions sheet is
                   where Release's consequence lives, and the reason belongs
@@ -488,11 +488,11 @@ export function SessionActionsSheet({
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
           {session.workspace !== null && session.archivedAt !== null && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>
               Clean up workspace…
-            </button>
+            </Button>
           )}
 
           {/* The end-of-life a non-workspace session never had: stop leaves
@@ -503,11 +503,11 @@ export function SessionActionsSheet({
               state and goes through the audited sheet above. ccd re-proves
               both gates (and the hold) on the box. */}
           {session.workspace === null && session.status === 'dead' && (
-            <button type="button" className="btn-ghost sess-sheet-remove"
+            <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>
               Forget session…
-            </button>
+            </Button>
           )}
 
           {session.status !== 'dead' && session.wrapper !== session.home && (

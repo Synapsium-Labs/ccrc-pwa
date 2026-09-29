@@ -18,7 +18,7 @@
 // Styles live in styles/shell.css (`.login-screen`) beside `.block-screen`, not
 // in a stylesheet of their own: the design gate discovers its stylesheet list
 // from disk and pins it exactly (pwa/test/contrast.test.ts), so a new file here
-// would be a test to update for no reason. `.btn-primary` (styles/legacy.css) is
+// would be a test to update for no reason. The accent button is `<Button>`, which is
 // already in the bundle via ToastHost.
 import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
@@ -26,6 +26,7 @@ import type { AuthStatus, AuthVerdict } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { clearAuthLost, readAuthStatus, useAuthLost, verdictOf } from '../lib/auth';
 import { PasskeyCeremonyError, assertPasskey, passkeyLoginSupported } from '../lib/passkey';
+import { Button } from '@ccrc/ui';
 
 /**
  * One sentence per verdict — the whole point of `AuthVerdict` being a six-member
@@ -326,13 +327,13 @@ export function LoginScreen(): ReactNode {
             defaults to `type="submit"`, so without it tapping this would submit
             an empty passphrase instead of starting the ceremony. */}
         {offerPasskey && (
-          <button type="button" className="btn-primary" disabled={busy} onClick={() => void signInWithPasskey()}>
+          <Button variant="primary" disabled={busy} onClick={() => void signInWithPasskey()}>
             Sign in with a passkey
-          </button>
+          </Button>
         )}
-        <button type="submit" className="btn-primary" disabled={busy || passphrase === ''}>
+        <Button type="submit" variant="primary" disabled={busy || passphrase === ''}>
           {busy ? 'Signing in…' : 'Sign in'}
-        </button>
+        </Button>
       </form>
     </div>
   );

@@ -18,14 +18,14 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { cn } from '../lib/cn';
 
 export const buttonVariants = cva(
-  'flex w-full min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift enabled:active:scale-[0.97] disabled:cursor-default',
+  'flex w-full min-h-tap cursor-pointer items-center justify-center rounded-md font-ui transition-transform duration-press ease-swift motion-reduce:transition-none enabled:active:scale-[0.97] disabled:cursor-default',
   {
     variants: {
       variant: {
         primary:
           'btn-primary border-0 bg-accent text-ink-on-accent text-base font-semibold disabled:bg-edge-subtle disabled:text-ink-disabled',
         ghost:
-          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
+          'btn-ghost border border-edge-strong bg-transparent text-ink-primary text-base font-medium transition-[transform,background-color] motion-reduce:transition-none enabled:active:bg-raised disabled:text-ink-disabled disabled:border-edge-subtle',
       },
     },
     defaultVariants: { variant: 'primary' },

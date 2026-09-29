@@ -17,7 +17,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Sheet } from '@ccrc/ui';
+import { Button, Sheet } from '@ccrc/ui';
 import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -1210,13 +1210,12 @@ export function TerminalDrawer({
                   <span className="term-overlay-word term-overlay-word--lost">
                     connection lost
                   </span>
-                  <button
-                    type="button"
-                    className="btn-ghost term-retry"
+                  <Button
+                    variant="ghost" className="term-retry"
                     onClick={() => setAttempt((a) => a + 1)}
                   >
                     Reconnect
-                  </button>
+                  </Button>
                 </>
               )}
             </div>

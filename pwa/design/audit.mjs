@@ -505,7 +505,6 @@ export const GROUNDS = {
   'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
   'chat.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
-  'legacy.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
 };
 
 /** Rules exempt from the contrast audit, each with the reason. WCAG 1.4.3
@@ -518,13 +517,11 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   'chat.css .chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   'chat.css .send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
-  'legacy.css .btn-primary:disabled': 'WCAG 1.4.3 exempts inactive controls',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that
   // override `color` DIRECTLY started being measured (final2-gates F1), and it
   // is exempt for the same clause, not a new judgement.
-  'legacy.css .btn-ghost:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is 2.85 dark / 2.63 light here and is documented sub-AA in tokens.css',
   'chat.css .attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
@@ -839,14 +836,6 @@ export const OPACITY_REGISTRY = {
   },
   "chat.css .attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',
-  },
-  'legacy.css .dot--busy, .dot--attention 0.85': {
-    pairs: [
-      ['busy dot on the lamp well', 'var(--status-busy)', ['var(--bg-well)'], 3],
-      ['attention dot on the lamp well', 'var(--status-attention)', ['var(--bg-well)'], 3],
-      ['busy dot on a card', 'var(--status-busy)', ['var(--bg-surface)'], 3],
-      ['attention dot on a card', 'var(--status-attention)', ['var(--bg-surface)'], 3],
-    ],
   },
   'chat.css .tool-dot--run 0.8': {
     pairs: [['running tool dot on a card', 'var(--status-busy)', ['var(--bg-surface)'], 3]],

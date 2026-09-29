@@ -8,7 +8,19 @@ import type { ReactNode } from 'react';
 import type { SessionBucket } from '../../../shared/api';
 import { cn } from '../lib/cn';
 
-export const dotVariants = cva(
+export /* `motion-reduce:opacity-85` is 0.85, NOT 0.8, and the value is measured rather
+ * than chosen. Element opacity composites over the ground and these dots are
+ * non-text UI at a 3:1 floor. At 0.8 the light-theme attention dot fell to 2.88
+ * on a card. At 0.85 the four grounds these dots use read 7.57/3.10 (attention
+ * on a card), 8.20/3.68 (attention on a lamp well), 7.22/3.45 and 7.82/3.30
+ * (busy on each) — the tightest is 3.10. Same value as the reduced-motion pin
+ * on `.task-mark--running` (chat.css).
+ *
+ * This note moved here from `styles/legacy.css`'s reduced-motion block when
+ * that block retired (wave 2). The utility is invisible to `design/audit.mjs`,
+ * which reads stylesheets — so this comment is now the only record of why the
+ * number is what it is. Do not lower it. */
+const dotVariants = cva(
   'dot inline-flex min-w-2 min-h-2 flex-none items-center justify-center rounded-full font-mono text-[9px] leading-none',
   {
     variants: {

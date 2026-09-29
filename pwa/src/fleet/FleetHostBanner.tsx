@@ -30,7 +30,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth, NodeWire } from '../../../shared/api';
 import { api, apiErrorText } from '../lib/api';
-import { QuickConfirm, toast } from '@ccrc/ui';
+import { Button, QuickConfirm, toast } from '@ccrc/ui';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
 import { useFleetHealth } from './useFleetHealth';
@@ -130,14 +130,13 @@ export function FleetHostBanner(
       <span className="fleet-host-banner-msg">
         Fleet host unreachable{health.downSince !== null ? ` since ${elapsedSince(health.downSince, now)}` : ''}
       </span>
-      <button
-        type="button"
-        className="btn-primary"
+      <Button
+        variant="primary"
         disabled={rebooting}
         onClick={() => setConfirmOpen(true)}
       >
         Reboot
-      </button>
+      </Button>
       <QuickConfirm
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}

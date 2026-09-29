@@ -20,7 +20,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Sheet } from '@ccrc/ui';
+import { Button, Sheet } from '@ccrc/ui';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
 
@@ -284,7 +284,7 @@ export function ResumeSheet({
   return (
     <Sheet open onClose={onClose} title="The coordinator is gone">
       <div className="abandon-sheet">
-        <p className="qc-consequence">
+        <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">
           {claimedBy === null
             // Unreachable from the board (the row's gate needs a claimant to
             // measure), and stated rather than collapsed into `return null`:
@@ -294,13 +294,13 @@ export function ResumeSheet({
             : `${claimedBy} claims run ${run.id} — ${run.program}, wave ${run.wave} — and this box measured it dead. Cheapest door first: bring the pane back, tell it to pick the wave up, or hand the program to another session.`}
         </p>
         {claimedBy !== null && (
-          <div className="qc-actions">
-            <button type="button" className="btn-primary" disabled={busy !== null} onClick={revive}>
+          <div className="qc-actions grid gap-2">
+            <Button variant="primary" disabled={busy !== null} onClick={revive}>
               {busy === 'revive' ? 'Reviving…' : `Revive ${claimedBy}`}
-            </button>
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={reKickoff}>
+            </Button>
+            <Button variant="ghost" disabled={busy !== null} onClick={reKickoff}>
               {busy === 'kickoff' ? 'Queueing…' : 'Re-kickoff'}
-            </button>
+            </Button>
             {reclaimOpen ? (
               <>
                 {/* `.sess-hold-input` verbatim, not a new class: the same
@@ -316,23 +316,23 @@ export function ResumeSheet({
                   value={to}
                   onChange={(e) => setTo(e.target.value)}
                 />
-                <button type="button" className="btn-ghost"
+                <Button variant="ghost"
                         disabled={busy !== null || to.trim() === ''} onClick={reclaim}>
                   {busy === 'reclaim' ? 'Handing over…' : 'Reclaim'}
-                </button>
+                </Button>
               </>
             ) : (
-              <button type="button" className="btn-ghost" disabled={busy !== null}
+              <Button variant="ghost" disabled={busy !== null}
                       onClick={() => setReclaimOpen(true)}>
                 That id cannot be revived
-              </button>
+              </Button>
             )}
-            <button type="button" className="btn-ghost" disabled={busy !== null} onClick={onClose}>
+            <Button variant="ghost" disabled={busy !== null} onClick={onClose}>
               Cancel
-            </button>
+            </Button>
           </div>
         )}
-        {note !== null && <p className="qc-consequence">{note}</p>}
+        {note !== null && <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">{note}</p>}
         {error !== null && <p className="abandon-error">{error}</p>}
       </div>
     </Sheet>
