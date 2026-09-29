@@ -437,7 +437,7 @@ describe('stallPushText: r3 and the three caps', () => {
     expect(n).toEqual({ act: 'notify', arm: 'dialog-cap', rung: 1, key: EPISODE, to: 'operator' });
     expect(stallPushText(input, stallFacts(input), n as StallNotify, R1_AT)).toEqual({
       title: '⚠ stalled › demo-ws (dialog)',
-      body: `${LABEL}: worker demo-worker shows a dialog with no question behind it; this quiet episode opened 2026-09-28T21:17Z (2h 39m). Neither the worker nor its coordinator can be mailed while it shows: answer or dismiss it on the pane.`,
+      body: `${LABEL}: worker demo-worker shows a dialog with no question behind it; this quiet episode opened 2026-09-28T21:17Z (2h 39m). Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
     });
   });
 

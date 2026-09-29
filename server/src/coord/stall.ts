@@ -747,7 +747,7 @@ export function stallPushText(input: StallInput, facts: StallFacts, n: StallNoti
     case 'dialog-cap':
       return {
         title: `⚠ stalled › ${ws} (dialog)`,
-        body: `${label}: worker ${worker} shows a dialog with no question behind it; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Neither the worker nor its coordinator can be mailed while it shows: answer or dismiss it on the pane.`,
+        body: `${label}: worker ${worker} shows a dialog with no question behind it; this quiet episode opened ${stallUtc(n.key)} (${stallSpan(now - n.key)}). Mail to the worker, its coordinator's included, cannot land while the dialog shows: answer or dismiss it on the pane.`,
       };
     case 'limit-cap':
       return {
