@@ -205,6 +205,11 @@ Each departure from the spec's literal text, by number and slug:
   when the stall check and the stall report went out, to whom the report went (its own recipient, not today's
   claimant), and whether and when a coordinator last mailed the worker after it. The plan asserted "both went
   unanswered", which is false whenever the coordinator obeyed r2 and sent a resume.
+- **D-3584** `run-gone-includes-inactive` (Task 7 review): `insertStallObservation` answers `run-gone` for a run that is
+  absent OR no longer active (`state IN INACTIVE_RUN_STATES_SQL`), so neither a row nor a mail is written. The lane
+  awaits between its candidate read and the notice (pane, live file, `measureClaimant`), and a close landing in that
+  window would otherwise queue a stall mail on a closed run after close's `cancelOutstandingDeliveries` ran, which
+  `dueDeliveries` would deliver. The spec's `run-gone` meant absent only.
 
 ## File structure
 
