@@ -218,9 +218,47 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
     .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
 
+  // The module-boundary scans, kept as named text-level pins so the CONTROL below can plant every shape as text.
+  // Either quote, the same one on both ends: a double-quoted specifier is valid TS and would otherwise pass a scan
+  // written for single quotes unseen (the fix `single-definition.test.ts` already made for its update ring).
+  const NODE_BUILTIN = /\bfrom\s*['"]node:/;
+  const SIDE_EFFECT_IMPORT = /^\s*import\s*['"]/m;
+  const RE_EXPORT = /^\s*export\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\b/m;
+  /** The specifier of every import that is not `import type`. The clause between `import` and `from` holds no quote,
+   *  so a match cannot run on into a LATER import's specifier: `[^'"]*?`, never the lazy `[\s\S]*?` that did. */
+  const valueImportSpecifiers = (c: string): string[] =>
+    [...c.matchAll(/^\s*import\s+(type\s+)?[^'"]*?\bfrom\s*(['"])([^'"]+)\2/gm)]
+      .filter((m) => m[1] === undefined).map((m) => m[3]!);
+
   it('the scan is over real code, not an empty string', () => {
     expect(code()).toContain('export function stallSubjects');
     expect(code().replace(/\s/g, '').length).toBeGreaterThan(400);
+  });
+  it('CONTROL: the boundary scans see either quote, every re-export shape and a second import behind a first', () => {
+    expect(NODE_BUILTIN.test(`import { readFileSync } from "node:fs";`), 'double-quoted builtin').toBe(true);
+    expect(NODE_BUILTIN.test(`import { readFileSync } from 'node:fs';`), 'single-quoted builtin').toBe(true);
+    expect(NODE_BUILTIN.test(`import { x } from '../../../shared/api.js';`), 'L0 is no builtin').toBe(false);
+    expect(SIDE_EFFECT_IMPORT.test(`import "./claims.js";`), 'double-quoted side effect').toBe(true);
+    expect(SIDE_EFFECT_IMPORT.test(`import './claims.js';`), 'single-quoted side effect').toBe(true);
+    expect(SIDE_EFFECT_IMPORT.test(`import { x } from './claims.js';`), 'a named import has a clause').toBe(false);
+    for (const shape of [
+      `export * from './claims.js';`, `export * as claims from './claims.js';`, `export * as claims from "./claims.js";`,
+      `export { claimExpiry } from './claims.js';`, `export {\n  a,\n  b,\n} from "./claims.js";`,
+      `export type { A } from './claims.js';`, `export type * from './claims.js';`,
+    ]) expect(RE_EXPORT.test(shape), shape).toBe(true);
+    for (const shape of [`export const x = 1;`, `export type { A };`, `export { a, b };`, `export function f() {}`]) {
+      expect(RE_EXPORT.test(shape), shape).toBe(false);
+    }
+    expect(valueImportSpecifiers(`import { claimExpiry } from "./claims.js";`), 'double-quoted value import')
+      .toEqual(['./claims.js']);
+    expect(valueImportSpecifiers(`import { claimExpiry } from './claims.js';`), 'single-quoted value import')
+      .toEqual(['./claims.js']);
+    expect(valueImportSpecifiers(`import * as ns from "./claims.js";`), 'a namespace import').toEqual(['./claims.js']);
+    expect(valueImportSpecifiers(`import { claimExpiry } from "./claims.js";\nimport { x } from '../../../shared/api.js';`),
+      'a double-quoted import before an L0 one must not hide behind it').toEqual(['./claims.js', '../../../shared/api.js']);
+    expect(valueImportSpecifiers(`import type { A } from './claims.js';`), 'a type import is no value import').toEqual([]);
+    expect(valueImportSpecifiers(`import type { A } from "./claims.js";\nimport { x } from "../../../shared/api.js";`))
+      .toEqual(['../../../shared/api.js']);
   });
   it('has no clock', () => {
     expect(code(), 'stall.ts reads the clock: the verdict is no longer pure')
@@ -233,7 +271,7 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
     expect(formatting, 'stall.ts builds a Date that is not a formatted measured epoch').toBe(every);
   });
   it('has no fs and no other node builtin', () => {
-    expect(code(), 'stall.ts imports a node builtin').not.toMatch(/from\s+'node:/);
+    expect(code(), 'stall.ts imports a node builtin').not.toMatch(NODE_BUILTIN);
     expect(code(), 'stall.ts reaches for a filesystem').not.toMatch(/\bfs\s*\.|require\s*\(/);
   });
   it('has no fastify, no reply, no store, no handle', () => {
@@ -242,11 +280,11 @@ describe('stall.ts is the pure L1 module its docstring says it is', () => {
   });
   it('imports values only from shared/api.ts (L0); anything else is a type import', () => {
     const c = code();
-    expect(c, 'a side-effect import').not.toMatch(/^\s*import\s+['"]/m);
+    expect(c, 'a side-effect import').not.toMatch(SIDE_EFFECT_IMPORT);
     expect(c, 'a dynamic import').not.toMatch(/\bimport\s*\(/);
-    expect(c, 'a re-export').not.toMatch(/^\s*export\s+(?:type\s+)?(?:\*|\{[^}]*\})\s*from\b/m);
-    for (const m of c.matchAll(/^\s*import\s+(type\s+)?[\s\S]*?\bfrom\s+'([^']+)'/gm)) {
-      if (m[1] === undefined) expect(m[2], `stall.ts takes a value import from ${m[2]}`).toBe('../../../shared/api.js');
+    expect(c, 'a re-export').not.toMatch(RE_EXPORT);
+    for (const spec of valueImportSpecifiers(c)) {
+      expect(spec, `stall.ts takes a value import from ${spec}`).toBe('../../../shared/api.js');
     }
   });
 });
