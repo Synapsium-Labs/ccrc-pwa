@@ -87,7 +87,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
   `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
-  the arbiter; a flake CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  the arbiter, but only for a file it RAN: a pull request runs its selection, so first check that the PR's `select
+  tests` summary lists the file. If it is not listed, the arbiter is the daily run's `test (server)` or a
+  `workflow_dispatch` full run (`gh workflow run ci.yml --ref <branch> -f mode=full`). A flake that CI ran and passed
+  is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
   re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
   2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
   clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
@@ -100,9 +103,8 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   summary `test (server)`; `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` run in full, and
   `test-macos` runs the same selection, advisory. A change under `.github/` or `server/scripts/`, to any
   `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, or a missing
-  map, runs the full suite instead — and **while
-  `CCRC_SELECTION` in `ci.yml` reads `shadow`, the selection is only reported and every server test still
-  runs.** **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
+  map, runs the full suite instead. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, the selection is only reported and every server test runs. **A merge to `main`** runs no test legs: it re-traces the tests the merge affected and updates the map.
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
