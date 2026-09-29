@@ -78,7 +78,7 @@ on:
 # still run every server test; `enforce` makes a pull request run only what
 # was selected. One line, defined once — server/test/ci-pipeline.test.ts.
 env:
-  CCRC_SELECTION: shadow
+  CCRC_SELECTION: enforce
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
 # Everything else never cancels, and each mode has its own group, so a merge's
@@ -317,9 +317,10 @@ jobs:
         env:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
+          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'
@@ -457,12 +458,14 @@ jobs:
   # Server package only: it owns the ccd/ccrc/doctor/expose/update suites and
   # every Darwin test in the tree. No tsc step — types have no platform.
   #
-  # Sharded across machines, never across workers: the unsharded leg had
+  # Sharded across machines and two workers per shard: the unsharded leg had
   # outgrown its deadline (the last 13 completed legs to 2026-09-23 were all
-  # cut at 55 minutes), and it runs ONE vitest worker, because `maxWorkers:
-  # '40%'` rounds to 1 on the 3-CPU runner — a setting vitest.config.ts argues
-  # for on flake grounds. At most 2 shards on a pull request and 4 in full, so
-  # the organisation's 5-job macOS cap still leaves room for `probe-macos`.
+  # cut at 55 minutes). The original one-worker policy was superseded by
+  # D-3527 after hosted `macos-26-arm64` runs measured a 20.64 -> 12.99 minute
+  # critical-path improvement, then 12.44 and 12.25 minute repetitions, with
+  # identical file, case, skip and failure identities. At most 2 shards on a
+  # pull request and 4 in full, so the organisation's 5-job macOS cap still
+  # leaves room for `probe-macos`.
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
@@ -510,9 +513,10 @@ jobs:
         env:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}
+          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"
 
   # THE PROBE LEG — a platform CONTRACT check that is not hostage to the suite.
   #
@@ -689,9 +693,10 @@ jobs:
       - name: Trace
         env:
           FILES: ${{ matrix.files }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/trace.txt"
-          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560
+          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560
       - name: Keep the records
         if: always()
         uses: actions/upload-artifact@v4
