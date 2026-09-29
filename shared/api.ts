@@ -8375,11 +8375,6 @@ export function isUpdateState(v: unknown): v is UpdateState {
  *  Every `UpdateState` is in exactly one list (`update-states.test.ts`). */
 export const BUSY_UPDATE_STATES = ['pending', 'applying', 'unknown'] as const satisfies readonly UpdateState[];
 export const SETTLED_UPDATE_STATES = ['idle', 'reverted', 'failed'] as const satisfies readonly UpdateState[];
-/** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
- *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
- *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
- *  the refusal by it. */
-export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
 export type BusyUpdateState = (typeof BUSY_UPDATE_STATES)[number];
 export type SettledUpdateState = (typeof SETTLED_UPDATE_STATES)[number];
 
@@ -8840,3 +8835,9 @@ export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
  *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
  *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
 export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
+
+/** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
+ *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
+ *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
+ *  the refusal by it. */
+export const PROVENANCE_DETAIL_PREFIX = 'provenance:';
