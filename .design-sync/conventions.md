@@ -45,7 +45,8 @@ system). Utilities are semantic:
 **The compiled utility set covers what these components use.** For anything else
 — spacing, the six account hues, syntax colours — use the token directly:
 `style={{ color: 'var(--acct-violet)' }}`. Every token in `styles.css` is live
-in both themes; a utility class that was never compiled silently does nothing.
+in both themes, so a `var(--…)` always resolves; a utility class that was never
+compiled silently does nothing, so grep `_ds_bundle.css` before inventing one.
 
 ## Five laws — designs that ignore these do not look like ccrc
 
@@ -55,10 +56,8 @@ in both themes; a utility class that was never compiled silently does nothing.
 2. **Mono is the machine's voice.** `font-mono` for ids, paths, commands,
    counts, timestamps. `font-ui` for prose written to a human.
 3. **Wells are cut into the interface.** `bg-well` stays dark in BOTH themes —
-   terminals and logs are holes, not cards. Text on them takes
-   `var(--ink-on-well)`: that token ships, but no primitive uses the bare
-   utility, so `text-ink-on-well` was never compiled. This is the rule above in
-   miniature — check `_ds_bundle.css` before reaching for a class.
+   terminals and logs are holes, not cards. Text on them is `text-ink-on-well`
+   (and `text-ink-on-well/55` for the quieter furniture).
 4. **Two cues per state, never colour alone.** Every status carries a word AND a
    glyph beside its colour. Selection is reverse video, not a tint.
 5. **Limit bands are fixed:** ok under 50%, warn 50–75, critical over 75. Use
