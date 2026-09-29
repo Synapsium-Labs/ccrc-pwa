@@ -3781,11 +3781,11 @@ describe('the update op — its refusal words and its launcher are declared once
     // The words alone don't prove a copy: `bad-tag` and `busy` are also
     // route and store words (`UpdateRouteError`, `UPDATE_STORE_REFUSE_CODES`),
     // and the dispatcher's answer mapping names `spawn-failed` in a `case`.
-    // What proves a second vocabulary is all four TOGETHER — derived from
+    // What proves a second vocabulary is all five TOGETHER — derived from
     // `UPDATE_OP_ERRORS` itself, so a reordered or double-quoted copy still
     // counts, not just this file's own single-quoted, in-order spelling. A
     // holder is a single line, or a single `[...]` array-literal span, that
-    // quotes all four.
+    // quotes all five.
     // A dynamic import, not a static top-of-file line: an import line above `:32-37` shifts every
     // line the citation audit anchors (R13; the F16 `NODE_FILES` describe above does the same).
     const { UPDATE_OP_ERRORS } = await import('../../shared/agent-protocol.js');

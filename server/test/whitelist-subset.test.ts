@@ -643,6 +643,23 @@ describe('layer 4 — the update op is not an exec path, and its spawn port has 
     }
   });
 
+  // Review of the item 6 census, M2: the `\bspawnUpdate\s*\(` count above cannot see an alias
+  // (`const su = ctx.spawnUpdate; await su(...)` in `case 'exec'` calls the port with no such token), so every line that
+  // NAMES the port is pinned, as the `makeUpdateSpawn`/`realUpdateSpawn` case pins its own.
+  it('(b) `spawnUpdate` is named only where the port is declared, carried and called: an alias of it is a new line here', () => {
+    const lines = code(serverSrc).split('\n').filter((l) => /\bspawnUpdate\b/.test(l)).map((l) => l.trim());
+    expect(lines).toEqual([
+      'spawnUpdate?: UpdateSpawn;',
+      'spawnUpdate: UpdateSpawn;',
+      'spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);',
+      'spawnUpdate: opts.spawnUpdate,',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} names the update spawn port`).not.toMatch(/\bspawnUpdate\b/);
+    }
+  });
+
   it('(b) makeUpdateSpawn and realUpdateSpawn are referenced only where the port is wired: the definition, the default, and the option that carries it', () => {
     const lines = (word: RegExp): string[] => code(serverSrc).split('\n').filter((l) => word.test(l)).map((l) => l.trim());
     expect(lines(/\bmakeUpdateSpawn\b/)).toEqual([

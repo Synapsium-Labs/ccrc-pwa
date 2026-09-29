@@ -643,10 +643,10 @@ reads the rows after every inventory sweep, every intent write and every request
 at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet
 node's request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent
 that advertises it in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op`
-until that box is updated by hand). The agent answers `busy` while a live run is in flight or the lock is held;
+until that box is updated by hand). The agent answers `busy` while a run is in flight (its report's writer alive, or no readable pid) or the lock is held;
 otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` —
 two fixed argument lists with the tag the only word that varies, outside the exec whitelist — and answers
-`accepted` once the detaching parent has exited 0. The server node is spawned the same way on its own box, after
+`accepted` once the detaching parent has exited 0 (killed at its bound it answers `accepted` too if it queued or cannot be attributed). The server node is spawned the same way on its own box, after
 the same `busy` check. `accepted` only holds the lease (the row reads `pending`): the node settles when a later
 sweep measures it on the target, and a request for the tag a node already runs is settled without a move. A
 refusal releases the lease in the same turn and never consumes the request — `busy`, a dropped link or a timeout

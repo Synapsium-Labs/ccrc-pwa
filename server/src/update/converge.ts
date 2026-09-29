@@ -264,7 +264,7 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   // stretch then re-reads every row itself, so a row that changed in between is judged on its own fresh state and only
   // ever loses the sentence (a `null` here, or a report that does not fit, yields the plain `deadline`) — never a
   // wrong verdict. The scan in `update-converge.test.ts` pins the stretch from `const expired` to the acquire.
-  // `now` was passed in by `watch.ts` before this await, so after it `now` can be up to INVENTORY_BUDGET_MS stale; harmless, because the await happens only when a server-role row expires, whose failure halts the fleet, so no acquire follows.
+  // `now` was passed in by `watch.ts` before this await, so after it `now` can be up to INVENTORY_BUDGET_MS stale. Harmless, but an acquire CAN follow: the await happens when a server-role row is about to expire, and if that row settles during it (a report lands) the stretch's fresh re-read skips it, so `dispatchNode` may stamp a `now` up to INVENTORY_BUDGET_MS old and that lease's deadline fires up to that long (10 s) early. A row that does expire fails, and failed halts the fleet, so no acquire follows THAT case.
   const ownReport = store.nodes().some((r) => r.agentOps === null && deadlineExpired(r, now, deps.deadlineMs))
     ? await ownReportOrigin(deps)
     : null;

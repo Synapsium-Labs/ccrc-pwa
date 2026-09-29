@@ -481,6 +481,35 @@ describe('POST /api/updates/apply {all: true} — every live node the move takes
     expect(plan.move?.nodeId, JSON.stringify(plan.refusals)).toBe(SERVER_ID);
   });
 
+  // Review of the item 8 sentences, M3: the note is written ONCE and nothing clears it, so each says what WAS measured, in
+  // the past tense. Every word `skipWord` lets through and the route notes is pinned to its whole sentence (`not-newer`
+  // is skipped without a note, and the other four are the dispatcher's own refusals `skipWord` throws on).
+  const SKIP_NOTES: { word: string; tag: string; setup: (c: CoordStore) => void; sentence: string }[] = [
+    { word: 'unknown-tag', tag: 'v0.0.12', setup: (c) => plant(c, fleetNode()),
+      sentence: `v0.0.12 was not a release ${FLEET_LABEL} could be moved to (no eligible catalogue row for it)` },
+    { word: 'refused-by-node', tag: 'v0.0.10', setup: (c) => {
+      plant(c, fleetNode());
+      expect(c.refuseRelease(FLEET_ID, 'v0.0.10', 6, 'provenance: signature mismatch').ok).toBe(true);
+    }, sentence: `${FLEET_LABEL} had refused v0.0.10 on a provenance verdict` },
+    { word: 'stamp-unread', tag: 'v0.0.10', setup: (c) => plant(c, fleetNode(UNREAD)),
+      sentence: `${FLEET_LABEL}'s build stamp read unreadable, so its version was unknown` },
+    { word: 'floor-unread', tag: 'v0.0.10', setup: (c) => plant(c, fleetNode({ highestVersion: null, floorRead: 'unmeasured' })),
+      sentence: `${FLEET_LABEL}'s floor had not been measured` },
+    { word: 'no-detach-cap', tag: 'v0.0.10', setup: (c) => plant(c, fleetNode({ caps: without(DETACH_CAP) })),
+      sentence: `${FLEET_LABEL}'s ccrc-caps had no detach` },
+    { word: 'agent-predates-update-op', tag: 'v0.0.10', setup: (c) => plant(c, fleetNode({ agentOps: [] })),
+      sentence: `${FLEET_LABEL}'s agent did not advertise the update op` },
+  ];
+  it.each(SKIP_NOTES)("a skipped node's note for $word is the whole past-tense sentence, on the row", async (c) => {
+    const f = await open();
+    catalogue(f.coord);
+    c.setup(f.coord);
+    const r = await post(f.app, '/api/updates/apply', { all: true, tag: c.tag });
+    expect(r.statusCode, r.body).toBe(202);
+    expect(r.json()).toEqual({ ok: true, requested: [], skipped: [{ nodeId: FLEET_ID, why: c.word }] });
+    expect(f.coord.node(FLEET_ID)!.updateDetail).toBe(`not requested: ${c.word} — ${c.sentence}`);
+  });
+
   it("a skipped node whose row holds a verdict keeps the verdict's detail — the note never overwrites it", async () => {
     const f = await open();
     catalogue(f.coord);
