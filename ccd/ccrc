@@ -1677,7 +1677,7 @@ UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<
 UPD_URL_DIR_SAFE=""    # _upd_resolve: same, through _upd_redact — every "fetching …"/WARN line prints THIS, never UPD_URL_DIR, so a credentialed CCRC_RELEASE_BASE_URL never reaches stdout (review 155 C17, fix round 1 item 11); the real curl calls still read UPD_URL_DIR
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
-UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (the floor's refusal names a restored update by it)
+UPD_LAST_PHASE=""    # _upd_last_report: the phase the PREVIOUS run's ~/.ccrc/update.json ended in, read before this run's first write (a foreground run's floor refusal names a restored update by it; a detached run's cannot — its parent's `queued` write replaced the report first)
 UPD_LAST_TARGET=""   # _upd_last_report: … and its target tag
 UPD_PREV_UNSIGNED=0  # cmd_update, before the staged install: 1 iff the marker's line 2 read `unsigned` (arm 2's precondition)
 UPD_BACKUP_LISTING=0 # _upd_backup_copy's listing mode; only ever set `local` by _upd_backup_pairs
@@ -13296,7 +13296,10 @@ cmd_update() {
   # nothing. BEFORE UPD_REPORTING, so a run refused here reports nothing.
   _upd_lock
   # The PREVIOUS run's report, read before this run's first `_upd_phase`
-  # replaces it (`resolving` is written before the floor is checked).
+  # replaces it (`resolving` is written before the floor is checked). For a
+  # `--detach` run the "previous" report is already the PARENT's `queued`
+  # (`_upd_detach` writes it before this child starts), so this read cannot
+  # see what the last update left.
   _upd_last_report
 
   # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
@@ -16317,7 +16320,11 @@ _upd_gate() {   # <role> <version> -> 0 at the first pass, 1 when the window end
 # phase and target the PREVIOUS run left in `~/.ccrc/update.json`, into
 # UPD_LAST_PHASE / UPD_LAST_TARGET. `cmd_update` calls it right after taking
 # the lock and before this run writes anything, because this run's own first
-# report (`resolving`) replaces the file before `_upd_floor_check` runs. Every
+# report (`resolving`) replaces the file before `_upd_floor_check` runs. That
+# holds for a foreground run only: a `--detach` run's parent has already
+# written `queued` over the last update's report (`_upd_detach`, before the
+# child reads anything), so a detached run reads `queued` and its floor
+# refusal names the floor alone (pinned, with a foreground control). Every
 # field is shape-checked (the file is same-user-writable by every session on
 # the box); anything unreadable — absent, unsafe, no jq, not an object —
 # leaves both empty, which the floor's refusal reads as "no such update", never
@@ -16393,7 +16400,9 @@ _upd_floor_check() {
   # gate and was restored) the box runs the floor's own tag, not a release
   # below it. The clause is exactly what the report proves and no more.
   # Anything else, including an unreadable or absent report, names the floor
-  # alone.
+  # alone — and so does EVERY `--detach` run (the console's rollback and
+  # update taps among them): `_upd_detach` writes `queued` before the child
+  # reads the last report, so the child never sees `reverted`.
   local raised=""
   if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
     raised=" — the last update, to $floor, failed its health gate and was restored"

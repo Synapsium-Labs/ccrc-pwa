@@ -8660,6 +8660,7 @@ Programme wave 4 (PR #181) merged with three node-side items carried, by the rul
   - Amended (review 179, fix round 1): C27 admits ONE disagreement, the killed-flip state (six conditions, one measuring function), and only to a flip — re-measured under the lock, and keyed on the state, so a detached run's child holds to it too; its sentence stays one definition. D-3466.
 - **The floor's refusal after a restore (C28's root).** `_inst_floor` (the last step of `_inst_installed`) raises `~/.ccrc/floor` inside the staged spine, before the health gate, and spec §9 says a restore never lowers it. So a failed update that restored leaves the floor above the running release. W4 made a converged box ignore the floor, so nothing is stuck.
   - Ruling: spec §9's placement stays; there is no departure here. The refusal a later move meets names the floor AND the update that raised it (the tag, and that its gate failed and was restored), so the operator can see why `--downgrade` is being asked for.
+  - Amended (review 179, fix round 1): that holds for a foreground run only. A `--detach` run's floor refusal names the floor alone, because `_upd_detach` writes `queued` over the last update's report before the child reads it. The code stays; the comments say so, and the detached sentence is pinned beside a foreground control.
   - Pin that sentence.
 
 

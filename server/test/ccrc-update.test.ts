@@ -4490,6 +4490,57 @@ describe('ccrc update --detach (design §10; W4 Task 3)', () => {
     expect(spawnSync('flock', ['-n', lockPath(home), 'true']).status, 'the finished run left the lock held').toBe(0);
   }, 60_000);
 
+  // Review 179 fix round 1, item 8 (F8): a DETACHED run's floor refusal names
+  // the floor ALONE. `_upd_detach` writes `queued` before the child runs, so
+  // the child's `_upd_last_report` reads `queued` — never the `reverted` the
+  // last update left — and cannot name a restored update. (The foreground
+  // sentence, which reads the previous report before it writes anything, is
+  // pinned in the floor describe; the CONTROL here is that same sentence on an
+  // identical box.) `fixture-systemd-run-exec` runs the detached child for real.
+  itLinux('a --detach run\'s floor refusal names the floor alone: the parent\'s `queued` write replaces the report the child would read, so the "restored after its gate failed" clause never appears — and the same box, run in the foreground, does name it (review 179 item 8)', async () => {
+    const REVERTED = '{"target":"v3.0.0","phase":"reverted","startedAt":1,"updatedAt":2,"detail":"arm1: flipped back to v1.0.0; gate: fixture","from":"cli","pid":1}\n';
+    const boxBelowFloor = (prefix: string): string => {
+      const home = freshUpdateBox(prefix);
+      plantOldBox(home, { version: 'v3.0.0' });
+      writeFileSync(join(home, '.ccrc', 'floor'), 'v3.0.0\n');
+      writeFileSync(join(home, '.ccrc', 'update.json'), REVERTED);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      return home;
+    };
+    const RESTORED = 'the last update, to v3.0.0, failed its health gate and was restored';
+    // CONTROL: foreground, same box — the clause IS there, so its absence below
+    // is the detach's doing and not a fixture that never reads a report.
+    const fg = boxBelowFloor('ccrc-update-detach-floor-control-');
+    const c = runUpdate(fg, ['--to', 'v2.0.0']);
+    expect(c.code, `stderr: ${c.stderr}`).toBe(1);
+    expect(c.stderr).toContain(RESTORED);
+    // THE DETACHED RUN.
+    const home = boxBelowFloor('ccrc-update-detach-floor-');
+    writeFileSync(join(home, 'fixture-systemd-run-exec'), '');
+    writeFileSync(join(home, '.local', 'bin', 'ccrc'),
+      `#!/bin/sh\nexec '${BASH}' '${join(REPO, 'ccd', 'ccrc')}' "$@"\n`, { mode: 0o755 });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env = { ...updateEnv(home), TMPDIR: join(home, 'tmp'), CCRC_RELEASE_BASE_URL: `local://${home}/releases` };
+    replantDoctorStubs(home);
+    const parent = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'update', '--detach', '--to', 'v2.0.0'],
+      { env, encoding: 'utf8' });
+    expect(parent.status, `stderr: ${parent.stderr}\nstdout: ${parent.stdout}`).toBe(0);
+    const detachedLog = (): string => (existsSync(join(home, 'detached.log'))
+      ? readFileSync(join(home, 'detached.log'), 'utf8') : '(no detached.log)');
+    let final: Record<string, unknown> = {};
+    for (let until = Date.now() + 20_000; Date.now() < until;) {
+      try { final = report(home); } catch { final = {}; }
+      if (final['phase'] === 'failed' || final['phase'] === 'done') break;
+      await new Promise<void>((res) => setTimeout(res, 50));
+    }
+    expect(final, `the detached run never reported its refusal\n${detachedLog()}`).toMatchObject({ phase: 'failed', target: 'v2.0.0' });
+    expect(reportWrites(home)[0], '`queued` is the parent\'s write, before the child reads any report').toMatchObject({ phase: 'queued' });
+    const log = detachedLog();
+    expect(log).toContain("v2.0.0 (resolved by --to v2.0.0) is below this box's floor v3.0.0 (");
+    expect(log).toMatch(/the highest version this box completed an install of\) — moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade\. Nothing on this box was changed/);
+    expect(log, 'a detached refusal must not claim a restore it never read').not.toContain(RESTORED);
+  }, 60_000);
+
   itLinux('--from and every typed flag ride the detached argv in ONE fixed order, whatever order they were typed in (D-3238)', () => {
     const home = detachedBox('ccrc-update-detach-flags-');
     const r = runUpdate(home,
