@@ -10474,6 +10474,14 @@ _inst_tree() {   # place the shipped tree at ~/ccrc-versions/<name>/ and point
     placed)  echo "install: tree: $name is already placed at \$HOME/ccrc-versions/$name — installing from it, no copy" ;;
     copy)
       command -v rsync >/dev/null 2>&1 || _ccrc_die "rsync is required to place the tree — sudo apt install rsync"
+      # D-3464: the name must be nothing, or a directory this ccrc made. A
+      # symlink there is written THROUGH by everything below — the record
+      # void, `rsync --delete`, `npm ci` — into wherever it points, possibly
+      # the running version; the flip's re-check refuses a link only at the
+      # end. `_upd_legacy_target` and `_ver_kept` ask the same question.
+      if [ -L "$dest" ] || { [ -e "$dest" ] && [ ! -d "$dest" ]; }; then
+        _ccrc_die "$shown is not a directory ccrc placed — nothing was written; \$HOME/ccrc and \$HOME/ccrc-versions were not touched"
+      fi
       # A version directory is INCOMPLETE from the first byte this run writes
       # into it until `_ver_keep_state` marks it again at the spine's end: its
       # kept install record goes first, so a run that dies half-way never

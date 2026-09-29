@@ -2486,6 +2486,38 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(JSON.parse(read(vroot(home, 'v9.9.1', '.ccrc-stamp.json'))).version).toBe('v9.9.1');
   });
 
+  it.each(['a symlink to a real directory', 'a regular file'] as const)('a version NAME that is %s is refused BEFORE any write: nothing is voided, copied or installed into whatever it names (D-3464)', (kind) => {
+    const home = freshBox('ccrc-install-ver-linked-name-');
+    installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });
+    shipStamp(treeRoot(home), 'b'.repeat(40), 'v9.9.1');
+    // The name the run would place into. A link into a directory that even
+    // carries a kept record — the record the copy arm voids first.
+    const elsewhere = join(home, 'elsewhere-3');
+    if (kind === 'a regular file') {
+      writeFileSync(vroot(home, 'v9.9.1'), 'not a tree\n');
+    } else {
+      mkdirSync(join(elsewhere, 'server'), { recursive: true });
+      writeFileSync(join(elsewhere, 'server', 'MINE'), 'not ccrc\n');
+      writeFileSync(join(elsewhere, '.ccrc-installed'), `${'b'.repeat(40)}\n`);
+      symlinkSync(elsewhere, vroot(home, 'v9.9.1'));
+    }
+    const before = kind === 'a regular file' ? '' : treeBytes(elsewhere);
+    const running = treeBytes(vroot(home, 'v9.9.0'));
+    const r = runInstall(home, ['install'], {}, { stubs: { ln: lnRecorder } });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('ccrc: $HOME/ccrc-versions/v9.9.1 is not a directory ccrc placed — nothing was written; $HOME/ccrc and $HOME/ccrc-versions were not touched');
+    if (kind !== 'a regular file') {
+      expect(treeBytes(elsewhere), 'the link\'s target was written through').toEqual(before);
+      expect(existsSync(join(elsewhere, '.ccrc-installed')), 'the target\'s kept record was voided').toBe(true);
+    } else {
+      expect(readFileSync(vroot(home, 'v9.9.1'), 'utf8')).toBe('not a tree\n');
+    }
+    expect(existsSync(join(home, 'rsync-argv')), 'rsync ran').toBe(false);
+    expect(existsSync(join(home, 'npm-argv')), 'npm ci ran').toBe(false);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(vroot(home, 'v9.9.0'));
+    expect(treeBytes(vroot(home, 'v9.9.0'))).toEqual(running);
+  });
+
   it('a re-run from the version ~/ccrc points at: the pre-W6 sentence, no copy, no npm ci, no flip — and the stamp comes from the version\'s own kept copy', () => {
     const home = mkTmp('ccrc-install-ver-rerun-');
     installVersionedTree(home, 'v9.9.0', { stamp: { sha: '9'.repeat(40), version: 'v9.9.0' } });

@@ -1441,6 +1441,31 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8'), 'the caps were left removed').toBe(planted.caps);
   });
 
+  it('an update to a version name that is a SYMLINK is refused by the spine before any write: exit 1 as nothing replaced, the link target and the running version byte-unchanged (D-3464)', () => {
+    const home = freshUpdateBox('ccrc-update-linked-name-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    rmSync(join(home, 'ccrc'), { recursive: true, force: true });
+    installVersionedTree(home, 'v1.0.0', { stamp: { sha: '1'.repeat(40), version: 'v1.0.0' } });
+    plantCoordDb(home);
+    const elsewhere = join(home, 'elsewhere-4');
+    mkdirSync(join(elsewhere, 'server'), { recursive: true });
+    writeFileSync(join(elsewhere, 'server', 'MINE'), 'not ccrc\n');
+    writeFileSync(join(elsewhere, '.ccrc-installed'), 'b'.repeat(40) + '\n');
+    symlinkSync(elsewhere, join(home, 'ccrc-versions', 'v2.0.0'));
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const target = treeDigest(elsewhere);
+    const running = treeDigest(join(home, 'ccrc-versions', 'v1.0.0'));
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toContain('$HOME/ccrc-versions/v2.0.0 is not a directory ccrc placed — nothing was written');
+    expect(r.stderr).toContain('spine died at _inst_tree, before its flip: nothing was replaced');
+    expect(treeDigest(elsewhere), 'the link target was written through').toEqual(target);
+    expect(treeDigest(join(home, 'ccrc-versions', 'v1.0.0'))).toEqual(running);
+    expect(readlinkSync(join(home, 'ccrc'))).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+  });
+
   it('a REAL-DIRECTORY (pre-W6) box whose staged npm ci fails replaced nothing either: exit 1 BEFORE the gate, no restore, and the directory byte-unchanged (D-3458)', () => {
     // The controller's ruling on the pre-flight scan: Task 2 left
     // `_upd_tree_untouched`'s `directory` row "Task 3's to revisit" and
