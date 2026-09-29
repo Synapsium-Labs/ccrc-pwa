@@ -9644,6 +9644,9 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
 
     it('a flip back that fails is named, never silent: ~/ccrc still points at the older tag\'s directory, and the sentence says flipping it back to v2.0.0 failed', () => {
       const { home } = dyingBox('ccrc-update-legacy-back-fails-', false);
+      // A caps file to be cleared and (before the fix wave) put back, so its
+      // absence below is a measurement and not a vacuous zero.
+      writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\n');
       writeFileSync(join(home, 'fixture-install-step'), '_inst_node_id\n');
       // The spine leaves a real directory at <link>.new, which `_plat_ln_swap`
       // refuses to clear (Task 1): the legacy flip itself (before the spine)
@@ -9655,6 +9658,14 @@ describe('ccrc update: a spine older than W6 gets a directory named for its own 
       expect(r.stderr).toContain('$HOME/ccrc still points at $HOME/ccrc-versions/v1.0.0, and flipping it back to v2.0.0 failed');
       expect(r.stderr).not.toContain('points back at');
       expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+      // Controller ruling (final-review fix wave, Step 0a): `~/ccrc` names the
+      // OLDER tree, so a completed-install record (or caps) put back would vouch
+      // for a build the box is not on, and a retry could be skipped as
+      // converged. Neither file goes back, and the sentence says why.
+      expect(existsSync(join(home, '.ccrc', 'installed')), 'the record was put back over a tree ~/ccrc no longer names').toBe(false);
+      expect(existsSync(join(home, '.ccrc', 'ccrc-caps')), 'the caps were put back over a tree ~/ccrc no longer names').toBe(false);
+      expect(r.stderr).toContain('; not put back — $HOME/ccrc names another tree: completed-install record, caps');
+      expect(r.stderr).not.toContain('put back as they were');
     });
 
     it('a die BETWEEN the legacy flip and the staged spine flips back too (D-3459 amended): a directory squatting on ~/.ccrc/install-step refuses the marker clear, nothing is installed, and ~/ccrc is on the version it named before', () => {

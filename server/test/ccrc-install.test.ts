@@ -2433,6 +2433,30 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(stamp, 'the stamp took the enclosing repository\'s sha').not.toContain(esha);
   });
 
+  it('an exported GIT_DIR naming ANOTHER repository changes neither the name nor the stamp: the source is named and stamped from its own HEAD (final-review fix wave, Step 0c)', () => {
+    // `git -C <src> rev-parse HEAD` under an ambient GIT_DIR answers for that
+    // repository, and `_inst_git_own` (which already unsets it) then agrees
+    // that <src> is a top level — a name taken from another tree's commit.
+    const home = mkTmp('ccrc-ver-name-git-dir-');
+    installFixtureTree(home, 'repo');
+    installFixtureTree(home, 'other');
+    const repo = join(home, 'repo');
+    const other = join(home, 'other');
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'a different commit\n');
+    const sha = gitInit(repo);
+    const osha = gitInit(other);
+    expect(osha, 'the two fixture repositories share a commit — the pin would prove nothing').not.toBe(sha);
+    const env = `export GIT_DIR='${other}/.git' GIT_WORK_TREE='${other}'; `;
+    const n = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}_inst_version_name "$(cd '${repo}' && pwd -P)"`);
+    expect(n.code, n.stderr).toBe(0);
+    expect(n.stdout.trim()).toBe(`untagged-${sha.slice(0, 12)}`);
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}CCRC_HERE='${repo}/ccd'; _inst_stamp`);
+    expect(r.code, r.stderr).toBe(0);
+    const stamp = readFileSync(join(home, '.ccrc', 'build.json'), 'utf8');
+    expect(stamp).toContain(sha);
+    expect(stamp, 'the stamp took the ambient GIT_DIR repository\'s sha').not.toContain(osha);
+  });
+
   it('a fresh box: the tree lands in ~/ccrc-versions/<name>/, never at the live name, and ~/ccrc becomes an absolute link to it — after the deps, by one rename', () => {
     const home = freshBox('ccrc-install-ver-fresh-');
     const sha = gitInit(treeRoot(home));

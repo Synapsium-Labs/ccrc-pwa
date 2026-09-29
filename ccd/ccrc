@@ -10222,6 +10222,18 @@ _ver_layout() {
   return 0
 }
 
+# ── _inst_git <dir> <git args…> — git's answer for <dir> ITSELF ──────────
+# `GIT_DIR`, `GIT_WORK_TREE` and `GIT_CEILING_DIRECTORIES` in the caller's
+# environment change WHICH repository `git -C <dir>` answers for — an exported
+# `GIT_DIR` makes every answer another repository's — so a call whose answer
+# names or stamps a tree runs with the three unset, as `_inst_git_own`'s does.
+# A subshell, so the caller's environment is untouched and no new tool joins
+# the install path; git's stdout, stderr and exit status pass through.
+_inst_git() {   # <dir> <git args…> -> git's own status and output
+  local dir="$1"; shift
+  ( unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES; git -C "$dir" "$@" )
+}
+
 # ── _inst_git_own <dir> — is <dir> ITSELF a git repository's top level? ──
 # (D-3463.) `git -C <dir> rev-parse HEAD` answers for the ENCLOSING
 # repository when <dir> is merely inside a work tree — a staged release tree
@@ -10277,11 +10289,11 @@ _inst_version_name() {   # <src, physical> -> one VER_NAME_RE name on stdout
     printf '%s\n' "${src##*/}"
     return 0
   fi
-  if command -v git >/dev/null 2>&1 && sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" \
+  if command -v git >/dev/null 2>&1 && sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" \
      && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && _inst_git_own "$src"; then
     while IFS= read -r t; do
       if [[ "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then n="$t"; break; fi
-    done < <(git -C "$src" tag --points-at HEAD 2>/dev/null)
+    done < <(_inst_git "$src" tag --points-at HEAD 2>/dev/null)
     [ -n "$n" ] || n="untagged-${sha:0:12}"
     if [[ "$n" =~ $VER_NAME_RE ]]; then printf '%s\n' "$n"; return 0; fi
   fi
@@ -11245,7 +11257,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     echo "install: stamp: skipped (no git on PATH) — ccrc version will say unstamped"
     return 0
   fi
-  sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
+  sha="$(_inst_git "$src" rev-parse HEAD 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
     _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
@@ -11269,7 +11281,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     # a path that is already the failure path. If this call disagrees with the
     # first — a repository that appeared in between — `why` is empty and the
     # line says so rather than inventing a reason.
-    why="$(git -C "$src" rev-parse HEAD 2>&1 >/dev/null)"
+    why="$(_inst_git "$src" rev-parse HEAD 2>&1 >/dev/null)"
     why="${why%%$'\n'*}"
     why="${why//[[:cntrl:]]/}"
     why="${why:0:200}"
@@ -11277,9 +11289,9 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
     echo "install: stamp: skipped (git rev-parse HEAD exited $rc: $why) — ccrc version will say unstamped"
     return 0
   fi
-  ref="$(git -C "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
+  ref="$(_inst_git "$src" rev-parse --abbrev-ref HEAD 2>/dev/null)" || ref=""
   [ -n "$ref" ] || ref="HEAD"
-  if git -C "$src" diff --quiet 2>/dev/null && git -C "$src" diff --cached --quiet 2>/dev/null; then
+  if _inst_git "$src" diff --quiet 2>/dev/null && _inst_git "$src" diff --cached --quiet 2>/dev/null; then
     dirty=false
   else
     dirty=true
@@ -11289,7 +11301,7 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   # derivation, translated to this machine. Only the release shape qualifies
   # (which also keeps refname characters a JSON string can't carry, like `"`,
   # out of the stamp); no match is the ordinary case, not a failure.
-  version="$(git -C "$src" tag --points-at HEAD 2>/dev/null \
+  version="$(_inst_git "$src" tag --points-at HEAD 2>/dev/null \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)" || version=""
   vfield=""
   [ -n "$version" ] && vfield=",\"version\":\"$version\""
@@ -15713,23 +15725,37 @@ _upd_tree_untouched() {   # <pre_layout> <pre_current>
 #     sentences), or the next restart runs a voided older version.
 #   - `put_rec` / `put_caps` (1) rewrite the completed-install record and the
 #     caps file the run removed, from the bodies it held: tmp + one rename,
-#     mode 644, as the spine writes them. A failed write names itself, since
-#     the box then reads `install: incomplete` and loses the cap word the
-#     control plane's resolver needs.
+#     mode 644, as the spine writes them, through `_plat_mv_notdir`. A failed
+#     write names itself, since the box then reads `install: incomplete` and
+#     loses the cap word the control plane's resolver needs. When the legacy
+#     flip happened and the flip BACK failed, `~/ccrc` still names another
+#     tree, so NEITHER file goes back (a record over that link would vouch for
+#     a build the box is not on) and the sentence says so.
 _upd_unwind() {
   local legacy_from="$1" put_rec="$2" rec_body="$3" put_caps="$4" caps_body="$5"
-  local ok="" bad="" tmp
+  local ok="" bad="" held="" tmp
   UPD_UNWIND_SAID=""
   if [ -n "$legacy_from" ]; then
     if _plat_ln_swap "$BOX_VERSIONS_ROOT/$legacy_from" "$BOX_TREE_DIR"; then
       UPD_UNWIND_SAID="; \$HOME/ccrc points back at \$HOME/ccrc-versions/$legacy_from"
     else
       UPD_UNWIND_SAID="; \$HOME/ccrc still points at \$HOME/ccrc-versions/$UPD_VERSION, and flipping it back to $legacy_from failed"
+      # A record or caps put back over a link that failed to go back would
+      # vouch for a build the box is not on (`current` on the pre-update
+      # build while `~/ccrc` names another directory), and a retry could be
+      # skipped as converged. Neither goes back; the sentence says so.
+      [ "$put_rec" -ne 1 ] || held="completed-install record"
+      [ "$put_caps" -ne 1 ] || held="${held:+$held, }caps"
+      put_rec=0 put_caps=0
+      [ -z "$held" ] || UPD_UNWIND_SAID="$UPD_UNWIND_SAID; not put back — \$HOME/ccrc names another tree: $held"
     fi
   fi
+  # `_plat_mv_notdir` (D-2187's idiom), not `mv -f`: a directory standing at
+  # the destination refuses rather than swallowing the file, and the failure
+  # is named below like any failed write.
   if [ "$put_rec" -eq 1 ]; then
     tmp="$BOX_INSTALLED_FILE.tmp.$$"
-    if printf '%s' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then
+    if printf '%s' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then
       ok="completed-install record"
     else
       rm -f -- "$tmp" 2>/dev/null; bad="completed-install record"
@@ -15737,7 +15763,7 @@ _upd_unwind() {
   fi
   if [ "$put_caps" -eq 1 ]; then
     tmp="$BOX_CAPS_FILE.tmp.$$"
-    if printf '%s' "$caps_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" 2>/dev/null; then
+    if printf '%s' "$caps_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_CAPS_FILE" 2>/dev/null; then
       ok="${ok:+$ok, }caps"
     else
       rm -f -- "$tmp" 2>/dev/null; bad="${bad:+$bad, }caps"
