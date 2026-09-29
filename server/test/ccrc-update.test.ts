@@ -7855,6 +7855,32 @@ describe('ccrc watchdog: a re-measurement, never a timestamp alone (design §11)
     }
   });
 
+  // W6 Task 8A, review 167's F8: a watchdog rollback killed in any of the five
+  // pre-install phases leaves a pre-install report whose raw `from` is
+  // `watchdog`. D-3276's sentence ("tree never moved, nothing reverted") is
+  // true of an update that never began and FALSE here: the update the
+  // rollback was correcting did move the box, and the box is unhealthy on it.
+  // Its own sentence says that, is terminal like C29's, and never retries.
+  itLinux('F8: a watchdog rollback killed in a pre-install phase (a report from watchdog) with a failing probe is recorded with its own true sentence — never "tree never moved" — and is not retried', () => {
+    for (const phase of ['queued', 'resolving', 'fetching', 'verifying', 'backing-up']) {
+      const home = watchBox(`ccrc-watchdog-killed-rollback-${phase}-`);
+      report(home, { phase, ageS: 90, from: 'watchdog', target: 'v1.0.0' });
+      writeFileSync(join(home, 'fixture-unit-state'), 'failed\n');
+      const r = runWatchdog(home);
+      expect(r.code, `${phase}: ${r.stderr}`).toBe(0);
+      const now = readReport(home);
+      expect(now.phase, phase).toBe('failed');
+      expect(String(now.detail), phase).toMatch(new RegExp(
+        `^the watchdog's own rollback died at ${phase} before it moved anything; the box still runs the build the failed update left; not retrying; box unhealthy: .+$`));
+      expect(String(now.detail), phase).not.toContain('tree never moved');
+      expect(r.stdout, phase).toMatch(new RegExp(
+        `^watchdog: stale report \\(${phase}, \\d+s\\), from watchdog, fails its health probe \\(.+\\) — a PRIOR watchdog rollback died at ${phase} before it moved anything; the box still runs the build the update it was correcting left; not retrying, recorded as failed$`, 'm'));
+      expect(r.stdout, phase).not.toContain('tree never moved');
+      expect(existsSync(join(home, 'launcher-argv')), `${phase}: it rolled back again`).toBe(false);
+      expect(lockFree(home), phase).toBe(true);
+    }
+  });
+
   itLinux('D-3276: a stale report on an UNVERSIONED running tree with a failing probe is never rolled back', () => {
     // A deploy.sh-placed (or never-stamped) box: no ~/.ccrc/build.json at
     // all, so `_box_build_fields` answers non-zero and `cur_v` stays "".

@@ -14128,6 +14128,23 @@ cmd_watchdog() {
   # an update this run never applied. And a box whose running stamp carries
   # no version is never rolled back either — see the comment above the probe.
   if [ "$pre_install" -eq 1 ]; then
+    if [ "$raw_from" = watchdog ]; then
+      # W6 Task 8A, review 167's F8: a report in a pre-install phase whose RAW
+      # `from` is literally `watchdog` is not an update that never began — it
+      # is a PRIOR watchdog rollback killed before its install (the rollback
+      # writes `queued` … `backing-up` like any update, and C29's arm below
+      # cannot see it, because this arm runs first). The rollback's own tree
+      # never moved, but the UPDATE it was called to correct DID move this
+      # box, and nothing has undone that: "tree never moved, nothing
+      # reverted" — the sentence the other case below is true for — would tell
+      # the operator the opposite of the box's state. One revert attempt is
+      # still all there is (terminal, like C29's), and the verdict still leads
+      # so the 200-char cut drops only `$why`'s tail.
+      _upd_phase failed "the watchdog's own rollback died at $phase before it moved anything; the box still runs the build the failed update left; not retrying; box unhealthy: $why"
+      echo "watchdog: stale report ($phase, ${age}s), from watchdog, fails its health probe ($why) — a PRIOR watchdog rollback died at $phase before it moved anything; the box still runs the build the update it was correcting left; not retrying, recorded as failed"
+      _upd_unlock
+      return 0
+    fi
     # B6 (final review, wording only, D-3249's own rule — no number): the
     # verdict now leads so the 200-char cut can only drop `$why`'s tail,
     # never the verdict itself.
@@ -14183,11 +14200,17 @@ cmd_watchdog() {
   # Review fix round 1, I4 (relocating fix round 1 item 18 / review 155
   # C29): a stale in-flight report whose RAW `from` (captured before C6's
   # closed-vocabulary coercion, above) is LITERALLY `watchdog` can only mean
-  # one thing, this far past the re-measurement — pre-install, unversioned
-  # and item 8's "nothing to revert to" have all already ruled themselves
-  # out, and the probe genuinely failed: a PRIOR `ccrc rollback --from
-  # watchdog` this same watchdog ran died mid-flight (OOM, the unit's own
-  # TimeoutStartSec). Rolling back AGAIN retries with no bound — each
+  # one thing, this far past the re-measurement — unversioned and item 8's
+  # "nothing to revert to" have already ruled themselves out, and the probe
+  # genuinely failed: a PRIOR `ccrc rollback --from watchdog` this same
+  # watchdog ran died mid-flight (OOM, the unit's own TimeoutStartSec). This
+  # comment used to list PRE-INSTALL among the ruled-out cases, and that was
+  # false (review 167's F8): a rollback killed at `queued`…`backing-up` is
+  # exactly a pre-install report with `from: watchdog`, and it IS caught
+  # before this line, by the pre-install arm above — which now gives it its
+  # own sentence (the box still runs the build the update it was correcting
+  # left) rather than the "tree never moved" one that is true only of an
+  # update that never began. Rolling back AGAIN retries with no bound — each
   # attempt takes a fresh backup, re-runs the spine and restarts the unit,
   # forever, if the box keeps dying the same way. Placed HERE, not before
   # the re-measurement (review fix round 1 I4 — a genuinely stale report
