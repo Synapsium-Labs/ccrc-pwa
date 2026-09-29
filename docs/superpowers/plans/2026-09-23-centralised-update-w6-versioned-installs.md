@@ -518,6 +518,73 @@ update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"roll
 
 Fixture environment: the fixture's own server (the published build it ran when R7 started) wrote `~/.ccrc/update-intent` (epoch 0, `desired none`, lease in force), so R7a printed no `versions: WARN` and R7ch read `state=none`, and R7ch2's plant was skipped by the brief's own rule. D-3447's absent-projection → prune-skipped path was therefore NOT exercised in this rehearsal. The suites carry it by composition: an absent projection reads `unreadable (absent)`, and `_ver_protect`'s `*)` arm, which unreadable and stale share, prunes nothing. No suite case runs an absent projection end to end through `versions --prune`.
 
+### R6 (re-run after Task 8A)
+
+Why: Task 8A-1 changed `cmd_rollback` (a bare rollback now checks `previous` against the layout before it trusts it, C27, and exits 3 when its kept spine's trailing doctor FAILed after the gate passed, D-3461) and arm 3, after R6 ran. **Run:** on this branch at `c26aa61a83a0`, in the same harness, after its own containment proof: `command -v` of `systemctl`, `loginctl`, `journalctl`, `curl`, `tmux`, `ssh`, `gh`, `systemd-run`, `launchctl` and `ln`, under the harness's `env -i`, each answered `$S/bin/<tool>`, with `TMUX=unset` and `HOME=$H`. Nothing of the live half ran.
+
+The state R6 needs was re-made rather than assumed: R7c pruned `$U`, whose placed copy was also the pre-8A code, so both commands below run the checkout's ccrc by explicit path, as R7 does. The state after R7 was `~/ccrc -> v0.0.35`, so R5 was repeated first (R5r), to put `~/ccrc` back on `v0.0.34` with `previous` = `v0.0.35` kept.
+
+R5r: `bash $REPO/ccd/ccrc update --to v0.0.34 --downgrade` — exit `3` (the gate passed; the trailing doctor FAILed the same two fixture-environment checks, gh_auth and git_email). Deciding lines:
+
+```text
+update: previous: v0.0.35 (023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa) — the tag a restore or a bare 'ccrc rollback' returns to
+update: tree: v0.0.34's spine predates versioned installs and writes through $HOME/ccrc — $HOME/ccrc now points at $HOME/ccrc-versions/v0.0.34 (kept) for it to write into
+PASS build: the running server at 127.0.0.1:$PORT reports the sha the stamp names (6ff4e2e9fcda)
+```
+
+State after R5r:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.34
+ccrc-versions: v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+installed: 6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b 
+ccrc.service: active
+health: {"version":"v0.0.34","sha":"6ff4e2e9fcda9bcb75ee489d89cd3ab418b8d90b"}
+update.json: {"phase":"done","target":"v0.0.34","from":"cli","detail":"doctor exited 1 - the box moved; its health is ccrc doctor's"}
+```
+
+R6r: `bash $REPO/ccd/ccrc rollback` — exit `3` (expected 0 or 3 since D-3461: the kept spine completed and its trailing doctor exited 1 on those two checks; R6 above exited 0 on the same transcript). Deciding lines, verbatim:
+
+```text
+rollback: v0.0.35 is kept at $HOME/ccrc-versions/v0.0.35 — no release-host question and no download
+rollback: flip: v0.0.35's spine completed (its record is written) but its trailing doctor exited 1 — the FAIL lines above are the box's health; the gate decides
+rollback: flip: $HOME/ccrc -> $HOME/ccrc-versions/v0.0.35; its stamp and install record restored; its own spine re-placed the executables, hooks and units (no release download)
+update: gate: server answers on v0.0.35 (ccrc.service up, /health at 127.0.0.1:$PORT answers v0.0.35)
+rollback: this box runs v0.0.35 again — flipped back to $HOME/ccrc-versions/v0.0.35, no download
+rollback: the kept spine completed (its record is written) but its trailing doctor exited 1 — this box IS on v0.0.35; the FAIL lines above are the box's health, not the rollback's
+```
+
+- yes — the bare rollback was not refused by the layout check: `~/ccrc` pointed at `v0.0.34` and the stamp read `v0.0.34` (they agree), so `previous` was trusted, as C27's control requires
+- yes — the kept version answered the existence question, and nothing was downloaded: the R6r `curl` calls (the gate's and doctor's loopback probes) were 3, and 0 of them named the release host (R5r's were 3)
+- yes — the flip restored the stamp and record and re-ran the kept spine; the gate passed once more, on v0.0.35
+- yes — exit 3, D-3461's reading: the box IS on v0.0.35 and the FAIL lines are its health
+- yes — `update.json` closed `done`, from rollback, its detail naming the doctor exit (`doctor exited 1 - the box moved; its health is ccrc doctor's`)
+
+State after R6r:
+
+```text
+entries of $H named ccrc* (type name link-target):
+  d ccrc-backups 
+  d ccrc-versions 
+  l ccrc $H/ccrc-versions/v0.0.35
+ccrc-versions: v0.0.34[stamp,record] v0.0.35[stamp,record]
+previous: v0.0.35 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+migrating-to: (none)
+stamp: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+installed: 023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa 
+ccrc.service: active
+health: {"version":"v0.0.35","sha":"023fe94d9f2a6bc69017c1c2b149a0134cc2bcaa"}
+update.json: {"phase":"done","target":"v0.0.35","from":"rollback","detail":"doctor exited 1 - the box moved; its health is ccrc doctor's"}
+```
+
+Teardown: `ccrc.service` `inactive`; the live box measured identical before the containment proof and after R6r; no process naming the harness was left running; the poison log holds only `tmux -V` and `gh auth status` probes, each refused.
+
 ### The live half — the coordinator's, at rollout (not run here)
 
 Fleet node first, from a machine holding `~/.ccrc/deploy.env`, each box named by its role. The merge cuts a
@@ -8486,7 +8553,7 @@ The state: `  l ccrc $H/ccrc-versions/<N-1>`, `previous: <N> <sha>`, `health` `<
 bash "$S/run.sh" R6 bash "$H/ccrc-versions/$U/ccd/ccrc" rollback; bash "$S/state.sh" R6
 grep -c '^R6	' "$S/logs/curl-argv"; grep '^R6	' "$S/logs/curl-argv" | grep -cF "$BASE"
 ```
-Expected: `== R6: exit 0` with, in order:
+Expected: `== R6: exit 0`, or `3` when the kept spine's trailing doctor FAILs only baseline checks and the gate passes (D-3461, as R4), with, in order:
 - `rollback: <N> is kept at $HOME/ccrc-versions/<N> — no release-host question and no download`;
 - `N`'s own spine lines (its pre-W6 `install: tree: already running from $HOME/ccrc`, its `npm ci`, and `install: stamp: skipped (…) — ccrc version will say unstamped`, which a pre-W6 spine prints over the stamp `_ver_flip_back` restored — expected, not a finding, D-3439);
 - `rollback: flip: $HOME/ccrc -> $HOME/ccrc-versions/<N>; its stamp and install record restored; its own spine re-placed the executables, hooks and units (no release download)`;
