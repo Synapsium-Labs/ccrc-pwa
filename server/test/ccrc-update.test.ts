@@ -10032,16 +10032,101 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
     r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP must be a number \(got a non-numeric value\) — nothing was pruned$/m);
+    expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — nothing was pruned$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
     expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
     // F8: listing is exit 0 by the exit table — a bad knob WARNs and lists, verdicts unmeasured.
     r = runVersions(home, [], { CCRC_VERSIONS_KEEP: 'three' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned$/m);
-    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
-    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
+    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP='three' is not a whole number from 0 to 9999 — listing only; nothing would be pruned$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+  });
+
+  // F6 (review 179, fix round 1 item 6): ONE bounded validator, `^[0-9]{1,4}$`, for
+  // every KEEP knob. `99999999999999999999` used to pass `^[0-9]+$`, and then
+  // `[ -le ]` / `[ -lt ]` failed with rc 2 ("integer expression expected"), so
+  // the short-circuit was skipped and every unprotected complete version was
+  // pruned — by `--prune` and by the automatic GC after a passed gate — while
+  // the plain listing called every one of them `prunable`.
+  describe('the KEEP knob is ONE bounded number: a whole number from 0 to 9999, or nothing is pruned and nothing is called prunable (F6)', () => {
+    const NAMES = ['v1.0.4', 'v1.0.3', 'v1.0.2', 'v1.0.1', 'v1.0.0'];
+    const WHY = (v: string): string => `CCRC_VERSIONS_KEEP='${v}' is not a whole number from 0 to 9999`;
+    const HUGE = '99999999999999999999';
+
+    it("the report's value is refused by the prune, the plain listing and the automatic GC — every version stays, none is called prunable", () => {
+      const home = versionedBox('ccrc-versions-keep-huge-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: HUGE });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY(HUGE)} — nothing was pruned`);
+      expect(r.stdout).not.toMatch(/pruned/);
+      expect(existsSync(join(home, '.ccrc', 'update.lock')), 'refused before the lock').toBe(false);
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      // The plain listing lists (exit 0), names the knob and value, and marks no version prunable.
+      r = runVersions(home, [], { CCRC_VERSIONS_KEEP: HUGE });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain(`versions: WARN: ${WHY(HUGE)} — listing only; nothing would be pruned`);
+      expect(r.stdout, 'a version was listed as prunable').not.toMatch(/^ {2}[ *] \S+ {2}(?:in)?complete {2}prunable/m);
+      expect(r.stdout).toMatch(/^ {4}v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999$/m);
+      expect(r.stdout).toContain('CCRC_VERSIONS_KEEP=(not a whole number from 0 to 9999)');
+      // The automatic GC keeps its contract: a WARN, rc 1 (its callers ignore it), nothing removed.
+      const a = sourcedCcrc(home, `CCRC_VERSIONS_KEEP=${HUGE}; _ver_gc update auto; echo "rc=$?"`);
+      expect(a.stdout, a.stderr).toBe(`update: versions: WARN: ${WHY(HUGE)} — nothing pruned\nrc=1\n`);
+      expect(a.stderr).toBe('');
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+    });
+
+    it('controls: 9999 is a working knob (nothing to prune beside four versions), 10000 is refused, and leading zeros are decimal', () => {
+      const home = versionedBox('ccrc-versions-keep-bounds-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '9999' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toContain('versions: nothing to prune — 4 complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=9999, and none incomplete');
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '10000' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY('10000')} — nothing was pruned`);
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+      // `0002` is two, never octal-or-error arithmetic: the newest 2 beside the pointed-at one stay.
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0002' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.0 \(complete, not among the newest 2\)$/m);
+      expect(r.stdout).toMatch(/^versions: pruned \$HOME\/ccrc-versions\/v1\.0\.1 \(complete, not among the newest 2\)$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.2', 'v1.0.3', 'v1.0.4']);
+    });
+
+    it('the value in the sentence is sanitised as _upd_validate_timeout does and capped in length: no control byte, no newline, no more than 32 characters and an ellipsis', () => {
+      const home = versionedBox('ccrc-versions-keep-sane-', NAMES);
+      stopUnits(home);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'a\nb\x1b[31mc' });
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY('a?b?[31mc')} — nothing was pruned\n`);
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: 'x'.repeat(200) });
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain(`ccrc: versions: ${WHY(`${'x'.repeat(32)}...`)} — nothing was pruned\n`);
+      expect(r.stderr).not.toContain('x'.repeat(33));
+      expect(versionDirs(home)).toEqual([...NAMES].sort());
+    });
+
+    it('belt: _ver_verdicts answers unmeasured — rc 1, nothing doomed, every verdict kept — when a numeric test ERRORS, never prune (the validator is bypassed on purpose)', () => {
+      const home = versionedBox('ccrc-versions-keep-belt-', NAMES);
+      const script = (keep: string): string => [
+        '_ver_list; declare -gA VER_PROTECT=()',
+        `rc=0; _ver_verdicts prune ${keep} 2>/dev/null || rc=$?`,
+        'printf "rc=%s doomed=[%s] why=[%s]\\n" "$rc" "${VER_DOOMED[*]}" "$VER_WHY"',
+        'for n in "${VER_NAMES[@]}"; do printf "%s=%s\\n" "$n" "${VER_VERDICT[$n]}"; done',
+      ].join('\n');
+      const bad = sourcedCcrc(home, script(HUGE));
+      expect(bad.stdout.split('\n')[0], bad.stderr)
+        .toBe('rc=1 doomed=[] why=[the keep count could not be compared (an integer expression expected) — no version is pruned on a guess]');
+      expect(bad.stdout.split('\n').slice(1, 6), bad.stderr).toEqual(NAMES.map((n) => `${n}=kept: unmeasured`));
+      // the control: the same call over a number answers, and dooms what no slot holds
+      // (nothing is protected in this call, so the pointed-at name takes the one slot)
+      const ok = sourcedCcrc(home, script('1'));
+      expect(ok.stdout.split('\n')[0], ok.stderr).toBe('rc=0 doomed=[v1.0.3 v1.0.2 v1.0.1 v1.0.0] why=[]');
+    });
   });
 
   it('a box whose ~/ccrc is still a directory: nothing is versioned, and --prune removes nothing', () => {

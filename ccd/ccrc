@@ -17638,6 +17638,25 @@ cmd_backup() {
   _bak_prune
 }
 
+# `_keep_ok <value>` and `_keep_why <knob> <value>` — the ONE validator for
+# every KEEP knob (review 179 F6; D-3423): `CCRC_BACKUP_KEEP` below,
+# `CCRC_VERSIONS_KEEP` in `_ver_gc` and `cmd_versions`. A whole number of one
+# to four digits, `0` to `9999`, and nothing else. `^[0-9]+$` let
+# `99999999999999999999` through, and there `[ -le ]`, `[ -lt ]` and bash
+# arithmetic fail or WRAP (`18446744073709551615` is -1), which read as "remove
+# everything" — an operator who meant "keep everything" got the opposite. Four
+# digits is far past any number of trees or backups a box keeps, and no value
+# that long can overflow anything. `_keep_why` is the refusal's own sentence:
+# it names the knob and the value, the value sanitised as `_upd_validate_timeout`
+# does (a non-printable byte becomes `?`) and capped at 32 characters, so a hostile
+# or absurd value cannot fill a line or drive a terminal.
+_keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
+_keep_why() {   # <knob> <value>
+  local v="$2"
+  [ "${#v}" -le 32 ] || v="${v:0:32}..."
+  printf "%s='%s' is not a whole number from 0 to 9999" "$1" "${v//[![:print:]]/?}"
+}
+
 # Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
 # `deploy.sh`'s `prune_backups` glob exactly (`[0-9]{8}-[0-9]{6}`, the shape
 # `_upd_backup`'s `date +%Y%m%d-%H%M%S` writes), because the directory also
@@ -17647,8 +17666,8 @@ cmd_backup() {
 # chronological order.
 _bak_prune() {
   local keep="${CCRC_BACKUP_KEEP:-10}"
-  [[ "$keep" =~ ^[0-9]+$ ]] \
-    || _ccrc_die "CCRC_BACKUP_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  _keep_ok "$keep" || _ccrc_die "$(_keep_why CCRC_BACKUP_KEEP "$keep") — nothing was pruned"
+  keep=$((10#$keep))   # `0002` is two: the loop below is ARITHMETIC, where a leading 0 is octal (or an error)
   local -a dirs=()
   local had_nullglob=0 d
   shopt -q nullglob && had_nullglob=1
@@ -17841,10 +17860,14 @@ _ver_protect() {
 # decided, for the listing and the prune alike, over VER_NAMES in
 # `_ver_list`'s order: protected → kept; complete → the first <keep> kept,
 # the rest doomed; incomplete → doomed by `prune` only. Fills VER_VERDICT
-# and VER_DOOMED / VER_DOOMED_WHY. rc 0.
+# and VER_DOOMED / VER_DOOMED_WHY. rc 0. rc 1 (VER_WHY) when a numeric test
+# ERRORED — a <keep> that is not a number bash can compare (review 179 F6's
+# belt over `_keep_ok`, which every caller has asked first): `[ -lt ]` answers 2,
+# which the plain `if` below reads as "no", i.e. `prunable`. Then EVERY
+# version is `kept: unmeasured` and nothing is doomed, never one guess.
 _ver_verdicts() {
   declare -gA VER_VERDICT=()
-  local mode="$1" keep="$2" n slots=0
+  local mode="$1" keep="$2" n slots=0 trc
   VER_DOOMED=(); VER_DOOMED_WHY=()
   for n in "${VER_NAMES[@]}"; do
     # Not bash 4.2's `-v` variable test: bash 3.2 cannot PARSE it inside
@@ -17854,7 +17877,13 @@ _ver_verdicts() {
     if [ -n "${VER_PROTECT[$n]:-}" ]; then
       VER_VERDICT[$n]="kept: ${VER_PROTECT[$n]}"
     elif [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ]; then
-      if [ "$slots" -lt "$keep" ]; then
+      trc=0; [ "$slots" -lt "$keep" ] 2>/dev/null || trc=$?
+      if [ "$trc" -gt 1 ]; then
+        VER_WHY="the keep count could not be compared (an integer expression expected) — no version is pruned on a guess"
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
+        VER_DOOMED=(); VER_DOOMED_WHY=()
+        return 1
+      elif [ "$trc" -eq 0 ]; then
         slots=$((slots + 1)); VER_VERDICT[$n]="kept: newest $keep"
       else
         VER_VERDICT[$n]="prunable"
@@ -17880,14 +17909,15 @@ _ver_gc() {
   local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
   local rc=0 lrc=0 prc=0 ncomp=0 npart=0 d b pid gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
-  if [[ ! "$keep" =~ ^[0-9]+$ ]]; then
+  if ! _keep_ok "$keep"; then
     if [ "$mode" = auto ]; then
-      echo "$lead WARN: CCRC_VERSIONS_KEEP is not a number — nothing pruned"
+      echo "$lead WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing pruned"
     else
-      echo "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+      echo "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
     fi
     return 1
   fi
+  keep=$((10#$keep))   # decimal: `0002` is two, whatever a later arithmetic context would make of a leading 0
   _ver_layout
   case "$VER_LAYOUT" in
     linked|migrated) ;;
@@ -17917,7 +17947,14 @@ _ver_gc() {
     fi
     return 1
   fi
-  _ver_verdicts "$mode" "$keep"
+  if ! _ver_verdicts "$mode" "$keep"; then
+    if [ "$mode" = auto ]; then
+      echo "$lead WARN: nothing pruned — $VER_WHY"
+    else
+      echo "versions: prune skipped — $VER_WHY; nothing was removed"
+    fi
+    return 1
+  fi
   if [ "${#VER_DOOMED[@]}" -eq 0 ]; then
     [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
     return 0
@@ -17996,11 +18033,13 @@ cmd_versions() {
   # reads (final review F8) — so it WARNs, lists, and marks every verdict
   # unmeasured.
   local keep_ok=1
-  if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
+  if ! _keep_ok "$keep"; then
     [ "$prune" -eq 0 ] \
-      || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+      || _ccrc_die "versions: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — nothing was pruned"
     keep_ok=0
-    echo "versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned"
+    echo "versions: WARN: $(_keep_why CCRC_VERSIONS_KEEP "$keep") — listing only; nothing would be pruned"
+  else
+    keep=$((10#$keep))
   fi
   if [ "$prune" -eq 1 ]; then
     _upd_lock
@@ -18031,12 +18070,12 @@ cmd_versions() {
     linked|migrated)
       if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
       if [ "$keep_ok" -eq 0 ]; then
-        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a number"; done
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a whole number from 0 to 9999"; done
       elif [ "$prc" -ne 0 ]; then
         echo "versions: WARN: $VER_WHY — nothing would be pruned"
         for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
-      else
-        _ver_verdicts prune "$keep"
+      elif ! _ver_verdicts prune "$keep"; then
+        echo "versions: WARN: $VER_WHY — nothing would be pruned"   # verdicts: `kept: unmeasured`, set by the belt itself
       fi ;;
     *) for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: nothing is pruned while \$HOME/ccrc reads $VER_LAYOUT"; done ;;
   esac
@@ -18045,7 +18084,7 @@ cmd_versions() {
     cpl=incomplete; [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ] && cpl=complete
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done
-  [ "$keep_ok" -eq 1 ] || keep="(not a number)"
+  [ "$keep_ok" -eq 1 ] || keep="(not a whole number from 0 to 9999)"
   echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
   return "$grc"
 }
