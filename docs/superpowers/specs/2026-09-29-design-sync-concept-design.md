@@ -174,7 +174,41 @@ Three properties of it are deliberate:
 3. The two skill clauses + the guard test. **AGENT-FIRST**: anything under `ccd/` ships to
    the fleet host before the server.
 
-## Open, carried forward
+## What landed, 2026-09-29
 
-- Wave 2 (~45 domain components) is scoped and not started.
-- Wave 1 plus the three earlier pwa fixes are uncommitted on `design-system`.
+All three lanes shipped the same day this was written. Recorded here because the section
+this replaces said the opposite and was false within hours.
+
+| Lane | Commit |
+|---|---|
+| B + C — briefs, register, posture, guard, coordinator clause | `887239e1` |
+| A — first sync, plus the Storybook defect it found | `e68f1d58` |
+| wave 2 — call sites take the primitives, `legacy.css` retires | `b816c1ce` |
+| A — re-sync after wave 2 | `e5a40d22` |
+
+**Two corrections to this document's own claims:**
+
+1. Lane C proposed a per-task `Design:` line. That did not fit — plans list tasks as
+   bullets under `## Tasks`, so the declaration became a per-plan `## Design` section.
+   Corrected in the lane C text above.
+2. Lane C proposed `POST /api/asks` for the `offer` posture. **That route does not
+   exist**, and `coordinator-skill.test.ts`'s route-linkage check caught it before it
+   shipped. Asks are created by the AskUserQuestion tool through the session hook. The
+   argument survived the correction and got stronger; the mechanism named was simply
+   wrong.
+
+**The gate moved as lane A predicted it would, and in the direction wave 1 warned about:**
+`ALL 482 PASS` -> `ALL 462 PASS` when `legacy.css` retired. Twenty pairs left the census
+because they were duplicate rules, not because anything regressed. 462 is the honest
+number.
+
+## Open
+
+- **`ccd/coordinator-skill/SKILL.md` changed (`887239e1`, 18 lines) -> AGENT-FIRST.** It
+  ships to the fleet host before the server. Not done: it is the operator's call, and
+  separately `~/.ccrc/deploy.env` does not exist on this machine, so `deploy.sh` would
+  refuse with exit 2 rather than guess coordinates.
+- **The branch is not merged.** Six commits on `design-system`, nothing pushed.
+- **The contrast gate does not reach Claude Design.** `pwa/design/audit.mjs` runs over
+  this repo's stylesheets; designs the agent produces there are outside it, so a canvas
+  can show a pair the gate would refuse. Caught at the code step, not the design step.
