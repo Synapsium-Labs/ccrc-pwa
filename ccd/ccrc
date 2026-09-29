@@ -13767,8 +13767,15 @@ cmd_update() {
 # that cannot be read. The common first rollback after the move onto W6 agrees
 # (the migration names the directory from the stamp) and proceeds. Never
 # consulted for `--to`. Reads only; changes nothing.
-_rollback_previous_agrees_with_layout() {
-  local cur="" stamp_name="" want="" rc=0
+#   ONE DISAGREEMENT IS ADMITTED (D-3466, review 179 F1): the killed-flip
+# state — `_rollback_killed_flip_state`, below. A W6 update killed between
+# `_inst_tree`'s flip and `_inst_stamp` leaves exactly this disagreement (link
+# on the new version, stamp on the old build, `previous` naming that old
+# build, no record), and the watchdog's bare rollback is the one recovery it
+# has, tried once. Refusing it here would strand the box, so this admits it
+# — to a FLIP only, which `cmd_rollback` re-measures under its lock.
+_rollback_previous_agrees_with_layout() {   # [role]
+  local role="${1:-}" cur="" stamp_name="" want="" rc=0 krc=0
   _ver_layout
   case "$VER_LAYOUT" in linked|migrated) ;; *) return 0 ;; esac
   cur="$VER_CURRENT"
@@ -13778,7 +13785,91 @@ _rollback_previous_agrees_with_layout() {
   stamp_name="${BOX_BUILD[4]:-untagged-${BOX_BUILD[0]:0:12}}"
   if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then want="${BOX_BUILD[4]}"; else want="untagged-${BOX_BUILD[0]:0:12}"; fi
   [ "$cur" = "$want" ] && return 0
-  _ccrc_die "rollback: ~/.ccrc/previous names $UPD_PREV_TAG, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
+  _rollback_killed_flip_state "$UPD_PREV_TAG" "$role" || krc=$?
+  [ "$krc" -eq 0 ] && return 0
+  _rollback_refuse_layout "$cur" "$stamp_name" "$KF_WHY"
+}
+
+# `_rollback_refuse_layout <cur> <stamp_name> [why]` — C27's sentence, the ONE
+# definition of it (D-3466). Every refusal of a rollback whose layout and stamp
+# disagree ends here: C27 itself, and `cmd_rollback`'s re-measurement under its
+# lock (a `--to` run, a detached run's child, a flip that cannot be made).
+# `why`, when given, is a whole line of its own — why the killed-flip state
+# (the one disagreement a rollback may act on, and only by flip) does not carry
+# this run — printed BEFORE the sentence, so the sentence stays byte-for-byte
+# what C27 always said.
+# A `--to` run never read `previous`, so it is read here, for the sentence only.
+_rollback_refuse_layout() {   # <cur> <stamp_name> [why]
+  local cur="$1" stamp_name="$2" why="${3:-}"
+  [ -n "$UPD_PREV_TAG" ] || _upd_read_previous || :
+  [ -z "$why" ] || echo "$PROG: rollback: $(_upd_redact "$why")" >&2
+  _ccrc_die "rollback: ~/.ccrc/previous names ${UPD_PREV_TAG:-nothing usable}, but it cannot be trusted here — \$HOME/ccrc points at \$HOME/ccrc-versions/$cur while this box's stamp reads $stamp_name, so the last move was made by something that does not keep the layout (for example a pre-W6 release's updater after a rollback, or deploy.sh), and previous may not be the build before the last update. Nothing on this box was changed — name the target: ccrc rollback --to vX.Y.Z"
+}
+
+# `_rollback_killed_flip_state <to> <role>` (D-3466, review 179 F1) — the ONE
+# measurement of the killed-flip state, called by C27 and, again, under the
+# lock where `cmd_rollback` decides the flip. rc 0: the state holds, ALL SIX
+# conditions. rc 1: conditions (1) to (3) do not all hold — no verdict, the
+# rollback goes on exactly as before this function existed. rc 2: (1) to (3)
+# hold and one of (4) to (6) does not — `KF_WHY` names it. Reads only.
+#   (1) the target is the stamp's non-empty version — `BOX_BUILD[4]`, never
+#       the `untagged-<sha12>` name `stamp_name` falls back to; for a bare
+#       rollback the target is `UPD_PREV_TAG`;
+#   (2) nothing is at `~/.ccrc/installed` (`[ ! -e ] && [ ! -L ]`);
+#   (3) `~/ccrc` names a different version;
+#   (4) the target's version is kept — `_ver_kept` answers 0, which after
+#       D-3465 also says its bytes are the ones that were kept;
+#   (5) its kept stamp's sha is the box stamp's — the stamp still describes
+#       that version's build;
+#   (6) its `ccd/ccrc` carries `^BOX_VERSIONS_ROOT=`, the probe `cmd_update`
+#       uses: a pre-W6 version's own spine runs `npm ci` in `~/ccrc` with no
+#       condition, and in this state the units still run that tree.
+# An unreadable stamp, or an unversioned layout, is rc 1: today's behaviour.
+# Absence of the record alone means nothing — five things remove it
+# (`cmd_update`, `_ver_flip_back`, `_upd_restore_arm3`, `_upd_restore_arm1`'s
+# failure path, `_uninst_tree_bins`) — which is why (1), (3) and (4) to (6)
+# stand beside (2). Sets `KF_WHY`; leaves `BOX_BUILD` the box's own stamp.
+KF_WHY=""
+_rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 applies but fails (KF_WHY)
+  local to="$1" role="${2:-}" brc=0 krc=0 vdir="$BOX_VERSIONS_ROOT/$1" box_sha="" kept_sha="" kwhy=""
+  local -a saved=()
+  KF_WHY=""
+  _ver_layout
+  case "$VER_LAYOUT" in linked|migrated) ;; *) return 1 ;; esac
+  _box_build_fields || brc=$?
+  [ "$brc" -eq 0 ] || return 1
+  # (1)
+  [ -n "${BOX_BUILD[4]}" ] && [ "${BOX_BUILD[4]}" = "$to" ] || return 1
+  box_sha="${BOX_BUILD[0]}"
+  # (2)
+  { [ ! -e "$BOX_INSTALLED_FILE" ] && [ ! -L "$BOX_INSTALLED_FILE" ]; } || return 1
+  # (3)
+  [ "$VER_CURRENT" != "$to" ] || return 1
+  # (4)
+  _ver_kept "$to" "$role" || krc=$?
+  if [ "$krc" -ne 0 ]; then
+    kwhy="$VER_WHY"
+    case "$krc" in
+      1) KF_WHY="the killed-flip state does not hold — the target is not kept ($kwhy)" ;;
+      3) KF_WHY="the killed-flip state does not hold — the target was written through since it was kept ($kwhy)" ;;
+      *) KF_WHY="the killed-flip state does not hold — the target is not kept complete ($kwhy)" ;;
+    esac
+    return 2
+  fi
+  # (5)
+  saved=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  if _box_build_fields "$vdir/$VER_STAMP_COPY"; then kept_sha="${BOX_BUILD[0]}"; fi
+  BOX_BUILD=(${saved[@]+"${saved[@]}"})
+  if [ -z "$kept_sha" ] || [ "$kept_sha" != "$box_sha" ]; then
+    KF_WHY="the killed-flip state does not hold — the target's kept stamp is not this box's stamp (another build's sha)"
+    return 2
+  fi
+  # (6)
+  if ! grep -q '^BOX_VERSIONS_ROOT=' "$vdir/ccd/ccrc" 2>/dev/null; then
+    KF_WHY="the killed-flip state does not hold — the target's own ccd/ccrc predates versioned installs, so its spine would npm ci in the tree the units run"
+    return 2
+  fi
+  return 0
 }
 
 # ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
@@ -13857,11 +13948,20 @@ cmd_rollback() {
   # spelling of the refusal (`_upd_detach` repeats it as its step 0).
   [ "$detach" -eq 1 ] && _upd_detach_os_check
 
+  # The box's role, read as `cmd_update` reads it — before the target is
+  # resolved, because C27's killed-flip admission (D-3466) asks whether the
+  # target is KEPT, and a kept version's build is the role's.
+  local role="" kept=0 frc=0 now="" krc=0 kf=0 kf_cur=""
+  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
+    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  fi
+  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+
   if [ -z "$to" ]; then
     _upd_read_previous || prc=$?
     case "$prc" in
       0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous"
-         _rollback_previous_agrees_with_layout ;;
+         _rollback_previous_agrees_with_layout "$role" ;;
       1) _ccrc_die "rollback: nothing to roll back to — ~/.ccrc/previous is absent (no update has run on this box since W4); name one: ccrc rollback --to vX.Y.Z" ;;
       2) _ccrc_die "rollback: the build before the last update carried no release tag (previous: untagged ${UPD_PREV_SHA:-unstamped}) — name one: ccrc rollback --to vX.Y.Z" ;;
       *) _ccrc_die "rollback: ~/.ccrc/previous is unreadable or malformed (line 1 must be a release tag vX.Y.Z or 'untagged') — fix or remove it by hand, or name one: ccrc rollback --to vX.Y.Z" ;;
@@ -13962,11 +14062,7 @@ cmd_rollback() {
   # `--detach` hands the run on — and before the lock is taken, except for
   # a non-`cli` run without `--detach`, which took it above (D-3429 as
   # amended; `cmd_update` refuses it too, for the re-install arm).
-  local role="" kept=0 frc=0 now="" krc=0
-  if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
-  fi
-  case "$role" in server|fleet|both) ;; *) role="" ;; esac
+  # (`role` was read above, before the target was resolved.)
   # W6 Task 3 (D-3437, applied here): a
   # crashed migration reads `crashed` — neither `linked` nor `migrated` — so
   # a kept tag would read as NOT kept, and the rollback would ask the release
@@ -14023,6 +14119,23 @@ cmd_rollback() {
   _upd_lock
   local run_from=rollback
   [ "$from" = watchdog ] && run_from=watchdog
+  # D-3466 (review 179 F1): the killed-flip state, RE-MEASURED under the lock
+  # where the flip is decided, and keyed on conditions (1) to (3), never on C27
+  # having run — a detached run's child gets `--to` and never runs C27. When
+  # (1) to (3) hold the rollback may only FLIP: (4) to (6) failing here dies
+  # with C27's sentence (the report closed `failed` first, as the flip's own
+  # refusals close it), and the flip below is the target's kept version or
+  # nothing — it never falls through to `cmd_update --to … --downgrade`,
+  # whose re-install would rsync --delete and `npm ci` into the tree the
+  # units still run. The state's own measurement decides `kept`: what it read
+  # a moment ago, under this lock, is what the flip acts on.
+  _rollback_killed_flip_state "$to" "$role" || kf=$?
+  kf_cur="$VER_CURRENT"
+  case "$kf" in
+    0) kept=1 ;;
+    2) UPD_FROM="$run_from"; UPD_REPORT_TARGET="$to"; UPD_REPORTING=1
+       _rollback_refuse_layout "$kf_cur" "$to" "$KF_WHY" ;;
+  esac
   if [ "$kept" -eq 1 ]; then
     # ROLLBACK BY FLIP (design §11: rollback "runs arm 1 or arm 2 above, then
     # the gate, then _upd_sweep"; "rollback after W5 is arm 1"). Re-measured
@@ -14088,6 +14201,9 @@ cmd_rollback() {
         fi
         return 0 ;;
       1)
+        # D-3466: in the killed-flip state a flip that cannot be made is a
+        # refusal, never a re-install (see the guard above).
+        [ "$kf" -eq 0 ] && _rollback_refuse_layout "$kf_cur" "$to" "the killed-flip state holds, so this rollback may only flip, and the flip could not be made ($VER_WHY) — it does not fall back to a re-install"
         # UPD_REPORTING deliberately stays 1 here, unlike the RESET above: this
         # path has already written a non-terminal `installing "rollback by
         # flip …"` phase, so a refusal on the way into the in-process
