@@ -100,8 +100,8 @@ const redriveFromswap = (env: Record<string, string> = {}): string[] => {
   return sendKeys();
 };
 const typedPrompt = (keys: string[]): boolean =>
-  keys.some((k) => k.startsWith('tmux send-keys -t cc-test -l Continue from where you left off.'))
-  && keys.some((k) => k === 'tmux send-keys -t cc-test Enter');
+  keys.some((k) => k.startsWith('tmux send-keys -t =cc-test: -l Continue from where you left off.'))
+  && keys.some((k) => k === 'tmux send-keys -t =cc-test: Enter');
 
 describe('_transcript_stalled_pair', () => {
   const rc = (lines: string[]): number => {

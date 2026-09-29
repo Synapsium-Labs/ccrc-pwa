@@ -1789,8 +1789,8 @@ general remote-shell:
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
   rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
   server never asks systemd anything — nothing under `~/.config/systemd`.
-- **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
-  `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
+- **pty**: `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` — the EXACT target, since a bare
+  name is a tmux prefix search (D-3525) — with `sessionId` sanitized to `[A-Za-z0-9_-]+`, never an arbitrary command.
 - **Update op**: `update` only ever spawns `~/.local/bin/ccrc update` or `rollback`, as
   `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
   first — never through the exec whitelist, never an arbitrary command. The agent
@@ -3499,7 +3499,7 @@ but the pane is still scraped, and two jobs genuinely need it: reading the
 input-box draft, and proving that the menu on screen is the one an answer is
 about. Both drift between Claude Code versions. After any upgrade, re-capture
 the fixtures under `server/test/fixtures/panes/` (e.g.
-`tmux capture-pane -t cc-<id> -p`) and re-run `test/dialog.test.ts` /
+`tmux capture-pane -t =cc-<id>: -p`) and re-run `test/dialog.test.ts` /
 `test/send.test.ts` / `test/ask-route.test.ts`.
 
 Hook *delivery* drifts too, and silently: Claude Code 2.1.222 delivers

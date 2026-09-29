@@ -150,11 +150,13 @@ describe('rungs 3 to 6 — the retryable ones', () => {
     makeChild(h);
     resetCalls();
     expect(evalOf(h, { pre: ATTACHED }).verdict).toBe('attached');
-    // `=` anchors the target: a bare `cc-<id>` is an fnmatch pattern that
-    // resolves a prefix to a DIFFERENT session (`ccd-win-size.test.ts` measures it).
-    expect(calls()).toContain(`tmux has-session -t =cc-${CHILD_ID}`);
-    expect(calls()).toContain(`tmux list-clients -t =cc-${CHILD_ID} -F #{client_tty}`);
+    // The EXACT target `=cc-<id>:` (D-3525): a bare `cc-<id>` is a search that
+    // resolves a prefix to a DIFFERENT session (`ccd-tmux-anchor.test.ts` measures it
+    // on real tmux), and a colon-less `=cc-<id>` is exact only for session-type verbs.
+    expect(calls()).toContain(`tmux has-session -t =cc-${CHILD_ID}:`);
+    expect(calls()).toContain(`tmux list-clients -t =cc-${CHILD_ID}: -F #{client_tty}`);
     expect(calls().some((c) => / -t cc-/.test(c)), 'no unanchored target').toBe(false);
+    expect(calls().some((c) => / -t =[^ ]*[^: ](?: |$)/.test(c)), 'no colon-less anchor').toBe(false);
     expect(evalOf(h, { pre: UNLISTABLE }).verdict, 'presence unmeasured is not absence').toBe('attached');
   }, 60_000);
 
@@ -195,13 +197,13 @@ describe('rung 5 asks tmux through `_session_probe`, ANCHORED — "tmux could no
     expect(r.verdict, r.detail).toBe('unmeasured');
     expect(r.token).toBe('');
     expect(r.detail).toContain(fault);
-    expect(calls(), 'asked, and asked ANCHORED').toContain(`tmux has-session -t =cc-${CHILD_ID}`);
+    expect(calls(), 'asked, and asked EXACTLY').toContain(`tmux has-session -t =cc-${CHILD_ID}:`);
   }, 60_000);
 
   it('the CONTROL: `can’t find session` is gone — reclaimable; and a live session with no client passes too', () => {
     makeChild(h);
-    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}`).stderr, 'the model says gone')
-      .toContain(`can't find session: =cc-${CHILD_ID}`);
+    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}:`).stderr, 'the model says gone, in tmux\'s words')
+      .toContain(`can't find session: cc-${CHILD_ID}`);
     expect(evalOf(h).verdict).toBe('reclaimable');
     plantTmux(h, { sessions: [`cc-${CHILD_ID}`] });
     expect(evalOf(h).verdict).toBe('reclaimable');
@@ -216,7 +218,7 @@ describe('rung 5 asks tmux through `_session_probe`, ANCHORED — "tmux could no
     // The model resolves a BARE target as tmux does — to the sibling — so the
     // anchoring is what this case measures, not an artefact of the stub.
     expect(h.run(`${CHILD_STUBS} tmux has-session -t cc-${CHILD_ID}`).code, 'an unanchored target finds the sibling').toBe(0);
-    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}`).code, 'an anchored one does not').toBe(1);
+    expect(h.run(`${CHILD_STUBS} tmux has-session -t =cc-${CHILD_ID}:`).code, 'an exact one does not').toBe(1);
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('reclaimable');
   }, 60_000);

@@ -124,7 +124,7 @@ const HAS_PWA = existsSync(path.resolve(here, '..', 'dist-pwa', 'index.html'));
 // ── fixtures ─────────────────────────────────────────────────────────────
 
 /** A pty that never touches tmux. REQUIRED, not tidiness: the real `attachPty`
- *  runs `tmux attach -t cc-<id>` on this box, and `/ws/pty/:id` is one of the
+ *  runs `tmux attach -t =cc-<id>:` on this box, and `/ws/pty/:id` is one of the
  *  three sockets swept below. The gate refuses the upgrade before the handler
  *  runs — but the mutation runs that measure this suite DELETE the gate, and a
  *  suite whose mutant spawns tmux against the live box is not a suite anyone can
