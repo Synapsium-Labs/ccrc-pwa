@@ -19,7 +19,7 @@ export const verbHelpers = (getH: () => PrHarness) => {
   const atticShas = (c: Child): string[] =>
     getH().git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`)
       .split('\n').filter(Boolean).map((r) => r.split('/').pop()!);
-  const KILL = `tmux kill-session -t =cc-${CHILD_ID}:`;   // the exact target (D-3525)
+  const KILL = `tmux kill-session -t =cc-${CHILD_ID}:`;   // `=` forces an EXACT session-name match, never a substring one
   const unsupervised = (): string[] => getH().calls().filter((l) => l.startsWith('unsupervise'));
 
   /** Everything a refusal must leave standing. */

@@ -255,11 +255,12 @@ export type ChildReclaimSweepVerdict =
  *  matched no run of this child's own protects UNCONDITIONALLY, decided
  *  before the minting run is even read: the `held`/`unmeasured` kinds return
  *  at the SAME early place a bare boolean hold would have, ahead of even
- *  `minting-run-absent`. That is deliberate, not merely permitted by A9 (only
- *  the PROVEN `program` kind is required to wait for the minting run) — it is
- *  fail-shut, because an unaccounted hold protects on its own terms, whatever
- *  the minting run reads as. Its one cost: after a coordination-database loss
- *  a child under a non-programme hold answers `held`, not `minting-run-absent`,
+ *  `minting-run-absent`. That is deliberate, not merely a narrower rule's
+ *  allowance (only the PROVEN `program` kind is required to wait for the
+ *  minting run) — it is fail-shut, because an unaccounted hold protects on
+ *  its own terms, whatever the minting run reads as. Its one cost: after a
+ *  coordination-database loss a child under a non-programme hold answers
+ *  `held`, not `minting-run-absent`,
  *  and so produces no absence log line for THAT child on THAT pass — every
  *  other child still does, and this one is never destroyed by the omission,
  *  which is the only thing fail-shut requires. Only a hold this build PROVED

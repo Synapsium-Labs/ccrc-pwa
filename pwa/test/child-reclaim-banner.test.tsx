@@ -79,8 +79,8 @@ describe('the reclaim row', () => {
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.unmeasurable)).toBeInTheDocument();
   });
 
-  // Fix round 1, Important 1: the server sends `reclaim` unconditionally, even
-  // from a fleet box that lacks the reclaim capabilities — where the sweep
+  // The server sends `reclaim` unconditionally, even from a fleet box that
+  // lacks the reclaim capabilities — where the sweep
   // does nothing and the route answers 501. `clear` must claim only the
   // SWITCH's own state, never that reclamation is actually running, so a
   // capability-less box's honesty comes from the tap's own inline 501, not
@@ -110,7 +110,7 @@ describe('the reclaim row', () => {
     expect(childReclaimPause).toHaveBeenCalledWith('off');
   });
 
-  // Fix round 1, Minor 7 (test gap): the 'off' direction's own busy label —
+  // The 'off' direction's own busy label —
   // only the 'on' direction's 'pausing…' had a case.
   it("a resume tap shows resuming… — the word does NOT flip either", async () => {
     const store = makeStore();
@@ -123,7 +123,7 @@ describe('the reclaim row', () => {
     expect(screen.getByText(CHILD_RECLAIM_MARKER_WORD.set)).toBeInTheDocument();
   });
 
-  // Fix round 1, Minor 7 (test gap): `marker !== 'set'` reads `'unmeasurable'`
+  // `marker !== 'set'` reads `'unmeasurable'`
   // as "not set" too, so a tap on it asks `'on'` — the fail direction of the
   // one control is STOP deletion, never resume it, even from doubt.
   it("a tap on 'unmeasurable' asks childReclaimPause('on') — doubt fails toward stopping deletion", () => {
@@ -143,7 +143,7 @@ describe('the reclaim row', () => {
     expect(await screen.findByText('pausing…')).toBeInTheDocument();
     seen(store, coord({ reclaim: 'clear', childReclaimAttention: [item()] }));   // a frame, still disagreeing
     expect(screen.getByText('pausing…')).toBeInTheDocument();
-    // Fix round 1: the settle effect now keys on `marker` alone (Minor 2), so
+    // The settle effect keys on `marker` alone, so
     // a frame whose `reclaim` value CHANGES but still is not the value the tap
     // asked for ('set') must not settle either — the guard is `marker ===
     // wantedRef.current`, never merely "marker changed".
@@ -191,7 +191,7 @@ describe('the reclaim row', () => {
     expect(document.querySelector('.toast')).toBeNull();
   });
 
-  // Fix round 1, Minor 7 (test gap): `inlinePauseError` has no `bad-request`
+  // `inlinePauseError` has no `bad-request`
   // arm — a 400 must fall through to the ordinary toast like CoordBanner's own.
   it('a 400 (bad-request) falls through to the ordinary toast, not the inline banner', async () => {
     const store = makeStore();
@@ -221,7 +221,7 @@ describe('the reclaim row', () => {
     expect(rows[0]!.textContent).not.toContain('tree-unreadable');
     // A report, not a tap: the only INTERACTIVE element on the row is the
     // switch — buttons AND links, so a future remedy link on a row would fail
-    // this too (fix round 1, Minor 7: the old assertion counted buttons only).
+    // this too (the assertion counts both, not buttons only).
     expect([...screen.queryAllByRole('button'), ...screen.queryAllByRole('link')]).toHaveLength(1);
   });
 
@@ -232,7 +232,7 @@ describe('the reclaim row', () => {
     expect(document.querySelector('.child-reclaim-attention')).toBeNull();
   });
 
-  // Fix round 1, Minor 6: `role="status"` wraps the switch readout ALONE —
+  // `role="status"` wraps the switch readout ALONE —
   // a changing attention list must not spam a live region with every
   // standing child's sentence on each sweep tick.
   it('role="status" covers the switch readout only, not the attention list', () => {
@@ -245,7 +245,7 @@ describe('the reclaim row', () => {
     expect(document.querySelector('.child-reclaim-attention')).not.toBeNull();
   });
 
-  // Fix round 1, Minor 2 (the reviewer's probe, this row's own direction): the
+  // This row's own direction: the
   // frame now carries both rows' facts. A frame that changes only the PAUSE
   // row's fields (`pause`/`mail`) must not clear THIS row's inline refusal —
   // `reclaim` itself never moved, so nothing this row measured changed.
@@ -294,7 +294,7 @@ describe('the two tolerant readers', () => {
       .toEqual([good]);
   });
 
-  // Fix round 1, Minor 1 (test gap): the case above never isolates any ONE of
+  // The case above never isolates any ONE of
   // `isAttention`'s three checks — `{sessionId: 7}` fails BOTH the sessionId
   // and (lacking `sentence`) the sentence check at once, so deleting either
   // alone would still pass it. Each bad member below is wrong in exactly one
@@ -309,7 +309,7 @@ describe('the two tolerant readers', () => {
     expect(childReclaimAttentionOf({ childReclaimAttention: [good, badRunId] })).toEqual([good]);
   });
 
-  // Fix round 1, Minor 5: only the fields the renderer reads are required —
+  // Only the fields the renderer reads are required —
   // a member with no `token` (or `at`) still reports, rather than an under-
   // count the moment a future server dropped a field this row never shows.
   it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {

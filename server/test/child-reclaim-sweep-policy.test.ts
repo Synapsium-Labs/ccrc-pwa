@@ -464,7 +464,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
     expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, NOW, false)).toMatchObject({ refusedAt: null });
   });
 
-  it("A9's own case — starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
+  it("starting past the ceiling, ENDING the episode makes childReclaimDeferExpired false — for failed, refused, and every non-presence why, asked of the function itself", () => {
     const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C };
     const outcomes: ChildReclaimSweepOutcome[] = [
       { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },

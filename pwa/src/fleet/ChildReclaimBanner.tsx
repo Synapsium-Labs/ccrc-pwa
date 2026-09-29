@@ -61,7 +61,7 @@ export function ChildReclaimBanner({
   // an inline refusal about the old one (CoordBanner's M4), and it settles
   // the outstanding tap ONLY when it reports the value the tap asked for.
   //
-  // Fix round 1, Minor 2 (was keyed on `coord` itself): one frame now carries
+  // Keyed on `marker`, not on `coord` itself: one frame now carries
   // both rows' facts — `pause`/`mail` for the sibling banner, `reclaim`/
   // `childReclaimAttention` for this one. Keying on the whole `coord` object
   // meant a `pause` flip, or merely a fresh 60s sweep tick changing nothing
@@ -116,7 +116,7 @@ export function ChildReclaimBanner({
 
   return (
     <div className="child-reclaim-banner">
-      {/* Fix round 1, Minor 6: `role="status"` covers the switch readout
+      {/* `role="status"` covers the switch readout
           ALONE (glyph, word, toggle, error) — never the attention list below,
           whose own changes must not re-announce every standing child's
           sentence through this live region. */}

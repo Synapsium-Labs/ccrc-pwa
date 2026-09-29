@@ -104,7 +104,7 @@ describe('every unattended ccd call site names itself', () => {
       .toEqual([]);
   });
 
-  it('found EXACTLY the fifteen pinned call sites — not a floor, an exact count (fix round 2, F5b)', () => {
+  it('found EXACTLY the fifteen pinned call sites — not a floor, an exact count', () => {
     // `toBeGreaterThanOrEqual(10)` was a floor, not a count: an eleventh
     // unattended call site — a NEW verb call this file's `SITES` array below
     // has no entry for — would satisfy `11 >= 10` silently, so a mislabelled

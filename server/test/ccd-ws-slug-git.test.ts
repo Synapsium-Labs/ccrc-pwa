@@ -86,7 +86,7 @@ describe('_ws_slug_git_state: three answers', () => {
       .toMatch(/^unmeasurable git worktree list failed[^\n]*\nrc=2$/);
   });
 
-  // Residue (review 142): the `for-each-ref` arm had no test of its own and
+  // The `for-each-ref` arm had no test of its own and
   // stayed green when removed. A shell-function `git`, failing only that one
   // read — nothing in ccd is told it is under test.
   it('unmeasurable: for-each-ref failing for a reason other than absence, never free', () => {
@@ -139,7 +139,7 @@ describe('_ws_slug_git_state: three answers', () => {
     } finally { fs.chmodSync(refsDir(main), 0o755); }
   });
 
-  // Fix round 1 (review I-1): `refs/heads` not being a directory is TWO
+  // `refs/heads` not being a directory is TWO
   // DIFFERENT SHAPES, told apart — "absent" was FALSE for the one real case
   // this exists to name. TRUE ABSENCE is simulated here by removing the
   // directory outright; still fail-closed. PRESENT but not a directory is
@@ -223,7 +223,7 @@ describe('_ws_slug_git_state: three answers', () => {
     } finally { fs.chmodSync(parent, 0o755); }
   });
 
-  // Residue (review 142): the loop's OTHER element, $WORKTREES_ROOT itself,
+  // The loop's OTHER element, $WORKTREES_ROOT itself,
   // had no test of its own and stayed green when removed from the loop.
   it('unmeasurable: $WORKTREES_ROOT itself cannot be searched, never free', () => {
     h.makeRepo('demo');

@@ -266,7 +266,7 @@ describe.each(CHMODS)('_spawn_start exports TMPDIR for a child, and only for a c
     });
 });
 
-// Review 163, F3: this case does not depend on chmod argument order at
+// This case does not depend on chmod argument order at
 // all — it is a static census of which function reads the marker — so
 // running it once per CHMODS entry duplicated it for no reason (3512's
 // "bsd-cases-plus-resume" wording). A plain `describe` runs it once; the

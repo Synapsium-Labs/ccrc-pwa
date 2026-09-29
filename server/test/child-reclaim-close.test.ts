@@ -218,7 +218,7 @@ describe('two authorities, equal — anything else is not a child here', () => {
   });
 });
 
-// Fix round 1, Important #2: the close-side wiring of `hasCoordinated` (the
+// The close-side wiring of `hasCoordinated` (the
 // store read, and its throw-fold) had no test that reds when either is
 // removed — the pure decision was pinned, but nothing proved the CALLER
 // actually reads and carries the value. These three cases pin the wiring

@@ -323,7 +323,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     expect(JSON.parse(r.stdout).failed).toBe('tombstone-unwritable');
   }, 90_000);
 
-  it('another registry row naming the same workdir stops a RESUMED tail (A10 re-asked), and an unlistable registry does too', () => {
+  it('another registry row naming the same workdir stops a RESUMED tail, asked again on that arm, and an unlistable registry does too', () => {
     const c = makeChild(h);
     interrupted(c, 'worktree');
     const tok = resumeToken('worktree');
@@ -1063,7 +1063,7 @@ describe('"gone" is PROVEN — a path that could not be looked at is never read 
     try { expect(ask(path.join(locked, 'inner')), 'EACCES is not absence').toBe('2'); } finally { fs.chmodSync(locked, 0o755); }
   }, 30_000);
 
-  describe('`_ws_reclaim_hidden` over a flagged path a sparse checkout has no entry for (review 171 F-G)', () => {
+  describe('`_ws_reclaim_hidden` over a flagged path a sparse checkout has no entry for', () => {
     /** A repo with `sub/f.txt` committed and then flagged skip-worktree, so
      *  `_ws_reclaim_hidden_contained`'s sparse skip is the only thing between
      *  `f.txt`'s flagged entry and a verdict. */

@@ -292,7 +292,7 @@ export async function childSpentLive(
  * (spec §5.7's naming); it plays no role in the judgment below — every fact
  * comes from `line` and `birth` alone, never from the registry.
  *
- * The operator's rule (D-3347): a PR OPENED FROM THE CHILD'S BRANCH SPENDS
+ * The operator's rule: a PR OPENED FROM THE CHILD'S BRANCH SPENDS
  * IT, in any state, whatever its base, whether or not it BINDS — binding
  * (`boundRow`'s base/`ours` conjuncts) is a fact about which PR a workspace's
  * control renders, not about whether the branch has been spent. So this reads

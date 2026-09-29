@@ -87,11 +87,11 @@ export function CoordBanner({
   // it asked for — and ONLY then. A frame that arrives but still disagrees
   // (the marker hasn't moved yet) changes nothing here; the timer below is
   // what eventually gives up on that case. Runs whenever `coord.pause`
-  // actually changes VALUE — not on every `coord` frame (fix round 1,
-  // Minor 2: see the M4 note below) — including ones that land after
-  // "unconfirmed" has already been shown — an operator staring at
-  // "unconfirmed" for a genuinely-late frame deserves to see it resolve, not
-  // stay stale forever.
+  // actually changes VALUE — not on every `coord` frame (keyed on `marker`,
+  // not on the whole `coord` object; see the M4 note below) — including
+  // ones that land after "unconfirmed" has already been shown — an operator
+  // staring at "unconfirmed" for a genuinely-late frame deserves to see it
+  // resolve, not stay stale forever.
   useEffect(() => {
     // Review, M4: an inline refusal describes the tap that produced it, and a
     // NEW value for `coord.pause` is a fresh measurement of the very thing
@@ -101,7 +101,7 @@ export function CoordBanner({
     // both be current. Cleared here, the refusal lives exactly as long as the
     // reading it belongs to.
     //
-    // Fix round 1, Minor 2 (was keyed on `coord` itself): the frame now also
+    // Keyed on `coord?.pause`, not on `coord` itself: the frame now also
     // carries `reclaim` and `childReclaimAttention` (child-reclamation wave
     // 4) — fields this banner never renders. Keying on the whole `coord`
     // object meant a fresh reclaim-row tick or attention-list change gave

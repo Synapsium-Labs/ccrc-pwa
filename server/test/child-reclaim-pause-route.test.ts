@@ -4,7 +4,7 @@
 //
 // `POST /api/coord/pause`'s shape in every respect but two, and both are
 // deliberate. (1) It is SESSION_ONLY, not UNGATED: raising it releases no wedge,
-// so it has no D-282 release-valve argument — it is an ordinary same-origin PWA
+// so it has no release-valve argument — it is an ordinary same-origin PWA
 // write that no machine lane calls, and the fleet's shared secret is the wrong
 // key for it. (2) Its skew gate is a CAPABILITY token read with `capSupported`
 // (no evidence REFUSES), not `verbSupported`.

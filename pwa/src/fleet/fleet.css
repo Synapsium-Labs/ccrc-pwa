@@ -2697,7 +2697,7 @@ button.proj-card-pool::before {
   font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
   color: var(--ink-secondary);
 }
-/* Task 9 fix round 1, Minor 6: the switch readout (glyph, word, toggle,
+/* The switch readout (glyph, word, toggle,
    error) is its OWN flex context, carrying `role="status"` in the markup, so
    only ITS changes enter a live region — the attention list below is a
    separate sibling and never re-announces its sentences on every sweep tick.
@@ -2829,11 +2829,11 @@ button.proj-card-pool::before {
    idiom as `.coord-banner .coord-glyph` a few lines up — so `design/audit.mjs`
    can actually recover a ground for this pair and measure it, rather than
    filing it under `uncovered` the way a bare `.coord-error { color: … }`
-   selector would (review fix round 1, Minor 3: hand-computed 6.80 DARK /
-   5.73 LIGHT against --bg-surface, but unmeasured by the automatic gate
-   until this selector named its ancestor). Task 9 fix round 1: moved back
-   beside this rule — a child-reclaim wave insertion had pushed it down to sit
-   under `.child-reclaim-who` instead, where it read as that rule's docstring. */
+   selector would (hand-computed 6.80 DARK / 5.73 LIGHT against --bg-surface,
+   but unmeasured by the automatic gate until this selector named its
+   ancestor). Moved back beside this rule — a child-reclaim wave insertion had
+   pushed it down to sit under `.child-reclaim-who` instead, where it read as
+   that rule's docstring. */
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;

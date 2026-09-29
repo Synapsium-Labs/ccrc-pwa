@@ -94,8 +94,8 @@ describe('the coord banner', () => {
     act(() => { store.setState({ coord: coord({ pause: 'clear' }) }); });
     expect(screen.getByText('pausing…')).toBeInTheDocument();
 
-    // Fix round 1: the settle effect now keys on `coord?.pause` alone
-    // (Minor 2), so a frame whose `pause` value CHANGES but still is not the
+    // The settle effect keys on `coord?.pause` alone,
+    // so a frame whose `pause` value CHANGES but still is not the
     // value the tap asked for ('set') must not settle either — the guard is
     // `coord?.pause === wantedRef.current`, never merely "pause changed".
     act(() => { store.setState({ coord: coord({ pause: 'unmeasurable' }) }); });
@@ -223,7 +223,7 @@ describe('the coord banner', () => {
     expect(screen.getByText(MARKER_WORD.set)).toBeInTheDocument();
   });
 
-  // Fix round 1, Minor 2 (the reviewer's probe, this row's own direction): the
+  // This row's own direction: the
   // frame now also carries `reclaim`/`childReclaimAttention` (child-reclamation
   // wave 4). A frame that changes only the RECLAIM row's fields must not clear
   // THIS banner's inline refusal — `pause` itself never moved.

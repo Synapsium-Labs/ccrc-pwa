@@ -8,8 +8,8 @@
 // second marker needs its own table rather than a widened reuse.
 import { isMarkerState, type ChildReclaimAttention, type MarkerState } from '../../../shared/api';
 
-/** Fix round 1, Important 1: `clear` used to read "children are reclaimed
- *  when their runs close" — a claim about BEHAVIOUR the frame cannot back.
+/** `clear` does not read "children are reclaimed when their runs close" —
+ *  a claim about BEHAVIOUR the frame cannot back.
  *  The server sends `reclaim` unconditionally, even from a fleet box that
  *  lacks the reclaim capabilities (the sweep then does nothing and the route
  *  answers 501); the frame carries no capability bit the PWA could read
@@ -41,8 +41,8 @@ export function childReclaimMarker(coord: unknown): MarkerState | null {
   return isMarkerState(v) ? v : 'unmeasurable';
 }
 
-// Fix round 1, Minor 5: checks only the fields `ChildReclaimBanner` actually
-// RENDERS — `sessionId`, `runId`, `sentence` — plus the shape sanity that
+// Checks only the fields `ChildReclaimBanner` actually RENDERS —
+// `sessionId`, `runId`, `sentence` — plus the shape sanity that
 // distinguishes a real member from junk. `token` and `at` are real fields of
 // `ChildReclaimAttention` (`shared/api.ts`) but nothing here reads either, so
 // requiring them would under-report the moment a future server dropped the

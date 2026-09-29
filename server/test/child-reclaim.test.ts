@@ -456,8 +456,8 @@ describe('parseChildReclaimResult', () => {
 describe('childReclaimDecision — has the coordinator finished with this child?', () => {
   const OPEN_NONE: OpenSiblingsResult = { ok: true, siblings: [] };
   // Every `ChildReclaimMinting` row fixture carries `sessionBornAt`/
-  // `sessionBornFor`/`dispatchStartedAt` (migration 15/migration 5; controller
-  // ruling P7) — a plain literal here, since the pure decision reads only
+  // `sessionBornFor`/`dispatchStartedAt` (migration 15/migration 5) — a
+  // plain literal here, since the pure decision reads only
   // `reviews`/`sessionId`, never these columns; Task 9 is the one that places
   // a fast-path spent verdict against them before it decides.
   const base: ChildReclaimDecisionInput = {
@@ -499,7 +499,7 @@ describe('childReclaimDecision — has the coordinator finished with this child?
       { reclaim: false, why: 'not-finished-unmeasured' }],
     ['a child that has EVER coordinated a run — never reclaimed automatically, even on a final close',
       { hasCoordinated: true, final: true }, { reclaim: false, why: 'has-coordinated' }],
-    // Fix round 1, Important #1: `hasCoordinated: 'unreadable'` folds into
+    // `hasCoordinated: 'unreadable'` folds into
     // `siblings-unreadable` at the SAME place the sibling check itself
     // ranks — never ahead of the identity checks above it.
     ['an unreadable coordination-history read, alone, folds where the sibling check ranks',

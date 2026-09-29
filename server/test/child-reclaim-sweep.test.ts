@@ -501,7 +501,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
   });
 
   it('the sighting memory resets exactly like the ordinary one: an intervening OTHER-ineligible verdict needs two fresh sightings', async () => {
-    // A10's own "a verdict of the other kind starts a fresh sighting" — the
+    // A verdict of the other kind starts a fresh sighting — the
     // OTHER-ineligible branch's own clear (a run of the programme reopens,
     // demoting the verdict from hold-retired to plain held, then it closes
     // again).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=190f185d627a58ac0f7f98d9d807183808a257d4cbf3a1a48dc8cf70637602a5
+# ccrc:generated 1 sha256=1eefacefc858d7615968ebca2415fa946d9fd8225ffd8ee40722e47bfad5200f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19649,7 +19649,7 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # EMPTY directory at the ref path reads `taken` by ruling, though git itself
 # removes one and succeeds — measured; the stricter answer only skips a slug.
 # The loose probe assumes the files backend, and `refs/heads` NOT BEING A
-# DIRECTORY is TWO DIFFERENT SHAPES, told apart (fix round 1, review I-1) —
+# DIRECTORY is TWO DIFFERENT SHAPES, told apart by what stands at the path —
 # "absent" is FALSE for the one real case this exists to name. A reftable
 # repository does not lack `refs/heads`; git's own `refs_create_refdir_stubs`
 # writes it as a regular FILE ("this repository uses the reftable format")
@@ -19721,22 +19721,20 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
     [[ -x "$common/refs/heads" ]] \
       || { echo "unmeasurable cannot search $common/refs/heads"; return 2; }
   elif [[ -e "$common/refs/heads" || -L "$common/refs/heads" ]]; then
-    # NARROWED (fix round 1, review I-1): PRESENT but not a directory is a
-    # reftable repository's own stub — git's `refs_create_refdir_stubs`
-    # writes `refs/heads` as a regular FILE ("this repository uses the
-    # reftable format") for every non-files backend, so "absent" is FALSE
-    # here, measured. A corrupt repository that replaced the directory with
-    # something else reads the same. Either way it is no evidence of a loose
-    # ref, so this still answers unmeasurable, never free — it just says
-    # what is actually there instead of a false "absent".
+    # PRESENT but not a directory is a reftable repository's own stub — git's
+    # `refs_create_refdir_stubs` writes `refs/heads` as a regular FILE ("this
+    # repository uses the reftable format") for every non-files backend, so
+    # "absent" is FALSE here, measured. A corrupt repository that replaced the
+    # directory with something else reads the same. Either way it is no
+    # evidence of a loose ref, so this still answers unmeasurable, never free
+    # — it just says what is actually there instead of a false "absent".
     echo "unmeasurable refs/heads is not a directory under $common — a reftable repository's stub, or a corrupt one"
     return 2
   else
-    # NARROWED (residue, review 142): true absence is not merely unsearchable
-    # either — nothing stands at the path at all (the reftable shape above is
-    # a DIFFERENT, present-but-not-a-directory case, fix round 1 review I-1).
-    # Either way it is no evidence of a loose ref, so this still answers
-    # unmeasurable, never free.
+    # True absence is not merely unsearchable either — nothing stands at the
+    # path at all, a DIFFERENT case from the present-but-not-a-directory shape
+    # above. Either way it is no evidence of a loose ref, so this still
+    # answers unmeasurable, never free.
     echo "unmeasurable refs/heads is absent under $common"
     return 2
   fi

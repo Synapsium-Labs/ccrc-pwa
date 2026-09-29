@@ -2291,9 +2291,9 @@ export function registerCoordRoutes(
    *  The box token gates machine lanes; an operator toggling this from the phone
    *  is not one, and gating it on the fleet's shared secret would put it behind
    *  a key the phone does not hold. Nor is it a release valve: raising it
-   *  releases no wedge, so the D-282 argument does not apply. Armed, it sits
-   *  behind `auth/gate.ts` like every other PWA write. The coordinator skill is
-   *  exempt from naming it AND forbidden from it (`coordinator-skill.test.ts`):
+   *  releases no wedge, so the release-valve argument does not apply. Armed,
+   *  it sits behind `auth/gate.ts` like every other PWA write. The
+   *  coordinator skill is exempt from naming it AND forbidden from it (`coordinator-skill.test.ts`):
    *  a coordinator told about this door would be told how to stop or restart
    *  the reclamation of its own children.
    *
