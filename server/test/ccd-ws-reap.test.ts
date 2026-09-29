@@ -2931,3 +2931,97 @@ describe('a symlinked workdir is never followed — ws-reap refuses the LEAF lin
     expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('worktree');
   }, 60000);
 });
+
+describe('untracked files are dirt whatever status.showUntrackedFiles says — parent or child worktree config, fresh or resume', () => {
+  // Worktree-scoped config (`extensions.worktreeConfig`, which `git
+  // sparse-checkout init` turns on by itself) can hide untracked files from a
+  // plain `status --porcelain` in ONE worktree, and `git worktree remove` with
+  // no --force then deletes them (git 2.43). Every ws-reap dirt read — the
+  // eval's parent and child reads, the resume's parent and child reads —
+  // passes `--untracked-files=all`, so the verdict is the dirt rung's own and
+  // never an unrelated read failing first.
+  const addChild = (main: string, parentDir: string): string => {
+    const dir = path.join(parentDir, '.claude', 'worktrees', 'agent-a');
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    h.git(main, 'worktree', 'add', dir, '-b', 'ca');
+    return dir;
+  };
+  /** `status.showUntrackedFiles=no` in `dir`'s OWN worktree config only. */
+  const hideUntrackedIn = (main: string, dir: string): void => {
+    h.git(main, 'config', 'extensions.worktreeConfig', 'true');
+    h.git(dir, 'config', '--worktree', 'status.showUntrackedFiles', 'no');
+  };
+  /** The CONTROL every case states: what a plain status read says in `dir`. */
+  const plainStatus = (dir: string): string => h.git(dir, 'status', '--porcelain');
+  const journal = (main: string): void => {
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin',
+        tip: h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin'), clips: [] }));
+  };
+
+  for (const hidden of [false, true]) {
+    const label = hidden ? 'UNDER the parent worktree’s own showUntrackedFiles=no' : '— the control, no config';
+    it(`fresh, parent read: an untracked file in the workspace refuses dirty-tree ${label}`, () => {
+      const { main, wt } = ready();
+      const tok = tokenOf();
+      if (hidden) hideUntrackedIn(main, wt);
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(plainStatus(wt), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      expect(JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`)).verdict).toBe('dirty-tree');
+      expect(refused(tok, wt, main).refused).toBe('dirty-tree');
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+    }, 60000);
+
+    it(`resume, parent read: an untracked file written in the gap refuses dirty-tree ${label}`, () => {
+      const { main, wt } = ready();
+      const tok = tokenOf();
+      journal(main);
+      if (hidden) hideUntrackedIn(main, wt);
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(plainStatus(wt), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      expect(refused(tok, wt, main).refused).toBe('dirty-tree');
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(h.reg('demo-quiet-basin', 'reaping')).toBe('worktree');
+    }, 60000);
+  }
+
+  for (const hidden of [false, true]) {
+    const label = hidden ? 'UNDER the child worktree’s own showUntrackedFiles=no' : '— the control, no config';
+    it(`fresh, child read: an untracked file in a registered child refuses child-dirty ${label}`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      if (hidden) hideUntrackedIn(main, child);
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      expect(plainStatus(wt), 'the parent reads clean either way').toBe('');
+      expect(JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`)).verdict).toBe('child-dirty');
+      expect(refused(tok, wt, main).refused).toBe('child-dirty');
+      expect(fs.readFileSync(path.join(child, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(h.git(main, 'branch', '--list', 'ca')).toContain('ca');
+    }, 60000);
+
+    it(`resume, child read: an untracked file written into a consented child in the gap refuses state-changed ${label}`, () => {
+      const { main, wt } = ready(['.claude/']);
+      const child = addChild(main, wt);
+      const tok = tokenOf();
+      // An interrupted reap with breadcrumb `children`: the consented child's
+      // own removal fails on a lock, then the lock is lifted.
+      h.git(main, 'worktree', 'lock', child);
+      expect(JSON.parse(reap(tok).stdout).refused, 'the CONTROL: the run stopped at the child').toBe('worktree-remove-failed');
+      expect(h.reg('demo-quiet-basin', 'reaping')).toBe('children');
+      h.git(main, 'worktree', 'unlock', child);
+      if (hidden) hideUntrackedIn(main, child);
+      fs.writeFileSync(path.join(child, 'notes.md'), 'draft\n');
+      expect(plainStatus(child), 'the CONTROL').toBe(hidden ? '' : '?? notes.md');
+      const o = refused(tok, wt, main);
+      expect(o.refused).toBe('state-changed');
+      expect(o.detail).toContain(`${child} is dirty now`);
+      expect(fs.readFileSync(path.join(child, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(h.git(main, 'branch', '--list', 'ca')).toContain('ca');
+      expect(h.reg('demo-quiet-basin', 'reaping')).toBe('children');
+    }, 60000);
+  }
+});

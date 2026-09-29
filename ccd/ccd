@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c9954eb533aa8a9b443b0a0a713567660f8123eff9917d6b3a753e23555f101d
+# ccrc:generated 1 sha256=acbf5876c6b067557dca61f5ac0daf94a16683bf7849af38e61e69b9161e86d9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11629,10 +11629,10 @@ _ws_reap_reset() {
   REAP_CHILDDIGEST=""
 }
 
-# MUTATION SURVIVOR, disclosed: the `return 1` is removable with the suite
-# green, because every call site in `_ws_reap_eval` is `… ; return 1` and none
-# of them reads this function's status. It stays so that a site CAN be written
-# `_reap_refuse … || return` — and so that the function's contract is "this
+# THE `return 1` IS READ: `_ws_reap_leaf_ok` (the MIRROR block) ends in
+# `… || _reap_refuse …`, so its status IS this function's, and `_ws_reap_eval`
+# calls it `… || return 1` — drop the `return 1` and a linked workdir reads as
+# reapable. Every other site is still `… ; return 1`. The contract is "this
 # refuses", not "this assigns two variables".
 _reap_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }
 
@@ -11938,7 +11938,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
     # observable is left to pin. It states the case rather than relying on a
     # later line to catch it.
     errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
-    dirt=$(git -C "$workdir" status --porcelain 2>"$errf"); rc=$?
+    dirt=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`: untracked files are dirt whatever status.showUntrackedFiles says, repo- or worktree-scoped
     err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
     (( rc == 0 )) && [[ -z "$err" ]] \
       || { _reap_refuse tree-unreadable "could not read the tree at $workdir"; return 1; }
@@ -12114,7 +12114,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       [[ -z "$cop" ]] || { _reap_refuse child-busy "$cop in progress at $cpath"; return 1; }
       [[ -n "$cbr" ]] || { _reap_refuse child-busy "detached HEAD at $cpath"; return 1; }
       errf=$(_plat_mktemp) || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
-      dirt=$(git -C "$cpath" status --porcelain 2>"$errf"); rc=$?
+      dirt=$(git -C "$cpath" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all`, as the parent's: a child's own worktree config must not hide its untracked files
       err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
       { (( rc == 0 )) && [[ -z "$err" ]]; } \
         || { _reap_refuse tree-unreadable "could not read the child at $cpath"; return 1; }
@@ -13826,7 +13826,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
           "$(_json_str "could not read the tree at $workdir — refusing to finish the cleanup on a guess")"
         return 0
       }
-      rdirty=$(git -C "$workdir" status --porcelain 2>"$rerrf"); rrc=$?
+      rdirty=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$rerrf"); rrc=$?   # `all`, as the eval's
       rerr=$(cat "$rerrf" 2>/dev/null); rm -f "$rerrf"
       { (( rrc == 0 )) && [[ -z "$rerr" ]]; } || {
         printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
@@ -13961,7 +13961,7 @@ _ws_reap_locked() {   # token id — everything the reap lock serialises
                   "$(_json_str "could not read the child at $_rccpath — refusing to finish the cleanup on a guess")"
                 return 0
               }
-              _rcdirt=$(git -C "$_rccpath" status --porcelain 2>"$_rcerrf"); _rcrc=$?
+              _rcdirt=$(git -C "$_rccpath" status --porcelain --untracked-files=all 2>"$_rcerrf"); _rcrc=$?   # `all`, as the eval's
               _rcerr=$(cat "$_rcerrf" 2>/dev/null); rm -f "$_rcerrf"
               { (( _rcrc == 0 )) && [[ -z "$_rcerr" ]]; } || {
                 printf '{"refused":"tree-unreadable","detail":%s,"paths":[]}\n' \
@@ -26909,7 +26909,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
-# ── ws-reap's mirror of a reclaim breadcrumb (spec 2026-09-22 §5.6) ─────── MIRROR-BEGIN ──
+# ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` breadcrumb, on stdout
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
