@@ -28,6 +28,7 @@ numbers; the spec wave each one implements is named beside it.
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **MERGED** `023fe94d` (PR #181, run 129 done) 2026-09-28 16:53 UTC, released as v0.0.35 (dev). The merged tree is byte-identical to the tip CI tested (`d1eed83f`, which merges `main` at `6ff4e2e9` with an empty remerge-diff); every Linux leg was green there. Scoped review 173 at `f546715d6` closed its rounds. F1r (ruled) and nine prose/pin items carry to wave 6's Task 8A (`4e05173a`). Earlier: **accepted; merging** (run 129): scoped review 173 at `f546715d6` closed 2026-09-28 16:30 UTC. Round 2 did what was ruled. One arm-3 wording defect (F1r, ruled) and nine coverage/prose items carry to wave 6's Task 8A (`rulings-run173.md`). `main` moved to `6ff4e2e9` (#187, #188) after CI started, so the worker merges it and CI's Linux legs re-run before `gh pr merge`. Was: narrow round 2 done 2026-09-28 15:45 UTC (F1+F2, F4; no new number; the census is back at `main`'s 5); scoped review run 173 dispatched 15:50 UTC to `ccrc-pwa-swift-summit`. Round 2 was sent 2026-09-25 02:35 UTC on scoped review 167 (`rulings-run129-fix2.md`). Was: scoped review at `7a20ff8f`, which merges `main` at `3fd6c816` with W3's README overlap resolved as ruled; fix round 1 done 2026-09-25 01:40 UTC (3288, 3289 and 3290 spent); scoped review run 167 dispatched 01:50 UTC to `ccrc-pwa-quiet-meadow`, under the bar in `rulings-run129-fix1.md`; round 1 sent 2026-09-24 14:25 UTC on review 155; wave-done was at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **MERGED** `af5a29f8` (PR #201, run 132 done) 2026-09-29 06:40 UTC, released as v0.0.36 (dev). The merged tree is byte-identical to the tested tip `325d4072` (`main` unmoved at `023fe94d`, every Linux leg green). Scoped review 176 met none of the committed bar's four classes; F1 and F2 to F5 go to the residue list as R5 and R6 (`rulings-run176.md`). Earlier: **run 132 open, planned**; plan commits in cherry-pick order: `6acbff6d`, `287caa07`, `7210c4f6`, `a8c28b42`, `a404b1ac`, `419d626f`, `d5f923e8`, `e821ceba`, `fddf8370`, `d8db956a`, `0003a6c3` (re-point against W3's merge `4b2ff904`), `8d6f2515` (re-point against wave 4's reviewed tree `f546715d6`); **final scoped review** (run 176, dispatched 2026-09-29 06:00 UTC to `ccrc-pwa-soft-delta`) of fix round 1, done at `325d4072`: 33 commits, no merge (`main` unmoved at `023fe94d`), numbers 3411, 3412 and 3413 spent (bare: their definitions are on the worker branch). After it, #201 merges under the committed bar. Was: fix round 1 (`rulings-run132-fix1.md`, mail 2514, 2026-09-28 22:55 UTC) on review 175 at `8e9a9bf3`: 15 findings, the two important ones (F1, F2) ruled together, and the bar for the one scoped review after it committed now. Was: wave-done 2026-09-28 at `8e9a9bf3`, PR #201, 10/10 items, reserve spent: seven numbers, 3404 through 3410 (bare: their definitions are on the worker branch); `main` did not move during the wave; review run 175 dispatched 21:45 UTC to `ccrc-pwa-still-ridge`. Was: dispatched 2026-09-28 16:57 UTC to `ccrc-pwa-warm-harbor` |
 | 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **run 133 open, planned**; plan commits in cherry-pick order: `079f1881`, `edc98508`, `14f77194`, `e27aacae` (re-point against wave 4's reviewed tree `f546715d6`), `4e05173a` (review 173's residue); **DISPATCHED** 2026-09-28 16:57 UTC to `ccrc-pwa-quiet-basin` |
+| 7 | — (residue) | before stable: a fleet-link failure after the op's hand-off holds the lease (R1), the answer follows the lease by identity (R5), wave 5's prose and pins (R6) | server | — | **DISPATCHED** 2026-09-29 07:25 UTC to `ccrc-pwa-quiet-summit` (run 177); plan `c3382e95` (one departure, 3555, defined in it; a five-number reserve named in the brief) |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -606,6 +607,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     CLAUDE.md and `single-definition` overlaps. Wave 5's contained real-`ccd/ccrc` suites then run against wave 6's
     bash, which is the drift check on mail 2515's facts.
 
+- **2026-09-29 07:25 UTC — wave 7 opened (run 177) for the residue that must land before stable, and dispatched.**
+  - R1 is a bar class-1 path. The spec itself chose it (§10: "disconnected/timeout → idle … the lease never waits for
+    the deadline"), so closing it is a ruled departure: 3555.
+  - **The rule.** After the op frame is handed to the link, every transport failure HOLDS the lease. Only a failure
+    proven to come before the hand-off, the client's new `LinkNotSentError` (measured: three arms of `request()`, all
+    before `ws.send`), releases `idle`.
+  - **The cost, accepted.** A link blip mid-op now costs a deadline and a halting row that the operator acks, instead
+    of an immediate retry. Not chosen: an agent-side replay of the last op's outcome, because the node's own
+    `update.json` already carries that fact, read by identity.
+  - **R5.** The post-answer writes find the lease by identity. D-3412 is amended in place, with no number. R6 is
+    wave 5's prose and pins.
+  - **The plan** was written and attacked by four Opus agents against `main` at `af5a29f8`. Both attackers held it;
+    their nine notes and amends are applied.
+  - I confirmed its one narrowing. The deadline says "no run of `<tag>` was reported" only when that is true, because
+    no column keeps the report as it stood at the acquire.
+  - Opening run 177 with a wave title renamed the programme's `programTitle` (a work run's title does too, not only a
+    review run's). The next open that passes "Centralised update management" restores it.
+
 ## Carried constraints
 
 From W1's whole-branch review (minors, not patched in W1) — each lands in the wave named:
@@ -627,7 +646,7 @@ trusted root is dated — if it outlives an upstream key rotation it refuses eve
 What a committed bar carried out of a wave whose files no later wave edits. Each item is worked after its wave
 merges. The ones marked **before stable** are fixed, reviewed and merged before `stable` is promoted.
 
-- **R1 — before stable (bar class 1, wave 5, pre-existing in its first cut).** A fleet-link `timeout`, `aborted` or
+- **R1 — before stable, IN WAVE 7 (run 177) (bar class 1, wave 5, pre-existing in its first cut).** A fleet-link `timeout`, `aborted` or
   `disconnected` releases the fleet row `idle` after an agent that may already have spawned. Then a `met` settle
   while the fleet box is still in its gate can let the server move beside it. Recorded in D-3400.
 - **R2 (wave 5, D-3412).**
@@ -641,11 +660,11 @@ merges. The ones marked **before stable** are fixed, reviewed and merged before 
   - (b) A hung live updater answers `busy` on every sweep; the exit is ack.
   - (c) W4's D-3251 probe-to-acquire window.
   - A reused pid reads as alive.
-- **R5 (wave 5, review 176 F1).** A `rekeyNode` revive during an in-flight op hands the lease to the heir. The
+- **R5 — IN WAVE 7 (wave 5, review 176 F1).** A `rekeyNode` revive during an in-flight op hands the lease to the heir. The
   dispatcher's release by `move.nodeId` then answers `superseded`, and the heir's copy is held until a halting
   `failed: deadline`. The fix direction: release by lease identity (label plus `updateStartedAt`), or re-resolve the
   heir on `superseded`.
-- **R6 (wave 5, review 176 F2 to F5, prose and pins).**
+- **R6 — IN WAVE 7 (wave 5, review 176 F2 to F5, prose and pins).**
   - Item 9's EAGAIN premise is false: spawn errnos resolve as a halting code 1, and only a synchronous throw rejects.
   - `update-watchdog-revert`'s tmux containment line is vacuous: plant a poisoned `tmux` and `gh`.
   - The plan's Task 2 snippets still show the old mapping.
