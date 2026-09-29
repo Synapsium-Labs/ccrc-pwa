@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=946d675a7b292085c5127e01a6448a4e14f22525eb46939dc5cbe433bd8d7ffe
+# ccrc:generated 1 sha256=c9954eb533aa8a9b443b0a0a713567660f8123eff9917d6b3a753e23555f101d
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21140,6 +21140,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # what `-d` accepted (a logical `..` through a linked cwd reaches another
   # directory); the `//` collapse is bash's one non-plain `pwd`. The quote
   # guard runs on the RESOLVED path: `_spawn` interpolates it into the pane.
+  [[ "$workdir" != *[[:cntrl:]]* && "$workdir" != *$'\n'* ]] \
+    || die "workdir must not contain a newline or any other control character — nothing was written"
   [[ -d "$workdir" ]] || die "workdir missing: $workdir"
   local wabs
   wabs=$(CDPATH= builtin cd -- "$workdir" >/dev/null 2>&1 && builtin pwd) || wabs=""
@@ -21152,7 +21154,9 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # reader of `.workdir` takes it as one line — `_reg_get`'s own read, and the
   # ancestor walks' `$(…)` captures, which drop a trailing newline and so name
   # another directory — and a newline in it would forge a line on any report
-  # that prints it. The value is not echoed back, for the same reason.
+  # that prints it. The value is not echoed back, for the same reason: asked
+  # of the value as given before any `die` that prints it, and again here of
+  # the resolved one (a relative value takes on the caller's cwd).
   [[ "$workdir" != *[[:cntrl:]]* && "$workdir" != *$'\n'* ]] \
     || die "workdir must not contain a newline or any other control character — nothing was written"
   # NOR UNDER `/proc` (spec §5.5, rung 9): absolute in form, but what a path
@@ -24036,14 +24040,19 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # every row not literally at or below it is unplaced, or cannot be placed
   # against it, and every row that is literally there is refused.
   #
-  # NOR A ROW `_ws_realpath` CANNOT RESOLVE (measured: it answered reclaimable,
-  # and the pin and tail would have taken that session's files). Its answer
-  # for a longest existing prefix it cannot ENTER — a directory with no search
-  # bit, reached through a link into the child — is the path as written, so a
-  # row spelled through that link read as outside. Asked by
-  # `_ws_reclaim_resolvable`, not literally at or below the child (the chain
-  # refuses a literal one as it is), collected and decided after the loop, as
-  # an unplaced row is.
+  # NOR A ROW `_ws_realpath` CANNOT RESOLVE. Where it cannot enter the longest
+  # prefix that answers `-d`, or `-d` answered false for EACCES rather than
+  # ENOENT (a link whose target crosses a directory with no search bit), it
+  # hands back the path as written, so a row spelled through a link into the
+  # child read as outside. Measured: through an unsearchable directory INSIDE
+  # the child the audit answered reclaimable (the verb then refused, only
+  # because the audit's permission pass had made that directory searchable);
+  # through one OUTSIDE the child, which no permission pass touches, the verb
+  # removed that session's tree. Asked by `_ws_reclaim_resolvable`, not
+  # literally at or below the child (the chain refuses a literal one as it
+  # is), collected and decided after the loop, as an unplaced row is. The
+  # child's own spelling needs no such test: one that cannot be entered fails
+  # every git read of the tree further down the ladder, which is never a pass.
   local id="$1" wd="$2" mine names n o w wr rc lit unread='' unplaced='' unmine='' unproc='' unres=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
@@ -24085,22 +24094,33 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unproc" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unproc name a workdir under /proc, which names whatever the reading process's own cwd or descriptors are, so ccd cannot place them against this child — stop each and start it again from a plain path, or purge its row"
   [[ -z "$unres" ]] \
-    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory on its path cannot be entered), so ccd cannot place them against this child — make that directory searchable, or stop and purge the row"
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed), so ccd cannot place them against this child — make it searchable, or stop and purge the row"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
   return 0
 }
 
-_ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path: the longest prefix of it that
-  #                              is a directory (its own walk, fork-free) can be entered; 1 when it cannot,
-  #                              and `_ws_realpath` would hand path back as written
-  local head="$1"
+_ws_reclaim_resolvable() {   # path -> 0 when `_ws_realpath` resolves path exactly: the longest prefix of it
+  #                              that is a directory (its own walk, fork-free) can be entered, and the
+  #                              component below that prefix is PROVEN absent (`_ws_reclaim_absent`); 1
+  #                              otherwise — `_ws_realpath` then answers something that is not where path
+  #                              leads. `-d` is false on EACCES as on ENOENT, so a component that stands
+  #                              but cannot be followed (a link across an unsearchable directory, or one
+  #                              that cannot be looked at) stops that walk as if it were missing. A path
+  #                              holding a control character is never resolvable: `_ws_realpath`'s
+  #                              `dirname`/`basename` captures drop a trailing newline.
+  local p="$1" head="$1" rest
+  [[ "$p" != *[[:cntrl:]]* && "$p" != *$'\n'* ]] || return 1
   while [[ ! -d "$head" && "$head" != / && "$head" != . && -n "$head" ]]; do
     case "$head" in
       */*) head="${head%/*}"; [[ -n "$head" ]] || head=/ ;;
       *)   head=. ;;
     esac
   done
-  ( cd -- "$head" >/dev/null 2>&1 && pwd -P >/dev/null 2>&1 )
+  ( cd -- "$head" >/dev/null 2>&1 && pwd -P >/dev/null 2>&1 ) || return 1
+  rest="${p#"$head"}"
+  while [[ "$rest" == /* ]]; do rest="${rest#/}"; done
+  [[ -n "$rest" ]] || return 0
+  _ws_reclaim_absent "${head%/}/${rest%%/*}"
 }
 
 _ws_reclaim_plain_path() {   # path -> 0 when it is ONE plain absolute spelling: absolute, with no trailing
@@ -24248,11 +24268,50 @@ _ws_reclaim_foreign_clean() {   # path -> 0 when the checkout of ANOTHER reposit
   # here. So `--reflog` joins `--all`, and such a clone refuses; it strands
   # the child for a human, the accepted cost of a shape this rare. A reflog
   # entry whose object git already pruned names nothing to lose: git warns
-  # and skips it (rc 0, measured, git 2.43).
-  ahead=$(git -C "$p" rev-list --count --all --reflog --not --remotes 2>/dev/null) \
-    || { _WS_FOREIGN_WHY="could not count the commits in $p that are on none of its own remotes"; return 2; }
+  # and skips it (rc 0, measured, git 2.43). But a read that did not finish
+  # is not zero: git reads an unreadable reflog FILE as empty and says
+  # nothing, and skips one under an unreadable directory with a warning (both
+  # rc 0, count 0, measured) — and rung 8's permission pass never reaches a
+  # git directory outside the child. So every entry under its `logs/` must
+  # read first (`_ws_reclaim_logs_readable`), and any word on git's stderr
+  # but that pruned-commit warning is unmeasured.
+  _ws_reclaim_logs_readable "$p" || { _WS_FOREIGN_WHY="$_WS_LOGSREAD_WHY"; return 2; }
+  errf=$(_plat_mktemp) || { _WS_FOREIGN_WHY="could not make a scratch file to count the commits in $p"; return 2; }
+  ahead=$(LC_ALL=C git -C "$p" rev-list --count --all --reflog --not --remotes 2>"$errf"); rc=$?
+  err=$(LC_ALL=C grep -v -- "^warning: reflog of '.*' references pruned commits\$" "$errf"); [[ $? -le 1 ]] || err='its stderr could not be read'
+  rm -f "$errf"
+  { (( rc == 0 )) && [[ -z "$err" && "$ahead" =~ ^[0-9]+$ ]]; } \
+    || { _WS_FOREIGN_WHY="could not count the commits in $p that are on none of its own remotes${err:+: ${err%%$'\n'*}}"; return 2; }
   (( ahead == 0 )) \
     || { _WS_FOREIGN_WHY="$ahead commit(s) in the checkout of another repository at $p, counting those only its reflogs name, are on none of its remotes"; return 1; }
+  return 0
+}
+
+_WS_LOGSREAD_WHY=''
+_ws_reclaim_logs_readable() {   # checkout -> 0 when every entry under the `logs/` of its git directory and
+  #                                 of its common directory reads (a directory searchable too), absent
+  #                                 counting as none; 1 (_WS_LOGSREAD_WHY) otherwise. The listing answers,
+  #                                 never a test before it: `find`'s status and stderr, as the keep reads G.
+  local p="$1" gd cm d e lst err rc
+  _WS_LOGSREAD_WHY=''
+  gd=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) && [[ -n "$gd" ]] \
+    && cm=$(git -C "$p" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [[ -n "$cm" ]] \
+    || { _WS_LOGSREAD_WHY="could not locate the git directory of the checkout at $p, so its reflogs were never read"; return 1; }
+  for d in "$gd/logs" "$cm/logs"; do
+    _ws_reclaim_absent "$d"; rc=$?
+    (( rc != 0 )) || continue
+    (( rc != 2 )) || { _WS_LOGSREAD_WHY="$_WS_ABSENT_WHY — the reflogs of the checkout at $p were never read"; return 1; }
+    lst=$(_plat_mktemp) || { _WS_LOGSREAD_WHY="could not make a scratch file to list $d"; return 1; }
+    err=$(LC_ALL=C find "$d" -print0 2>&1 >"$lst"); rc=$?
+    if (( rc != 0 )) || [[ -n "$err" ]]; then
+      rm -f "$lst"; _WS_LOGSREAD_WHY="$d cannot be listed (find answered $rc: ${err%%$'\n'*}) — the reflogs of the checkout at $p were never read"; return 1
+    fi
+    while IFS= read -r -d '' e; do
+      if [[ -d "$e" && ! -L "$e" ]]; then [[ -r "$e" && -x "$e" ]]; else [[ -r "$e" ]]; fi \
+        || { rm -f "$lst"; _WS_LOGSREAD_WHY="$e cannot be read — the commits the reflogs of the checkout at $p name are unknown"; return 1; }
+    done < "$lst"
+    rm -f "$lst"
+  done
   return 0
 }
 
@@ -24671,10 +24730,11 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
 _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it makes hook-free,
   #                              fsmonitor-free, free of optional locks and with untracked files
   #                              shown whatever the repository's or the user's config files say,
-  #                              and no inherited GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE;
+  #                              and no inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or other
+  #                              repository-selecting variable;
   #                              answers cmd's status
   # WHAT THIS DOES TO GIT'S CONFIG — EXACTLY FOUR THINGS (and, outermost, it
-  # drops three inherited variables: the foot of this function). Three it DISABLES (the plan's Task
+  # drops the inherited variables that select a repository: the foot of this function). Three it DISABLES (the plan's Task
   # 3: "no hook of the repository runs"): the repository's HOOKS
   # (`core.hooksPath=/dev/null`), its FSMONITOR (`core.fsmonitor=false`) and
   # git's OPTIONAL LOCKS (`GIT_OPTIONAL_LOCKS=0`). A hook is not only a
@@ -24722,7 +24782,13 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # GIT_WORK_TREE or GIT_INDEX_FILE — ccd started from a git hook, or by
   # anything that exported one — outranks every `git -C <dir>` beneath: the
   # ladder would read, and the pin commit, another repository or another
-  # index. So the OUTERMOST containment unsets all three, and does not put
+  # index. So do the rest of `git rev-parse --local-env-vars` (git 2.43's own
+  # list of what selects a repository, its objects, refs and history): a
+  # pre-receive quarantine exports GIT_OBJECT_DIRECTORY, and the WIP's objects
+  # would land outside the child's repository. GIT_NAMESPACE, not on that
+  # list, scopes every ref read and write, so it goes too. The GIT_CONFIG_*
+  # entries stay: they are this function's own mechanism, and a caller's are
+  # kept by design (above). So the OUTERMOST containment unsets them all, and does not put
   # them back: nothing a reclaim runs wants its caller's repository, and a
   # restore would re-arm it for everything after. Unset, never shadowed —
   # measured, bash 5.2: a `local` of an exported name, set or unset, still
@@ -24734,7 +24800,10 @@ _ws_reclaim_contained() {   # cmd args... -> runs cmd with EVERY git call it mak
   # index as GIT_INDEX_FILE.
   if [[ -z "${_WS_RECLAIM_CONTAINED:-}" ]]; then
     local _ws_u
-    for _ws_u in 1 2 3 4; do unset -v GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; done
+    for _ws_u in 1 2 3 4; do
+      unset -v GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+        GIT_NAMESPACE GIT_IMPLICIT_WORK_TREE GIT_GRAFT_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE
+    done
   fi
   local _WS_RECLAIM_CONTAINED=1
   "$@"
@@ -25009,8 +25078,10 @@ _ws_wip_commit() {   # dir id childof prefix -> 0 with RECLAIM_WIP_SHA = the WIP
   # never from the user's untouched index: a staged secret goes back to HEAD's
   # entry first (spec §5.5 step 1 — a secret-shaped file is never staged), so
   # the index commit carries no secret either. An unmerged path has no one
-  # staged version — its stages are the merge's own sides, each reachable from
-  # HEAD or MERGE_HEAD — so it is HEAD's entry in that tree. Only when that
+  # staged version, so it is HEAD's entry in that tree. For a merge its stages
+  # are the sides HEAD and MERGE_HEAD reach; for an `am -3` or `stash apply`
+  # conflict (which `--defer-expired` can reach) they may be reachable from
+  # nothing, and this commit does not keep them — as nothing did before it. Only when that
   # tree differs from BOTH HEAD's tree and the WIP's own is it kept; otherwise
   # the WIP's shape is exactly as before. Idempotent as the WIP is: an index
   # commit of the same tree on the same HEAD, already the last parent of an

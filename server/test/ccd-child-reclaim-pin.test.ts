@@ -282,7 +282,7 @@ describe('the only commit ccd writes', () => {
       if (!/^\s*#/.test(l) && /_ws_reclaim_commit_tree "/.test(l)) callers.push(fn);
     }
     // The WIP commit calls it twice — its index commit, then the WIP itself.
-    expect([...new Set(callers)], 'the commit writer’s callers, by enclosing function').toEqual(['_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
+    expect(callers, 'the commit writer’s call sites, by enclosing function').toEqual(['_ws_wip_commit', '_ws_wip_commit', '_ws_reclaim_keep_reflogs']);
     const pinBody = src.slice(src.indexOf('_ws_reclaim_pin() {'), src.indexOf('_ws_reclaim_secrets_json() {'));
     const calls = (s: string): number => [...s.matchAll(/^[^#\n]*_ws_wip_commit "/gm)].length;
     expect(calls(src)).toBe(2);

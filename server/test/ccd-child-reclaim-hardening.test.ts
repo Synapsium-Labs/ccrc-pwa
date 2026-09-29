@@ -374,6 +374,75 @@ describe('rung 9 counts a nested foreign clone’s REFLOGS too — a commit only
   }, 60_000);
 });
 
+describe('rung 9’s count never reads an unreadable reflog as zero (spec §5.5)', () => {
+  /** A clean, pushed clone at `<wt>/vendor/other` whose git directory lies OUTSIDE the child
+   *  (`--separate-git-dir`), so rung 8's permission pass never reaches it; then one commit made
+   *  and reset away, so only its reflogs name it. */
+  const externalClone = (wt: string): { clone: string; ext: string; lost: string } => {
+    const origin = path.join(h.home, 'origins', 'other.git');
+    h.git(h.home, 'init', '--bare', '-q', '-b', 'main', origin);
+    const seed = path.join(h.home, 'seed-other');
+    h.git(h.home, 'init', '-q', '-b', 'main', seed);
+    fs.writeFileSync(path.join(seed, 'r'), 'r');
+    h.git(seed, 'add', 'r'); h.git(seed, 'commit', '-q', '-m', 'r');
+    h.git(seed, 'remote', 'add', 'origin', origin); h.git(seed, 'push', '-q', 'origin', 'main');
+    const clone = path.join(wt, 'vendor', 'other');
+    const ext = path.join(h.home, 'ext.git');
+    h.git(h.home, 'clone', '-q', `--separate-git-dir=${ext}`, origin, clone);
+    fs.writeFileSync(path.join(clone, 'x'), 'x');
+    h.git(clone, 'add', 'x'); h.git(clone, 'commit', '-q', '-m', 'local only, then reset away');
+    const lost = h.git(clone, 'rev-parse', 'HEAD');
+    h.git(clone, 'reset', '-q', '--hard', 'HEAD~1');
+    return { clone, ext, lost };
+  };
+
+  it('unreadable reflog FILES — which git reads as empty, silently — are unmeasured, never a pass', () => {
+    const { wt } = makeChild(h);
+    const { ext } = externalClone(wt);
+    expect(evalOf(h).verdict, 'the CONTROL: readable, the reflog-only commit refuses').toBe('containment-unproven');
+    const logs = [path.join(ext, 'logs', 'HEAD'), path.join(ext, 'logs', 'refs', 'heads', 'main')];
+    for (const f of logs) fs.chmodSync(f, 0o000);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+      expect(logs.some((f) => r.detail.includes(`${f} cannot be read — the commits the reflogs of the checkout at`)), r.detail).toBe(true);
+    } finally { for (const f of logs) fs.chmodSync(f, 0o644); }
+  }, 60_000);
+
+  it('an unreadable reflog DIRECTORY is unmeasured', () => {
+    const { wt } = makeChild(h);
+    const { ext } = externalClone(wt);
+    const heads = path.join(ext, 'logs', 'refs', 'heads');
+    fs.chmodSync(path.join(ext, 'logs', 'HEAD'), 0o000);
+    fs.chmodSync(heads, 0o000);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain(`${path.join(ext, 'logs')} cannot be listed (find answered 1: find: '${heads}': Permission denied)`);
+    } finally { fs.chmodSync(heads, 0o755); fs.chmodSync(path.join(ext, 'logs', 'HEAD'), 0o644); }
+  }, 60_000);
+
+  it('any word on git’s stderr but the pruned-commit warning is unmeasured', () => {
+    const { wt } = makeChild(h);
+    const { clone, ext } = externalClone(wt);
+    fs.rmSync(path.join(ext, 'logs'), { recursive: true });
+    expect(evalOf(h).verdict, 'the CONTROL: no reflog names it — clean and pushed').toBe('reclaimable');
+    const pre = `git() { if [[ "$*" == *"${clone} rev-list "* ]]; then command git "$@"; echo 'warning: something went unread' >&2; return 0; fi; command git "$@"; };`;
+    const r = evalOf(h, { pre });
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain('warning: something went unread');
+  }, 60_000);
+
+  it('the CONTROL: a reflog entry whose object git already pruned — git warns, and that warning alone passes', () => {
+    const { wt } = makeChild(h);
+    const { ext, lost } = externalClone(wt);
+    fs.rmSync(path.join(ext, 'objects', lost.slice(0, 2), lost.slice(2)));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
+  }, 60_000);
+});
+
 describe('the keep reads G as git reads it (spec §5.5)', () => {
   const gitDirOf = (dir: string): string => h.git(dir, 'rev-parse', '--absolute-git-dir');
 
@@ -408,6 +477,34 @@ describe('the keep reads G as git reads it (spec §5.5)', () => {
     expect(atticReach(h, c), 'the commit is kept by the attic').toContain(x);
     gcNow(h, c.main);
     expect(hasCommit(h, c.main, x!), 'it survived git gc --prune=now').toBe(true);
+  }, 120_000);
+
+  it('a name git could not JUDGE fails the keep — `check-ref-format` answering neither 0 nor 1 is never a skip', () => {
+    const c = makeChild(h);
+    const [x] = looseCommits(h, c.main, 1, 'judged by a failing git');
+    h.git(c.wt, 'update-ref', 'refs/worktree/keep', x!);
+    const tok = evalOf(h).token;
+    const pre = 'git() { if [[ "$1" == check-ref-format ]]; then return 128; fi; command git "$@"; };';
+    const r = childReclaimVerb(h, tok, { pre });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toContain('could not be told (git check-ref-format answered 128)');
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+    expect(fs.readFileSync(path.join(gitDirOf(c.wt), 'refs', 'worktree', 'keep'), 'utf8').trim(), 'the ref stands').toBe(x);
+  }, 120_000);
+
+  it('a reflog whose name opens with `-` is judged, not read as an option — `G/logs/-foo` is kept through gc', () => {
+    const c = makeChild(h);
+    const [x] = looseCommits(h, c.main, 1, 'a dash-led reflog');
+    const tip = h.git(c.wt, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(gitDirOf(c.wt), 'logs', '-foo'), `${tip} ${x} T <t@x> 1700000000 +0000\tfixture\n`);
+    expect(h.run(`git check-ref-format --allow-onelevel -foo`).code, 'the CONTROL: git reads it as an option').toBe(129);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(atticReach(h, c)).toContain(x);
+    gcNow(h, c.main);
+    expect(hasCommit(h, c.main, x!)).toBe(true);
   }, 120_000);
 
   it('a VALID name under G/refs/ still fails when it is not a ref — the skip is the format’s, never the content’s', () => {
@@ -470,6 +567,10 @@ describe('the keep reads G as git reads it (spec §5.5)', () => {
 
 describe('containment drops an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE (spec §5.5)', () => {
   const SHOW = 'bash -c \'printf "%s|%s|%s" "${GIT_DIR-unset}" "${GIT_WORK_TREE-unset}" "${GIT_INDEX_FILE-unset}"\'';
+  /** Every other variable that selects a repository, its objects, refs or history: `git rev-parse
+   *  --local-env-vars` on git 2.43 less the GIT_CONFIG_* entries, plus GIT_NAMESPACE. */
+  const OTHERS = ['GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE',
+    'GIT_IMPLICIT_WORK_TREE', 'GIT_GRAFT_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE'];
 
   it('the outermost containment unsets all three for everything beneath it; a nested one keeps ccd’s own', () => {
     const out = h.sh('export GIT_DIR=/elsewhere/.git GIT_WORK_TREE=/elsewhere GIT_INDEX_FILE=/elsewhere/index;'
@@ -482,6 +583,14 @@ describe('containment drops an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FI
     // The nesting mark is never taken from the environment: ccd clears it at load.
     expect(h.sh(`export GIT_DIR=/elsewhere/.git; _ws_reclaim_contained ${SHOW}`, { _WS_RECLAIM_CONTAINED: '1' }))
       .toBe('unset|unset|unset');
+  });
+
+  it('and every other variable that selects a repository, its objects, refs or history', () => {
+    const env = Object.fromEntries(OTHERS.map((v) => [v, `/elsewhere/${v}`]));
+    const shown = OTHERS.map((v) => `"\${${v}-unset}"`).join(' ');
+    const out = h.sh(`_ws_reclaim_contained bash -c 'printf "%s\\n" ${shown}'`, env);
+    expect(out.split('\n')).toEqual(OTHERS.map(() => 'unset'));
+    expect(h.sh(`printf '%s' "$GIT_OBJECT_DIRECTORY"`, env), 'the CONTROL: they were exported').toBe('/elsewhere/GIT_OBJECT_DIRECTORY');
   });
 
   it('`ws-audit --reclaim` run with another repository’s GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE exported answers as without them', () => {
@@ -515,6 +624,20 @@ describe('a workdir holding a newline or other control character is refused wher
       const ok = spawnCcd(`${START_STUBS} cmd_start claude demo "$HOME/ab"`, 30_000);
       expect(ok.code, `the CONTROL: a plain directory starts — ${ok.stderr}`).toBe(0);
     }, 60_000);
+  it('a value holding a newline is refused BEFORE any refusal that prints the value — a missing one included', () => {
+    const r = spawnCcd(`${START_STUBS} cmd_start claude demo "$HOME/no"$'\\n'"such"`, 30_000);
+    expect(r.code, r.stdout).not.toBe(0);
+    expect(r.stderr).toContain('workdir must not contain a newline or any other control character — nothing was written');
+    expect(r.stderr, 'the value was echoed').not.toContain('such');
+  }, 60_000);
+
+  it('a RELATIVE workdir taken from a cwd holding a newline is refused on its resolved spelling', () => {
+    fs.mkdirSync(path.join(h.home, 'a\nb', 'sub'), { recursive: true });
+    const r = spawnCcd(`${START_STUBS} builtin cd -- "$HOME/a"$'\\n'"b" && cmd_start claude demo sub`, 30_000);
+    expect(r.code, r.stdout).not.toBe(0);
+    expect(r.stderr).toContain('workdir must not contain a newline or any other control character — nothing was written');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'claude-demo.workdir')), 'no .workdir was written').toBe(false);
+  }, 60_000);
 });
 
 describe('the hidden read’s memo is a GLOBAL table — ccd sourced inside a function, many paths, two missing directories (spec §5.5 step 2)', () => {
@@ -591,7 +714,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     }
   }, 60_000);
 
-  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory on its path cannot be entered), so ccd cannot place them against this child';
+  const UNRESOLVED = 'name a workdir that cannot be resolved (a directory or link on its path cannot be entered or followed), so ccd cannot place them against this child';
 
   it('an absolute OTHER row that cannot be resolved — a link to the child, into a directory that cannot be entered — is unplaced, and `<child>/server` stands', () => {
     const { wt } = makeChild(h);
@@ -617,6 +740,71 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
       expect(o.detail).toContain('registry row(s) demo-nested rooted inside');
     } finally { if (fs.existsSync(server)) fs.chmodSync(server, 0o755); }
     expect(fs.readFileSync(path.join(server, 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 60_000);
+
+  it('the review’s shape: a row `$HOME/a`, `a -> $HOME/locked/l`, `l -> <child>/server`, `locked` unsearchable OUTSIDE the child — unmeasured, and ws-reclaim leaves `server/live.txt`', () => {
+    // `-d` is false on EACCES as on ENOENT, so the walk stopped at `$HOME`,
+    // which can be entered, and `_ws_realpath` handed back `$HOME/a` — read as
+    // outside; the verb then removed the other session's tree (review, measured).
+    const c = makeChild(h);
+    const server = path.join(c.wt, 'server');
+    fs.mkdirSync(server);
+    fs.writeFileSync(path.join(server, 'live.txt'), 'another session’s uncommitted work\n');
+    const locked = path.join(h.home, 'locked');
+    fs.mkdirSync(locked);
+    fs.symlinkSync(server, path.join(locked, 'l'));
+    fs.symlinkSync(path.join(locked, 'l'), path.join(h.home, 'a'));
+    otherRowOf('demo-a', path.join(h.home, 'a'));
+    const control = evalOf(h);
+    expect(control.verdict, `the CONTROL: searchable, it places inside the child — ${control.detail}`).toBe('containment-unproven');
+    expect(control.detail).toContain('registry row(s) demo-a rooted inside');
+    fs.chmodSync(locked, 0o600);
+    try {
+      expect(h.sh(`_ws_realpath "${path.join(h.home, 'a')}"`), 'the CONTROL: `_ws_realpath` answers the link itself').toBe(path.join(h.home, 'a'));
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.token).toBe('');
+      expect(r.detail).toContain(`registry row(s) demo-a ${UNRESOLVED}`);
+      const v = childReclaimVerb(h, '0'.repeat(64));
+      expect(v.stdout, 'nothing was reclaimed').not.toContain('"reclaimed"');
+    } finally { fs.chmodSync(locked, 0o755); }
+    expect(fs.existsSync(c.wt), 'the child stands').toBe(true);
+    expect(fs.readFileSync(path.join(server, 'live.txt'), 'utf8')).toContain('uncommitted');
+  }, 90_000);
+
+  it('a link whose target crosses an unsearchable directory INSIDE the child is unmeasured too — the audit alone never answers reclaimable', () => {
+    const { wt } = makeChild(h);
+    const server = path.join(wt, 'server');
+    fs.mkdirSync(path.join(server, 'inner'), { recursive: true });
+    fs.symlinkSync(path.join(server, 'inner'), path.join(h.home, 'lnk2'));
+    otherRowOf('demo-lnk2', path.join(h.home, 'lnk2'));
+    expect(evalOf(h).verdict, 'the CONTROL: searchable, it places inside the child').toBe('containment-unproven');
+    fs.chmodSync(server, 0o600);
+    try {
+      const r = evalOf(h);
+      expect(r.verdict, r.detail).toBe('unmeasured');
+      expect(r.detail).toContain(`registry row(s) demo-lnk2 ${UNRESOLVED}`);
+    } finally { fs.chmodSync(server, 0o755); }
+  }, 60_000);
+
+  it('a row whose spelling holds a newline is never resolvable — `_ws_realpath`’s `dirname` would read another directory', () => {
+    // `$HOME/lnk\n` -> the child, and nothing at `<child>/gone`: `_ws_realpath`
+    // drops the newline, climbs to `$HOME`, and answers `$HOME/lnk/gone`, outside.
+    const { wt } = makeChild(h);
+    fs.symlinkSync(wt, path.join(h.home, 'lnk\n'));
+    const row = `${path.join(h.home, 'lnk')}\n/gone`;
+    expect(h.sh(`_ws_realpath "${h.home}/lnk"$'\\n'"/gone"`), 'the CONTROL: it reads as outside').toBe(path.join(h.home, 'lnk', 'gone'));
+    otherRowOf('demo-nl', row);
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(`registry row(s) demo-nl ${UNRESOLVED}`);
+  }, 60_000);
+
+  it('the CONTROL: a row whose directory was simply deleted still resolves — it places, and a stale row outside never strands the child', () => {
+    makeChild(h);
+    otherRowOf('demo-gone', path.join(h.home, 'deleted', 'long', 'ago'));
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('reclaimable');
   }, 60_000);
 });
 
