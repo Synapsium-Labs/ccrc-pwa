@@ -545,10 +545,12 @@ describe('the watchdog\'s REAL revert sequence, then the server\'s deadline (F6,
     expect(existsSync(join(box.home, 'gh-argv'))).toBe(true);
     expect(existsSync(join(box.home, 'tmux-argv'))).toBe(false);
     expect(() => expectContained(box.home)).toThrow(/gh \(poisoned, recording\)/);
-    // Now tmux too — both argv files exist; `expectContained` still reds (defense in depth, and the tmux line's
-    // own guard, checked earlier in the function).
+    // Now tmux too — both argv files exist. The tmux-argv line runs BEFORE the gh-argv line in `expectContained`,
+    // so with both present it throws FIRST, on tmux's own message — a generic `/poisoned, recording/` match here
+    // would pass even with the tmux-argv line deleted (gh's message still matches it), so the regex names tmux
+    // specifically to pin that line's own guard, not just "the function throws".
     spawnSync(join(box.home, 'bin', 'tmux'), ['probe'], { env: box.env });
     expect(existsSync(join(box.home, 'tmux-argv'))).toBe(true);
-    expect(() => expectContained(box.home)).toThrow(/poisoned, recording/);
+    expect(() => expectContained(box.home)).toThrow(/tmux \(poisoned, recording\)/);
   });
 });
