@@ -139,15 +139,27 @@ describe('_ws_slug_git_state: three answers', () => {
     } finally { fs.chmodSync(refsDir(main), 0o755); }
   });
 
-  // Residue (review 142): absent is narrower than merely unsearchable — a
-  // reftable repository has no `refs/heads` directory at all, and neither
-  // does one that lost it to corruption. Simulated here by removing the
-  // directory outright, whatever put it in that state; still fail-closed.
+  // Fix round 1 (review I-1): `refs/heads` not being a directory is TWO
+  // DIFFERENT SHAPES, told apart — "absent" was FALSE for the one real case
+  // this exists to name. TRUE ABSENCE is simulated here by removing the
+  // directory outright; still fail-closed. PRESENT but not a directory is
+  // what a reftable repository actually does — git's `refs_create_refdir_stubs`
+  // writes `refs/heads` as a regular FILE for every non-files backend — so
+  // that shape is simulated separately below, by planting a file, and reads
+  // "not a directory" rather than the false "absent".
   it('unmeasurable: refs/heads is absent, narrowed and still fail-closed, never free', () => {
     const main = h.makeRepo('demo');
     h.git(main, 'pack-refs', '--all');
     fs.rmSync(refsDir(main), { recursive: true, force: true });
     expect(state()).toMatch(/^unmeasurable refs\/heads is absent[^\n]*\nrc=2$/);
+  });
+
+  it('unmeasurable: refs/heads is a FILE — a reftable repository\'s stub — never "absent"', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'pack-refs', '--all');
+    fs.rmSync(refsDir(main), { recursive: true, force: true });
+    fs.writeFileSync(refsDir(main), 'this repository uses the reftable format\n');
+    expect(state()).toMatch(/^unmeasurable refs\/heads is not a directory[^\n]*\nrc=2$/);
   });
 
   it('taken: a PACKED child ref ws/<slug>/<x> — only for-each-ref can see it', () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ef09ef7477e85ed4dd1efd427d6eb909b67bbe65a0c007e7e2147dc4a24e93b0
+# ccrc:generated 1 sha256=236c8cf26e3dadd81efbc148eb2d199318cabe08669fc1f8d785fd9a5938b281
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19515,26 +19515,33 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # anything minted.
 #
 # THREE ANSWERS, one line on stdout:
-#   rc 0  `free`                EVERY one of these holds: no branch
+#   rc 0  `free`                EVERY one of these holds, AND EVERY PROBE
+#                               ANSWERED (no rc-2 arm fired): no branch
 #                               `refs/heads/ws/<slug>` (packed or loose,
 #                               `show-ref`); no branch `refs/heads/ws` itself;
-#                               no PACKED child ref under
-#                               `refs/heads/ws/<slug>/` (`for-each-ref`); no
-#                               loose ref/file/directory conflict at
-#                               `refs/heads/ws` or `refs/heads/ws/<slug>`;
-#                               nothing at all at $wt (not even a dangling
-#                               link); and $wt is not a registered worktree of
-#                               $main;
+#                               no child ref under `refs/heads/ws/<slug>/`
+#                               git can LIST, packed or loose
+#                               (`for-each-ref`); no loose ref/file/directory
+#                               conflict at `refs/heads/ws` or
+#                               `refs/heads/ws/<slug>`; nothing at all at $wt
+#                               (not even a dangling link); and $wt is not a
+#                               registered worktree of $main;
 #   rc 1  `taken <what>`        every shape below, the FIRST one found:
 #                                 `branch ws/<slug>`        the direct ref
 #                                 `branch ws`                a branch named
 #                                                            exactly `ws`,
 #                                                            packed or loose
-#                                 `branch ws/<slug>/<x>`    a PACKED child ref
+#                                 `branch ws/<slug>/<x>`    a child ref git can
+#                                                            LIST, packed or
+#                                                            loose
 #                                                            (`for-each-ref`)
 #                                 `branch ws/<slug>/ (a directory holds its
-#                                   path)`                  a LOOSE child ref
-#                                                            git cannot list
+#                                   path)`                  a child ref git
+#                                                            CANNOT list (the
+#                                                            child itself
+#                                                            unreadable, so
+#                                                            `for-each-ref`
+#                                                            finds nothing)
 #                                 `path <wt>`                something at the
 #                                                            worktree path
 #                                 `worktree <wt>`            a registered
@@ -19567,12 +19574,17 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # A ref present only in `packed-refs` is already answered by `show-ref`. An
 # EMPTY directory at the ref path reads `taken` by ruling, though git itself
 # removes one and succeeds — measured; the stricter answer only skips a slug.
-# The loose probe assumes the files backend: a reftable repository has no
-# `refs/heads` DIRECTORY at all. An ABSENT `refs/heads` is narrower than
-# merely unsearchable — it is no evidence of a loose ref either way — and
-# answers `unmeasurable … refs/heads is absent`, never `free`: a reftable
-# repository and a corrupt one that lost the directory read the same, loud
-# and closed.
+# The loose probe assumes the files backend, and `refs/heads` NOT BEING A
+# DIRECTORY is TWO DIFFERENT SHAPES, told apart (fix round 1, review I-1) —
+# "absent" is FALSE for the one real case this exists to name. A reftable
+# repository does not lack `refs/heads`; git's own `refs_create_refdir_stubs`
+# writes it as a regular FILE ("this repository uses the reftable format")
+# for every non-files backend, measured. So PRESENT but not a directory
+# answers `unmeasurable … refs/heads is not a directory` — the reftable stub,
+# or a corrupt repository that put something else there — while TRUE absence
+# (nothing at the path at all, `-e || -L` both false) answers `unmeasurable …
+# refs/heads is absent`. Both are no evidence of a loose ref either way, and
+# both stay `unmeasurable`, never `free`.
 #
 # THE REPOSITORY IS PROVED TO BE $main FIRST. git skips a `.git` it cannot read
 # and keeps discovering UPWARDS, so a broken $main inside another repository
@@ -19634,12 +19646,24 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
   if [[ -d "$common/refs/heads" ]]; then
     [[ -x "$common/refs/heads" ]] \
       || { echo "unmeasurable cannot search $common/refs/heads"; return 2; }
+  elif [[ -e "$common/refs/heads" || -L "$common/refs/heads" ]]; then
+    # NARROWED (fix round 1, review I-1): PRESENT but not a directory is a
+    # reftable repository's own stub — git's `refs_create_refdir_stubs`
+    # writes `refs/heads` as a regular FILE ("this repository uses the
+    # reftable format") for every non-files backend, so "absent" is FALSE
+    # here, measured. A corrupt repository that replaced the directory with
+    # something else reads the same. Either way it is no evidence of a loose
+    # ref, so this still answers unmeasurable, never free — it just says
+    # what is actually there instead of a false "absent".
+    echo "unmeasurable refs/heads is not a directory under $common — a reftable repository's stub, or a corrupt one"
+    return 2
   else
-    # NARROWED (residue, review 142): absent is not merely unsearchable — a
-    # reftable repository never has this directory, and neither does one that
-    # lost it to corruption. Either way it is no evidence of a loose ref, so
-    # this still answers unmeasurable, never free.
-    echo "unmeasurable refs/heads is absent under $common — a reftable repository, or a corrupt one"
+    # NARROWED (residue, review 142): true absence is not merely unsearchable
+    # either — nothing stands at the path at all (the reftable shape above is
+    # a DIFFERENT, present-but-not-a-directory case, fix round 1 review I-1).
+    # Either way it is no evidence of a loose ref, so this still answers
+    # unmeasurable, never free.
+    echo "unmeasurable refs/heads is absent under $common"
     return 2
   fi
   d="$common/refs/heads/ws"
