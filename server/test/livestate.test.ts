@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { liveSessionStatus, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
+import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from '../src/livestate.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
@@ -47,6 +47,30 @@ describe('liveSessionStatus', () => {
 
   it('treats an unrecognised future status as work, not rest', () => {
     expect(liveSessionStatus('reticulating')).toBe('busy');
+  });
+});
+
+// The 2.1.277 floor: from that build on (measured through 2.1.283) Claude
+// Code's own `busy` covers delegated work, a running Workflow included, so an
+// `idle` from its file has already ruled one out (fleet.ts gates the pane
+// row's promotion on this).
+describe('liveStatusCoversDelegation', () => {
+  it('is true from 2.1.277 on, across minor and major bumps', () => {
+    for (const v of ['2.1.277', '2.1.283', '2.1.1000', '2.2.0', '3.0.0', '10.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, true]);
+    }
+  });
+
+  it('is false below 2.1.277 — those builds are unmeasured, so the pane row keeps speaking', () => {
+    for (const v of ['2.1.276', '2.1.99', '2.0.999', '1.9.999', '0.0.0']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
+  });
+
+  it('is false, never a throw, for no version and for a string that is not X.Y.Z', () => {
+    for (const v of [null, '', 'v2.1.283', '2.1', 'latest', ' 2.1.283', '2.1.x']) {
+      expect([v, liveStatusCoversDelegation(v)]).toEqual([v, false]);
+    }
   });
 });
 
