@@ -222,6 +222,9 @@ RAW_CAP = 1048576   # mirrored by the bash side'"'"'s `--max-filesize 1048576` -
 try:
     # Never more than the cap plus one byte, whatever the size of the file
     # on disk and whichever curl wrote it (the bash side'"'"'s header says why).
+    # That bound on the READ is pinned by nothing: the suite pins that a body
+    # over RAW_CAP is refused, and a read of the whole file would refuse it
+    # just the same. Only the refusal is measured, not the memory.
     raw = sys.stdin.buffer.read(RAW_CAP + 1)
     if len(raw) > RAW_CAP:
         raise ValueError("response body is over the %d-byte cap" % RAW_CAP)
