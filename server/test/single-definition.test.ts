@@ -1398,9 +1398,15 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
       '4) printf \'build:     unreadable (%s is not a regular file)\\n\' "$BOX_STAMP_FILE" ;;',
       '5) printf \'build:     unreadable (jq is not on PATH, so %s cannot be parsed)\\n\' "$BOX_STAMP_FILE" ;;',
       '*) printf \'build:     unreadable (%s does not parse as a build stamp)\\n\' "$BOX_STAMP_FILE" ;;',
+      // W6 Task 2: `_ver_keep_state` copies the stamp into the version
+      // directory it describes — a reader, through one local.
+      'local from_stamp="$BOX_STAMP_FILE"',
       'mkdir -p "${BOX_STAMP_FILE%/*}" || _ccrc_die "cannot create ${BOX_STAMP_FILE%/*}"',
       '_inst_atomic "$shipped" "$BOX_STAMP_FILE" 644',
       'local src sha ref dirty version vfield tmp why rc=0 dest="$BOX_STAMP_FILE"',
+      // W6 Task 4: `_ver_flip_back` restores a kept version's stamp over the
+      // box's, through a local — `_inst_stamp`'s `dest=` idiom above.
+      'local stamp="$BOX_STAMP_FILE"',
     ]);
     // Scoped to `_box_build_fields`'s OWN body, not the whole file: the
     // `ccrc models` verbs carry their own `jq -r` parses of catalogues and
@@ -1502,6 +1508,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // unsigned/verified marker, so `cmd_version` reads both lines in one
       // redirect rather than the record's first line alone.
       '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
+      // W6 Task 2: `_ver_keep_state` copies the record into the version
+      // directory it describes, as that version's completeness mark.
+      'local from_record="$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
       // cmd_update (review fix round 1 I4): whether the OLD (running) build
@@ -1511,6 +1520,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // 2 restore `previous` instead of falling straight to arm 3.
       'if [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
       'IFS= read -r old_rec < "$BOX_INSTALLED_FILE" 2>/dev/null || old_rec=""',
+      // cmd_update (D-3462): the record's whole body, held before the run clears
+      // it, so a death that replaced nothing can put it back (`_upd_unwind`).
+      'if [ "$old_completed" -eq 1 ] && [ -f "$BOX_INSTALLED_FILE" ] && [ -r "$BOX_INSTALLED_FILE" ]; then',
+      'IFS= read -r -d \'\' old_rec_body < "$BOX_INSTALLED_FILE" 2>/dev/null; old_rec_kept=1',
       // cmd_update (D-3114): cleared right before the staged install, so its
       // presence afterwards means this run's spine completed — the one fact
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
@@ -1529,6 +1542,9 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // review fix round 1 I4) so an absent record prints no stray bash
       // error.
       '&& { [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rb_rec < "$BOX_INSTALLED_FILE"; } 2>/dev/null \\',
+      // W6 Task 4, `cmd_rollback`: a box already on the kept tag has nothing
+      // to do only when its record IS the kept version's (D-3264's rerun).
+      'if [ "$VER_CURRENT" = "$to" ] && [ "$now" = "$to" ] && cmp -s -- "$BOX_INSTALLED_FILE" "$BOX_VERSIONS_ROOT/$to/$VER_RECORD_COPY"; then',
       // W4a Task 9: `cmd_watchdog`'s re-measure reads the record's line 1 on
       // ONE line; its failed-detail sentence names no path (the assertion
       // above). Measured (not the brief's claimed anchor, which put this
@@ -1552,9 +1568,18 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // round 1 I2): the same-tag arm above now `return`s unconditionally,
       // so this is no longer its `elif`.
       'if [ ! -e "$BOX_INSTALLED_FILE" ]; then',
+      // `_upd_unwind` (D-3462): rewrites the record cmd_update cleared, tmp + one rename.
+      'tmp="$BOX_INSTALLED_FILE.tmp.$$"',
+      'if printf \'%s\' "$rec_body" > "$tmp" 2>/dev/null && chmod 644 "$tmp" && _plat_mv_notdir "$tmp" "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       // _upd_restore_arm3 (wave 4, Task 6, D-3260):
       // removes the record a completed spine wrote before its gate failed.
       'if rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
+      // W6 Task 4, `_ver_flip_back`: the record, cleared before the kept
+      // version's own spine so its presence afterwards means that spine wrote it.
+      'local rec="$BOX_INSTALLED_FILE"',
+      // W6 Task 4, `_upd_restore_arm1`: a failed arm 1 clears the record, so
+      // arm 2's child cannot read the box as already on the previous tag.
+      'if ! rm -f -- "$BOX_INSTALLED_FILE" 2>/dev/null; then',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
       '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
     ]);
