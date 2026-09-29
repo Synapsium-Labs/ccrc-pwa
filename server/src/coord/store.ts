@@ -56,7 +56,7 @@ import {
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -659,6 +659,21 @@ export type RunsReadResult =
 export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
+
+/** `runsNamingSession`'s row — `OpenSibling` plus `sessionId` (the session
+ *  this whole read is scoped to, carried per row so a caller building
+ *  `ChildReclaimHoldCandidate`s never has to remember it separately) and
+ *  `state` (child-reclamation wave 4: unlike `OpenSibling`'s rows, which are
+ *  non-terminal by construction, these span every state, and the hold read
+ *  needs to know which ones are terminal). */
+export interface ChildReclaimNamingRow {
+  readonly id: number; readonly sessionId: string; readonly program: string;
+  readonly wave: number; readonly waveOf: number | null; readonly state: RunState;
+}
+
+export type RunsNamingSessionResult =
+  | { readonly ok: true; readonly runs: readonly ChildReclaimNamingRow[] }
+  | { readonly ok: false; readonly kind: 'run-unreadable'; readonly detail: string };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
@@ -1294,9 +1309,13 @@ class IntentJournalFault extends Error {
  *
  *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
  *  into a THROW rather than a silent drop — only for text that does not
- *  start with `reclaim:` (the SQL `LIKE` is case-insensitive) or holds no
- *  ` -> ` at all: the writer always emits the prefix and one separator, so
- *  such a row is hand-written or a future reword of the writer. */
+ *  start with `reclaim:` or holds no ` -> ` at all: the writer always emits
+ *  the prefix and one separator, so such a row is hand-written or a future
+ *  reword of the writer. The SQL selection below is case-SENSITIVE
+ *  (`substr(detail, 1, 8) = 'reclaim:'`, wave 4's fix — SQLite's `LIKE` is
+ *  case-insensitive for ASCII by default and would have handed this reader a
+ *  row it can never attribute, such as an operator's own `RECLAIM:x -> y`
+ *  note, which is exactly the "hand-written" case this function throws on. */
 function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const prefix = 'reclaim:';
   if (!detail.startsWith(prefix)) return null;
@@ -2870,6 +2889,36 @@ export class CoordStore {
     return { ok: true, siblings };
   }
 
+  /** `openRunsForSession`'s shape, with its `state NOT IN …` filter REMOVED
+   *  (child-reclamation wave 4, spec §5.7's "no hold" conjunct): every run
+   *  naming `sessionId`, in ANY state, TERMINAL included. `openRunsForSession`
+   *  answers "is this workspace still claimed?" and deliberately excludes a
+   *  terminal run; the hold read needs the OPPOSITE population — a run that
+   *  has FINISHED, because only a terminal run's own claim can be what a held
+   *  child's text renders. `state` rides on every row (`openRunsForSession`'s
+   *  narrower row omits it — every row it returns is non-terminal by
+   *  construction, so its caller never needs to ask): the hold read compares
+   *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
+   *  own rule: a partial candidate list is how a hold this build did write can
+   *  read as one it never wrote. */
+  runsNamingSession(sessionId: string, excludeRunId?: number): RunsNamingSessionResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
+      'WHERE sessionId = ? AND id != ? ORDER BY id',
+    ).all(sessionId, excludeRunId ?? -1) as unknown as
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null; state: string }[];
+    const runs: ChildReclaimNamingRow[] = [];
+    for (const r of rows) {
+      const m = measureRunNumbers(r);
+      if (!m.ok) return { ok: false, kind: 'run-unreadable', detail: m.detail };
+      runs.push({ id: m.nums.id, sessionId, program: r.program, wave: m.nums.wave, waveOf: m.nums.waveOf,
+        state: isRunState(r.state) ? r.state : 'unknown' });
+    }
+    return { ok: true, runs };
+  }
+
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
    *  run this build calls non-terminal. NOT `openRunsForSession`'s question one
    *  method up — that one keys on `sessionId`, the WORKER column, which is the
@@ -2977,8 +3026,18 @@ export class CoordStore {
     const ids = new Set((this.db.prepare(
       'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
+    // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
+    // wave 4, controller carry): SQLite's `LIKE` is case-insensitive for ASCII
+    // by default, so an unrelated OPERATOR note that merely starts
+    // `RECLAIM:…` would have matched the old pattern and then reached
+    // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
+    // is case-SENSITIVE — a mismatch it reads as "not this writer's row" and
+    // therefore throws on (a row this build cannot attribute to a `from`).
+    // One hand-written note in the wrong case would have broken automatic
+    // reclamation fleet-wide. `substr` selects only what the writer's own
+    // `reclaim:${…}` template can produce.
     const displacements = this.db.prepare(
-      "SELECT detail FROM run_events WHERE causedBy = 'operator' AND detail LIKE 'reclaim:%'",
+      "SELECT detail FROM run_events WHERE causedBy = 'operator' AND substr(detail, 1, 8) = 'reclaim:'",
     ).all() as { detail: string }[];
     for (const row of displacements) {
       const froms = childReclaimDisplacedCandidates(row.detail);
@@ -5015,7 +5074,47 @@ export class CoordStore {
           refusal: string | null; detail: string | null; truncated: number;
           obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
         }[];
-    return rows.map((r) => ({
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
+   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
+   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
+   *  its own opening `create` in days of retried refusals, and the run-id fence
+   *  needs that row for the LIFE of the workspace, not for as long as it fits
+   *  a page. Bounded to one ACT instead, so a long-refused child costs one
+   *  narrow index scan (`sessionId`, `act`), never the whole table — and never
+   *  the oldest `create` either, which would skip every recycled slug
+   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
+   *  narrows "every create this session ever had" down to the CURRENT
+   *  generation's own opening row. Same column set, same reviver, as
+   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
+    const c = CoordStore.LC_COLS;
+    const act: LifecycleAct = 'create';
+    const rows = this.db.prepare(
+      `SELECT ${c} FROM lifecycle_events WHERE sessionId = ? AND act = ? ORDER BY id ASC`,
+    ).all(sessionId, act) as {
+      uid: string | null; gen: string; at: number | null; ingestedAt: number;
+      act: string; badact: string | null; outcome: string; badoutcome: string | null;
+      verb: string | null; sessionId: string | null; tx: string | null;
+      refusal: string | null; detail: string | null; truncated: number;
+      obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+    }[];
+    return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
+   *  a column gaining a field lands in both readers or neither — never one and
+   *  not the other. Private and static: it touches no instance state. */
+  private static reviveLifecycleRow(r: {
+    uid: string | null; gen: string; at: number | null; ingestedAt: number;
+    act: string; badact: string | null; outcome: string; badoutcome: string | null;
+    verb: string | null; sessionId: string | null; tx: string | null;
+    refusal: string | null; detail: string | null; truncated: number;
+    obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
+  }): MirroredLifecycleEvent {
+    return {
       uid: r.uid, gen: r.gen, at: r.at, ingestedAt: r.ingestedAt,
       // Through the guards, never a cast — the same discipline `feedEvents`
       // gives `kind` and `programs()` gives `state`. A token a NEWER build
@@ -5040,7 +5139,25 @@ export class CoordStore {
       dec: reviveDec(jsonOrNull(r.decJson)),
       meas: reviveMeas(jsonOrNull(r.measJson)),
       raw: r.raw,
-    }));
+    };
+  }
+
+  /** Every session id the lifecycle mirror holds a `reclaim` row for
+   *  (child-reclamation wave 4, spec §5.9) — the NARROWING read before the
+   *  sweep's per-session history reads: it asks `lifecycleFor`/
+   *  `lifecycleCreatesFor` only for the listed rows in this set, so a registry
+   *  full of non-children costs one statement a sweep, not one per row. A
+   *  SUPERSET on purpose: it names ids whose only `reclaim` rows belong to an
+   *  EARLIER workspace under a recycled slug (spec §5.6), and the generation
+   *  fence (`childReclaimGeneration`) is what drops those — this method
+   *  decides nothing about generations. The act is BOUND, typed against its
+   *  union, so it is not a second hand-spelled literal. */
+  childReclaimSessionIds(): Set<string> {
+    const act: LifecycleAct = 'reclaim';
+    const rows = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events WHERE act = ? AND sessionId IS NOT NULL',
+    ).all(act) as { sessionId: string }[];
+    return new Set(rows.map((r) => r.sessionId));
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */

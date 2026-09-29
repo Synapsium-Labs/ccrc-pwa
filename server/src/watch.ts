@@ -10,7 +10,7 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
@@ -26,8 +26,8 @@ import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
-  MailGate, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary, SessionStatus,
-  SessionUsage, TaskProgress,
+  MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
+  SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -56,9 +56,26 @@ import type { PushPayload } from './push.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
-import { MAIL_REPLAY_CEILING_ERROR, toRunSummary, type CoordStore, type AskRow, type MarkReleaseNotifiedResult } from './coord/store.js';
+import {
+  MAIL_REPLAY_CEILING_ERROR, toRunSummary, type AskRow, type CoordStore, type MarkReleaseNotifiedResult,
+  type RunRow,
+} from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
+import { refusalSentence } from './wsaudit.js';
+import {
+  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild,
+  type ChildReclaimOutcome, type ChildReclaimRequest,
+} from './coord/childReclaim.js';
+import {
+  childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
+  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
+  childReclaimTerminalRefusal, type ChildReclaimHoldCandidate, type ChildReclaimHoldCandidatesRead,
+  type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead, type ChildReclaimJournalRow,
+  type ChildReclaimMintingRunRead, type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead,
+  type ChildReclaimSweepEntry, type ChildReclaimSweepSkip,
+} from './childReclaimSweep.js';
+import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -98,6 +115,35 @@ const NAME_SWEEP_MS = 10_000;
  *  the name sweep, deliberately: this one touches the filesystem per PROJECT,
  *  not per pane. */
 const DIVERGENCE_SWEEP_MS = 60_000;
+
+/** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
+ *  census's cadence, for the census's reason — a child's eligibility moves on
+ *  human timescales (a run closes, a re-dispatch binds) — and the
+ *  TWICE-OBSERVED rule is measured in these intervals: a child must read
+ *  eligible on two passes at least this far apart before anything is
+ *  composed. It is also the base of the failure backoff (spec §5.9: "retries
+ *  back off in between"). EXPORTED so its suite advances by the real
+ *  constant. */
+export const CHILD_RECLAIM_SWEEP_MS = 60_000;
+
+/** At most this many lane-asked reclaims outstanding at once (contract §8
+ *  R5a). Close-path reclaims are not counted, and neither is the hold-release
+ *  job (part 2): the bound is the LANE's own concurrency, not the fleet's —
+ *  one destructive verb from this automatic trigger in flight at a time keeps
+ *  a bad pass from asking the box for ten deletions before the first one has
+ *  even answered. */
+export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
+
+/** A lane-asked reclaim that has not settled after this long stops counting
+ *  against `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8 R5a) — twice
+ *  `ws-reclaim`'s own remote budget (`ws-reap`'s four minutes, the same
+ *  budget wave 3's executor composes its argv under), so a genuinely slow but
+ *  live attempt gets a full budget's grace before the lane treats it as
+ *  stuck. It STAYS in flight — nothing here cancels or forgets it — and is
+ *  logged once, not once a pass, so a fleet host that never answers does not
+ *  fill the log forever. */
+export const CHILD_RECLAIM_STALL_MS = 480_000;
+
 /** How long the FIRST fleet assembly after boot waits for the first HEAD
  *  sweep (`headBranches`) before shipping without it. Bounded because that
  *  sweep is serial agent round trips per project and a dropped one need not
@@ -596,6 +642,38 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
+  /** The child-reclaim lane's clock (child-reclamation wave 4). */
+  private lastChildReclaimSweep = 0;
+  /** Per marked child: the twice-observed sighting, the two deferral clocks
+   *  (the first deferral of any kind, which each request carries; the first
+   *  PRESENCE deferral, which alone the ceiling reads), the run of failed
+   *  attempts the backoff reads, and the fairness ordering key
+   *  (`lastAskedAt`) — `ChildReclaimSweepEntry`. IN MEMORY ONLY, deliberately:
+   *  a restart loses it, and losing it can only DELAY a reclaim (two passes
+   *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
+   *  sooner, which ccd's re-proof on the box makes safe — never cause one. */
+  private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
+  /** Children whose reclaim this lane has asked for and not heard back on. A
+   *  pass never asks a child already in this set twice: the executor can hold
+   *  a session's queue for minutes (`ws-reclaim`'s remote budget is
+   *  `ws-reap`'s). Bounded to `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8
+   *  R5a), except a dispatch that has run past `CHILD_RECLAIM_STALL_MS` —
+   *  `childReclaimInFlightSince` is what tells the two apart. */
+  private childReclaimInFlight = new Set<string>();
+  /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
+   *  clock, and the reason a request that never settles stops holding the
+   *  lane's one slot forever. */
+  private childReclaimInFlightSince = new Map<string, number>();
+  /** Session ids whose stall past `CHILD_RECLAIM_STALL_MS` this process has
+   *  already logged once — never once a pass, for the reason
+   *  `CHILD_RECLAIM_STALL_MS`'s own docstring gives. Cleared when the
+   *  dispatch finally settles, so a LATER stall of the same child (a second
+   *  reclaim, long after the first) is reported again. */
+  private childReclaimStalledLogged = new Set<string>();
+  /** One log line per absence per child per process, not one a minute — keyed
+   *  `<why> <id>`, because an absent minting run and an absent reviewed run
+   *  are two conditions with two sentences. */
+  private childReclaimAbsentLogged = new Set<string>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -1195,6 +1273,13 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
+   *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
+   *  restart, by design: see `childReclaimSweepState`'s own docstring. */
+  currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
+    return this.childReclaimSweepState;
+  }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -1379,6 +1464,16 @@ export class FleetWatcher {
       // a listing snapshotted here would be three awaited lanes older than the
       // records it is compared with. `sweepDivergences` states the race in full.
       void this.sweepDivergences(records)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, same reasoning as `sweepNames` above and then some: this
+      // lane joins the per-session KeyedQueue behind wave 3's `ws-reclaim`,
+      // whose remote budget is `ws-reap`'s four minutes. Own clock
+      // (`CHILD_RECLAIM_SWEEP_MS`). HANDED `registryRead.names`, unlike the
+      // census: the only fact it takes from the listing is the reclaim
+      // switches, and a listing a few awaited lanes old is safe for that one —
+      // ccd re-reads `$REG/reclaim-paused` inside `ws-reclaim`'s lock at the
+      // instant of deletion, which is the read that makes the switch real.
+      void this.sweepChildReclaim(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -2650,6 +2745,447 @@ export class FleetWatcher {
     if (json === this.lastDivergenceJson) return;
     this.lastDivergenceJson = json;
     this.bus.emit('divergence', found);
+  }
+
+  /**
+   * THE CHILD-RECLAIM LANE (child-reclamation wave 4, spec §5.7 "On the
+   * sweep"). A SIBLING of `sweepDivergences`, never a branch of it: that lane
+   * "DECIDES nothing — no ccd verb runs here and nothing mutates", and this
+   * one asks for a deletion. It decides nothing either — every verdict is
+   * `childReclaimSweepVerdict`'s (L1) — but it APPLIES them, through wave 3's
+   * one executor, which both triggers share.
+   *
+   * THE SUBJECT IS THE MARKER. It walks the registry rows this tick already
+   * read and acts only on those whose `.child` marker names a minting run, so
+   * it reaches the children the close path cannot: dispatch's two arms that
+   * mint a child and fail to bind it. An absent minting run is never
+   * eligible.
+   *
+   * WHICH PASS, AND WHY IT DOES NOT RACE THE WRITE ROUTES. The 2 s tick's own
+   * registry read, throttled to `CHILD_RECLAIM_SWEEP_MS`. It cannot take the
+   * coordination mutex (not exported, and the watcher holds no handle on it),
+   * so it does not try: every coord.db read here is one synchronous
+   * `DatabaseSync` statement, atomic against the routes' writes; the executor
+   * re-reads the marker and the sibling list itself immediately before it
+   * composes the argv; the session's `KeyedQueue` serialises this lane against
+   * the close path's reclaim and the reap route for that session; and ccd
+   * recomputes the `--expect` fingerprint inside its lock, refusing
+   * `state-changed` on any drift. The server narrows the window; the re-proof
+   * on the box ends it.
+   *
+   * PRESENCE IS A DEFER, NOT AN INELIGIBILITY — the executor measures it (the
+   * server's visibility claim) and ccd measures it (rungs 5 and 6), and each
+   * answers `deferred`. That is what lets the ceiling bound it: a presence
+   * that reset eligibility would reset the clock with it, and the drawer's
+   * `tmux attach` on a locked phone would wedge a child forever.
+   *
+   * PART 1 OF 2. A `hold-retired` verdict (contract §8 R1) takes NO action
+   * here — the child is simply not asked, exactly like any other ineligible
+   * verdict — and carries no release job: that job (`releaseRetiredChildHold`,
+   * its own memory-entry accounting, its censuses) is wave 4's next part. The
+   * `!v.eligible` branch below already folds `why: 'hold-retired'` into the
+   * generic skip it is (its own `release` payload is simply unread), so
+   * adding the job later is a branch inserted ahead of that fallthrough, not
+   * a restructuring of it.
+   *
+   * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with
+   * `void`.
+   */
+  async sweepChildReclaim(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    const now = Date.now();
+    if (this.lastChildReclaimSweep !== 0 && now - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastChildReclaimSweep = now;
+
+    // ONE — the attention list, and the pass's coordination-history read,
+    // from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
+    // a restart does not lose it"), BEFORE either early return below: a
+    // paused fleet, or a fleet host without both `reclaim-v1` and
+    // `reclaim-pause-v1`, still has children standing under terminal
+    // refusals or failing past the ceiling, and the report must not go dark
+    // because the lane is idle. Per LISTED row whose id the mirror has a
+    // `reclaim` row for: that session's history — `lifecycleCreatesFor`
+    // MERGED with the windowed `lifecycleFor` read (contract, A10 item 6),
+    // so a long-refused child's own opening `create` never drops off this
+    // list just because its window has scrolled past it — cut to its CURRENT
+    // workspace generation by the one fence (`at` = now; spec §5.6 — a
+    // refusal of an earlier workspace under a recycled slug is not this
+    // child's), then the LATEST reclaim event of that generation, of ANY
+    // outcome, `intent` included (an attempt in flight, or one that died
+    // mid-way, lists nothing), as the L1 input row.
+    //
+    // ONE STORE READ of every `claimedBy` per pass too (contract §8 R5c) — in
+    // the SAME try as the mirror read: a throw here proves as little about
+    // who has coordinated as a failed mirror read proves about who is
+    // terminal, so it fails the WHOLE pass shut exactly the same way.
+    let latest: ChildReclaimJournalRow[];
+    let coordinating: ReadonlySet<string>;
+    try {
+      const withReclaim = coord.childReclaimSessionIds();
+      coordinating = coord.childReclaimCoordinatorIds();
+      latest = [];
+      for (const r of records) {
+        if (!withReclaim.has(r.id)) continue;
+        const gen = childReclaimGeneration(this.childReclaimAttentionGenerationRows(coord, r.id), now);
+        const row = childReclaimJournalRow(gen, childReclaimLatest(gen));
+        if (row !== null) latest.push(row);
+      }
+    } catch (err) {
+      // FAIL SHUT, and keep the last list: a failed read proves nothing about
+      // which children are terminal or which have coordinated, so this pass
+      // neither reports differently nor decides anything — and the
+      // twice-observed memory is dropped, so no child acts on the strength of
+      // a pass that measured nothing.
+      console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
+      this.childReclaimSweepState.clear();
+      return;
+    }
+    const live = new Map<string, number | null>(
+      records.map((r): [string, number | null] => [r.id, r.child.kind === 'child' ? r.child.runId : null]));
+    // The ONLY write of the list: the mirror derivation's result. No executor
+    // answer ever writes it (spec §5.9 — see the `.then` below).
+    this.childReclaimAttentionList = childReclaimAttention({
+      latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
+    });
+
+    // TWO — the switches (contract §8 R5b): BOTH caps must be advertised, not
+    // just `reclaim-v1` — a box that cannot answer `reclaim-pause` cannot be
+    // told to stop from the phone, so an automatic reclaim must never run
+    // there at all. No `reclaim-v1` on the fleet host means the executor
+    // would answer `unsupported` for every child every minute, each with a
+    // feed row; a raised `reclaim-paused` means stop. Either way the memory
+    // is dropped: "the switches read clear" is itself an eligibility
+    // conjunct, so a child needs two FRESH passes once a switch is lowered
+    // (or the box gains the missing capability).
+    if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
+        || names.includes(RECLAIM_PAUSE_MARKER)) {
+      this.childReclaimSweepState.clear();
+      return;
+    }
+
+    // THREE — eligibility, per marked child, then GATHER the due ones, then
+    // dispatch at most `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8 R5a). The
+    // TERMINAL set is the mirror's terminal refusals ONLY — never the
+    // attention list, which also names children whose reclaim keeps FAILING
+    // past the ceiling, and a failure is retried (backing off) for as long as
+    // it fails. It comes from the mirror alone (bound to the current
+    // generation) and survives a restart, and it includes a terminal ladder
+    // refusal found at AUDIT time: wave 3's `cmd_ws_audit --reclaim` journals
+    // exactly the terminal verdicts (`verb ws-audit`), so the mirror holds
+    // them as it holds `ws-reclaim`'s. A retryable verdict found there is
+    // journaled nowhere and needs no exclusion — it is retried by design.
+    // Between the executor's `refused` answer and the mirror lane's ingest
+    // (`LC_SWEEP_MS`) the child's twice-observed entry is forgotten
+    // (`childReclaimNextEntry`), so it cannot be asked for again until two
+    // fresh passes — long after.
+    const terminal = new Set(latest
+      .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
+    const seen = new Set<string>();
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number }[] = [];
+    for (const r of records) {
+      if (r.child.kind === 'none') continue;
+      seen.add(r.id);
+      // R-5e: every default here is an UNMEASURED shape, never an optimistic
+      // "absent"/"zero" one — `child.kind !== 'child'` short-circuits
+      // `childReclaimSweepVerdict` long before any of these would be read
+      // (its own `child.kind` check comes first), so these values are never
+      // consulted for such a row; they exist only so a future change to that
+      // ordering fails SHUT rather than silently reading a stale success.
+      let mintingRun: ChildReclaimMintingRunRead = { ok: false, detail: 'not read: not a child marker' };
+      let mintingRunFull: RunRow | null = null;
+      let reviewedRun: ChildReclaimReviewedRunRead = { kind: 'not-a-review' };
+      let reviewedId: number | null = null;
+      let siblings: ChildReclaimSiblingsRead = { ok: false, detail: 'not read: not a child marker' };
+      let held: ChildReclaimHoldRead = { kind: 'none' };
+      let childBornAt: number | null = null;
+      if (r.child.kind === 'child') {
+        try {
+          const run = coord.run(r.child.runId);
+          mintingRunFull = run.ok ? run.run : null;
+          mintingRun = run.ok
+            ? { ok: true, run: run.run === null ? null : { state: run.run.state, sessionId: run.run.sessionId,
+                dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt } }
+            : { ok: false, detail: run.detail };
+          // THE HOLD READ (contract §8 R1's first bullet): built from the
+          // row's own trimmed `held` text, the candidate runs a match might be
+          // one of, and a lazy per-programme open-run count — each of the
+          // latter two in its OWN try (both private helpers below), so a
+          // failure reading candidates or counting a programme's open runs
+          // reads as `unmeasured` (which protects), never throws out to this
+          // per-child catch and discards the reads that already succeeded.
+          held = childReclaimHoldRead(r.held, r.id, r.child.runId,
+            this.childReclaimHoldCandidatesRead(coord, r.id, r.child.runId, mintingRunFull),
+            (program) => this.childReclaimOpenOf(coord, program));
+          // A REVIEW run's child waits on the run it reviewed (`runs.reviews`;
+          // spec §5.7, "A review child is finished later than its own run"):
+          // the reviewer's report lives in the child's clips while the
+          // coordinator still cites it. Three answers that are not "not a
+          // review", never folded into it.
+          if (mintingRunFull !== null && mintingRunFull.reviews !== null) {
+            reviewedId = mintingRunFull.reviews;
+            const reviewed = coord.run(reviewedId);
+            reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
+              : reviewed.run === null ? { kind: 'absent' }
+              : { kind: 'run', state: reviewed.run.state };
+          }
+          const sib = coord.openRunsForSession(r.id);
+          siblings = sib.ok ? { ok: true, open: sib.siblings.length } : { ok: false, detail: sib.detail };
+          // THE RUN-ID FENCE (contract §8 R5d): the child's own birth is the
+          // OPENING `create` of its current generation — `lifecycleCreatesFor`
+          // is uncapped, so a failing child's `create` is findable for the
+          // life of the workspace, never just for as long as it fits a page
+          // (the birth fence's own reason `lifecycleCreatesFor` exists rather
+          // than reusing `lifecycleFor` here). `childReclaimGeneration` over a
+          // CREATE-ONLY list answers a single-row slice whose one element IS
+          // that opening row — a generation is a contiguous slice of ONE
+          // array, so its first element, when the slice is non-empty, is
+          // always index 0, whatever the fence would otherwise have sliced
+          // around it.
+          childBornAt = childReclaimGeneration(coord.lifecycleCreatesFor(r.id), now)[0]?.at ?? null;
+        } catch (err) {
+          // `node:sqlite` throws synchronously; an unread run is not an
+          // absent one. Every read this try attempted is discarded together —
+          // `mintingRun.ok === false` alone is enough to fail the verdict
+          // shut, whatever `held`/`siblings`/`childBornAt` happened to read
+          // before the throw.
+          mintingRun = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      const v = childReclaimSweepVerdict({
+        sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, workspace: r.workspace,
+        held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
+        coordinating: coordinating.has(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
+      });
+      if (!v.eligible) {
+        this.childReclaimSweepState.delete(r.id);
+        this.childReclaimLogAbsence(r, v.why, reviewedId);
+        if (v.why === 'minting-run-postdates-child' && mintingRunFull !== null && childBornAt !== null) {
+          this.childReclaimLogBirthSkip(r, mintingRunFull.openedAt, childBornAt);
+        }
+        continue;
+      }
+      const entry = this.childReclaimSweepState.get(r.id);
+      if (entry === undefined) {
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
+        continue;
+      }
+      if (this.childReclaimInFlight.has(r.id)) continue;
+      // THE ONE "MAY I ASK AGAIN" QUESTION (`childReclaimDue`, L1): folds the
+      // failure backoff AND the terminal-refusal pacing (contract §8 R20,
+      // R5g) — L4 decides no pacing of its own.
+      if (!childReclaimDue(entry, now, CHILD_RECLAIM_SWEEP_MS)) continue;
+      due.push({ r, entry, runId: v.runId });
+    }
+
+    // FOUR — the bound (contract §8 R5a). A dispatch that has not settled
+    // after `CHILD_RECLAIM_STALL_MS` stops counting against the bound (it
+    // stays in flight; nothing here cancels it) and is logged once. Due
+    // children are sorted `lastAskedAt` (never-asked first), then
+    // `firstEligibleAt`, then id, so a child that defers every pass cannot
+    // hog the one slot forever — the never-asked and the longest-waiting go
+    // first.
+    let activeInFlight = 0;
+    for (const [id, since] of this.childReclaimInFlightSince) {
+      if (now - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
+      if (!this.childReclaimStalledLogged.has(id)) {
+        this.childReclaimStalledLogged.add(id);
+        console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${id} has not settled after `
+          + `${CHILD_RECLAIM_STALL_MS / 1000}s — it stays in flight, and stops counting against `
+          + `CHILD_RECLAIM_MAX_IN_FLIGHT`);
+      }
+    }
+    const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
+    due.sort((a, b) => {
+      const la = a.entry.lastAskedAt;
+      const lb = b.entry.lastAskedAt;
+      if (la === null || lb === null) {
+        if (la === lb) return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
+        return la === null ? -1 : 1;
+      }
+      if (la !== lb) return la - lb;
+      if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
+      return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
+    });
+    const acts: Promise<void>[] = [];
+    for (const { r, entry, runId } of due.slice(0, freeSlots)) {
+      const req: ChildReclaimRequest = {
+        sessionId: r.id, runId, trigger: 'sweep',
+        // THE CEILING READS THE PRESENCE CLOCK ALONE (spec §5.7, "Presence,
+        // and its bound": the ceiling bounds presence and nothing else).
+        deferExpired: childReclaimDeferExpired(entry, now),
+        // THE ELAPSED DEFER RIDES THE REQUEST. Spec §5.7: past the ceiling
+        // "the feed row says how long it waited and why"; §5.9: a deferral is
+        // shown "with its elapsed time". So it is the FIRST deferral of ANY
+        // kind this sweep saw for the child — the other clock — and null
+        // before any; the executor's ONE feed row renders the wait from it.
+        // In memory, so a restart restarts it: a later `deferredSinceMs`,
+        // never an earlier one.
+        deferredSinceMs: entry.firstDeferredAt,
+      };
+      this.childReclaimInFlight.add(r.id);
+      this.childReclaimInFlightSince.set(r.id, now);
+      acts.push(this.execChildReclaim(coord, req).then(
+        (outcome) => {
+          // A terminal refusal, or a failure, needs no memory here beyond the
+          // entry, and gets none: ccd journalled it, and the mirror is where
+          // the attention list and the terminal exclusion read it (spec
+          // §5.9 — an executor answer never feeds `CoordStatus`). The entry:
+          // write back ONLY when it is still the live one. A pass that ran
+          // while this was in flight may have cleared the memory (switch
+          // raised, capability lost, mirror unread, row unlisted, child
+          // ineligible); re-seeding it from a stale entry would let the child
+          // be asked for on the FIRST pass after, and "two FRESH passes"
+          // would be false.
+          if (this.childReclaimSweepState.get(r.id) !== entry) return;
+          // `licensed` — this REQUEST's own `deferExpired`: whether this
+          // attempt was sent past the previous presence ceiling, which is
+          // what lets a presence-class answer RESTART the episode rather than
+          // silently keep skipping ccd's presence rungs forever (spec §5.7).
+          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired);
+          if (nextEntry === null) this.childReclaimSweepState.delete(r.id);
+          else this.childReclaimSweepState.set(r.id, nextEntry);
+        },
+        (err: unknown) => {
+          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+        },
+      ).finally(() => {
+        this.childReclaimInFlight.delete(r.id);
+        this.childReclaimInFlightSince.delete(r.id);
+        this.childReclaimStalledLogged.delete(r.id);
+      }));
+    }
+    // A child the registry no longer lists has no twice-observed entry to keep.
+    for (const id of [...this.childReclaimSweepState.keys()]) {
+      if (!seen.has(id)) this.childReclaimSweepState.delete(id);
+    }
+    await Promise.all(acts);
+  }
+
+  /** `ChildReclaimHoldCandidatesRead` for one child (contract §8 R1, "the
+   *  read"): every run naming this session, in ANY state
+   *  (`CoordStore.runsNamingSession`), plus the MINTING RUN itself even when
+   *  it names a DIFFERENT session — an orphan's own dispatch or non-final
+   *  close may have written the hold this child still carries, and
+   *  `runsNamingSession` alone cannot see that once the run has moved on to a
+   *  different session (Task 7 review's carried obligation). `runsNamingSession`'s
+   *  OWN try: a throw here is this READ's failure alone, answered
+   *  `unmeasured` by `childReclaimHoldRead` — which PROTECTS — never a throw
+   *  that discards the per-child reads around it. */
+  private childReclaimHoldCandidatesRead(
+    coord: CoordStore, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
+  ): ChildReclaimHoldCandidatesRead {
+    let naming: ReturnType<CoordStore['runsNamingSession']>;
+    try {
+      naming = coord.runsNamingSession(sessionId);
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    if (!naming.ok) return { ok: false, detail: naming.detail };
+    const candidates: ChildReclaimHoldCandidate[] = naming.runs.map((row) => (
+      { runId: row.id, sessionId: row.sessionId, state: row.state, program: row.program, wave: row.wave,
+        waveOf: row.waveOf }));
+    if (mintingRunFull !== null) {
+      candidates.push({ runId: mintingRunId, sessionId: mintingRunFull.sessionId, state: mintingRunFull.state,
+        program: mintingRunFull.program, wave: mintingRunFull.wave, waveOf: mintingRunFull.waveOf });
+    }
+    return { ok: true, candidates };
+  }
+
+  /** `ChildReclaimHoldOpenRead` for one programme (contract §8 R1's second
+   *  bullet): `CoordStore.programOpenRunCount` throws bare, so this is its
+   *  own try — called LAZILY by `childReclaimHoldRead`, only once a hold's
+   *  text has PROVEN to match one of this child's own runs, so a programme
+   *  whose hold does not match spends nothing here. */
+  private childReclaimOpenOf(coord: CoordStore, program: string): ChildReclaimHoldOpenRead {
+    try {
+      return { ok: true, count: coord.programOpenRunCount(program) };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** The generation input for the attention list and the terminal exclusion
+   *  ALONE (contract, A10 item 6): `lifecycleCreatesFor` (every `create` row,
+   *  uncapped) merged with `lifecycleFor`'s own windowed read, so a
+   *  long-refused child's own OPENING `create` stays findable however far it
+   *  has scrolled past `LIFECYCLE_PAGE_MAX`. `lifecycleFor` answers this
+   *  session's NEWEST rows; any `create` this adds that the window did not
+   *  already carry is — by that read's own ordering — older than every row
+   *  the window holds, so it is PREPENDED, never interleaved into the
+   *  window's own internal order (nothing here re-sorts either read).
+   *  Deduplicated by `uid`, the mirror's one stable per-row identity
+   *  (`lifecycle_uid`'s UNIQUE index); a `create` whose own line carried none
+   *  (rare — the mirror's own dedupe degrades to its raw bytes for exactly
+   *  that row) may appear twice, which costs `childReclaimGeneration`
+   *  nothing: a duplicate boundary answers the same boundary. The birth
+   *  fence (above, in the per-child loop) does NOT use this — it reads
+   *  `lifecycleCreatesFor` alone, where a single-row generation IS the
+   *  opening create, and merging in window rows would only cost a query. */
+  private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
+    const window = coord.lifecycleFor({ sessionId });
+    const creates = coord.lifecycleCreatesFor(sessionId);
+    if (creates.length === 0) return window;
+    const windowUids = new Set(window.map((e) => e.uid).filter((u): u is string => u !== null));
+    const extra = creates.filter((c) => c.uid === null || !windowUids.has(c.uid));
+    return extra.length === 0 ? window : [...extra, ...window];
+  }
+
+  /** Absence is logged and skipped (spec §5.7) — ONCE per child per condition
+   *  per process. Two absences, two sentences: an absent MINTING run is never
+   *  eligible, because a lost or rebuilt database makes every child's minting
+   *  run absent at once; an absent REVIEWED run keeps a review child, because
+   *  a run the database does not hold is not proven terminal and the report
+   *  in the child's clips may still be cited. Every other skip is an ordinary
+   *  state of the world and says nothing (`minting-run-postdates-child` has
+   *  its OWN log, `childReclaimLogBirthSkip`, below — a different sentence
+   *  with different evidence to name). */
+  private childReclaimLogAbsence(r: SessionRecord, why: ChildReclaimSweepSkip, reviewedId: number | null): void {
+    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent') return;
+    const key = `${why} ${r.id}`;
+    if (this.childReclaimAbsentLogged.has(key)) return;
+    this.childReclaimAbsentLogged.add(key);
+    const runId = r.child.kind === 'child' ? String(r.child.runId) : '?';
+    console.warn(why === 'minting-run-absent'
+      ? `ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`
+      : `ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+  }
+
+  /** R-5d's own log line: once per child per process, naming both instants —
+   *  never re-logged for the same skip while this process runs. A minting run
+   *  opened AFTER this child's own birth (past the clock-skew allowance)
+   *  cannot be the run that minted THIS incarnation — run ids restart after a
+   *  coordination-database loss — and the two possible causes are named so an
+   *  operator does not have to guess which one applies. */
+  private childReclaimLogBirthSkip(r: SessionRecord, openedAt: number, childBornAt: number): void {
+    const key = `minting-run-postdates-child ${r.id}`;
+    if (this.childReclaimAbsentLogged.has(key)) return;
+    this.childReclaimAbsentLogged.add(key);
+    console.warn(`ccrc-server: sweepChildReclaim: ${r.id}'s marker names a run opened ${openedAt - childBornAt}ms `
+      + `after this child's own birth (run openedAt=${openedAt}, child born=${childBornAt}, skew=${CHILD_BIRTH_SKEW_MS}ms) `
+      + '— skipped as minting-run-postdates-child: either a rebuilt coordination database (run ids restart at 1 after '
+      + 'a loss) or the fleet box\'s clock reading behind the server\'s');
+  }
+
+  /** The ONE executor, as both triggers reach it: `reclaimChild` on the
+   *  session's own `KeyedQueue`, with the deps the close route composes — so
+   *  presence, the ceiling and the feed row behave identically however a
+   *  reclaim was started (spec §5.7). Composes EXACTLY the close port's seven
+   *  members (`coord, io, cfg, runCcd, fleetState, presence, notifyLog`),
+   *  `now` unset — built HERE, inside the queue callback, as the close port
+   *  does. `Deps.childReclaimExec` replaces the whole call in a test, and
+   *  nowhere else. */
+  private execChildReclaim(coord: CoordStore, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
+    const seam = this.deps.childReclaimExec;
+    if (seam) return seam(req);
+    // The close route's OWN shape (`coord/routes.ts`'s `childReclaimPort`):
+    // the literal is built INSIDE the queue callback, so its members are
+    // `deps`'s current answer WHEN THE JOB RUNS, never a snapshot taken when
+    // the sweep queued it.
+    return this.deps.queue.run(req.sessionId, () => reclaimChild({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
+      fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+    }, req));
   }
 
   /**

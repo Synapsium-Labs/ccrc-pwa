@@ -2697,7 +2697,7 @@ MSG
   - `FleetWatcher.currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry>` — the sweep's in-memory state, read-only, for wave 5's `childReclaimStatus`.
   - The attention list reaches `CoordStatus.childReclaimAttention` through Task 4's `emitCoord`.
 
-- [ ] **Step 1: Read what wave 3 shipped**
+- [x] **Step 1: Read what wave 3 shipped**
 
 ```bash
 sed -n '/export interface ChildReclaimDeps/,/^}/p' server/src/coord/childReclaim.ts
@@ -2708,7 +2708,7 @@ grep -n "from '../../../shared/api.js'" server/src/coord/childReclaim.ts
 
 `execChildReclaim` in Step 5 composes `ChildReclaimDeps` from `this.deps` with the members `coord, io, cfg, runCcd, fleetState, presence, notifyLog`. **If the shipped interface declares a different member set, the literal takes exactly the shipped members, taken from `this.deps` under the same names the close route takes them from `Deps`** — the route builds it from `Deps`, so every member exists on `this.deps`. If wave 3 exported a builder for it, call that builder instead. Either way, name the resulting literal in the wave-done mail, because the two triggers are only one executor if they compose one deps shape. The last `grep` prints the one `shared/api.js` import Step 4 extends (`server/src/coord/` is three levels below the root).
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 (a) Create `server/test/child-reclaim-sweep.test.ts`:
 
@@ -3455,13 +3455,13 @@ describe('one implementation each', () => {
 });
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts test/child-reclaim-generation.test.ts`
 
 Expected: each FILE LOADS — a named import a module does not export reads as `undefined` under vitest's module transform, never a collection error (Task 3 Step 2's measurement) — and EVERY case fails on its own line: each case that calls `f.pass()` with `TypeError: watcher.sweepChildReclaim is not a function` (and `CHILD_RECLAIM_SWEEP_MS` is `undefined`, so `f.next()` would advance the clock by `NaN` — the TypeError lands first); the cases that call `f.latestOf` before any pass with `TypeError: childReclaimGeneration is not a function`; the first `childReclaimTokenKind` case with `TypeError: childReclaimTokenKind is not a function`, and the second with `expected '…' to match /import \{[^}]*\bchildReclaimTokenKind\b…/`; the generation/latest import pin with `expected '…' to match /import \{[^}]*\bchildReclaimGeneration\b…/`; the KeyedQueue text pin with `expected '…' to match /this\.deps\.queue\.run\(req\.sessionId, …/`. And `child-reclaim-generation.test.ts` (Step 2b): every `ROWS` row with `TypeError: childReclaimGeneration is not a function`, every `LATEST` row with `TypeError: childReclaimLatest is not a function`, and the one-definition scan with `childReclaimGeneration: expected [] to deeply equal [ 'server/src/coord/childReclaim.ts' ]`. A case that passes here is a case that pins nothing — stop and find out why.
 
-- [ ] **Step 4: The token-kind reader, the generation fence, the latest-event rule, the mirror read, and the seam**
+- [x] **Step 4: The token-kind reader, the generation fence, the latest-event rule, the mirror read, and the seam**
 
 In `server/src/coord/childReclaim.ts` (wave 3's file), directly after `export const CHILD_RECLAIM_TOKEN_KIND`'s closing `};`:
 
@@ -3592,7 +3592,7 @@ In `server/src/server.ts`, add `import type { ChildReclaimOutcome, ChildReclaimR
   childReclaimExec?: (req: ChildReclaimRequest) => Promise<ChildReclaimOutcome>;
 ```
 
-- [ ] **Step 5: The lane**
+- [x] **Step 5: The lane**
 
 In `server/src/watch.ts`:
 
@@ -3920,7 +3920,7 @@ export const CHILD_RECLAIM_SWEEP_MS = 60_000;
 
 (`CoordStore` is already imported as a type in `watch.ts` from `./coord/store.js`.) If Step 1 found a different `ChildReclaimDeps` member set, the literal in `execChildReclaim` takes that set, as Step 1 says.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts test/child-reclaim-generation.test.ts \
@@ -3931,7 +3931,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts tes
 
 Expected: PASS — `child-reclaim-sweep` 32/32 (eighteen executor cases, nine attention cases, three token-kind/import cases, two production-path cases — count them before and after: a smaller green is still green only if nothing was dropped); `child-reclaim-generation` 22/22 (thirteen fence rows, eight latest-event rows and the one-definition scan); `child-reclaim-sweep-policy` 44/44 and `child-reclaim-paused-at-server` 8/8 unchanged; `mail-routes`' kebab scan over `server/src/coord` finds no new literal in `childReclaim.ts`; `divergence-sweep` unchanged (its lane is untouched; `the tick itself` still finds one `setInterval(`); `verb-gate` finds no new `CCD_ARGV.` call site in `watch.ts`.
 
-- [ ] **Step 7: Mutation check, then commit**
+- [x] **Step 7: Mutation check, then commit**
 
 Each run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep.test.ts` — rows 16–18, 23, 24, 27 and 28 run `test/child-reclaim-generation.test.ts` instead (row 24 both files).
 

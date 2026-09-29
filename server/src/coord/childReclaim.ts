@@ -10,7 +10,10 @@ import { refusalSentence } from '../wsaudit.js';
 import type { ChildSpentVerdict } from './childSpent.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
-import { CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type MarkerState, type RunState } from '../../../shared/api.js';
+import {
+  CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type LifecycleAct, type LifecycleOutcome, type MarkerState,
+  type MirroredLifecycleEvent, type RunState,
+} from '../../../shared/api.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -72,6 +75,98 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
 
 export function isChildReclaimToken(v: unknown): v is ChildReclaimToken {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, v);
+}
+
+/** `CHILD_RECLAIM_TOKEN_KIND` read TOTALLY: a token's classification, or null
+ *  for one this build was never compiled to know (a newer ccd's), which is
+ *  therefore never terminal and never listed. Never a cast: the journal's
+ *  `refusal` is free text. `hasOwnProperty`, not `in`: `'toString' in {}` is
+ *  true.
+ *
+ *  THE ONE LOOKUP, exported beside the table it reads (child-reclamation
+ *  wave 4, spec §5.9): the kind map is spelled once, and a second reader
+ *  would be a second place a classification could drift. The sweep
+ *  (`watch.ts`) imports it and injects it into the L1 attention derivation as
+ *  `kindOf`; wave 5's run chip imports it as-is and moves nothing. */
+export const childReclaimTokenKind = (token: string): 'gone' | 'terminal' | 'retry' | null =>
+  Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_TOKEN_KIND, token)
+    ? CHILD_RECLAIM_TOKEN_KIND[token as ChildReclaimToken]
+    : null;
+
+const CREATE_ACT: LifecycleAct = 'create';
+const CREATE_DONE: LifecycleOutcome = 'done';
+const RECLAIM_ACT: LifecycleAct = 'reclaim';
+
+/** ONE WORKSPACE GENERATION of one session's lifecycle events (child-
+ *  reclamation wave 4, spec §5.6, §5.9). Session ids are slugs and slugs
+ *  recycle: once a child is reclaimed or reaped, ws-add may mint a NEW
+ *  workspace under the same id, and "the latest `reclaim` event for this
+ *  session" would then describe a workspace that no longer exists —
+ *  inheriting a terminal refusal would list the new child and keep the sweep
+ *  off it for good. So every such read is taken within one generation: from
+ *  the last `create` row with outcome `done` whose `at` is at or before `at`,
+ *  up to (not including) the first such `create` after it.
+ *
+ *  NO OPENING `create`, NO GENERATION. When no placed `done` create lies at
+ *  or before `at` — a workspace minted before the mirror existed, one whose
+ *  `create` has scrolled out of the window read or carried no clock, or a
+ *  history of rows alone — the answer is `[]`: there is no evidence which
+ *  workspace those rows describe, and a guess would be another generation's
+ *  rows.
+ *
+ *  `events` is ONE session's rows in the mirror's `id` order, oldest first —
+ *  `CoordStore.lifecycleFor({ sessionId })`'s or `lifecycleCreatesFor`'s
+ *  answer — and the answer keeps that order: `id` orders, never `at`. TIME IS
+ *  CCD'S CLOCK ALONE, and it only PLACES the fence. The mirror's `ingestedAt`
+ *  is the server's clock and is never read as an event time (D8,
+ *  `coord/schema.ts`), so a `done` create whose line carried no `at` cannot be
+ *  placed: it is no boundary — it opens nothing and closes nothing — and it,
+ *  like every row between two boundaries, belongs to the generation its `id`
+ *  falls in, whatever its `at`. Only a `done` create opens or closes a
+ *  generation: a refused `ws-add` minted nothing, and an `intent` without its
+ *  `done` is a create that never completed.
+ *
+ *  THE ONE IMPLEMENTATION. The sweep's attention list calls it with `at` =
+ *  now; the birth fence calls it over `lifecycleCreatesFor` alone, so its
+ *  single-row answer is the opening `create` itself; wave 5's run chip
+ *  imports it and calls it with `at` = the run's `closedAt`.
+ *  `child-reclaim-generation.test.ts` scans for a second. */
+export function childReclaimGeneration(
+  events: readonly MirroredLifecycleEvent[], at: number,
+): readonly MirroredLifecycleEvent[] {
+  /** A generation BOUNDARY: a `done` create that ccd placed in time. */
+  const bound = (e: MirroredLifecycleEvent): e is MirroredLifecycleEvent & { readonly at: number } =>
+    e.act === CREATE_ACT && e.outcome === CREATE_DONE && e.at !== null;
+  let start = -1;
+  for (let k = 0; k < events.length; k += 1) {
+    const e = events[k]!;
+    if (bound(e) && e.at <= at) start = k;
+  }
+  if (start === -1) return [];
+  let end = events.length;
+  for (let k = start + 1; k < events.length; k += 1) {
+    if (bound(events[k]!)) { end = k; break; }
+  }
+  return events.slice(start, end);
+}
+
+/** The LATEST `reclaim` event of a generation, of ANY outcome — `intent`
+ *  included — or null when it holds none (child-reclamation wave 4, contract
+ *  §8 R21). An `intent` newer than every outcome is an attempt in flight, or
+ *  one that died mid-way: what it will find is not known yet, so the
+ *  attention list lists nothing for that child and the chip falls through to
+ *  its row rule (spec §5.9 — a report of what stands, never of what an
+ *  unfinished attempt might say). The mirror's `id` order decides "latest",
+ *  never ccd's nullable clock (`lifecycleFor`'s rule).
+ *
+ *  THE ONE RULE: the sweep's attention list reads it over
+ *  `childReclaimGeneration(events, now)`; wave 5's chip imports it as-is.
+ *  `child-reclaim-generation.test.ts` scans for a second. */
+export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): MirroredLifecycleEvent | null {
+  for (let k = events.length - 1; k >= 0; k -= 1) {
+    if (events[k]!.act === RECLAIM_ACT) return events[k]!;
+  }
+  return null;
 }
 
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
@@ -139,6 +234,15 @@ const CHILD_RECLAIM_RESUME: Readonly<Record<ChildReclaimResume, true>> = {
 export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
 }
+
+/** The ONE ccd `{failed:…}` word `parseChildReclaimResult` gives its own
+ *  treatment (A16 item 7, wave 3's second fix round): the presence rungs' own
+ *  in-lock tmux probe failing BEFORE any act, which — unlike every other
+ *  post-start failure word, free ccd text this file never compares against a
+ *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
+ *  `resumable`: nothing was left to resume from). Named so
+ *  `isChildReclaimKebab` admits it without a second hand-kept literal. */
+const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured';
 
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
@@ -377,6 +481,7 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
+    || v === CHILD_RECLAIM_PROBE_UNMEASURED
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
@@ -542,8 +647,14 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      return { kind: 'failed', resume: 'resumable',
-        detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      // Wave 3's second fix round (A16 item 7): `probe-unmeasured` is the
+      // presence rungs' own in-lock tmux probe failing BEFORE any act — the
+      // destructive tail never started, so unlike every other post-start
+      // `{failed:…}` document there is no breadcrumb to resume from. A retry
+      // starts completely afresh, exactly as `not-resumable` already reads
+      // (`childReclaimFeedBody`'s tail text: "It is retried from the start.").
+      const resume: ChildReclaimResume = v.failed === CHILD_RECLAIM_PROBE_UNMEASURED ? 'not-resumable' : 'resumable';
+      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
     }
   }
   const err = stderr.trim();

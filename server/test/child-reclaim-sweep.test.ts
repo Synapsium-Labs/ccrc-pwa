@@ -1,0 +1,842 @@
+// The child-reclaim lane, wired (child-reclamation spec §5.7 "On the sweep",
+// as amended by the coordinator's rulings R-1 through R-12 and A10's per-task
+// amendments — the plan's own Task 8 code block PREDATES those and is
+// superseded wherever they differ). `child-reclaim-sweep-policy.test.ts` pins
+// the L1 verdicts (`childReclaimSweepVerdict`, `childReclaimHoldRead`,
+// `childReclaimNextEntry`, `childReclaimDue`); what is only provable HERE is
+// what reaches the executor, when, how often, with which `deferExpired` and
+// `deferredSinceMs`, the fairness/in-flight bound (contract §8 R5a), the two
+// new store reads this lane composes (the hold candidates, the coordination
+// history, the birth fence), and that everything else reaches nothing.
+//
+// PART 1 OF 2: the release job for a retired programme hold (contract §8 R1)
+// is NOT this file's — a `hold-retired` verdict is asserted here to take NO
+// action (no release, no reclaim), never to eventually release.
+//
+// The executor is stubbed at `Deps.childReclaimExec`, the ONE seam the
+// watcher calls through, so most cases assert on the requests themselves. The
+// production-path cases remove the stub and prove the real path composes wave
+// 3's own audit argv through `runCcd`, and the SAME ports the close route
+// composes.
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher, CHILD_RECLAIM_MAX_IN_FLIGHT, CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/watch.js';
+import { readRegistry } from '../src/registry.js';
+import { loadConfig } from '../src/config.js';
+import { CoordStore } from '../src/coord/store.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { parseJournalLine } from '../src/coord/journalparse.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
+import { refusalSentence } from '../src/wsaudit.js';
+import { NotifyLog } from '../src/notifylog.js';
+import {
+  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimFailingSentence, childReclaimJournalRow,
+} from '../src/childReclaimSweep.js';
+import {
+  CHILD_RECLAIM_TOKEN_KIND, childReclaimGeneration, childReclaimLatest, childReclaimTokenKind,
+  type ChildReclaimOutcome, type ChildReclaimRequest,
+} from '../src/coord/childReclaim.js';
+import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
+import { SPAWN_STALL_MS, holdReason, lcRefusalWord } from '../../shared/api.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { mkTmp } from './tmpHelpers.js';
+
+afterEach(() => { vi.restoreAllMocks(); });
+
+const T0 = 1_790_000_000_000;
+const GEN = '1790000000000000000';
+
+interface FixtureOpts {
+  /** false → the fleet host does not advertise `reclaim-v1`. */
+  cap?: boolean;
+  /** false → the fleet host does not advertise `reclaim-pause-v1` (A10 item 2). */
+  pauseCap?: boolean;
+  /** 'real' → no stub; the production path runs against the recording runner. */
+  exec?: 'stub' | 'real';
+  /** The stub's answer; defaults to `reclaimed`. */
+  outcome?: (req: ChildReclaimRequest) => ChildReclaimOutcome | Promise<ChildReclaimOutcome>;
+  /** Reuse a coordination database (the restart case). */
+  coord?: CoordStore;
+  home?: string;
+  /** Wired into `deps.presence` — the ports-composition case. */
+  visible?: (id: string) => boolean;
+  /** Wired into `deps.notifyLog` — the ports-composition case. */
+  notifyLog?: NotifyLog;
+}
+
+const fixture = (opts: FixtureOpts = {}) => {
+  let clock = T0;
+  vi.spyOn(Date, 'now').mockImplementation(() => clock);
+  const home = opts.home ?? mkTmp('ccrc-child-reclaim-sweep-');
+  seedRoster(home);
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: mkTmp('ccrc-projects-') } as never);
+  const calls: string[][] = [];
+  const run = async (_cmd: string, args: string[]) => { calls.push(args); return { code: 1, stdout: '', stderr: '' }; };
+  const coord = opts.coord ?? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const requests: ChildReclaimRequest[] = [];
+  const answer = opts.outcome ?? ((req: ChildReclaimRequest): ChildReclaimOutcome =>
+    ({ kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 }));
+  const deps = {
+    ...testDeps(home, run), cfg, coord,
+    // The verbs wave 3's executor checks before it reaches the audit — its own
+    // test's `CAPS`: `ws-audit` (`verbSupported`, which REFUSES a verb a
+    // present list does not name), `reclaim-v1` and `reclaim-pause-v1` (both
+    // `capSupported`, the lane's own gate, A10 item 2) and `ws-reclaim` +
+    // `actor-flags-v1` (the act and its dec).
+    fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
+      ccdVerbs: [
+        'ws-audit', 'ws-reclaim',
+        ...(opts.cap === false ? [] : [RECLAIM_CAP]),
+        ...(opts.pauseCap === false ? [] : [RECLAIM_PAUSE_CAP]),
+        ACTOR_FLAGS_CAP,
+      ] },
+    presence: { isVisible: (id: string) => opts.visible?.(id) === true },
+    ...(opts.notifyLog === undefined ? {} : { notifyLog: opts.notifyLog }),
+    ...(opts.exec === 'real' ? {} : {
+      childReclaimExec: async (req: ChildReclaimRequest) => { requests.push(req); return answer(req); },
+    }),
+  };
+  const bus = new Bus();
+  const watcher = new FleetWatcher(deps as never, bus, 10_000);
+
+  let uidN = 0;
+  /** One journal line, mirrored — a `reclaim` line is what wave 3's ccd
+   *  writes (`verb` `ws-reclaim`; or `ws-audit` for a TERMINAL refusal the
+   *  reclaim-mode audit answered, spec §5.9); `act: 'create'` is ws-add
+   *  minting a workspace under that id. */
+  const journal = (id: string, outcome: string, refusal: string | null, act: 'reclaim' | 'create' = 'reclaim',
+    verb?: 'ws-reclaim' | 'ws-audit'): void => {
+    uidN += 1;
+    const line = JSON.stringify({ uid: `w4.1.${uidN}`, at: clock, act, outcome,
+      verb: act === 'create' ? 'ws-add' : (verb ?? 'ws-reclaim'), id,
+      ...(refusal === null ? {} : { refusal }) });
+    coord.ingestJournal({ gen: GEN, rows: [parseJournalLine(line)], cursor: uidN * 200, size: uidN * 200, at: clock });
+  };
+  /** A registry row, `divergence-sweep.test.ts`'s idiom. `child` is the
+   *  marker. ws-add journals the workspace's `create` as it mints it, so the
+   *  row gets that line too: without it the mirror holds no generation for
+   *  the id at all, and the fence answers nothing (spec §5.6's recycled slugs). */
+  const plant = (id: string, extra: Record<string, string> = {}): void => {
+    const fields: Record<string, string> = {
+      uuid: `u-${id}`, wrapper: 'claude', project: 'demo', workdir: `/w/${id}`,
+      workspace: id.slice('demo-'.length), branch: `ws/${id}`, base: 'origin/main', started: '1', ...extra,
+    };
+    for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
+    journal(id, 'done', null, 'create');
+  };
+  let progN = 0;
+  const openRun = (): { id: number; program: string } => {
+    const program = `w4-prog-${++progN}`;
+    const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    return { id: r.id, program };
+  };
+  /** A REVIEW run of `work` (spec §5.7, "A review child is finished later
+   *  than its own run") — `runs.reviews` names it. The store writes it as-is;
+   *  the route's own checks are not what is tested. */
+  const openReview = (work: { id: number; program: string }): { id: number; program: string } => {
+    const r = coord.openRun({ program: work.program, title: work.program, project: 'demo', wave: 1, waveOf: null,
+      claimedBy: 'demo-coord', kind: 'review', reviews: work.id });
+    if (!('id' in r)) throw new Error(`openRun (review) refused: ${JSON.stringify(r)}`);
+    return { id: r.id, program: work.program };
+  };
+  const abandon = (r: { id: number; program: string }): void => {
+    const res = coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: r.program, viaClosing: false });
+    if (!res.ok) throw new Error(`abandon refused: ${JSON.stringify(res)}`);
+  };
+  const pass = async (): Promise<void> => {
+    await watcher.sweepChildReclaim(await readRegistry(deps.io, cfg), readdirSync(reg));
+  };
+  const advance = (ms: number): void => { clock += ms; };
+  const next = (): void => advance(CHILD_RECLAIM_SWEEP_MS + 1);
+  /** The lane's own read of one session's attention input row, at `now` —
+   *  the generation fence, the latest-event rule and the L1 row, over the
+   *  plain windowed read (every case here fits inside one window; the
+   *  window-overflow merge has its own dedicated case). */
+  const latestOf = (id: string) => {
+    const gen = childReclaimGeneration(coord.lifecycleFor({ sessionId: id }), clock);
+    return childReclaimJournalRow(gen, childReclaimLatest(gen));
+  };
+  const entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id);
+  return { home, reg, coord, watcher, bus, calls, requests, plant, openRun, openReview, abandon, journal, pass, next,
+    advance, latestOf, entryOf, now: () => clock };
+};
+
+/** A child minted by a run that has since been abandoned — the plain case. */
+const finishedChild = (f: ReturnType<typeof fixture>, id = 'demo-a'): number => {
+  const r = f.openRun();
+  f.abandon(r);
+  f.plant(id, { child: String(r.id) });
+  return r.id;
+};
+
+const deferredAs = (why: 'presence' | 'state-changed', req: ChildReclaimRequest): ChildReclaimOutcome =>
+  ({ kind: 'deferred', sessionId: req.sessionId, runId: req.runId, why, detail: `deferred: ${why}` });
+
+describe('sweepChildReclaim — what reaches the executor', () => {
+  it('nothing on the FIRST eligible pass; one request on the second — twice observed', async () => {
+    const f = fixture();
+    const runId = finishedChild(f);
+    await f.pass();
+    expect(f.requests).toEqual([]);
+    f.next();
+    await f.pass();
+    expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('keeps its own clock: a second call inside CHILD_RECLAIM_SWEEP_MS is not a second pass', async () => {
+    const f = fixture();
+    finishedChild(f);
+    await f.pass();
+    f.advance(CHILD_RECLAIM_SWEEP_MS - 1);
+    await f.pass();
+    expect(f.requests).toEqual([]);
+    f.advance(2);
+    await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('forgets the child once reclaimed — no third request', async () => {
+    const f = fixture();
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.entryOf('demo-a')).toBeUndefined();
+  });
+
+  it('never reaches a child whose minting run is ABSENT, and says so once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = fixture();
+    f.plant('demo-a', { child: '999' });
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('demo-a'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('never eligible');
+  });
+
+  it('never reaches a review child whose reviewed run is ABSENT, and says so once — as for an absent minting run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = fixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-r', { child: String(review.id) });
+    const real = f.coord.run.bind(f.coord);
+    vi.spyOn(f.coord, 'run').mockImplementation((id: number) =>
+      (id === work.id ? { ok: true as const, run: null } : real(id)));
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('demo-r'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`reviews run ${work.id}`);
+    expect(lines[0]).toContain('kept');
+  });
+
+  it('reaches an ORPHAN whose minting run names a different session, outside the stall window', async () => {
+    const f = fixture();
+    const r = f.openRun();
+    f.coord.markDispatchStarted(r.id, f.now() - SPAWN_STALL_MS - 1);
+    f.coord.setSession(r.id, 'demo-b');
+    f.plant('demo-a', { child: String(r.id) });
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+
+  it('leaves an orphan alone while its run is planned INSIDE the stall window', async () => {
+    const f = fixture();
+    const r = f.openRun();
+    f.coord.markDispatchStarted(r.id, f.now() - 1_000);
+    f.coord.setSession(r.id, 'demo-b');
+    f.plant('demo-a', { child: String(r.id) });
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('leaves a child an OPEN run names — the hand-over case', async () => {
+    const f = fixture();
+    finishedChild(f);
+    const wave2 = f.openRun();
+    f.coord.setSession(wave2.id, 'demo-a');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('keeps a REVIEW child while the run it reviewed is open, and reclaims it once that run is terminal', async () => {
+    const f = fixture();
+    const work = f.openRun();
+    const review = f.openReview(work);
+    f.abandon(review);
+    f.plant('demo-r', { child: String(review.id) });
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests, 'reclaimed a review child whose report is still cited').toEqual([]);
+    f.abandon(work);
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([
+      { sessionId: 'demo-r', runId: review.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null }]);
+  });
+
+  it('leaves a held child, a child with an unreadable marker, and a row with no marker', async () => {
+    const f = fixture();
+    const r = f.openRun(); f.abandon(r);
+    f.plant('demo-a', { child: String(r.id), hold: 'a human wrote this — please wait' });
+    f.plant('demo-b', { child: 'not-a-run-id' });
+    f.plant('demo-c');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('a program-accounted hold protects while its programme has an open run, and takes NO action once retired (part 1: no release, no reclaim)', async () => {
+    // Contract §8 R1 — the RELEASE job is part 2's; part 1 must not release
+    // AND must not fall through to an ordinary reclaim either.
+    const f = fixture();
+    const r1 = f.openRun();
+    f.abandon(r1);
+    const reason = holdReason(r1.program, 2, null, null);
+    f.plant('demo-a', { child: String(r1.id), hold: reason });
+    const r2raw = f.coord.openRun({ program: r1.program, title: r1.program, project: 'demo', wave: 2, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in r2raw)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2raw)}`);
+    const r2 = { id: r2raw.id, program: r1.program };
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests, 'protected while its programme has an open run').toEqual([]);
+    f.abandon(r2);
+    for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests, 'hold-retired takes NO action in part 1').toEqual([]);
+    expect(f.entryOf('demo-a')).toBeUndefined();
+  });
+
+  it('a child that has EVER coordinated a run is never reclaimed automatically (contract §8 R5c)', async () => {
+    const f = fixture();
+    const r1 = f.openRun();
+    f.abandon(r1);
+    f.plant('demo-a', { child: String(r1.id) });
+    const coordRun = f.coord.openRun({ program: 'other-prog', title: 'other-prog', project: 'demo', wave: 1,
+      waveOf: null, claimedBy: 'demo-a' });
+    if (!('id' in coordRun)) throw new Error(`coordRun refused: ${JSON.stringify(coordRun)}`);
+    f.abandon({ id: coordRun.id, program: 'other-prog' });
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('the run-id fence: a marker naming a run opened well after the child\'s own birth is skipped, with one log line (contract §8 R5d)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = fixture();
+    f.plant('demo-a');
+    f.advance(CHILD_BIRTH_SKEW_MS + 10_000);
+    const late = f.openRun();
+    f.abandon(late);
+    writeFileSync(path.join(f.reg, 'demo-a.child'), String(late.id));
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('demo-a') && l.includes('postdates'));
+    expect(lines).toHaveLength(1);
+  });
+
+  it('the run-id fence is UNCAPPED: a child with more than 500 newer lifecycle rows is still placed', async () => {
+    const f = fixture();
+    const runId = finishedChild(f);
+    for (let i = 0; i < 510; i += 1) f.journal('demo-a', 'refused', 'attached');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+    void runId;
+  });
+
+  it('does nothing while reclaim-paused stands, and needs two FRESH passes once it is lowered', async () => {
+    const f = fixture();
+    finishedChild(f);
+    await f.pass();                                           // first sighting
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();                                 // paused: nothing, memory cleared
+    expect(f.requests).toEqual([]);
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();                                 // a first sighting again
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('does nothing on a fleet host that does not advertise reclaim-v1 — and still REPORTS', async () => {
+    const f = fixture({ cap: false });
+    finishedChild(f);
+    finishedChild(f, 'demo-b');
+    f.journal('demo-b', 'refused', 'tree-unreadable');
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-b']);
+  });
+
+  it('does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still REPORTS (A10 item 2)', async () => {
+    const f = fixture({ pauseCap: false });
+    finishedChild(f);
+    finishedChild(f, 'demo-b');
+    f.journal('demo-b', 'refused', 'tree-unreadable');
+    await f.pass(); f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-b']);
+  });
+
+  it('passes deferExpired only once a PRESENCE defer has lasted the ceiling — and hands the executor when deferral began', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('presence', req) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → deferred; BOTH clocks start NOW
+    const deferredAt = f.now();
+    f.next(); await f.pass();                                 // request 2, inside the ceiling
+    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();   // request 3, AT it — LICENSED
+    expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs]))
+      .toEqual([[false, null], [false, deferredAt], [true, deferredAt]]);
+    // Request 3 was LICENSED (`deferExpired: true`) and STILL came back
+    // presence-class: the episode RESTARTS at that request's own instant
+    // (`childReclaimNextEntry`'s own rule — R-4), rather than silently
+    // keeping the ceiling exhausted forever.
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: f.now() });
+  });
+
+  it('a non-presence defer starts the any-kind clock, which the request carries, and never the ceiling', async () => {
+    const f = fixture({ outcome: (req) => deferredAs('state-changed', req) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → state-changed
+    const deferredAt = f.now();
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1); await f.pass();   // request 2, a ceiling later
+    expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([[false, null], [false, deferredAt]]);
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: null });
+  });
+
+  it('keeps TWO clocks: deferredSinceMs is the first deferral of ANY kind, the ceiling counts PRESENCE alone', async () => {
+    let asked = 0;
+    const f = fixture({ outcome: (req) => { asked += 1; return deferredAs(asked === 1 ? 'state-changed' : 'presence', req); } });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → state-changed: the ANY-kind clock starts
+    const firstDefer = f.now();
+    f.next(); await f.pass();                                 // request 2 → presence: the presence clock starts
+    const firstPresence = f.now();
+    f.advance(firstDefer + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();     // request 3: a ceiling after the FIRST deferral
+    f.advance(firstPresence + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // request 4: a ceiling of PRESENCE — LICENSED
+    expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([
+      [false, null], [false, firstDefer], [false, firstDefer], [true, firstDefer]]);
+    // Request 4 was licensed and still came back presence-class: R-4 restarts
+    // the episode at request 4's own instant.
+    expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstPresenceDeferredAt: f.now() });
+  });
+
+  it('never dispatches a child twice while its reclaim is still in flight', async () => {
+    let release!: () => void;
+    const f = fixture({ outcome: (req) => new Promise<ChildReclaimOutcome>((resolve) => {
+      release = () => resolve({ kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 });
+    }) });
+    finishedChild(f);
+    await f.pass(); f.next();
+    const first = f.pass();                                   // dispatches; the executor has not answered
+    await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+    f.next(); await f.pass();                                 // a pass while in flight
+    expect(f.requests).toHaveLength(1);
+    release();
+    await first;
+  });
+
+  it('drops an answer that comes back after a pass cleared the memory — the pause still needs two FRESH passes', async () => {
+    let release!: () => void;
+    // Only the FIRST dispatch hangs (controlled by `release`, below); every
+    // later one resolves immediately, so the trailing passes can be awaited
+    // directly without a second, uncontrolled hang.
+    let calls = 0;
+    const answer = (req: ChildReclaimRequest): ChildReclaimOutcome =>
+      ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1' });
+    const f = fixture({ outcome: (req) => {
+      calls += 1;
+      if (calls > 1) return answer(req);
+      return new Promise<ChildReclaimOutcome>((resolve) => { release = () => resolve(answer(req)); });
+    } });
+    finishedChild(f);
+    await f.pass(); f.next();
+    const first = f.pass();                                   // request 1, in flight
+    await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+    writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
+    f.next(); await f.pass();                                 // paused: memory cleared
+    release();
+    await first;                                              // `failed` comes back to a cleared map
+    expect(f.entryOf('demo-a')).toBeUndefined();
+    rmSync(path.join(f.reg, 'reclaim-paused'));
+    f.next(); await f.pass();                                 // a FIRST sighting, not a second
+    expect(f.requests).toHaveLength(1);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(2);
+  });
+
+  it('backs off a child whose reclaim keeps failing: min(ceiling, pass interval × 2^k) after the k-th failure', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId, resume: 'resumable', detail: 'ccd exited 1' }) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → failed: k = 1, wait 2 intervals
+    expect(f.requests).toHaveLength(1);
+    expect(f.entryOf('demo-a')?.consecutiveFailures).toBe(1);
+    f.next(); await f.pass();                                 // one interval later: backing off
+    expect(f.requests, 'asked again inside the backoff').toHaveLength(1);
+    f.next(); await f.pass();                                 // two intervals (+2 ms) later: asked
+    expect(f.requests).toHaveLength(2);
+    expect(f.entryOf('demo-a')?.consecutiveFailures).toBe(2);
+    for (let i = 0; i < 3; i += 1) { f.next(); await f.pass(); }   // k = 2: four intervals; three passes wait
+    expect(f.requests).toHaveLength(2);
+    f.next(); await f.pass();                                 // the fourth pass asks
+    expect(f.requests).toHaveLength(3);
+  });
+
+  it('two passes after a terminal refusal make no second request (contract §8 R5g)', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
+      token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), detail: '' }) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+    f.next(); await f.pass(); f.next(); await f.pass();
+    expect(f.requests, 'a terminal refusal is not retried on the ordinary pass cadence').toHaveLength(1);
+  });
+
+  it('a licensed request refused with no mirror line → the next request carries deferExpired: false (contract §8 R5g)', async () => {
+    // The ceiling licensed a presence-class attempt; the box answered a
+    // TERMINAL refusal instead — the presence episode's own clock is cleared
+    // by ANY non-presence outcome, refusals included, so the entry a much
+    // later pass reads (once the terminal-refusal wait has itself elapsed)
+    // starts a fresh episode.
+    const f = fixture({ outcome: (req) => (req.deferExpired
+      ? { kind: 'refused', sessionId: req.sessionId, runId: req.runId, token: 'tree-unreadable',
+          sentence: refusalSentence('tree-unreadable'), detail: '' }
+      : deferredAs('presence', req)) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → presence
+    const deferredAt = f.now();
+    f.advance(deferredAt + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // request 2, licensed → refused
+    expect(f.requests.map((q) => q.deferExpired)).toEqual([false, true]);
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS + 1); await f.pass();  // due again on the terminal-refusal wait
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[2]?.deferExpired, 'the refusal ended the presence episode; nothing is licensed again').toBe(false);
+  });
+
+  it('an executor `failed` with no mirror line is retried with backoff and never listed (contract §8 R11)', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId,
+      resume: 'not-resumable', detail: 'ws-audit --reclaim answered nothing readable' }) });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests, 'backing off, not asked yet').toHaveLength(1);
+    f.next(); await f.pass();
+    expect(f.requests, 'a retryable failure keeps being retried').toHaveLength(2);
+  });
+
+  describe('the in-flight bound (contract §8 R5a)', () => {
+    it('three finished children → one request, none while it is in flight, and the second after it settles', async () => {
+      let release!: () => void;
+      let calls = 0;
+      const answer = (req: ChildReclaimRequest): ChildReclaimOutcome =>
+        ({ kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 });
+      const f = fixture({ outcome: (req) => {
+        calls += 1;
+        if (calls > 1) return answer(req);
+        return new Promise<ChildReclaimOutcome>((resolve) => { release = () => resolve(answer(req)); });
+      } });
+      finishedChild(f, 'demo-a'); finishedChild(f, 'demo-b'); finishedChild(f, 'demo-c');
+      await f.pass(); f.next();
+      const p1 = f.pass();
+      await vi.waitFor(() => expect(f.requests).toHaveLength(1));
+      f.next(); await f.pass();
+      expect(f.requests, 'the bound holds the other two children back').toHaveLength(1);
+      release();
+      await p1;
+      f.next(); await f.pass();
+      expect(f.requests).toHaveLength(2);
+    });
+
+    it('A defers every time and B reclaims → B is asked on the pass after A\'s first request (fairness sort)', async () => {
+      const f = fixture({ outcome: (req) => (req.sessionId === 'demo-a'
+        ? deferredAs('state-changed', req)
+        : { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 }) });
+      finishedChild(f, 'demo-a');
+      await f.pass();                                            // A: first sighting
+      f.next(); finishedChild(f, 'demo-b');
+      await f.pass();                                            // A: due (2nd sighting); B: first sighting
+      expect(f.requests.map((q) => q.sessionId), 'A goes first (older sighting), and defers').toEqual(['demo-a']);
+      f.next(); await f.pass();
+      // demo-a's lastAskedAt is now set (non-null, from its deferral above);
+      // demo-b's is still null — null sorts FIRST, so B overtakes A even
+      // though A was sighted earlier.
+      expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-b']);
+    });
+
+    it('a request that never settles: after CHILD_RECLAIM_STALL_MS, the next child is asked anyway', async () => {
+      const f = fixture({ outcome: (req) => (req.sessionId === 'demo-a'
+        ? new Promise<ChildReclaimOutcome>(() => { /* never resolves, deliberately */ })
+        : { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 }) });
+      finishedChild(f, 'demo-a');
+      f.next(); finishedChild(f, 'demo-b');
+      await f.pass(); f.next();
+      // demo-a's promise never settles: the dispatching pass must be
+      // fire-and-forget, never directly awaited (it would hang forever on its
+      // own `Promise.all`), and its effect is observed by polling instead.
+      void f.pass();
+      await vi.waitFor(() => expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']));
+      f.advance(CHILD_RECLAIM_STALL_MS - 1); await f.pass();
+      expect(f.requests, 'still within the stall bound').toHaveLength(1);
+      f.advance(2); f.next(); await f.pass();
+      expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-b']);
+      void CHILD_RECLAIM_MAX_IN_FLIGHT;
+    });
+  });
+});
+
+describe('the attention list — derived from the mirror, carried on the coord frame', () => {
+  it('reports a terminal refusal with the server sentence, and never retries that child', async () => {
+    const f = fixture();
+    const runId = finishedChild(f);
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
+      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+    }]);
+  });
+
+  it('an AUDIT-TIME terminal refusal reaches the mirror through ws-audit\'s own line — listed, never retried, kept across a restart', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
+      token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), detail: 'audit: tree-unreadable' }) });
+    const runId = finishedChild(f);
+    await f.pass(); f.next(); await f.pass();                 // request 1 → refused, terminally, at the audit
+    expect(f.requests).toHaveLength(1);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention, 'an executor answer fed the frame').toEqual([]);
+    f.journal('demo-a', 'refused', 'tree-unreadable', 'reclaim', 'ws-audit');
+    const refusedAt = f.now();
+    expect(f.latestOf('demo-a')).toMatchObject({ sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable' });
+    for (let i = 0; i < 4; i += 1) { f.next(); await f.pass(); }
+    expect(f.requests, 'retried a terminal refusal').toHaveLength(1);
+    await f.watcher.tick();
+    const item = { sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: refusedAt };
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([item]);
+    const g = fixture({ coord: f.coord, home: f.home });
+    await g.pass(); g.next(); await g.pass(); g.next(); await g.pass();
+    expect(g.requests, 'a restart retried a terminal refusal').toEqual([]);
+    await g.watcher.tick();
+    expect(g.watcher.currentCoord()?.childReclaimAttention).toEqual([item]);
+  });
+
+  it('a recycled id does not inherit an old child\'s terminal refusal — and its own is still listed', async () => {
+    const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
+      token: 'containment-unproven', sentence: refusalSentence('containment-unproven'), detail: 'nested repo' }) });
+    f.journal('demo-a', 'done', null, 'create');              // the OLD workspace
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    const runId = finishedChild(f);                           // the NEW one — `plant` journals its create
+    expect(f.latestOf('demo-a')).toBeNull();
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+    f.advance(1);
+    f.journal('demo-a', 'refused', 'containment-unproven');   // the NEW workspace's own refusal
+    const at = f.now();
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
+      sessionId: 'demo-a', runId, token: 'containment-unproven', sentence: refusalSentence('containment-unproven'), at,
+    }]);
+  });
+
+  it('keeps retrying a RETRYABLE refusal, and never lists it', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'refused', 'attached');
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+  });
+
+  it('an INTENT newer than the refusal lists nothing — the latest reclaim event of ANY outcome decides', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'refused', 'containment-unproven');
+    f.journal('demo-a', 'intent', null);
+    expect(f.latestOf('demo-a')).toMatchObject({ outcome: 'intent', refusal: null });
+    await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+    f.journal('demo-a', 'refused', 'containment-unproven');   // the attempt answered
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.token)).toEqual(['containment-unproven']);
+  });
+
+  it('drops the child once its registry row is gone', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    await f.pass();
+    for (const n of readdirSync(f.reg)) if (n.startsWith('demo-a.')) rmSync(path.join(f.reg, n));
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+  });
+
+  it('survives a restart: a new watcher over the same database rebuilds it on its first pass', async () => {
+    const f = fixture();
+    finishedChild(f);
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    const g = fixture({ coord: f.coord, home: f.home });
+    await g.pass();
+    await g.watcher.tick();
+    expect(g.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-a']);
+  });
+
+  it('lists a child whose reclaim has kept FAILING past the ceiling, with the failure\'s sentence — and keeps asking for it', async () => {
+    const f = fixture();
+    const runId = finishedChild(f);
+    f.journal('demo-a', 'failed', 'pin-failed');
+    const since = f.now();
+    await f.pass();                                           // a first sighting; failing for 0 ms
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention, 'listed before the ceiling').toEqual([]);
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    f.journal('demo-a', 'intent', null);
+    f.journal('demo-a', 'failed', 'pin-failed');              // still failing, a ceiling later
+    await f.pass();                                           // listed — AND asked for: the second sighting
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
+      sessionId: 'demo-a', runId, token: 'pin-failed',
+      sentence: childReclaimFailingSentence(lcRefusalWord('pin-failed') ?? refusalSentence('pin-failed')), at: since,
+    }]);
+    expect(f.requests.map((q) => q.sessionId), 'a failing child was excluded like a terminal refusal').toEqual(['demo-a']);
+  });
+
+  it('reads a run of failures within the current generation: an earlier workspace\'s failures under a recycled id do not count', async () => {
+    const f = fixture();
+    f.journal('demo-a', 'done', null, 'create');              // the OLD workspace
+    f.journal('demo-a', 'failed', 'pin-failed');
+    f.advance(CHILD_RECLAIM_DEFER_CEILING_MS);
+    finishedChild(f);                                         // the NEW demo-a — `plant` journals its create
+    f.journal('demo-a', 'failed', 'pin-failed');
+    expect(f.latestOf('demo-a')).toMatchObject({ outcome: 'failed', failingSince: f.now() });
+    await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
+  });
+
+  it('survives its own create scrolling out of the 500-row window (A10 item 6)', async () => {
+    // WITHOUT the window/creates merge, the create row falls out of
+    // `lifecycleFor`'s own 500-newest-row window, `childReclaimGeneration`
+    // finds no evidence at all, and this terminal refusal — which IS still
+    // inside the window — silently stops being listed.
+    const f = fixture();
+    const runId = finishedChild(f);
+    for (let i = 0; i < 505; i += 1) f.journal('demo-a', 'refused', 'attached');
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    const at = f.now();
+    await f.pass();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([{
+      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at,
+    }]);
+  });
+});
+
+describe('lost triggers — orphans the close path never had a chance to reclaim', () => {
+  it('(a) the minting run closed done NON-FINALLY while its programme stays open on another session — one request after two passes', async () => {
+    const f = fixture();
+    const r1 = f.openRun();
+    // `planned` has no direct edge to `closing` (RUN_TRANSITIONS): a real
+    // wave takes `dispatched` first. Advanced by hand rather than through
+    // `closeRun`'s own `markDispatched` plumbing — this test only needs the
+    // STATE terminal, not a real worker session bound to it.
+    for (const to of ['dispatched', 'closing', 'done'] as const) {
+      const adv = f.coord.advance(r1.id, to, 'test');
+      if (!adv.ok) throw new Error(`advance to ${to} refused: ${JSON.stringify(adv)}`);
+    }
+    const r2raw = f.coord.openRun({ program: r1.program, title: r1.program, project: 'demo', wave: 2, waveOf: null,
+      claimedBy: 'demo-coord' });
+    if (!('id' in r2raw)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2raw)}`);
+    f.coord.setSession(r2raw.id, 'demo-b');
+    f.plant('demo-a', { child: String(r1.id) });
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+
+  it('(b) a planned run that named the child was unbound (dispatch refusal released it) — one request after two passes', async () => {
+    const f = fixture();
+    const r1 = f.openRun();
+    f.abandon(r1);
+    const r2 = f.openRun();
+    f.coord.setSession(r2.id, 'demo-a');
+    f.coord.clearSession(r2.id, 0);
+    f.plant('demo-a', { child: String(r1.id) });
+    await f.pass(); f.next(); await f.pass();
+    expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a']);
+  });
+});
+
+describe('childReclaimTokenKind — wave 3\'s classification, read totally, from ONE place', () => {
+  it('answers every token the map classifies, and null for anything else — never a prototype member', () => {
+    for (const [token, kind] of Object.entries(CHILD_RECLAIM_TOKEN_KIND)) {
+      expect(childReclaimTokenKind(token), token).toBe(kind);
+    }
+    expect(childReclaimTokenKind('from-a-newer-ccd')).toBeNull();
+    expect(childReclaimTokenKind('toString')).toBeNull();
+  });
+
+  it('watch.ts imports it rather than keeping a copy', () => {
+    const src = readFileSync(path.join(__dirname, '../src/watch.ts'), 'utf8');
+    expect(src).not.toContain('CHILD_RECLAIM_TOKEN_KIND');
+    expect(src).toMatch(/import \{[^}]*\bchildReclaimTokenKind\b[^}]*\} from '\.\/coord\/childReclaim\.js'/);
+  });
+
+  it('watch.ts reads a generation through the ONE fence and its latest event through the ONE rule — imported, never its own', () => {
+    const src = readFileSync(path.join(__dirname, '../src/watch.ts'), 'utf8');
+    expect(src).toMatch(/import \{[^}]*\bchildReclaimGeneration\b[^}]*\} from '\.\/coord\/childReclaim\.js'/);
+    expect(src).toMatch(/import \{[^}]*\bchildReclaimLatest\b[^}]*\} from '\.\/coord\/childReclaim\.js'/);
+    expect(src).toContain('childReclaimGeneration(this.childReclaimAttentionGenerationRows(coord, r.id), now)');
+    expect(src).toContain('childReclaimJournalRow(gen, childReclaimLatest(gen))');
+  });
+});
+
+describe('the production path', () => {
+  it("reaches wave 3's own audit argv through runCcd — no stub", async () => {
+    const f = fixture({ exec: 'real' });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.calls).toContainEqual([...CCD_ARGV.wsReclaimAudit('demo-a', false)]);
+  });
+
+  it("goes through the session's own KeyedQueue — the one the close path and the reap route join", () => {
+    const src = readFileSync(path.join(__dirname, '../src/watch.ts'), 'utf8');
+    expect(src).toMatch(/this\.deps\.queue\.run\(req\.sessionId, \(\) => reclaimChild\(\{/);
+  });
+
+  it('composes the SAME ports the close route does — presence blocks it before any argv is composed', async () => {
+    // `presence: true` must reach the executor and defer BEFORE `ws-audit`
+    // is ever called — proof the production path wires `deps.presence`
+    // through, exactly as `execChildReclaim`'s docstring says.
+    const f = fixture({ exec: 'real', visible: (id) => id === 'demo-a' });
+    finishedChild(f);
+    await f.pass(); f.next(); await f.pass();
+    expect(f.calls, 'presence should have blocked every argv').toEqual([]);
+  });
+
+  it('composes the feed log too: a real reclaim writes one feed row through deps.notifyLog', async () => {
+    const home = mkTmp('ccrc-child-reclaim-sweep-notify-');
+    const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+    await notifyLog.load();
+    const f = fixture({ exec: 'real', home, notifyLog });
+    finishedChild(f);
+    // `ws-audit --reclaim` at exit 1 (the fixture's blanket refusal) is a
+    // FAILURE, which still writes one feed row.
+    await f.pass(); f.next(); await f.pass();
+    const feed = f.coord.feedEvents(50).filter((e) => e.sessionId === 'demo-a');
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.title).toBe('child reclaim failed');
+  });
+});

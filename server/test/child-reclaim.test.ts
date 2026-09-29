@@ -273,6 +273,22 @@ describe('parseChildReclaimResult', () => {
     expect(cutShort.kind === 'failed' ? cutShort.resume : 'not-resumable').toBe('resumable');
   });
 
+  // Wave 3's second fix round (A16 item 7): `probe-unmeasured` is the
+  // presence rungs' own in-lock tmux probe failing BEFORE any act — unlike
+  // every other post-start `{failed:…}` document, the destructive tail never
+  // started, so a retry has no breadcrumb to resume from and starts
+  // completely afresh — the SAME sentence an unrecognised refusal word
+  // already gets ('not-resumable'), never `resumable`'s "resumes where it
+  // stopped" promise.
+  it('maps the in-lock probe-unmeasured failure to not-resumable — a retry starts afresh, never resumable', () => {
+    const out = parseChildReclaimResult(ID, JSON.stringify({ failed: 'probe-unmeasured', detail: 'tmux unreachable' }), '');
+    expect(out).toEqual({ kind: 'failed', resume: 'not-resumable', detail: 'probe-unmeasured: tmux unreachable' });
+    // Every OTHER post-start failure word stays `resumable` — this is a
+    // narrow exception for this one word, not a wider default flip.
+    const other = parseChildReclaimResult(ID, JSON.stringify({ failed: 'attic-pin-failed', detail: 'x' }), '');
+    expect(other).toEqual({ kind: 'failed', resume: 'resumable', detail: 'attic-pin-failed: x' });
+  });
+
   // Review 170 F20: a PRE-LOCK die of `cmd_ws_reclaim` — recognised POSITIVELY
   // against ccd's own stderr text, never guessed from the exit status alone —
   // is `resume: 'pre-lock-die'`, distinct from every other non-resumable
