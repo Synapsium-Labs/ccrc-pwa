@@ -34,8 +34,8 @@ const TAG = 'v0.0.9';
 const armA = `the --detach parent was stopped at the ${BOUND} bound before it queued anything; nothing started`;
 const armB = (pid: number): string =>
   `the --detach parent was stopped at the ${BOUND} bound after it queued ${TAG} (pid ${pid}); the run may have started, lease held`;
-const armD = (seen: string): string =>
-  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease for ${TAG} held until the report or deadline`;
+const armD = (seen: string, tag = TAG): string =>
+  `stopped at the bound; ${seen} - it could not be attributed; lease for ${tag} held until the report or deadline`;
 
 const reportText = (o: Record<string, unknown> = {}): string => `${JSON.stringify({
   target: TAG, phase: 'queued', startedAt: 1790000000, updatedAt: 1790000001, detail: null, from: 'pwa', pid: 4242, ...o,
@@ -79,7 +79,7 @@ describe('the bound\'s arms against a recorder whose parent plants what a real o
     await c.hello();
     return { c, home, get calls() { return state.calls; } };
   }
-  const ask = (c: TestClient): Promise<Res> => c.req<Res>(1, { op: 'update', tag: TAG });
+  const ask = (c: TestClient, tag = TAG): Promise<Res> => c.req<Res>(1, { op: 'update', tag });
 
   describe('arm A — nothing was queued: not-queued, the request stands, update.json untouched', () => {
     it('both reads identical bytes (a terminal report), stdout at EOF and empty', async () => {
@@ -188,6 +188,24 @@ describe('the bound\'s arms against a recorder whose parent plants what a real o
       expect(await ask(c)).toEqual({
         t: 'res', id: 1, ok: true, accepted: true,
         detail: armD(`update.json changed, but not by the parent (pid 4242, target ${TAG})`),
+      });
+    });
+
+    // Review of f7762afcc, I1: the ending names the lease's tag, which took room from the reasons; a reason that did not fit
+    // was cut mid-token (`target v0.0.123` read `target v0.0.12`, a real, different tag) and its `(+N more)` dropped.
+    it('a longer tag and pid: the reason is whole, not cut to a different tag (I1, measured case 1)', async () => {
+      const { c } = await up({ before: TERMINAL_REPORT, during: (home) => writeFileSync(reportFile(home), reportText({ pid: 1234567, target: 'v0.0.123' })) });
+      expect(await ask(c, 'v0.0.100')).toEqual({
+        t: 'res', id: 1, ok: true, accepted: true,
+        detail: armD('update.json changed, but not by the parent (pid 1234567, target v0.0.123)', 'v0.0.100'),
+      });
+    });
+
+    it('a second reason that cannot fit is COUNTED, not silently dropped (I1, measured case 2)', async () => {
+      const { c } = await up({ before: TERMINAL_REPORT, stdout: null, during: (home) => writeFileSync(reportFile(home), reportText({ pid: 123456, target: 'v0.0.40' })) });
+      expect(await ask(c, 'v0.0.40')).toEqual({
+        t: 'res', id: 1, ok: true, accepted: true,
+        detail: armD('update.json changed, but not by the parent (pid 123456, target v0.0.40) (+1 more)', 'v0.0.40'),
       });
     });
 

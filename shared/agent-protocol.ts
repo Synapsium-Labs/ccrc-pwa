@@ -603,8 +603,10 @@ export function decideKilledSpawn(i: {
   if (detached) seen.push("the parent printed 'detached'");
   if (stdout === null) seen.push('its stdout did not reach EOF');
   // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease, naming the move)
-  // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted.
-  const head = 'the --detach parent was stopped at the bound; ';
+  // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted. The head
+  // is short so an ordinary tag and pid fit whole; a reason that still cannot fit (the longest tag the ingress admits,
+  // twice) is cut only with `...`, never mid-token unmarked, and the count of those left out rides after it.
+  const head = 'stopped at the bound; ';
   const tail = ` - it could not be attributed; lease for ${tag} held until the report or deadline`;
   const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - head.length - tail.length);
   let taken = 0;
@@ -615,8 +617,10 @@ export function decideKilledSpawn(i: {
     text = next;
     taken += 1;
   }
-  if (taken === 0) text = seen[0]!.slice(0, budget);
-  else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
+  if (taken === 0) {
+    const more = seen.length > 1 ? ` (+${seen.length - 1} more)` : '';
+    text = `${seen[0]!.slice(0, Math.max(0, budget - more.length - 3))}...${more}`;
+  } else if (taken < seen.length) text += ` (+${seen.length - taken} more)`;
   return { arm: 'D', detail: head + text + tail };
 }
 

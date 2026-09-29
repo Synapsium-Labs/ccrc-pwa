@@ -18,12 +18,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  UPDATE_DETACHED_PREFIX, UPDATE_PHASE_WARN_PREFIX, UPDATE_SPAWN_DRAIN_MS, decideKilledSpawn, type UpdateReportRead,
+  UPDATE_DETACHED_PREFIX, UPDATE_OP_DETAIL_MAX, UPDATE_PHASE_WARN_PREFIX, UPDATE_SPAWN_DRAIN_MS, decideKilledSpawn, type UpdateReportRead,
 } from '../../shared/agent-protocol.js';
 import type { RequestKind } from '../../shared/api.js';
 import type { ExecResult } from '../src/exec.js';
 import { AgentOpError } from '../src/remote/client.js';
 import { runDispatch, localUpdateSpawnFor } from '../src/update/converge.js';
+import { RELEASE_TAG_COMPONENT_MAX_DIGITS } from '../src/update/resolve.js';
 import {
   ACCEPTED, FLEET_ID, SERVER_ID, T0, TAG, harness, hang, plant, ran, reportFile, seedFleet, seedServer, serverMeas, type Harness,
 } from './updateKilledHarness.js';
@@ -32,15 +33,19 @@ import { itLinux } from './platformFixtures.js';
 import { FAKE_SPAWN_PID } from './updateSpawnFake.js';
 
 const BOUND = '20000 ms';
+const D_HEAD = 'stopped at the bound; ';
+const LONGEST_TAG = `v${Array.from({ length: 3 }, () => '9'.repeat(RELEASE_TAG_COMPONENT_MAX_DIGITS)).join('.')}`;
+const dTail = (tag: string): string => ` - it could not be attributed; lease for ${tag} held until the report or deadline`;
 /** The sentences, spelled out (the builder is L0's; a test that called it would agree with any wording). */
 const armA = `the --detach parent was stopped at the ${BOUND} bound before it queued anything; nothing started`;
 const armB = (pid: number, tag = TAG): string =>
   `the --detach parent was stopped at the ${BOUND} bound after it queued ${tag} (pid ${pid}); the run may have started, lease held`;
-const armD = (seen: string): string =>
-  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease for ${TAG} held until the report or deadline`;
+const armD = (seen: string, tag = TAG): string =>
+  `${D_HEAD}${seen}${dTail(tag)}`;
 const WARN_LINE = 'update: WARN: could not write ~/.ccrc/update.json (phase queued) — the console will not see this phase; the update continues\n';
 const DETACHED_LINE = "update: detached — 'update --to v0.0.10' runs as a transient systemd --user unit; its progress is ~/.ccrc/update.json\n";
 
+const T_REPORT = TERMINAL_REPORT;
 const bytes = (text: string): UpdateReportRead => ({ kind: 'bytes', text });
 const ABSENT: UpdateReportRead = { kind: 'absent' };
 const UNREADABLE: UpdateReportRead = { kind: 'unreadable' };
@@ -114,16 +119,58 @@ describe('decideKilledSpawn — the arms, in order A, B, D (D-3400 amended, D-34
     expect(all.detail).toMatch(/^[\x20-\x7e]+$/);
     expect(all.detail.endsWith(` - it could not be attributed; lease for ${TAG} held until the report or deadline`)).toBe(true);
     expect(all.detail).toContain('(+');
-    // The lease's own tag rides the ending, whatever it is, and the longest tag the ingress admits still fits: the
-    // reasons give way (whole, then counted), never the tag or the words that say what happens to the lease.
-    const longTag = 'v99999999.99999999.99999999';
-    const longD = decide({ before: UNREADABLE, after: UNREADABLE, stdout: WARN_LINE + DETACHED_LINE, tag: longTag });
-    expect(longD.arm).toBe('D');
-    expect(longD.detail.length).toBeLessThanOrEqual(200);
-    expect(longD.detail.endsWith(` - it could not be attributed; lease for ${longTag} held until the report or deadline`)).toBe(true);
-    const longB = decide({ after: bytes(reportText({ pid: 4294967295, target: 'v99999999.99999999.99999999' })), pid: 4294967295, tag: 'v99999999.99999999.99999999' });
+    // The lease's own tag rides the ending, whatever it is; arm B's sentence fits the longest tag the ingress admits.
+    const longB = decide({ after: bytes(reportText({ pid: 4294967295, target: LONGEST_TAG })), pid: 4294967295, tag: LONGEST_TAG });
     expect(longB.arm).toBe('B');
-    expect(longB.detail.length).toBeLessThanOrEqual(200);
+    expect(longB.detail.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+  });
+
+  // Review of f7762afcc, I1: the ending names the lease's tag, so the room left for reasons shrank, and a first reason that
+  // did not fit was cut mid-token with its `(+N more)` dropped — `target v0.0.12` read as a real, different tag.
+  it('a reason is never cut mid-token unmarked, and never loses the count of the reasons left out (I1)', () => {
+    // Measured case 1: a 3-digit tag and a 7-digit pid used to cut `target v0.0.123` to `target v0.0.12`.
+    const r1 = 'update.json changed, but not by the parent (pid 1234567, target v0.0.123)';
+    expect(decide({ after: bytes(reportText({ pid: 1234567, target: 'v0.0.123' })), tag: 'v0.0.100' }))
+      .toEqual({ arm: 'D', detail: armD(r1, 'v0.0.100') });
+    // Measured case 2: the first reason fits, the second cannot: the first is whole, the count says one more.
+    const r2 = 'update.json changed, but not by the parent (pid 123456, target v0.0.40)';
+    expect(decide({ after: bytes(reportText({ pid: 123456, target: 'v0.0.40' })), stdout: null, tag: 'v0.0.40' }))
+      .toEqual({ arm: 'D', detail: armD(`${r2} (+1 more)`, 'v0.0.40') });
+  });
+
+  it('the longest tag the ingress admits (derived from RELEASE_TAG_COMPONENT_MAX_DIGITS): within the bound, the ending whole, every cut marked and counted (I1)', () => {
+    expect(LONGEST_TAG.length).toBe(3 * RELEASE_TAG_COMPONENT_MAX_DIGITS + 3);
+    const cases = [
+      { after: bytes(reportText({ pid: 4294967295, target: LONGEST_TAG })), stdout: '', reasons: [`update.json changed, but not by the parent (pid 4294967295, target ${LONGEST_TAG})`] },
+      { after: bytes(reportText({ pid: 4294967295, target: LONGEST_TAG })), stdout: null, reasons: [`update.json changed, but not by the parent (pid 4294967295, target ${LONGEST_TAG})`, 'its stdout did not reach EOF'] },
+      { after: bytes(T_REPORT), stdout: WARN_LINE + DETACHED_LINE, reasons: ['the parent printed the update.json WARN', "the parent printed 'detached'"] },
+      { after: UNREADABLE, stdout: null, reasons: ['update.json was unreadable after the stop', 'its stdout did not reach EOF'] },
+    ];
+    for (const c of cases) {
+      const d = decideKilledSpawn({ before: bytes(T_REPORT), after: c.after, stdout: c.stdout, pid: FAKE_SPAWN_PID, tag: LONGEST_TAG });
+      expect(d.arm).toBe('D');
+      expect(d.detail.length).toBeLessThanOrEqual(UPDATE_OP_DETAIL_MAX);
+      expect(d.detail.startsWith(D_HEAD)).toBe(true);
+      expect(d.detail.endsWith(dTail(LONGEST_TAG))).toBe(true);
+      const body = d.detail.slice(D_HEAD.length, d.detail.length - dTail(LONGEST_TAG).length);
+      const count = /^(.*?)(?: \(\+(\d+) more\))?$/.exec(body)!;
+      // Walk the reasons in order (some carry a comma of their own, so no split): each is whole and `, `-joined, until the
+      // last one named, which may be cut — and then only with `...`, as a prefix of its reason.
+      let rest = count[1]!;
+      let named = 0;
+      for (const want of c.reasons) {
+        if (rest === '') break;
+        named += 1;
+        if (rest === want) { rest = ''; break; }
+        if (rest.startsWith(`${want}, `)) { rest = rest.slice(want.length + 2); continue; }
+        expect(rest.endsWith('...'), `neither whole nor marked: ${rest}`).toBe(true);
+        expect(want.startsWith(rest.slice(0, -3)), `not a prefix of its reason: ${rest}`).toBe(true);
+        rest = '';
+        break;
+      }
+      expect(rest, 'text left over that names no reason').toBe('');
+      expect(named + Number(count[2] ?? 0), 'named + counted = every reason').toBe(c.reasons.length);
+    }
   });
 
   it('the prefixes are the ones L0 declares', () => {
