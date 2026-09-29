@@ -99,8 +99,9 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 ## Next-wave brief
 
 Wave 1 is planned, reviewed and re-measured (2026-09-28); once the docs PR has merged, dispatch it on a fresh
-workspace with its plan path and this file. Wave 2 is HELD: its Tasks 1–2 are superseded by the carried-in fix, and Tasks 3–5 are re-planned once that fix is
-on `main` (its status block).
+workspace with its plan path and this file. Wave 2 is HELD: its Tasks 1–2 are superseded by the carried-in fix, which merged on 2026-09-29 (#207, plan
+`docs/superpowers/plans/2026-09-28-carried-in-banner-is-not-a-block.md`), so Tasks 3–5 are now re-planned on its reader
+(its status block).
 Wave 1's first task re-measures the write model the planner measured (journals and agent logs appended in place,
 records written whole); if it disagrees, the rules change in the plan before any code. Wave 2 changes a verdict every rescue and strand decision runs on;
 its safety lens is `xhigh`.
