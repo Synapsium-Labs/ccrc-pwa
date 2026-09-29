@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,15 +25,17 @@ import type {
   TailData,
   TailOpenReq,
   TailReset,
+  UpdateOpError,
+  UpdateReq,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  CCRC_DIR_NAME,
-  NODE_FILE_BASENAMES,
-  parseCcdCaps,
-  parseObservedEpochDoc,
-  POOL_EPOCH_FILE_NAME,
+  CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, UPDATE_OP,
+  UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine, inFlightBusyDetail, isUpdateLockHeldLine,
+  lockHeldBusyDetail, updateLauncherPath, updateSpawnArgv, updateWriterMayLive,
+  type KillProbeOutcome, type UpdateReportRead, type UpdateSpawnResult,
 } from '../../shared/agent-protocol.js';
+import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -69,6 +71,7 @@ export interface AgentOpts {
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
+  spawnUpdate?: UpdateSpawn; // default realUpdateSpawn (a process-group spawn) — tests inject a recorder; the `update` op's ONLY spawn
 }
 
 export interface RunningAgent {
@@ -170,10 +173,17 @@ export function resolveProjectsRoot(
  *  for "never synced"). The wire declares it optional only so a READER can
  *  tolerate an OLDER agent that predates the field entirely; this build is
  *  never that agent, so its own frame type says so and the send site cannot
- *  compile while silently omitting it. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch'> & {
+ *  compile while silently omitting it.
+ *
+ *  `ops` is narrowed the same way, for the same reason (design 2026-09-20 §10):
+ *  the wire declares it optional so a READER tolerates an agent from before the
+ *  `update` op, and this build is never that agent. It answers the op, so its
+ *  own frame type says so, and the send site cannot compile while silently
+ *  omitting the one word the server's dispatcher looks for before it sends it. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch' | 'ops'> & {
   ccdVerbs: string[];
   observedEpoch: number | null;
+  ops: string[];
 };
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
@@ -186,8 +196,20 @@ function ok(id: number, fields: Record<string, unknown> = {}): ResOk {
   return { t: 'res', id, ok: true, ...fields };
 }
 
-function fail(id: number, message: string): ResErr {
-  return { t: 'res', id, ok: false, err: message };
+/** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): spread
+ *  only when there is one, so every existing refusal's frame is byte-identical
+ *  to what it was. */
+function fail(id: number, message: string, detail?: string): ResErr {
+  return detail === undefined
+    ? { t: 'res', id, ok: false, err: message }
+    : { t: 'res', id, ok: false, err: message, detail };
+}
+
+/** The `update` op's refusals. `err` is typed to the op's closed vocabulary
+ *  (`UPDATE_OP_ERRORS`), so a word the server's answer mapping does not know is
+ *  a compile error here, not a string that drifts. */
+function failUpdate(id: number, err: UpdateOpError, detail?: string): ResErr {
+  return fail(id, err, detail);
 }
 
 /** Builds the `read` op's wire payload from `readWhole`'s result. `data`
@@ -298,6 +320,139 @@ function runExec(
   });
 }
 
+/**
+ * The `update` op's spawn port (design 2026-09-20 §10). It is the ONE place a
+ * wire-triggered request reaches a process spawn outside the exec whitelist,
+ * and it is deliberately NOT `runExec`: `runExec` is the exec op's executor,
+ * and a call to it here would put this op on the exec path in the reader's
+ * mind, which is exactly what §18 "the op never execs" forbids. Production is
+ * `realUpdateSpawn`; tests inject a recorder through `AgentOpts.spawnUpdate`.
+ */
+export type UpdateSpawn = (file: string, args: readonly string[], timeoutMs: number) => Promise<UpdateSpawnResult>;
+
+/** Enough for any sentence a `--detach` parent prints; past it the capture stops and stdout reads as incomplete. */
+const UPDATE_SPAWN_MAX_BUFFER = 1024 * 1024;
+
+/**
+ * The `--detach` parent under a bound — the ABSOLUTE launcher and one of the two templates, both built by the
+ * caller from `shared/agent-protocol.ts`. `env` is the parent's whole environment, passed on purpose: the factory
+ * takes it so a test can hand the child a fixture HOME and PATH, and production hands it `process.env`.
+ *
+ * The parent is its own PROCESS GROUP (`detached`, pgid = pid), and the bound kills the WHOLE group with SIGKILL:
+ * a bound that killed only the parent would leave whatever it had already forked running, and the caller would
+ * read that as a stopped run. Answers, kept apart:
+ *  - `killed` — the parent was still running at the bound; the group was sent SIGKILL.
+ *  - A spawn error — the launcher absent or not executable (`ENOENT`/`EACCES`). It answers code 1 with the
+ *    sentence `could not start the launcher (<code>)` (D-3393) and `pid: null`: without that sentence the
+ *    parent's stderr is empty, and a node with no `ccrc` installed would read `spawn-failed: no message`.
+ *  - Every other exit — the parent's own code, its stderr, its stdout.
+ *
+ * The answer comes once the parent has EXITED and then either both pipes reached EOF or
+ * `UPDATE_SPAWN_DRAIN_MS` passed. A grandchild that left the group (setsid) and still holds a pipe therefore never
+ * stops the answer; it costs `stdout: null` (EOF not reached). The drain is ONE deadline, armed by the kill or by the
+ * parent's exit, whichever comes first, so the whole answer is within `timeoutMs + UPDATE_SPAWN_DRAIN_MS` of the spawn.
+ * A parent that a signal ended answers `128 + signo`. A pipe that errors marks the capture incomplete (`stdout: null`).
+ * Nothing resolves twice.
+ */
+export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {
+  return (file, args, timeoutMs) => new Promise((resolve) => {
+    // ── BEGIN bounded-spawn body — identical in `agent/src/server.ts` and `server/src/update/spawn.ts`; a test holds the two equal
+    let settled = false;
+    let exited: { code: number } | null = null;
+    let killed = false;
+    let killTimer: NodeJS.Timeout | null = null;
+    let drainTimer: NodeJS.Timeout | null = null;
+    const out = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
+    const err = { chunks: [] as Buffer[], bytes: 0, capped: false, broken: false, eof: false };
+    const child = spawn(file, [...args], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env });
+    const finish = (r: UpdateSpawnResult): void => {
+      if (settled) return;
+      settled = true;
+      if (killTimer !== null) clearTimeout(killTimer);
+      if (drainTimer !== null) clearTimeout(drainTimer);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve(r);
+    };
+    const answer = (): void => {
+      if (exited === null) return;
+      finish({
+        code: exited.code,
+        stdout: out.eof && !out.capped && !out.broken ? Buffer.concat(out.chunks).toString('utf8') : null,
+        stderr: Buffer.concat(err.chunks).toString('utf8'),
+        killed,
+        pid: child.pid ?? null,
+      });
+    };
+    // ONE absolute drain deadline (I1): the first arm stands. The kill arms it at T; a parent that then exits at
+    // T + D - e must not restart it, or the answer would come at T + 2D and the op's budget be TIMEOUT + 2 * DRAIN.
+    const armDrain = (): void => {
+      if (drainTimer !== null) return;
+      drainTimer = setTimeout(() => { exited ??= { code: 1 }; answer(); }, UPDATE_SPAWN_DRAIN_MS);
+    };
+    const take = (buf: typeof out) => (chunk: Buffer): void => {
+      if (buf.capped) return;
+      if (buf.bytes + chunk.length > UPDATE_SPAWN_MAX_BUFFER) { buf.capped = true; return; }
+      buf.chunks.push(chunk);
+      buf.bytes += chunk.length;
+    };
+    // A pipe that errors (EPIPE, ECONNRESET) never reaches `end`, and an uncaught stream error kills the process:
+    // the capture is marked incomplete (stdout reads null) and counts as finished, so the answer is not held for it.
+    const broke = (buf: typeof out, other: typeof out) => (): void => {
+      buf.broken = true;
+      buf.eof = true;
+      if (other.eof) answer();
+    };
+    child.stdout?.on('data', take(out));
+    child.stderr?.on('data', take(err));
+    child.stdout?.on('end', () => { out.eof = true; if (err.eof) answer(); });
+    child.stderr?.on('end', () => { err.eof = true; if (out.eof) answer(); });
+    child.stdout?.on('error', broke(out, err));
+    child.stderr?.on('error', broke(err, out));
+    // `on`, not `once` (M2): `child.kill()` in the kill's fallback can emit `error` a second time, and an `error`
+    // event with no listener throws.
+    child.on('error', (e: NodeJS.ErrnoException) => {
+      // A spawn that never produced a pid (ENOENT, EACCES): the launcher never ran.
+      if (child.pid !== undefined) return;
+      finish({
+        code: 1, stdout: '', killed: false, pid: null,
+        stderr: `could not start the launcher (${typeof e.code === 'string' ? e.code : 'unknown'})`,
+      });
+    });
+    child.once('exit', (code, signal) => {
+      if (killTimer !== null) { clearTimeout(killTimer); killTimer = null; }
+      // A parent that a signal ended (not ours: `killed` says ours) answers the shell's `128 + signo`, so the detail
+      // says what happened; a code of its own is kept as it is (M4).
+      const signo = signal === null ? undefined : os.constants.signals[signal];
+      exited = { code: typeof code === 'number' ? code : signo !== undefined ? 128 + signo : 1 };
+      if (out.eof && err.eof) { answer(); return; }
+      armDrain();
+    });
+    killTimer = setTimeout(() => {
+      killTimer = null;
+      if (exited !== null || child.pid === undefined) return;
+      killed = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (e) {
+        // ESRCH: the group is already gone. Anything else: fall back to the parent alone rather than to nothing.
+        if ((e as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL');
+      }
+      // A parent that will not die (an uninterruptible wait) must not stop the answer past the drain bound.
+      armDrain();
+    }, timeoutMs);
+    // ── END bounded-spawn body
+  });
+}
+
+/** The agent's production spawner: the parent inherits this process's own environment. */
+export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);
+
+/** ONE per agent PROCESS, shared by every connection (D-3392).
+ *  A server whose link dropped while an op was spawning reconnects on a NEW
+ *  socket and re-sends the op, and a per-connection flag would let that second
+ *  `--detach` parent start beside the first. Both parents only PROBE the lock
+ *  (wave 4 Task 3), so both would pass it and write `queued`. */
+interface UpdateGate { spawning: boolean }
+
 interface PtyEntry {
   proc: PtyProcess;
   dataSub: { dispose(): void };
@@ -311,6 +466,8 @@ interface ConnCtx {
   ptys: Map<number, PtyEntry>;
   nextPtyId: number;
   spawnPty: PtySpawn;
+  spawnUpdate: UpdateSpawn;
+  updateGate: UpdateGate;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -463,6 +620,78 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ptyId }));
       return;
     }
+    case 'update': {
+      // Design 2026-09-20 §10. THE ONE wire-triggered spawn outside the exec
+      // whitelist (agent/CLAUDE.md). `validateReq` has already refused a tag
+      // that fails `isReleaseTag` and a kind outside `RequestKind`, so this body
+      // never sees an unvalidated argument. `updateSpawnArgv` checks both AGAIN
+      // and throws on a caller bug, so an edit that lets one through reaches
+      // the envelope's `.catch`, never `execFile`. Nothing here consults the
+      // exec whitelist, and nothing here may: `ccrc` is on neither list, and
+      // the argv is one of two templates with `tag` the only variable token.
+      //
+      // No `await` before the busy decision. The gate is checked and taken in
+      // one synchronous stretch, so two ops arriving together cannot both pass.
+      if (ctx.updateGate.spawning) {
+        send(ws, failUpdate(req.id, 'busy', 'an update op is already spawning on this agent'));
+        return;
+      }
+      const home = ctx.cfg.home;
+      // ONE read feeds both the in-flight check and the bound's snapshot (D-3400 amended, D-3413): the report's text, proven
+      // absent, or unreadable. Absent and unreadable stay two values, because arm A needs a readable before.
+      const before = readUpdateReport(home);
+      const inFlight = before.kind === 'bytes' ? inFlightReport(before.text) : null;
+      // D-3411: an in-flight report answers busy only while its WRITER lives. A dead writer's report is a
+      // leftover (an updater killed mid-run), and the op spawns: the parent's own lock probe then decides.
+      // An absent or unreadable pid keeps busy — that writer is unmeasurable, which is not dead. The
+      // sentence is `inFlightBusyDetail`'s, the one both roles send, and it stays within the op's detail bound
+      // (D-3391) with its advice intact.
+      if (inFlight !== null && writerMayLive(inFlight.pid)) {
+        send(ws, failUpdate(req.id, 'busy', inFlightBusyDetail(inFlight)));
+        return;
+      }
+      const file = updateLauncherPath(home);
+      const argv = updateSpawnArgv(req.kind ?? 'update', req.tag);
+      ctx.updateGate.spawning = true;
+      let spawned: Awaited<ReturnType<UpdateSpawn>>;
+      try {
+        spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);
+      } finally {
+        ctx.updateGate.spawning = false;
+      }
+      // D-3372: `accepted` is a measured fact about the
+      // node. The `--detach` parent exits 0 only after `_upd_phase queued` (which WARNs, never fails) and
+      // `_svc_run_detached` started the unit (wave 4 Task 3). It is never "a
+      // process was forked". Everything else is `spawn-failed`, carrying what
+      // the parent said.
+      if (spawned.killed) {
+        // D-3400 (amended), D-3413: the bound killed the parent's whole group, and what it did is MEASURED, never guessed:
+        // re-read update.json and let L0's `decideKilledSpawn` attribute the change (A. nothing queued, B. it queued our tag
+        // as this pid, D. anything else). Only A releases (`not-queued`: idle, the request standing); B and D answer the ok
+        // `accepted` reply carrying their words, so the server HOLDS the lease. The old `spawn-failed` here was a halting
+        // answer for a parent that may well have started the run.
+        const verdict = decideKilledSpawn({
+          before, after: readUpdateReport(home), stdout: spawned.stdout, pid: spawned.pid, tag: req.tag,
+        });
+        send(ws, verdict.arm === 'A'
+          ? failUpdate(req.id, 'not-queued', verdict.detail)
+          : ok(req.id, { accepted: true, detail: verdict.detail }));
+        return;
+      }
+      if (spawned.code !== 0) {
+        const line = firstStderrLine(spawned.stderr);
+        // D-3411: the parent's lock probe found the lock HELD and died before its `queued` write, so nothing on
+        // the box changed. That is a busy node, not a faulted one: `busy` releases `idle` with the request
+        // standing. `_upd_flock_die` and the probe's unmeasured arm carry other sentences and stay spawn-failed.
+        // The busy detail carries the way out (`lockHeldBusyDetail`): a holder that hangs writes no report.
+        send(ws, isUpdateLockHeldLine(line)
+          ? failUpdate(req.id, 'busy', lockHeldBusyDetail(line))
+          : failUpdate(req.id, 'spawn-failed', line));
+        return;
+      }
+      send(ws, ok(req.id, { accepted: true }));
+      return;
+    }
     default: {
       // Exhaustive today (every `AgentReq` op above), but kept as a
       // defensive fallback rather than removed — a future protocol variant
@@ -488,6 +717,13 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
+/** `validateReq`'s answer for a well-shaped op whose ARGUMENT failed its guard
+ *  (design 2026-09-20 §10). The message handler sends it as
+ *  `failUpdate(id, refuse)` before any case body runs. It is not `null`,
+ *  because the handler answers `null` with `bad-request`, which from the
+ *  `update` op must mean exactly one thing: this agent predates it. */
+export interface ReqRefusal { refuse: Extract<UpdateOpError, 'bad-tag' | 'bad-kind'>; id: number }
+
 /**
  * Runtime shape/type validation for an already-JSON-parsed `req` frame.
  * `msg as AgentReq` (the old dispatch site) is a *compile-time-only*
@@ -500,7 +736,7 @@ function isStringArray(v: unknown): v is string[] {
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -559,6 +795,15 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     }
     case 'caps':
       return { t: 'req', id, op: 'caps' } satisfies CapsReq;
+    case 'update': {
+      // The ONE tag-shape guard (`isReleaseTag`, never a regex here) and the
+      // one kind guard. A failed argument is a `ReqRefusal` carrying the op's
+      // own word; nothing past this point sees an unvalidated tag.
+      if (!isReleaseTag(msg.tag)) return { refuse: 'bad-tag', id };
+      const kind = msg.kind === undefined ? 'update' : msg.kind;
+      if (!isRequestKind(kind)) return { refuse: 'bad-kind', id };
+      return { t: 'req', id, op: 'update', tag: msg.tag, kind } satisfies UpdateReq;
+    }
     default:
       return null;
   }
@@ -663,6 +908,76 @@ export function readObservedEpoch(home: string): number | null {
   }
 }
 
+/** Wave 4's writer puts ONE line of a few hundred bytes. Anything larger is not its report. */
+const UPDATE_REPORT_READ_MAX = 65_536;
+
+/** The agent's `process.kill(pid, 0)` adapter for `updateWriterAlive` (D-3411; the liveness RULE is L0's). */
+function probeKill(pid: number): KillProbeOutcome {
+  try {
+    process.kill(pid, 0);
+    return { threw: false };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return { threw: true, code: typeof code === 'string' ? code : null };
+  }
+}
+/** Whether an in-flight report's writer may still be running: L0's `updateWriterMayLive` over this role's adapter.
+ *  Exported for the pins; the `update` op is its one caller. */
+export function writerMayLive(pid: number | null): boolean {
+  return updateWriterMayLive(pid, probeKill);
+}
+
+/**
+ * Spec §10: the handler refuses when `~/.ccrc/update.json` says an update is in
+ * flight. The agent reads the file ITSELF, as `readObservedEpoch` and
+ * `readBuildStamp` read theirs (D-3371). This
+ * is the agent's own decision about its own box, not a wire file op, so it
+ * never goes through `checkPath`: that gate exists for what the SERVER reads.
+ *
+ * `null` (not busy) covers every failure: an absent, unreadable, over-cap or
+ * unparseable file, a non-regular one, and a report that is not in flight.
+ * The `--detach` parent's own lock probe (`_upd_detach`'s `_upd_lock_probe`) then decides, and a held lock comes back as
+ * `busy` with the lock's sentence (D-3411; it was `spawn-failed` before). A report that IS in flight is returned
+ * with its writer's `pid`; whether that writer lives is `writerMayLive`'s question, asked by the `update` case, not this
+ * read's. Opened `O_NONBLOCK`, because a FIFO
+ * planted at this name would otherwise block `open(2)` and, with it, this
+ * agent's whole event loop; `fstat` then refuses it as not a regular file. The
+ * CONTENT is judged by `inFlightReport` (`shared/api.ts`), the same parser the
+ * server-role spawn uses, so the two roles cannot disagree about what "in
+ * flight" means.
+ */
+export function readInFlightReport(home: string): InFlightReport | null {
+  const read = readUpdateReport(home);
+  return read.kind === 'bytes' ? inFlightReport(read.text) : null;
+}
+
+/**
+ * `~/.ccrc/update.json` on THIS box, bounded and measured (D-3400 amended, D-3413): its text, `absent` on a PROVEN ENOENT
+ * at the open, or `unreadable` for every other failure (a non-regular file, over the cap, any other errno). The `update` op
+ * reads it once before the spawn — that read is both the in-flight check's input and the bound's snapshot — and once
+ * after a kill, and the two are compared byte for byte. Same bounds as ever: `O_NONBLOCK` (a FIFO planted at the name
+ * would block `open(2)` and the agent's whole event loop), `fstat` to a regular file of at most `UPDATE_REPORT_READ_MAX`.
+ */
+export function readUpdateReport(home: string): UpdateReportRead {
+  let fd: number;
+  try {
+    fd = openSync(path.join(home, CCRC_DIR_NAME, NODE_FILES.report), fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? { kind: 'absent' } : { kind: 'unreadable' };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > UPDATE_REPORT_READ_MAX) return { kind: 'unreadable' };
+    const buf = Buffer.alloc(st.size);
+    const n = readSync(fd, buf, 0, st.size, 0);
+    return { kind: 'bytes', text: buf.subarray(0, n).toString('utf8') };
+  } catch {
+    return { kind: 'unreadable' };
+  } finally {
+    try { closeSync(fd); } catch { /* nothing left to release */ }
+  }
+}
+
 /**
  * This box's own build stamp — `~/.ccrc/build.json` as `deploy/deploy.sh`'s
  * `stamp_build` installed it on the agent lane — or `undefined` when there
@@ -747,7 +1062,10 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
   return cache.verbs;
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache): void {
+function handleConnection(
+  ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
+  updateGate: UpdateGate,
+): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -756,6 +1074,8 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
     ptys: new Map(),
     nextPtyId: 1,
     spawnPty: opts.spawnPty,
+    spawnUpdate: opts.spawnUpdate,
+    updateGate,
   };
 
   const helloTimer = setTimeout(() => {
@@ -796,8 +1116,11 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // becomes four spellings of one frame, and a third field eight. The
       // contract is unchanged — a key is written only when there is
       // something to write.
+      // `ops` (design 2026-09-20 §10): the request ops this agent answers beyond
+      // the closed set every agent has always had, which is exactly one today.
+      // It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home),
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -823,6 +1146,9 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
         if (typeof msg.id === 'number') send(ws, fail(msg.id, 'bad-request'));
         return;
       }
+      // A well-shaped op whose ARGUMENT failed its guard (design 2026-09-20
+      // §10) is answered with the op's own word, never `bad-request`.
+      if ('refuse' in req) { send(ws, failUpdate(req.id, req.refuse)); return; }
       // Defense in depth: even a validated request could hit an unforeseen
       // rejection downstream — this `.catch` guarantees no rejection from
       // the fire-and-forget dispatch is ever left unhandled.
@@ -878,6 +1204,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     home: rawOpts.home ?? os.homedir(),
     projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
+    spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
@@ -891,7 +1218,9 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache));
+  // ONE update gate per agent process, shared by every connection (D-3392).
+  const updateGate: UpdateGate = { spawning: false };
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

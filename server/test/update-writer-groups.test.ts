@@ -98,7 +98,7 @@ const WRITER_GROUPS: readonly { table: 'releases' | 'node_release_refusals' | 'n
   { table: 'nodes', group: 'report', columns: ['reportedPhase', 'reportedTarget', 'reportedStartedAt', 'reportedUpdatedAt',
       'reportedDetail'], writers: ['upsertNodeMeasurement'] },
   { table: 'nodes', group: 'lease', columns: ['updateState', 'updateTarget', 'updateStartedAt', 'updateDetail'],
-      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode'] },
+      writers: ['dispatchNode', 'releaseLease', 'settleNode', 'ackNode', 'noteDispatchRefusal', 'noteLeaseDetail', 'handOffLease'] },
   { table: 'nodes', group: 'resolved', columns: ['channel', 'desiredTag', 'resolveDetail'], writers: ['resolveNode'] },
   { table: 'nodes', group: 'request', columns: ['requestedTag', 'requestedKind', 'requestedAt'],
       writers: ['requestNode', 'settleNode', 'ackNode'] },
@@ -130,6 +130,14 @@ const W2_WRITERS = ['applyReleaseListing', 'refuseRelease', 'clearRefusals', 'up
  *  says which wave put it there. Programme wave 5 (spec W4's dispatcher)
  *  appends `dispatchNode`/`requestNode` the same way. */
 const W3_WRITERS = ['markReleaseNotified'] as const;
+
+/** The programme-wave-5 writers the same floor requires (spec W4's
+ *  dispatcher, Task 3): the request group's setter, the lease group's ONE
+ *  acquire, the refusal note on an idle row (D-3375) and the detail note on a held
+ *  busy row (D-3413).
+ *  A list of its own, as W3's is, so each floor entry says which wave put it
+ *  there. */
+const W5_WRITERS = ['requestNode', 'dispatchNode', 'noteDispatchRefusal', 'noteLeaseDetail', 'handOffLease'] as const;
 
 // ── the analyser ─────────────────────────────────────────────────────────────
 
@@ -349,9 +357,9 @@ describe('update writer groups — one writer per column group (design 2026-09-2
     db.close();
   });
 
-  it('finds every W2 and W3 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
+  it('finds every W2, W3 and W5 writer writing — a renamed table reds this, and so does rewriting a required writer\'s ONLY write into one of the header\'s four invisible shapes (a writer with more than one statement in the scan is unaffected, and a NEW illegitimate write built the same way would not red either — see header)', () => {
     const found = new Set(stmts.map((s) => s.method));
-    for (const w of [...W2_WRITERS, ...W3_WRITERS]) {
+    for (const w of [...W2_WRITERS, ...W3_WRITERS, ...W5_WRITERS]) {
       expect(WRITER_GROUPS.some((g) => g.writers.includes(w)), `${w} is in no writer group`).toBe(true);
       expect(found.has(w), `the scan found no statement of ${w} writing an update table`).toBe(true);
     }
