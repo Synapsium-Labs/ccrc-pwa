@@ -795,6 +795,28 @@ describe('sweepStalls: fail-shut inputs (hold 1)', () => {
     await w.sweepStalls([fleetRow(WORKER)], ARMED);
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
+
+  it('idle, and the tick\'s fleet row names an unmeasured identity field: held and nothing written; measured, r1 goes out', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER, { unmeasured: ['uuid'] })], ARMED);
+    nothingWritten(coord, runId, sent);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('idle, and the tick\'s fleet row says its status is unmeasured: held and nothing written; measured, r1 goes out', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER, { statusUnmeasured: true })], ARMED);
+    nothingWritten(coord, runId, sent);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
 });
 
 describe('sweepStalls: wiring', () => {
