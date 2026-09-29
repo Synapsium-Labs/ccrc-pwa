@@ -414,6 +414,10 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // R-10 (A7): a FAST-PATH MISS (no `.prnumber`, no `.prhistory`) reaches
+    // `childSpent`'s own rung 3 with `verifyDone`'s line already in hand, so it
+    // never asks `pr-state` a second time — ONE call total, not two.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
   });
 
   it('(ii) that row has no createdAt — spent/unplaced, never proven this incarnation — HOLD, ws-hold only, not-finished-undated', async () => {
@@ -428,6 +432,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-undated' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // R-10 (A7): a fast-path miss, ONE call
   });
 
   it('(iii) the registry .prnumber names an old merged PR whose live row predates birth (the merge-commit path) — HOLD, not-finished-merge-commit', async () => {
@@ -444,6 +449,11 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'merged' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished-merge-commit' });
     expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    // R-10 (A7): a RE-DATED FAST-PATH close (rung 1's `.prnumber` answers
+    // spent/unplaced, then redated through the live rung) reuses `verifyDone`'s
+    // own line for that redate instead of fetching a second time — ONE
+    // `pr-state` call total, not two.
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
   });
 
   // The positive mirror of (iii): the redate step does not just refuse a
@@ -466,6 +476,7 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'open' }, final: false }, 'coordinator');
     expect(out).toMatchObject({ ok: true, released: true, childReclaim: 'queued' });
     expect(fleetActs(b.acts())).toEqual(['ws-release']);
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);   // R-10 (A7): a re-dated fast-path close, ONE call
   });
 });
 

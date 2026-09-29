@@ -216,13 +216,17 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * workspace wearing this slug the PR belongs to. `birth` is spent by rung 3
  * alone, and is REQUIRED here anyway so no caller can reach rung 3 without it.
  *
- * COST, measured rather than assumed: steps 1–2 are file reads; step 3 is one
- * gh call on the fleet box, bounded by `pr-state`'s 20 s remote budget, and it
- * runs only for a CHILD with no PR on record — never for a workspace with no
- * marker (`childBindGate` returns before calling this).
+ * COST, measured rather than assumed: steps 1–2 are file reads; step 3, absent
+ * a pre-read `line`, is one gh call on the fleet box, bounded by `pr-state`'s
+ * 20 s remote budget, and it runs only for a CHILD with no PR on record —
+ * never for a workspace with no marker (`childBindGate` returns before
+ * calling this). A caller already holding this session's own measured
+ * `pr-state` line (spec §5.7, R-10 — the close reusing `verifyDone`'s line)
+ * passes it as `line`, and step 3 makes NO gh call at all: it runs the pure
+ * `childSpentLiveFrom` over the line handed in, never `childSpentLive`'s fetch.
  */
 export async function childSpent(
-  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
+  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth, line?: CcdPrLine,
 ): Promise<ChildSpentVerdict> {
   if (rec.prNumber !== null) {
     return { kind: 'spent', pr: rec.prNumber, source: 'registry', incarnation: 'unplaced' };
@@ -234,7 +238,7 @@ export async function childSpent(
   for (const e of history.entries) if (newest === null || e.recordedAt >= newest.recordedAt) newest = e;
   if (newest !== null) return { kind: 'spent', pr: newest.pr, source: 'prhistory', incarnation: 'unplaced' };
 
-  return childSpentLive(deps, rec, birth);
+  return line !== undefined ? childSpentLiveFrom(line, rec, birth) : childSpentLive(deps, rec, birth);
 }
 
 /**
@@ -245,19 +249,58 @@ export async function childSpent(
  * this to DATE that PR, and treats only spent/this as finished. It therefore
  * reads no fast path of its own: `rec.prNumber` is ignored here.
  *
- * A LIVE `ccd pr-state --session <id>` — nothing in this system learns of a
- * PR by push, and the sweep's cadence is minutes while a coordinator opens
- * wave N+1 seconds after the worker's done mail. Gated like every other
- * caller of the verb (`verbSupported`). The operator's rule (D-3347): a PR
- * OPENED FROM THE CHILD'S BRANCH SPENDS IT, in any state, whatever its base,
- * whether or not it BINDS — binding (`boundRow`'s base/`ours` conjuncts) is a
- * fact about which PR a workspace's control renders, not about whether the
- * branch has been spent. So this rung reads every row of `line.rows` —
- * measured 2026-09-23 to survive ccd's own `--head` filter unfiltered, base
- * and `ours` included — for one whose `isCrossRepository` is exactly `false`
- * (passed through from gh's own JSON unchanged; `ours`, not this field, is
- * what ccd itself computes and annotates) and whose `headRefName` names
- * `line.branch`.
+ * THE FETCH ONLY (spec §5.7, R-10): a LIVE `ccd pr-state --session <id>` —
+ * nothing in this system learns of a PR by push, and the sweep's cadence is
+ * minutes while a coordinator opens wave N+1 seconds after the worker's done
+ * mail. Gated like every other caller of the verb (`verbSupported`). Every
+ * rung of judgment over the answered line lives in the pure
+ * `childSpentLiveFrom` below, which this calls once the line is in hand — the
+ * split exists so a caller already holding this session's own measured line
+ * (the close reusing `verifyDone`'s) can skip this fetch entirely and call
+ * `childSpentLiveFrom` directly, at the cost of one fewer `pr-state` call
+ * inside the same mutex section.
+ *
+ * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
+ * budget — for the close, inside whatever lock the close holds.
+ */
+export async function childSpentLive(
+  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
+): Promise<ChildSpentVerdict> {
+  const argv = CCD_ARGV.prStateSession(rec.id);
+  if (!verbSupported(deps.fleetState, argv)) {
+    return { kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' };
+  }
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { kind: 'unmeasured', detail: `pr-state failed: ${res.stderr.trim()}` };
+  const lines = parsePrLines(res.stdout);
+  const line = lines.find((l): l is CcdPrLine => isFullLine(l) && l.id === rec.id);
+  if (line === undefined) {
+    const failure = lines.find((l) => !isFullLine(l));
+    return { kind: 'unmeasured', detail: failure === undefined
+      ? 'pr-state answered no line for this session'
+      : `pr-state answered ${failure.reason ?? 'unknown'}` };
+  }
+  return childSpentLiveFrom(line, rec, birth);
+}
+
+/**
+ * The PURE judgment half of the live rung (spec §5.7, R-10), split out of
+ * `childSpentLive` so a caller already holding this session's own measured
+ * `pr-state` line — the close, reusing `verifyDone`'s line — can reach it
+ * with no `pr-state` call of its own. `rec` is accepted only so this
+ * function's signature matches `childSpent`'s and `childSpentLive`'s own
+ * (spec §5.7's naming); it plays no role in the judgment below — every fact
+ * comes from `line` and `birth` alone, never from the registry.
+ *
+ * The operator's rule (D-3347): a PR OPENED FROM THE CHILD'S BRANCH SPENDS
+ * IT, in any state, whatever its base, whether or not it BINDS — binding
+ * (`boundRow`'s base/`ours` conjuncts) is a fact about which PR a workspace's
+ * control renders, not about whether the branch has been spent. So this reads
+ * every row of `line.rows` — measured 2026-09-23 to survive ccd's own `--head`
+ * filter unfiltered, base and `ours` included — for one whose
+ * `isCrossRepository` is exactly `false` (passed through from gh's own JSON
+ * unchanged; `ours`, not this field, is what ccd itself computes and
+ * annotates) and whose `headRefName` names `line.branch`.
  *
  * EVERY SUCH ROW IS PLACED against `birth` (`placeChildRow`): a child's branch
  * name is a recycled slug (spec §5.5), and a row created before this child
@@ -285,26 +328,9 @@ export async function childSpent(
  * branch's PR), a whole-repo failure, a failed ccd call, an unparseable or
  * foreign line — answers `unmeasured`, with the reason in `detail`.
  *
- * COST: one gh call on the fleet box, bounded by `pr-state`'s 20 s remote
- * budget — for the close, inside whatever lock the close holds.
+ * COST: none — no I/O, synchronous over an already-measured line.
  */
-export async function childSpentLive(
-  deps: ChildSpentDeps, rec: SessionRecord, birth: ChildBirth,
-): Promise<ChildSpentVerdict> {
-  const argv = CCD_ARGV.prStateSession(rec.id);
-  if (!verbSupported(deps.fleetState, argv)) {
-    return { kind: 'unmeasured', detail: 'the fleet host cannot answer pr-state' };
-  }
-  const res = await deps.runCcd(argv);
-  if (!res.ok) return { kind: 'unmeasured', detail: `pr-state failed: ${res.stderr.trim()}` };
-  const lines = parsePrLines(res.stdout);
-  const line = lines.find((l): l is CcdPrLine => isFullLine(l) && l.id === rec.id);
-  if (line === undefined) {
-    const failure = lines.find((l) => !isFullLine(l));
-    return { kind: 'unmeasured', detail: failure === undefined
-      ? 'pr-state answered no line for this session'
-      : `pr-state answered ${failure.reason ?? 'unknown'}` };
-  }
+export function childSpentLiveFrom(line: CcdPrLine, rec: SessionRecord, birth: ChildBirth): ChildSpentVerdict {
   // D-3351: without this check, a line with no `branch` at all (and a string
   // `tip`, and only rows with string heads) falls through to `phaseFor` and
   // answers `unspent` — not by matching anything below, but by matching
