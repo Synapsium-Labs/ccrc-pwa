@@ -1038,7 +1038,7 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
   /** The observations `send` records on its FIRST call, so the harness's own `expect`s land as themselves rather
    *  than being caught by `linkAnswer` and reported as a transport failure (any non-`AgentOpError` throw inside
    *  `send` becomes a transport hold, which swallows a failed assertion and reports the wrong cause). */
-  interface SendObserved { rekey?: { ok: boolean; revived?: boolean }; busyIds?: string[]; busyStartedAt?: number }
+  interface SendObserved { rekey?: { ok: boolean; revived?: boolean }; busyIds?: string[]; busyStartedAt?: number | null }
 
   /** The reviewer's interleaving (steps 1-4): U1 idle, rekeyed away to U2, U2 requested and dispatched; the
    *  harness's `send` then revives U1 BACK — mid-op — before it answers, so the lease U2 acquired is now U1's,
