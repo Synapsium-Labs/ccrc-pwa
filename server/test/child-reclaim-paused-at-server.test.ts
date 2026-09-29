@@ -284,27 +284,41 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
   });
 
-  it('round-trips a from with its own embedded " -> " — the split lands at the LAST occurrence', () => {
+  // An arrow on the `from` side: the true `from` is the LAST prefix here, and
+  // the prefix before the first arrow joins the set too — the over-protection
+  // `childReclaimDisplacedCandidates` accepts rather than pick one split.
+  it('round-trips a from with its own embedded " -> " — the true from and the earlier prefix both join', () => {
     const coord = bareStore();
     const from = 'demo -> x';
     const opened = coord.openRun({ program: 'w4-embedded-arrow', title: 'w4-embedded-arrow', project: 'demo',
       wave: 1, waveOf: null, claimedBy: from });
     if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
     expect(coord.reclaimProgram(opened.id, 'heir-arrow', Date.now(), null)).toMatchObject({ ok: true });
+    const ids = coord.childReclaimCoordinatorIds();
+    expect(ids.has(from)).toBe(true);
+    expect(ids.has('demo')).toBe(true);   // the documented over-protection
+  });
+
+  // A `from` ENDING in ` ->` makes the writer's separator overlap an earlier
+  // occurrence: `demo -> -> heir` holds ` -> ` at two overlapping offsets,
+  // and only a search that resumes one character past each hit finds both.
+  it('round-trips a from ending in " ->" — overlapping occurrences are all found', () => {
+    const coord = bareStore();
+    const from = 'demo ->';
+    const opened = coord.openRun({ program: 'w4-trailing-arrow', title: 'w4-trailing-arrow', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir', Date.now(), null)).toMatchObject({ ok: true });
     expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
   });
 
-  // Bare `.` in JS does not match a LINE TERMINATOR (`\n`, `\r`, U+2028,
-  // U+2029) without the `s` flag — a narrower gap in the same class as the
-  // whitespace/arrow cases above: `POST /api/runs`'s own check is
+  // A LINE TERMINATOR in `from`: `POST /api/runs`'s own check is
   // `claimedBy.trim() === ''`, which refuses a value that is ONLY line
   // terminators but not one holding a terminator beside other characters,
   // so such a value reaches the writer. Each case reads its `from` back
   // VERBATIM through the real `reclaimProgram` writer, exactly as the
-  // whitespace cases above do. The plain-space case ('demo x') is already
-  // covered by "round-trips a from with an inner space" above and is not
-  // repeated here: a plain space is not one of the four excluded bytes, so it
-  // round-trips with or without the `s` flag and proves nothing about it.
+  // whitespace cases above do — a reader that matched with a bare regex `.`
+  // (which excludes `\n`, `\r`, U+2028 and U+2029) would throw on these.
   it('round-trips a from holding an embedded line feed', () => {
     const coord = bareStore();
     const from = 'demo\nx';
@@ -338,7 +352,8 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   // An EMPTY `from`. `trim` does not strip NUL, so `POST /api/runs` accepts
   // a `claimedBy` of `"\u0000"`; node:sqlite reads the stored value back
   // truncated at the NUL, as `""`, so the writer emits `reclaim: -> <to>`.
-  // A `from` capture that needed one character threw on that row forever.
+  // A reader that needed at least one character of `from` threw on that row
+  // forever.
   it('round-trips an EMPTY from — a NUL-leading claimedBy reads back as ""', () => {
     const coord = bareStore();
     const opened = coord.openRun({ program: 'w4-nul-from', title: 'w4-nul-from', project: 'demo',
@@ -353,12 +368,18 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
 
   // The `to` side. The reclaim door hands `reclaimProgram` a trimmed id whose
   // `<to>.uuid` is in the registry listing — a filename, which may hold a
-  // space, a tab or a line feed. Each such `to` must still parse, and the
-  // `from` beside it must come back whole.
-  for (const [label, to] of [['a space', 'heir x'], ['a tab', 'heir\tx'], ['a line feed', 'heir\nx']] as const) {
+  // space, a tab, a line feed, a ` -> ` of its own, or start with `-> `.
+  // Each such `to` must still parse, and the true displaced `from` must be in
+  // the set. With an arrow in `to`, the true `from` is the FIRST prefix, not
+  // the last: a reader that took the last arrow as the separator dropped it
+  // (measured through the reclaim route before this reader existed).
+  for (const [slug, label, to] of [
+    ['space', 'a space', 'heir x'], ['tab', 'a tab', 'heir\tx'], ['lf', 'a line feed', 'heir\nx'],
+    ['arrow', 'its own " -> "', 'heir -> y'], ['lead-arrow', 'a leading "-> "', '-> y'],
+  ] as const) {
     it(`round-trips a to holding ${label}`, () => {
       const coord = bareStore();
-      const opened = coord.openRun({ program: `w4-to-${label.replace(/ /g, '-')}`, title: 'w4-to-ws', project: 'demo',
+      const opened = coord.openRun({ program: `w4-to-${slug}`, title: 'w4-to-ws', project: 'demo',
         wave: 1, waveOf: null, claimedBy: 'demo-a' });
       if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
       expect(coord.reclaimProgram(opened.id, to, Date.now(), null)).toMatchObject({ ok: true });

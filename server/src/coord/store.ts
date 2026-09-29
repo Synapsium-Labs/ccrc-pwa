@@ -1257,50 +1257,56 @@ class IntentJournalFault extends Error {
   }
 }
 
-/** The exact shape `reclaimProgram` writes for each run it displaces —
+/** Every id that may be the `from` of one `reclaimProgram` row, or `null`
+ *  for a row the writer cannot have produced. The writer emits
  *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
  *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
- *  rewrote). A row this pattern cannot read makes the one reader throw, and
- *  `run_events` rows are never deleted, so one unreadable row stops every
- *  automatic reclamation for good: the pattern must admit EVERY string the
- *  writer can emit, and it reads each side as what can actually reach it
- *  rather than what a session id ideally looks like.
+ *  rewrote). A row the reader cannot use makes it throw, and `run_events`
+ *  rows are never deleted, so one such row stops every automatic
+ *  reclamation for good: this must accept EVERY string the writer can emit.
  *
- *  `from` is `runs.claimedBy` as sqlite reads it back. `POST /api/runs`
- *  checks it only with `claimedBy.trim() === ''` — no charset guard
- *  (`shared/api.ts`'s `isSessionIdShape` exists precisely because the route
- *  does not enforce one) — so `from` may carry internal or trailing
- *  whitespace, a line terminator beside other characters (a value that is
- *  ONLY whitespace or line terminators trims to `''` and is refused), or its
- *  own literal ` -> `. It may also be EMPTY: `trim` does not strip NUL, so
- *  `"\u0000"` and `"\u0000demo"` are accepted, and node:sqlite reads the
- *  stored value back truncated at the NUL, as `""` — the writer then emits
- *  `reclaim: -> <to>`. Hence `(.*)`, not `(.+)`, with the `s` flag, since
- *  bare `.` in JS does not match `\n`, `\r`, U+2028 or U+2029. No NUL ever
- *  reaches the detail itself: `from` is the truncated read-back.
+ *  Neither side has a shape it can be split on. `from` is `runs.claimedBy`
+ *  as sqlite reads it back; `POST /api/runs` checks it only with
+ *  `claimedBy.trim() === ''` and no charset guard (`shared/api.ts`'s
+ *  `isSessionIdShape` exists precisely because the route does not enforce
+ *  one), so `from` may hold whitespace, a line terminator beside other
+ *  characters, its own ` -> `, or nothing at all — `trim` keeps NUL, and
+ *  node:sqlite reads `"\u0000demo"` back truncated to `""`. `to` is the
+ *  trimmed id `reclaimRun` (`reclaim.ts`) found as `<to>.uuid` in the
+ *  registry listing: never empty, but a filename, so it may hold a space, a
+ *  tab, a line feed or a ` -> ` of its own, or start with `-> `. With an
+ *  arrow on both sides, `reclaim:<from> -> <to>` has more than one reading,
+ *  and no single split recovers `from` in every case.
  *
- *  `to` is never empty and holds no NUL or `/`: `POST /api/runs/:id/reclaim`
- *  refuses a value that trims to `''` and passes the trimmed value on, and
- *  `reclaimRun` (`reclaim.ts`) proceeds only once `readSessionRecord` finds
- *  `<to>.uuid` in the registry directory's listing — a filename. But a
- *  filename may hold a space, a tab or a line feed, so `to` may too, and a
- *  hand-made registry row is enough to put one there. Hence `(.+)` with the
- *  same `s` flag, not `(\S+)`.
+ *  So this does not pick a split. It returns the prefix before EVERY
+ *  occurrence of ` -> ` in the text after `reclaim:`, overlapping ones
+ *  included (the search resumes one character past each hit, so `a -> -> b`
+ *  yields both `a` and `a ->`). The writer's own separator is one of those
+ *  occurrences, so the true `from` is always among the prefixes, whatever
+ *  either side contains. THE COST IS OVER-PROTECTION: the extra prefixes
+ *  join the set of ids that have coordinated, so a session whose id happens
+ *  to equal one of them — `demo` beside a displaced `demo -> x`, say — is
+ *  never reclaimed automatically. That is the fail-shut direction (it can
+ *  only leave a workspace for a human to clean up), where choosing one split
+ *  could silently drop the real `from` and let the displaced coordinator's
+ *  workspace be reclaimed. A well-shaped row (`demo-a -> heir-x`) has one
+ *  occurrence and yields exactly its `from`.
  *
- *  The split lands at the LAST literal ` -> ` (the greedy `from` takes
- *  everything it can, and `$` without the `m` flag matches only at the very
- *  end of input), so a `from` embedding ` -> ` of its own is read whole. The
- *  one string this still cannot split correctly is a `to` that itself
- *  contains ` -> ` or starts with `-> `: the row parses, but the split lands
- *  inside `to`, so the displaced coordinator is missing from the set the
- *  reader returns. That is a misreading, not a throw, and no pattern can fix
- *  it, because such a row is ambiguous as written.
- *
- *  A row that still fails this shape — a hand-written one that merely
- *  starts with the same prefix, or a future reword of the writer itself —
- *  THROWS at the one reader, `childReclaimCoordinatorIds`, below; it does
- *  not silently drop. */
-const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.*) -> (.+)$/s;
+ *  `null` — which the one reader, `childReclaimCoordinatorIds`, below, turns
+ *  into a THROW rather than a silent drop — only for text that does not
+ *  start with `reclaim:` (the SQL `LIKE` is case-insensitive) or holds no
+ *  ` -> ` at all: the writer always emits the prefix and one separator, so
+ *  such a row is hand-written or a future reword of the writer. */
+function childReclaimDisplacedCandidates(detail: string): string[] | null {
+  const prefix = 'reclaim:';
+  if (!detail.startsWith(prefix)) return null;
+  const body = detail.slice(prefix.length);
+  const out: string[] = [];
+  for (let i = body.indexOf(' -> '); i !== -1; i = body.indexOf(' -> ', i + 1)) {
+    out.push(body.slice(0, i));
+  }
+  return out.length > 0 ? out : null;
+}
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -2930,13 +2936,15 @@ export class CoordStore {
    *  PARSED, not compared: unlike a hold's grammar (`holdReasonVerdict`,
    *  compared against the server's own rendering, never parsed back), nothing
    *  else ever reads this string, so there is no server-rendered form to
-   *  compare it against — it must be parsed. Anchored whole-string against
-   *  `CHILD_RECLAIM_DISPLACED_DETAIL`, below; a `reclaim:`-prefixed row from
-   *  this exact writer that does NOT match that shape THROWS rather than being
-   *  silently dropped — a row this build cannot attribute to a `from` id is a
-   *  row this build cannot prove is NOT evidence of past coordination, and
-   *  excluding it silently would be the exact fail-open this fix exists to
-   *  close. The executor's own try/catch around this call turns the throw into
+   *  compare it against — it must be parsed, by
+   *  `childReclaimDisplacedCandidates` (above the class), which returns every
+   *  reading of the row that could be its `from` — all of them join the set,
+   *  and that function states what the over-protection costs. A
+   *  `reclaim:`-prefixed row it cannot read at all (no ` -> ` in it) THROWS
+   *  rather than being silently dropped — a row this build cannot attribute
+   *  to a `from` id is a row this build cannot prove is NOT evidence of past
+   *  coordination, and excluding it silently would be the exact fail-open
+   *  this fix exists to close. The executor's own try/catch around this call turns the throw into
    *  a `siblings-unreadable` deferral (fail shut), the same word it already
    *  uses for an unreadable `openRunsForSession`.
    *
@@ -2973,11 +2981,11 @@ export class CoordStore {
       "SELECT detail FROM run_events WHERE causedBy = 'operator' AND detail LIKE 'reclaim:%'",
     ).all() as { detail: string }[];
     for (const row of displacements) {
-      const m = CHILD_RECLAIM_DISPLACED_DETAIL.exec(row.detail);
-      if (!m) {
+      const froms = childReclaimDisplacedCandidates(row.detail);
+      if (froms === null) {
         throw new Error(`run_events carries an unparseable reclaim-displacement row: ${JSON.stringify(row.detail)}`);
       }
-      ids.add(m[1]!);
+      for (const from of froms) ids.add(from);
     }
     return ids;
   }
