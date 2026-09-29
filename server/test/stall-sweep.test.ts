@@ -25,6 +25,7 @@ import {
 } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
 import { WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
@@ -185,8 +186,10 @@ const mailBody = (coord: CoordStore, mailId: number): string =>
 const lines = (spy: { mock: { calls: unknown[][] } }, text: string): number =>
   spy.mock.calls.filter((c) => String(c[0]).includes(text)).length;
 const listPanes = (h: Harness): number => h.calls.filter((a) => a[0] === 'list-panes').length;
+/** Matches the adapter's own exact target (`Tmux.hasSession`, D-3525), so a spelling drift reds the positive case
+ *  rather than leaving the negative one vacuous. */
 const hasSessionFor = (h: Harness, id: string): boolean =>
-  h.calls.some((a) => a[0] === 'has-session' && a.includes(`cc-${id}`));
+  h.calls.some((a) => a[0] === 'has-session' && a.includes(tmuxTarget(id)));
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
