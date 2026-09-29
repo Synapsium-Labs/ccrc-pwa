@@ -9874,6 +9874,13 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(r.stderr).toMatch(/^ccrc: versions: CCRC_VERSIONS_KEEP must be a number \(got a non-numeric value\) — nothing was pruned$/m);
     expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
     expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+    // F8: listing is exit 0 by the exit table — a bad knob WARNs and lists, verdicts unmeasured.
+    r = runVersions(home, [], { CCRC_VERSIONS_KEEP: 'three' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned$/m);
+    expect(r.stdout).toMatch(/^ {2}\* v1\.0\.1 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
+    expect(r.stdout).toMatch(/^ {2}  v1\.0\.0 {2}complete {2}kept: CCRC_VERSIONS_KEEP is not a number$/m);
+    expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
   });
 
   it('a box whose ~/ccrc is still a directory: nothing is versioned, and --prune removes nothing', () => {

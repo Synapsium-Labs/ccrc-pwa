@@ -17950,8 +17950,17 @@ cmd_versions() {
     esac
     shift
   done
-  [[ "$keep" =~ ^[0-9]+$ ]] \
-    || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+  # A bad knob refuses a PRUNE (exit 1) but not a LISTING: the exit table says
+  # `ccrc versions` lists at 0, and a list removes nothing whatever the knob
+  # reads (final review F8) — so it WARNs, lists, and marks every verdict
+  # unmeasured.
+  local keep_ok=1
+  if ! [[ "$keep" =~ ^[0-9]+$ ]]; then
+    [ "$prune" -eq 0 ] \
+      || _ccrc_die "versions: CCRC_VERSIONS_KEEP must be a number (got a non-numeric value) — nothing was pruned"
+    keep_ok=0
+    echo "versions: WARN: CCRC_VERSIONS_KEEP is not a number — listing only; nothing would be pruned"
+  fi
   if [ "$prune" -eq 1 ]; then
     _upd_lock
     _inst_migrate_resume versions
@@ -17980,7 +17989,9 @@ cmd_versions() {
   case "$VER_LAYOUT" in
     linked|migrated)
       if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
-      if [ "$prc" -ne 0 ]; then
+      if [ "$keep_ok" -eq 0 ]; then
+        for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: CCRC_VERSIONS_KEEP is not a number"; done
+      elif [ "$prc" -ne 0 ]; then
         echo "versions: WARN: $VER_WHY — nothing would be pruned"
         for n in "${VER_NAMES[@]}"; do VER_VERDICT[$n]="kept: unmeasured"; done
       else
@@ -17993,6 +18004,7 @@ cmd_versions() {
     cpl=incomplete; [ -f "$BOX_VERSIONS_ROOT/$n/$VER_RECORD_COPY" ] && cpl=complete
     printf '  %s %s  %s  %s\n' "$mark" "$n" "$cpl" "${VER_VERDICT[$n]}"
   done
+  [ "$keep_ok" -eq 1 ] || keep="(not a number)"
   echo "versions: ${#VER_NAMES[@]} kept tree(s) under \$HOME/ccrc-versions; CCRC_VERSIONS_KEEP=$keep plus the protected set (pointed-at, previous, the projection's desired tags, running units) — 'ccrc versions --prune' removes the prunable ones"
   return "$grc"
 }
