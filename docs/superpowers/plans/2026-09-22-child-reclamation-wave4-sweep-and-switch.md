@@ -1222,7 +1222,7 @@ The placement is three facts, each pinned by a test below: AFTER the marker and 
 - Consumes: `RECLAIM_PAUSE_MARKER` (Task 4); `MarkerState` (`shared/api.ts`); `FleetIO['readdir']` (answers `null` when the directory cannot be listed); wave 3's `reclaimChild`, its module-private `childReclaimOutcome` and that function's local `deferred(why, detail)` helper, `ChildReclaimDeps` (with `io` and `cfg` — Task 1 Step 3 fact 2), the marked comment `WAVE 4 ADDS THE SERVER-SIDE PAUSE READ HERE` (Task 1 Step 3 fact 4); `RECLAIM_CAP`, `ACTOR_FLAGS_CAP` (`server/src/ccdargv.ts`); `NotifyLog` (`server/src/notifylog.ts`) and `CoordStore.feedEvents` for the feed-row case.
 - Produces: `export async function childReclaimPauseRead(io: Pick<FleetIO, 'readdir'>, registryDir: string): Promise<MarkerState>` — `set` when the listing names the marker, `clear` when it lists without it, `unmeasurable` when it does not list (three answers, never folded; `emitCoord`'s mapping of the same listing). `childReclaimOutcome` answers `deferred(...)`'s `{ kind: 'deferred', sessionId, runId, why: 'paused-at-server', detail }` on anything but `clear` — after the marker and sibling re-reads, before presence, the capability and any ccd argv — whatever `req.trigger` and whatever `req.deferExpired`; `reclaimChild` writes its one feed row for it like every other deferral. Task 8's sweep does not call it (it skips on the tick's own listing before asking); the close route reaches it through the executor.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/child-reclaim-paused-at-server.test.ts`:
 
@@ -1376,13 +1376,13 @@ describe('reclaimChild — the pause, read before any argv', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-paused-at-server.test.ts`
 
 Expected: the file loads (a missing named export reads as `undefined` under vitest's transform — see Task 3 Step 2). The two `childReclaimPauseRead` cases fail `TypeError: childReclaimPauseRead is not a function`; the two paused cases fail — the executor composes the audit argv, so `ccdCalls()` is `[ [ 'ws-audit', … ] ]` where `[]` was expected (or, if wave 3's executor answers something other than `deferred` first, the `toMatchObject` names that); *is read BEFORE presence* fails `expected { …, why: 'presence' } to match object { …, why: 'paused-at-server' }`; the feed-row case fails `expected [ 'child reclaim failed' ] to deeply equal [ 'child reclaim deferred' ]` (the audit ran against the recording runner's exit 1 and failed); *is read AFTER the sibling re-read* PASSES already (nothing reads the switch yet, so the sibling answer stands) — it is the placement guard for Step 3, and its mutation row below proves it bites; the CONTROL passes. **If the CONTROL fails, STOP**: the fixture does not reach the audit — check the verb list against wave 3's `childReclaimAudit` gate and the member set against Task 1 Step 3 fact 2 — and the paused cases prove nothing until it does.
 
-- [ ] **Step 3: The read, at the marked place**
+- [x] **Step 3: The read, at the marked place**
 
 In `server/src/coord/childReclaim.ts`, add `import { RECLAIM_PAUSE_MARKER } from './rundefs.js';` (or add the name to that import if the file has one), and `type MarkerState` to its `../../../shared/api.js` import (wave 3's one import from that path — `TERMINAL_RUN_STATES`, `ChildMark` and `RunState` among its members in wave 3's plan; keep every existing member). `FleetIO` is already imported there (`ChildReclaimDeps.io: FleetIO`). Then, as a top-level export beside the file's other helpers:
 
@@ -1426,7 +1426,7 @@ In `childReclaimOutcome`, REPLACE wave 3's marked comment — the whole comment 
 
 Nothing is added to `reclaimChild` itself — its body stays `childReclaimOutcome` then the one `recordChildReclaimFeed`. In `reclaimChild`'s docstring, the sentence that lists what it re-reads (`the marker against \`req.runId\`, the open siblings, presence, the capability`) becomes `the marker against \`req.runId\`, the open siblings, the reclaim switch (\`childReclaimPauseRead\`, wave 4), presence, the capability`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-paused-at-server.test.ts test/child-reclaim.test.ts \
@@ -1435,7 +1435,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-paused-at-server.
 
 Expected: PASS — `child-reclaim-paused-at-server` 8/8; wave 3's `child-reclaim` suite unchanged (its cases never raise the switch, and its registry lists, so every one of them reads `clear` and goes on exactly as before); `single-definition`'s one-literal pin still finds `'reclaim-paused'` only in `rundefs.ts` (the executor reaches it through the constant); `mail-routes`' kebab scan over `server/src/coord` sees no new literal (`'paused-at-server'` is wave 3's, already in this file's type union and admitted by `isChildReclaimKebab`).
 
-- [ ] **Step 5: Mutation check, then commit**
+- [x] **Step 5: Mutation check, then commit**
 
 Each run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-paused-at-server.test.ts`.
 

@@ -2830,6 +2830,37 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
+  /** Every session EVER named `claimedBy` of any run, in ANY state — the
+   *  past-tense counterpart of `openCoordinatorIds` one method up (which
+   *  answers only LIVE coordination, `state NOT IN` the terminal set, and so
+   *  drops a claim that has since reached a terminal run). Child-workspace
+   *  reclamation (spec 2026-09-22 §1, rules 3–4: manual cleanup is reserved
+   *  for a coordinator's OWN workspace, never a sub-workspace a sweep may
+   *  act on) needs the historical question, not the live one: a child made a
+   *  programme's HEIR — the reclaim door rewrites `claimedBy` onto it — became
+   *  that programme's coordinator the moment the rewrite landed, whatever
+   *  state the run later reaches, so nothing here is excluded by state the
+   *  way `openCoordinatorIds` excludes it. A row `reclaimProgram` rewrote onto
+   *  an already-terminal run still counts: the workspace coordinated it once,
+   *  and a later close does not retroactively make that false.
+   *
+   *  Returns the whole set, not a per-session boolean, because the reclaim
+   *  sweep reads it ONCE per pass and checks many children against it — a
+   *  per-child query issued once per child would repeat the same table scan
+   *  every pass. The close-path executor and the close decision call it once
+   *  per session and check membership the same way, so the three
+   *  `childReclaim*` consumers share ONE read instead of three spellings of
+   *  the same SELECT.
+   *
+   *  Synchronous, like every other read on this store — see
+   *  `openRunsForSession`'s own docstring for why that is not an oversight to
+   *  be wrapped. */
+  childReclaimCoordinatorIds(): ReadonlySet<string> {
+    return new Set((this.db.prepare(
+      'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
+    ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
+  }
+
   /** `detail` joins the SELECT (fix, found in Task 9 review — D-47): `advance`
    *  has always taken a `detail` parameter, but until the dispatch route's
    *  refused-`/clear` fix started passing one, nothing in this file ever

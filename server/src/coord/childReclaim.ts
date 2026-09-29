@@ -9,7 +9,8 @@ import { readSessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import type { ChildSpentVerdict } from './childSpent.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
-import { CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type RunState } from '../../../shared/api.js';
+import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
+import { CHILD_RUN_ID, TERMINAL_RUN_STATES, type ChildMark, type MarkerState, type RunState } from '../../../shared/api.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
@@ -504,8 +505,9 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
 
 /**
  * Reclaim ONE child, from either trigger (spec §5.7). Re-reads everything it
- * decides on — the marker against `req.runId`, the open siblings, presence,
- * the capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
+ * decides on — the marker against `req.runId`, the open siblings, the
+ * reclaim switch (`childReclaimPauseRead`, wave 4), presence, the
+ * capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
  * `reclaimed` — and on a row step 1 measures ABSENT, whose earlier attempt's
  * box half finished without its cancel — it cancels every outstanding
  * delivery addressed to the child.
@@ -521,6 +523,22 @@ export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequ
   const outcome = await childReclaimOutcome(deps, req);
   if (outcome.kind !== 'gone') recordChildReclaimFeed(deps, outcome, req);
   return outcome;
+}
+
+/** The server's read of the reclaim kill-switch (child-reclamation spec §5.8,
+ *  wave 4) — the close path's skip, and the one server-side read that covers a
+ *  sweep reclaim queued behind a session's `KeyedQueue` before the switch went
+ *  up. `emitCoord`'s mapping of the same listing: THREE answers, because "the
+ *  registry did not list" is not "the switch is down". NOT the authority —
+ *  `ws-reclaim` re-reads the file inside its lock at rung 3 and again on
+ *  resume; this spares the box an audit walk the server already knows ccd will
+ *  refuse. */
+export async function childReclaimPauseRead(
+  io: Pick<FleetIO, 'readdir'>, registryDir: string,
+): Promise<MarkerState> {
+  const names = await io.readdir(registryDir);
+  if (names === null) return 'unmeasurable';
+  return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
 }
 
 async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
@@ -568,13 +586,41 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (sib.siblings.length > 0) {
     return deferred('siblings-open', `open run(s) ${sib.siblings.map((s) => `#${s.id}`).join(', ')} still name this workspace`);
   }
-  // WAVE 4 ADDS THE SERVER-SIDE PAUSE READ HERE (spec §5.8: the close path
-  // and the sweep skip): a `paused-at-server` deferral through `deferred(…)`
-  // above when the registry carries `RECLAIM_PAUSE_MARKER`, before presence,
-  // the capability or any argv — an early skip that returns through this
-  // function's one exit like every other outcome, never inside the
-  // `reclaimChild` wrapper. ccd's own rung 3, read on the box at the instant
-  // of deletion (Task 2), is the read that matters, and it does not change.
+  // 2a — COORDINATING, ANY STATE (spec §1, rules 3-4: manual cleanup is
+  // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
+  // may act on). A child that has EVER been named `claimedBy` of a run —
+  // including a run made this session's by the reclaim door's `claimedBy`
+  // rewrite, or any nested coordinator — is never reclaimed automatically,
+  // whatever state that run reaches later. Read after the sibling re-read
+  // (which answers a narrower, LIVE question) and before the pause: an
+  // unreadable coordination table is `siblings-unreadable`, the same word
+  // this function already uses for an unreadable `openRunsForSession` — never
+  // silently treated as "never coordinated".
+  let coordinated: ReadonlySet<string>;
+  try {
+    coordinated = deps.coord.childReclaimCoordinatorIds();
+  } catch (err) {
+    return deferred('siblings-unreadable', `whether ${sessionId} has coordinated a run could not be read `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (coordinated.has(sessionId)) {
+    return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
+  }
+  // 2b — THE SWITCH, READ BY THE SERVER (spec §5.8: "the close path skips").
+  // After the marker and sibling re-reads and BEFORE presence, the capability
+  // and any argv: a raised switch — or a registry that did not list, which
+  // cannot rule one out — defers, on EITHER trigger and WHATEVER
+  // `deferExpired` says (the ceiling bounds presence; the pause is not
+  // presence). Through this function's own `deferred(...)`, so `reclaimChild`
+  // writes its one feed row for it like every other deferral. ccd's rung 3,
+  // read on the box inside the lock at the instant of deletion, is still the
+  // read that matters.
+  const pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
+  if (pause !== 'clear') {
+    return deferred('paused-at-server', pause === 'set'
+      ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
+      : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
+  }
   // 3 — a human looking at it, unless the defer's ceiling was reached.
   if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
