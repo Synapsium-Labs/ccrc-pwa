@@ -679,11 +679,11 @@ A box whose `~/ccrc` is a real directory is migrated once: the new tree is place
 `~/ccrc.migrating`, the link is placed, and `~/ccrc.migrating` is removed only after a gate passes — `ccrc update`'s
 or `ccrc rollback`'s health gate, or a plain `ccrc install`'s own doctor when that install can take
 `~/.ccrc/update.lock` itself (an update's staged install cannot, and leaves it to the update's gate). A staged spine
-of this layout that dies while `~/ccrc` is still the real directory replaced nothing: the run exits 1 and restores
-nothing. The first move onto this layout is made by a box's older updater: one that holds that lock has a gate that
-knows nothing of the migration, so the old tree outlives that run and goes at the next one, while one older than the
-lock leaves it to the staged install's own doctor; `--no-gate` keeps it too. A crash between the move and the link
-leaves `~/ccrc.migrating` and no `~/ccrc`, where the launcher cannot run: the placed version's own
+of this layout that dies while `~/ccrc` is still the real directory replaced nothing: the run exits 1 and runs no
+restore arm. The first move onto this layout is made by a box's older updater: one that holds that lock has a gate
+that knows nothing of the migration, so the old tree outlives that run and goes at the next one, while one older
+than the lock leaves it to the staged install's own doctor; `--no-gate` keeps it too. A crash between the move and
+the link leaves `~/ccrc.migrating` and no `~/ccrc`, where the launcher cannot run: the placed version's own
 `bash ~/ccrc-versions/<name>/ccd/ccrc install` completes the link from `~/.ccrc/migrating-to` before it does
 anything else, and refuses, naming both by-hand remedies, when that record is missing or names no placed version.
 With the previous version kept, a failed gate's restore tries arm 1 first: it flips `~/ccrc` back, restores that
@@ -692,12 +692,15 @@ runs the gate once more, falling to arm 2 only when there is no kept version or 
 kept version makes the same flip, spine and gate, and asks the release host nothing: below the floor if need be, the
 floor itself never lowered, and exit 3 when the kept spine's doctor fails after the gate passes; a bare one checks
 `previous` against the layout before it trusts it. A staged release older than this layout is first given a
-directory named for its own tag to write into, and `~/ccrc` goes back to the version it named, with the record and
-caps the run cleared, when that spine dies before replacing anything. Arm 3's MIXED tree loses its kept record, so
-no flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at). After an install
-or update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename
-to a dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version
-a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
+directory named for its own tag to write into, and `~/ccrc` goes back to the version it named when that spine dies
+before replacing anything. A staged spine that dies having replaced nothing, of any age, has the run put back what
+it cleared before it: the caps file, and the install record only when it was a completed install of the running
+build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
+spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
+flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at). After an install or
+update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
+dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
+running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
 stay. An input that cannot be read prunes nothing, and only `--prune` removes an incomplete tree. `deploy.sh` still
 pushes its tree through `~/ccrc`, into whichever version directory that points at.
 
@@ -705,11 +708,12 @@ pushes its tree through `~/ccrc`, into whichever version directory that points a
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
 unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
-takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
-`--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
+takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
+`~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both; D-3453), removes the units, ccrc's
+managed settings.json hook entries (per-file backup;
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc`, every kept tree under `~/ccrc-versions` and a leftover
-`~/ccrc.migrating`, and the installed executables — and preserves
+inside `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under
+`~/ccrc-versions` and a leftover `~/ccrc.migrating`, and the installed executables — and preserves
 `~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
 `previous`, `install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the
 tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
