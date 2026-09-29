@@ -2428,10 +2428,11 @@ since. Each hour runs from the rung before. A worker that reads `busy` when a
 rung falls due defers it, and that rung's hour then runs again from the live
 file's next stamp; a restamp inside the hour (the worker's own turn after a
 notice) does not re-time it, and neither does mail — worker mail opens a new
-episode instead. r2 and r3 measure the silence from the worker's own last mail
-on the run, or from dispatch. A paused coordinator, a dead one or none at all
-skips r2, and r3 says which. It holds — sends nothing — on anything it could
-not measure (a live file with no timestamp included), a dead or restarting
+episode instead. r2 and r3 measure the silence from the episode's start: the
+worker's own last mail on the run, a later coordinator `wait:`, or dispatch,
+none of which the watch's own notices can move. A paused coordinator, a dead
+one or none at all skips r2, and r3 says which. It holds — sends nothing — on
+anything it could not measure (a live file with no timestamp included), a dead or restarting
 worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
 after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
 worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
