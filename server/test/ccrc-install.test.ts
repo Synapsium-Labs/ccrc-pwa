@@ -2653,6 +2653,24 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(existsSync(join(home, 'ccrc'))).toBe(false);
   });
 
+  it('the macOS python3 preflight, measured on a gating leg: CCD_OS forced to darwin, a python3 that is on PATH but does not run is refused before anything is written (F7, C-Minor-3)', () => {
+    const home = freshBox('ccrc-install-ver-darwin-forced-');
+    const bin = join(home, 'forced-darwin-bin');
+    mkdirSync(bin, { recursive: true });
+    for (const t of ['launchctl', 'tmux', 'flock']) writeFileSync(join(bin, t), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'python3'),
+      '#!/bin/sh\necho "xcode-select: note: No developer tools were found, requesting install." >&2\nexit 1\n', { mode: 0o755 });
+    // The stubs shadow everything after them; the real PATH follows for bash's own tools.
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'),
+      `PATH='${bin}':"$PATH"; CCD_OS=darwin; cmd_install --role both; echo "survived rc=$?"`);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).not.toContain('survived');
+    expect(r.stderr).toMatch(/^ccrc: python3 is required by 'ccrc install' on macOS — the \$HOME\/ccrc flip is one rename\(2\) through os\.replace/m);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(vroot(home))).toBe(false);
+    expect(existsSync(join(home, 'ccrc'))).toBe(false);
+  });
+
   itDarwin('refuses on macOS when the python3 on PATH does not RUN — /usr/bin/python3 is an xcode-select stub until the Command Line Tools are installed — before anything is written', () => {
     // The shape a real Mac without the Command Line Tools has: `command -v
     // python3` answers /usr/bin/python3, and running it prints the

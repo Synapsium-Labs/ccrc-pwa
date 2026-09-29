@@ -16572,11 +16572,21 @@ _ver_kept() {   # <name> <role> -> 0 complete, 1 absent, 2 incomplete (VER_WHY)
 # named before anything moves instead of surfacing as "the one rename
 # failed". Not a verb-level probe: a Darwin `ccrc update` that flips nothing
 # (a `directory` box moving to an older spine, or `--check`) needs no
-# python3. Builtins only, so it answers on any PATH.
+# python3. The probe RUNS the interpreter (`import os`, the flip's own first
+# word — the same probe as `cmd_install`'s preflight), because `command -v` is
+# true on stock macOS for the /usr/bin/python3 xcode-select stub, which fails
+# when run until the Command Line Tools are installed: the named refusal would
+# never fire there and the flip would die as "the one rename failed" (final
+# review F7). Two sentences, because they have two remedies' first steps: no
+# python3 on PATH, and one that does not run.
 _ver_can_flip() {   # -> 0 can flip; 1 cannot (VER_WHY)
   VER_WHY=""
-  if [ "$CCD_OS" = darwin ] && ! command -v python3 >/dev/null 2>&1; then
-    VER_WHY="python3 is not on PATH — on macOS the \$HOME/ccrc flip is one rename(2) through os.replace; install the Xcode Command Line Tools: xcode-select --install"
+  if [ "$CCD_OS" = darwin ] && ! python3 -c 'import os' >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then
+      VER_WHY="python3 is on PATH but does not run (on macOS /usr/bin/python3 is only a stub until the Xcode Command Line Tools are installed) — the \$HOME/ccrc flip is one rename(2) through os.replace; install them: xcode-select --install"
+    else
+      VER_WHY="python3 is not on PATH — on macOS the \$HOME/ccrc flip is one rename(2) through os.replace; install the Xcode Command Line Tools: xcode-select --install"
+    fi
     return 1
   fi
   return 0

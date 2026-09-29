@@ -9702,6 +9702,19 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
     expect(existsSync(join(home, 'kept-spine-argv')), 'the kept spine ran despite the failed stamp').toBe(false);
   });
 
+  it('on macOS a python3 that is on PATH but does not RUN (the /usr/bin/python3 stub) is refused by _ver_can_flip too, with its own sentence — command -v is true there (F7; CCD_OS forced, sourced)', () => {
+    const home = freshUpdateBox('ccrc-update-stubpy-probe-');
+    const bin = join(home, 'stub-py-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'python3'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const r = sourcedCcrc(home,
+      `for os in darwin linux; do ( CCD_OS=$os; PATH='${bin}':"$PATH"; rc=0; _ver_can_flip || rc=$?; printf '%s rc=%s why=%s\\n' "$os" "$rc" "$VER_WHY" ); done`);
+    expect(r.stdout.split('\n').filter((l) => / rc=/.test(l)), r.stderr).toEqual([
+      'darwin rc=1 why=python3 is on PATH but does not run (on macOS /usr/bin/python3 is only a stub until the Xcode Command Line Tools are installed) — the $HOME/ccrc flip is one rename(2) through os.replace; install them: xcode-select --install',
+      'linux rc=0 why=',
+    ]);
+  });
+
   it('on macOS without python3 the two flips this ccrc makes OUTSIDE a spine refuse before anything moves, naming python3 — never "the one rename failed" (_ver_can_flip, _ver_flip_back, _upd_legacy_target; CCD_OS forced, sourced; D-3419, amended by Task 4)', () => {
     // From this assignment on the sourced shell has builtins only.
     const NOPY = 'PATH="$HOME/no-such-bin"';
