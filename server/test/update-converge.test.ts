@@ -78,8 +78,8 @@ const serverMeas = (over: Partial<NodeMeasurement> = {}): NodeMeasurement =>
  *  writers' `expectedStartedAt` is passed `null` here — `applyMeasurement` computes it inline
  *  (`preRow === null ? null : preRow.updateStartedAt`, not a named helper), and this harness has no `preRow` of
  *  its own to read it from — so the store's identity guard is not exercised by this file. W2's
- *  `update-inventory.test.ts` and `update-store-nodes.test.ts` pin it, and every report below starts after the
- *  lease it reports on. */
+ *  `update-inventory.test.ts` and `update-store-nodes.test.ts` pin it. The rule that decides whether a report counts
+ *  for a lease is identity plus change (D-3405), never a clock: no report below is ordered against a lease by its time. */
 const sweepOnce = (store: CoordStore, m: NodeMeasurement): SweepPlan => {
   const plan = sweepPlanFor(store.node(m.nodeId), m);
   expect(store.upsertNodeMeasurement(m).ok).toBe(true);

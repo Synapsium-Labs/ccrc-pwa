@@ -497,7 +497,7 @@ describe('sweepPlanFor — the §8 phase table, the precedence, and only a chang
     expect(sweepPlanFor(null, withReport({})).lease).toEqual({ kind: 'none', why: 'not-busy' });
   });
 
-  it.each([...IN_FLIGHT_UPDATE_PHASES])('%s leaves a busy lease busy (pending → applying is the dispatcher\'s write)', (phase) => {
+  it.each([...IN_FLIGHT_UPDATE_PHASES])('%s leaves a busy lease busy (the row stays pending: no writer of applying exists, D-3382)', (phase) => {
     expect(sweepPlanFor(busy(), withReport({ phase })).lease).toEqual({ kind: 'none', why: 'in-flight' });
   });
 
