@@ -75,7 +75,7 @@ describe('the tail’s anchored kill is BOUNDED — a wedged tmux answers unit-s
     expect(o.detail, 'the timed-out kill is not the exit-empty exception').toContain('(exit 124)');
     expect(o.detail).toContain('no server running');
     const calls = fs.readFileSync(path.join(h.home, 'tmux-bin-calls'), 'utf8');
-    expect(calls, 'the kill was asked, anchored').toContain(`kill-session -t =cc-${CHILD_ID}`);
+    expect(calls, 'the kill was asked, anchored').toContain(`kill-session -t =cc-${CHILD_ID}:`);
     expect(r.ms, 'bounded by the deadline and its grace, not by the wedge').toBeLessThan(15_000);
     // Nothing was deleted, and the breadcrumb stays for the retry.
     expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the worktree survives').toBe(true);

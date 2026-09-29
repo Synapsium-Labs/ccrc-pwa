@@ -79,7 +79,7 @@ function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
-      const id = target.startsWith('cc-') ? target.slice('cc-'.length) : '';
+      const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)
       const pid = info.get(id)?.pid;
       return { code: 0, stdout: pid ? `${pid}\n` : '', stderr: '' };
     }
@@ -1146,7 +1146,9 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     const w = watcher({ push, coord: true, sessions: [] });
     expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
     expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.7')).ok).toBe(true);
-    // The fleet row WAS measured this sweep, but its stamp did not read — the
+    // The fleet row HAS been measured (`measuredAt` is set — W5 review 161, F-I:
+    // `statedOf` asks "ever measured", never "measured this sweep"), but its stamp
+    // did not read — the
     // same shape a local-mode box's EACCES leaves. `measured()` fixes
     // stampRead 'ok', so this overrides it to the unread arm directly.
     expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
@@ -1442,6 +1444,30 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     warn.mockRestore();
   });
 
+  // W5 review 161 (F-G): `sweptEnoughToDecide`'s `wasMeasured` counts only a
+  // `'measured'`/`'node-id-collision'` outcome. A `'refused'` row — the
+  // store's own upsert REFUSING the write (e.g. `superseded`), never a
+  // throw — is a third shape, previously unpinned: nothing wrote this
+  // sweep's row either way, so it must not open the gate, exactly like the
+  // throw case right above.
+  it("a sweep whose own upsert is REFUSED (not thrown) also leaves inventorySwept closed (F-G)", async () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [] });   // local mode: one `both` row
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    // The previous process's row — already behind the candidate.
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'both', 'v0.0.7')).ok).toBe(true);
+    vi.spyOn(w.coord!, 'upsertNodeMeasurement')
+      .mockImplementationOnce(() => ({ ok: false, why: 'superseded', supersededBy: 'some-other-node-id' }));
+    await w.w.inventoryNow();   // sweepOwn's own write is REFUSED, caught as a 'refused' outcome, never a throw
+    expect(sent).toEqual([]);
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toBeNull();
+    expect(w.w.pushReleaseAfterPoll(T + 1)).toEqual({ did: 'skipped', why: 'not-yet-swept' });
+
+    // The mock was `mockImplementationOnce` — the next sweep's write succeeds for real, and opens the gate.
+    await w.w.inventoryNow();
+    expect(notifiedAt(w.coord!, 'v0.0.9')).toEqual(expect.any(Number));
+  });
+
   // Fix round 1 (F1, D-3313 via remoteSides, moved to L0): on a REMOTE fleet, deciding sides from a
   // pre-filtered row set is what let a `both` server row's own version stand in for a fleet nobody measured.
   // The reviewer's exact rows: a server row recorded `both`, and a separate fleet row whose stamp did not read.
@@ -1453,6 +1479,27 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
     expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.7. Tap to see what\'s new.');
+  });
+
+  // W5 review 161 (F-D): every case above uses at most ONE row per role, so a
+  // caller that pre-filtered before mapping to a `SummaryRow` and one that
+  // did not would happen to agree. This proves the rule actually bites: two
+  // LIVE rows both carry role 'fleet' (distinct node ids — `versionSides`'
+  // `.find` is generic over the array, not keyed to FLEET_LABEL specifically)
+  // — the first unstated (its stamp never read), the second fully stated and
+  // current. `versionSides` still picks the FIRST live 'fleet' row it finds,
+  // so the summary reads a dash for the fleet side; a pre-filter that dropped
+  // the unstated row BEFORE picking sides would let the second, stated row
+  // stand in instead, and the summary would name its version.
+  it('sides are picked from EVERY row, never a pre-filtered subset — two rows share one role, and a pre-filter would change the answer (F-D)', () => {
+    const { sent, push } = recorder();
+    const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
+    expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
+    expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement({ ...measured(FLEET_LABEL, 'fleet', null), stampRead: 'unreadable' }).ok).toBe(true);
+    expect(w.coord!.upsertNodeMeasurement(measured('second-fleet-node', 'fleet', 'v0.0.9')).ok).toBe(true);
+    expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
+    expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
   });
 
   // The narrower D-3313 case: no separate fleet row exists AT ALL, so `versionSides`' own `both`-row fallback
@@ -1468,16 +1515,27 @@ describe('the release push — once per tag, across restarts, sessionless (desig
   });
 
   // Fix round 1 (F14, D-3316): "unreachable is not current" binds the push body too. An unreachable fleet
-  // row carrying an old version does not state its version in the push body, and does not count as current
-  // in the decision — it is not the fact that suppresses the push.
-  it('an unreachable fleet row carrying an old version does not state its version, and is not treated as current (F14, D-3316)', () => {
+  // row carrying an old version does not state its version in the push body.
+  //
+  // W5 review 161 (F-J): this case's title used to also claim it pins the DECISION half ("is not treated as
+  // current" — i.e. that `!reachable` is what keeps the push from being suppressed). It does not: the fleet
+  // row here also carries an OLDER version (v0.0.7 against the v0.0.9 candidate), so `isNewerTag` alone
+  // already makes `releaseToNotify`'s push decision true regardless of `reachable` — dropping the
+  // `!n.reachable ||` clause from `notify.ts`'s push test would NOT red this case. The decision half is
+  // pinned properly in `update-notify.test.ts`'s "an unreachable node never counts as already on the
+  // candidate, even one whose cached version reads current" (a node on the SAME tag as the candidate, so
+  // only `!reachable` can be why it still pushes) and "a sole unreachable node still pushes". This case pins
+  // the TEXT half only: the push BODY's summary clause reads the unreachable side as a dash, never its stale
+  // `v0.0.7`.
+  it('an unreachable fleet row carrying an old version does not state its version in the push body (F14, D-3316)', () => {
     const { sent, push } = recorder();
     const w = watcher({ push, coord: true, sessions: [], cfg: { fleetMode: 'remote' } });
     expect(w.coord!.applyReleaseListing([listed('v0.0.9')], T, 'complete')).toMatchObject({ ok: true });
     expect(w.coord!.upsertNodeMeasurement(measured(SERVER_LABEL, 'server', 'v0.0.9')).ok).toBe(true);
     expect(w.coord!.upsertNodeMeasurement(measured(FLEET_LABEL, 'fleet', 'v0.0.7')).ok).toBe(true);
     expect(w.coord!.markUnreachable(FLEET_LABEL, 'fleet', T + 1).ok).toBe(true);   // the connection then drops
-    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });   // never suppressed
+    // Pushed because the cached v0.0.7 is older than the candidate — a control, not this case's own claim.
+    expect(w.w.pushRelease(T + 1)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     expect(sent[0]!.body).toBe('On stable — fleet — · server v0.0.9. Tap to see what\'s new.');
   });
 });

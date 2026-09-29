@@ -794,10 +794,6 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the 'refused by N of M nodes' line in the same unfilled release row, retinted to --status-attention-text. Same ground and same reason as .settings-release-date; registered separately because it sets its own colour",
   },
-  'fleet.css .settings-move-note': {
-    under: ['var(--bg-page)'],
-    why: "the 'lands with the next release (W4)' note beside a disabled Install/Roll back button, in the same unfilled release row (and in any other unfilled row of this screen that reuses it). Same ground as .settings-release-date; the NOTE is live text and is measured, unlike the disabled button beside it (primitives.css .btn-ghost:disabled, WCAG 1.4.3)",
-  },
   // ── centralised update management W3, Task 9: the node inventory ───────
   'fleet.css .settings-node-current--amber': {
     under: ['var(--bg-page)'],

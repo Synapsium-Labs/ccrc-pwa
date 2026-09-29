@@ -50,9 +50,9 @@
    is the one case this has not been measured against in a real browser.
    (Centralised update management, Task 6, D-3303, later added a FIFTH item
    — the settings door — to this group; the four-item, 38px figure above is
-   unchanged by that addition, and the group now WRAPS at 390px rather than
-   holding everything on the one line this note assumes — see the override
-   comment near `.settings-door` below.) */
+   unchanged by that addition; with `20 sessions` the group WRAPS below a 460px
+   viewport (369px with no count) rather than holding everything on one line, as
+   this note assumes — see the override comment near `.settings-door` below.) */
 .pool-epoch-lag {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -3072,13 +3072,13 @@ button.proj-card-pool::before {
    the 44px floor. Without this rule the head would push the fleet screen past
    the viewport, the defect #116 shipped. With it, a group that does not fit
    breaks onto a second right-aligned line. CORRECTED (R3 + the coordinator's
-   parked note): "where it fits nothing moves" is not true at every width
-   this rule reaches — measured in Chromium, the group does NOT fit on one
-   line at exactly the 390px viewport this note's own math is about (the
-   fleet header grows from 48px to 92px there), nor in the desktop sidebar
-   between roughly 300px and 380px wide, so it wraps in both places; outside
-   those two bands the group does fit and the header stays a single 48px
-   row, which is the one case "nothing moves" still describes correctly.
+   parked note, then W5 review 161): "where it fits nothing moves" is not true
+   at every width this rule reaches. Measured in Chromium: the head fits from
+   a 369px viewport with no session count, from 460px with `20 sessions` (459
+   wraps, 73px; 390px wraps to 92px) and from about 546px with `20 sessions ·
+   3 waiting`, so a phone at or below ~459px wraps whenever the fleet has a
+   session. The desktop sidebar's 300-380px range was NOT re-measured. Only
+   above those widths does the header stay one 48px row, "nothing moves".
    The descendant form out-specifies `.fleet-head-right` (0,2,0 against
    0,1,0), so it wins from any position — the cascade trap documented at the
    class chooser. No row gap: every control on the group is already a 44px
@@ -3194,7 +3194,6 @@ button.proj-card-pool::before {
    which sheet loads last, and any disabled move button on this screen (the
    node rows' Update / Roll back too) can carry the same pair of classes. */
 .btn-ghost.settings-move { width: auto; padding: 0 var(--sp-3); }
-.settings-move-note { font-size: var(--text-2xs); color: var(--ink-tertiary); }
 
 /* — centralised update management W3, Task 9: the node inventory —
    One row per live node, in the server's order (label, then nodeId). Same
@@ -3203,7 +3202,7 @@ button.proj-card-pool::before {
    the muted detail lines) are registered in design/audit.mjs's
    INHERITED_GROUNDS against --bg-page, the .settings-release-date argument.
    The desired cell reuses the release list's self-grounded channel badges
-   and the move row reuses its .settings-move-note, both already measured. */
+   (already measured); the move buttons carry no note of their own. */
 .settings-nodes { list-style: none; margin: 0; padding: 0; display: grid; }
 .settings-node {
   display: grid;
@@ -3318,15 +3317,47 @@ button.proj-card-pool::before {
   width: auto;
   padding: 0 var(--sp-3);
 }
-.update-banner-note {
-  flex-basis: 100%;
-  font-size: var(--text-xs);
-}
-
 /* BuildLine's affix (centralised-update design 2026-09-20 §13): " → v0.0.9"
  * after a side whose node the inventory says should move up (`pendingTag`).
  * Amber like the warn side — something to do, not a fault — and a rule of its
  * own, so the contrast audit measures it (audit.mjs INHERITED_GROUNDS). */
 .build-line-next {
   color: var(--status-attention-text);
+}
+
+/* — centralised update management, programme wave 5 Task 8: the move sheet —
+   The ONE confirm sheet every move control opens (UpdateMoveSheet.tsx): the
+   nodes it moves, numbered in dispatch order, one confirm, a refusal said in
+   place. Self-grounded — its own `color` AND `background`, the .abandon-sheet
+   pairing — so the children below are named-ancestor DESCENDANTS
+   design/audit.mjs recovers a ground for and measures; none of them needs an
+   INHERITED_GROUNDS entry. The number is in each line's text (movePlan's
+   moveLines), so the list draws no marker of its own; the lines are
+   same-user text (labels) and wrap inside the phone width. */
+.update-move-sheet {
+  display: grid;
+  gap: var(--sp-3);
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+}
+.update-move-sheet .update-move-list {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.update-move-sheet .update-move-node {
+  min-width: 0;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  overflow-wrap: anywhere;
+}
+/* `--status-dead-text` on `--bg-surface`: the pair `.abandon-sheet
+   .abandon-error` already measures (6.80:1 DARK / 5.73:1 LIGHT). */
+.update-move-sheet .update-move-error {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--status-dead-text);
 }

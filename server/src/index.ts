@@ -19,6 +19,8 @@ import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
 import { readLocalCcdCaps } from './localcaps.js';
+import { localUpdateSpawnFor } from './update/converge.js';
+import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import path from 'node:path';
 
@@ -129,6 +131,8 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    updateRunner: localUpdateSpawnFor(cfg.home),
+    sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
@@ -183,6 +187,7 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    updateRunner: localUpdateSpawnFor(cfg.home),
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

@@ -194,13 +194,20 @@ describe('ccrc: dispatch and usage', () => {
     // whose report went stale and reverts only a box that fails its health
     // probe. A timer's verb is still a verb an operator can type by hand.
     // `server/test/ccrc-update.test.ts` owns what it does.
+    //
+    // `versions` joined it in W6 Task 5 (design 2026-09-20 §11) — the kept
+    // release trees under ~/ccrc-versions and the one hand-run prune, which
+    // never removes a version the box needs. Same split:
+    // `server/test/ccrc-update.test.ts` owns what it does, this line owns that
+    // an operator can find it.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\|watchdog\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}versions {2}list the kept release trees under ~\/ccrc-versions/m);
     expect(r.stdout).toMatch(/^ {2}channel {3}print this box's update channel as the control plane projects/m);
     expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);

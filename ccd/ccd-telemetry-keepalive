@@ -481,12 +481,12 @@ KA_PANE_DETAIL=""
 _ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
                      #                 KA_PANE_DETAIL (unknown only); rc 0
   local out rc
-  # A bare `timeout`, like the turn's — this file is Linux-only on the record
-  # (see PORTABILITY above). ccd's probe carves out a `type -t tmux == function`
-  # arm for a stubbed substrate; there is nothing to carve out here, because a
-  # sibling executable spawned by a timer cannot see a caller's shell function
-  # — this script's own suite stubs tmux on PATH, where `timeout` finds it.
-  out="$(timeout "$KA_PANE_DEADLINE" tmux has-session -t "$KA_TMUX_PREFIX$1" 2>&1)"; rc=$?
+  # A bare `timeout`, like the turn's — Linux-only on the record (PORTABILITY
+  # above); ccd's `type -t tmux == function` arm has no twin here, since a
+  # timer-spawned sibling cannot see a caller's shell function (the suite stubs
+  # tmux on PATH). The target is EXACT — `=` + name + `:`, `.`/`:` -> `_` — as
+  # ccd's `_tmux_at` spells it: a bare name is a tmux prefix SEARCH (D-3525).
+  out="$(timeout "$KA_PANE_DEADLINE" tmux has-session -t "=${KA_TMUX_PREFIX}${1//[.:]/_}:" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then KA_PANE_VERDICT=live; KA_PANE_DETAIL=""; return 0; fi
   # rc 124 with nothing said is `timeout`'s own kill: tmux printed no words, so
   # the reason is SYNTHESIZED rather than left empty.

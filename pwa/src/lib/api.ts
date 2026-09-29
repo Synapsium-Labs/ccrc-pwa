@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, AckAnswer, ApplyUpdateBody, AutoMode, CatalogueState, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, MoveSkipWhy, NotifyEvent, NotifyMode, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RollbackUpdateBody, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, UpdateChannel, UpdateRouteError, UpdatesView, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -294,17 +294,6 @@ const KICKOFF_ERROR_TEXT: Record<string, string> = {
 export const kickoffErrorText = (text: string): string => KICKOFF_ERROR_TEXT[text] ?? text;
 
 /**
- * The one sentence every move control carries while it is DISABLED (design
- * 2026-09-20 §13, §15 row W3): Install and Roll back on a release row, Update
- * and Roll back on a node row, and the fleet banner's Update all. One literal,
- * so five controls cannot disagree about when they arrive, and the wave that
- * enables them retires one line. This client has no method for either move
- * route, on purpose — `api.test.ts` pins the census of the update routes it
- * spells, so nothing here can be wired to a disabled control early.
- */
-export const MOVE_DISABLED_TEXT = 'lands with the next release (W4)';
-
-/**
  * The body of `POST /api/updates/intent` — W2's `INTENT_BODY_KEYS`, and nothing
  * else (its parser refuses an unknown key). A PARTIAL over one scope: an omitted
  * field keeps its stored value, so moving one setting cannot clobber another
@@ -347,20 +336,44 @@ export interface UpdateIntentRequest {
  * scheduled poll both set, so `lastOkAt` may still be null — and nothing says
  * "checked" while it is (spec §18).
  */
-const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'>, string> = {
+const UPDATE_ERROR_TEXT: Record<Exclude<UpdateRouteError, 'unauthenticated'> | 'waiting-for-fleet', string> = {
   'not-configured': 'This box has no update control plane — it runs without a coordination database.',
   'bad-tag': 'That is not a release tag this server accepts — tags look like v0.0.9, with no leading zeros.',
   'bad-request': 'The server refused the shape of that request — reload the screen and try again.',
   'unknown-scope': 'That node has no identity yet — it follows the fleet setting until an install gives it one.',
   'unknown-node': 'That node is no longer in the inventory.',
   superseded: 'That node was reinstalled under a new identity — reload to see it.',
-  busy: 'That node is mid-update — wait for it to settle, then acknowledge.',
+  // Shown for three different callers — the ack route's own 409, an apply/rollback 409, and an `{all}` skip —
+  // so this sentence must read true in all three, not only the one it was first written for.
+  busy: 'That node is in the middle of a move — wait for it to settle, then try again.',
   'auto-needs-rollback-gate': 'Auto-install needs the rollback gate on every node, and at least one does not carry it yet.',
   'rate-limited': 'GitHub was asked too recently — try again in a few minutes.',
   'no-channel': 'A stored channel is one this build cannot read — choose the channel again.',
   'journal-unreadable': 'The server cannot read its intent journal — nothing was changed.',
   'journal-unwritable': 'The server cannot write its intent journal — nothing was changed.',
-};
+  'unknown-tag': 'That tag is not a release this node can move to — choose one from the release list.',
+  'not-newer': 'That release is not newer than what that node runs, or than its floor after a rollback — use Roll back to move it there.',
+  'refused-by-node': 'That node refused this release when it failed verification — acknowledge the node to clear the refusal first.',
+  'stamp-unread': 'That node’s build stamp could not be read, so nothing can say whether the release is newer — nothing was requested.',
+  'floor-unread': 'That node’s floor has not been measured yet, so nothing can say whether the release is above it — nothing was requested.',
+  // False on macOS, where `--detach` never exists: corrected to name both readings rather than the one that
+  // assumes a Linux box behind an old ccrc.
+  'no-detach-cap': 'That node’s ccrc predates the one-tap — update it once from its own shell — or it is macOS, which cannot be moved from here.',
+  'no-rollback-cap': 'That node cannot roll back on request yet — update it once from its own shell.',
+  'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
+  halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
+  'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
+  'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
+  // Never an HTTP 409 (the route answers it only through `{all: true}`'s per-node skip, never a single-node
+  // move's own refusal) — a key `moveSkipText` needs that `updateErrorText`'s own table never looks up. The
+  // skip holds EVERY non-fleet row (`dispatchRank` != 0) that is not itself halting — a server-role node and a
+  // `role: null` one alike (a halting one is skipped `halted` first) — whenever a fleet row was itself skipped
+  // busy or halted in the same call (D-3408).
+  'waiting-for-fleet': 'Nothing was requested for that node — it is held behind a fleet node’s own move. Tap again once that node’s move settles or it is acknowledged.',
+  // `satisfies` is what makes `moveSkipText`'s claim below true: the annotation above is keyed by
+  // `UpdateRouteError`, which does not follow `MoveSkipWhy`, so without this a skip word added to `MoveSkipWhy`
+  // alone would compile with no sentence. (`& Record<string, string>` keeps the extra keys legal.)
+} satisfies Record<MoveSkipWhy, string> & Record<string, string>;
 
 /** Operator-facing text for a failed update-route call: the code in
  *  `UPDATE_ERROR_TEXT` (OWN keys only — `Object.hasOwn`, so a body naming
@@ -373,6 +386,32 @@ export function updateErrorText(err: unknown): string {
     }
   }
   return apiErrorText(err);
+}
+
+/** A raw wire word `UPDATE_ERROR_TEXT` has no sentence for, made printable rather than rendered raw — the same
+ *  collapse `shared/agent-protocol.ts`'s `firstStderrLine` applies to a stderr line: every run outside printable
+ *  ASCII (0x20–0x7E) becomes one space, the ends are trimmed, and the result is bounded so a long or hostile word
+ *  cannot grow the sentence around it. */
+function printableSkipWord(raw: string): string {
+  const cleaned = raw.replace(/[^\x20-\x7e]+/g, ' ').trim();
+  return (cleaned === '' ? '(blank)' : cleaned).slice(0, 40);
+}
+
+/** The sentence for a word `{all: true}`'s 202 skipped a node with (`MoveRequestAnswer.skipped`, programme wave 5).
+ *  `MoveSkipWhy` is a subset of `UPDATE_ERROR_TEXT`'s keys, so this is the table's own sentence — the one a
+ *  single-node 409 of the same word renders — and a MoveSkipWhy variant with no sentence is a compile error at
+ *  `UPDATE_ERROR_TEXT`'s own definition.
+ *
+ *  Read with `Object.hasOwn`, never a bare index (review MINOR 2). The value arrives over the wire — additive
+ *  discipline (README) means a CACHED OLDER PWA can face a NEWER server that skips for a word this build's
+ *  `MoveSkipWhy` union does not carry — so `why`'s type also admits any string, the honest wire type. A bare
+ *  `UPDATE_ERROR_TEXT[why]` would render the literal `"undefined"` for such a word, and would hand back the
+ *  `Object.prototype` method itself for an inherited key such as `'toString'`; `hasOwn` refuses both, and the
+ *  fallback names the raw word, made printable, rather than pretending nothing was skipped. */
+export function moveSkipText(why: MoveSkipWhy | (string & {})): string {
+  return Object.hasOwn(UPDATE_ERROR_TEXT, why)
+    ? UPDATE_ERROR_TEXT[why as keyof typeof UPDATE_ERROR_TEXT]
+    : `An update reason this build doesn't recognise (${printableSkipWord(why)}).`;
 }
 
 /** Injectable for tests; defaults to the real global fetch. */
@@ -588,6 +627,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  ack that answered unreadably may already have cleared the row. */
     ackUpdateNode: (nodeId: string) =>
       postJsonOr<AckAnswer | 'unreadable'>('/api/updates/ack', 'unreadable', { nodeId }),
+    /** `POST /api/updates/apply` (programme wave 5) — move one node (`{nodeId}`) or
+     *  every node the tag takes forward (`{all: true}`), to `tag` or, without one,
+     *  to each node's resolved desired tag. The answer is a REQUEST written, never
+     *  a move made: `202 {requested, skipped}`; the dispatcher moves the nodes one
+     *  at a time and the inventory is where the result is read.
+     *
+     *  `postJsonOr`, the `setUpdateIntent` argument (D-1150): a 2xx whose body
+     *  would not parse may still have written the request, so the move sheet
+     *  says "requested, unconfirmed" and re-polls rather than reporting a refusal
+     *  that did not happen. A refusal — `400`, `404`, a single node's `409`
+     *  (the dispatcher's own predicate), `501` — still rejects with its
+     *  `ApiError`, which `updateErrorText` reads code-first. */
+    applyUpdate: (body: ApplyUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/apply', 'unreadable', body),
+    /** `POST /api/updates/rollback` (programme wave 5) — one node back to `to`, or
+     *  without one to its `previousVersion`. Single-node by route: a fleet-wide
+     *  rollback is one of these per node, in dispatch order (the move sheet's
+     *  `sendMove`). `postJsonOr` for `applyUpdate`'s reason. */
+    rollbackUpdate: (body: RollbackUpdateBody) =>
+      postJsonOr<MoveRequestAnswer | 'unreadable'>('/api/updates/rollback', 'unreadable', body),
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

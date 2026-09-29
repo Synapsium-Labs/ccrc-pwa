@@ -2789,3 +2789,45 @@ describe('a malformed /api/updates element does not blank the fleet screen (F11)
     warn.mockRestore();
   });
 });
+
+// ── centralised-update programme wave 5 Task 8: the banner's one tap ─────────
+// Update all is live on the real screen: the sheet names the nodes in
+// dispatch order, one confirm sends apply {all: true, tag}, and the SCREEN's
+// one poll re-reads the inventory — FleetScreen hands the banner its reload
+// (the banner is injected, so its own useUpdatesView(0) reload is a no-op).
+describe('Update all on the fleet screen (programme wave 5)', () => {
+  const FLEET = '0b6e1c62-7a4f-4d0e-9c1a-3f2d5e8a9b10';
+  const SERVER = '5f3a9d21-2c8b-4e6f-a1d7-8b0c4e2f6a93';
+  const nodeOf = (nodeId: string, role: 'fleet' | 'server'): NodeWire => ({
+    nodeId, role, label: role, os: 'linux',
+    current: { sha: 'bd2bf57a91c3e0d4f6a8b2c5e7d9f1a3b5c7e9d1', ref: 'main', builtAt: '2026-09-20T12:00:00Z', dirty: false, version: 'v0.0.7' },
+    stampRead: 'ok', installState: 'complete', provenance: 'verified',
+    caps: [], agentOps: role === 'server' ? null : ['update'], highestVersion: 'v0.0.7', previousVersion: null,
+    measuredAt: Date.now() - MIN, reachable: true, unreachableSince: null,
+    channel: 'stable', desiredTag: 'v0.0.9', resolveDetail: null,
+    request: null, report: null,
+    update: { state: 'idle', target: null, startedAt: null, detail: null },
+  });
+  const behind = (): UpdatesView => ({
+    catalogue: { lastOkAt: Date.now() - 4 * MIN, lastError: null },
+    releases: [],
+    nodes: [nodeOf(SERVER, 'server'), nodeOf(FLEET, 'fleet')],   // the server row first on the wire
+    intent: [],
+  });
+
+  it('opens the move sheet naming the fleet node first, sends apply {all: true, tag}, and re-polls the screen', async () => {
+    const updates = vi.spyOn(api, 'updates').mockResolvedValue(behind());
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [FLEET, SERVER], skipped: [] });
+    render(<FleetScreen store={makeStore()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update all' }));
+    const list = await screen.findByRole('list', { name: 'Nodes this moves, in order' });
+    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      '1. fleet (fleet) v0.0.7 → v0.0.9',
+      '2. server (server) v0.0.7 → v0.0.9',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' }));
+    await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    expect(apply).toHaveBeenCalledWith({ all: true, tag: 'v0.0.9' });
+    await waitFor(() => expect(updates).toHaveBeenCalledTimes(2));
+  });
+});

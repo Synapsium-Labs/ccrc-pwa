@@ -1344,7 +1344,7 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     // No session to find, in tmux's words: rung 5 and the tail's re-measure
     // read an rc 1 with no message as "could not be asked", which stops them.
     const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}";`
-      + ` echo "can't find session: =cc-${CHILD_ID}" >&2; return 1; };`;
+      + ` echo "can't find session: cc-${CHILD_ID}" >&2; return 1; };`;
     fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);

@@ -8643,7 +8643,8 @@ export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[
 export type UpdateRouteError =
   | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
   | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
-  | 'journal-unreadable' | 'journal-unwritable';
+  | 'journal-unreadable' | 'journal-unwritable'
+  | Exclude<DispatchRefusal, 'no-update-gate' | 'waiting-for-fleet'> | 'no-previous' | 'no-desired';   // wave 5: the moves' 409s (spec §12)
 export interface UpdateRouteRefusal {
   ok: false; error: UpdateRouteError;
   field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
@@ -8680,12 +8681,16 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *    label-key-taken — `markUnreachable` found no live row for the label and
  *                    could not write the label-keyed placeholder: a row
  *                    already holds that key.
- *    not-busy      — `releaseLease` on a settled row: there is no lease.
- *    stale-report  — a report whose run began before the lease (even the
- *                    last ms its whole-second `startedAt` covers,
- *                    `startedAt*1000 + 999`, is before `updateStartedAt`)
- *                    belongs to a previous run and never moves it (design
- *                    §8's precedence).
+ *    not-busy      — `releaseLease`, `noteLeaseDetail` on a settled row: there
+ *                    is no lease (for the note, a report or the deadline
+ *                    settled it first, and its verdict is not the
+ *                    dispatcher's to overwrite).
+ *    stale-report  — the identity guard refused: `releaseLease`/`settleNode`'s
+ *                    row no longer holds the `updateStartedAt` the caller read
+ *                    (the lease moved on), or `noteLeaseDetail`'s row holds a
+ *                    newer lease than the one the caller acquired (D-3413).
+ *                    Freshness is change plus the lease's tag, never a clock
+ *                    (D-3405).
  *    empty-patch   — `setIntent`'s patch names none of channel/pinnedTag/
  *                    auto/notify.
  *    bad-field     — a named patch field's value is outside its vocabulary
@@ -8713,13 +8718,26 @@ export interface AckAnswer { ok: true; node: NodeWire }
  *                    the tag; nothing is written.
  *    already-notified — `markReleaseNotified` (W3): the tag's `notifiedAt` is
  *                    already set. The first mark stands, and the caller
- *                    sends nothing (design §13: one push per tag). */
+ *                    sends nothing (design §13: one push per tag).
+ *    bad-kind      — `requestNode`/`dispatchNode` (programme wave 5): a kind
+ *                    outside `REQUEST_KINDS`; decided before any SQL.
+ *    no-request    — `dispatchNode`: a rollback with no matching operator
+ *                    rollback request — a move down is never automatic
+ *                    (design decision 8). Nothing is written.
+ *    not-idle      — `noteDispatchRefusal`: the row is not `idle`. A
+ *                    `failed`/`reverted` row's detail is the verdict the halt
+ *                    reads and a busy row's is its lease's; nothing is written.
+ *    no-lease-to-hand — `handOffLease` (D-3412): the donor is not a BUSY row
+ *                    of the heir's label retired TOWARD the heir (absent,
+ *                    live, settled, retired toward another node, or another
+ *                    box's row); nothing is written. */
 export const UPDATE_STORE_REFUSE_CODES = [
   'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
   'bad-node-id', 'label-key-taken', 'not-busy', 'stale-report',
   'empty-patch', 'bad-field', 'unknown-scope', 'no-channel', 'journal-unreadable', 'journal-unwritable',
   'single-not-one', 'withdrawn-not-empty',
   'unknown-release', 'already-notified',
+  'bad-kind', 'no-request', 'not-idle', 'no-lease-to-hand',
 ] as const;
 export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
 export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
@@ -8759,3 +8777,118 @@ export function isTagFileRead(v: unknown): v is TagFileRead {
  *  settings screen, which disables its auto-install control before a tap (D-3297), read
  *  one word. `server/src/update/resolve.ts` re-exports it, so W2's importers keep their path. */
 export const UPDATE_GATE_CAP = 'update-gate';
+
+/** What a `~/.ccrc/update.json` text says about a run IN FLIGHT (design
+ *  2026-09-20 §10). Two callers ask it: the agent's `update` op, before it spawns
+ *  (D-3371), and the server-role local spawn
+ *  (programme wave 5 Task 5). The inventory NEVER asks it: `reportFrom`
+ *  (`server/src/update/inventory.ts`) is that reader, and it answers a different
+ *  question — the five report columns, with `unknown` for garbage. This one
+ *  answers only "is a run in flight right now". So garbage is `null` here, not
+ *  busy, and the node's own lock decides instead (the `--detach` parent's
+ *  `_upd_lock_probe`, then the run's `_upd_lock`). `startedAtS` stays in
+ *  SECONDS (ruling R1) because it is shown, never compared. */
+export interface InFlightReport { phase: UpdatePhase; target: string | null; startedAtS: number | null; pid: number | null }
+/** Non-null iff `text` is ONE JSON object whose `phase` is in
+ *  `IN_FLIGHT_UPDATE_PHASES`. Fields are read BY NAME and every other key is
+ *  ignored (ruling R2: any key this reader does not name). `target` passes
+ *  through `isReleaseTag`, else `null`. `startedAt` must be a positive safe
+ *  integer ≤ `UNIX_SECONDS_MAX` (W2's one declaration, above in this file), else `null`, and the report is still kept.
+ *  `pid` (D-3411) is the WRITER's own pid — wave 4 stamps every in-flight write with the process that wrote it —
+ *  and is a positive safe integer or `null`, never 0 or a negative number: `kill(2)` reads those as a process
+ *  group, so a pid this reader admitted as such would ask about the wrong thing. A report whose pid is `null`
+ *  is kept (its writer is unmeasurable, which is not dead). */
+export function inFlightReport(text: string): InFlightReport | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const doc = parsed as Record<string, unknown>;
+  const phase = doc.phase;
+  if (!isUpdatePhase(phase) || !(IN_FLIGHT_UPDATE_PHASES as readonly UpdatePhase[]).includes(phase)) return null;
+  const started = doc.startedAt;
+  return {
+    phase,
+    target: isReleaseTag(doc.target) ? doc.target : null,
+    startedAtS: typeof started === 'number' && Number.isSafeInteger(started) && started > 0 && started <= UNIX_SECONDS_MAX
+      ? started : null,
+    pid: typeof doc.pid === 'number' && Number.isSafeInteger(doc.pid) && doc.pid > 0 ? doc.pid : null,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * THE DISPATCHER'S VOCABULARY AND ORDER (design 2026-09-20 §9/§10; programme
+ * wave 5, Task 4). Still inside the end-of-file update block (D-3188, ruling
+ * R13): appended, so no line README or the session-hook audit cites moves.
+ * `server/src/update/dispatch.ts` (L1) decides with these; the update routes
+ * answer with the words; the PWA's move planner sorts with the comparator —
+ * one spelling of each, which `single-definition.test.ts` holds.
+ * ------------------------------------------------------------------------- */
+
+/** Why the dispatcher did not move a node it considered (spec §9/§10). EVERY word is NON-halting: it is noted
+ *  in `updateDetail` on an `idle` row (D-3375) and a standing request stays standing
+ *  (decision 7). The routes answer every word but `no-update-gate` (auto only — a route writes a request, never
+ *  auto) and `waiting-for-fleet` (the order, not a refusal of this node) as a single-node `409`. */
+export const DISPATCH_REFUSALS = [
+  'unknown-tag', 'not-newer', 'refused-by-node', 'stamp-unread', 'floor-unread', 'no-detach-cap',
+  'no-update-gate', 'no-rollback-cap', 'agent-predates-update-op', 'halted', 'waiting-for-fleet',
+] as const;
+export type DispatchRefusal = (typeof DISPATCH_REFUSALS)[number];
+/** Use THIS, never `DISPATCH_REFUSALS.includes(x as DispatchRefusal)` — `isRunState`'s rule. */
+export function isDispatchRefusal(v: unknown): v is DispatchRefusal {
+  return typeof v === 'string' && (DISPATCH_REFUSALS as readonly string[]).includes(v);
+}
+
+/** THE dispatch order's one spelling (spec §10's standing order: the server reads what the fleet host's hook
+ *  writes, and the agent caches `ccd caps` at boot). `fleet` 0; `server` and `both` 1 — the box the server
+ *  process runs on; `null`, a role token this build cannot name, 2 — last, so an unnamed row never jumps the
+ *  fleet. */
+export function dispatchRank(role: NodeRole | null): 0 | 1 | 2 {
+  if (role === 'fleet') return 0;
+  if (role === 'server' || role === 'both') return 1;
+  return 2;
+}
+
+/** `dispatchRank`, then `label`, then `nodeId`, the last two by UTF-16 code unit — never `localeCompare`, whose
+ *  answer follows the box's locale. The server's `planDispatch` and the PWA's `planMove` both sort with this, so
+ *  a confirm sheet names the nodes in the order the dispatcher will move them. */
+export function compareDispatchOrder(a: { role: NodeRole | null; label: string; nodeId: string }, b: { role: NodeRole | null; label: string; nodeId: string }): number {
+  const rank = dispatchRank(a.role) - dispatchRank(b.role);
+  if (rank !== 0) return rank;
+  if (a.label !== b.label) return a.label < b.label ? -1 : 1;
+  if (a.nodeId !== b.nodeId) return a.nodeId < b.nodeId ? -1 : 1;
+  return 0;
+}
+
+/** `POST /api/updates/apply` (design 2026-09-20 §12, update-management wave 5). Exactly one of `nodeId` / `all`;
+ *  `tag` absent = each named node's resolved `desiredTag`. */
+export type ApplyUpdateBody = ({ nodeId: string } | { all: true }) & { tag?: string };
+/** `POST /api/updates/rollback` (§12). `to` absent = the node's measured `previousVersion`. */
+export interface RollbackUpdateBody { nodeId: string; to?: string }
+/** Why `{all: true}` wrote no request for a live node (D-3385, D-3401):
+ *  the dispatcher's own per-node refusal with the fleet's halt set aside (an update move is never asked for the
+ *  rollback cap, and never `no-update-gate` — that is auto's), or no tag to move it to. Every refusal word but
+ *  `not-newer` is also noted in that node's `updateDetail` (§12), which is where the inventory shows it. A node
+ *  whose OWN lease is already busy is skipped `busy` too (D-3406): a request written there would be silently
+ *  erased the moment that running move settles (`settleNode` clears the request columns unconditionally), and
+ *  the single-node route already answers `409 busy` for the same row rather than writing a doomed request.
+ *
+ *  Two more words a row's OWN state can answer with (D-3408): a row that is ITSELF halting
+ *  (`isHalting`, a `failed`/`reverted` row that is not a provenance verdict) is skipped `halted` before its move
+ *  is even asked — the only door out of a halt is `ack`, which clears the request columns, so a request written
+ *  beside a halting row's own verdict would be silently erased the same way a busy row's would; its detail is
+ *  already the verdict, so nothing is noted either. And once any live FLEET-role row was skipped this call for
+ *  its own busy lease or its own halt, every non-fleet row is skipped `waiting-for-fleet` rather than requested —
+ *  a fleet-first move the operator's tap could not reach must not let the server move ahead of it, and a
+ *  server-role row's own halt does not trigger this (only a fleet-role row's own busy/halted does). */
+export type MoveSkipWhy = Exclude<DispatchRefusal, 'no-update-gate' | 'no-rollback-cap'> | 'no-desired' | 'busy';
+export interface MoveSkip { nodeId: string; why: MoveSkipWhy }
+/** §12's `202 {requested}`, plus `skipped`. `requested` is in dispatch order (`compareDispatchOrder`); a single-node
+ *  move answers `requested: [nodeId]` and `skipped: []`. A request, not a dispatch: the row shows it as
+ *  `request: {tag, kind, at}` until convergence or `ack` clears it. */
+export interface MoveRequestAnswer { ok: true; requested: string[]; skipped: MoveSkip[] }
+
+/** The word a `failed` node's detail begins with when the node refuses a RELEASE, not a fault of its own: a verdict
+ *  on the tag, recorded beside the row (`node_release_refusals`, D-3378) and NOT a halt. Spelled ONCE: `isHalting`
+ *  (update/dispatch.ts) reads it in JS, the store's `haltingRowSql` in SQL (D-3412), and `sweepPlanFor` decides
+ *  the refusal by it. */
+export const PROVENANCE_DETAIL_PREFIX = 'provenance:';

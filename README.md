@@ -471,7 +471,7 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
 **Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` (with `--channel`, `--no-gate`, `--detach`
-and `--from`, below) — per box, explicit, never automatic. `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
+and `--from`, below) — per box, explicit; unattended only under `auto` (below). `--check` prints where this box stands against its target (`--to`, the control plane's projection on a managed box, or stable) (a fixed-shape
 `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
 running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
 last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
@@ -486,6 +486,7 @@ box records the install as unsigned, which `ccrc version` says); extract, check 
 version; back up to `~/ccrc-backups/<ts>/` (coord.db via
 `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
 the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
+places the tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it
 mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
 floor last); the health gate (below); the supervisor sweep behind its mandatory `KillMode=process` preflight;
 then the from→to report.
@@ -498,8 +499,8 @@ both boxes re-measured. `ccrc doctor`'s `build` check compares the
 running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`,
 and `update-exposure` FAILs a reachable server box whose session gate is unarmed (Exposure, above).
 
-**Control plane (update-management W2).** The server now measures and records the fleet's update state; nothing
-in it moves a node yet. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
+**Control plane (update-management W2).** The server now measures and records the fleet's update state; what moves
+a node is the one-tap, below. `coord.db` (migration 14) holds a **release catalogue** — the repo's GitHub releases
 listing, read every 30 minutes with `If-None-Match` and no token (owner and repo come from the installed tree's
 `ccd/ccrc`, or from `CCRC_RELEASE_OWNER` and `CCRC_RELEASE_REPO` when both are set — a pair that is not two
 plain names stops the poll rather than falling back); a release that vanishes from the listing is marked
@@ -517,9 +518,9 @@ says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/
 (rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
 `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. Not yet: no
-apply or rollback route — and an `auto` other than `off` is refused (`409`) until every node the intent covers
-lists `update-gate` in its `ccrc-caps` (an install of the W4 node side writes it — below).
+`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. An `auto`
+other than `off` is refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`
+(an install of the W4 node side writes it); the dispatcher checks the same word again at every auto move.
 
 **One update at a time, reported, gated, and undone.** An installing `ccrc update` holds `~/.ccrc/update.lock`
 (`flock`; macOS needs `brew install flock`) from just after its arguments are checked until just before the supervisor
@@ -538,11 +539,12 @@ never completed: a `previous` already recorded is kept. After the install and be
 `ccrc.service` is active and its `/health` (at the configured server address, loopback by default) answers the staged
 `version`; on a fleet box `ccrc-agent.service` is active and stays up (on macOS, launchd's view of the same jobs). A
 gate that passes under a failing doctor is still exit 3. A gate that fails restores the box, and the run exits **4**:
-arm 2 re-installs `previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
+arm 1 flips `~/ccrc` back to a kept previous version (Versioned installs, below); failing that, arm 2 re-installs
+`previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
 under the parent's lock, passing `--allow-unsigned` only when the replaced install was itself unsigned (a verified box
 whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); the child exiting **3** (its
 own spine completed but ITS doctor FAILed) still counts as arm 2 restored, never a fall to arm 3 — arm 3 runs only when
-arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — usually a MIXED tree, whose remedy is `deploy.sh`. Arm 2 never re-installs the tag whose install just failed: when `previous` names it, arm 2 is skipped with a line saying why, and arm 3 runs. On a run whose target is the version that was running, arm 3's backup is that same version's pre-update tree: it says "same build, not mixed" only when that tree was a completed install with the staged sha; a completed install with a different sha is a rebuild, MIXED as above; and an incomplete one is a pre-update tree that may itself be MIXED, remedy `ccrc update --to <tag> --force` once the box is healthy.
+arm 2 cannot run or its child fails outright, copying the pre-update backup back and restarting the unit — usually a MIXED tree, whose remedy is `deploy.sh`. Arm 2 never re-installs the tag whose install just failed, and it is skipped, with a line saying why, in two cases: `previous` names that tag, or the run is a same-tag rerun over a completed install of that tag — the second even when `previous` names a different, restorable release. Arm 3 then runs. The staged sha decides whether arm 3's tree is MIXED: a staged sha that differs from the running stamp's is MIXED, whatever the completed-install record says, remedy `deploy.sh`; on a same-tag run with the same sha, arm 3's backup is that same version's pre-update tree, and arm 3 says "same build, not mixed" only when that tree was a completed install, while a same-sha run with no completed record is a pre-update tree that may itself be MIXED, remedy `ccrc update --to <tag> --force` once the box is healthy.
 `update.json` ends `reverted`, naming the arm; neither `coord.db` nor `~/.ccrc/memory` is ever restored, and the
 restore does not sweep. A spine that dies before it replaces the tree changed nothing and exits 1
 (`~/.ccrc/install-step` names the step it died in; a spine older than W4 writes none, and counts as after the tree
@@ -553,7 +555,8 @@ the flags typed beside it, as a transient `systemd --user` unit and returns at o
 the `ccrc.service` restart it causes; `update.json` is its progress.
 
 **Rolling back, and the watchdog.** `ccrc rollback [--to vX.Y.Z] [--detach] [--from <who>]` takes the lock and
-re-installs `previous`'s tag, or the one named — which must be a published release (a `SHA256SUMS` that answers
+re-installs `previous`'s tag, or the one named — a version kept under `~/ccrc-versions` is flipped back to with no
+download (Versioned installs, below); any other must be a published release (a `SHA256SUMS` that answers
 404 is exit 2) — as a downgrade that leaves the floor where it is, then runs the gate, then the supervisor
 sweep behind the same `KillMode=process` preflight. A rollback whose gate fails is left for the operator at
 exit 1, never restored over, and an `untagged` previous build is refused by name (`--to` names one). On a
@@ -616,8 +619,8 @@ never "up to date" while nothing was reached. Then the release list (newest firs
 only when a node runs that tag and its bundle verified — a listed bundle alone reads `bundle listed`;
 notes as plain text, never markup) and the node inventory (what each node runs and should run, its request
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
-that would move a node — Install, Roll back, Update, Update all — is shown disabled until the next
-release. A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
+that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
+(below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
 address. On the fleet screen an update banner (`vX is out on <channel> — …`, with a door to
 `/settings`) and a `→ vX` on that node's side of `BuildLine` appear while a measured node with a channel,
 whose stamp was read, that is not a macOS node, has a newer desired tag; the banner also waits until GitHub
@@ -627,16 +630,92 @@ for the newest tag its release-notification setting (on my channel, stable only,
 measured node already runs is recorded without a push. It has no session, so an open app does not suppress
 it; tapping it opens `/settings`.
 
+**Moving a node from the console (update-management W4, server side).** Install and Roll back on a release, Update and Roll
+back on a node, and Update all on the fleet screen's banner each open one confirm sheet that names the nodes the move takes,
+fleet first, and sends `POST /api/updates/apply` (`{nodeId}` or `{all: true}`, with an optional `tag` — without one, the
+node's desired tag) or `POST /api/updates/rollback` (`{nodeId}`, with an optional `to` — without one, the node's previous
+version). Both are session-only: the box token never moves a node. A single-node move the dispatcher would refuse answers
+`409` with its word in the same request (not newer, an unread stamp or floor, halted, the node's own lease busy, a missing
+capability, an agent that predates the op, an unknown or refused tag, no previous version, no desired tag); `{all: true}`
+always answers `202`, writing a request only for a node the tag takes forward and the dispatcher could move, and naming every
+other live node as skipped, with its word: a node whose own lease is busy, or that is itself halting, is skipped, and while a
+fleet node is skipped for either, so is every server-role node (`waiting-for-fleet`); a halt caused by another row still
+writes the request. What is written is a **request** on the node's row, never a command. On a `server` or `both` box the
+dispatcher reads the rows after every inventory sweep, every intent write and every request write, and moves at most one node
+at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet node's
+request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent that advertises it
+in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op` until that box is updated by
+hand). The agent answers `busy` while a run is in flight (its report's writer alive, or no readable pid) or the lock is held;
+otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` — two fixed
+argument lists with the tag the only word that varies, outside the exec whitelist — and answers `accepted` once the detaching
+parent has exited 0 (killed at its bound it answers `accepted` too if it queued or cannot be attributed). The server node is
+spawned the same way on its own box, after the same `busy` check. `accepted` only holds the lease (the row reads `pending`):
+it settles on the node's own report naming the tag, not a sweep measuring the target, and a request for the tag a node
+already runs is settled without a move. A refusal releases the lease in the same turn and never consumes the request —
+`busy`, or a link that was down before the op left the server, returns the row to `idle`; a link that fails after the op was
+handed to it holds the lease until the node's own report of the run settles it or the deadline fails it, because the node may
+already have started the run — while a spawn that fails, a tag or kind the agent refuses, or a `bad-request` from an agent
+that advertised the op fails it; a capability refusal takes no lease, is noted on the row and waits. A `failed` or `reverted`
+row **halts** every further move until **Ack** (`POST /api/updates/ack`) returns it to idle and clears its request and
+refusals; a `provenance:` verdict on a release does not halt (the row keeps `failed` and that detail), and the node moves on
+to the next release eligible for it. A lease is failed `deadline` once `CCRC_UPDATE_DEADLINE_MS` (default 15 minutes) has
+passed since the later of the dispatch and the node's last report, and at all events four deadlines after the dispatch; that
+halts too. With `auto` on (`stable` only for a node on the stable channel), the dispatcher moves a node to its desired tag
+with no request, and refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever the intent route admitted.
+A macOS node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move and the dispatcher
+refuses one; `ccrc rollout` stays the path when the console itself is down.
+
+**Versioned installs, and rollback by flip.** A box keeps each release it installs as a tree of its own under
+`~/ccrc-versions/<name>/` — the release tag; `untagged-<the first twelve hex digits of its sha>` for a checkout that
+is its own repository's top level, or an unversioned build; `unstamped-<twelve random hex digits>` for a tree whose
+identity cannot be measured — and `~/ccrc` is a symlink to the one that runs, so the launcher, the units, the plist
+and doctor all resolve through it unchanged. An install places the new tree beside the running one, runs `npm ci`
+there, and only then points `~/ccrc` at it in one rename (GNU `ln -sfn` then `mv -fT`; on macOS python3's
+`os.replace`, so `ccrc install` there needs the Xcode Command Line Tools). A reinstall of the name already running
+writes in place, and a complete kept version run from its own directory copies nothing and runs no `npm ci`. A
+symlink or a non-directory standing at a version's name is refused before anything is written. Every completed
+install keeps a copy of the box's stamp and install record inside its version directory; a flip back restores both.
+A box whose `~/ccrc` is a real directory is migrated once: the new tree is placed fully, the old one is moved to
+`~/ccrc.migrating`, the link is placed, and `~/ccrc.migrating` is removed only after a gate passes — `ccrc update`'s
+or `ccrc rollback`'s health gate, or a plain `ccrc install`'s own doctor when that install can take
+`~/.ccrc/update.lock` itself (an update's staged install cannot, and leaves it to the update's gate). A staged spine
+of this layout that dies while `~/ccrc` is still the real directory replaced nothing: the run exits 1 and runs no
+restore arm. The first move onto this layout is made by a box's older updater: one that holds that lock has a gate
+that knows nothing of the migration, so the old tree outlives that run and goes at the next one, while one older
+than the lock leaves it to the staged install's own doctor; `--no-gate` keeps it too. A crash between the move and
+the link leaves `~/ccrc.migrating` and no `~/ccrc`, where the launcher cannot run: the placed version's own
+`bash ~/ccrc-versions/<name>/ccd/ccrc install` completes the link from `~/.ccrc/migrating-to` before it does
+anything else, and refuses, naming both by-hand remedies, when that record is missing or names no placed version.
+With the previous version kept, a failed gate's restore tries arm 1 first: it flips `~/ccrc` back, restores that
+version's stamp and record, re-runs its own install spine (the executables, hooks and units, with no download) and
+runs the gate once more, falling to arm 2 only when there is no kept version or that fails. `ccrc rollback` to a
+kept version makes the same flip, spine and gate, and asks the release host nothing: below the floor if need be, the
+floor itself never lowered, and exit 3 when the kept spine's doctor fails after the gate passes; a bare one checks
+`previous` against the layout before it trusts it. A staged release older than this layout is first given a
+directory named for its own tag to write into, and `~/ccrc` goes back to the version it named when that spine dies
+before replacing anything. A staged spine that dies having replaced nothing, of any age, has the run put back what
+it cleared before it: the caps file, and the install record only when it was a completed install of the running
+build's own sha, provided `~/ccrc` names the tree it named before (D-3462); neither comes back for a marker-less
+spine whose stamp did not move, or when a legacy flip-back failed. Arm 3's MIXED tree loses its kept record, so no
+flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at). After an install or
+update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename to a
+dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version a
+running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
+stay. An input that cannot be read prunes nothing, and only `--prune` removes an incomplete tree. `deploy.sh` still
+pushes its tree through `~/ccrc`, into whichever version directory that points at.
+
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
 unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`). `ccrc uninstall`
-takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
-`--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
+takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist, and while an update holds
+`~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both; D-3453), removes the units, ccrc's
+managed settings.json hook entries (per-file backup;
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
+inside `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under
+`~/ccrc-versions` and a leftover `~/ccrc.migrating`, and the installed executables — and preserves
 `~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
-`previous`, `install-step`, `update.json`, `update.lock`, `update-intent` — which leave with the
+`previous`, `install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the
 tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
 (never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
 (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
@@ -818,7 +897,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see), and the
 deploy generates it from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1003,10 +1082,12 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   every tagged account, so two boxes whose pools disagree read `divergent` and
   the banner's existing remedy is the right one. `hidden` is **outside** it:
   nothing in `accounts.sh` carries that key, so two copies that disagree about
-  `hidden` project byte-identical bash and report `agreed` — the same gap
-  `exec.secretsFile` and a `generated`/`external` `exec.kind` sit in (an
-  `upstream` flip is visible, because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s
-  wrapper check rather than the fingerprint is what catches those. Between the
+  `hidden` project byte-identical bash and report `agreed` — the same gap a
+  `generated`/`external` `exec.kind` sits in (an `upstream` flip is visible,
+  because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s wrapper check
+  rather than the fingerprint is what catches that. `exec.secretsFile` left that
+  gap with D-3524: `_ccrc_secrets_file` is emitted for every account that declares
+  one, so it is **inside** the digest, like `pool`. Between the
   two lanes of one agent-first deploy that changes pools, `divergent` is
   EXPECTED for the minutes in between, and the deploy says so as it runs.
 
@@ -1394,10 +1475,47 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
   marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
   session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
-  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
-  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer; the next
+  point says what else ends it. A 403, exhausted credit (`billing_error`) and a 529 are
   not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
   feared.
+- **The auth-dead marker lasts until the credential changes (D-3524).** A clean spawn is no evidence:
+  Claude Code 2.1.280 shows its prompt on a dead OAuth token, so the old rc-0 clear wiped a rescue's
+  fresh marker and the home arm sent the session back into the 401. The account's credential FILE
+  decides instead — the roster's `exec.secretsFile` (projected into `accounts.sh` as
+  `_ccrc_secrets_file`), else the upstream's `.cc-secrets/<id>-oauth.env`. Once its ctime is at or
+  after the marker's epoch, any ccd reader expires the marker, so a re-login revives the account at
+  the next placement or home decision with no spawn. A clean spawn clears the marker only then, or on
+  a lane whose credential ccd cannot name — any lane that declares no `secretsFile` (a login lane, an
+  external lane) or an older `accounts.sh`; a config dir's `.credentials.json` is never read, because
+  it changes without a re-login. A rescue writes none when the named file changed after the pane was
+  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) whose
+  `telemetry: "anthropic"` credential identity is an OAuth setup token: an upstream lane's declared
+  `exec.secretsFile` (or its legacy `.cc-secrets/<id>-oauth.env`) and a generated Anthropic lane with a
+  declared setup-token file. API-key and login lanes are refused before a stale guessed OAuth file can
+  answer for them. On a lane it cannot measure but ccd can name (an API-key lane's
+  `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
+  `rm`; a probed account revived
+  with no local trace (a transient 401) keeps its marker until the probe's next live answer.
+- **A carried-in banner is not a block (D-3526).** A swap carries the transcript with every row's own
+  timestamp, so the old account's rate-limit row lands on the new account unchanged, and it stays the
+  newest real row when the new process writes nothing. Once `SWAP_COOLDOWN` lapsed the rescue read it
+  as a block on the new account and moved the session again (26 of 259 rescues from 2026-09-08). The
+  rate limit is now dated against the same clock as the 401, the pane's tmux `session_created`: a
+  `rate_limit` row provably older than it answers rc 3 in `stuck` mode, with the row's epoch. It is
+  carried in only if a swap also came after it — `$REG/<id>.lastswap` (stamped by the rescue and
+  affinity dispatches and by the landing, deleted by a refused swap) later than the row — so a
+  same-account restart (an OOM kill, a revival, stop/start) keeps its own account's block: the strand
+  stays, and the session moves when a target frees. A carried-in row is not a block on any rung — the
+  pane rungs ask the same read before they fire, unless the pane shows an auth failure, and cache its
+  answer in `$REG/<id>.tdate` on the pane's birth and the transcript's path, mtime and size, so a
+  stranded pane re-reads nothing until the file changes. The one exception is a process that never came
+  up (`$REG/<id>.spawn` records rc 4 at or after its birth): that session is still moved. Each process
+  logs one `carried-in <id>: via=<transcript|pane|banner> rate-limit row at <epoch> predates this pane's
+  process (born <epoch>) — not a block [wrapper=<w>] [spawn=<rc>]` line in `swap.log`, floored by
+  `$REG/<id>.carriednote`. A pane positive is dated by the transcript's newest real row, so once the
+  process has written a real row nothing is suppressed. Carried: the 30-second `tscan` cache is not
+  keyed on the process, and a dispatch that neither lands nor is refused leaves its `lastswap` stamp.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
@@ -1671,8 +1789,12 @@ general remote-shell:
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
   rides the existing `$HOME/.claude*` grant, and the heartbeat exists so the
   server never asks systemd anything — nothing under `~/.config/systemd`.
-- **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
-  `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
+- **pty**: `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` — the EXACT target, since a bare
+  name is a tmux prefix search (D-3525) — with `sessionId` sanitized to `[A-Za-z0-9_-]+`, never an arbitrary command.
+- **Update op**: `update` only ever spawns `~/.local/bin/ccrc update` or `rollback`, as
+  `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
+  first — never through the exec whitelist, never an arbitrary command. The agent
+  names it in its ready frame, and the server sends it to no agent that does not.
 
 ### Degraded mode
 
@@ -2783,8 +2905,8 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21567`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
-  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20283-20285`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
+  THE FIRST IS NOW REPAIRED BY THAT RESPAWN RATHER THAN MERELY OUTLIVED BY IT: `cmd_ensure` mints a missing generation before it spawns (`_reg_generation_init "$id"`, `ccd/ccd:21649`), best effort and never fatal, because this is the supervisor's path and a verb that dies here leaves the session down. It had to be that verb — the other two minting sites are row CREATION, and the unit runs `ccd supervise`, which calls `cmd_ensure`. Measured before the fix, hours after the card first shipped here: 31 of 34 live rows carried no generation and no automatic path could give them one, so the sentence above promised a repair nothing performed.
+  AND ALL THREE NOW SAY SO ON STDERR — the contended arm (`ccd/ccd:20348-20350`, `genrc == 1`) sits between an absent-or-invalid-generation arm and a mechanism-absent one. The silence this file recorded as a deferred `ccd/ccd` change is closed; the absence of the artifacts is still a signal, and no longer the only one.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
@@ -3338,7 +3460,10 @@ PWA raises its amber banner until the server lane runs. That is expected, not a 
 agent lane prints the same sentence as it goes — and the second deploy clears
 it.
 
-**Restore** (manual, from the target box — pick the `<ts>` to roll back to):
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to). The first remedy is `ccrc rollback`:
+to a version still kept under `~/ccrc-versions` it is a flip with no download. The `cp -a` lines below write
+THROUGH `~/ccrc` into the version directory it points at, which then holds a MIXED tree under its release's name —
+remove that directory's `.ccrc-installed` afterwards, as arm 3 does, so no flip ever returns to it:
 
 ```bash
 # fleet host (agent target)
@@ -3374,7 +3499,7 @@ but the pane is still scraped, and two jobs genuinely need it: reading the
 input-box draft, and proving that the menu on screen is the one an answer is
 about. Both drift between Claude Code versions. After any upgrade, re-capture
 the fixtures under `server/test/fixtures/panes/` (e.g.
-`tmux capture-pane -t cc-<id> -p`) and re-run `test/dialog.test.ts` /
+`tmux capture-pane -t =cc-<id>: -p`) and re-run `test/dialog.test.ts` /
 `test/send.test.ts` / `test/ask-route.test.ts`.
 
 Hook *delivery* drifts too, and silently: Claude Code 2.1.222 delivers

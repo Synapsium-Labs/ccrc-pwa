@@ -117,9 +117,14 @@ describe('asUpdatesView — a non-conforming ELEMENT is dropped, never the whole
     warn.mockRestore();
   });
 
-  it('drops a node whose reachable arrived as a non-boolean — tolerates it ABSENT, refuses it malformed (fix round 2, item 5)', () => {
-    // `statedOf`/`pendingTag` read `reachable === true`; a stray truthy
-    // non-boolean (e.g. the string "true") must not silently vouch for a
+  it('drops a node whose reachable is not a boolean, INCLUDING the key entirely absent — REQUIRED, never tolerated absent (W5 review 161, F-B; corrects fix round 2 item 5)', () => {
+    // `statedOf`/`pendingTag` read `reachable === true`; `reachabilityLine`
+    // reads a confirmed `reachable === false`. `NodeWire.reachable` is a
+    // REQUIRED boolean on the wire (shared/api.ts) — an element silent about
+    // it is not "unknown, treat like absent" (fix round 2 item 5's own
+    // reasoning, which this corrects): it is neither of the two spellings
+    // those readers recognise, exactly as a stray truthy non-boolean
+    // (e.g. the string "true") is not, and must not silently vouch for a
     // version or an arrow it never measured.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const good = node();
@@ -130,9 +135,27 @@ describe('asUpdatesView — a non-conforming ELEMENT is dropped, never the whole
       nodes: [{ ...node(), reachable: 'true' }, noReachableKey as NodeWire, good],
     });
     expect(got).not.toBeNull();
-    // The malformed one is dropped; the one with the key simply ABSENT is
-    // tolerated (wire discipline) and kept, alongside the fully-formed one.
-    expect(got!.nodes).toEqual([noReachableKey, good]);
+    // Both the malformed one AND the one with the key entirely absent are
+    // dropped now; only the fully-formed node is kept.
+    expect(got!.nodes).toEqual([good]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('drops a node whose role is neither a string nor null, and one whose measuredAt is neither a number nor null (W5 review 161, F-K)', () => {
+    // `versionSides` (`shared/update-summary.ts`) dereferences `.role` with
+    // `===`; `pendingTag`/`nodeVersion` dereference `.measuredAt`. Neither
+    // guard has ever been pinned on its own — this proves each independently:
+    // deleting either clause lets its own malformed element through while the
+    // other stays caught.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const good = node();
+    const got = asUpdatesView({
+      ...view(),
+      nodes: [{ ...node(), role: 7 }, { ...node(), measuredAt: 'never' }, good],
+    });
+    expect(got).not.toBeNull();
+    expect(got!.nodes).toEqual([good]);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });

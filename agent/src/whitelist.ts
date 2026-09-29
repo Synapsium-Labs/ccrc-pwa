@@ -506,7 +506,7 @@ export const EXEC_WHITELIST = {
     //
     // WHAT KEEPS IT UNREACHABLE IS THE CALL CONVENTION, not this table. Every
     // tmux argv in `server/src/exec.ts` is a literal token array, and each
-    // wire-supplied value lands as a SINGLE token (`target(id)`, and
+    // wire-supplied value lands as a SINGLE token (`tmuxTarget(id)`, and
     // `sendLiteral`'s text in the one slot after `-l`), so nothing on the wire
     // can contribute a `;` of its own: measured on the same socket, both
     // `send-keys -t <s> -l ';'` and `send-keys -t <s> -l '; set-option -g

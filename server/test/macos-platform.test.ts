@@ -17,11 +17,12 @@
 //     restated here.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
+import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
 const ccdRoot = path.dirname(CCD);
@@ -108,8 +109,11 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   // ccrc (the shims legitimately spell both arms), and refuse the GNU-only
   // spellings the block exists to wrap.
   //
-  // `readlink -f` is deliberately NOT in the table: the tree's one live call
-  // site (cmd_swap) predates the port on both sides, and macOS ships
+  // `readlink -f` is deliberately NOT in the table: its live call sites (ccd's
+  // cmd_swap, which predates the port, and ccrc's own `_mem_apply`, the
+  // graphify-engine reads, `_inst_graph_always_on_off` and — since versioned
+  // installs — `_ver_running_names`, the GC's running-unit check, where an
+  // empty answer is read as unmeasured) all run on a macOS that ships
   // `readlink -f` from 12.3 — a floor the port accepts rather than shims.
   // `systemctl`/`journalctl` are not here either: the `_svc_` layer and the
   // doctor's remedy STRINGS spell them legitimately, and the doctor's
@@ -285,6 +289,7 @@ describe('the Linux arms are the original GNU commands', () => {
   // to touch.
   const arms: Array<[string, RegExp]> = [
     ['_plat_mv_notdir', /else\s*\n\s*mv -fT -- "\$1" "\$2"/],
+    ['_plat_ln_swap', /else\s*\n\s*mv -fT -- "\$2\.new" "\$2"/],
     ['_plat_mtime', /else stat -c %Y "\$@"; fi/],
     ['_plat_size', /else stat -c %s "\$@"; fi/],
     ['_plat_devino', /else stat -c '%d:%i' "\$@"; fi/],
@@ -294,6 +299,9 @@ describe('the Linux arms are the original GNU commands', () => {
     ['_plat_ppid', /sed -n 's\/\^PPid:\[\[:space:\]\]\*\/\/p' "\/proc\/\$\{1-\}\/status"/],
     ['_plat_cgroup', /sed -n 's\/\^0::\/\/p' "\/proc\/\$\$\/cgroup"/],
     ['_plat_mode', /else stat -c%a "\$@"; fi/],
+    // D-3524's ctime, the one timestamp a credential restore cannot backdate.
+    // New rather than ported, so the row binds the NAME as well as the arm.
+    ['_plat_ctime', /^_plat_ctime\(\) \{ if \[ "\$CCD_OS" = darwin \]; then stat -f %c "\$@"; else stat -c %Z "\$@"; fi; \}/m],
     ['_plat_bytes', /du -sb "\$1" \| head -n1 \| cut -f1/],
     ['_svc_run_detached', /systemd-run --user --collect --quiet "\$@"/],
   ];
@@ -600,6 +608,262 @@ describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
   });
 });
 
+// W6 Task 1 — `_plat_ln_swap`, the flip of `$HOME/ccrc` (spec 2026-09-20 §11
+// Pins: "the flip is `mv -T` (argv pinned)"; §18 "the flip is a rename").
+// Every case runs the REAL platform block, sliced out of ccd, under `bash -c`
+// with `CCD_OS` assigned AFTER the source (the rule the describe above
+// states), and with RECORDING `ln`/`mv`/`rm`/`python3` wrappers first on PATH
+// that `exec` the real tool — so what is pinned is the argv the helper
+// issued AND what the filesystem looks like afterwards, never one without
+// the other. The argv alone would pass a wrapper that lied; the
+// postcondition alone would pass a non-atomic unlink-then-symlink.
+describe('_plat_ln_swap: one rename, both arms (W6 Task 1)', () => {
+  type Os = 'linux' | 'darwin';
+  const PY = 'import os, sys; os.replace(sys.argv[1], sys.argv[2])';
+
+  interface Fx { d: string; bin: string; log: string; old: string; next: string; link: string }
+
+  /** Whether a NAME exists — a dangling link included, which `existsSync`
+   *  (it follows links) would call absent. */
+  const lexists = (p: string): boolean => {
+    try { lstatSync(p); return true; } catch { return false; }
+  };
+
+  // The real tools, resolved ONCE and BEFORE any wrapper is on PATH (a
+  // wrapper that `exec`d the bare name would find itself) — and WITHOUT a
+  // throw: `execFileSync` throws on `command -v`'s rc 1, so a runner with no
+  // python3 would red all fourteen cases, the GNU-arm ones that never call it
+  // included (the rule the Global Constraints set for the harness stubs).
+  const REAL: Record<string, string> = Object.fromEntries(['ln', 'mv', 'rm', 'python3'].map((t) => [
+    t, spawnSync('bash', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim(),
+  ]));
+  /** The forced-Darwin cases whose rename runs the REAL `os.replace` skip on
+   *  a runner with no python3; every other case, on both arms, still runs. */
+  const itPy = it.skipIf(REAL.python3 === '');
+
+  /** A scratch dir holding two version-shaped directories (`old` carries a
+   *  marker file, so "its listing is unchanged" has something to compare),
+   *  `link` → `old` (absolute, as the tree's link is), and the recording
+   *  wrappers. `fail` names tools whose wrapper exits 1 WITHOUT running the
+   *  real one — how a failing rename is caused on either arm, so that case
+   *  needs no real python3 either. */
+  function fixture(fail: string[] = []): Fx {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-ln-swap-'));
+    const bin = path.join(d, 'bin');
+    mkdirSync(bin);
+    const log = path.join(d, 'calls.log');
+    for (const tool of ['ln', 'mv', 'rm', 'python3']) {
+      const real = REAL[tool]!;
+      // Nothing to `exec`: plant no wrapper (only python3 can be missing).
+      if (real === '' && !fail.includes(tool)) continue;
+      writeFileSync(path.join(bin, tool), [
+        '#!/bin/sh',
+        // One line per call, argv TAB-separated: the python3 program text
+        // has spaces in it, and no path here has a tab.
+        `printf '%s' '${tool}' >> '${log}'`,
+        `for a in "$@"; do printf '\\t%s' "$a" >> '${log}'; done`,
+        `printf '\\n' >> '${log}'`,
+        fail.includes(tool) ? 'exit 1' : `exec '${real}' "$@"`,
+      ].join('\n') + '\n', { mode: 0o755 });
+    }
+    const old = path.join(d, 'versions', 'v0.0.1');
+    const next = path.join(d, 'versions', 'v0.0.2');
+    mkdirSync(old, { recursive: true });
+    mkdirSync(next);
+    writeFileSync(path.join(old, 'OLD-MARKER'), 'old');
+    writeFileSync(path.join(next, 'NEW-MARKER'), 'new');
+    const link = path.join(d, 'ccrc');
+    symlinkSync(old, link);
+    return { d, bin, log, old, next, link };
+  }
+
+  function swap(os: Os, f: Fx, target: string = f.next, link: string = f.link):
+    { rc: number | null; out: string; calls: string[][] } {
+    const script = `${platformBlock(ccd)}\nCCD_OS=${os}\nexport PATH='${f.bin}':"$PATH"\n`
+      + `_plat_ln_swap '${target}' '${link}'\n`;
+    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    const calls = existsSync(f.log)
+      ? readFileSync(f.log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t'))
+      : [];
+    return { rc: r.status, out: `${r.stdout}${r.stderr}`, calls };
+  }
+
+  /** The postcondition both arms owe on success. */
+  function flipped(f: Fx, target: string = f.next): void {
+    expect(lstatSync(f.link).isSymbolicLink(), 'the link must still be a symlink — never a copied tree').toBe(true);
+    expect(readlinkSync(f.link), 'the link\'s value must be the target, verbatim').toBe(target);
+    expect(readdirSync(f.old), 'nothing may be moved INSIDE the old version (D-2187\'s shape)').toEqual(['OLD-MARKER']);
+    expect(lexists(`${f.link}.new`), 'the staged <link>.new must be gone').toBe(false);
+  }
+
+  // PLATFORM-ONLY: this arm's rename is GNU `mv -fT`, and BSD `mv` has no `-T`
+  // — on the macOS runner there is no binary for it to run. Its pair is the
+  // forced-Darwin case below, which runs on BOTH runners.
+  itLinux('the Linux arm is the spec\'s argv — ln -sfn to <link>.new, then mv -fT over <link>', () => {
+    const f = fixture();
+    try {
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out, 'the helper prints nothing — the caller owns the sentence').toBe('');
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['mv', '-fT', '--', `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  itPy('the Darwin arm stages the same link and renames it with os.replace — no mv, no rm of <link>', () => {
+    const f = fixture();
+    try {
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).toBe('');
+      // `_plat_mv_notdir`'s Darwin arm would show here as an `rm` of <link>
+      // followed by a `mv -f` — the window this helper exists to close.
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['python3', '-c', PY, `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  for (const os of ['linux', 'darwin'] as const) {
+    for (const kind of ['directory', 'file'] as const) {
+      it(`refuses a real ${kind} at <link> and touches nothing (${os} arm)`, () => {
+        const f = fixture();
+        try {
+          rmSync(f.link);
+          if (kind === 'directory') {
+            mkdirSync(f.link);
+            writeFileSync(path.join(f.link, 'LIVE'), 'pre-versioned tree');
+          } else {
+            writeFileSync(f.link, 'not a tree');
+          }
+          const before = statSync(f.link).mtimeMs;
+          const r = swap(os, f);
+          expect(r.rc, 'a real directory is the migration\'s case, and a file nobody\'s — never the flip\'s').toBe(1);
+          expect(r.out).toBe('');
+          expect(r.calls, 'refused BEFORE anything is staged').toEqual([]);
+          if (kind === 'directory') {
+            expect(lstatSync(f.link).isDirectory()).toBe(true);
+            expect(readdirSync(f.link)).toEqual(['LIVE']);
+          } else {
+            expect(lstatSync(f.link).isFile()).toBe(true);
+            expect(readFileSync(f.link, 'utf8')).toBe('not a tree');
+          }
+          expect(statSync(f.link).mtimeMs).toBe(before);
+          expect(lexists(`${f.link}.new`), 'nothing may be left staged').toBe(false);
+        } finally {
+          rmSync(f.d, { recursive: true, force: true });
+        }
+      });
+    }
+
+    for (const kind of ['file', 'directory'] as const) {
+      it(`refuses a ${kind} at <link>.new, and leaves both names alone (${os} arm)`, () => {
+        // `ln -sfn`'s `-f` would delete a file here and a directory would take
+        // the new link inside it — neither is this function's to touch.
+        const f = fixture();
+        try {
+          const staged = `${f.link}.new`;
+          if (kind === 'file') writeFileSync(staged, 'not ours');
+          else { mkdirSync(staged); writeFileSync(path.join(staged, 'THEIRS'), 'not ours'); }
+          const r = swap(os, f);
+          expect(r.rc).toBe(1);
+          expect(r.out).toBe('');
+          expect(r.calls, 'refused BEFORE `ln` runs').toEqual([]);
+          if (kind === 'file') expect(readFileSync(staged, 'utf8')).toBe('not ours');
+          else expect(readdirSync(staged), 'nothing may be linked inside it').toEqual(['THEIRS']);
+          expect(readlinkSync(f.link), 'the running version is still the one pointed at').toBe(f.old);
+        } finally {
+          rmSync(f.d, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it(`a failed rename leaves <link> where it was and removes the staged name (${os} arm)`, () => {
+      // The rename tool's wrapper exits 1 without running it, so this case
+      // needs no GNU `mv` and runs on both runners for both arms.
+      const f = fixture([os === 'darwin' ? 'python3' : 'mv']);
+      try {
+        const r = swap(os, f);
+        expect(r.rc).toBe(1);
+        expect(readlinkSync(f.link), 'the running version is still the one pointed at').toBe(f.old);
+        expect(lexists(`${f.link}.new`), 'the staged link must be cleaned up').toBe(false);
+        expect(r.calls.at(-1), 'the clean-up is the last act').toEqual(['rm', '-f', '--', `${f.link}.new`]);
+      } finally {
+        rmSync(f.d, { recursive: true, force: true });
+      }
+    });
+  }
+
+  itPy('replaces a stale symlink left at <link>.new (Darwin arm)', () => {
+    const f = fixture();
+    try {
+      symlinkSync(f.old, `${f.link}.new`);
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      // `ln -sfn` replaces the stale link itself; nothing else is called.
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['python3', '-c', PY, `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  // PLATFORM-ONLY: the rename is GNU `mv -fT` (see the first case's marker);
+  // the Darwin twin is the case directly above.
+  itLinux('replaces a stale symlink left at <link>.new (Linux arm)', () => {
+    const f = fixture();
+    try {
+      symlinkSync(f.old, `${f.link}.new`);
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.calls).toEqual([
+        ['ln', '-sfn', '--', f.next, `${f.link}.new`],
+        ['mv', '-fT', '--', `${f.link}.new`, f.link],
+      ]);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  itPy('places the link when nothing stands at <link> yet (Darwin arm)', () => {
+    const f = fixture();
+    try {
+      rmSync(f.link);
+      const r = swap('darwin', f);
+      expect(r.rc, r.out).toBe(0);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+
+  // PLATFORM-ONLY: GNU `mv -fT`, as above; the Darwin twin is directly above.
+  itLinux('places the link when nothing stands at <link> yet (Linux arm)', () => {
+    const f = fixture();
+    try {
+      rmSync(f.link);
+      const r = swap('linux', f);
+      expect(r.rc, r.out).toBe(0);
+      flipped(f);
+    } finally {
+      rmSync(f.d, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── Everything below needs a real Darwin userland ────────────────────────
 describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
   /** Source just the platform block into a bash and run one expression
@@ -637,6 +901,29 @@ describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
       expect(rc, 'a directory destination must be refused').toBe('1');
       const ok = inBlock(`_plat_mv_notdir '${d}/src' '${d}/plain'; echo $?`);
       expect(ok, 'an ordinary rename must still succeed').toBe('0');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('_plat_ln_swap repoints a symlink-to-directory in one rename, with CCD_OS as the block computed it', () => {
+    // The forced-Darwin cases above prove the argv and the postcondition on
+    // Linux's rename(2); this is the same postcondition on APFS, through the
+    // python3 the runner really has.
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-ln-swap-real-'));
+    try {
+      const old = path.join(d, 'v0.0.1');
+      const next = path.join(d, 'v0.0.2');
+      mkdirSync(old);
+      mkdirSync(next);
+      writeFileSync(path.join(old, 'OLD-MARKER'), 'old');
+      const link = path.join(d, 'ccrc');
+      symlinkSync(old, link);
+      expect(inBlock(`_plat_ln_swap '${next}' '${link}'; echo $?`)).toBe('0');
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(link)).toBe(next);
+      expect(readdirSync(old), 'nothing may be moved inside the old version').toEqual(['OLD-MARKER']);
+      expect(readdirSync(d).sort(), 'no staged <link>.new may be left').toEqual(['ccrc', 'v0.0.1', 'v0.0.2']);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

@@ -616,7 +616,7 @@ describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5
   // asked" stops the verb before anything is deleted: at rung 5 as the
   // `probe-unmeasured` failure, and in the tail — where `KillMode=process`
   // means stopping the unit never stopped the pane — as `unit-still-active`.
-  const PROBE = `tmux has-session -t =cc-${CHILD_ID}`;
+  const PROBE = `tmux has-session -t =cc-${CHILD_ID}:`;
   /** Everything a stopped tail must leave standing: the tree, the branch, the
    *  row, and the breadcrumb for the retry. Read off disk FIRST. */
   const tailStopped = (c: Child): void => {

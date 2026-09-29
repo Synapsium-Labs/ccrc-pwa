@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~3400 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3600 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -129,7 +129,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
   the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
   `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
-  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
+  passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
+  `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
   re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
   a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
@@ -142,7 +145,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. A
+  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
+  node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
+  locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
+  `ccrc rollout` stays the path when the console is down. A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
@@ -267,11 +274,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   that one file is invisible to the set that pins the doors. The other two are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
-  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh` and `POST
-  /api/updates/ack` consult no box token. They are registered from `server/src/update/routes.ts`, a file neither
-  `SESSION_ONLY` nor the kickoff literal can see, so `box-token-census.test.ts` reads it as a lane source of its
-  own and keeps their names in a hand-kept `UPDATE_DOORS`, checked against that file in both directions (programme
-  wave 5, spec W4 part B, adds `apply` and `rollback` there with their routes).
+  decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
+  /api/updates/ack`, `POST /api/updates/apply` and `POST /api/updates/rollback` consult no box token. They are
+  registered from `server/src/update/routes.ts`, a file neither `SESSION_ONLY` nor the kickoff literal can see, so
+  `box-token-census.test.ts` reads it as a lane source of its own and keeps their names in a hand-kept
+  `UPDATE_DOORS`, checked against that file in both directions.
   Don't assume — read the guards.
 - **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
   `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`

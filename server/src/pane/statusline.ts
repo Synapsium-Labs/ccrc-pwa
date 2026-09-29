@@ -23,7 +23,16 @@ export interface Statusline {
   effort?: string; // effort level, e.g. "xhigh"
   ultracode: boolean;
   branch?: string; // current git branch, e.g. "fix/linear-go-live-completion"
-  workflowActive: boolean; // a Workflow is running — orchestrator is idle-waiting on subagents
+  /** A Workflow row below the statusline row reads as running (see
+   *  `workflowRunning`). `undefined` — UNMEASURED this tick — when the capture
+   *  had no statusline row (an overlay, a pane mid-render): the rows below it
+   *  went unseen, which is not the same fact as seeing none running, and
+   *  FleetWatcher keeps its last measurement across such a tick rather than
+   *  store a `false` nobody measured. NOT a second opinion on a 2.1.277+
+   *  session's live status, which already reads busy while a workflow runs:
+   *  fleet.ts consults it only where that file did not measure such an idle,
+   *  and reads `undefined` there as no row. */
+  workflowActive?: boolean;
   /** Context-window pressure, parsed from the `▓ ctx <bar> NN%` segment
    *  (statusline-command.sh's field 4, D-2011). `undefined` when this
    *  capture carried no such segment — never fabricated as 0, which is a
@@ -58,35 +67,87 @@ export interface Statusline {
   boxCols?: number;
 }
 
-// The Workflow progress row: `◯ <name>  <desc>   …   N/M agents done · 2s`.
-// The count is RIGHT-ALIGNED after a run of padding spaces (2.1.280, both
-// renderers, measured at 60-220 columns), or opens a ` · ` part (the older
-// fleet capture below the row in statusline.test.ts) — so a sentence that
-// merely contains "2/4 agents done", one space before the number, is not it.
-const WORKFLOW_RE = /(?:^|\s·\s|\s{2})(\d+)\/(\d+)\s+agents?\s+done\b(?:\s+·\s+(\d+)\s+failed\b)?/i;
+// A footer Workflow row, below the statusline row: `◯ <name> …`, `❯ ◯ …` when
+// the footer selection is on it, and `⏸ …` while paused on a usage limit.
+// `◉` is the older fleet capture's bullet (statusline.test.ts). Anchoring the
+// LINE on its bullet is what keeps a sentence that merely contains "2/4 agents
+// done" from reading as a row.
+const WORKFLOW_ROW_RE = /^(?:❯ )?([◯◉⏸]) (\S.*)$/;
+// ≤ 2.1.280: `N/M agents done[ · K failed]`, right-aligned after padding, or
+// after ` · ` (the older capture), or after ONE space (a description cut to
+// `…`, or none at all in a pane ≤ 60 columns). The count ends its part: it is
+// followed by ` · ` (cut to ` ·` at the pane's edge) or ends the row, so a `◯`
+// background-task row whose activity merely quotes `1/4 agents done`, its own
+// clock two spaces on, is not one. A failed count is read only WITH its word:
+// a row cut to `· N` is ambiguous (see `workflowRunning`).
+const LEGACY_COUNT_RE = /\s(\d+)\/(\d+)\s+agents?\s+done(?=\s+·(?:\s|$)|\s*$)(?:\s+·\s+(\d+)\s+failed\b)?/i;
+// 2.1.281+: the name column, two spaces, the progress pill — `▰`/`▱`, or
+// `█`/`░` under Ghostty, 20/12/8 cells — then, unless the pane is too narrow
+// for any, two spaces and `N/M · <clock> · ↓ <n> tokens`, whose count is the
+// first segment dropped as the pane narrows. A pill cut by `…` is not read.
+const PILL_RE = /\s{2}([▰▱]+|[█░]+)(?:\s{2}\S.*)?$/;
+// Both generations' paused statuses, widest first: `paused · usage limit
+// resets …`, `paused · usage limit`, `paused`. Read anywhere in the body, not
+// anchored to its end, because 2.1.280 cuts a row raw at the pane's edge
+// (measured on its count rows: `2/3 agents done · 1`).
+const PAUSED_RE = /paused/;
+// The other `⏸` line below the statusline row: the footer's own mode line,
+// `⏸ manual mode on · ← for agents`, `⏸ plan mode on (shift+tab to cycle)`.
+// Never a Workflow row — yet its row can say `paused`: `/pause-memory` adds a
+// right-aligned `memory paused` label to the footer's right column
+// (`<flag>()?["memory paused"]:[]`, in every binary from 2.1.277 to 2.1.284),
+// and that column shares the mode line's row in a wide pane.
+const MODE_LINE_RE = /^\S+ mode on\b/;
 
 /** A Workflow row that is still RUNNING. A finished run's row stays mounted
- *  for ~30 s after it ends, same glyph, same shape, its clock stopped — only
- *  the count tells them apart: done plus failed has caught up with a nonzero
- *  total (`3/3`, `2/3 agents done · 1 failed`; 2.1.280 counts a failed agent
- *  apart, and its own "complete" is done + failed ≥ total). `0/0` reads as
- *  running: it is the launch row, and a count cannot tell it from a run that
- *  died before its first agent, whose `0/0` lingers like any finished row.
- *  THE COUNT IS NOT PROOF of a finish either: a script awaiting a timer
- *  between agents, or worktree-isolated agents being torn down, reads N/N
- *  with its clock running. On 2.1.277–2.1.280 Claude Code's own live status
- *  reads busy while any workflow runs (`delegatedActive`), and fleet.ts asks
- *  this row only for an idle session, so both bite only where that status is
- *  unreadable. A killed run's row (`k/M`, k < M) still lingers as running.
- *  Unread, as before this function: a count after ONE space (a description cut
- *  to `…`, or a pane ≤ 60 columns once the tokens segment shows), a row paused
- *  on a usage limit (no count at all), and 2.1.281+, whose binaries carry no
- *  `agents done` literal. */
+ *  for ~30 s after it ends, same glyph, same shape, its clock stopped.
+ *
+ *  ≤ 2.1.280 — only the count tells them apart: done plus failed has caught up
+ *  with a nonzero total (`3/3`, `2/3 agents done · 1 failed`; 2.1.280 counts a
+ *  failed agent apart, and its own "complete" is done + failed ≥ total). `0/0`
+ *  reads as running: it is the launch row, and a count cannot tell it from a
+ *  run that died before its first agent, whose `0/0` lingers like any finished
+ *  row. A row cut raw just past the number after the count's ` · `
+ *  (`2/3 agents done · 1`, 36 columns) is AMBIGUOUS: with a failure that
+ *  number opens `1 failed`, with none it opens the clock (`· 7s`). It is not
+ *  read as failures, so such a row reads RUNNING — fail toward busy — and a
+ *  finished run with a failure, cut there, lingers as running.
+ *
+ *  2.1.281+ — the pill: `floor(done·W/total)` of its W cells are filled, so it
+ *  has an empty cell iff done < total or total is 0 (a launch row, which has
+ *  no count segment at all) — #194's rule minus the failed count, which this
+ *  build NEVER PRINTS (a failure only colours the bullet, and this is a plain
+ *  `capture-pane -p` read). So a finished run with a failed agent (`2/3`, a
+ *  partial pill) reads as RUNNING for its whole linger, and so does a killed
+ *  run (`k/M`) and a run that died before its first agent. Unread: the
+ *  screen-reader fallback, which draws `NN%` in place of the pill.
+ *
+ *  Paused, both generations — `⏸` and a `paused…` status, no count: only a
+ *  running task is ever paused. Read from the format strings, not captured.
+ *  A `⏸` line whose body opens `<word> mode on` is the footer's mode line,
+ *  never a row, whatever its right column says. Unread: 2.1.281+'s narrowest
+ *  paused form, a bare `⏸ <name>` with no status at all (its last layout
+ *  candidate, `{barWidth:0, segments:[]}`, source-read) — nothing on that line
+ *  says paused, so a paused Workflow in a pane that narrow reads not running.
+ *
+ *  THE ROW IS NOT PROOF of a finish either way: a script awaiting a timer
+ *  between agents, or worktree-isolated agents being torn down, reads N/N with
+ *  its clock running. From 2.1.277 Claude Code's own live status reads busy
+ *  while any workflow runs (`delegatedActive`, measured through 2.1.283), so
+ *  fleet.ts asks this row only where that file did not answer idle for a build
+ *  that counts delegated work (`liveStatusCoversDelegation`). */
 function workflowRunning(line: string): boolean {
-  const m = WORKFLOW_RE.exec(line.trim());
-  if (!m) return false;
-  const [done, total, failed] = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
-  return total === 0 || done + failed < total;
+  const row = WORKFLOW_ROW_RE.exec(line.trim());
+  if (!row) return false;
+  const glyph = row[1]!, body = row[2]!;
+  if (glyph === '⏸') return !MODE_LINE_RE.test(body) && PAUSED_RE.test(body);
+  const legacy = LEGACY_COUNT_RE.exec(body);
+  if (legacy) {
+    const [done, total, failed] = [Number(legacy[1]), Number(legacy[2]), Number(legacy[3] ?? 0)];
+    return total === 0 || done + failed < total;
+  }
+  const pill = PILL_RE.exec(body);
+  return pill !== null && /[▱░]/.test(pill[1]!);
 }
 
 const ROBOT = '🤖';
@@ -290,15 +351,18 @@ export function parseStatusline(pane: string): Statusline {
   const title = at === -1 ? undefined : topBorderTitle(lines, at);
   const ultracode = title !== undefined && /\bultracode\b/.test(title);
 
-  // A running Workflow leaves the orchestrator reporting "idle" while it waits
-  // on subagents — detect it so the session reads as busy, not finished.
+  // A running Workflow's footer row — the fallback fleet.ts reads where
+  // Claude Code's own live status did not speak for the workflow (no readable
+  // file, no configDir, or a build older than 2.1.277 or naming no version:
+  // from 2.1.277 that file itself reads busy while a workflow runs).
   //
   // Read BELOW the statusline row only: Claude Code mounts the workflow row
   // after the footer (a real fleet capture has it under the `👤` row), and
   // nothing but footer chrome is ever drawn there — chat sits above the box.
   // A sentence quoting "2/4 agents done" used to hold an idle session `busy`,
   // and so did a finished run's row, for the half minute it lingers.
-  const workflowActive = at !== -1 && lines.slice(at + 1).some(workflowRunning);
+  // No row, no "below": `undefined`, never a measured `false` (see the field).
+  const workflowActive = at === -1 ? undefined : lines.slice(at + 1).some(workflowRunning);
 
   const ctxPct = parseCtxPct(row);
 

@@ -54,6 +54,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { registerUpdateRoutes } from './update/routes.js';
+import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
 import { buildInfoOfRow } from './update/inventory.js';
@@ -319,6 +320,14 @@ export interface Deps {
    *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
    *  intent route answers `501 not-configured`. */
   updateIntentLog?: UpdateIntentLog;
+  /** Design 2026-09-20 §10 (wave 5): the SERVER-role node's own move, spawned on this box with the same absolute
+   *  argv the agent uses. A two-template capability, never a raw `Runner` — a runner here would give every
+   *  route a way around `runCcd` (D-3397). `localUpdateSpawnFor(realRunner, cfg.home)` in
+   *  `index.ts`, both arms; absent → the dispatcher notes the server row and moves nothing there. */
+  updateRunner?: LocalUpdateSpawn;
+  /** Design 2026-09-20 §10 (wave 5): the fleet link's `request()` narrowed to the `update` op, with
+   *  `UPDATE_OP_TIMEOUT_MS`. Remote mode only — in local mode no node is link-reached. */
+  sendUpdateOp?: SendUpdateOp;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this

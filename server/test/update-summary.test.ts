@@ -1,43 +1,50 @@
 // The L0 summary clause (design 2026-09-20 §13; plan W3 Task 3, D-3301): the push body and
-// the update banner both say what the nodes run through `versionsSummary`, so both forms are pinned here once.
+// the update banner both say what the nodes run through `summaryFromSides` over sides `versionSides`/
+// `remoteSides` picked, so both forms are pinned here once. (W5 review 161, F-L: the convenience wrapper
+// `versionsSummary` — `summaryFromSides(versionSides(rows))` — is gone; neither real caller ever composed
+// through it, each picks its own sides first, so it was untested-by-a-real-caller dead code. This
+// `describe` still pins the exact composition local mode uses.)
 import { describe, it, expect } from 'vitest';
 import {
   MISSING_SIDE, UNVERSIONED_WORD, remoteSides, sideVersion, statedOf, summaryFromSides, versionSides,
-  versionsSummary, type SummaryRow,
+  type SummaryRow,
 } from '../../shared/update-summary.js';
 
 // `stated` is REQUIRED (fix round 2, item 7) — every existing case here means a row that vouches for its
 // version, so `stated: true` is fixed, never a parameter of this helper.
 const row = (role: string | null, version: string | null): SummaryRow => ({ role, version, stated: true });
+// W5 review 161 (F-L): the composition local mode uses — `versionsSummary`, the now-deleted convenience
+// wrapper, was exactly this and nothing more.
+const summary = (rows: readonly SummaryRow[]): string => summaryFromSides(versionSides(rows));
 
-describe('versionsSummary — the clause the push body and the banner share', () => {
+describe('summaryFromSides(versionSides(rows)) — the clause the push body and the banner share (local-mode composition)', () => {
   it('one clause when both sides run the same tag', () => {
-    expect(versionsSummary([row('server', 'v0.0.7'), row('fleet', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
+    expect(summary([row('server', 'v0.0.7'), row('fleet', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
     // order-independent: the fleet row listed first reads the same
-    expect(versionsSummary([row('fleet', 'v0.0.7'), row('server', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
+    expect(summary([row('fleet', 'v0.0.7'), row('server', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
   });
 
   it('each side named when they differ — fleet first, then server', () => {
-    expect(versionsSummary([row('server', 'v0.0.9'), row('fleet', 'v0.0.7')])).toBe('fleet v0.0.7 · server v0.0.9');
+    expect(summary([row('server', 'v0.0.9'), row('fleet', 'v0.0.7')])).toBe('fleet v0.0.7 · server v0.0.9');
   });
 
   it('a missing side reads as the dash, never as agreement', () => {
-    expect(versionsSummary([row('server', 'v0.0.7')])).toBe('fleet — · server v0.0.7');
-    expect(versionsSummary([row('fleet', 'v0.0.7')])).toBe('fleet v0.0.7 · server —');
-    expect(versionsSummary([])).toBe('fleet — · server —');
+    expect(summary([row('server', 'v0.0.7')])).toBe('fleet — · server v0.0.7');
+    expect(summary([row('fleet', 'v0.0.7')])).toBe('fleet v0.0.7 · server —');
+    expect(summary([])).toBe('fleet — · server —');
   });
 
   it('an unversioned side is named, and two unversioned sides never "agree"', () => {
-    expect(versionsSummary([row('server', 'v0.0.7'), row('fleet', null)])).toBe('fleet unversioned · server v0.0.7');
-    expect(versionsSummary([row('server', null), row('fleet', null)])).toBe('fleet unversioned · server unversioned');
+    expect(summary([row('server', 'v0.0.7'), row('fleet', null)])).toBe('fleet unversioned · server v0.0.7');
+    expect(summary([row('server', null), row('fleet', null)])).toBe('fleet unversioned · server unversioned');
   });
 
   it("local mode's one `both` row is both sides", () => {
-    expect(versionsSummary([row('both', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
+    expect(summary([row('both', 'v0.0.7')])).toBe('fleet and server are on v0.0.7');
   });
 
   it('a row with no role, or a role outside the vocabulary, is on neither side', () => {
-    expect(versionsSummary([row(null, 'v0.0.9'), row('mystery', 'v0.0.9'), row('server', 'v0.0.7')]))
+    expect(summary([row(null, 'v0.0.9'), row('mystery', 'v0.0.9'), row('server', 'v0.0.7')]))
       .toBe('fleet — · server v0.0.7');
   });
 });
@@ -87,18 +94,14 @@ describe('remoteSides — versionSides for a remote fleet, moved to L0 (D-3313)'
 });
 
 // Fix round 1 (item 1/item 4, F1/F14, D-3316): `stated` — an occupying row that does not vouch for its
-// version (unmeasured this run, unread stamp, or unreachable) renders as the dash, never as its stale value,
-// but still blocks another row from falling back into its side.
+// version (never measured — W5 review 161, F-I: not "unmeasured THIS run" — unread stamp, or unreachable)
+// renders as the dash, never as its stale value, but still blocks another row from falling back into its side.
 describe('stated — an occupied side that does not vouch for its version (D-3316)', () => {
   const statedRow = (role: string | null, version: string | null, stated: boolean): SummaryRow => ({ role, version, stated });
 
   it('an unstated row reads as the dash, not its version — sideVersion', () => {
     expect(sideVersion(statedRow('fleet', 'v0.0.7', false))).toBe(MISSING_SIDE);
     expect(sideVersion(statedRow('fleet', 'v0.0.7', true))).toBe('v0.0.7');
-  });
-
-  it('an omitted `stated` defaults to stated — every existing caller and row is unaffected', () => {
-    expect(sideVersion(row('fleet', 'v0.0.7'))).toBe('v0.0.7');
   });
 
   it("an unstated occupant still blocks the OTHER side's fallback — never a version nobody vouches for", () => {
@@ -122,7 +125,7 @@ describe('stated — an occupied side that does not vouch for its version (D-331
 describe('statedOf — the one "does this reading vouch for its version" predicate (fix round 2, item 5)', () => {
   const measured = { measuredAt: 1_000, stampRead: 'ok', reachable: true };
 
-  it('true only when measured this run, stamp read, and reachable — all three, each exactly', () => {
+  it('true only when EVER measured, stamp read, and reachable — all three, each exactly (W5 review 161, F-I: not "measured THIS run")', () => {
     expect(statedOf(measured)).toBe(true);
     expect(statedOf({ ...measured, measuredAt: null })).toBe(false);
     expect(statedOf({ ...measured, stampRead: 'unreadable' })).toBe(false);

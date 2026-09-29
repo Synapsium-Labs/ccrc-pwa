@@ -2,7 +2,7 @@
 // refuses. That failure is invisible to every other test in this repo — the
 // route returns 502 only on the live fleet — and it has already shipped once
 // (ws-add/ws-rm).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
 } from '../../agent/src/whitelist.js';
@@ -589,5 +589,109 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['start', '--cross-pool', 'claude', 'demo', '/w']);
     expect(CCD_ARGV.enableCross('claude', 'demo', '/w'))
       .toEqual(['enable', '--cross-pool', 'claude', 'demo', '/w']);
+  });
+});
+
+// Spec §10 and its §15 W4 row: "the whitelist pin tests gain a case that the `update` op reaches no exec path". The `update` op is the
+// ONE wire-triggered spawn outside the exec whitelist, so its whole safety is that nothing else can reach its spawn port and that it
+// reaches nothing of the whitelist's. It is a SOURCE scan, because no behavioural case can see an extra call whose answer comes out
+// the same. It lives in THIS whitelist pin test, and not in one of the agent's three, because this is the one that reads the agent's
+// exec surface from OUTSIDE it (layer 3: "the list never drifts wider than the code") and this describe is that layer's other half: the
+// code that spawns without the list. The agent's three whitelist suites spawn a `tsc` over their own type-bypass fixtures and are
+// about the list's shape; a text scan of `server.ts` is not their subject. `agent/test/update-op.test.ts` keeps its own slices of the
+// update case; this one adds the census of every call site. (Added, not weakened: no case above is touched.)
+describe('layer 4 — the update op is not an exec path, and its spawn port has one caller (spec §10)', () => {
+  // Dynamic imports, so this append moves no line above it (this file's `describe`s are cited by line).
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  /** Every way into the exec surface or the wire read gate. */
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  /** Whole-line and trailing `// ` comments dropped: a sentence naming `spawnUpdate(` is not a call, and a scan that reds on prose is a false red. */
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  /** The text of one `case '<word>': {` body of a switch, up to the next case at the same indent. */
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) neither `case 'update'` nor the update spawner names an exec-surface symbol; the same cut of `case 'exec'` does (the control)", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    expect(code(updateCase)).not.toMatch(EXEC_PATH);
+    expect(code(updateCase), 'the cut is the update op, not an empty slice').toMatch(/\bspawnUpdate\s*\(/);
+    const at = serverSrc.indexOf('export function makeUpdateSpawn');
+    expect(at, 'makeUpdateSpawn not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\ninterface PtyEntry/.exec(rest);
+    expect(end, 'no end after makeUpdateSpawn').not.toBeNull();
+    expect(code(rest.slice(0, end!.index))).not.toMatch(EXEC_PATH);
+    expect(caseBody(handleReq, 'exec')).toMatch(/isExecAllowed\(/);
+  });
+
+  it("(b) `spawnUpdate(` is called exactly once in agent/src, inside `case 'update'` of handleReq, and nowhere outside it", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    const call = /\bspawnUpdate\s*\(/g;
+    expect(code(updateCase).match(call)?.length ?? 0, "one call inside case 'update'").toBe(1);
+    // Every file of the package's source, the whole of server.ts included: the count outside the case is zero.
+    const outsideUpdateCase = serverSrc.replace(updateCase, '');
+    expect(outsideUpdateCase.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outsideUpdateCase).match(call)?.length ?? 0, "call sites outside case 'update' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnUpdate(`).toBe(0);
+    }
+  });
+
+  // Review of the item 6 census, M2: the `\bspawnUpdate\s*\(` count above cannot see an alias
+  // (`const su = ctx.spawnUpdate; await su(...)` in `case 'exec'` calls the port with no such token), so every line that
+  // NAMES the port is pinned, as the `makeUpdateSpawn`/`realUpdateSpawn` case pins its own.
+  it('(b) `spawnUpdate` is named only where the port is declared, carried and called: an alias of it is a new line here', () => {
+    const lines = code(serverSrc).split('\n').filter((l) => /\bspawnUpdate\b/.test(l)).map((l) => l.trim());
+    expect(lines).toEqual([
+      'spawnUpdate?: UpdateSpawn;',
+      'spawnUpdate: UpdateSpawn;',
+      'spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);',
+      'spawnUpdate: opts.spawnUpdate,',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} names the update spawn port`).not.toMatch(/\bspawnUpdate\b/);
+    }
+  });
+
+  it('(b) makeUpdateSpawn and realUpdateSpawn are referenced only where the port is wired: the definition, the default, and the option that carries it', () => {
+    const lines = (word: RegExp): string[] => code(serverSrc).split('\n').filter((l) => word.test(l)).map((l) => l.trim());
+    expect(lines(/\bmakeUpdateSpawn\b/)).toEqual([
+      'export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {',
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+    ]);
+    expect(lines(/\brealUpdateSpawn\b/)).toEqual([
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} references the update spawn port`).not.toMatch(/\b(?:makeUpdateSpawn|realUpdateSpawn)\b/);
+    }
   });
 });

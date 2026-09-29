@@ -792,7 +792,7 @@ describe('cmd_stop', () => {
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@rp-llm-quiet-mesa',
-      'tmux kill-session -t cc-rp-llm-quiet-mesa',
+      'tmux kill-session -t =cc-rp-llm-quiet-mesa:',
     ]);
   });
 
@@ -801,7 +801,7 @@ describe('cmd_stop', () => {
     expect(calls()).toEqual([
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude-a-demo',
-      'tmux kill-session -t cc-claude-a-demo',
+      'tmux kill-session -t =cc-claude-a-demo:',
     ]);
   });
 });
@@ -850,7 +850,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1235,7 +1235,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1296,7 +1296,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 
@@ -1328,7 +1328,7 @@ describe('ws-rm', () => {
       // prove gets written.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'unsupervise demo-quiet-mesa',
-      'tmux kill-session -t cc-demo-quiet-mesa',
+      'tmux kill-session -t =cc-demo-quiet-mesa:',
     ]);
   });
 

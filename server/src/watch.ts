@@ -81,6 +81,7 @@ import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
 import { resolveAndProject, type ProjectionOutcome } from './update/project.js';
+import { runDispatch, type DispatchRunResult } from './update/converge.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
@@ -630,10 +631,19 @@ export class FleetWatcher {
   /** Plan W3 Task 3: the last reason a release-push decision failed, so a coord.db that cannot be read
    *  warns once per change of reason on the inventory lane's minute beat (`lastProjectionWhy`'s idiom). */
   private lastReleasePushFailure: string | null = null;
-  /** Plan W3 Task 3 (D-3314): true once THIS process has finished one
-   *  inventory run. Until then the `nodes` rows are the previous process's, so the catalogue side
-   *  (`pushReleaseAfterPoll`) decides nothing. Set by `sweepThenProject`; never cleared. */
+  /** Plan W3 Task 3 (D-3314): true once THIS process's sweep has actually REWRITTEN the rows the push decides
+   *  on — never merely "a sweep finished" (W5 review 161, F-H: a sweep can finish with the server row
+   *  unreachable, refused or errored, none of which rewrites it — `sweptEnoughToDecide` is the exact
+   *  predicate, `sweepThenProject`'s own comment above its call site). Until it opens, the `nodes` rows are
+   *  the previous process's, so the catalogue side (`pushReleaseAfterPoll`) decides nothing. Set by
+   *  `sweepThenProject`; never cleared. */
   private inventorySwept = false;
+  /** Wave 5 (design 2026-09-20 §10): the dispatcher's ONE run in flight, and whether a trigger arrived while
+   *  it ran. However many triggers arrive during a run, they ask for ONE follow-up after it — so a request
+   *  written mid-run is planned by a run that reads it, and no two runs ever hold the plan-then-acquire
+   *  stretch at once. */
+  private dispatchRun: Promise<DispatchRunResult> | null = null;
+  private dispatchAgain = false;
   /** The sixth lane's clock. */
   private lastNameSweep = 0;
   /** The census lane's clock, and its byte-equality guard. A git-ref read per
@@ -1007,6 +1017,58 @@ export class FleetWatcher {
     });
   }
 
+  /**
+   * The dispatcher's ONE run (design 2026-09-20 §10), single-flight. Called at the end of every inventory run
+   * (`sweepThenProject`) and by the update routes after every intent and request write. A call while a run is
+   * in flight JOINS it and asks for exactly one follow-up; otherwise it starts a run SYNCHRONOUSLY — the run's
+   * plan and lease acquire happen in the caller's own turn, so a route's reply already reads `pending`.
+   */
+  dispatchNow(): Promise<DispatchRunResult> {
+    if (this.dispatchRun !== null) {
+      this.dispatchAgain = true;
+      return this.dispatchRun;
+    }
+    // `.finally`, not `.then` — it must clear `dispatchRun` whether this run resolves OR rejects. A `.then`
+    // success-only callback would never run on a rejection, so a single thrown run would leave the single-flight
+    // field set forever and nothing would dispatch again until restart (review finding 1).
+    const run = this.dispatchOnce().finally(() => {
+      this.dispatchRun = null;
+      if (this.dispatchAgain) {
+        this.dispatchAgain = false;
+        this.triggerDispatch();
+      }
+    });
+    // D-3493 — the update lanes' rule at the tip: a rejection is warned, never swallowed. Attached ONCE, here, at
+    // the run's own creation — never inside `triggerDispatch`, which every caller that JOINS this same run also
+    // calls: a `.catch` there would fire once per joiner, logging one rejection N times (review finding 2).
+    void run.catch((err: unknown) => {
+      console.warn(`ccrc-server: a dispatch run rejected: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+    });
+    this.dispatchRun = run;
+    return run;
+  }
+
+  /** For a caller that must not wait: the inventory run's tail, a route's reply. Fire-and-forget only —
+   *  `dispatchNow` itself attaches the rejection log to the run it creates (see above), so this must not attach
+   *  a second one. */
+  triggerDispatch(): void {
+    void this.dispatchNow();
+  }
+
+  /** The act's deps, built from this process's Deps — the ONE place they are assembled. The server's own
+   *  update.json is read through `localIO` in both modes (`deps.io` is the FLEET box's io in remote mode). */
+  private async dispatchOnce(): Promise<DispatchRunResult> {
+    const coord = this.deps.coord;
+    if (coord === undefined) return { ran: false, why: 'no-coord' };
+    const { cfg, fleetState, sendUpdateOp, updateRunner } = this.deps;
+    return runDispatch({
+      store: coord, role: cfg.role, ccrcDir: cfg.ccrcDir, localIo: localIO, deadlineMs: cfg.updateDeadlineMs,
+      fleet: sendUpdateOp !== undefined && fleetState !== undefined ? { state: fleetState, send: sendUpdateOp } : null,
+      runLocal: updateRunner ?? null,
+      onAccepted: () => this.triggerInventory(),
+    }, Date.now());
+  }
+
   /** C3 (final fix wave): D-3211 says a node-id collision "is named", but the
    *  sweep's `SweepOutcome[]` was discarded by both callers — nothing ever
    *  printed it. Warns each `node-id-collision`, each `refused` and each
@@ -1122,6 +1184,9 @@ export class FleetWatcher {
     // skipped too, rather than deciding on rows this process never wrote.
     if (this.sweptEnoughToDecide(inv, outcomes)) this.inventorySwept = true;
     if (this.inventorySwept) this.pushRelease(now);
+    // Wave 5 (design 2026-09-20 §10): the sweep is what settles a lease, so every inventory run ends in ONE
+    // dispatch run — the next node's turn starts on the beat that freed it.
+    this.triggerDispatch();
     return outcomes;
   }
 
@@ -1172,8 +1237,9 @@ export class FleetWatcher {
       marked = coord.markReleaseNotified(n.tag, now);
       // Fix round 1 (F1/F14, D-3313/D-3316): sides are picked from EVERY live row — filtering first is what
       // let a `both` server row's own version stand in for a fleet nobody measured (the reviewer's exact
-      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — measured this
-      // sweep, its stamp read, and (D-3316) reachable — so an occupying row that fails it renders as a dash,
+      // rows). `stated` carries the per-row "does this reading vouch for its version" fact — EVER measured
+      // (W5 review 161, F-I: `measuredAt` is a persisting stamp, not "measured THIS sweep"), its stamp read,
+      // and (D-3316) reachable — so an occupying row that fails it renders as a dash,
       // never its stale value, but still blocks another row from falling back into its side. On a remote
       // fleet (D-3313) a `both` row is THIS box, never the fleet box; local mode's one `both` row genuinely
       // is both (D-3301).
@@ -1201,8 +1267,11 @@ export class FleetWatcher {
 
   /**
    * The catalogue side's entry (plan W3 Task 3): `tick()`'s catalogue gate and `POST /api/updates/refresh`
-   * call this, never `pushRelease` directly. It decides only once THIS process has finished one inventory run
-   * (D-3314). Both lanes fire unawaited on the first tick after a start, and
+   * call this, never `pushRelease` directly. It decides only once THIS process's own sweep has actually
+   * REWRITTEN the rows it decides on (D-3314) — not merely once an inventory run has finished (W5 review
+   * 161, F-H: a finished run whose write was refused, errored or left the row merely marked unreachable
+   * leaves `inventorySwept` closed too; `sweptEnoughToDecide` is the exact gate). Both lanes fire unawaited
+   * on the first tick after a start, and
    * until the first sweep rewrites them the `nodes` rows are the previous process's. After a server-box update
    * they still carry the version the update replaced, so a poll that resolves first would push "vX is out" to
    * a fleet already on vX. The inventory run's own `pushRelease` call makes that first decision instead.
@@ -4765,7 +4834,11 @@ export class FleetWatcher {
       //     ctxPct: a stale high reading surviving a tick where the console
       //     could not even see the statusline is worse than showing no
       //     reading, so it is explicitly cleared while model/branch/effort
-      //     ride through untouched.
+      //     ride through untouched. On either retaining branch (3 or 4)
+      //     `boxCols` is never kept — THIS tick's reading or none — and
+      //     `workflowActive` is THIS tick's reading wherever the tick saw the
+      //     statusline row, the last one kept where it did not, as the notes
+      //     beside the code below say.
       if (pane === null) {
         this.statuslines.delete(r.id);
       } else {
@@ -4782,14 +4855,26 @@ export class FleetWatcher {
           this.statuslines.set(r.id, sl);
         } else if (sl.ctxPct !== undefined) {
           const prev = this.statuslines.get(r.id);
-          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, retained: true } : sl);
+          // ctx is read off the statusline row, so this tick saw it and its
+          // `workflowActive` is defined: the `??` below never falls through
+          // here. Written as on branch 4 so the one rule reads the same on both.
+          this.statuslines.set(r.id, prev ? { ...prev, ctxPct: sl.ctxPct, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true } : sl);
         } else {
           // `boxCols` rides with ctxPct, never with identity: it is THIS
           // tick's width or nothing. A kept width would read an overlay tick
           // on a pane just narrowed by an attach as still wide — the one
           // direction the fleet's `narrow` chip must not err in.
+          // `workflowActive` reads the rows BELOW the statusline row. A tick
+          // that saw that row measured them — a `👤`-only row lands on this
+          // branch with no identity and no ctx, and its reading is this
+          // tick's, `true` or `false`. A tick that did not (an overlay, a
+          // pane mid-render) gets `undefined` from `parseStatusline`, and the
+          // LAST measurement rides through, like identity: a stored `false`
+          // there dropped a running Workflow's card to idle, and fired
+          // "✓ Finished", for as long as the overlay stayed up, wherever
+          // fleet.ts reads the row (no live file, or a pre-2.1.277 build).
           const prev = this.statuslines.get(r.id);
-          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, retained: true });
+          if (prev) this.statuslines.set(r.id, { ...prev, ctxPct: undefined, boxCols: sl.boxCols, workflowActive: sl.workflowActive ?? prev.workflowActive, retained: true });
         }
       }
       // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
