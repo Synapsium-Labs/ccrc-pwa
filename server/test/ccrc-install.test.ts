@@ -2404,6 +2404,35 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(a).not.toBe(b);
   });
 
+  it('a staged tree INSIDE another git work tree is named and stamped by its own build.json, never by the enclosing repository\'s HEAD (D-3463)', () => {
+    // A TMPDIR under a git-tracked HOME: the release tarball is extracted into
+    // an untracked subdirectory of a repository. `git -C <stage> rev-parse
+    // HEAD` answers for the ENCLOSING repository there.
+    const home = mkTmp('ccrc-ver-name-enclosed-');
+    const encl = join(home, 'encl');
+    installFixtureTree(home, 'encl');
+    const esha = gitInit(encl);
+    const stage = join(encl, 'stage');
+    mkdirSync(join(stage, 'ccd'), { recursive: true });
+    shipStamp(stage, 'c'.repeat(40), 'v1.5.0');
+    // git really does answer for the enclosing repository from here (the hazard exists)
+    expect(spawnSync('git', ['-C', stage, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim()).toBe(esha);
+    expect(nameOf(home, stage)).toBe('v1.5.0');
+    // no build.json either: not the enclosing commit — unstamped
+    rmSync(join(stage, 'build.json'));
+    expect(nameOf(home, stage)).toMatch(/^unstamped-[0-9a-f]{12}$/);
+    // and the enclosing repository ITSELF (its own top level) is still named from git
+    expect(nameOf(home, encl)).toBe(`untagged-${esha.slice(0, 12)}`);
+    // the stamp: `_inst_stamp` reads the shipped build.json of the enclosed tree
+    shipStamp(stage, 'c'.repeat(40), 'v1.5.0');
+    const r = sourced(home, join(REPO, 'ccd', 'ccrc'), `CCRC_HERE='${stage}/ccd'; _inst_stamp`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain(`install: stamp: ${'c'.repeat(40)} (release, v1.5.0, shipped in the release artifact)`);
+    const stamp = readFileSync(join(home, '.ccrc', 'build.json'), 'utf8');
+    expect(stamp).toContain('c'.repeat(40));
+    expect(stamp, 'the stamp took the enclosing repository\'s sha').not.toContain(esha);
+  });
+
   it('a fresh box: the tree lands in ~/ccrc-versions/<name>/, never at the live name, and ~/ccrc becomes an absolute link to it — after the deps, by one rename', () => {
     const home = freshBox('ccrc-install-ver-fresh-');
     const sha = gitInit(treeRoot(home));

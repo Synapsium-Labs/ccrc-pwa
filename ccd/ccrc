@@ -10222,6 +10222,25 @@ _ver_layout() {
   return 0
 }
 
+# ── _inst_git_own <dir> — is <dir> ITSELF a git repository's top level? ──
+# (D-3463.) `git -C <dir> rev-parse HEAD` answers for the ENCLOSING
+# repository when <dir> is merely inside a work tree — a staged release tree
+# under a TMPDIR that sits in a git-tracked HOME — and a name or a stamp taken
+# from that answer is another tree's commit. So: 0 only when git's top level
+# for <dir> IS <dir>, compared physically; 1 for everything else, including a
+# git that refuses (the callers' own git-failure sentences still speak for
+# that case, they ask git first). `GIT_DIR`, `GIT_WORK_TREE` and
+# `GIT_CEILING_DIRECTORIES` are unset for the call — a subshell, so no new
+# tool joins the install path — because each of them changes which repository
+# `<dir>` belongs to.
+_inst_git_own() {   # <dir> -> 0 iff git's top level for <dir> is <dir> itself
+  local here top
+  here="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  top="$( unset GIT_DIR GIT_WORK_TREE GIT_CEILING_DIRECTORIES; git -C "$here" rev-parse --show-toplevel 2>/dev/null )" || return 1
+  top="$(cd "$top" 2>/dev/null && pwd -P)" || return 1
+  [ "$top" = "$here" ]
+}
+
 # ── _inst_version_name <src> — the directory a source tree is placed into ─
 # (W6 Task 2). `<src>` is the PHYSICAL path of the tree this run installs from
 # (`_inst_tree`'s `pwd -P`). Prints exactly one name matching VER_NAME_RE and
@@ -10229,7 +10248,8 @@ _ver_layout() {
 #   1. `<src>` is a placed version — `<physical versions root>/<n>`, `<n>` a
 #      version name — and names itself, so a run of a kept version's own
 #      `ccd/ccrc` is recognised as that version and nothing is copied.
-#   2. git answers for `<src>`: the release tag at HEAD, else
+#   2. git answers for `<src>` AND `<src>` is the repository's own top level
+#      (`_inst_git_own`, D-3463): the release tag at HEAD, else
 #      `untagged-<sha12>` (D-3422). The same precedence
 #      `_inst_stamp` gives git — a checkout's own state is the truth about a
 #      checkout, and a stray `build.json` beside it never outvotes it. The tag
@@ -10258,7 +10278,7 @@ _inst_version_name() {   # <src, physical> -> one VER_NAME_RE name on stdout
     return 0
   fi
   if command -v git >/dev/null 2>&1 && sha="$(git -C "$src" rev-parse HEAD 2>/dev/null)" \
-     && [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+     && [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && _inst_git_own "$src"; then
     while IFS= read -r t; do
       if [[ "$t" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then n="$t"; break; fi
     done < <(git -C "$src" tag --points-at HEAD 2>/dev/null)
@@ -11221,6 +11241,14 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   if [ "$rc" -eq 0 ] && [ -z "$sha" ]; then
     _inst_stamp_shipped && return 0
     echo "install: stamp: skipped (git rev-parse HEAD exited 0 but printed no sha) — ccrc version will say unstamped"
+    return 0
+  fi
+  if [ "$rc" -eq 0 ] && ! _inst_git_own "$src"; then
+    # D-3463: git answered, but for a repository that ENCLOSES this tree (a
+    # release tarball extracted under a git-tracked directory) — its HEAD is
+    # not this tree's. Treated as what it is, a tree that is no checkout.
+    _inst_stamp_shipped && return 0
+    echo "install: stamp: skipped (this tree is not the top level of a git checkout — an enclosing repository's commit is not its own) — ccrc version will say unstamped"
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
