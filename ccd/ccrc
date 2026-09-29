@@ -17652,9 +17652,9 @@ cmd_backup() {
 # or absurd value cannot fill a line or drive a terminal.
 _keep_ok() { [[ "$1" =~ ^[0-9]{1,4}$ ]]; }
 _keep_why() {   # <knob> <value>
-  local v="$2"
-  [ "${#v}" -le 32 ] || v="${v:0:32}..."
-  printf "%s='%s' is not a whole number from 0 to 9999" "$1" "${v//[![:print:]]/?}"
+  local val="$2"
+  [ "${#val}" -le 32 ] || val="${val:0:32}..."
+  printf "%s='%s' is not a whole number from 0 to 9999" "$1" "${val//[![:print:]]/?}"
 }
 
 # Keep the newest ${CCRC_BACKUP_KEEP:-10} TIMESTAMPED backups —
