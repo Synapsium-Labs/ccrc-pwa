@@ -390,13 +390,28 @@ const CCD_POOL_SYNC = path.join(repoRootForSync, 'ccd', 'ccd-pool-sync');
  *  exact file `_acct_pool_state` reads, so no hand-copy of the rendered text
  *  can drift from what the real python renderer actually produced. Hoisted to
  *  module scope (review round 3) so both the C1 and W1 cross-side suites
- *  share one definition rather than two copies that could drift. */
+ *  share one definition rather than two copies that could drift.
+ *
+ *  The stub models the script's CURRENT curl argv (`-o <file> -w '%{http_code}'`,
+ *  W6 Task 8A): it copies the body into the `-o` file and prints only the
+ *  status to stdout, as a real curl does. The body rides in a data file the
+ *  stub `cat`s, not a quoting chain, so a JSON body with quotes is safe. */
 const syncInto = (home: string, body: string): void => {
   const bin = path.join(home, 'bin');
   mkdirSync(bin, { recursive: true });
-  const escaped = body.replace(/'/g, `'\\''`);
-  writeFileSync(path.join(bin, 'curl'),
-    `#!/usr/bin/env bash\ncat > /dev/null\nprintf '%s\\n%s' '${escaped}' '200'\n`, { mode: 0o755 });
+  writeFileSync(path.join(home, 'curl-body.json'), body, 'utf8');
+  writeFileSync(path.join(bin, 'curl'), [
+    '#!/usr/bin/env bash',
+    'cat > /dev/null',
+    'outfile=""; prev=""',
+    'for a in "$@"; do',
+    '  if [ "$prev" = "-o" ]; then outfile="$a"; fi',
+    '  prev="$a"',
+    'done',
+    '[ -n "$outfile" ] && cat "$HOME/curl-body.json" > "$outfile"',
+    "printf '200'",
+    '',
+  ].join('\n'), { mode: 0o755 });
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_SERVER_URL=https://example.invalid\n', 'utf8');
   mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
