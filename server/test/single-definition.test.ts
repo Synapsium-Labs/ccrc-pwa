@@ -1529,6 +1529,12 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
       'rm -f "$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ]; then',
+      // `_rollback_killed_flip_state` (D-3466), condition (2): nothing at all is
+      // at the record's path — `[ ! -e ] && [ ! -L ]`, so a dangling link or a
+      // FIFO counts as something. One of six conditions, and the only reader of
+      // the record's ABSENCE for a rollback; the record has five removers, so
+      // absence alone proves nothing (the entry names them).
+      '{ [ ! -e "$BOX_INSTALLED_FILE" ] && [ ! -L "$BOX_INSTALLED_FILE" ]; } || return 1',
       // cmd_rollback (D-3285, final review B3(i), then a re-review clause):
       // a read-only convergence check — the running stamp's version and sha
       // against the completed-install record — before any network call or
