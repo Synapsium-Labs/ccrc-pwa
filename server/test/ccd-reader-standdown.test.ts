@@ -103,11 +103,11 @@ describe('_pane_measurable', () => {
     expect(rc(`${panes('1 0x80')} _pane_measurable demo`), 'nor is a hex literal').toBe(1);
   });
 
-  it('targets cc-<id>, through _tmux', () => {
+  it('targets EXACTLY =cc-<id>:, through _tmux_t (D-3525)', () => {
     const out = h.sh(
       'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };'
       + ' _pane_measurable demo-quiet-basin; cat "$HOME/ccd-calls"');
-    expect(out).toContain('-t cc-demo-quiet-basin');
+    expect(out).toContain('-t =cc-demo-quiet-basin:');
     expect(out).toContain('#{pane_active}');
     expect(out).toContain('#{pane_width}');
   });
@@ -255,8 +255,11 @@ describe('the two stand-downs outside the phrase population', () => {
     // so a guard that measured `$t` rather than the stripped id stands down
     // here just the same — and `_pane_measurable` would rebuild it as
     // `cc-cc-demo`, a session that does not exist.
-    expect(out, 'the guard measured a pane').toContain('-t cc-demo');
-    expect(out, '`cc-` stripped once, not twice').not.toContain('cc-cc-demo');
+    // Since D-3525 `$t` is the ANCHORED name (`=cc-demo:`), so a guard handed
+    // it would rebuild `=cc-=cc-demo_:` — the second assertion's pattern
+    // covers that spelling as well as the unanchored `cc-cc-demo`.
+    expect(out, 'the guard measured a pane').toContain('-t =cc-demo:');
+    expect(out, '`cc-` stripped once, not twice').not.toMatch(/cc-=?cc-demo/);
   });
 });
 

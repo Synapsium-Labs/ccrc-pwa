@@ -218,7 +218,7 @@ describe('cmd_swap keeps carrying the task list', () => {
     runSwap();
     expect(asManagerCalls(h.calls())).toEqual([
       'systemctl --user stop claude-session@claude-demo',
-      'tmux kill-session -t cc-claude-demo',
+      'tmux kill-session -t =cc-claude-demo:',
       // cmd_swap's own `_lc_done` (task 18) is the first `_lc_emit` in this
       // process — it sits right after the registry flip, before the restart —
       // so `_lc_obs`'s once-per-process `tmux list-panes` probe fires here.

@@ -4,6 +4,16 @@ import type { RunningAgent } from '../src/server.js';
 import type { PtyProcess, PtySpawn } from '../src/pty.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 
+/** node-pty's `spawn`, REPLACED for this file (D-3525): the real
+ *  `spawnFleetPty` runs against it, so the argv it hands tmux is pinned at its
+ *  own call site without loading the native binding. Every other case here
+ *  injects its own fake `PtySpawn`, so nothing else reaches it. */
+const ptySpawn = vi.hoisted(() => vi.fn(() => ({
+  onData: () => ({ dispose: () => {} }), onExit: () => ({ dispose: () => {} }),
+  write: () => {}, resize: () => {}, kill: () => {},
+})));
+vi.mock('node-pty', () => ({ spawn: ptySpawn }));
+
 interface Res { ok: boolean; err?: string; ptyId?: number; [k: string]: unknown }
 interface PtyMsg { t: 'pty'; ptyId: number; ev: 'data' | 'exit'; dataB64?: string }
 
@@ -185,5 +195,20 @@ describe('ccrc-agent ptyOpen/pty control frames', () => {
     client!.ws.close();
 
     await vi.waitFor(() => expect(fake.instances[0]!.killed).toBe(true), wait);
+  });
+});
+
+describe('spawnFleetPty — the remote drawer attaches EXACTLY one session (D-3525)', () => {
+  it('spawns `tmux attach -t =cc-<id>:`, never the bare name', async () => {
+    // `isSessionIdAllowed` bars every tmux target sigil, but it cannot bar a
+    // PREFIX: a bare `-t cc-<id>` resolves a gone session to a live
+    // `cc-<id>-…` sibling and the drawer attaches to it (measured, tmux 3.4).
+    const { spawnFleetPty } = await import('../src/pty.js');
+    spawnFleetPty('demo', 120, 40);
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
+    const call = ptySpawn.mock.calls[0] as unknown as [string, string[], { cols: number; rows: number }];
+    expect(call[0]).toBe('tmux');
+    expect(call[1]).toEqual(['attach', '-t', '=cc-demo:']);
+    expect(call[2]).toMatchObject({ cols: 120, rows: 40 });
   });
 });

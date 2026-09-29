@@ -418,7 +418,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     // 401 as "earlier"; the harness's tmux stub answers any display-message, so
     // only the source can hold the format.
     const src = fs.readFileSync(CCD, 'utf8');
-    expect(src).toContain(`tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null`);
+    expect(src).toContain(`tmux display-message -p -t "$(_tmux_t "$1")" '#{session_created}' 2>/dev/null`);
     expect(src).toContain('born=$(_pane_born "$id")');
     // The rescue's marker write reads the bound ONCE (D-3524) and hands the same
     // value to the stuck scan and to the credential-change check, so the two can

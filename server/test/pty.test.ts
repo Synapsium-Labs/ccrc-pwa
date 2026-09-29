@@ -5,6 +5,15 @@ import { buildServer } from '../src/server.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
 
+/** node-pty's `spawn`, REPLACED for this file (D-3525): the real `attachPty`
+ *  runs against it, so the argv it hands tmux is pinned at its own call site
+ *  without loading the native binding. Nothing else here reaches it — every
+ *  other case injects `spawnPty`. */
+const ptySpawn = vi.hoisted(() => vi.fn(() => ({
+  onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {},
+})));
+vi.mock('node-pty', () => ({ spawn: ptySpawn }));
+
 /** Stub in place of node-pty: records writes/resizes/kill, emits one queued output frame. */
 class StubPty implements PtyLike {
   written: string[] = [];
@@ -76,7 +85,7 @@ describe('pty drawer bridge', () => {
     ws.close();
     await vi.waitFor(() => expect(stub.killed).toBe(true), wait);
     await vi.waitFor(() =>
-      expect(calls).toContainEqual(['tmux', 'resize-window', '-t', 'cc-claude2-MekWarLive', '-x', '220', '-y', '50']),
+      expect(calls).toContainEqual(['tmux', 'resize-window', '-t', '=cc-claude2-MekWarLive:', '-x', '220', '-y', '50']),
       wait);
   });
 
@@ -116,7 +125,7 @@ describe('pty drawer bridge', () => {
     await opened(ws);
     await vi.waitFor(() => expect(log).toContain('spawnPty claude2-MekWarLive 43x40'), wait);
 
-    const pin = 'tmux resize-window -t cc-claude2-MekWarLive -x 220 -y 50';
+    const pin = 'tmux resize-window -t =cc-claude2-MekWarLive: -x 220 -y 50';
     const spawn = 'spawnPty claude2-MekWarLive 43x40';
     expect(log.indexOf(pin), 'the canonical pin never ran — the client reflows the history')
       .toBeGreaterThanOrEqual(0);
@@ -160,5 +169,22 @@ describe('pty drawer bridge', () => {
     // The close handler's restore is now a no-op against a window that never
     // moved, which is exactly what §5.1 says it becomes.
     await vi.waitFor(() => expect(log.filter((l) => l === pin)).toHaveLength(2), wait);
+  });
+});
+
+describe('attachPty — the local drawer attaches EXACTLY one session (D-3525)', () => {
+  it('spawns `tmux attach -t =cc-<id>:`, never the bare name', async () => {
+    // A bare `-t cc-<id>` is a tmux SEARCH: with `cc-<id>` gone and a
+    // `cc-<id>-…` sibling live, the drawer attached to the SIBLING (measured,
+    // tmux 3.4, `list-clients -F '#{client_session}'`) — typing into someone
+    // else's session through a drawer labelled with this one's id. The exact
+    // target refuses instead: `can't find session`.
+    const { attachPty } = await import('../src/pty.js');
+    attachPty('demo', 120, 40);
+    expect(ptySpawn).toHaveBeenCalledTimes(1);
+    const call = ptySpawn.mock.calls[0] as unknown as [string, string[], { cols: number; rows: number }];
+    expect(call[0]).toBe('tmux');
+    expect(call[1]).toEqual(['attach', '-t', '=cc-demo:']);
+    expect(call[2]).toMatchObject({ cols: 120, rows: 40 });
   });
 });

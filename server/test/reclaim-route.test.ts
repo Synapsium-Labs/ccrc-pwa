@@ -201,7 +201,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     const home = mkTmp('ccrc-reclaim-');
     seed(home, DEAD);
     seed(home, HEIR);
-    const { run } = makeRunner(new Set([`cc-${DEAD}`]));
+    const { run } = makeRunner(new Set([`=cc-${DEAD}:`]));
     const w = await openApp(home, run); app = w.app;
     const id = openWave(w.coord, 1);
 

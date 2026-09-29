@@ -267,7 +267,7 @@ describe('POST /api/asks/:id/answer', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — answerAsk's own contract.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     const row = okAsk(coord.askById(id))!;
     expect(row.state).toBe('answered');
@@ -783,7 +783,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     // The row is untouched by this request — left exactly where the
     // pre-existing take put it, neither settled nor rolled back.
@@ -848,7 +848,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     // own result — not shaped by `taken.ok` at all.
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
 
     // This request never held the row — left exactly where the competing
     // take put it, neither settled nor rolled back out from under it.
@@ -862,7 +862,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     const res = await post(CHILD, { askKey: ASK_KEY, optionIndexes: [1] });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
   });
 
   // WHOLE-BRANCH REVIEW, F3 — the operator's LOCK-SCREEN answer must survive
@@ -890,7 +890,7 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true });
-      expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${CHILD}`, '2']]);
+      expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${CHILD}:`, '2']]);
       expect(warn).toHaveBeenCalled();
       expect(id).not.toBeNull();
     });

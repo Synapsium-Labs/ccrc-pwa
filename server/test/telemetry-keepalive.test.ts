@@ -265,7 +265,7 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.wrapper'), 'claude-a\n');
     fs.writeFileSync(j('.cc-sessions', 'claude-a-demo.supervised'),
       `${Math.floor(Date.now() / 1000) - 999}\n`);
-    plantTmux(tmuxLive('cc-claude-a-demo'));
+    plantTmux(tmuxLive('=cc-claude-a-demo:'));
     run();
     const r = row('claude-a');
     expect(r.outcome,
@@ -286,7 +286,11 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     plantLimits('claude-a', 41, 9999);
     fs.writeFileSync(j('.cc-sessions', 'some-stopped-session.wrapper'), 'claude-a\n');
     run();
-    expect(tmuxCalls()).toContain('has-session -t cc-some-stopped-session');
+    // EXACT (D-3525): `=` + the name + `:`. A bare `cc-some-stopped-session`
+    // is a tmux prefix SEARCH, and a live `cc-some-stopped-session-2` would
+    // answer for it — reading a dead pane as live (the fail-safe direction
+    // here, but still the wrong session's answer).
+    expect(tmuxCalls()).toContain('has-session -t =cc-some-stopped-session:');
   });
 
   it('skips an account whose pane liveness cannot be MEASURED — the gate fails shut', () => {
@@ -319,7 +323,7 @@ describe('the three skips — a keepalive is for the idle case only', () => {
     plantLimits('claude-a', 41, 9999);
     fs.writeFileSync(j('.cc-sessions', 'aaa-unmeasured.wrapper'), 'claude-a\n');
     fs.writeFileSync(j('.cc-sessions', 'zzz-live.wrapper'), 'claude-a\n');
-    plantTmux(`[ "$3" = "cc-zzz-live" ] && exit 0\n${TMUX_NO_SERVER}`);
+    plantTmux(`[ "$3" = "=cc-zzz-live:" ] && exit 0\n${TMUX_NO_SERVER}`);
     run();
     const r = row('claude-a');
     expect(r.outcome).toBe('skipped');

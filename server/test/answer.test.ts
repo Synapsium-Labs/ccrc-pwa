@@ -52,9 +52,9 @@ describe('answerDialog', () => {
     const res = await answerDialog(deps(tmux), 'x', DIALOG_ID, 3);
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -63,9 +63,9 @@ describe('answerDialog', () => {
     const res = await answerDialog(deps(tmux), 'x', DIALOG_ID, 1);
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Up'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Up'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Up'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Up'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -89,8 +89,8 @@ describe('answerDialog', () => {
     expect(res).toEqual({ ok: false, error: 'walk-failed' });
     const sk = sendKeysCalls(calls);
     expect(sk).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
     ]);
     expect(sk.some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
@@ -113,8 +113,8 @@ describe('answerDialog', () => {
     const res = await answerDialog(deps(tmux), 'x', DIALOG_ID, 2);
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Down'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Down'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 });
@@ -131,7 +131,7 @@ describe('interrupt', () => {
     const { tmux, calls } = fakeTmux(['generation in progress\n❯ \n']);
     const res = await interrupt(deps(tmux), 'x', async () => true);
     expect(res).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Escape']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Escape']]);
   });
 
   it('idle (per resolver): not-busy, no keys sent', async () => {

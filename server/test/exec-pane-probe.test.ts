@@ -18,6 +18,12 @@
 // pane: cc-nope"; `list-panes` says "can't find WINDOW". Two verbs, two
 // messages, and folding them into one substring test would make a real
 // `unreadable` read as death.
+//
+// THOSE TWO WERE MEASURED WITH A BARE TARGET, and the adapter no longer sends
+// one (D-3525). Against the exact `=cc-nope:` it now builds, BOTH verbs answer
+// `can't find session: cc-nope` for a missing session — measured, tmux 3.4,
+// private socket — so that is the message the gone arm must recognise first;
+// the bare-target literal stays recognised, and nothing else joins it.
 import { describe, it, expect } from 'vitest';
 import { Tmux, PANE_PROBE_FORMAT, type ExecResult, type Runner } from '../src/exec.js';
 import type { PaneProbe } from '../../shared/api.js';
@@ -35,9 +41,9 @@ const probeOn = async (r: ExecResult): Promise<{ probe: PaneProbe; calls: string
 };
 
 describe('Tmux.paneProbe', () => {
-  it('asks for the six formats in one list-panes, against cc-<id>', async () => {
+  it('asks for the six formats in one list-panes, against EXACTLY =cc-<id>:', async () => {
     const { calls } = await probeOn({ code: 0, stdout: '1 0 2000 220 50 0\n', stderr: '' });
-    expect(calls).toEqual([['tmux', 'list-panes', '-t', `cc-${ID}`, '-F', PANE_PROBE_FORMAT]]);
+    expect(calls).toEqual([['tmux', 'list-panes', '-t', `=cc-${ID}:`, '-F', PANE_PROBE_FORMAT]]);
     // The format string is the contract with tmux, so it is spelled out here
     // rather than only referenced — a reordering would silently swap two of
     // the numbers below for each other.
@@ -60,6 +66,14 @@ describe('Tmux.paneProbe', () => {
 
   it("answers `gone` on list-panes' own missing-target message, measured verbatim", async () => {
     const { probe } = await probeOn({ code: 1, stdout: '', stderr: "can't find window: cc-nope\n" });
+    expect(probe).toEqual({ ok: false, reason: 'gone' });
+  });
+
+  it("answers `gone` on the EXACT target's missing-session message, measured verbatim (D-3525)", async () => {
+    // What `list-panes -t =cc-nope:` actually says. Read as `unreadable`, a
+    // dead session would show the drawer's "could not look" instead of its
+    // loss overlay — measured against the real adapter before this arm.
+    const { probe } = await probeOn({ code: 1, stdout: '', stderr: "can't find session: cc-nope\n" });
     expect(probe).toEqual({ ok: false, reason: 'gone' });
   });
 

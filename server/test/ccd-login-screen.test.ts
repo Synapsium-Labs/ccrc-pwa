@@ -531,13 +531,13 @@ describe('the settle ANSWERS it, and answers YES (D-3107, D-3109)', () => {
     // answers "No, disable external imports" — silently, permanently, for that
     // project on that lane.
     expect(run(CURSOR_ON_NO)).toEqual([
-      'tmux send-keys -t cc-test Down',
-      'tmux send-keys -t cc-test Enter',
+      'tmux send-keys -t =cc-test: Down',
+      'tmux send-keys -t =cc-test: Enter',
     ]);
   });
 
   it('cursor already on YES: a single Enter', () => {
-    expect(run(CURSOR_ON_YES)).toEqual(['tmux send-keys -t cc-test Enter']);
+    expect(run(CURSOR_ON_YES)).toEqual(['tmux send-keys -t =cc-test: Enter']);
   });
 
   it('it is asked ABOVE the ready markers, so a pane carrying BOTH is still answered', () => {
@@ -549,8 +549,8 @@ describe('the settle ANSWERS it, and answers YES (D-3107, D-3109)', () => {
     // TUI over a modal nobody answered.
     const withFooter = CURSOR_ON_NO + '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents\n';
     expect(run(withFooter)).toEqual([
-      'tmux send-keys -t cc-test Down',
-      'tmux send-keys -t cc-test Enter',
+      'tmux send-keys -t =cc-test: Down',
+      'tmux send-keys -t =cc-test: Enter',
     ]);
   });
 

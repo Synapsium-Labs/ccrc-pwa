@@ -319,8 +319,8 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello world'],
-      ['tmux', 'send-keys', '-t', 'cc-myid', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', 'Enter'],
     ]);
   });
 
@@ -373,9 +373,9 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'new text', { replaceDraft: true });
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'new text'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'new text'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -388,7 +388,7 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { replaceDraft: true });
     expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: 'stubborn' });
     expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(
-      new Set(['tmux send-keys -t cc-x C-u']),
+      new Set(['tmux send-keys -t =cc-x: C-u']),
     );
     // The ceiling, reached only because `sleep` is free here; against a real
     // clock the 3 s budget stops it first (see the budget tests below).
@@ -400,10 +400,10 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'a\nb');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'a'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'b'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'a'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'b'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -420,10 +420,10 @@ describe('sendPrompt', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'real first line'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'second line'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'real first line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -452,8 +452,8 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'myid', 'hello world');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-myid', '-l', 'hello world'],
-      ['tmux', 'send-keys', '-t', 'cc-myid', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-myid:', 'Enter'],
     ]);
   });
 
@@ -469,8 +469,8 @@ describe('sendPrompt', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'hello'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
     // draft check must use the ANSI capture (-e), not the plain one.
     expect(calls.some((c) => c[0] === 'tmux' && c[1] === 'capture-pane' && c.includes('-e'))).toBe(true);
@@ -513,7 +513,7 @@ describe('sendPrompt', () => {
     expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect((res as { pane?: string }).pane).toContain('❯');
     const sk = sendKeysCalls(calls);
-    expect(sk).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', '-l', 'will not appear']);
+    expect(sk).toContainEqual(['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'will not appear']);
     expect(sk.some((c) => c[c.length - 1] === 'Enter')).toBe(false);
   });
 
@@ -830,7 +830,7 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
     // No `-l` literal send anywhere: the text was never retyped, only submitted.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
   });
 
   it('still refuses a foreign human draft as draft-present, even with resumeIfOwn set — the sacred guard (F2)', async () => {
@@ -896,7 +896,7 @@ describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeA, { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
     // No `-l` literal send anywhere: the envelope was never retyped, only submitted.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
   });
 
   it('does NOT resume a DIFFERENT envelope\'s draft left in the same box, even though the marker row matches — the exact bug', async () => {
@@ -919,7 +919,7 @@ describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker
     const { tmux, calls } = fakeTmux([boxOf(envelopeB), '❯ \n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
   });
 });
 
@@ -972,9 +972,9 @@ describe('sendPrompt clearMailResidue', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'ccrc-mail: you have new mail. List it.'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'ccrc-mail: you have new mail. List it.'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -990,7 +990,7 @@ describe('sendPrompt clearMailResidue', () => {
       { resumeIfOwn: true, clearMailResidue: true },
     );
     expect(res).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)[0]).toEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+    expect(sendKeysCalls(calls)[0]).toEqual(['tmux', 'send-keys', '-t', '=cc-x:', 'C-u']);
   });
 
   it('a genuine human draft is STILL refused as draft-present, even with clearMailResidue set — F2 preserved (hard case d)', async () => {
@@ -1042,7 +1042,7 @@ describe('sendPrompt clearMailResidue', () => {
       { resumeIfOwn: true, clearMailResidue: true },
     );
     expect(res).toEqual({ ok: false, error: 'draft-clear-failed', draft: '[Pasted text #1 +54 lines]' });
-    expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(new Set(['tmux send-keys -t cc-x C-u']));
+    expect(new Set(sendKeysCalls(calls).map((c) => c.join(' ')))).toEqual(new Set(['tmux send-keys -t =cc-x: C-u']));
   });
 
   it('resumeIfOwn still takes priority: a stale OWN nudge is resumed (Enter only), never cleared', async () => {
@@ -1055,7 +1055,7 @@ describe('sendPrompt clearMailResidue', () => {
     expect(res).toEqual({ ok: true });
     // Only Enter — no C-u, no retype: resumeIfOwn's own-draft match wins
     // before clearMailResidue's residue check is ever reached.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
   });
 
   it('a menu that opens mid-clear is reported as dialog-open, same as the replaceDraft site', async () => {
@@ -1065,7 +1065,7 @@ describe('sendPrompt clearMailResidue', () => {
       { resumeIfOwn: true, clearMailResidue: true },
     );
     expect(res).toEqual({ ok: false, error: 'dialog-open' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', 'cc-x', 'C-u']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'C-u']]);
   });
 });
 
@@ -1104,9 +1104,9 @@ describe('sendPrompt ownStrandedClear', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', 'C-u'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', NUDGE],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'C-u'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', NUDGE],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -1256,8 +1256,8 @@ describe('draftOf strips the dim queue hint even with an interleaved SGR code', 
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'another message');
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'another message'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'another message'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -1338,10 +1338,10 @@ describe('sendPrompt with attachments', () => {
     expect(res).toEqual({ ok: true });
     // Alt+Enter separates the lines; the path goes first.
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', P],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'what is this'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', P],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 
@@ -1361,7 +1361,7 @@ describe('sendPrompt with attachments', () => {
     await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'x', { attachments: [P] });
     // Otherwise the paths are stranded in the live box — the exact state this
     // whole design exists to remove.
-    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', '=cc-x:', 'C-u']);
   });
 
   it('still refuses a scrollback-only match when attachments are present', async () => {
@@ -1421,7 +1421,7 @@ describe('sendPrompt with attachments', () => {
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', '', { attachments: [P] },
     );
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: 'stubborn leftover' });
-    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', 'cc-x', 'C-u']);
+    expect(sendKeysCalls(calls)).toContainEqual(['tmux', 'send-keys', '-t', '=cc-x:', 'C-u']);
   });
 });
 
@@ -1484,7 +1484,7 @@ describe('the failed-send cleanup actually empties the box', () => {
     expect(cuPresses(calls)).toBe(5);
     expect(box.lines).toEqual(['']); // submitted
     const typed = sendKeysCalls(calls).filter((c) => c.includes('-l'));
-    expect(typed).toEqual([['tmux', 'send-keys', '-t', 'cc-x', '-l', 'fresh text']]);
+    expect(typed).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'fresh text']]);
   });
 
   it('replaceDraft clears a 5-line draft — a pasted stack trace is not an exotic case', async () => {
@@ -1619,10 +1619,10 @@ describe('sendPrompt echo verification', () => {
     );
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'note:  '],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'M-Enter'],
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'second line'],
-      ['tmux', 'send-keys', '-t', 'cc-x', 'Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'note:  '],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'M-Enter'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'second line'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'],
     ]);
   });
 

@@ -398,7 +398,7 @@ describeLinux('the start waits on observables', () => {
     expect(r.code).toBe(0);
     const calls = h.calls();
     const enableAt = calls.indexOf('systemctl --user enable --now claude-session@claude-a-demo');
-    const attachAt = calls.indexOf('tmux attach -t cc-claude-a-demo');
+    const attachAt = calls.indexOf('tmux attach -t =cc-claude-a-demo:');
     expect(enableAt).toBeGreaterThan(-1);
     expect(attachAt).toBeGreaterThan(enableAt);
   });

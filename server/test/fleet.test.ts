@@ -94,7 +94,7 @@ describe('assembleFleet', () => {
     writeFileSync(path.join(home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 55, seven: 70, ts: now - 60 }));
 
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
@@ -883,7 +883,7 @@ describe('hook state on the wire', () => {
       name: 'mekwar-a1', status: 'busy', statusUpdatedAt: 1784582728369, version: '2.1.210',
     }));
     const run: Runner = async (_cmd, args) => {
-      if (args[0] === 'has-session') return { code: args.includes('cc-claude-a-MekWarLive') ? 0 : 1, stdout: '', stderr: '' };
+      if (args[0] === 'has-session') return { code: args.includes('=cc-claude-a-MekWarLive:') ? 0 : 1, stdout: '', stderr: '' };
       if (args[0] === 'list-panes') return { code: 0, stdout: '40613\n', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
