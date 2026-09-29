@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f63251272d0617a842867e2656b55ec7bfb80add4d81976ec9543db607245ce8
+# ccrc:generated 1 sha256=769535a420e13984026c9f13af969007eed2ef80e8a0922ccd66c7f281772639
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2949,11 +2949,11 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 170
-# invocations across 141 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 176
+# invocations across 147 non-comment lines.
 #
-# THE LAST MOVE WAS D-3526's carried-in verdict (`_never_came_up`, `_carried_in_note`); before it the
-# RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s `.child` read and CCR-10's archive check.
+# THE LAST MOVE WAS D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in
+# `_carried_in_note`); before it the RECLAIM region's reads (CCR-15 wave 3, Task 5), `_child_tmpdir`'s and CCR-10's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
@@ -3701,18 +3701,18 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` 40 — by addition, NOT a fresh census of
+  # floors): 38; CCR-15's `child` made 39, D-3526's `carriednote` and `tdate` 41 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 40: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # The 41: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `carriednote`, `child`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `swapnarrownote`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tdate`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -16723,7 +16723,7 @@ _pane_born() {   # id -> the epoch the session's tmux session was created, i.e. 
   tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null
 }
 
-_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing — never a banner carried in from before this process (D-2363, D-3522, D-3526)
+_session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, OR the transcript's newest real row is a rate-limit banner or this process's 401, and nobody is typing — never a banner a swap carried in from before this process (D-2363, D-3522, D-3526)
   # THE PANE FIRST, UNCHANGED. `_pane_hard_blocked` is the detector every landing,
   # rescue and strand verdict has run on since Wave 3 and it stays primary — its
   # contract (a visible banner swaps, draft or not) is not touched here. The
@@ -16792,8 +16792,8 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
   # like to a boolean caller.
   _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
-  # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates
-  # to an earlier process answers no (`_pane_carried_in`); `_limit_dated` holds the rule and its exception.
+  # A CARRIED-IN BANNER IS NOT A BLOCK, on any rung (D-3526): a pane positive the transcript dates to an
+  # earlier process, with a swap after it, answers no (`_pane_carried_in`); `_limit_dated` holds the rule.
   _pane_hard_blocked "$pane" && { _pane_carried_in "$id" pane "$pane" && return 1; HARD_BLOCK_VIA=pane; return 0; }
   # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
   # arm below the transcript deliberately: a banner Claude Code is rendering on
@@ -20594,8 +20594,8 @@ _transcript_limit_banner() {   # transcript-path [stuck since-epoch] -> 0 the ne
   # — but PROOF-ONLY and as its own answer: a `rate_limit` row still counts
   # (rc 0) unless `since` is digits, the row's timestamp parses and it is
   # EARLIER than `since`; then it answers rc 3 with the row's epoch, a banner
-  # this process did not write. Never folded into rc 1: the caller keeps the
-  # block when this process never came up. The default mode is unchanged.
+  # this process did not write. Never folded into rc 1: the caller keeps the block when no
+  # swap came after the row, or this process never came up. The default mode is unchanged.
   local f="$1" mode="${2:-}" since="${3:-}" rows rc
   [[ -f "$f" && -r "$f" ]] || return 2
   rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
@@ -22214,20 +22214,32 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
 # none since 2026-09-16. Another 6 pane rescues had no rate-limit row in the
 # window at all, so nothing here dates them and nothing here suppresses them.
 #
-# THE CLOCK IS D-3522's, the pane's tmux `session_created` (`_pane_born`): ccd
-# creates a fresh tmux session per spawn, so a row older than it was written by
-# an earlier process. The spec named a new `$REG/<id>.landed` stamp instead;
-# D-3526 records why this one ships (one clock for the 401 and the rate limit,
-# no write in `cmd_swap`, nothing to bootstrap) and what it costs: after a
-# same-account restart a pre-restart row stops counting, and a real block is
-# re-measured by Claude Code's own resume re-drive, which writes a fresh row
-# within seconds when the block is under six hours old.
+# TWO CONDITIONS, BOTH PROVED. (1) THE CLOCK IS D-3522's, the pane's tmux
+# `session_created` (`_pane_born`): ccd creates a fresh tmux session per spawn,
+# so a row older than it was written by an earlier process. (2) A SWAP CAME
+# AFTER THE ROW: `$REG/<id>.lastswap` is later than the row's epoch. The clock
+# alone cannot tell a row a swap carried in from one this same account wrote
+# before a restart (an OOM kill, a supervisor revival, `ccd stop`/`start`), and
+# a restart more than six hours after a real block gets no re-drive, so the
+# clock alone retracted a standing strand and never moved that session when a
+# target freed (round-1 harm review, measured in a fixture). `lastswap` is
+# stamped by the rescue and affinity dispatches and by cmd_swap's landing, and
+# `_swap_refuse` DELETES it — a refused carry restarts on the same account — so
+# a missing, unreadable or not-later `lastswap` means the row is this account's
+# own and it stays a block. The spec named a new `$REG/<id>.landed` stamp
+# instead; D-3526 records why these two ship (one clock for the 401 and the
+# rate limit, no new write in `cmd_swap`, nothing to bootstrap) and the one
+# place they differ from it: a dispatch that neither landed nor reached
+# `_swap_refuse` (an early `die` in cmd_swap, a failed `systemd-run`) leaves its
+# stamp, and a same-account restart after that reads a pre-dispatch row as
+# carried in.
 #
-# PROOF-ONLY. A row counts unless the reader can PROVE it is older than born:
-# born unknown, an unparseable timestamp or an unresolvable transcript keeps
-# today's answer. And a pane positive is dated by the transcript's NEWEST REAL
-# row, not by the newest rate-limit row: once this process has written a real
-# row, nothing here can suppress what its pane says.
+# PROOF-ONLY. A row counts unless the reader can PROVE it is older than born
+# and the registry proves a swap after it: born unknown, an unparseable
+# timestamp, an unresolvable transcript or a torn `lastswap` keeps today's
+# answer. And a pane positive is dated by the transcript's NEWEST REAL row, not
+# by the newest rate-limit row: once this process has written a real row,
+# nothing here can suppress what its pane says.
 #
 # THE ONE EXCEPTION, the operator's ruling of 2026-09-28: a process that never
 # came up. 24 of the 26 were landings whose Claude Code never started, and the
@@ -22242,15 +22254,60 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
 # CARRIED: the 30 s `tscan` cache is not keyed on the process, so a positive
 # cached by the previous process can outlive a same-account restart by up to
 # 30 s — as D-3522's 401 arm already can.
-_limit_dated() {   # id via born -> 0 the transcript's newest real row is a block | 3 a rate-limit row older than born: carried in, and noted | 1 neither, or no transcript (D-3526)
-  local id="$1" via="$2" born="$3" f out rc
+_limit_dated() {   # id via born -> 0 the transcript's newest real row is a block | 3 a rate-limit row older than born and than the last swap: carried in, and noted | 1 neither, or no transcript (D-3526)
+  local id="$1" via="$2" born="$3" f out rc sw
   f=$(_transcript_path "$id") || return 1
-  out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
+  out=$(_limit_read "$id" "$f" "$born"); rc=$?
   (( rc == 0 )) && return 0
   (( rc == 3 )) || return 1
+  # Condition (2): the regex goes FIRST, so the arithmetic never sees an
+  # unvalidated field (D-299), and `10#` keeps a leading zero from reading as
+  # octal. Strictly later: a swap in the row's own second is not proof.
+  sw=$(_reg_get "$id" lastswap)
+  [[ "$sw" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ ]] && (( 10#$sw > 10#$out )) || return 0
   _never_came_up "$id" "$born" && return 0
   _carried_in_note "$id" "$via" "$out" "$born"
   return 3
+}
+
+_limit_read() {   # id transcript-path born -> the stuck-mode read's rc (0|1|2|3; on 3 prints the row's epoch), cached in `$REG/<id>.tdate` on the process and the file (D-3526)
+  # THE PANE RUNGS ASK THIS ON EVERY TICK OF A POSITIVE, for as long as a real
+  # block sits stranded (the round-1 review read 24 strands in swap.log since
+  # 2026-09-11: a median of 75 to 160 minutes, the longest 1852) and as long as a
+  # suppressed carried-in banner stays on screen, so an uncached read put
+  # D-2444's python pass back on the 5 s tick. The answer is a pure function
+  # of the file and of `since`, so it is cached on exactly those:
+  # "<born> <mtime> <size> <rc> <row-epoch|-> <path>", and read again the moment
+  # any of them changes. Every row Claude Code appends grows the file, so a fresh
+  # block is never hidden by the cache — the rule the pane rungs keep, that an
+  # old answer must not overrule what is on screen now. `lastswap` and `.spawn`
+  # are NOT cached: they are single registry reads applied after this on every
+  # call, so a refusal's deletion or a settle counts at once. rc 2 (unreadable)
+  # is never cached: it can be transient, and a stuck session's file does not
+  # change to clear it. Born unknown, or a file stat cannot measure, reads
+  # uncached — today's answer. A record for any other key, or a torn one, is
+  # read past, never trusted: the regex admits digits and the path only.
+  local id="$1" f="$2" born="$3" m s key="" rec out rc
+  local re='^([0-9]+ [0-9]+ [0-9]+) ([013]) ([0-9]+|-) (.+)$'
+  m=$(_plat_mtime "$f" 2>/dev/null); s=$(_plat_size "$f" 2>/dev/null)
+  [[ "$born" =~ ^[0-9]+$ && "$m" =~ ^[0-9]+$ && "$s" =~ ^[0-9]+$ ]] && key="$born $m $s"
+  if [[ -n "$key" ]]; then
+    rec=$(_reg_get "$id" tdate)
+    if [[ "$rec" =~ $re && "${BASH_REMATCH[1]}" == "$key" && "${BASH_REMATCH[4]}" == "$f" ]]; then
+      [[ "${BASH_REMATCH[2]}" == 3 ]] && printf '%s\n' "${BASH_REMATCH[3]}"
+      return "${BASH_REMATCH[2]}"
+    fi
+  fi
+  out=$(_transcript_limit_banner "$f" stuck "$born"); rc=$?
+  if [[ -n "$key" ]]; then
+    if (( rc == 0 || rc == 1 )); then
+      _reg_set "$id" tdate "$key $rc - $f" 2>/dev/null || true
+    elif (( rc == 3 )) && [[ "$out" =~ ^[0-9]+$ ]]; then
+      _reg_set "$id" tdate "$key 3 $out $f" 2>/dev/null || true
+    fi
+  fi
+  (( rc == 3 )) && printf '%s\n' "$out"
+  return "$rc"
 }
 
 _never_came_up() {   # id born -> 0 iff this pane's process settled with no live TUI: `.spawn` reads "<epoch> 4" with epoch >= born (D-3526)
@@ -22264,12 +22321,14 @@ _never_came_up() {   # id born -> 0 iff this pane's process settled with no live
 }
 
 _pane_carried_in() {   # id via pane-text -> 0 iff a pane rung's positive is a carried-in banner, not a block (D-3526)
-  # UNCACHED, and asked only on a positive: this runs where a pane rung has
-  # already said yes, never on the idle steady state, and a 30 s-old transcript
-  # answer must not overrule what is on screen now. An auth failure on the pane
-  # (outside the box, as the rung reads it) is not a rate limit and is not dated
-  # against one. Born unknown, or any answer but carried-in, keeps the positive:
-  # the reader cannot prove a row older than a `since` it was not given.
+  # Asked only on a positive, but on EVERY tick of one — a stranded block and a
+  # suppressed carried-in banner both stay on screen for hours — so the dated
+  # read is cached on the process and the file (`_limit_read`), never on time:
+  # a 30 s-old transcript answer (`tscan`) must not overrule what is on screen
+  # now, and a grown file is read again. An auth failure on the pane (outside
+  # the box, as the rung reads it) is not a rate limit and is not dated against
+  # one. Born unknown, or any answer but carried-in, keeps the positive: the
+  # reader cannot prove a row older than a `since` it was not given.
   grep -qiE "Invalid API key|Please run /login" <<<"$(_pane_outside_box "$3")" && return 1
   _limit_dated "$1" "$2" "$(_pane_born "$1")"
   (( $? == 3 ))
@@ -22277,9 +22336,10 @@ _pane_carried_in() {   # id via pane-text -> 0 iff a pane rung's positive is a c
 
 _carried_in_note() {   # id via row-epoch born — one swap.log line per process, floored by `$REG/<id>.carriednote` = the born last noted (D-3526)
   # Keyed on the PROCESS, not on time: the verdict is re-asked every tick (the
-  # pane rungs uncached, the transcript rung every TRANSCRIPT_ARM_INTERVAL), and
-  # a new process is a new floor. `spawn=` is the rc this row's last settle
-  # recorded — 24 of the 26 measured cases were landings that settled rc 4.
+  # pane rungs through the `tdate` cache, the transcript rung every
+  # TRANSCRIPT_ARM_INTERVAL), and a new process is a new floor. `spawn=` is the
+  # rc this row's last settle recorded — 24 of the 26 measured cases were
+  # landings that settled rc 4.
   local id="$1" st
   [[ "$(_reg_get "$id" carriednote)" == "$4" ]] && return 0
   _reg_set "$id" carriednote "$4" 2>/dev/null || true

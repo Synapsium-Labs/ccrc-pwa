@@ -671,6 +671,14 @@ describe('the banner rung rescues, and the log names WHICH detector fired (D-310
 // folding it into "not a limit". The one exception, the operator's ruling: a
 // process that never came up (`.spawn` rc 4 at or after its birth) is still
 // moved, because that move is what got such a landing off a dead target.
+//
+// ROUND 1 (the orchestrator's rulings on the harm review). The clock alone
+// cannot tell a row a SWAP carried in from one this same account wrote before
+// a restart (an OOM kill, a revival, stop/start), so "carried in" also needs a
+// swap after the row: `$REG/<id>.lastswap` later than the row's epoch. And the
+// pane rungs' dated read is cached on the process and the file
+// (`$REG/<id>.tdate`), because a pane positive is asked every 5 s tick for as
+// long as a stranded block, or a suppressed carried-in banner, stays on screen.
 
 describe('_transcript_limit_banner stuck mode: a rate limit written before this process (D-3526)', () => {
   const read = (p: string, since: string | number, mode = 'stuck'): { rc: string; out: string } => {
@@ -747,8 +755,21 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     const f = path.join(h.home, '.cc-sessions', 'claude-authdead');
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
   };
-  const carried = (): void => { seed(); writeTranscript([L.human(), L.banner()]); };
+  /** The swap that carried the row in: stamped after the row, before this pane's birth. */
+  const LANDED = BANNER_AT + 30;
+  const carried = (): void => {
+    seed(); writeTranscript([L.human(), L.banner()]);
+    h.sh(`_reg_set ${ID} lastswap ${LANDED}`);
+  };
   const settled = (at: number, rc: number): void => { h.sh(`_reg_set ${ID} spawn "${at} ${rc}"`); };
+  /** Counts every transcript read the verdict makes: the real reader, wrapped. */
+  const COUNTED = `eval "$(declare -f _transcript_limit_banner | sed '1s/^_transcript_limit_banner/_tlb_real/')";
+    _transcript_limit_banner() { echo transcript-read >> "$HOME/ccd-calls"; _tlb_real "$@"; };`;
+  const reads = (): number => h.calls().filter((l) => l === 'transcript-read').length;
+  /** One verdict read, as the rescue arm asks it, with the reader counted. */
+  const verdict = (pane: string, born: number = BORN): string =>
+    h.sh(`${STUBS(pane)} ${COUNTED} _session_hard_blocked ${ID} ${JSON.stringify(pane)}; echo "$?:$HARD_BLOCK_VIA"`,
+      { TMUX_CREATED: String(born) });
 
   it('transcript rung: a banner older than the pane rescues nothing, and says so once per process', () => {
     carried(); settled(BORN + 30, 0);
@@ -848,7 +869,7 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     expect(notes()).toEqual([]);
     expect(authdead()).toBeNull();
   });
-  it('the pane rung\'s dating read is uncached: a cached negative does not decide it', () => {
+  it('the pane rung\'s dating read is not the tscan cache: a cached negative does not decide it', () => {
     carried();
     h.sh(`_reg_set ${ID} tscan "$(date +%s) 0"`);
     tick(NEW_BANNER);
@@ -891,10 +912,179 @@ describe('_session_hard_blocked: a carried-in rate-limit banner is not a block (
     expect(ask(`${BORN} 4`, `REG[$(touch ${marker})]`)).toBe('rc=1');
     expect(fs.existsSync(marker)).toBe(false);
   });
-  it('purge: carriednote goes with the row', () => {
-    seed(); h.sh(`_reg_set ${ID} carriednote 5`);
+  it('purge: carriednote and tdate go with the row', () => {
+    seed(); h.sh(`_reg_set ${ID} carriednote 5; _reg_set ${ID} tdate "1 2 3 1 - /x.jsonl"`);
     expect(h.reg(ID, 'carriednote')).toBe('5');
+    expect(h.reg(ID, 'tdate')).toBe('1 2 3 1 - /x.jsonl');
     h.sh(`_reg_purge ${ID}`);
     expect(h.reg(ID, 'carriednote')).toBeNull();
+    expect(h.reg(ID, 'tdate')).toBeNull();
+  });
+
+  // ── Round 1, ruling 1: carried in means a SWAP carried it ──────────────────
+  // The harm review's scenario, step for step: a session strands on a limit its
+  // own account wrote, every account pinned; more than six hours later the pane
+  // is revived ON THE SAME ACCOUNT (an OOM kill, a revival, stop/start), so the
+  // new process is born after the row and Claude Code's six-hour cap declines to
+  // re-drive it. The clock alone read that row as carried in: the strand was
+  // retracted and the session was never moved when a target freed. No swap
+  // after the row means the row is this account's own, and it stays a block.
+  it.each([['the transcript rung', PROMPT], ['the banner rung', NEW_BANNER]])(
+    'a same-account restart more than 6 h after a real block keeps it, via %s: stays stranded, then moves when a target frees', (_what, pane) => {
+      seed(); writeTranscript([L.human(), L.banner()]);
+      // The swap that brought the session onto this account came BEFORE the row.
+      h.sh(`_reg_set ${ID} lastswap ${BANNER_AT - 3600}`);
+      // (1) the pane that hit the limit, nowhere to go: stranded.
+      tick(pane, BANNER_AT - 60, '');
+      expect(stranded()).toBe(true);
+      // (2) revived on the same account seven hours later; this process came up.
+      const REVIVED = BANNER_AT + 7 * 3600;
+      settled(REVIVED + 30, 0);
+      h.sh(`_reg_set ${ID} tscan ""`);
+      tick(pane, REVIVED, '');
+      expect(stranded()).toBe(true);
+      expect(swapLog()).not.toMatch(/unstranded/);
+      expect(notes()).toEqual([]);
+      // (3) the same process, and now a target frees: it is moved.
+      h.sh(`_reg_set ${ID} tscan ""`);
+      tick(pane, REVIVED);
+      expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    });
+  it('a missing lastswap (a refused carry deletes it) is no swap: the row stays a block', () => {
+    seed(); writeTranscript([L.human(), L.banner()]);
+    settled(BANNER_AT + 7 * 3600 + 30, 0);
+    tick(PROMPT, BANNER_AT + 7 * 3600);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(notes()).toEqual([]);
+  });
+  it('control: the same restart with a swap after the row is carried in', () => {
+    carried(); settled(BANNER_AT + 7 * 3600 + 30, 0);
+    tick(PROMPT, BANNER_AT + 7 * 3600, '');
+    expect(dispatches()).toEqual([]);
+    expect(stranded()).toBe(false);
+    expect(notes()).toHaveLength(1);
+  });
+  it('a swap in the row\'s own second is not proof it came after: the row stays a block', () => {
+    seed(); writeTranscript([L.human(), L.banner()]);
+    h.sh(`_reg_set ${ID} lastswap ${BANNER_AT}`);
+    tick(PROMPT);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    // Control: one second later is.
+    h.sh(`_reg_set ${ID} lastswap ${BANNER_AT + 1}; _reg_set ${ID} tscan ""`);
+    expect(verdict(PROMPT)).toBe('1:');
+    expect(notes()).toHaveLength(1);
+  });
+  it('a torn lastswap is no swap, and is never evaluated (D-299)', () => {
+    seed(); writeTranscript([L.human(), L.banner()]);
+    const marker = path.join(h.home, 'evaluated');
+    const at = (sw: string): string => {
+      fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.lastswap`), sw);
+      h.sh(`_reg_set ${ID} tscan ""`);
+      return verdict(PROMPT);
+    };
+    // `+0` is the one that would read as a later swap if it reached the arithmetic.
+    for (const torn of ['', 'soon', `REG[$(touch ${marker})]`, `${LANDED} ${LANDED}`, `${LANDED}+0`]) {
+      expect(at(torn), JSON.stringify(torn)).toBe('0:transcript');
+    }
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(notes()).toEqual([]);
+    // Control: a leading zero is still a number, in base ten.
+    expect(at(`0${LANDED}`)).toBe('1:');
+    expect(notes()).toHaveLength(1);
+  });
+
+  // ── Round 1, ruling 2: the dated answer is cached on the process and the file ──
+  it('a pane positive reads the transcript once per process and file: the second tick does not read it again', () => {
+    carried();
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(1);
+    const p = h.sh(`_transcript_path ${ID}`);
+    expect(h.reg(ID, 'tdate')).toBe(`${BORN} ${Math.floor(fs.statSync(p).mtimeMs / 1000)} ${fs.statSync(p).size} 3 ${BANNER_AT} ${p}`);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(verdict(FOOTER)).toBe('1:');
+    expect(reads()).toBe(1);
+    expect(notes()).toHaveLength(1);
+  });
+  it('a grown transcript is read again, so a fresh block is never hidden by the cache — even in the same second', () => {
+    carried();
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    const p = h.sh(`_transcript_path ${ID}`);
+    const { atime, mtime } = fs.statSync(p);
+    // This process now writes its own limit row; the clock is held still, so only the size says so.
+    fs.appendFileSync(p, L.banner({ timestamp: iso(BORN + 60) }) + '\n');
+    fs.utimesSync(p, atime, mtime);
+    expect(verdict(NEW_BANNER)).toBe('0:banner');
+    expect(reads()).toBe(2);
+  });
+  it('a rewritten transcript of the same size is read again: the mtime is a key too', () => {
+    carried();
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    const p = h.sh(`_transcript_path ${ID}`);
+    const { atime, mtime } = fs.statSync(p);
+    fs.utimesSync(p, atime, new Date(mtime.getTime() + 5000));
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(2);
+  });
+  it('a new process is read again: born is a key — a 401 is dated by it', () => {
+    seed(); writeTranscript([AUTH()]);
+    // Born before the 401: this process wrote it, a block.
+    expect(verdict(PROMPT, ROW_AT - 60)).toBe('0:transcript');
+    // A later process on the same file: that 401 is no longer its own.
+    h.sh(`_reg_set ${ID} tscan ""`);
+    expect(verdict(PROMPT, ROW_AT + 60)).toBe('1:');
+    expect(reads()).toBe(2);
+  });
+  it('another transcript is read again: the path is a key too', () => {
+    carried();
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    const p = h.sh(`_transcript_path ${ID}`);
+    const { atime, mtime } = fs.statSync(p);
+    // A new conversation id, and a file with the same bytes and the same clock.
+    h.sh(`_reg_set ${ID} uuid deadbeef-0000-4000-8000-000000000001`);
+    const q = writeTranscript([L.human(), L.banner()]);
+    expect(q).not.toBe(p);
+    fs.utimesSync(q, atime, mtime);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(2);
+  });
+  it('an unreadable answer (rc 2) is never cached: it is asked again next tick', () => {
+    seed(); writeTranscript([L.human(), L.banner()]);
+    const TWO = '_transcript_limit_banner() { echo transcript-read >> "$HOME/ccd-calls"; return 2; };';
+    const ask = (): string => h.sh(`${STUBS(NEW_BANNER)} ${TWO} _session_hard_blocked ${ID} ${JSON.stringify(NEW_BANNER)}; echo "$?:$HARD_BLOCK_VIA"`,
+      { TMUX_CREATED: String(BORN) });
+    expect(ask()).toBe('0:banner');
+    expect(ask()).toBe('0:banner');
+    expect(reads()).toBe(2);
+    expect(h.reg(ID, 'tdate')).toBeNull();
+  });
+  it('born unknown, or a file stat cannot measure, reads uncached and writes no record', () => {
+    carried();
+    const ask = (extra: string, env: Record<string, string>): string =>
+      h.sh(`${STUBS(NEW_BANNER)} ${COUNTED} ${extra} _session_hard_blocked ${ID} ${JSON.stringify(NEW_BANNER)}; echo "$?:$HARD_BLOCK_VIA"`, env);
+    // tmux cannot say when this pane was born: the positive stands, read every time.
+    expect(ask('', {})).toBe('0:banner');
+    expect(ask('', {})).toBe('0:banner');
+    expect(reads()).toBe(2);
+    expect(h.reg(ID, 'tdate')).toBeNull();
+    // A stat that answers no number, for either key: still dated, never cached.
+    for (const broken of ['_plat_mtime() { echo soon; };', '_plat_size() { :; };']) {
+      expect(ask(broken, { TMUX_CREATED: String(BORN) }), broken).toBe('1:');
+      expect(ask(broken, { TMUX_CREATED: String(BORN) }), broken).toBe('1:');
+      expect(h.reg(ID, 'tdate'), broken).toBeNull();
+    }
+    expect(reads()).toBe(6);
+  });
+  it('a record for another key, or a torn one, is never trusted', () => {
+    carried();
+    const p = h.sh(`_transcript_path ${ID}`);
+    const m = Math.floor(fs.statSync(p).mtimeMs / 1000); const s = fs.statSync(p).size;
+    // A record that would answer "not a limit" for a different process: ignored, the file is read.
+    h.sh(`_reg_set ${ID} tdate "${BORN - 1} ${m} ${s} 1 - ${p}"`);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(1);
+    // A torn record for this key: ignored too.
+    h.sh(`_reg_set ${ID} tdate "${BORN} ${m} ${s} 9 - ${p}"`);
+    expect(verdict(NEW_BANNER)).toBe('1:');
+    expect(reads()).toBe(2);
   });
 });
