@@ -4016,6 +4016,11 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
       'set -uo pipefail',
       pick(/^_upd_redact\(\) \{[\s\S]*?\n\}$/m, '_upd_redact'),
       pick(/^_upd_json_str\(\) \([\s\S]*?\n\)$/m, '_upd_json_str'),
+      // W6 Task 8A: `_upd_phase` guards its temp file on the shared EXIT chain.
+      pick(/^_EXIT_CHAIN=\(\)$/m, '_EXIT_CHAIN'),
+      pick(/^_exit_run\(\) \{[\s\S]*?\n\}$/m, '_exit_run'),
+      pick(/^_exit_add\(\) \{[\s\S]*?\n\}$/m, '_exit_add'),
+      pick(/^_tmp_guard\(\) \{.*\}$/m, '_tmp_guard'),
       pick(/^_upd_phase\(\) \{[\s\S]*?\n\}$/m, '_upd_phase'),
       `BOX_UPDATE_JSON=${JSON.stringify(jsonPath)}`,
       'UPD_REPORT_TARGET=""', 'UPD_REPORT_STARTED=""', 'UPD_FROM=cli',
@@ -10072,4 +10077,111 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(versionDirs(home)).toEqual(['v1.0.1', 'v1.0.2', 'v1.0.3', 'v1.0.4', 'v2.0.0']);
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('v1.0.4');
   });
+});
+
+// W6 Task 8A (W4's worker's carry: the `*.tmp.$$` EXIT-trap class). A writer's
+// `<dest>.tmp.$$` survives a SIGTERM, Ctrl-C or die caught between its
+// creation and its rename unless something removes it at exit — and a shell
+// has ONE EXIT trap, which every `trap '…' EXIT` REPLACES, so a per-function
+// trap at each writer would have clobbered `_upd_resolve`'s staging trap (and
+// `cmd_wrappers'`, and `cmd_rollout`'s). One chain (`_exit_add`, `_exit_run`,
+// `_tmp_guard`) carries them all. The harness SOURCES the real `ccd/ccrc`
+// under a fixture HOME and calls the real writers, with the step between the
+// tmp's creation and its rename replaced by a `kill -TERM $$` on the shell
+// itself; a CONTROL runs the same harness with `_tmp_guard` made a no-op, so
+// a harness that could not see a leak would say so.
+describe('ccrc: one EXIT chain — a killed writer leaves no <dest>.tmp.$$, and no per-function trap clobbers another (W6 Task 8A)', () => {
+  const chainEnv = (home: string): NodeJS.ProcessEnv => {
+    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    return env;
+  };
+  const run = (home: string, body: string): { code: number; stdout: string; stderr: string } => {
+    const r = spawnSync(BASH, ['-c', `set --; source "${join(REPO, 'ccd', 'ccrc')}"; mkdir -p "$HOME/.ccrc"; ${body}`],
+      { env: chainEnv(home), encoding: 'utf8', timeout: 30_000 });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  const leftovers = (home: string): string[] =>
+    readdirSync(join(home, '.ccrc')).filter((n) => /\.tmp\.\d+$/.test(n));
+
+  itLinux('the chain runs EVERY arm on a SIGTERM (a staging tree and a temp file, neither clobbering the other), runs an entry once however often it is added, and never lets a subshell run its parent\'s arms', () => {
+    const home = mkTmp('ccrc-exit-chain-');
+    const r = run(home, [
+      'stage="$HOME/stage-dir"; mkdir -p "$stage"; : > "$HOME/.ccrc/x.tmp.$$"',
+      '_exit_add "rm -rf -- $(printf \'%q\' "$stage")"',
+      '_tmp_guard "$HOME/.ccrc/x.tmp.$$"',
+      '_exit_add "echo second >> \\"$HOME/ran-second\\""',
+      '_exit_add "echo second >> \\"$HOME/ran-second\\""',
+      // A subshell adds an arm of its own, and ends: it runs that arm and
+      // NOT the parent's, so the parent's staging tree is still here after it.
+      '( _exit_add "echo sub >> \\"$HOME/ran-sub\\"" )',
+      '[ -d "$stage" ] && echo PARENT-STAGE-SURVIVED-THE-SUBSHELL',
+      'kill -TERM $$',
+      'echo NOT-REACHED',
+    ].join('\n'));
+    expect(r.stdout).toContain('PARENT-STAGE-SURVIVED-THE-SUBSHELL');
+    expect(r.stdout).not.toContain('NOT-REACHED');
+    expect(existsSync(join(home, 'stage-dir')), 'the staging arm did not run').toBe(false);
+    expect(leftovers(home), 'the tmp guard did not run').toEqual([]);
+    expect(readFileSync(join(home, 'ran-second'), 'utf8'), 'an entry added twice must run once').toBe('second\n');
+    expect(readFileSync(join(home, 'ran-sub'), 'utf8')).toBe('sub\n');
+  });
+
+  it('`trap - EXIT` (the install prompt\'s stty restore ends with one) does not leave arms added AFTER it unarmed — the next add re-arms the chain', () => {
+    const home = mkTmp('ccrc-exit-chain-rearm-');
+    const r = run(home, [
+      '_exit_add "echo one >> \\"$HOME/ran\\""',
+      'trap - EXIT',
+      '_exit_add "echo two >> \\"$HOME/ran\\""',
+      'exit 0',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(home, 'ran'), 'utf8')).toBe('one\ntwo\n');
+  });
+
+  // The clobber this chain exists to prevent, run through the REAL
+  // `_upd_resolve`: a temp file guarded FIRST, then `_upd_resolve` makes its
+  // staging tree and arms its own cleanup, then its download fails and it dies.
+  // Both must be gone. Were `_upd_resolve`'s arm a plain `trap … EXIT` again,
+  // it would REPLACE the chain and the guarded temp file would survive.
+  itLinux('`_upd_resolve`\'s staging trap does not clobber a temp-file guard armed before it — both are removed when its download fails and it dies', () => {
+    const home = mkTmp('ccrc-exit-chain-resolve-');
+    mkdirSync(join(home, 'tmpdir'), { recursive: true });
+    const r = run(home, [
+      'export TMPDIR="$HOME/tmpdir"',
+      'curl() { return 22; }',
+      ': > "$HOME/.ccrc/guarded.tmp.$$"',
+      '_tmp_guard "$HOME/.ccrc/guarded.tmp.$$"',
+      '_upd_resolve v1.0.0',
+      'echo NOT-REACHED',
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/download failed: /);
+    expect(r.stdout).not.toContain('NOT-REACHED');
+    expect(readdirSync(join(home, 'tmpdir')), 'the staging tree survived the die').toEqual([]);
+    expect(leftovers(home), 'the guard armed before _upd_resolve was clobbered').toEqual([]);
+  });
+
+  // The four W4 writers, by name. Each step between the creation of the tmp
+  // and its rename is replaced by the signal.
+  const WRITERS: Array<[string, string, string]> = [
+    ['_upd_phase (update.json)', 'chmod() { kill -TERM $$; }; UPD_FROM=cli; UPD_REPORT_STARTED=""; UPD_REPORT_TARGET=""',
+      '_upd_phase fetching "the writer under test"'],
+    ['_inst_floor (floor)', 'chmod() { kill -TERM $$; }; BOX_BUILD=(a b c d v1.0.0)',
+      '_inst_floor'],
+    ['_inst_step (install-step)', '_plat_mv_notdir() { kill -TERM $$; }',
+      '_inst_step true'],
+    ['_upd_write_previous (previous)', '_plat_mv_notdir() { kill -TERM $$; }; UPD_FROM=cli; UPD_VERSION=v2.0.0',
+      '_upd_write_previous v1.0.0 aaaaaaaaaaaa'],
+  ];
+  for (const [name, prelude, call] of WRITERS) {
+    itLinux(`${name}: killed between its temp file and its rename, it leaves no <dest>.tmp.$$ (and the same harness with the guard disabled DOES leave one — the control)`, () => {
+      const guarded = mkTmp('ccrc-exit-chain-writer-');
+      run(guarded, `${prelude}; ${call}`);
+      expect(leftovers(guarded), `${name} left its temp file`).toEqual([]);
+      const control = mkTmp('ccrc-exit-chain-control-');
+      run(control, `_tmp_guard() { :; }; ${prelude}; ${call}`);
+      expect(leftovers(control).length, `${name}: the harness could not see a leak`).toBe(1);
+    });
+  }
 });

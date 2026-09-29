@@ -2131,6 +2131,49 @@ _upd_redact() {
 # each harness that actually triggers a die also picks `_upd_redact`'s
 # definition beside it, the same way it already picks `PROG=`.
 _ccrc_die() { local m="$*"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && m="$(_upd_redact "$m")"; echo "$PROG: $m" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$m"; exit 1; }
+# ── ONE EXIT CHAIN — `_exit_add`, `_exit_run`, `_tmp_guard` (W6 Task 8A: W4's
+# worker's carry, the `*.tmp.$$` EXIT-trap class) ───────────────────────────
+# A shell has ONE `EXIT` trap, and `trap '…' EXIT` REPLACES it. This file
+# already had three per-function traps (`cmd_wrappers`' staging directory,
+# `_upd_resolve`'s staging tree, `cmd_rollout`'s stderr file), and the obvious
+# fix for the leaking `<dest>.tmp.$$` files — a trap of its own at each writer —
+# would have clobbered whichever of them was armed first: a `_upd_resolve`
+# whose staging tree then survives a die, or a wrapper generator whose staging
+# directory does. So there is one chain, every arm of it added with
+# `_exit_add`, and one trap that runs it.
+#   * An entry is a command string, `eval`'d at exit (so a variable it names is
+#     read then, as `_upd_resolve`'s own trap always read `$UPD_STAGE`), and it
+#     is recorded with the pid of the shell that added it. `_exit_run` runs an
+#     entry only in THAT shell: a `$( )` subshell inherits the whole array and
+#     would otherwise `rm -rf` its parent's staging tree the moment it ended.
+#     A subshell that adds an entry of its own owns and runs it.
+#   * The same entry is never added twice (`_upd_phase` runs for every phase).
+#   * `trap` is re-armed on every add, so a later `trap - EXIT` (the install
+#     prompt's `stty` restore ends with one) cannot leave the chain unarmed for
+#     the entries added after it.
+#   * `_tmp_guard <path>` is the writers' arm: `rm -f` of a `<dest>.tmp.$$`
+#     that a SIGTERM, Ctrl-C or die caught between its creation and its
+#     rename. A path already renamed away is a no-op there. A SIGKILL is
+#     beyond any trap, and stays the disclosed price it always was.
+# The three interactive `stty echo` traps (account and install prompts) are
+# NOT on the chain: each is armed for one `read` and disarmed after it.
+_EXIT_CHAIN=()
+_exit_run() {
+  local e
+  for e in ${_EXIT_CHAIN[@]+"${_EXIT_CHAIN[@]}"}; do
+    [ "${e%%|*}" = "$BASHPID" ] && { eval "${e#*|}" || :; }
+  done
+  return 0
+}
+_exit_add() {   # <command string, eval'd at exit>
+  local c="$BASHPID|$1" e
+  for e in ${_EXIT_CHAIN[@]+"${_EXIT_CHAIN[@]}"}; do
+    [ "$e" = "$c" ] && { trap '_exit_run' EXIT; return 0; }
+  done
+  _EXIT_CHAIN+=("$c")
+  trap '_exit_run' EXIT
+}
+_tmp_guard() { _exit_add "rm -f -- $(printf '%q' "$1")"; }
 # The one place "unknown argument" is spelled, so the unknown-verb and
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
@@ -3410,8 +3453,7 @@ cmd_wrappers() {
   # own fixture helper (server/test/tmpHelpers.ts) exists because 7,830 leaked
   # temp directories were once measured on this box; a leak in the shipped tool
   # is the same defect with no afterAll underneath it.
-  # shellcheck disable=SC2064
-  trap "rm -rf -- $(printf '%q' "$staging")" EXIT
+  _exit_add "rm -rf -- $(printf '%q' "$staging")"
 
   # WHAT THE GENERATOR IS POINTED AT TO *READ*. Normally the bin dir itself.
   # On a dry run against a box that has no `~/.local/bin` at all, there is
@@ -9639,6 +9681,7 @@ CCRC_INST_SPINE=(
 # the path moves the temp INSIDE it and answers 0.
 _inst_step() {   # <fn>
   local fn="$1" tmp="$BOX_INSTALL_STEP_FILE.tmp.$$"
+  _tmp_guard "$tmp"
   if ! { mkdir -p "$HOME/.ccrc" && printf '%s\n' "$fn" > "$tmp" && chmod 644 "$tmp" \
          && _plat_mv_notdir "$tmp" "$BOX_INSTALL_STEP_FILE"; }; then
     rm -f -- "$tmp" 2>/dev/null
@@ -12558,6 +12601,7 @@ _inst_floor() {
     return 0
   fi
   ftmp="$BOX_FLOOR_FILE.tmp.$$"
+  _tmp_guard "$ftmp"
   printf '%s\n' "$ver" > "$ftmp" && chmod 644 "$ftmp" && mv -f -- "$ftmp" "$BOX_FLOOR_FILE" \
     || { rm -f -- "$ftmp"; _ccrc_die "writing $BOX_FLOOR_FILE failed"; }
   echo "install: floor: $ver (${cur:-none} before; ccrc update refuses to go below it without --downgrade)"
@@ -14429,6 +14473,7 @@ _upd_phase() {
   detail="$(_upd_redact "$detail")"
   det="$(_upd_json_str "$detail")"
   tmp="$BOX_UPDATE_JSON.tmp.$$"
+  _tmp_guard "$tmp"
   if [ -n "$now" ] \
      && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
      && [ ! -d "$BOX_UPDATE_JSON" ] \
@@ -15093,7 +15138,7 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
-  trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
+  _exit_add '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"'
   echo "update: fetching $UPD_URL_DIR_SAFE/SHA256SUMS …"
   # Fix round 1 item 12 / review 155 C22, AMENDED by fix round 2 F4 (review
   # 167): a CONNECT bound plus a STALL bound was the whole story here too,
@@ -15425,6 +15470,7 @@ _upd_write_previous() {
     echo "update: previous: kept ($kept) — $why"
     return 0
   fi
+  _tmp_guard "$tmp"
   if { mkdir -p "$HOME/.ccrc" && printf '%s\n%s\n' "$line1" "$line2" > "$tmp" && chmod 644 "$tmp" \
          && _plat_mv_notdir "$tmp" "$BOX_PREVIOUS_FILE"; }; then
     if [ "$line1" = untagged ]; then
@@ -17126,7 +17172,7 @@ cmd_rollout() {
   # cannot hand an assignment back to its parent.
   ROLLOUT_ERRF="$(_plat_mktemp)" \
     || _ccrc_die "rollout: could not create a temp file for the boxes' stderr (mktemp failed) — nothing was touched"
-  trap '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"' EXIT
+  _exit_add '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"'
 
   # Step 1 — preflight the roles, before touching either box.
   local single=0 frole="" srole="" rrc=0
