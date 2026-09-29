@@ -2470,8 +2470,16 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     };
     ogit('tag', 'v9.9.9');
     ogit('checkout', '-q', '-b', 'other-branch');
-    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'modified after the commit\n');
-    // (`other`'s tracked file is now dirty; `repo` is clean, on fixture-branch, untagged.)
+    // Dirty in the INDEX and in the WORKTREE, both: stage one change, then
+    // modify the file again. `git add` alone leaves the worktree clean (so an
+    // ambient-GIT_DIR read of `diff --quiet` would answer clean and the pin
+    // would not see it), and an edit alone leaves the index clean (so the same
+    // is true of `diff --cached --quiet`). Each of `_inst_stamp`'s two dirty
+    // reads answers `other`'s state as dirty if it is ever unshielded.
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'staged after the commit\n');
+    ogit('add', 'ONLY-IN-OTHER');
+    writeFileSync(join(other, 'ONLY-IN-OTHER'), 'modified again after it was staged\n');
+    // (`other`'s tracked file is now dirty in its index AND its worktree; `repo` is clean, on fixture-branch, untagged.)
     const env = `export GIT_DIR='${other}/.git' GIT_WORK_TREE='${other}'; `;
     const n = sourced(home, join(REPO, 'ccd', 'ccrc'), `${env}_inst_version_name "$(cd '${repo}' && pwd -P)"`);
     expect(n.code, n.stderr).toBe(0);
@@ -2481,7 +2489,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     const stamp = JSON.parse(readFileSync(join(home, '.ccrc', 'build.json'), 'utf8')) as Record<string, unknown>;
     expect(stamp['sha']).toBe(sha);
     expect(stamp['ref'], 'the stamp\'s ref is another repository\'s branch').toBe('fixture-branch');
-    expect(stamp['dirty'], 'the stamp\'s dirty is another repository\'s worktree state').toBe(false);
+    expect(stamp['dirty'], 'the stamp\'s dirty is another repository\'s index or worktree state').toBe(false);
     expect('version' in stamp, 'the stamp carries another repository\'s release tag').toBe(false);
   });
 
