@@ -28,7 +28,7 @@ import {
 import path, { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv } from './ccdWsHelpers.js';
 import { installVersionedTree } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -212,7 +212,7 @@ describe('spec §11 audit — the satisfied rows, walked through a symlinked ~/c
     expect(sweep).toContain(': "${CCRC_TREE:=$HOME/ccrc}"');
     // CODE lines only: W6 Task 1's platform helper is byte-identical in both
     // files, and its header comment names the spec's own `$HOME/ccrc.new`.
-    const code = readFileSync(join(REPO, 'ccd', 'ccd'), 'utf8').split('\n')
+    const code = readFileSync(CCD, 'utf8').split('\n')
       .map((l, i) => ({ n: i + 1, l }))
       .filter(({ l }) => !/^\s*#/.test(l));
     expect(code.length).toBeGreaterThan(1000);
