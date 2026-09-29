@@ -24,7 +24,7 @@ import type { ReactNode } from 'react';
 import type { RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { POOL_NAME_RE } from '../../../shared/roster';
-import { Sheet } from '@ccrc/ui';
+import { Button, Sheet } from '@ccrc/ui';
 import { poolOptions } from '../lib/pools';
 import './fleet.css';
 
@@ -171,9 +171,9 @@ export function AccountPoolSheet({
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
         />
-        <button type="button" className="btn-primary pool-new-create" disabled={!validNew} onClick={create}>
+        <Button variant="primary" className="pool-new-create" disabled={!validNew} onClick={create}>
           Create
-        </button>
+        </Button>
       </div>
     </Sheet>
   );

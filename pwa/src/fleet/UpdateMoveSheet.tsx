@@ -43,7 +43,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MoveRequestAnswer } from '../../../shared/api';
-import { Sheet, toast } from '@ccrc/ui';
+import { Button, Sheet, toast } from '@ccrc/ui';
 import { ApiError, api, moveSkipText, updateErrorText } from '../lib/api';
 import { moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, type PlannedMove } from './movePlan';
 import './fleet.css';
@@ -237,21 +237,21 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone }: {
     <Sheet open onClose={onClose} title={headline}>
       <div className="update-move-sheet">
         {lines.length === 0 ? (
-          <p className="qc-consequence">{moveEmptyText(plan.intent)}</p>
+          <p className="qc-consequence text-base leading-normal text-ink-secondary mb-5">{moveEmptyText(plan.intent)}</p>
         ) : (
           <ol className="update-move-list" role="list" aria-label="Nodes this moves, in order">
             {plan.nodes.map((n, i) => <li key={n.nodeId} className="update-move-node">{lines[i]}</li>)}
           </ol>
         )}
-        <div className="qc-actions">
+        <div className="qc-actions grid gap-2">
           {lines.length > 0 && !answered && (
-            <button type="button" className="btn-primary" disabled={busy} onClick={confirm}>
+            <Button variant="primary" disabled={busy} onClick={confirm}>
               {busy ? 'Sending…' : headline}
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn-ghost" disabled={busy} onClick={onClose}>
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
             {answered ? 'Close' : 'Cancel'}
-          </button>
+          </Button>
         </div>
         {error !== null && <p className="update-move-error" role="alert">{error}</p>}
       </div>

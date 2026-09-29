@@ -1,8 +1,11 @@
 # @ccrc/ui — Phosphor & Ink
 
 The design system behind ccrc's console: the tokens, the Tailwind theme that
-exposes them as utilities, and the shared components. Ships **source** — no
-build step, no `dist` to go stale; the consuming app's vite compiles it.
+exposes them as utilities, and the shared components. The app consumes
+**source** — `exports['.']` points at `src/index.ts` and the consuming app's
+vite compiles it, so there is no `dist` for `pwa` to go stale. (`npm run build`
+does emit one, for a single reader: the /design-sync converter. Nothing in the
+app resolves it.)
 
     cd ui && npm ci && npm run storybook      # every component, every state
 
@@ -59,3 +62,47 @@ their last consumer migrates.
 
 There is no suite here. The primitives are exercised from `pwa/`, where their
 consumers live — `pwa/test/primitives.test.tsx` plus every sheet and flow test.
+
+## Where the boundary is
+
+**This package owns a vocabulary, not just a set of files.** `btn-primary`,
+`btn-ghost`, `dot`, `dot--busy`, `limit-fill`, `limit-track`, `skel`,
+`sheet-panel`, `qc-actions` are emitted by the cva definitions here and by
+nothing else. A call site never writes them by hand:
+
+| you need | you import |
+|---|---|
+| a button | `Button` |
+| a link that looks like a button | `buttonVariants({ variant })` |
+| a bar in a layout that is not `LimitBar`'s own row | `fillVariants`, `LIMIT_TRACK` |
+| a status glyph | `StatusDot` |
+
+`pwa/test/design-system-boundary.test.ts` enforces the button half of that
+table and reds on any `.tsx` that hand-writes those two class names.
+
+**Why a guard and not a convention.** The convention failed once, silently and
+expensively. Wave 2 retired `pwa/src/styles/legacy.css`, the last copy of the
+button's styling outside this package. While that sat on a branch, `main` grew
+four new files hand-writing `btn-primary`/`btn-ghost` on raw `<button>`
+elements. Both sides stayed green — the app's tests never render those buttons
+against the retired stylesheet, and the contrast gate reads stylesheets, so a
+class with no rule behind it is invisible to it. Ten buttons lost their styling
+outright and only the rebase revealed it.
+
+**The classes still ship on the rendered element**, deliberately. Several
+scoped rules in `fleet.css`, `chat.css` and `shell.css` select on them
+(`.block-screen .btn-primary { width: auto }`, `.btn-ghost.settings-move`,
+`.acct-list .acct-row[data-disabled='true'] .limit-fill`), and those sheets are
+imported unlayered so they still beat `@layer utilities`. They are structural
+hooks for contextual overrides and for tests, never styling.
+
+## What belongs here, and what does not
+
+Here: anything rendered on more than one screen whose appearance is a
+design decision — the primitives above, the tokens, the theme bridge.
+
+Not here: anything that knows about ccrc's domain. A component that reads a
+session's bucket, calls the API, or touches the store belongs in `pwa/src`.
+`StatusDot` is the edge case that proves the line — it type-imports
+`SessionBucket` from `shared/` so its `DOT` record stays exhaustive, but it
+takes that bucket as a prop and fetches nothing.

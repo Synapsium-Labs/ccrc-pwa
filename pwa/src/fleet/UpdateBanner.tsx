@@ -43,6 +43,7 @@ import { planMove, type PlannedMove } from './movePlan';
 import { UpdateMoveSheet } from './UpdateMoveSheet';
 import { UPDATES_POLL_MS, isPlaceableInstant, nodeVersion, pendingTag, useUpdatesView } from './useUpdatesView';
 import './fleet.css';
+import { Button } from '@ccrc/ui';
 
 /** The release the banner announces: the NEWEST `pendingTag` across the
  *  inventory in semver order (`v0.0.10` above `v0.0.9` — string order has it
@@ -123,16 +124,15 @@ export function UpdateBanner({ updates: injected, health = null, onMoved }: {
         <div className="update-banner" role="status">
           <span className="update-banner-msg">{text}</span>
           <div className="update-banner-actions">
-            <button
-              type="button"
-              className="btn-ghost"
+            <Button
+              variant="ghost"
               onClick={() => setMove(planMove(view, { scope: 'fleet', direction: 'update', tag: release.tag }))}
             >
               Update all
-            </button>
-            <button type="button" className="btn-primary" onClick={() => navigate('/settings')}>
+            </Button>
+            <Button variant="primary" onClick={() => navigate('/settings')}>
               {"See what's new"}
-            </button>
+            </Button>
           </div>
         </div>
       )}

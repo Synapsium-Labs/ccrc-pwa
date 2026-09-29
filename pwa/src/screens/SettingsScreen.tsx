@@ -16,7 +16,7 @@ import type { AuthStatus, AutoMode, CatalogueErrorReason, CatalogueState, NodeWi
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, SETTLED_UPDATE_STATES, UPDATE_CHANNELS, UPDATE_GATE_CAP, isNotifyMode, isReleaseTag, isStampRead, isUpdateChannel } from '../../../shared/api';
 import { LOOPBACK_HOSTS } from '../../../shared/base-url';
 import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
-import { Skeleton, toast } from '@ccrc/ui';
+import { Button, Skeleton, toast } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { isManagedNode, planMove, type MoveIntent, type PlannedMove } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
@@ -249,9 +249,9 @@ function ReleaseItem({ release: r, nodes, onMove }: {
       {refused !== null && <p className="settings-release-refused">{refused}</p>}
       {typeof r.notes === 'string' && r.notes !== '' && <pre className="settings-release-notes">{r.notes}</pre>}
       <div className="settings-release-actions">
-        <button type="button" className="btn-ghost settings-move" onClick={() => onMove(intent)}>
+        <Button variant="ghost" className="settings-move" onClick={() => onMove(intent)}>
           {direction === 'rollback' ? 'Roll back' : 'Install'}
-        </button>
+        </Button>
       </div>
     </li>
   );
@@ -429,25 +429,23 @@ function NodeItem({ node: n, releases, now, onAcked, onMove }: {
       <div className="settings-node-actions">
         {!darwin && (
           <>
-            <button
-              type="button"
-              className="btn-ghost settings-move"
+            <Button
+              variant="ghost" className="settings-move"
               disabled={next === null}
               onClick={() => { if (next !== null) onMove({ scope: 'node', direction: 'update', nodeId: n.nodeId, tag: next }); }}
             >
               Update
-            </button>
-            <button
-              type="button"
-              className="btn-ghost settings-move"
+            </Button>
+            <Button
+              variant="ghost" className="settings-move"
               disabled={previous === null}
               onClick={() => { if (previous !== null) onMove({ scope: 'node', direction: 'rollback', nodeId: n.nodeId, to: previous }); }}
             >
               Roll back
-            </button>
+            </Button>
           </>
         )}
-        <button type="button" className="btn-ghost settings-move" disabled={!ackable || acking} onClick={ack}>Ack</button>
+        <Button variant="ghost" className="settings-move" disabled={!ackable || acking} onClick={ack}>Ack</Button>
       </div>
     </li>
   );
@@ -780,9 +778,9 @@ function UpdatesBody({ view, stale, now, reload }: {
         ))}
       </fieldset>
       {gateNote !== null && <p id={gateNoteId} className="settings-note">{gateNote}</p>}
-      <button type="button" className="btn-ghost settings-check" disabled={busy} onClick={checkNow}>
+      <Button variant="ghost" className="settings-check" disabled={busy} onClick={checkNow}>
         Check now
-      </button>
+      </Button>
       {refreshNote !== null && <p className="settings-note" aria-live="polite">{refreshNote}</p>}
       <p className={line.tone === 'calm' ? 'settings-catalogue' : `settings-catalogue settings-catalogue--${line.tone}`}>
         {line.text}
