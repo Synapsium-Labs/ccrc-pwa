@@ -20,8 +20,9 @@ import { mkTmp } from './tmpHelpers.js';
 // it on a Darwin box, and flock(1) is not BSD userland.
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
 
-const PROBE = path.resolve(__dirname, '../../ccd/ccd-account-health');
-const SHAPE = path.resolve(__dirname, '../../ccd/ccrc-wrapper-shape');
+const CCRC_ROOT = path.resolve(__dirname, '../..');
+const PROBE = path.join(CCRC_ROOT, 'ccd', 'ccd-account-health');
+const SHAPE = path.join(CCRC_ROOT, 'ccd', 'ccrc-wrapper-shape');
 let home: string;
 const j = (...p: string[]) => path.join(home, ...p);
 
@@ -128,6 +129,7 @@ beforeEach(() => {
   home = mkTmp('ccrc-account-health-');
   fs.mkdirSync(j('.cc-sessions'), { recursive: true });
   fs.mkdirSync(j('.ccrc'), { recursive: true });
+  fs.symlinkSync(CCRC_ROOT, j('ccrc'));
   fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify(ROSTER, null, 2));
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
@@ -258,7 +260,7 @@ describe('eligibility is roster-derived', () => {
     expect(fs.existsSync(marker('claude'))).toBe(true);
   });
 
-  it('refuses an invalid declared path without falling back to a stale legacy OAuth file', () => {
+  it('refuses an invalid declared path before falling back to a stale legacy OAuth file', () => {
     fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
       { id: 'claude', label: 'claude', configDirSuffix: '.claude',
         exec: { kind: 'upstream', secretsFile: '.cc-secrets/../outside.env' },
@@ -270,8 +272,8 @@ describe('eligibility is roster-derived', () => {
 
     const r = run();
 
-    expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/claude: refused — invalid declared setup-token credential path/);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid exec\.secretsFile/);
     expect(fs.existsSync(marker('claude'))).toBe(false);
     expect(fs.existsSync(j('invalid-path-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
@@ -282,6 +284,8 @@ describe('eligibility is roster-derived', () => {
     // no authority over it. A retained `<id>-oauth.env` must not turn a 403
     // scope reply into a false marker clear.
     fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
       { id: 'orl', label: 'orl', configDirSuffix: '.claude-orl',
         exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/orl-openrouter.env' },
         homeAble: true, hue: 'amber', telemetry: 'anthropic' },
@@ -306,6 +310,8 @@ describe('eligibility is roster-derived', () => {
     // is its credential and never becomes a D-3524 source. A leftover OAuth
     // file must not let this probe write a replacement verdict either.
     fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
       { id: 'login', label: 'login', configDirSuffix: '.claude-login',
         exec: { kind: 'generated', provider: 'anthropic' },
         homeAble: true, hue: 'green', telemetry: 'anthropic' },
@@ -330,6 +336,68 @@ describe('eligibility is roster-derived', () => {
     expect(r.stderr).toMatch(/no roster at \$HOME\/\.ccrc\/accounts\.json/);
   });
 
+  it('a duplicate account id makes the whole pass side-effect free', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+
+    const r = run();
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*duplicate account id "duplicate"/);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('multiple upstream accounts refuse before either credential is read', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'first', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'second', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('first'), '1757203200 rescue-401');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+
+    const r = run();
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*2 upstream accounts/);
+    expect(markerBody('first')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
   it('an id carrying whitespace is ONE illegal id, never two legal ones', () => {
     // The other half of the unquoted-expansion defect. `for id in $IDS` splits on
     // IFS as well as globbing, so `good-one evil` arrives as two ids that BOTH
@@ -341,7 +409,8 @@ describe('eligibility is roster-derived', () => {
     token('good-one'); token('evil');
     plantCurl('401', '{"error":{"type":"authentication_error"}}');
     const r = run();
-    expect(r.stderr).toMatch(/not a legal account id/);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid id/);
     expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
   });
@@ -352,7 +421,8 @@ describe('eligibility is roster-derived', () => {
     ] }));
     plantCurl('401');
     const r = run();
-    expect(r.stderr).toMatch(/not a legal account id/);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid id/);
     expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
   });
 });
@@ -470,11 +540,32 @@ describe('pass discipline', () => {
     // ONLY thing missing is flock; curl is the planted fake in `.local/bin`.
     token('claude'); token('claude-a');
     plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
-    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq'])}` });
+    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq', 'node'])}` });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/flock is not on PATH — nothing was measured/);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
     expect(fs.existsSync(marker('claude'))).toBe(false);
+  });
+
+  it('a box with no node refuses before any credential or request', () => {
+    token('claude'); token('claude-a');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq', 'flock'])}` });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/node is not on PATH — the account roster cannot be validated/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
+  });
+
+  it('a partial install with no shipped validator refuses instead of falling back to jq', () => {
+    token('claude'); token('claude-a');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    fs.rmSync(j('ccrc'));
+    const r = run();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/shipped roster validator .* is missing/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
   });
 
   it('an http:// URL is refused by curl itself — the bearer never goes out in cleartext', () => {
