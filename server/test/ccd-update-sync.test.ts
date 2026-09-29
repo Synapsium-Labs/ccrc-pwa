@@ -202,6 +202,35 @@ describe('ccd-update-sync: one GET of the node\'s own route, installed by rename
     expect(readFileSync(join(wss, 'curl.argv'), 'utf8')).toContain('--max-time 20');
   });
 
+  // W6 Task 8A, review 167's F7 (needs an environment ccrc did not write):
+  // curl reads `--max-time 0` as NO LIMIT, so an unvalidated `0` in the user
+  // manager's environment removed the pull's only time bound. Each bad value
+  // warns naming the variable, falls back to 20, and the pull still runs.
+  it.each([
+    ['0', '0'], ['a negative', '-5'], ['not a number', 'soon'], ['a float', '1.5'],
+    ['over an hour', '3601'], ['leading zeros', '007'], ['whitespace', ' 5'],
+  ])('CCRC_UPDATE_SYNC_TIMEOUT %s (%j) warns, is never handed to curl, and the pull falls back to 20 (review 167 F7)', (_what, bad) => {
+    const home = box('upd-sync-timeout-bad-');
+    answer(home, intentDoc());
+    const r = sync(home, { CCRC_UPDATE_SYNC_TIMEOUT: bad });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toContain(`ccd-update-sync: WARN: CCRC_UPDATE_SYNC_TIMEOUT='${bad}' is not a whole number of seconds from 1 to 3600 — using 20`);
+    const argv = readFileSync(join(home, 'curl.argv'), 'utf8');
+    expect(argv).toContain('--max-time 20 ');
+    expect(argv).not.toMatch(/--max-time (0|-|soon|1\.5|3601|007| )/);
+  });
+
+  it('CCRC_UPDATE_SYNC_TIMEOUT: a good value passes unchanged and unwarned, and so do unset and empty (the default, silently)', () => {
+    for (const [v, want] of [['1', '1'], ['3600', '3600'], ['45', '45'], [undefined, '20'], ['', '20']] as const) {
+      const home = box('upd-sync-timeout-ok-');
+      answer(home, intentDoc());
+      const r = sync(home, v === undefined ? {} : { CCRC_UPDATE_SYNC_TIMEOUT: v });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr, `${v}`).not.toContain('WARN');
+      expect(readFileSync(join(home, 'curl.argv'), 'utf8'), `${v}`).toContain(`--max-time ${want} `);
+    }
+  });
+
   it('hands the box token to curl on STDIN — never in argv, never in the environment', () => {
     const home = box('upd-sync-token-');
     answer(home, intentDoc());

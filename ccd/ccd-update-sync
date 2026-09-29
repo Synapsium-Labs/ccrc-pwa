@@ -197,6 +197,20 @@ redact() {
 }
 say() { printf 'ccd-update-sync: %s\n' "$(redact "$1")" >&2; }
 
+# W6 Task 8A, review 167's F7: `TIMEOUT` goes to curl's `--max-time`, and curl
+# reads `--max-time 0` as NO LIMIT AT ALL — so a `0` (or a typo) in the user
+# manager's environment, which a `--user` timer's unit inherits, would turn
+# the one bound on this pull's disk and time into none. Validated exactly as
+# ccd/ccrc's `_upd_validate_timeout` validates the `CCRC_RELEASE_*` knobs: a
+# whole number from 1 to 3600 is used as typed; anything else (`0`, negative,
+# non-numeric, over an hour) WARNs, naming the variable and what it got, and
+# falls back to 20. Unset or empty is the default, silently. A bad value never
+# refuses the pull: a timer that stops syncing over a typo is the worse fault.
+if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$TIMEOUT" -gt 3600 ]; then
+  say "WARN: CCRC_UPDATE_SYNC_TIMEOUT='${TIMEOUT//[![:print:]]/?}' is not a whole number of seconds from 1 to 3600 — using 20"
+  TIMEOUT=20
+fi
+
 command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }
 
