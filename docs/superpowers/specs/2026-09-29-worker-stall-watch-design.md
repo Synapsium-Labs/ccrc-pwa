@@ -1,7 +1,6 @@
 # Worker stall watch — the server notices a silent session, delivers mail past background work, and escalates — design
 
-**Status:** rev 3.1, draft for the operator, 2026-09-29. Nothing here is approved or planned. §11 lists the decisions
-owed.
+**Status:** rev 3.1, APPROVED by the operator 2026-09-29 11:58 UTC (§11 records the rulings). Wave 1 is being planned.
 - **Rev 3.1** applies the MekWarLive coordinator's read-back of S4 (mail 2526), checked against the worker's and the
   implementer's transcripts. §3.2 gains the measured self-resume contrast. §6.2's clause stops counting an agent whose
   completion says it may resume on its own as a wake; rev 3's text would have allowed S4's last turn-end. §2 prices the
@@ -275,8 +274,8 @@ the claim pair's synchronous try-block.
 `stallVerdict(input: StallInput, now: number): StallVerdict`, where
 `StallVerdict = {act:'none'} | {act:'hold', why: StallHold} | {act:'notify', arm: StallArm, rung: 1|2|3, key: number}`.
 `StallHold` and `StallArm` (`'quiet' | 'orphan-d' | 'orphan-e' | 'failed' | 'frozen' | 'dead' | 'coord-deaf' |
-'mail-stuck' | 'limit-cap' | 'coord-ball' | 'marker-unreadable'`) are derived from total `Record`s. Wave 1 uses
-`quiet`, `limit-cap` and `coord-ball`; the rest are wave 2's.
+'mail-stuck' | 'limit-cap' | 'dialog-cap' | 'coord-ball' | 'marker-unreadable'`) are derived from total `Record`s. Wave 1
+uses `quiet`, `limit-cap`, `dialog-cap` and `coord-ball`; the rest are wave 2's.
 
 **Candidates.** Runs with `state NOT IN ${INACTIVE_RUN_STATES_SQL}` (the existing fragment, reused, never a new list)
 and a `sessionId`, of both work and review kinds. A run in `unknown`, or in any state this build cannot name, is a hold.
@@ -329,8 +328,9 @@ dead arm even while it is asking or limit-held:
 2. a) a question the worker asked: a fresh hookstate `ask`, or an asks row `held`/`answering`. Uncapped; the asks lane
    owns it (5 legit AskUserQuestion waits ran at most 6.6 h).
    b) `dialogPending` or live `waiting` with no ask behind it: a harness menu such as the Fable consent fallback, or a
-   background subagent's permission prompt. Uncapped in this spec; the dialog's own one-shot `raise()` push is its only
-   escalation today. §11 decision 8 asks whether to cap it.
+   background subagent's permission prompt. Capped by §11 item 8's ruling: after 2 h of quiet under this hold, one
+   `dialog-cap` operator push per episode, `⚠ stalled › <run workspace> (dialog)`, and no worker or coordinator mail,
+   since neither can land on `waiting`.
 3. measured 5 h or 7 d usage at or above 100, `stranded`, `swapBlocked`, or a delivery to the worker whose `lastError`
    is `auto-continue-armed` (a `backOff` reason, never a `MailGate`) and whose `nextAttemptAt` is later than now −
    10 min + `MAIL_ARMED_HOLD_MS` (`backOff` stores no time of its own, and wave 1 adds no column). A null `limits`, or
@@ -426,7 +426,7 @@ store (the lowest id of a `stall-check:` mail from `operator` to that session on
   `⚠ failed` `› <run workspace>`. The frozen, dead and failed arms' coordinator notices are `stall:` mails, so none of
   them is pushed a second time through `pushOne`.
 
-Pushes with no mail row (r3, `limit-cap`, `coord-ball`, and wave 2's coord-deaf, mail-stuck, marker-unreadable and
+Pushes with no mail row (r3, `limit-cap`, `dialog-cap`, `coord-ball`, and wave 2's coord-deaf, mail-stuck, marker-unreadable and
 delayed orphan pushes) go through `pushOne` with an existing kind (`run` for run arms, `mail` for a run-less orphan),
 `recordAlways: true`, and the tag `stall-<runId|sessionId>-<arm>-<rung>-<key>` (the `key` below), except the delayed
 orphan push, whose tag is `orphaned-<toId>-<restartAt>` (§5.2). No `NotifyEvent` kind is added; a new kind is a wire
@@ -435,7 +435,7 @@ change.
 **Spelled once.** The prefixes `stall-check:`, `re stall-check:`, `re stall-check: waiting`, `stall:`, `orphaned:`,
 `failed:` and `wait:`, and the observation-detail pair `stallDetail`/`parseStallDetail`
 (`stall:<arm>:<rung>:<key>`, and `stall-shadow:…` in shadow), live in `stall.ts`. `key` is the arm's own event:
-`episodeKeyMs` for `quiet`, `limit-cap`, `coord-ball`, `frozen`, `dead`, `coord-deaf` and `marker-unreadable`; the
+`episodeKeyMs` for `quiet`, `limit-cap`, `dialog-cap`, `coord-ball`, `frozen`, `dead`, `coord-deaf` and `marker-unreadable`; the
 marker's `restartAt` for `orphan-d`; its `stopAt` for `orphan-e` and `failed`; the `deliveryId` for `mail-stuck`. A notice
 to a coordinator with no run to record it on is keyed on its own mail row, as §5.2's run-less D notice is.
 `single-definition.test.ts` reds on a second literal. `SYSTEM_MAIL_SENDER_MAP`'s gloss for `operator` names the watch.
@@ -878,6 +878,14 @@ Deviation numbers are minted at run-open (`POST /api/ledger/deviations`); this s
   and does not claim that lane's verdict.
 
 ## 11. Decisions for the operator
+
+**Ruled 2026-09-29 11:58 UTC: "design looks good".** Every recommendation below is approved as written. Two items had
+only a leaning, and each takes it; the operator can reverse either:
+- item 8 takes the cap: one `⚠ stalled › <workspace> (dialog)` operator push per episode after 2 h under hold 2b, arm
+  `dialog-cap`, keyed and recorded as `limit-cap` is. It is wave 1 scope.
+- item 10 excludes a deliberate stop from the dead arm's push if ccd leaves a record that tells it apart. That is
+  wave 2's to measure; wave 1 holds on every dead word.
+Where item 14's first two tickets are filed is still open.
 
 1. **No blocking Stop hook** (§2). The coordinator proposed one; the census says it fires 17–36 times a day, misses
    11–13 of the 36 turn-end stalls and all 13 mid-turn ones (about half of the 49), and has no backstop. Confirm.
