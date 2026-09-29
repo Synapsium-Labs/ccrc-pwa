@@ -1035,18 +1035,30 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
   const notSettled = (n: { updateState: string }): boolean => n.updateState !== 'idle' && n.updateState !== 'reverted' && n.updateState !== 'failed';
   const busyRows = (h: Harness): string[] => h.store.nodes().filter(notSettled).map((n) => n.nodeId);
 
+  /** The observations `send` records on its FIRST call, so the harness's own `expect`s land as themselves rather
+   *  than being caught by `linkAnswer` and reported as a transport failure (any non-`AgentOpError` throw inside
+   *  `send` becomes a transport hold, which swallows a failed assertion and reports the wrong cause). */
+  interface SendObserved { rekey?: { ok: boolean; revived?: boolean }; busyIds?: string[]; busyStartedAt?: number }
+
   /** The reviewer's interleaving (steps 1-4): U1 idle, rekeyed away to U2, U2 requested and dispatched; the
    *  harness's `send` then revives U1 BACK — mid-op — before it answers, so the lease U2 acquired is now U1's,
-   *  and asserts that exactly one live busy row remains (U1, holding the acquire's `updateStartedAt`) before
-   *  answering with `tail`. Step 5 (`runDispatch`) is left to the caller so it can inspect the outcome. */
-  const setup = (tail: SendUpdateOp): Harness => {
+   *  and RECORDS (never asserts, so a failure here is not folded into `linkAnswer`'s catch) that exactly one live
+   *  busy row remains (U1, holding the acquire's `updateStartedAt`) before answering with `tail`. Recorded only
+   *  on the first call: a later `send` (e.g. a post-deadline re-move) must not re-record or re-assert. Step 5
+   *  (`runDispatch`) is left to the caller, which asserts on `observed` after it returns. */
+  const setup = (tail: SendUpdateOp): { h: Harness; observed: SendObserved } => {
     const box: { h?: Harness } = {};
+    const observed: SendObserved = {};
+    let first = true;
     const send: SendUpdateOp = async (tag, kind) => {
       const h = box.h!;
-      expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID)).toMatchObject({ ok: true, revived: true });
-      const busy = h.store.nodes().filter(notSettled);
-      expect(busy.map((n) => n.nodeId)).toEqual([FLEET_ID]);
-      expect(busy[0]?.updateStartedAt).toBe(T0 + 1000);
+      if (first) {
+        first = false;
+        observed.rekey = h.store.rekeyNode(FLEET_LABEL, FLEET_ID);
+        const busy = h.store.nodes().filter(notSettled);
+        observed.busyIds = busy.map((n) => n.nodeId);
+        observed.busyStartedAt = busy[0]?.updateStartedAt;
+      }
       return tail(tag, kind);
     };
     const h = harness({ send });
@@ -1055,7 +1067,15 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
     expect(h.store.rekeyNode(FLEET_LABEL, FLEET_ID2)).toMatchObject({ ok: true, retired: 1, revived: false });
     expect(h.store.upsertNodeMeasurement(fleetMeas({ nodeId: FLEET_ID2 })).ok).toBe(true);
     expect(h.store.requestNode(FLEET_ID2, 'v0.0.10', 'update', T0).ok).toBe(true);
-    return h;
+    return { h, observed };
+  };
+
+  /** The interleaving's own assertions, checked AFTER `runDispatch` resolves so a failure reports itself instead
+   *  of being caught inside `send` and re-reported as a transport hold. */
+  const assertObserved = (observed: SendObserved): void => {
+    expect(observed.rekey).toMatchObject({ ok: true, revived: true });
+    expect(observed.busyIds, 'exactly one live busy row remains, and it is FLEET_ID').toEqual([FLEET_ID]);
+    expect(observed.busyStartedAt, 'the live busy row holds the acquire\'s updateStartedAt').toBe(T0 + 1000);
   };
 
   interface ReleaseCase { name: string; answer: SendUpdateOp; to: 'idle' | 'failed'; detail: string }
@@ -1078,8 +1098,9 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
   ];
 
   it.each(releaseCases)('every release word lands on the heir, not the id acquired: $name', async ({ answer, to, detail }) => {
-    const h = setup(answer);
+    const { h, observed } = setup(answer);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
+    assertObserved(observed);
     expect(r.outcome).toEqual({ nodeId: FLEET_ID, result: 'released', to, detail });
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: to, updateDetail: detail });
     expect(busyRows(h), 'no live row is busy').toEqual([]);
@@ -1103,8 +1124,9 @@ describe('runDispatch — a revive during the op hands the lease to the heir, an
   ];
 
   it.each(holdCases)('every hold word lands on the heir, not the id acquired: $name', async ({ answer, detail }) => {
-    const h = setup(answer);
+    const { h, observed } = setup(answer);
     const r = ran(await runDispatch(h.deps, T0 + 1000));
+    assertObserved(observed);
     expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, detail });
     expect(h.store.node(FLEET_ID)).toMatchObject({ updateState: 'pending', updateDetail: detail });
     expect(busyRows(h), 'exactly one live busy row remains, and it is FLEET_ID').toEqual([FLEET_ID]);

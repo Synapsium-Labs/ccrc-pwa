@@ -219,8 +219,9 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   } catch (e) {
     // A SYNCHRONOUS throw from the spawn — the argv builder's RangeError, or a relative or trailing-slash HOME — is a
     // fault of this server that will not mend itself: a halting `spawn-failed` naming the throw (fix round 1 item 9).
-    // It is NOT the rejected-promise arm below. That arm is reached only by an errno `child_process.spawn` throws
-    // synchronously inside the runner's executor (E2BIG, ENOMEM, an invalid argument), and nothing started there;
+    // It is NOT the rejected-promise arm below. That arm is reached only by an error `child_process.spawn` throws
+    // synchronously inside the runner's executor (E2BIG, ENOMEM, or an invalid argument such as ERR_INVALID_ARG_VALUE
+    // — the last is not an errno), and nothing started there;
     // EAGAIN, EMFILE, ENFILE, EACCES and ENOENT arrive as the child's `error` event, which the runner answers as
     // code 1 `could not start the launcher (<code>)` — a halting `spawn-failed` below (residue R6, review 176 F2).
     return { kind: 'refused', err: 'spawn-failed', detail: e instanceof Error ? e.message : String(e) };
@@ -249,7 +250,10 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
     const detail = stderrLine === 'no message' ? `exit ${res.code} with no stderr from the launcher` : stderrLine;
     return { kind: 'refused', err: 'spawn-failed', detail };
   } catch (e) {
-    // Reached only by an errno spawn() throw synchronously inside the runner's executor (residue R6, review 176 F2).
+    // Reached only by an error spawn() throw synchronously inside the runner's executor (residue R6, review 176 F2).
+    // `reached: 'never'` here rests on the bounded runner rejecting only before anything started (the premise cases
+    // in update-local-spawn-throw.test.ts pin it); a runner that could reject AFTER spawning would need its own
+    // positive marker, as the fleet link has (D-3555).
     return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e), reached: 'never' };
   }
 }

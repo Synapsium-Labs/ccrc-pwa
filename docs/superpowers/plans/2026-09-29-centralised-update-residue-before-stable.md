@@ -99,8 +99,8 @@ Plan-level departures from the spec's literal text. D-3555 was minted by the coo
   - **Mutation-measured.** Task 1 (`remote-connect.test.ts`): M1–M9, incl. M4b, each 1 failed — its own targeted
     assertion (M3's stops at its first, `pending.size` still 1; M7/M8/M9 isolate the same synchronous-throw case's
     later assertions, independently). Task 2 (`update-op-answer.test.ts` + `update-converge.test.ts`): M1 19 failed
-    (every `maybe` op-answer row, converge cases 1/2/4/5/6, the rewritten `:398` case), M2 11 failed (the same
-    converge cases as M1), M3 1 failed (the rewritten `:381` `LinkNotSentError` case), M4 9 failed (case 1's rows,
+    (8 op-answer `maybe` rows, converge cases 1 (5 rows), 2, 3, 4, 5, 6, the rewritten `:398` case), M2 11 failed
+    (the same converge cases as M1), M3 1 failed (the rewritten `:381` `LinkNotSentError` case), M4 9 failed (case 1's rows,
     cases 4/5/6, the rewritten `:398` case), M5 3 failed (cases 4/5/6), M6 2 failed (case 6, the op-answer
     `reportedTarget: 'v0.0.10'` row), M7 3 failed (the `:494` never-wrote-a-report deadline case, the op-answer
     `accepted —` and null-detail rows), M8 4 failed (the op-answer `never` rows, the rewritten `:381` case). Every

@@ -97,8 +97,9 @@ export function readReadyOps(raw: unknown): string[] {
  * A `ResErr` the AGENT SENT (design 2026-09-20 §10, D-3373), as
  * opposed to a request the LINK failed. A link failure AFTER the send stays a
  * plain `Error` whose message is `disconnected`, `timeout` or `aborted`; one
- * before the send is a `LinkNotSentError` (below, D-3555) with the same
- * message. The dispatcher must
+ * before the send is a `LinkNotSentError` (below, D-3555) carrying
+ * `disconnected` or `aborted`, or — for a synchronous `JSON.stringify`/`ws.send`
+ * throw — the thrown message; `timeout` is never pre-send. The dispatcher must
  * tell "the node answered busy" from "the node could not be asked", and a
  * message string cannot do that, because nothing stops an agent word from being
  * spelled `timeout`. `instanceof` can.

@@ -1,10 +1,11 @@
 // Fix round 1, item 9 — a SYNCHRONOUS throw from the server-role spawn (the argv builder's RangeError, a relative or
 // trailing-slash HOME) is a HALTING `spawn-failed` naming the throw: a fault of this server that will not mend itself. Only
-// the throw BEFORE `run` is called halts; a REJECTED promise from the runner — reached only by an errno `spawn()` throws
-// synchronously inside the runner's executor (E2BIG, ENOMEM, an invalid argument) — stays non-halting transport `other`,
-// the request standing (residue R6, review 176 F2: the premise this file pinned before — that a transient spawn errno such
-// as EAGAIN lands there — was wrong; EAGAIN, EMFILE, ENFILE, EACCES and ENOENT arrive as the child's `error` event instead,
-// which the bounded runner answers as code 1 `could not start the launcher (<code>)`, a HALTING `spawn-failed`).
+// the throw BEFORE `run` is called halts; a REJECTED promise from the runner — reached only by an error `spawn()` throws
+// synchronously inside the runner's executor (E2BIG, ENOMEM, or an invalid argument such as ERR_INVALID_ARG_VALUE — the
+// last is not an errno) — stays non-halting transport `other`, the request standing (residue R6, review 176 F2: the
+// premise this file pinned before — that a transient spawn errno such as EAGAIN lands there — was wrong; EAGAIN, EMFILE,
+// ENFILE, EACCES and ENOENT arrive as the child's `error` event instead, which the bounded runner answers as code 1
+// `could not start the launcher (<code>)`, a HALTING `spawn-failed`).
 import { describe, expect, it } from 'vitest';
 import { runDispatch, localUpdateSpawnFor } from '../src/update/converge.js';
 import { boundedUpdateSpawn } from '../src/update/spawn.js';
@@ -41,7 +42,7 @@ describe('item 9: a SYNCHRONOUS throw from the local spawn halts; a rejected pro
     expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
   });
 
-  it('a REJECTED promise from the runner — reached only by an errno spawn() throws synchronously — stays non-halting transport `other`: idle, the request standing', async () => {
+  it('a REJECTED promise from the runner — reached only by an error spawn() throws synchronously — stays non-halting transport `other`: idle, the request standing', async () => {
     const h = harness({});
     h.deps.runLocal = () => Promise.reject(Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG', syscall: 'spawn' }));
     seedServer(h);
