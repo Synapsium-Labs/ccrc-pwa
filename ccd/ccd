@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=751425e41c74f3590ab3c80da856b0f6448ea030cc8741556bcf1890192272b7
+# ccrc:generated 1 sha256=6018de0328effc51a75a3672fe8c325e680cb1f6e379903f0b395b6433e8d848
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2718,7 +2718,7 @@ _tmux()  { echo "cc-$1"; }                                  # id -> tmux NAME, f
 # the second fact with the subshell. Same classifier, same polarity — the probe
 # IS the one classifier now; `_session_verdict` merely re-derives from it.
 _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unknown only),
-                     #       PROBE_SUBSTRATE=present|absent|unmeasured; rc 0
+                     #       PROBE_SUBSTRATE=present|absent|unmeasured; rc 0. A 2nd arg (ws-reclaim's `anchored`, #187) is accepted and IGNORED: every probe is exact, `_tmux_t` (D-3525)
   # PROBE_SUBSTRATE IS NOT A FOURTH VERDICT, AND MUST NEVER BECOME ONE. It answers a
   # DIFFERENT question from PROBE_VERDICT — "is there a tmux server at all", not "is this
   # session alive" — and exactly one caller reads it: `cmd_supervise`'s pre-flight, which
@@ -24473,11 +24473,11 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   _ws_reclaim_plain_path "$workdir" \
     || { _reap_refuse containment-unproven "the registry spells $id's workdir as '$workdir' — not one plain absolute path, so ccd cannot prove the tree at that path is $id's own"; return 1; }
   main="$PROJECTS_ROOT/$project"
-  # 5 — presence ON THE BOX: a tmux client attached to THIS session. ANCHORED
-  # (`=`): a bare `-t cc-<id>` is an fnmatch pattern and resolves a prefix to a
-  # DIFFERENT session (`cmd_win_size`'s measured case). Whether the session is
+  # 5 — presence ON THE BOX: a tmux client attached to THIS session. EXACT
+  # (`_tmux_t`, `=cc-<id>:`): a bare `-t cc-<id>` is a search and resolves a prefix
+  # to a DIFFERENT session (D-3525's measured case). Whether the session is
   # up is asked through `_session_probe` — ccd's ONE classifier, with its
-  # deadline — and its second argument is what anchors the target there. Only
+  # deadline — which is exact for every caller; the `anchored` it is passed is kept, ignored. Only
   # `gone` (`can't find session`) passes: a session that does not exist has no
   # client. `unknown` — a refused connection, a socket nobody serves, no socket
   # at all, no answer in time — means tmux could NOT BE ASKED, never "no
@@ -24491,7 +24491,7 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
     case "$PROBE_VERDICT" in
       gone) : ;;
       live)
-        clients=$(tmux list-clients -t "=$(_tmux "$id")" -F '#{client_tty}' 2>/dev/null) \
+        clients=$(tmux list-clients -t "$(_tmux_t "$id")" -F '#{client_tty}' 2>/dev/null) \
           || { _reap_refuse attached "$(_tmux "$id") exists and would not list its clients — presence unmeasured is not absence"; return 1; }
         [[ -z "$clients" ]] \
           || { _reap_refuse attached "a terminal is attached to $(_tmux "$id"): ${clients//$'\n'/, }"; return 1; } ;;
@@ -26076,8 +26076,8 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   # tree is gone can still be up. Both are idempotent: running them twice
   # costs nothing, and skipping them once leaves `claude-session@<id>.service`
   # (Restart=always) respawning forever against a workspace with no row. The
-  # target is ANCHORED (`=`) — a bare `cc-<id>` is an fnmatch pattern and
-  # resolves a prefix to a DIFFERENT session (`cmd_win_size`'s measured case).
+  # target is EXACT (`_tmux_t`, `=cc-<id>:`) — a bare `cc-<id>` is a search and
+  # resolves a prefix to a DIFFERENT session, and KILLS it (D-3525, measured).
   # The stamp is the declared surface when one arrived and `ccd` otherwise; the
   # DECLARATION is passed only when one arrived (`none` is the journal's word
   # for "nothing was declared", never a surface `_ws_unsupervise` may record).
@@ -26085,7 +26085,7 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   stamp=ccd
   case "$surface" in cli|pwa|agent) stamp="$surface" ;; esac
   _ws_unsupervise "$id" "$stamp" "$declared"
-  tmux kill-session -t "=$(_tmux "$id")" 2>/dev/null; killrc=$?
+  tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null; killrc=$?
   # RE-MEASURED, because `_ws_unsupervise` answers 0 whatever systemd did: a
   # failed `_svc_disable_now` is a stderr warning and nothing more. A unit that
   # is still up is exactly the Restart=always hazard this arm exists for (spec

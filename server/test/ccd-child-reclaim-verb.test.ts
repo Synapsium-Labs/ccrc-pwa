@@ -31,7 +31,7 @@ const tombOf = (): Record<string, unknown> =>
 const atticShas = (c: Child): string[] =>
   h.git(c.main, 'for-each-ref', '--format=%(refname)', `refs/ccrc/attic/${CHILD_ID}/`)
     .split('\n').filter(Boolean).map((r) => r.split('/').pop()!);
-const KILL = `tmux kill-session -t =cc-${CHILD_ID}`;
+const KILL = `tmux kill-session -t =cc-${CHILD_ID}:`;   // the exact target (D-3525)
 const unsupervised = (): string[] => h.calls().filter((l) => l.startsWith('unsupervise'));
 
 /** Everything a refusal must leave standing. */
@@ -675,7 +675,7 @@ describe('tmux presence is read through `_session_probe`, ANCHORED — at rung 5
   // asked" stops the verb before anything is deleted: at rung 5 as the
   // `probe-unmeasured` failure, and in the tail — where `KillMode=process`
   // means stopping the unit never stopped the pane — as `unit-still-active`.
-  const PROBE = `tmux has-session -t =cc-${CHILD_ID}`;
+  const PROBE = `tmux has-session -t =cc-${CHILD_ID}:`;
   /** Everything a stopped tail must leave standing: the tree, the branch, the
    *  row, and the breadcrumb for the retry. Read off disk FIRST. */
   const tailStopped = (c: Child): void => {
@@ -2177,7 +2177,7 @@ describe('the tail never deletes, and the pin never writes, what is not provably
     // No session to find, in tmux's words: rung 5 and the tail's re-measure
     // read an rc 1 with no message as "could not be asked", which stops them.
     const pre = `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; [[ "$1" == kill-session ]] && : > "${lock}";`
-      + ` echo "can't find session: =cc-${CHILD_ID}" >&2; return 1; };`;
+      + ` echo "can't find session: cc-${CHILD_ID}" >&2; return 1; };`;
     fs.writeFileSync(path.join(c.wt, 'wip.txt'), 'w\n');
     const r = childReclaimVerb(h, evalOf(h).token, { pre });
     expect(r.code, r.stdout + r.stderr).toBe(0);
