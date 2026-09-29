@@ -630,18 +630,24 @@ async function childGateAtClose(
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
-  // Whether this session has EVER coordinated a run (spec §1 rules 3-4): read
+  // Whether this session has EVER coordinated a run (spec §1 rule 4): read
   // beside the sibling list, the same store call the executor makes for the
   // same question (`childReclaim.ts`'s own step 2a). An unreadable read is
-  // not "never coordinated" — it folds into the existing `siblings-unreadable`
-  // directly, never reaching the pure decision with a guessed boolean.
-  let hasCoordinated: boolean;
+  // not "never coordinated" — but it is also NOT folded into
+  // `siblings-unreadable` HERE: doing so ahead of calling the decision would
+  // outrank `not-a-child` and `marker-unreadable` for every close, coordinated
+  // or not, whenever one bad `run_events` row makes the read throw. It is
+  // carried into the pure decision as a THIRD value instead
+  // (`hasCoordinated: 'unreadable'`), which `childReclaimDecision` folds into
+  // `siblings-unreadable` at the exact place the sibling check itself ranks —
+  // after the mark/minting checks, never ahead of them.
+  let hasCoordinated: boolean | 'unreadable';
   try {
     hasCoordinated = deps.coord.childReclaimCoordinatorIds().has(sessionId);
   } catch (err) {
     console.warn(`ccrc-server: childReclaimCoordinatorIds() failed at close `
-      + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId} held as siblings-unreadable`);
-    return { decision: { reclaim: false, why: 'siblings-unreadable' }, request: null };
+      + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
+    hasCoordinated = 'unreadable';
   }
   const input = {
     mark, minting, sessionId, siblings, reviewed, final, state, spent: { kind: 'unasked' } as const,

@@ -187,7 +187,7 @@ export interface ChildReclaimDeps {
  *  read (the sweep retries); `siblings-*` mean another run still has — or may
  *  have — this workspace; `has-coordinated` is a child that has itself ever
  *  been named `claimedBy` of a run — the session a reclaim made an heir, the
- *  session it displaced, or any nested coordinator (spec §1 rules 3-4):
+ *  session it displaced, or any nested coordinator (spec §1 rule 4):
  *  manual cleanup is reserved for a coordinator's own workspace, never a
  *  sub-workspace a close may act on; `review-report-live` is a REVIEW child
  *  kept while the run it reviewed is not terminal, because the coordinator
@@ -279,13 +279,19 @@ export interface ChildReclaimDecisionInput {
    *  re-dates to `unspent` can still say WHY it is not finished —
    *  `not-finished-merge-commit` — rather than the ordinary unspent hand-over. */
   readonly spentFastPath: boolean;
-  /** Whether this session has EVER been named `claimedBy` of a run, or
-   *  displaced a coordinator by a reclaim (`CoordStore.childReclaimCoordinatorIds`,
-   *  spec §1 rules 3-4): a coordinator's own workspace, cleaned up by a human,
-   *  never reclaimed automatically. The caller resolves an unreadable read into
-   *  the existing `siblings-unreadable` itself — this field is never
-   *  "unreadable", only `true` or `false`. */
-  readonly hasCoordinated: boolean;
+  /** Whether this session has EVER been named `claimedBy` of a run, or was the
+   *  session a reclaim DISPLACED from a programme's chair (`CoordStore.
+   *  childReclaimCoordinatorIds`'s own union — the heir side is already
+   *  covered by being `claimedBy` itself; the set's one EXTRA member is the
+   *  `from` side of a `reclaim:` displacement) (spec §1 rule 4): a
+   *  coordinator's own workspace, cleaned up by a human, never reclaimed
+   *  automatically. `'unreadable'` when the caller's store read itself
+   *  failed — decided at the SAME place the sibling check ranks (right after
+   *  it, never ahead of `not-a-child`/`marker-unreadable`), so a throw folds
+   *  into the existing `siblings-unreadable` only where an unreadable
+   *  sibling list already would, never on every close. No overloaded
+   *  boolean: `true`/`false`/`'unreadable'` are three answers, never two. */
+  readonly hasCoordinated: boolean | 'unreadable';
   /** No OTHER open run of this run's program: `CoordStore.programOpenRunCount`
    *  with this run excluded — D-51's predicate, not a second spelling. */
   readonly retiresProgram: boolean;
@@ -293,10 +299,11 @@ export interface ChildReclaimDecisionInput {
 
 /**
  * Has the coordinator FINISHED with this child? (spec §5.7). Eligible iff
- * child ∧ no open sibling ∧ (final ∨ spent-and-proven-this-incarnation ∨ an
- * abandon ∨ this close retires the program). "No open sibling" ALONE is also
- * true on the ordinary non-final close, which is claiming the child for wave
- * N+1 — reclaiming on it would be the 2026-09-10 harm through a new door.
+ * child ∧ no open sibling ∧ never coordinated ∧ (final ∨
+ * spent-and-proven-this-incarnation ∨ an abandon ∨ this close retires the
+ * program). "No open sibling" ALONE is also true on the ordinary non-final
+ * close, which is claiming the child for wave N+1 — reclaiming on it would be
+ * the 2026-09-10 harm through a new door.
  *
  * Two authorities, EQUAL (spec §5.1): the box's marker names a run, and that
  * run's row names THIS session. A marker naming a run whose row is absent, or
@@ -324,9 +331,13 @@ export interface ChildReclaimDecisionInput {
  * or `not-finished-merge-commit` (the fast path's own answer was re-dated
  * `unspent`) — otherwise plain `not-finished`, the ordinary unspent hand-over.
  *
- * A child that has EVER coordinated a run (spec §1 rules 3-4) is never
+ * A child that has EVER coordinated a run (spec §1 rule 4) is never
  * reclaimed automatically, whatever else this close would otherwise decide:
- * checked beside the sibling read, before any of the above.
+ * checked right after the sibling read, the same place that read's own
+ * unreadable answer ranks — so a `hasCoordinated: 'unreadable'` input folds
+ * into `siblings-unreadable` only there, never ahead of `not-a-child` or
+ * `marker-unreadable` for an ordinary non-child close whose own coordination
+ * history happens to be unreadable.
  */
 export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildReclaimDecision {
   const no = (why: ChildReclaimNotWhy): ChildReclaimDecision => ({ reclaim: false, why });
@@ -336,6 +347,7 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
   if (input.minting.kind === 'absent' || input.minting.sessionId !== input.sessionId) return no('not-a-child');
   if (!input.siblings.ok) return no('siblings-unreadable');
   if (input.siblings.siblings.length > 0) return no('siblings-open');
+  if (input.hasCoordinated === 'unreadable') return no('siblings-unreadable');
   if (input.hasCoordinated) return no('has-coordinated');
   if (input.minting.reviews !== null) {
     if (input.reviewed.kind === 'unreadable') return no('marker-unreadable');
@@ -626,7 +638,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (sib.siblings.length > 0) {
     return deferred('siblings-open', `open run(s) ${sib.siblings.map((s) => `#${s.id}`).join(', ')} still name this workspace`);
   }
-  // 2a — COORDINATING, ANY STATE (spec §1, rules 3-4: manual cleanup is
+  // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
   // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
   // may act on). A child that has EVER been named `claimedBy` of a run — the
   // session a reclaim made an heir, the session the SAME reclaim displaced, or

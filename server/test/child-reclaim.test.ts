@@ -463,7 +463,7 @@ describe('childReclaimDecision — has the coordinator finished with this child?
       { reclaim: false, why: 'not-finished-undated' }],
     ['the ordinary non-final close', {}, { reclaim: false, why: 'not-finished' }],
     ['an unspent child', { spent: { kind: 'unspent' } }, { reclaim: false, why: 'not-finished' }],
-    // R-2's `-merge-commit` word: a fast-path spent (registry/`.prhistory`)
+    // Spec §5.3's `-merge-commit` word: a fast-path spent (registry/`.prhistory`)
     // whose live re-date came back `unspent` — the merge-commit path — holds
     // with a different word than the ordinary unspent hand-over above.
     ['an unspent child, but the fast path triggered its re-date',
@@ -472,6 +472,13 @@ describe('childReclaimDecision — has the coordinator finished with this child?
       { reclaim: false, why: 'not-finished-unmeasured' }],
     ['a child that has EVER coordinated a run — never reclaimed automatically, even on a final close',
       { hasCoordinated: true, final: true }, { reclaim: false, why: 'has-coordinated' }],
+    // Fix round 1, Important #1: `hasCoordinated: 'unreadable'` folds into
+    // `siblings-unreadable` at the SAME place the sibling check itself
+    // ranks — never ahead of the identity checks above it.
+    ['an unreadable coordination-history read, alone, folds where the sibling check ranks',
+      { hasCoordinated: 'unreadable', final: true }, { reclaim: false, why: 'siblings-unreadable' }],
+    ['an unreadable coordination-history read on a NON-CHILD — not-a-child still ranks first',
+      { mark: { kind: 'none' }, hasCoordinated: 'unreadable', final: true }, { reclaim: false, why: 'not-a-child' }],
     ['no marker', { mark: { kind: 'none' }, final: true }, { reclaim: false, why: 'not-a-child' }],
     ['an unreadable marker', { mark: { kind: 'unreadable' }, final: true }, { reclaim: false, why: 'marker-unreadable' }],
     ['an unreadable minting row', { minting: { kind: 'unreadable' }, final: true }, { reclaim: false, why: 'marker-unreadable' }],

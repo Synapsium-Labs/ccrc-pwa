@@ -218,6 +218,50 @@ describe('two authorities, equal — anything else is not a child here', () => {
   });
 });
 
+// Fix round 1, Important #2: the close-side wiring of `hasCoordinated` (the
+// store read, and its throw-fold) had no test that reds when either is
+// removed — the pure decision was pinned, but nothing proved the CALLER
+// actually reads and carries the value. These three cases pin the wiring
+// end to end through the real close path.
+describe('the close reads coordination history itself — has-coordinated, and an unreadable read never outranks identity', () => {
+  it('a child whose session has EVER coordinated a (terminal) run answers has-coordinated, closed final — no reclaim request', async () => {
+    const b = build();
+    // A run this session coordinated, brought to a TERMINAL state — a
+    // different workspace/session dispatched into it, `claimedBy` is ID.
+    const heir = b.coord.openRun({ program: 'q', title: 'heir', project: 'demo', wave: 1, waveOf: 1, claimedBy: ID });
+    if (!('id' in heir)) throw new Error('openRun refused');
+    b.coord.markDispatched(heir.id, 'demo-heir-worker', 'demo-heir-worker', 'ws/demo-heir-worker', false);
+    expect(b.coord.advance(heir.id, 'dispatched', 'test').ok).toBe(true);
+    expect(b.coord.closeRun({ runId: heir.id, finalState: 'done', causedBy: 'test', handoffCommit: null,
+      program: 'q', viaClosing: true }).ok).toBe(true);
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'has-coordinated' });
+    expect(b.handed).toEqual([]);
+  });
+
+  it('childReclaimCoordinatorIds throwing at close answers siblings-unreadable, never a guessed false', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, String(id));
+    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'siblings-unreadable' });
+    expect(b.handed).toEqual([]);
+  });
+
+  it('a throwing coordination-history read never outranks not-a-child on an ordinary non-child close', async () => {
+    const b = build();
+    const id = b.dispatched(ID);
+    b.seed(ID, null);   // no `.child` marker at all: an ordinary non-child close
+    b.coord.childReclaimCoordinatorIds = () => { throw new Error('coordination history unreadable'); };
+    const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
+    expect(out).toMatchObject({ ok: true, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' });
+    expect(b.handed).toEqual([]);
+  });
+});
+
 describe('the fleet act for a finished child is a RELEASE — never a hold, never an archive', () => {
   it('an ordinary non-final failed close of a child releases it; of a non-child, it re-holds as ever', async () => {
     const child = build();
