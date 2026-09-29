@@ -13968,21 +13968,22 @@ _rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 
 # never rewrites. There is NO fallback to latest/download: a rollback that
 # guessed its target would be an update.
 #
-# UPDATE'S OWN PATH, IN-PROCESS — never a second one. The lock is taken here,
-# then `cmd_update --to <tag> --downgrade --from rollback|watchdog` runs the
-# verify, the backup, the staged spine, the gate and `_upd_sweep`: the sweep
-# behind its own mandatory KillMode=process preflight and DEGRADED sentence,
-# CALLED, never restated — R1 is inherited, never re-argued. A rollback BY
-# FLIP (a kept version, no download) does not go through `cmd_update`: this
-# verb calls the same `_upd_sweep` itself, after `_ver_flip_back` and the
-# gate — still the one function, never a copy, and still behind its own
-# preflight, since the preflight lives inside `_upd_sweep`. So `_upd_sweep`
-# has exactly two call sites, `cmd_update`'s and this verb's flip arm. A standalone
-# rollback needs that sweep, because a PRIOR update's sweep already moved the
-# supervisors onto the build this one replaces. `--downgrade` because a
-# rollback is by definition a move below the floor the last update raised;
-# the floor file itself is never lowered (`_inst_installed` only raises it) —
-# D-3236.
+# TWO PATHS, ONE SWEEP. A rollback by re-install runs UPDATE'S OWN PATH,
+# IN-PROCESS: the lock is taken here, then `cmd_update --to <tag> --downgrade
+# --from rollback|watchdog` runs the verify, the backup, the staged spine, the
+# gate and `_upd_sweep`: the sweep behind its own mandatory KillMode=process
+# preflight and DEGRADED sentence, CALLED, never restated — R1 is inherited,
+# never re-argued. A rollback BY FLIP (a kept version, no download) is a
+# second path, and shares only that sweep: it does not go through
+# `cmd_update`, and this verb calls `_upd_sweep` itself, after `_ver_flip_back`
+# and the gate — still the one function, never a copy, and still behind its
+# own preflight, since the preflight lives inside `_upd_sweep`. So
+# `_upd_sweep` has exactly two call sites, `cmd_update`'s and this verb's flip
+# arm. A standalone rollback needs that sweep, because a PRIOR update's sweep
+# already moved the supervisors onto the build this one replaces.
+# `--downgrade` because a rollback is by definition a move below the floor the
+# last update raised; the floor file itself is never lowered (`_inst_installed`
+# only raises it) — D-3236.
 #
 # WHO ASKED vs WHAT KIND OF RUN (D-3262). `--from
 # <who>` is the caller's attribution — cli by hand, pwa from the console,
@@ -16435,9 +16436,10 @@ _upd_floor_check() {
   # gate and was restored) the box runs the floor's own tag, not a release
   # below it. The clause is exactly what the report proves and no more.
   # Anything else, including an unreadable or absent report, names the floor
-  # alone — and so does EVERY `--detach` run (the console's rollback and
-  # update taps among them): `_upd_detach` writes `queued` before the child
-  # reads the last report, so the child never sees `reverted`.
+  # alone — and so does EVERY `--detach` update run (the console's update tap
+  # among them): `_upd_detach` writes `queued` before the child reads the last
+  # report, so the child never sees `reverted`. A rollback never meets this
+  # refusal at all: `--from rollback|watchdog` passes the case above.
   local raised=""
   if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
     raised=" — the last update, to $floor, failed its health gate and was restored"
