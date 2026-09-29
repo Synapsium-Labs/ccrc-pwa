@@ -32,7 +32,7 @@
 //
 // NEVER against a real $HOME; no live tmux/systemd/journal is ever reachable
 // (recorders and poisons only). No secret value is ever printed or asserted.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo } from 'node:net';
@@ -10413,7 +10413,7 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
     const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
-    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list; its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes$/m);
+    expect(r.stdout).toMatch(/^versions: could not finish pruning \$HOME\/ccrc-versions\/v1\.0\.0 — it is already out of the version list and out of every reader's reach \(a rename took it there; that is not a proof that nothing runs from it\); its remains are at \$HOME\/ccrc-versions\/\.pruning-v1\.0\.0\.[0-9]+, which the next prune removes first, before it measures anything$/m);
     // not listed, and no directory under the version's own name
     expect(r.stdout).not.toMatch(/^ {4}v1\.0\.0 /m);
     const dirs = versionDirs(home);
@@ -10448,6 +10448,129 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
     expect(versionDirs(home)).toEqual([live, 'v1.0.1']);
     // and neither one was ever listed as a version
     expect(r.stdout).not.toMatch(/^ {4}\.pruning/m);
+  });
+
+  // F7 (review 179, fix round 1 item 7). A dead-pid `.pruning-<name>.<pid>`
+  // (the prune loop's rename target) and a dead-pid `.<tag>.incoming.<pid>`
+  // (`_upd_legacy_target`'s staging directory, which NOTHING removed) are swept
+  // ONCE per prune, right after the layout and knob checks — so before the
+  // KEEP short-circuit, the empty-doomed return and `_ver_protect`'s
+  // unmeasured return, each of which used to leave them behind. The sweep
+  // removes nothing a reader could find (a rename took each directory out of
+  // every reader's view); it is NOT a proof that nothing runs from one, which
+  // is deferred item 3's root cause and stays on the residue list.
+  describe('a dead process\'s leftover is swept once per prune, before anything can stop the prune (F7)', () => {
+    const DEAD = 999999;
+    const LIVE = process.pid;
+    const dead = [`.pruning-v0.0.1.${DEAD}`, `.v0.0.2.incoming.${DEAD}`];
+    const live = [`.pruning-v0.0.1.${LIVE}`, `.v0.0.2.incoming.${LIVE}`];
+    const plantLeft = (home: string, names: string[]): void => {
+      for (const d of names) {
+        mkdirSync(join(home, 'ccrc-versions', d, 'server'), { recursive: true });
+        writeFileSync(join(home, 'ccrc-versions', d, '.ccrc-installed'), 'x\n');
+      }
+    };
+    const removedLine = (name: string): RegExp =>
+      new RegExp(`^versions: removed \\$HOME/ccrc-versions/${lit(name)} \\(`, 'm');
+    beforeAll(() => {
+      expect(() => process.kill(DEAD, 0), 'the dead-pid fixture needs a pid nothing holds').toThrow();
+    });
+
+    it("the report's case: default KEEP, nothing to prune, a dead-pid leftover — the prune removes it (by hand and automatically), and says nothing to prune", () => {
+      const home = versionedBox('ccrc-versions-sweep-nothing-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(r.stdout).toMatch(/^versions: nothing to prune — 1 complete version\(s\) beside the pointed-at one, within CCRC_VERSIONS_KEEP=3, and none incomplete$/m);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+      // the automatic GC sweeps too, under its own lead, and is otherwise silent
+      plantLeft(home, dead);
+      const a = sourcedCcrc(home, '_ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout.split('\n').filter((l) => l !== ''), a.stderr).toEqual([
+        ...dead.map((d) => `update: versions: removed $HOME/ccrc-versions/${d} (what ${d.startsWith('.pruning') ? 'an earlier prune' : 'an earlier update'} left, already out of the version list; its process is gone)`),
+        'rc=0',
+      ]);
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1']);
+    });
+
+    it('it is swept when every kept tree is protected (the empty-doomed return) and when an input cannot be measured (the unmeasured return, which still stops the prune)', () => {
+      // empty-doomed: previous protects v1.0.1, so v1.0.0 takes the one slot and nothing is doomed
+      let home = versionedBox('ccrc-versions-sweep-protected-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantPrevious(home, `v1.0.1\n${'c'.repeat(40)}\n`);
+      plantLeft(home, dead);
+      let r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '1' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — every kept tree is protected or among the newest 1$/m);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(versionDirs(home)).toEqual(['v1.0.0', 'v1.0.1', 'v1.0.2']);
+      // unmeasured: a malformed previous stops the prune at rc 1 — after the sweep
+      home = versionedBox('ccrc-versions-sweep-unmeasured-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantPrevious(home, 'garbage\n');
+      plantLeft(home, dead);
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '0' });
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^versions: prune skipped — ~\/\.ccrc\/previous is unreadable or malformed; nothing was removed$/m);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      expect(versionDirs(home), 'the prune removed a version it could not measure').toEqual(['v1.0.0', 'v1.0.1']);
+    });
+
+    it('a leftover that cannot be removed fails the prune that could not remove it (rc 1) — through the short-circuit return too', () => {
+      const home = versionedBox('ccrc-versions-sweep-rc-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, [dead[0]!]);
+      writeFileSync(join(home, 'doctor-stubs', 'rm'),
+        '#!/bin/sh\n'
+        + 'for a in "$@"; do last="$a"; done\n'
+        + 'case "$last" in */ccrc-versions/.pruning-*) echo "rm: cannot remove \'$last\': fixture" >&2; exit 1 ;; esac\n'
+        + `exec ${REAL_RM} "$@"\n`, { mode: 0o755 });
+      const r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toContain(`versions: could not remove $HOME/ccrc-versions/${dead[0]} (what an earlier prune left, already out of the version list) — it stays out of every listing`);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — /m);
+      expect(versionDirs(home)).toContain(dead[0]);
+    });
+
+    it('controls, each keeping the leftover: a live pid (another process\'s work in flight), a refused knob, and a dangling ~/ccrc (the foreign layout, which sweeps nothing)', () => {
+      // live pid — beside a dead one, which goes
+      let home = versionedBox('ccrc-versions-sweep-live-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, [...dead, ...live]);
+      let r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
+      for (const d of live) expect(r.stdout).not.toContain(d);
+      expect(versionDirs(home)).toEqual([...live, 'v1.0.0', 'v1.0.1'].sort());
+      // a refused knob: nothing measured, nothing swept
+      home = versionedBox('ccrc-versions-sweep-knob-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '99999999999999999999' });
+      expect(r.code, r.stderr).toBe(1);
+      const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=99999999999999999999; _ver_gc update auto; echo "rc=$?"');
+      expect(a.stdout, a.stderr).toContain('rc=1');
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+      // a dangling ~/ccrc reads foreign: the layout check comes first and sweeps nothing
+      home = versionedBox('ccrc-versions-sweep-dangling-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      rmSync(join(home, 'ccrc'));
+      symlinkSync(join(home, 'ccrc-versions', 'v9.9.9'), join(home, 'ccrc'));
+      r = runVersions(home, ['--prune']);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(/^versions: nothing to prune — \$HOME\/ccrc is not versioned \(foreign\)$/m);
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+      // and a list-only run never sweeps
+      home = versionedBox('ccrc-versions-sweep-list-', ['v1.0.1', 'v1.0.0']);
+      stopUnits(home);
+      plantLeft(home, dead);
+      r = runVersions(home, []);
+      expect(r.code, r.stderr).toBe(0);
+      expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
+    });
   });
 
   it('--prune takes the update lock: a real holder refuses it at exit 1 and nothing is removed', () => {

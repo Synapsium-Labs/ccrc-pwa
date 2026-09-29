@@ -17701,8 +17701,10 @@ _bak_prune() {
 # `_ver_list` → VER_NAMES: every real directory directly under
 # $BOX_VERSIONS_ROOT whose name is a version name — complete ones (their kept
 # install record present) first, newest record first, then the incomplete
-# ones by name. Dot-names (a legacy target's `.incoming`) and anything else
-# are never listed, so never touched. The ordering is bash-only: no `sort`
+# ones by name. Dot-names (a legacy target's `.incoming`, a prune's
+# `.pruning-`) and anything else are never listed, so never chosen or kept;
+# `_ver_sweep_leftovers` removes a dead process's two kinds, and nothing else
+# touches them. The ordering is bash-only: no `sort`
 # binary on the install path. rc 1 (VER_WHY) when a record's mtime cannot be
 # read — the order is then unknown, and a prune that needs it is skipped;
 # VER_NAMES is still filled.
@@ -17897,6 +17899,45 @@ _ver_verdicts() {
   return 0
 }
 
+# `_ver_sweep_leftovers <lead>` → rc 0, or 1 when a leftover could not be
+# removed. Two kinds of directory under $BOX_VERSIONS_ROOT are a dead
+# process's leavings, each already OUT of every version list (a dot-name is
+# never listed, kept or chosen — VER_NAME_RE): `.pruning-<name>.<pid>`, the
+# rename target of a prune whose removal did not finish (D-3460), and
+# `.<tag>.incoming.<pid>`, the staging directory of `_upd_legacy_target`
+# (D-3440), which nothing removed until this. One whose pid is dead is
+# removed, with `kill -0` as today's pid test; one whose pid is ALIVE is
+# another process's work in flight and is never touched. WHY THIS ADDS NO
+# EXPOSURE: only the prune loop makes a `.pruning-` name and only
+# `_upd_legacy_target` makes an `.incoming.` one, and the rename that made
+# each took the directory out of every reader's reach — so the sweep removes
+# nothing a reader could still find. That is NOT a proof that nothing runs
+# from one: `_ver_running_names` resolves a unit through the CURRENT link, so
+# a unit not restarted since a flip counts as running the pointed-at version,
+# and a directory that was such a version's is only as unreachable as that
+# read is true. That root cause is deferred item 3 (review 179) and stays on
+# the residue list; this sweep neither adds to it nor closes it.
+_ver_sweep_leftovers() {   # <lead>
+  local lead="$1" d b pid what rc=0
+  for d in "$BOX_VERSIONS_ROOT"/.pruning-* "$BOX_VERSIONS_ROOT"/.v*.incoming.*; do
+    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+    b="${d##*/}"; pid="${b##*.}"
+    case "$b" in
+      .pruning-*) what="prune" ;;
+      *) [[ "$b" =~ ^\.v[0-9]+\.[0-9]+\.[0-9]+\.incoming\.[0-9]+$ ]] || continue; what="update" ;;
+    esac
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$pid" 2>/dev/null && continue
+    if rm -rf -- "$d"; then
+      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier $what left, already out of the version list; its process is gone)"
+    else
+      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier $what left, already out of the version list) — it stays out of every listing"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
 # `_ver_gc <prefix> <auto|prune>` → rc 0 done (or nothing to do), rc 1
 # skipped on an unmeasured input or a removal failed. `auto` is the call
 # after a PASSED gate only — a plain install's doctor under a free lock, an
@@ -17904,10 +17945,14 @@ _ver_verdicts() {
 # or a rollback, whose spine runs under its parent's lock
 # (D-3451); it says nothing unless it removes
 # something or skips. `prune` is `ccrc versions --prune`, which also removes
-# incomplete versions.
+# incomplete versions. Both first refuse a KEEP value `_keep_ok` does not
+# accept (WARN and rc 1 for `auto`, which its callers ignore), then read the
+# layout (only `linked`/`migrated` prunes), then sweep a dead process's
+# leftovers ONCE (`_ver_sweep_leftovers`) — all before any return that could
+# end the prune early.
 _ver_gc() {
   local pfx="$1" mode="$2" keep="${CCRC_VERSIONS_KEEP:-3}" lead n i cur
-  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 d b pid gone
+  local rc=0 lrc=0 prc=0 ncomp=0 npart=0 gone
   lead="$pfx: versions:"; [ "$pfx" = versions ] && lead="versions:"
   if ! _keep_ok "$keep"; then
     if [ "$mode" = auto ]; then
@@ -17924,6 +17969,13 @@ _ver_gc() {
     *) [ "$mode" = auto ] || echo "versions: nothing to prune — \$HOME/ccrc is not versioned ($VER_LAYOUT)"
        return 0 ;;
   esac
+  # LEFTOVERS, ONCE, FIRST (D-3460, amended by review 179 F7): on a layout ccrc
+  # made and a knob it can read — never before them: a dangling `~/ccrc` reads
+  # `foreign` above and must sweep nothing — and before EVERY return below that
+  # can end this prune early (the KEEP short-circuit, an empty removal set, an
+  # input that cannot be measured), so a leftover no longer waits for a prune that
+  # happens to have a version to remove. Its rc rides those returns.
+  _ver_sweep_leftovers "$lead" || rc=1
   _ver_list || lrc=$?
   for n in "${VER_NAMES[@]}"; do
     [ "$n" = "$VER_CURRENT" ] && continue
@@ -17936,7 +17988,7 @@ _ver_gc() {
   # no service manager, projection or previous is read.
   if [ "$ncomp" -le "$keep" ] && { [ "$mode" = auto ] || [ "$npart" -eq 0 ]; }; then
     [ "$mode" = auto ] || echo "versions: nothing to prune — $ncomp complete version(s) beside the pointed-at one, within CCRC_VERSIONS_KEEP=$keep, and none incomplete"
-    return 0
+    return "$rc"
   fi
   if [ "$lrc" -eq 0 ]; then _ver_protect || prc=$?; else prc=1; fi
   if [ "$prc" -ne 0 ]; then
@@ -17957,25 +18009,8 @@ _ver_gc() {
   fi
   if [ "${#VER_DOOMED[@]}" -eq 0 ]; then
     [ "$mode" = auto ] || echo "versions: nothing to prune — every kept tree is protected or among the newest $keep"
-    return 0
+    return "$rc"
   fi
-  # LEFTOVERS FIRST (D-3460), on the path that is about to remove and never
-  # on a list-only run: a `.pruning-<name>.<pid>` directory is a version an
-  # earlier prune took out of view and did not finish deleting. One whose pid
-  # is dead is finished here. One whose pid is ALIVE is another GC's removal
-  # in flight, and is never touched.
-  for d in "$BOX_VERSIONS_ROOT"/.pruning-*; do
-    { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
-    b="${d##*/}"; pid="${b##*.}"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    kill -0 "$pid" 2>/dev/null && continue
-    if rm -rf -- "$d"; then
-      echo "$lead removed \$HOME/ccrc-versions/$b (what an earlier prune left; its process is gone)"
-    else
-      echo "$lead could not remove \$HOME/ccrc-versions/$b (what an earlier prune left) — it is already out of the version list"
-      rc=1
-    fi
-  done
   for i in "${!VER_DOOMED[@]}"; do
     n="${VER_DOOMED[$i]}"
     # A belt over `pointed-at`: the link is read again at the moment of the
@@ -17996,7 +18031,8 @@ _ver_gc() {
     # `_inst_tree`'s flip re-check — so a half-deleted tree is unreachable, and
     # D-3456's window is back to the instant between the belt's read above and
     # this rename, not the length of the delete. A removal that does not finish
-    # leaves `.pruning-<name>.<pid>`, which the next prune finishes (above).
+    # leaves `.pruning-<name>.<pid>`, which the next prune removes first
+    # (`_ver_sweep_leftovers`, called once before anything can stop it).
     gone="$BOX_VERSIONS_ROOT/.pruning-$n.$$"
     if ! _plat_mv_notdir "$BOX_VERSIONS_ROOT/$n" "$gone"; then
       echo "$lead could not prune \$HOME/ccrc-versions/$n — every version above it is intact"
@@ -18005,7 +18041,7 @@ _ver_gc() {
     if rm -rf -- "$gone"; then
       echo "$lead pruned \$HOME/ccrc-versions/$n (${VER_DOOMED_WHY[$i]})"
     else
-      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list; its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes"
+      echo "$lead could not finish pruning \$HOME/ccrc-versions/$n — it is already out of the version list and out of every reader's reach (a rename took it there; that is not a proof that nothing runs from it); its remains are at \$HOME/ccrc-versions/.pruning-$n.$$, which the next prune removes first, before it measures anything"
       rc=1
     fi
   done
