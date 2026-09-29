@@ -27,8 +27,8 @@ numbers; the spec wave each one implements is named beside it.
 | 3 | W3 | `/settings`, `UpdateBanner`, release push once per tag, move controls DISABLED | server | — | **MERGED** `4b2ff904` (PR #184, run 130 done) 2026-09-24 ~19:00 UTC; **DEPLOYED** on both boxes as v0.0.27 (calm-mesa's rollout, 20:23 UTC, `rollout --check` current/current; live exit criteria are phone-side and measured at the final rollout), after scoped review 161 at `e5ddd3ba` met none of the committed bar's four classes; 13 findings carried to wave 5's Task 8A (`d8db956a`); plan `d638c602` + re-points `08cecd10`, `733d295a` |
 | 4 | W4 part A | node side: `ccd-update-sync`, the projection reader in `cmd_update`, `--channel/--detach/--from/--no-gate`, the lock, `update.json`, `previous`, `install-step`, the health gate, `_upd_restore` arms 2–3, `ccrc rollback`, the watchdog, doctor `provenance` + unarmed-exposure, `ccrc channel`, `--check caps=`, `rollout --channel`, the W4 cap words | fleet-first | — | **MERGED** `023fe94d` (PR #181, run 129 done) 2026-09-28 16:53 UTC, released as v0.0.35 (dev). The merged tree is byte-identical to the tip CI tested (`d1eed83f`, which merges `main` at `6ff4e2e9` with an empty remerge-diff); every Linux leg was green there. Scoped review 173 at `f546715d6` closed its rounds. F1r (ruled) and nine prose/pin items carry to wave 6's Task 8A (`4e05173a`). Earlier: **accepted; merging** (run 129): scoped review 173 at `f546715d6` closed 2026-09-28 16:30 UTC. Round 2 did what was ruled. One arm-3 wording defect (F1r, ruled) and nine coverage/prose items carry to wave 6's Task 8A (`rulings-run173.md`). `main` moved to `6ff4e2e9` (#187, #188) after CI started, so the worker merges it and CI's Linux legs re-run before `gh pr merge`. Was: narrow round 2 done 2026-09-28 15:45 UTC (F1+F2, F4; no new number; the census is back at `main`'s 5); scoped review run 173 dispatched 15:50 UTC to `ccrc-pwa-swift-summit`. Round 2 was sent 2026-09-25 02:35 UTC on scoped review 167 (`rulings-run129-fix2.md`). Was: scoped review at `7a20ff8f`, which merges `main` at `3fd6c816` with W3's README overlap resolved as ruled; fix round 1 done 2026-09-25 01:40 UTC (3288, 3289 and 3290 spent); scoped review run 167 dispatched 01:50 UTC to `ccrc-pwa-quiet-meadow`, under the bar in `rulings-run129-fix1.md`; round 1 sent 2026-09-24 14:25 UTC on review 155; wave-done was at `05b9ac4f`, PR #181, 16/16 items, reserve spent: 14 numbers, 3274 through 3287 (bare: their definitions are on the worker branch); review run 155 dispatched 09:55 UTC to `ccrc-pwa-keen-cove`; CI Linux legs green at the tip, `test-macos` cancelled at the 55-min cap; a scratch macOS run of the wave's 19 changed test files at `05b9ac4f` PASSED (1493 passed, 154 skipped; run 35984326446, branch deleted); plan `4b361c00` |
 | 5 | W4 part B | convergence: `update/dispatch.ts`, the agent `update` op + `ops` on ready, `apply`/`rollback` routes, the PWA controls enabled | agent-first | — | **MERGED** `af5a29f8` (PR #201, run 132 done) 2026-09-29 06:40 UTC, released as v0.0.36 (dev). The merged tree is byte-identical to the tested tip `325d4072` (`main` unmoved at `023fe94d`, every Linux leg green). Scoped review 176 met none of the committed bar's four classes; F1 and F2 to F5 go to the residue list as R5 and R6 (`rulings-run176.md`). Earlier: **run 132 open, planned**; plan commits in cherry-pick order: `6acbff6d`, `287caa07`, `7210c4f6`, `a8c28b42`, `a404b1ac`, `419d626f`, `d5f923e8`, `e821ceba`, `fddf8370`, `d8db956a`, `0003a6c3` (re-point against W3's merge `4b2ff904`), `8d6f2515` (re-point against wave 4's reviewed tree `f546715d6`); **final scoped review** (run 176, dispatched 2026-09-29 06:00 UTC to `ccrc-pwa-soft-delta`) of fix round 1, done at `325d4072`: 33 commits, no merge (`main` unmoved at `023fe94d`), numbers 3411, 3412 and 3413 spent (bare: their definitions are on the worker branch). After it, #201 merges under the committed bar. Was: fix round 1 (`rulings-run132-fix1.md`, mail 2514, 2026-09-28 22:55 UTC) on review 175 at `8e9a9bf3`: 15 findings, the two important ones (F1, F2) ruled together, and the bar for the one scoped review after it committed now. Was: wave-done 2026-09-28 at `8e9a9bf3`, PR #201, 10/10 items, reserve spent: seven numbers, 3404 through 3410 (bare: their definitions are on the worker branch); `main` did not move during the wave; review run 175 dispatched 21:45 UTC to `ccrc-pwa-still-ridge`. Was: dispatched 2026-09-28 16:57 UTC to `ccrc-pwa-warm-harbor` |
-| 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **Wave-done** 2026-09-29 at `751eb5da` (PR #202, 10/10 items; its one merge of `main` at `af5a29f8` has an empty remerge-diff; every Linux leg green in shadow mode; reserve spent: seven numbers, 3458 through 3464, bare: their definitions are on the worker branch); review run 179 dispatched under the bar committed before it. Was: **run 133 open, planned**; plan commits in cherry-pick order: `079f1881`, `edc98508`, `14f77194`, `e27aacae` (re-point against wave 4's reviewed tree `f546715d6`), `4e05173a` (review 173's residue); **DISPATCHED** 2026-09-28 16:57 UTC to `ccrc-pwa-quiet-basin` |
-| 7 | — (residue) | before stable: a fleet-link failure after the op's hand-off holds the lease (R1), the answer follows the lease by identity (R5), wave 5's prose and pins (R6) | server | — | **Fix round 1 sent** 2026-09-29 11:45 UTC (mail 2550, `rulings-run177-fix1.md`) on review 178 at `5f6eae8e`: its F1, a deadline sentence that can be false, is a behaviour defect the delta introduced, so the bar gives the one round; a scoped review follows, then #203 merges. Was: **wave-done** 2026-09-29 at `5f6eae8e` (PR #203, 4/4 items, no reserve number spent; `main` unmoved at `af5a29f8`); review run 178 dispatched under the bar committed before it. Was: **DISPATCHED** 2026-09-29 07:25 UTC to `ccrc-pwa-quiet-summit` (run 177); plan `c3382e95` (one departure, 3555, defined in it; a five-number reserve named in the brief) |
+| 6 | W5 | versioned installs: `~/ccrc-versions/<tag>` + symlink flip, migration + crash recovery, restore arm 1, GC, `ccrc versions`; the rehearsal | fleet-first | — | **Fix round 1 sent** 2026-09-29 12:05 UTC (mail 2552, `rulings-run133-fix1.md`) on review 179 at `751eb5da`: six behaviour defects the delta introduced, so the bar gives the one full round; a scoped review follows, then #202 merges. Was: **wave-done** 2026-09-29 at `751eb5da` (PR #202, 10/10 items; its one merge of `main` at `af5a29f8` has an empty remerge-diff; every Linux leg green in shadow mode; reserve spent: seven numbers, 3458 through 3464, bare: their definitions are on the worker branch); review run 179 dispatched under the bar committed before it. Was: **run 133 open, planned**; plan commits in cherry-pick order: `079f1881`, `edc98508`, `14f77194`, `e27aacae` (re-point against wave 4's reviewed tree `f546715d6`), `4e05173a` (review 173's residue); **DISPATCHED** 2026-09-28 16:57 UTC to `ccrc-pwa-quiet-basin` |
+| 7 | — (residue) | before stable: a fleet-link failure after the op's hand-off holds the lease (R1), the answer follows the lease by identity (R5), wave 5's prose and pins (R6) | server | — | **Fix round 1 sent** 2026-09-29 11:40 UTC (mail 2550, `rulings-run177-fix1.md`) on review 178 at `5f6eae8e`: its F1, a deadline sentence that can be false, is a behaviour defect the delta introduced, so the bar gives the one round; a scoped review follows, then #203 merges. Was: **wave-done** 2026-09-29 at `5f6eae8e` (PR #203, 4/4 items, no reserve number spent; `main` unmoved at `af5a29f8`); review run 178 dispatched under the bar committed before it. Was: **DISPATCHED** 2026-09-29 07:25 UTC to `ccrc-pwa-quiet-summit` (run 177); plan `c3382e95` (one departure, 3555, defined in it; a five-number reserve named in the brief) |
 | — | — | final rollout: promote to `stable`, `ccrc rollout`, the exit criteria measured live | — | — | planned |
 
 **Order.** 2 → {3, 4} → {5, 6} → rollout. Waves 3 and 4 touch disjoint files (PWA + notifier vs `ccd/ccrc` +
@@ -669,7 +669,7 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - runs a real tool against a live home, or records a move that did not happen.
     - After that review, #202 merges.
 
-- **2026-09-29 11:45 UTC — review 178 closed; wave 7 gets its one fix round, by the committed bar.**
+- **2026-09-29 11:40 UTC — review 178 closed; wave 7 gets its one fix round, by the committed bar.**
   - **F1 (behaviour, introduced).** The deadline's "no run of `<tag>` was reported" tests only the row's LAST stored
     report, and review 178 made it false twice: a later writer's report replaced this run's own, and D-3214's
     `stamp-unmeasured` override wrote the previous report back. The verdict is right; the sentence is not. It now
@@ -681,6 +681,39 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
     the plan is re-cited; README's settle clause is corrected. The three real-verb watchdog-revert cases now assert
     containment.
   - CI's Linux legs on #203 were green at `5f6eae8e`.
+
+- **2026-09-29 12:05 UTC — review 179 closed; wave 6 gets its one full fix round, by the committed bar.**
+  - **Review 179:** 111 agents; 15 of 35 findings survived. Six are behaviour defects the delta introduced.
+    - F1: C27 refuses the watchdog's rollback after a W6 update killed between its flip and its stamp.
+    - F2: after a write-through, a rollback flips into a version directory that holds another build and records it
+      complete.
+    - F6: a huge `CCRC_VERSIONS_KEEP` prunes every unprotected version.
+    - F7, F8 and F9 are smaller.
+  - **The rulings were attacked twice before sending,** by Opus agents measuring in fixture homes. Round 1 broke
+    both important drafts:
+    - relaxing C27 on `previous == stamp` alone let a `deploy.sh` hot-fix send a hand-typed rollback two builds
+      back;
+    - comparing stamps could not see a write-through that did not restamp.
+
+    Round 2 broke the revisions:
+    - "flip only" could not be enforced from inside C27, which runs before the lock and never in a detached child;
+    - a pre-W6 kept version's own spine would `npm ci` into the tree the units still run;
+    - an ordinary `ccrc install` would re-record a digest of a written-through tree.
+
+    All are fixed in the sent text.
+  - **What was ruled.**
+    - F1: in a measured six-condition "killed-flip" state, a rollback may only flip, re-measured under the lock.
+    - F2: "kept" is a frozen-recipe digest of the version's bytes, recorded only when a run placed them and
+      re-measured on every trust decision. GC's verdicts are unchanged.
+    - One bounded validator for every KEEP knob, `CCRC_BACKUP_KEEP` included by class.
+    - `CLAUDE.md`'s SAFETY sentence on `_upd_sweep`'s callers is corrected. Rollback by flip calls it from
+      `cmd_rollback`, and the `KillMode=process` preflight is inside `_upd_sweep`, so no actor is added.
+  - **To residue:**
+    - F13: the launcher shim's `deploy.sh` advice on a crashed migration.
+    - O1: the PWA's rollback trusts `previous`, including the route's no-`to` fallback.
+    - Arm 1's point-back, then arm 2's in-place re-install under running units: the same in-place write `main`
+      makes on every update.
+    - Deferred item 3's measured shape: a unit not restarted since a flip counts as running the pointed-at version.
 
 ## Carried constraints
 
