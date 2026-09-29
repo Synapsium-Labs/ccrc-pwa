@@ -13,6 +13,7 @@
     "./styles/theme.css": "./src/styles/theme.css",
     "./styles/reset.css": "./src/styles/reset.css"
   },
+  "types": "./dist/ui/src/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "storybook": "storybook dev -p 6006",

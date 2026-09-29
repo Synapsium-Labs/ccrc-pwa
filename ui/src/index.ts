@@ -1,5 +1,10 @@
-// @ccrc/ui — the Phosphor & Ink design system. Ships SOURCE, not a build: the
-// consuming app's vite compiles these files, so there is no dist to stale.
+// @ccrc/ui — the Phosphor & Ink design system. The APP consumes source: the
+// consuming app's vite compiles these files, and `exports['.']` points here, so
+// there is no dist for pwa to stale.
+//
+// `npm run build` does emit `dist/`, for one reader only — the /design-sync
+// converter, which bundles a built entry and reads its `.d.ts` tree. Nothing in
+// pwa resolves it. See `.design-sync/NOTES.md`.
 //
 // Styles are one entry point, styles/theme.css, which pulls tokens.css in
 // itself. Import that and nothing else — see the header of that file for why

@@ -1,8 +1,9 @@
 import type { Preview, Decorator } from '@storybook/react-vite';
-// The single style entry point. It pulls tokens.css in itself — see that
-// file's header for why importing tokens separately breaks the build silently.
-import '../src/styles/reset.css';
-import '../src/styles/theme.css';
+// The single style entry point, and it must stay a CSS file rather than two JS
+// imports: preview.css imports the reset `layer(base)`, exactly as the app's
+// own base.css does. Importing reset.css from here instead loads it unlayered,
+// where preflight beats `@layer utilities` and every button loses its fill.
+import './preview.css';
 
 /** Stamp the theme on <html>, the way the app does, so [data-theme='light']
  *  re-resolves every token. Also paints the canvas: a story rendered on
