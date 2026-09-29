@@ -592,7 +592,7 @@ describe('the child’s own reflogs are kept, completely, before the acts that d
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
       expect(o.failed).toBe('pin-failed');
-      expect(o.detail).toContain(`is ${common}, which is no directory directly under ${common}/worktrees`);
+      expect(o.detail).toContain(`is ${common}, which is none of ${common}'s worktree records, so it was never read`);
       expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
       expect(gitDir(c.wt), 'the CONTROL: the tree resolves to the common dir').toBe(common);
       expect(h.git(c.main, 'rev-parse', `refs/heads/${CHILD_BRANCH}`), 'the branch stands').toBe(c.tip);
