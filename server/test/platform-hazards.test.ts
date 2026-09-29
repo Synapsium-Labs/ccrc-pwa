@@ -243,6 +243,32 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       done
       echo "EOF=$GOT"
       echo "AFTER=$((SECONDS-t0))"
+      # WHEN IT SAYS never, SAY WHO. This probe went red on unchanged trees on
+      # PR #116, on main's own probe-macos and on PR #117, and each time it
+      # reported only "eof=never" — which names the symptom and nothing that
+      # could be acted on, so three reds bought no diagnosis at all. The
+      # question "which writer is still holding the write end" is answerable at
+      # exactly this moment and never afterwards, so it is answered here.
+      # Costs nothing on the passing path: the whole block is inside the branch.
+      if [ "$GOT" = never ]; then
+        echo "BASHV=$BASH_VERSION"
+        echo "TMO=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || echo none)"
+        # SCOPED TO THE WRITER'S OWN PROCESS GROUP, never a fleet-wide grep for
+        # the sleep command: this box runs ~20 unrelated sessions, a bare match
+        # caught an unrelated sleep 600 and another project's logger, and a CI
+        # failure message is
+        # the wrong place for another session's paths in a repo bound for
+        # public release. The pgid IS the subject anyway — whether the
+        # descendant left the group is the question.
+        PG=$(ps -o pgid= -p $W 2>/dev/null | tr -d ' ')
+        echo "PGID=$PG"
+        echo "SURV=$(ps -o pid=,ppid=,pgid=,stat=,command= 2>/dev/null | awk -v pg="$PG" '$3 == pg' | cut -c1-72 | tr -s ' ' | tr '\n' '|')"
+        # FD, NOT JUST THE PID. An 8r row is this probe's own read end and proves
+        # nothing; a 1w or 1u row is a WRITER, and a writer still open at the
+        # deadline is the entire hazard. Reported separately so the next red
+        # answers "who held it" rather than restating "it was held".
+        echo "HOLD=$(lsof -- "$D/out" 2>/dev/null | tail -n +2 | awk '{print $1":"$2":"$4}' | sort -u | tr '\n' '|')"
+      fi
       kill $W 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
     `, 40_000);
     expect(
@@ -250,7 +276,10 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS. That is D-2661 candidate (b)\n'
       + 'and it is the mechanism: a surviving descendant holds the write end, `_auth_pump` loops for ever,\n'
       + 'and only D-2736\'s backstop ends the run. The fix is to end the DESCENDANTS, not to wait longer.\n'
-      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}`,
+      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}\n`
+      + `  bash=${field(r.stdout, 'BASHV')}  timeout-binary=${field(r.stdout, 'TMO')}\n`
+      + `  writer pgid=${field(r.stdout, 'PGID')}, still alive in it: ${field(r.stdout, 'SURV')}\n`
+      + `  holding the write end: ${field(r.stdout, 'HOLD')}`,
     ).toBe('eof');
   });
 
