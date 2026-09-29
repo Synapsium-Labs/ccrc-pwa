@@ -9167,6 +9167,30 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     }
   });
 
+  // Review 179 fix round 1, item 5: a rollback by flip reaches `_upd_sweep`
+  // from `cmd_rollback` itself, not through `cmd_update` — so its preflight is
+  // pinned AT THIS CALL SITE. `withSweep` is deliberately NOT used: there is no
+  // KillMode drop-in, so the fixture's `show -p KillMode` answers systemd's
+  // control-group default, and a flip that swept anyway would kill every pane.
+  itLinux('a rollback BY FLIP\'s sweep is behind its own KillMode=process preflight at the flip call site: with KillMode resolving control-group it is REFUSED — the sentence, DEGRADED, no `--user try-restart` — and the flip itself still completes (review 179 item 5; R1 inherited, never re-argued)', () => {
+    const { home, kept } = flipBox('ccrc-rollback-flip-refused-');
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    const r = rollbackRun(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // It IS the flip path (not the re-install path), so the call site is the flip's own.
+    expect(r.stdout).toContain('rollback: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — no release-host question and no download');
+    expect(linkOf(home)).toBe(kept);
+    expect(r.stderr).toMatch(/^update: sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group/m);
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
+    const c = calls(home);
+    // The preflight was asked (so the refusal is a measurement, not an absence)…
+    expect(c, c.join('\n')).toContain('--user show -p KillMode claude-session@alpha.service');
+    // …and nothing restarted a supervisor.
+    expect(c.filter((l) => /--user try-restart/.test(l)), c.join('\n')).toEqual([]);
+    expect(lastReport(home)).toMatchObject({ phase: 'done', from: 'rollback' });
+  });
+
   it('an unverified kept version stays unverified: its own spine runs WITHOUT CCRC_UPDATE_VERIFIED when its kept record says unsigned — a flip never promotes it (§18 "arm 2 never silently unsigns", applied to the flip; D-3439)', () => {
     const { home } = flipBox('ccrc-rollback-flip-unsigned-', { unsigned: true });
     const r = rollbackRun(home);

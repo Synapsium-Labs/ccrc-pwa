@@ -55,10 +55,11 @@ real values: `deploy/reference-fleet.md` (gitignored).
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
   existing sweep may `try-restart` `claude-session@*` units — each ONLY behind its mandatory `KillMode=process`
   preflight (which refuses the sweep when the answer is anything else); panes/tmux stay untouched, and every
-  other actor remains forbidden. Two callers reach that same `_upd_sweep` THROUGH `cmd_update`, never a copy of
-  it: `ccrc rollback`, and — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`, whose
-  `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop (design 2026-09-20 §11:
-  R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
+  other actor remains forbidden. `ccrc rollback` reaches that same `_upd_sweep` through `cmd_update`, or — for a
+  rollback by flip to a kept version — directly from `cmd_rollback`; never a copy of it, always behind its own
+  preflight, no actor added. So does — UNATTENDED — a `server`/`both` Linux box's `ccrc-update-watchdog.timer`,
+  whose `ccrc rollback --from watchdog` sweeps that box's supervisors with no human in the loop, by either route
+  (design 2026-09-20 §11: R1 inherited, never re-argued). The gate-failure restore (`--from restore`) never sweeps.
 - **In tests, use FIXTURE HOMEs only — never run `ccd` against the live `$HOME`.** `HOME` is the single isolation
   boundary the whole ccd suite relies on. Harness: `makeCcdHarness(prefix)` (`server/test/ccdWsHelpers.ts`);
   cleanup in `tmpHelpers.ts`. Second boundary: `ghContainedEnv()` plants a poisoned `gh` on PATH so a stray real
