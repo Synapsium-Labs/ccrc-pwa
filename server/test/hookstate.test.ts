@@ -459,7 +459,7 @@ describe('graphGateDenials', () => {
   });
 });
 
-// The stall watch's hold 2a (spec 2026-09-29 §4.2, planning departure `ask-hold-correlates-the-dialog`): the lane
+// The stall watch's hold 2a (spec 2026-09-29 §4.2, planning departure D-3565 `ask-hold-correlates-the-dialog`): the lane
 // correlates a hookstate ask with the live `waiting` word by TIME, so it needs the ask after
 // HOOKSTATE_FRESH_MS has aged it out. Every other gate must still run.
 describe('readHookStateUnaged — identity-gated, never aged', () => {

@@ -244,7 +244,7 @@ export const AUTO_CONTINUE_RECENT_MS = 10 * 60_000;
 /** The coordinator's ball has a cap, above the 28.7 h legit maximum (§11 decision 9). */
 export const COORD_BALL_CAP_MS = 30 * 3_600_000;
 /** Hold 2a: a hookstate ask stamped no earlier than the live dialog's stamp minus this is that dialog's
- *  question, however old it is (planning departure ask-hold-correlates-the-dialog). */
+ *  question, however old it is (planning departure D-3565 ask-hold-correlates-the-dialog). */
 export const ASK_DIALOG_SLACK_MS = 60_000;
 
 /** The worker's RAW live word. The lane reads it itself (tmux pane pid, config dir, then the measured
@@ -300,7 +300,7 @@ export type StallVerdict =
   | { readonly act: 'hold'; readonly why: StallHold }
   | { readonly act: 'measure-coordinator'; readonly coordinatorId: string }
   | StallNotify;
-/** Total over the verdict's acts, for `isStallKebab` (planning departure r2-measures-on-demand). */
+/** Total over the verdict's acts, for `isStallKebab` (planning departure D-3570 r2-measures-on-demand). */
 const STALL_ACT_MAP: Record<StallVerdict['act'], string> = {
   none: 'nothing is due',
   hold: 'a hold defers every rung and cancels none',
@@ -398,7 +398,7 @@ function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): num
  *  stamp, never the quiet clock: a stamp inside the previous rung's hour (the rung's own turn restamps the
  *  worker) changes nothing, so the hour the r1 body promises holds; a stamp past that hour means the word
  *  turned again after the rung was due, so the hour runs from there. Mail does not re-time a rung: worker
- *  mail and a coordinator `wait:` close the episode through its key instead. */
+ *  mail and a coordinator `wait:` close the episode through its key instead (D-3579 rung-due-on-the-raw-stamp). */
 function rungDueAt(rungAt: number, liveSince: number, gap: number): number {
   return liveSince > rungAt + gap ? liveSince + gap : rungAt + gap;
 }
@@ -409,7 +409,7 @@ function rungRecipient(arm: StallArm, rung: 1 | 2 | 3): StallRecipient {
   return rung === 2 ? 'coordinator' : 'operator';
 }
 
-/** Planning departure shadow-rung-accounting. A rung is DONE when a live row exists for it, or when a
+/** Planning departure D-3572 shadow-rung-accounting. A rung is DONE when a live row exists for it, or when a
  *  shadow row exists and the rung's delivery is still shadow under the current markers, so arming
  *  mid-episode sends the pending rung once. Its time is its EARLIEST LIVE row when one exists, else its
  *  earliest row: a rung re-sent live is timed from the notice its recipient actually got, so the next
@@ -430,7 +430,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   // (1) a run this build cannot name
   if (!isRunState(p.state) || p.state === 'unknown') return holdVerdict('run-unnamed');
   if (p.kind !== 'work' && p.kind !== 'review') return holdVerdict('run-unnamed');
-  // (2) a worker absent from this tick (planning departure absent-worker-holds), then any unmeasured input
+  // (2) a worker absent from this tick (planning departure D-3566 absent-worker-holds), then any unmeasured input
   const w = input.worker;
   if (!w.present) return holdVerdict('absent');
   const live = w.live;
@@ -439,7 +439,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   if (!live.ok) return holdVerdict('unmeasured');
   if (lc === null || !isSessionLifecycle(lc) || lc === 'unmeasurable') return holdVerdict('unmeasured');
   if (p.dispatchedAt === null) return holdVerdict('unmeasured');
-  if (live.since === null) return holdVerdict('unmeasured');
+  if (live.since === null) return holdVerdict('unmeasured'); // D-3580 any-null-stamp-holds: whatever the word
   const dialogShaped = live.word === 'waiting' || w.dialogPending;
   if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
   // (3) lifecycle: restarting and the dead words hold; unsupervised and unclaimed are judged as running
@@ -459,7 +459,7 @@ export function stallVerdict(input: StallInput, now: number): StallVerdict {
   if (atCeiling || w.stranded || w.swapBlocked || autoContinueRecent) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, key) === null ? capVerdict('limit-cap', key) : holdVerdict('limit');
   }
-  // (6) the coordinator's ball: none below its cap (planning departure coord-ball-below-cap-is-none)
+  // (6) the coordinator's ball: none below its cap (planning departure D-3574 coord-ball-below-cap-is-none)
   if (f.ball === 'coordinator') {
     const ballAge = f.lastExchangeAt === null ? 0 : now - f.lastExchangeAt;
     return ballAge >= COORD_BALL_CAP_MS && rungDoneAt(input, 'coord-ball', 1, key) === null ? capVerdict('coord-ball', key) : VERDICT_NONE;

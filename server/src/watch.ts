@@ -2955,7 +2955,7 @@ export class FleetWatcher {
     };
     let v = stallVerdict(input, now);
     if (v.act === 'measure-coordinator') {
-      // `r2-measures-on-demand`: the reclaim door's own re-measurement, only when r2 falls due.
+      // D-3570 `r2-measures-on-demand`: the reclaim door's own re-measurement, only when r2 falls due.
       const measured = await measureClaimant(
         { coord: store, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, v.coordinatorId, now);
       input = { ...input, coordinator: measured.state };
@@ -3044,7 +3044,7 @@ export class FleetWatcher {
     if (n.to === 'coordinator') {
       // r2's body cites r1: its earliest LIVE row when one exists, else its earliest row. Arming mid-episode
       // leaves a shadow r1 before the live one, and citing the shadow row would tell the coordinator that no
-      // check was sent when one was (`shadow-rung-accounting`). Its mail is `stallLastCheck`'s, the one
+      // check was sent when one was (D-3572 `shadow-rung-accounting`). Its mail is `stallLastCheck`'s, the one
       // `stallReportMail` cites, which is null when r1 only ever ran in shadow. A check with no delivery row
       // hands null too, never a row of nulls: the body tells "no delivery row" from "not delivered".
       const r1Rows = input.notices

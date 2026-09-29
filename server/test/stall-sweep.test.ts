@@ -463,7 +463,7 @@ describe('sweepStalls: escalation', () => {
   });
 
   it('r2 tells a stall check with NO delivery row from one never delivered: the lane hands null, never a row of nulls', async () => {
-    // Departure r2-keeps-a-missing-delivery-row: `deliveryTimesFor` answers null for a mail with no delivery row,
+    // Departure D-3585 r2-keeps-a-missing-delivery-row: `deliveryTimesFor` answers null for a mail with no delivery row,
     // and `stallReportMail` has a sentence for exactly that. Folding the null into {deliveredAt:null, ackedAt:null}
     // would narrow it to "not delivered, not acked", a claim about a row that does not exist.
     const { h, coord, w } = await rig();
