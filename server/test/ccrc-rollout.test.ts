@@ -24,21 +24,65 @@ const SHA_NEW = 'newsha0000000000000000000000000000000000';
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** Per-host state the ssh stub reads: role, current version, update exit. */
-function plantHost(home: string, host: string, o: { role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean } = {}): void {
+/** Per-host state the ssh stub reads: role, current version, update exit —
+ *  and, since W4 (Task 12), the check line's two new fields, the pre-W4 line
+ *  shape, a state override and the `ccrc channel` answer. */
+function plantHost(home: string, host: string, o: {
+  role?: string; version?: string; sha?: string; updateExit?: number; installed?: boolean;
+  caps?: string; floor?: string; checkState?: string; oldCheck?: boolean; channelLine?: string;
+  /** Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
+   *  fix round 1 (I1): the RAW bytes at this host's `~/.ccrc/update.json`,
+   *  under a FAKE home the ssh stub really `bash -c`s the printed remote
+   *  command against (`$d/boxhome`) — so the guard shell snippet
+   *  `_rollout_exit3_detail` sends is exercised for REAL, not pattern-matched.
+   *  Undefined (the default) is a pre-W4 box: no file at all, exactly what
+   *  the guard's `[ -f ]` arm must answer nothing for. */
+  updateJson?: string;
+  /** I1's own FIFO case: a real FIFO at `~/.ccrc/update.json` under the fake
+   *  home — the guard's `[ -f "$f" ]` must answer false for it (a FIFO is
+   *  not a regular file), so this never blocks. Exclusive with `updateJson`. */
+  updateJsonFifo?: boolean;
+} = {}): void {
   const d = join(home, 'hosts', host);
   mkdirSync(d, { recursive: true });
   // D-3020: a re-plant with no `role` must leave the role file ABSENT, not
   // whatever an earlier plantHost on this same host left there — otherwise
   // "role file absent" (this function's own comment, and the role-preflight
-  // test's) is a lie for any host planted twice.
-  const roleFile = join(d, 'role');
-  if (o.role !== undefined) writeFileSync(roleFile, `${o.role}\n`);
-  else if (existsSync(roleFile)) rmSync(roleFile);
+  // test's) is a lie for any host planted twice. The W4 files below follow
+  // the same rule, for the same reason.
+  const optional = (name: string, v: string | undefined): void => {
+    const f = join(d, name);
+    if (v !== undefined) writeFileSync(f, `${v}\n`);
+    else if (existsSync(f)) rmSync(f);
+  };
+  optional('role', o.role);
   writeFileSync(join(d, 'version'), `${o.version ?? ''}\n`);
   writeFileSync(join(d, 'sha'), `${o.sha ?? SHA_OLD}\n`);
   writeFileSync(join(d, 'update-exit'), `${o.updateExit ?? 0}\n`);
   writeFileSync(join(d, 'installed'), o.installed === false ? 'no\n' : 'yes\n');
+  optional('caps', o.caps);
+  optional('floor', o.floor);
+  optional('check-state', o.checkState);
+  optional('old-check', o.oldCheck === true ? 'yes' : undefined);
+  optional('channel-line', o.channelLine);
+  // The fake box home the ssh stub redirects HOME to before running the
+  // exit-3 detail command for real. Cleared and rebuilt on every plant, the
+  // same "no stale state from an earlier plant" rule the files above follow.
+  const boxHomeCcrc = join(d, 'boxhome', '.ccrc');
+  rmSync(join(d, 'boxhome'), { recursive: true, force: true });
+  if (o.updateJson !== undefined || o.updateJsonFifo === true) {
+    mkdirSync(boxHomeCcrc, { recursive: true });
+    const ujf = join(boxHomeCcrc, 'update.json');
+    if (o.updateJsonFifo === true) {
+      const r = spawnSync('mkfifo', [ujf]);
+      if (r.status !== 0) throw new Error(`fixture mkfifo failed: ${r.stderr?.toString() ?? r.status}`);
+    } else {
+      // No trailing newline forced — a real update.json ends in one
+      // `mv -f`'d JSON line, and a test that wants to probe a malformed
+      // byte stream plants it directly rather than through this helper.
+      writeFileSync(ujf, o.updateJson as string);
+    }
+  }
 }
 
 function plantBox(home: string): void {
@@ -59,6 +103,19 @@ function plantBox(home: string): void {
   //   health-version  -> what `/health` reports, when that must DIFFER from
   //                      what `ccrc version` reports (a server whose unit
   //                      did not come back on the new build).
+  // W4 (Task 12) — five more, each a per-host file plantHost removes when
+  // not asked for. The stub computes `--check` ITSELF, never through the
+  // real cmd_update (that is ccrc-update.test.ts's subject), so these are
+  // rollout's PARSER's inputs:
+  //   caps            -> the caps= words (default W1's three: no update-json,
+  //                      so no --from rollout — every earlier case's argv)
+  //   floor           -> the floor= word (default none)
+  //   check-state     -> overrides the computed state (below-floor)
+  //   old-check       -> a box one wave older: the pre-W4 check line (no
+  //                      caps=, no floor=), and its update refuses --from
+  //                      exactly as an older ccrc refuses an unknown argument
+  //   channel-line    -> what `ccrc channel` prints; absent, the stub answers
+  //                      as a ccrc that predates the verb (stderr, exit 2)
   plant('ssh', [
     '#!/bin/sh',
     'while [ $# -gt 0 ]; do case "$1" in -p|-i|-o) shift 2 ;; -*) shift ;; *) break ;; esac; done',
@@ -76,15 +133,36 @@ function plantBox(home: string): void {
     '    elif [ "$ver" != "$tgt" ]; then state=behind; box="$ver"',
     '    elif [ "$inst" = yes ]; then state=current; box="$ver"',
     '    else state=incomplete; box="$ver"; fi',
-    '    echo "check: box=$box sha=$sha target=$tgt state=$state"',
+    '    caps=verify,node-id,floor; [ -f "$d/caps" ] && IFS= read -r caps < "$d/caps"',
+    '    floor=none; [ -f "$d/floor" ] && IFS= read -r floor < "$d/floor"',
+    '    [ -f "$d/check-state" ] && IFS= read -r state < "$d/check-state"',
+    '    if [ -f "$d/old-check" ]; then echo "check: box=$box sha=$sha target=$tgt state=$state"',
+    '    else echo "check: box=$box sha=$sha target=$tgt caps=$caps floor=$floor state=$state"; fi',
     '    [ "$state" = current ] && exit 0; exit 1 ;;',
     '  "ccrc update --to "*)',
+    '    case " $cmd " in *" --from "*) [ -f "$d/old-check" ] && { echo "ccrc: unknown argument: --from" >&2; exit 2; } ;; esac',
     '    IFS= read -r rc < "$d/update-exit"',
     '    echo "update: fixture ran on $host: $cmd"',
     // 0 = moved; 3 = moved, but the box's trailing doctor failed (D-3114): the
     // box IS on the new build either way, so the fixture bumps it either way.
     `    if [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; then set -- $cmd; echo "$4" > "$d/version"; echo "${SHA_NEW}" > "$d/sha"; fi`,
     '    exit "$rc" ;;',
+    '  "ccrc channel")',
+    '    [ -f "$d/channel-line" ] || { echo "ccrc: unknown argument: channel" >&2; exit 2; }',
+    '    cat "$d/channel-line"; exit 0 ;;',
+    // Fix round 1 item 4 / review 155 C34, bounded per batch E's own review
+    // fix round 1 (I1): `_rollout_exit3_detail`'s own extra read-only ssh,
+    // sent ONLY after an exit-3 update. Rather than pattern-match the
+    // guarded remote shell snippet, this stub really `bash -c`s the exact
+    // `$cmd` it received, with HOME redirected to this host's fake box home
+    // (`$d/boxhome`) — so `[ -L ]`/`[ -f ]`/`head -c 65536` all run for
+    // real, against a real (possibly FIFO) file, exactly as they would on
+    // the real remote box. An absent `boxhome/.ccrc/update.json` (the
+    // default — no plantHost updateJson/updateJsonFifo) means a pre-W4 box:
+    // the guard's own `[ -f ]` arm answers nothing, exit 0.
+    '  "f=~/.ccrc/update.json;"*)',
+    '    HOME="$d/boxhome" bash -c "$cmd"',
+    '    exit 0 ;;',
     '  "ccrc version") echo "ccrc $sha (release, built 2026-09-18T00:00:00Z)"; [ -n "$ver" ] && echo "version $ver"; exit 0 ;;',
     '  *"/health"*)',
     '    hv="$ver"; [ -f "$d/health-version" ] && IFS= read -r hv < "$d/health-version"',
@@ -127,13 +205,20 @@ function twoBoxFleet(prefix: string): string {
   return home;
 }
 
-function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result {
+/** `timeoutMs`: batch E review fix round 1, I1 — a pin that could hang (the
+ *  FIFO case) carries a spawn timeout so a hang reads red (killed, `code`
+ *  falls to -1, no output to match) rather than stalling this suite. Every
+ *  other caller leaves it unset (`spawnSync`'s own default: no timeout). */
+function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}, timeoutMs?: number): Result {
   const env = ghContainedEnv(home, { ...process.env, HOME: home, ...extraEnv });
   for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT', 'CCRC_RELEASE_BASE_URL', 'CCRC_DEPLOY_ENV']) delete env[k];
   env['CCRC_DEPLOY_ENV'] = join(home, 'deploy.env');
   env['CCRC_RELEASE_BASE_URL'] = `local://${home}/releases`;
   env['TMPDIR'] = join(home, 'tmp'); mkdirSync(env['TMPDIR'], { recursive: true });
-  const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', ...args], { env, encoding: 'utf8' });
+  const opts: { env: NodeJS.ProcessEnv; encoding: 'utf8'; timeout?: number; killSignal?: NodeJS.Signals } =
+    { env, encoding: 'utf8' };
+  if (timeoutMs !== undefined) { opts.timeout = timeoutMs; opts.killSignal = 'SIGKILL'; }
+  const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollout', ...args], opts);
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const sshCalls = (home: string): string[] => (existsSync(join(home, 'ssh-argv'))
@@ -222,7 +307,9 @@ describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', ()
     // No plantRelease(home, ...): the release space stays empty.
     const r = run(home);
     expect(r.code, `stderr: ${r.stderr}`).toBe(2);
-    expect(r.stderr).toMatch(/is there a release\?/);
+    // Fix round 1 item 12 / review 155 C22: the die sentence now also names
+    // the connect/stall bound.
+    expect(r.stderr).toMatch(/is there a release, or did the connection stall/);
     expect(updates(home)).toEqual([]);
   });
 
@@ -322,6 +409,15 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(r.stdout).toMatch(/^fleet: update: fixture ran on user@fleet-host/m);   // streamed, prefixed
   });
 
+  // Batch E review fix round 1, I2: "measured" needs the box's own report
+  // AND that report's `.target` naming THIS run's version. This box's
+  // update.json now says so (as the real writer, `_upd_phase`, would).
+  const findReportOf = (b: string): ReturnType<typeof JSON.stringify> => JSON.stringify({
+    target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2,
+    detail: `doctor exited ${b} — the box moved; its health is ccrc doctor's`,
+    from: 'rollout', pid: 12345,
+  });
+
   it('a box that MOVED but whose trailing doctor failed (update exit 3) does not stop the rollout: the next box runs, both are verified, exit 3 names it (D-3114)', () => {
     // Measured 2026-09-20 on the live fleet: the server box wrote its record
     // and was on the new build, its doctor FAILed on four pre-existing box
@@ -329,7 +425,7 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     // remains the fallback" over a box that had moved. Exit 3 from update is
     // "moved, unhealthy"; rollout relays it and carries on.
     const home = twoBoxFleet('ccrc-rollout-doctor-failed-');
-    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJson: findReportOf('1') });
     const r = run(home);
     expect(r.code, r.stderr).toBe(3);
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
@@ -342,6 +438,128 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     const r2 = run(home2);
     expect(r2.code).toBe(1);
     expect(updates(home2)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
+  });
+
+  // Fix round 1 item 4 / review 155 C34, beside the doctor case right above:
+  // exit 3 carries TWO different deaths under one code (D-3114), and only
+  // the first has doctor FAIL lines to read. This box's own measured detail
+  // (read over rollout's extra read-only ssh) says the second.
+  it('a box that MOVED but whose FLOOR WRITE died (update exit 3, no doctor FAIL lines at all) gets its own sentence, never "read the … FAIL lines above" — the real cause, measured from the box (C34)', () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-died-');
+    plantHost(home, FLEET, {
+      role: 'fleet', version: 'v1.0.0', updateExit: 3,
+      updateJson: JSON.stringify({
+        target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2,
+        detail: 'the floor write died inside _inst_installed - the box moved; its floor was not raised',
+        from: 'rollout', pid: 12345,
+      }),
+    });
+    const r = run(home);
+    expect(r.code, r.stderr).toBe(3);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0, but its floor write died before ccrc doctor ever ran — its floor was not raised, not its health; its own report: .*floor was not raised$/m);
+    expect(r.stdout).not.toContain('read the fleet: FAIL lines above');
+    expect(r.stdout).toMatch(/^rollout: fleet v2\.0\.0 \(newsha00\) · server v2\.0\.0 \(newsha00\)/m);   // step 6 still ran
+    expect(r.stderr).not.toMatch(/stopped here/);
+    // The extra read-only ssh reached exactly the box that exited 3, exactly
+    // once — never the server box, which moved clean (exit 0).
+    const detailCalls = sshCalls(home).filter((l) => l.includes('f=~/.ccrc/update.json;'));
+    expect(detailCalls).toEqual([`${FLEET} f=~/.ccrc/update.json; [ -L "$f" ] || { [ -f "$f" ] && [ -r "$f" ] && head -c 65536 "$f"; }; exit 0`]);
+  });
+
+  // Batch E review fix round 1, I2: no report, an unreadable one, or one
+  // naming a DIFFERENT run's target are all UNMEASURED — never assumed as
+  // doctor. Three sibling cases, one sentence.
+  it('exit 3 with an UNMEASURED cause (no update.json, or one naming a different run) never assumes doctor — a neutral sentence naming both possible causes', () => {
+    // (a) a pre-W4 box: no ~/.ccrc/update.json at all. Tolerated, not a
+    // death, and no crash or hang on the extra ssh's empty answer — but no
+    // longer reported as doctor either (I2 corrects the false "pre-W4 spine
+    // never had a floor step" comment: origin/main's own _inst_installed
+    // writes the floor file too and can die in it; it simply writes no
+    // update.json at all, so THIS box's report is unreadable, not "safe").
+    const preW4 = twoBoxFleet('ccrc-rollout-floor-prew4-');
+    plantHost(preW4, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });   // no updateJson
+    const rPreW4 = run(preW4);
+    expect(rPreW4.code, rPreW4.stderr).toBe(3);
+    expect(rPreW4.stdout).toMatch(
+      /^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read \(absent, unreadable, or naming a different run\), so which of two things happened is unmeasured here: either its trailing doctor failed, or its floor write died before doctor ran\. Its own 'fleet: update: \.\.\.' lines above say which\.$/m,
+    );
+    // The OLD verbatim sentences (distinguished by their own remedy text,
+    // never a bare substring of the new neutral one, which legitimately
+    // says "doctor failed" as one of the two named possibilities).
+    expect(rPreW4.stdout).not.toContain('FAIL lines above');
+    expect(rPreW4.stdout).not.toContain("its floor was not raised, not its health");
+
+    // (b) a report EXISTS and even names the doctor shape, but for a
+    // DIFFERENT target — a stale pre-W4 report a rollback left behind, or
+    // one `_upd_report_is_mine` itself would refuse. Still unmeasured.
+    const foreign = twoBoxFleet('ccrc-rollout-floor-foreign-');
+    plantHost(foreign, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJson: findReportOf('1').replace('v2.0.0', 'v1.9.0') });
+    const rForeign = run(foreign);
+    expect(rForeign.code, rForeign.stderr).toBe(3);
+    expect(rForeign.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read/m);
+    expect(rForeign.stdout).not.toContain('FAIL lines above');
+  });
+
+  // Batch E review fix round 1, I1: the FIFO case, with a spawn timeout so a
+  // hang reads red rather than stalling the whole suite. The unbounded
+  // `cat` this call replaced would block forever on this exact fixture.
+  it('exit 3 with a FIFO at the box\'s own ~/.ccrc/update.json returns promptly with the unmeasured sentence, never a hang', () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-fifo-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3, updateJsonFifo: true });
+    const r = run(home, [], {}, 8000);
+    expect(r.code, r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0 \(exit 3\) — this box's own report could not be read/m);
+  });
+
+  // Batch E review fix round 1, M5: the box's own `detail` is
+  // same-user-writable data (spec §8), not this run's own text — a control
+  // character or an embedded newline in it must never forge a second
+  // `rollout:` line or inject terminal escapes into this run's own stdout.
+  it("exit 3 with control characters and an embedded newline in the box's own report never forges a second line (M5)", () => {
+    const home = twoBoxFleet('ccrc-rollout-floor-ctrl-');
+    const evil = 'the floor write died inside _inst_installed - the box moved; its floor was not raised'
+      + '\x1b[31mFAKE\nrollout: fleet: EVERYTHING IS FINE';
+    plantHost(home, FLEET, {
+      role: 'fleet', version: 'v1.0.0', updateExit: 3,
+      updateJson: JSON.stringify({
+        target: 'v2.0.0', phase: 'done', startedAt: 1, updatedAt: 2, detail: evil, from: 'rollout', pid: 1,
+      }),
+    });
+    const r = run(home);
+    expect(r.code, r.stderr).toBe(3);
+    const lines = r.stdout.split('\n');
+    const sentence = lines.find((l) => l.startsWith('rollout: fleet: moved to v2.0.0, but its floor write died')) ?? '';
+    expect(sentence, r.stdout).not.toBe('');
+    // No escape byte reached stdout, and the injected "newline" is stripped,
+    // not turned into an actual line break — the two halves land contiguous
+    // on the ONE sentence line.
+    // eslint-disable-next-line no-control-regex
+    expect(sentence).not.toMatch(/[\x00-\x1f]/);
+    expect(sentence).toContain('FAKErollout: fleet: EVERYTHING IS FINE');
+    // And no SEPARATE forged line exists anywhere in this run's stdout.
+    expect(lines).not.toContain('rollout: fleet: EVERYTHING IS FINE');
+  });
+
+  it('a box whose update failed its health gate (update exit 4) stops the rollout with its own sentence — the other box is never touched (design §11)', () => {
+    // Exit 4 is "the gate failed and the box restored itself": NOT on the
+    // target, so the rollout stops like any other non-zero — but the remedy
+    // is that box's own report, not deploy.sh.
+    const home = twoBoxFleet('ccrc-rollout-gate-failed-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 4 });
+    const r = run(home);
+    expect(r.code).toBe(1);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
+    expect(r.stderr).toMatch(/rollout: the fleet box's update failed its health gate and restored itself \(exit 4\) — stopped here\. The server box was not touched\. Its ~\/\.ccrc\/update\.json names the restore arm; 'ccrc update --check' there says where it now stands$/m);
+    expect(r.stderr).not.toMatch(/deploy\.sh remains the fallback/);
+    expect(sshCalls(home).some((l) => l.endsWith(' ccrc version')), 'step 6 ran after a gate failure').toBe(false);
+    // Inverted: the server's 4 leaves the fleet box untouched, same sentence.
+    const inv = twoBoxFleet('ccrc-rollout-gate-failed-inv-');
+    plantHost(inv, SERVER, { role: 'server', version: 'v1.0.0', updateExit: 4 });
+    const r2 = run(inv, ['--server-first']);
+    expect(r2.code).toBe(1);
+    expect(updates(inv)).toEqual([`${SERVER} ccrc update --to v2.0.0`]);
+    expect(r2.stderr).toMatch(/the server box's update failed its health gate and restored itself \(exit 4\) — stopped here\. The fleet box was not touched\./);
   });
 
   it('--check measures and stops: no update argv; exit 1 while any box is behind, 0 when all current', () => {
@@ -437,5 +655,250 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     const r = run(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/server box reports v1\.0\.0, not v2\.0\.0/);
+  });
+});
+
+describe('ccrc rollout: the W4 check line, a box one wave older, the floor and the passthrough flags (M3, M4; spec §14, D-3106\'s lesson)', () => {
+  /** A W4 box's words: update-json is the one `--from rollout` rides on. */
+  const CAPS_W4 = 'verify,node-id,floor,update-json';
+
+  it('a pre-W4 box (no caps=, no floor=) parses with its state intact and gets no --from; a box whose caps name update-json gets --from rollout', () => {
+    const home = twoBoxFleet('ccrc-rollout-prew4-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', oldCheck: true });
+    plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', caps: CAPS_W4 });
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // No stray field swallowed into either state word.
+    expect(r.stdout).toMatch(/^rollout: fleet: v1\.0\.0 \(oldsha00\) → v2\.0\.0 \[behind\]$/m);
+    expect(r.stdout).toMatch(/^rollout: server: v1\.0\.0 \(oldsha00\) → v2\.0\.0 \[behind\]$/m);
+    expect(r.stdout).toMatch(/^rollout: fleet: its check line lists no capabilities \(a ccrc older than W4 prints no caps=\) — it gets no --from rollout$/m);
+    expect(r.stdout).not.toMatch(/^rollout: server: its check line lists no capabilities/m);
+    // Fix round 1 item 21 / review 155 C36: the SAME pre-W4 box's missing
+    // floor= gets a NOTE too, same shape as the missing caps= note right
+    // above — never a refusal (a refusal here would block the very first
+    // rollout onto this wave). The server box's check line names floor=none
+    // (a real, non-empty field), so it gets no such note.
+    expect(r.stdout).toMatch(/^rollout: fleet: its check line lists no floor= \(a ccrc older than W4 prints none\) — its floor is checked at its own install$/m);
+    expect(r.stdout).not.toMatch(/^rollout: server: its check line lists no floor=/m);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0 --from rollout`]);
+  });
+
+  it('a box below its floor refuses at exit 2 before EITHER box moves — --server-first too, so the server is never moved first (M3)', () => {
+    const home = twoBoxFleet('ccrc-rollout-belowfloor-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v3.0.0', floor: 'v3.0.0', checkState: 'below-floor' });
+    let r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stdout).toMatch(/^rollout: fleet: v3\.0\.0 \(oldsha00\) → v2\.0\.0 \[below-floor\]$/m);
+    expect(r.stderr).toMatch(/rollout: the fleet box's floor is v3\.0\.0, above v2\.0\.0 — pass --downgrade to move it down; nothing was touched/);
+    expect(updates(home)).toEqual([]);
+    r = run(home, ['--server-first']);
+    expect(r.code).toBe(2);
+    expect(updates(home)).toEqual([]);
+    // --force is not --downgrade (M7's rule, one layer up).
+    r = run(home, ['--force']);
+    expect(r.code).toBe(2);
+    expect(updates(home)).toEqual([]);
+  });
+
+  it('--check reports a below-floor box and touches nothing (exit 1, no refusal — a measurement)', () => {
+    const home = twoBoxFleet('ccrc-rollout-belowfloor-check-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v3.0.0', floor: 'v3.0.0', checkState: 'below-floor' });
+    const r = run(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/\[below-floor\]/);
+    expect(r.stderr).not.toMatch(/pass --downgrade/);
+    expect(updates(home)).toEqual([]);
+  });
+
+  it('--downgrade passes through to each box\'s update and lets a below-floor box move (M4)', () => {
+    const home = twoBoxFleet('ccrc-rollout-downgrade-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v3.0.0', floor: 'v3.0.0', checkState: 'below-floor' });
+    const r = run(home, ['--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --downgrade`, `${SERVER} ccrc update --to v2.0.0 --downgrade`]);
+  });
+
+  // F1 (fix round 1, D-3281): a box CURRENT on the target with a floor
+  // ABOVE it (a rolled-back box — W2's `rolledBack`, which `--check` reads
+  // `current` for, never `below-floor`) must refuse BEFORE either box moves,
+  // exactly like a `below-floor` box — `cmd_update` checks the floor before
+  // its converged no-op, so this box's own update would die after the other
+  // box had already moved.
+  it('a box CURRENT on the target but whose floor is above it (rolled back) refuses at exit 2 before either box moves, --downgrade lets it proceed, --server-first too (D-3281)', () => {
+    const home = twoBoxFleet('ccrc-rollout-rolledback-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v2.0.0', floor: 'v3.0.0' });
+    let r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stdout).toMatch(/^rollout: fleet: v2\.0\.0 \(oldsha00\) → v2\.0\.0 \[current\]$/m);
+    expect(r.stderr).toMatch(/rollout: the fleet box's floor is v3\.0\.0, above v2\.0\.0 — pass --downgrade to move it down; nothing was touched/);
+    expect(updates(home)).toEqual([]);
+
+    r = run(home, ['--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --downgrade`, `${SERVER} ccrc update --to v2.0.0 --downgrade`]);
+
+    const home2 = twoBoxFleet('ccrc-rollout-rolledback-serverfirst-');
+    plantHost(home2, FLEET, { role: 'fleet', version: 'v2.0.0', floor: 'v3.0.0' });
+    r = run(home2, ['--server-first']);
+    expect(r.code).toBe(2);
+    expect(updates(home2)).toEqual([]);
+  });
+
+  it('--allow-unsigned passes through; typed together, the flags ride in one fixed order before --from rollout (M4)', () => {
+    let home = twoBoxFleet('ccrc-rollout-unsigned-');
+    let r = run(home, ['--allow-unsigned']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --allow-unsigned`, `${SERVER} ccrc update --to v2.0.0 --allow-unsigned`]);
+    home = twoBoxFleet('ccrc-rollout-flag-order-');
+    plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', caps: CAPS_W4 });
+    r = run(home, ['--allow-unsigned', '--downgrade', '--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(updates(home)).toEqual([
+      `${FLEET} ccrc update --to v2.0.0 --force --downgrade --allow-unsigned`,
+      `${SERVER} ccrc update --to v2.0.0 --force --downgrade --allow-unsigned --from rollout`,
+    ]);
+  });
+
+  it('a box whose ~/.ccrc/floor is unreadable or malformed refuses at exit 2 before either box moves — --downgrade does not cure it', () => {
+    for (const word of ['malformed', 'unreadable']) {
+      const home = twoBoxFleet(`ccrc-rollout-floor-${word}-`);
+      plantHost(home, SERVER, { role: 'server', version: 'v1.0.0', floor: word });
+      const r = run(home, ['--downgrade']);
+      expect(r.code, word).toBe(2);
+      expect(r.stderr).toMatch(new RegExp(`the server box's ~/\\.ccrc/floor is ${word} — its update would refuse`));
+      expect(updates(home)).toEqual([]);
+    }
+  });
+
+  it('--check with --downgrade or --allow-unsigned is refused at exit 2 before any ssh (the D-3139 shape)', () => {
+    const home = twoBoxFleet('ccrc-rollout-check-flags-');
+    let r = run(home, ['--check', '--downgrade']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--check and --downgrade are exclusive/);
+    r = run(home, ['--check', '--allow-unsigned']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--check and --allow-unsigned are exclusive/);
+    expect(sshCalls(home)).toEqual([]);
+  });
+});
+
+describe('ccrc rollout --channel: each box\'s OWN projection names the tag', () => {
+  // Plan D-3234: rollout runs from a machine
+  // with ssh and no session, so it reads the resolution each box already
+  // holds (`ccrc channel`, the box's own reader), never an HTTP route.
+  const chan = (o: { state?: string; stable?: string; dev?: string } = {}): string =>
+    `channel: state=${o.state ?? 'ok'} channel=stable desired=${o.stable ?? 'none'} desired-stable=${o.stable ?? 'none'} desired-dev=${o.dev ?? 'none'} auto=off`;
+  const noDoc = (state: string): string =>
+    `channel: state=${state} channel=- desired=- desired-stable=- desired-dev=- auto=-`;
+  function chanFleet(prefix: string, fleet: string | undefined, server: string | undefined,
+    at: { fleet?: string; server?: string; fleetFloor?: string } = {}): string {
+    const home = twoBoxFleet(prefix);
+    plantRelease(home, 'v2.1.0', false);
+    plantHost(home, FLEET, { role: 'fleet', version: at.fleet ?? 'v1.0.0', floor: at.fleetFloor, channelLine: fleet });
+    plantHost(home, SERVER, { role: 'server', version: at.server ?? 'v1.0.0', channelLine: server });
+    return home;
+  }
+
+  it('both boxes name one stable tag → it is pinned from ITS SHA256SUMS and passed as --to; the projections are read before any --check', () => {
+    const home = chanFleet('ccrc-rollout-chan-', chan({ stable: 'v2.1.0' }), chan({ stable: 'v2.1.0' }));
+    const r = run(home, ['--channel', 'stable']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^rollout: channel stable: the control plane resolves v2\.1\.0 \(read from each box's own projection\)$/m);
+    expect(readFileSync(join(home, 'curl-argv'), 'utf8').trim()).toBe(`local://${home}/releases/download/v2.1.0/SHA256SUMS`);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.1.0`, `${SERVER} ccrc update --to v2.1.0`]);
+    const calls = sshCalls(home);
+    expect(calls.filter((l) => l.endsWith(' ccrc channel'))).toEqual([`${FLEET} ccrc channel`, `${SERVER} ccrc channel`]);
+    expect(calls.findIndex((l) => l.endsWith(' ccrc channel'))).toBeLessThan(calls.findIndex((l) => l.includes('--check')));
+  });
+
+  it('--channel=dev reads desired-dev; a box answering none is admitted only because its check line reads current on the other\'s tag', () => {
+    // The fleet box already runs v2.1.0 (W2's notNewerThanFloor: nothing
+    // above its floor), so `none` there is convergence, and its own update
+    // leaves it alone.
+    const home = chanFleet('ccrc-rollout-chan-dev-', chan({ stable: 'v2.0.0', dev: 'none' }), chan({ stable: 'v2.0.0', dev: 'v2.1.0' }), { fleet: 'v2.1.0' });
+    const r = run(home, ['--channel=dev']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^rollout: fleet: v2\.1\.0 \(oldsha00\) → v2\.1\.0 \[current\]$/m);
+    expect(r.stderr).not.toMatch(/resolves no dev target/);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.1.0`, `${SERVER} ccrc update --to v2.1.0`]);
+  });
+
+  it('a box answering none that is NOT already on the other\'s tag refuses at exit 2 before either box moves — rolled back, or the tag refused on provenance; --server-first, --force and --downgrade alike', () => {
+    // The line cannot say WHY a box resolves nothing (W2's resolveOnChannel:
+    // rolledBack, noEligible over refusedByThisNode, pinnedIneligible,
+    // pinnedAtOrBelowFloor, noFloor — or converged). Only its check line on
+    // the pinned tag tells convergence from a box the control plane declined
+    // to move (D-3234).
+    const cases: Array<[string, { fleet?: string; fleetFloor?: string }]> = [
+      // rolledBack: the fleet box runs v1.0.0 below its own floor v2.0.0.
+      ['rolled-back', { fleet: 'v1.0.0', fleetFloor: 'v2.0.0' }],
+      // noEligible: the fleet box refused v2.1.0 on provenance, so it names
+      // nothing, while the server box names that very tag.
+      ['refused-tag', { fleet: 'v2.0.0' }],
+    ];
+    for (const [why, at] of cases) {
+      for (const extra of [[], ['--server-first'], ['--force'], ['--downgrade']]) {
+        const home = chanFleet(`ccrc-rollout-chan-${why}-`, chan({ stable: 'none' }), chan({ stable: 'v2.1.0' }), at);
+        const r = run(home, ['--channel', 'stable', ...extra]);
+        expect(r.code, `${why} ${extra.join(' ')}\nstderr: ${r.stderr}`).toBe(2);
+        expect(r.stderr).toMatch(/rollout: the fleet box's projection resolves no stable target \(desired-stable none; its reason is on the console's update screen\) and it is not already on v2\.1\.0 — nothing was touched/);
+        expect(updates(home), `${why} ${extra.join(' ')}`).toEqual([]);
+      }
+    }
+  });
+
+  it('a projection that is not ok|none refuses at exit 2, naming the box and the state — nothing measured, nothing touched', () => {
+    for (const st of ['stale', 'unreadable', 'malformed', 'not-configured']) {
+      const home = chanFleet(`ccrc-rollout-chan-${st}-`, chan({ stable: 'v2.1.0' }), noDoc(st));
+      const r = run(home, ['--channel', 'stable']);
+      expect(r.code, st).toBe(2);
+      expect(r.stderr).toMatch(new RegExp(`the server box's projection is ${st} — 'ccrc channel' there says why`));
+      expect(sshCalls(home).filter((l) => l.includes('--check'))).toEqual([]);
+      expect(updates(home)).toEqual([]);
+    }
+  });
+
+  it('a box whose ccrc predates `ccrc channel` prints no channel line → exit 2 naming it, its own stderr relayed', () => {
+    const home = chanFleet('ccrc-rollout-chan-old-', undefined, chan({ stable: 'v2.1.0' }));
+    const r = run(home, ['--channel', 'stable']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/the fleet box printed no channel line \(got: nothing\) — is ccrc new enough to know 'ccrc channel'\? nothing was touched/);
+    expect(r.stderr).toMatch(/^fleet: ccrc: unknown argument: channel$/m);
+    expect(updates(home)).toEqual([]);
+  });
+
+  it('two different tags, no tag at all, or a desired value that is not a tag refuse at exit 2', () => {
+    let home = chanFleet('ccrc-rollout-chan-split-', chan({ stable: 'v2.1.0' }), chan({ stable: 'v2.2.0' }));
+    let r = run(home, ['--channel', 'stable']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/the boxes' projections name two stable targets — fleet: v2\.1\.0, server: v2\.2\.0/);
+    expect(updates(home)).toEqual([]);
+    home = chanFleet('ccrc-rollout-chan-none-', chan(), chan());
+    r = run(home, ['--channel', 'stable']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/the control plane resolves no stable target for either box — nothing was touched/);
+    // The value is interpolated into a remote command as --to: shape-checked
+    // before it can reach one.
+    home = chanFleet('ccrc-rollout-chan-shape-', chan({ stable: 'v2.1.0;echo' }), chan({ stable: 'v2.1.0' }));
+    r = run(home, ['--channel', 'stable']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/names desired-stable=v2\.1\.0;echo, not a release tag or none/);
+    expect(sshCalls(home).filter((l) => l.includes(';echo'))).toEqual([]);
+  });
+
+  it('--channel with --to, a word that is not stable|dev, or no value is a usage error before any ssh', () => {
+    const home = twoBoxFleet('ccrc-rollout-chan-usage-');
+    let r = run(home, ['--channel', 'stable', '--to', 'v2.0.0']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--channel and --to are exclusive/);
+    r = run(home, ['--channel', 'beta']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--channel expects stable or dev \(got: beta\)/);
+    r = run(home, ['--channel=']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--channel expects stable or dev \(got: nothing\)/);
+    r = run(home, ['--channel']);
+    expect(r.code).toBe(2);
+    expect(sshCalls(home)).toEqual([]);
   });
 });

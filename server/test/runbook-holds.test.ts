@@ -203,13 +203,18 @@ describe('the VM-gate runbook quotes what a real fresh install actually prints',
   });
 
   it("Step 2's PASS rc line is the state right after install, not the absent-file default", () => {
-    // FACT 1 — ORDER: _inst_rc runs before cmd_doctor, same function body.
+    // FACT 1 — ORDER: _inst_rc is a step of the spine, and cmd_install runs
+    // the spine before cmd_doctor, same function body. Since W4 Task 4 the
+    // spine is the `CCRC_INST_SPINE` array, iterated through `_inst_step`.
+    const spine = /^CCRC_INST_SPINE=\(([\s\S]*?)\n\)/m.exec(ccrcSrc);
+    expect(spine, 'ccd/ccrc has no CCRC_INST_SPINE').not.toBeNull();
+    expect(spine![1]!.split('\n').map((l) => l.trim())).toContain('_inst_rc');
     const body = cmdInstallBody();
-    const rcIdx = body.search(/^\s*_inst_rc\s*$/m);
+    const loopIdx = body.search(/^\s*for inst_fn in "\$\{CCRC_INST_SPINE\[@\]\}"; do _inst_step "\$inst_fn"; done\s*$/m);
     const doctorIdx = body.search(/^\s*cmd_doctor\s*$/m);
-    expect(rcIdx, body).toBeGreaterThan(-1);
+    expect(loopIdx, body).toBeGreaterThan(-1);
     expect(doctorIdx, body).toBeGreaterThan(-1);
-    expect(rcIdx).toBeLessThan(doctorIdx);
+    expect(loopIdx).toBeLessThan(doctorIdx);
 
     // FACT 2 — BYTES: _inst_rc writes exactly `off\n` when the file is absent.
     expect(ccrcSrc).toContain('printf \'%s\\n\' "off" > "$tmp"');

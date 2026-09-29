@@ -137,6 +137,10 @@ function plantInstalledBox(home: string): void {
   // role, so an installed Linux box has it and `_uninst_tree_bins` must take
   // it away — planted here so that removal can be MEASURED rather than read.
   writeFileSync(join(bin, 'ccd-pool-sync'), '#!/bin/sh\n# pool sync\n', { mode: 0o755 });
+  // programme wave 4: the update-intent puller, placed by `_inst_bins` on the
+  // non-Darwin arm for EVERY role (only its timer is fleet-gated) — planted
+  // so `_uninst_tree_bins`' removal of it is measured rather than read.
+  writeFileSync(join(bin, 'ccd-update-sync'), '#!/bin/sh\n# update sync\n', { mode: 0o755 });
   // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
   // The account wave's own, and UNMARKED exactly as every name above is:
@@ -173,6 +177,10 @@ function plantInstalledBox(home: string): void {
     // every role-gated pair below it, `_inst_units` ships this one on every
     // non-Darwin role — so it is on the box under test whatever role it had.
     'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+    // programme wave 4: the update-intent puller's pair. `_inst_units` ships
+    // it on the `fleet` role only; planted here because the uninstall removes
+    // it whatever role the box had.
+    'ccd-update-sync.service', 'ccd-update-sync.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
     // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
@@ -183,7 +191,9 @@ function plantInstalledBox(home: string): void {
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
-    'ccrc-models.service', 'ccrc-models.timer']) {
+    'ccrc-models.service', 'ccrc-models.timer',
+    // W4a Task 9: the server-role watchdog's pair.
+    'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
     writeFileSync(join(units, u), `[Unit]\nDescription=fixture ${u}\n`);
   }
   writeFileSync(join(units, 'claude-session@.service.d', 'limits.conf'), '[Service]\n');
@@ -211,6 +221,16 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
   writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
   writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
+  // W4 Task 4: the node's update state — install-state like the three above.
+  writeFileSync(join(home, '.ccrc', 'previous'), 'v0.9.0\nfixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'install-step'), '_inst_skills\n');
+  writeFileSync(join(home, '.ccrc', 'update.json'),
+    '{"target":"v1.0.0","phase":"done","startedAt":1,"updatedAt":2,"detail":null,"from":"cli","pid":4242}\n');
+  writeFileSync(join(home, '.ccrc', 'update.lock'), '');
+  // W4a Task 8: the control plane's projection — install-state too: a box with
+  // no tree follows nothing, and a stale copy would outlive the node's identity.
+  writeFileSync(join(home, '.ccrc', 'update-intent'),
+    'epoch 1\nissued 1\nlease 901\nchannel stable\ndesired none\ndesired-stable none\ndesired-dev none\nauto off\nend\n', { mode: 0o600 });
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -367,13 +387,17 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       // `_uninst_units` had never heard of — `ccrc uninstall` removed the
       // binary's siblings and left this timer ENABLED and orphaned.
       'ccd-pool-sync.service', 'ccd-pool-sync.timer',
+      // programme wave 4: the update-intent puller's pair.
+      'ccd-update-sync.service', 'ccd-update-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
       'ccd-tmp-sweep.service', 'ccd-tmp-sweep.timer',
       'ccd-account-health.service', 'ccd-account-health.timer',
       'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
       // C5: the models pair, mirroring the three role-gated siblings above.
-      'ccrc-models.service', 'ccrc-models.timer']) {
+      'ccrc-models.service', 'ccrc-models.timer',
+      // W4a Task 9: the server-role watchdog's pair.
+      'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer']) {
       expect(existsSync(join(units, u)), `${u} survived`).toBe(false);
     }
     expect(existsSync(join(units, 'claude-session@.service.d'))).toBe(false);
@@ -386,12 +410,14 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The half a file-absence assertion cannot see: a unit file deleted under
     // a still-enabled unit leaves systemd holding a dangling enablement.
     expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
+    expect(calls).toContain('--user disable --now ccd-update-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-tmp-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
+    expect(calls).toContain('--user disable --now ccrc-update-watchdog.timer');
     expect(calls[calls.length - 1]).toBe('--user daemon-reload');
     // The sacred rule holds even here: no claude-session@ instance is ever a
     // systemctl target, and tmux is never touched (poison would have fired).
@@ -546,7 +572,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // the binary would otherwise stay on PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health', 'ccd-tmp-sweep',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'ccd-update-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -557,9 +583,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The node's three files are install-state, not config (design 2026-09-20
     // §3, §9): an uninstalled box has no identity to the console, no
     // capabilities and no floor.
-    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+    for (const f of ['node-id', 'ccrc-caps', 'floor', 'previous', 'install-step', 'update.json', 'update.lock', 'update-intent']) {
       expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
     }
+    // W4 Task 4: a box with no tree has no update in flight, no baseline to
+    // restore to and no spine step to classify.
+    expect(r.stdout).toMatch(/; the completed-install record and the node's update state \(~\/\.ccrc\/previous, install-step, update\.json, update\.lock, update-intent\) removed$/m);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
@@ -615,6 +644,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
     expect(r.stdout, 'the bin census does not name it')
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
+  it('a STAMPED ccd-update-sync is the bin arm\'s subject too — the uninstall twin of its TOOLCHAIN_EXECUTABLES entry', () => {
+    // programme wave 4: the pool-sync sibling above, for the update-intent
+    // puller. INERT ON A REAL BOX TODAY for the same reason (`_inst_atomic`
+    // never stamps), and pinned for the same reason: only a MARKED fixture
+    // can tell `_uninst_wrappers`' case entry from its absence.
+    const home = mkTmp('ccrc-uninst-updatesync-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-update-sync'),
+      markGenerated('#!/bin/sh\n# update sync\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-update-sync')),
+      'the puller survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-update-sync/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-update-sync.* removed from \$HOME\/\.local\/bin/);
   });
 
   // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
