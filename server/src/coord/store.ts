@@ -1266,20 +1266,28 @@ class IntentJournalFault extends Error {
  *  only for "non-empty string" — untrimmed, no charset guard
  *  (`shared/api.ts`'s own `isSessionIdShape` doc says so: that check exists
  *  precisely because the route does not enforce it) — so `from` may carry
- *  internal whitespace, a trailing space, or even its own literal ` -> `,
- *  and the pattern below admits ALL of it via a greedy `(.+)`. `to` cannot:
- *  `POST /api/runs/:id/reclaim` trims it (`routes.ts`, `body.claimedBy.trim()`)
- *  and `reclaimRun` (`reclaim.ts`) then requires `readSessionRecord` to find
- *  it as a real, listed registry row before this UPDATE ever runs — a
- *  registry id ccd mints or a human types by hand, never a value with a
- *  space in practice — so `(\S+)` for `to`, anchored at the END, is what
- *  makes the split land at the LAST literal ` -> ` in the string rather than
- *  the first: a `from` that happens to embed ` -> ` of its own does not fool
- *  it. A row that still fails this shape — a hand-written one that merely
- *  starts with the same prefix, or a future reword of the writer itself —
- *  THROWS at the one reader, `childReclaimCoordinatorIds`, below; it does
- *  not silently drop. */
-const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.+) -> (\S+)$/;
+ *  internal whitespace, a trailing space, a LINE TERMINATOR, or even its own
+ *  literal ` -> ` — `POST /api/runs`'s own check is `claimedBy.trim() === ''`,
+ *  which a value holding only a newline or carriage return still fails, so
+ *  none of those four bytes (`\n`, `\r`, U+2028, U+2029) is refused either —
+ *  and the pattern below admits ALL of it via a greedy `(.+)` WITH THE `s`
+ *  FLAG: bare `.` in JS matches everything but those four bytes, so without
+ *  `s` a `from` holding one of them would still fail to parse, exactly the
+ *  same fail-shut this fix exists to close for whitespace. `to` cannot carry
+ *  any of it: `POST /api/runs/:id/reclaim` trims it (`routes.ts`,
+ *  `body.claimedBy.trim()`) and `reclaimRun` (`reclaim.ts`) then requires
+ *  `readSessionRecord` to find it as a real, listed registry row before this
+ *  UPDATE ever runs — a registry id ccd mints or a human types by hand, never
+ *  a value with a space or a line terminator in practice — so `(\S+)` for
+ *  `to`, anchored at the END, is what makes the split land at the LAST
+ *  literal ` -> ` in the string rather than the first: a `from` that happens
+ *  to embed ` -> ` of its own does not fool it, and `\S` already excludes
+ *  every line terminator on its own (no `s` flag needed on that side). A row
+ *  that still fails this shape — a hand-written one that merely starts with
+ *  the same prefix, or a future reword of the writer itself — THROWS at the
+ *  one reader, `childReclaimCoordinatorIds`, below; it does not silently
+ *  drop. */
+const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.+) -> (\S+)$/s;
 
 /**
  * Every read and every write of the coordination database, in one class, and

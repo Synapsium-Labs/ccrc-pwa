@@ -293,6 +293,47 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
   });
 
+  // Bare `.` in JS does not match a LINE TERMINATOR (`\n`, `\r`, U+2028,
+  // U+2029) without the `s` flag — a narrower gap in the same class as the
+  // whitespace/arrow cases above: `POST /api/runs`'s own check is
+  // `claimedBy.trim() === ''`, which a value holding only a newline or
+  // carriage return still fails (it is non-empty after trimming), so none of
+  // those four bytes is refused either. Each case reads its `from` back
+  // VERBATIM through the real `reclaimProgram` writer, exactly as the
+  // whitespace cases above do. The plain-space case ('demo x') is already
+  // covered by "round-trips a from with an inner space" above and is not
+  // repeated here: a plain space is not one of the four excluded bytes, so it
+  // round-trips with or without the `s` flag and proves nothing about it.
+  it('round-trips a from holding an embedded line feed', () => {
+    const coord = bareStore();
+    const from = 'demo\nx';
+    const opened = coord.openRun({ program: 'w4-embedded-lf', title: 'w4-embedded-lf', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-lf', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+  });
+
+  it('round-trips a from holding an embedded carriage return', () => {
+    const coord = bareStore();
+    const from = 'demo\rx';
+    const opened = coord.openRun({ program: 'w4-embedded-cr', title: 'w4-embedded-cr', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-cr', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+  });
+
+  it('round-trips a from with a LEADING line feed — the value is stored untrimmed', () => {
+    const coord = bareStore();
+    const from = '\ndemo-x';
+    const opened = coord.openRun({ program: 'w4-leading-lf', title: 'w4-leading-lf', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: from });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-leading-lf', Date.now(), null)).toMatchObject({ ok: true });
+    expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
+  });
+
   it('a reclaim: row from the exact writer that does not parse THROWS, never drops silently', () => {
     const coord = bareStore();
     const opened = coord.openRun({ program: 'w4-mangled', title: 'w4-mangled', project: 'demo',
