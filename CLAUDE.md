@@ -129,7 +129,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   **health gate** fails (its unit not up or not staying up, or — on a `server`/`both` box — `/health` not answering
   the staged `version`, within `CCRC_UPDATE_HEALTH_S`) restores the previous build itself and exits **4** —
   `~/.ccrc/update.json`, every run's phase report, names the restore arm — and `rollout` STOPS on 4. One update per
-  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
+  box at a time (`~/.ccrc/update.lock`); `ccrc rollback` is the typed way back. A box's tree is the symlink
+  `~/ccrc -> ~/ccrc-versions/<tag>` (a real `~/ccrc` is migrated once and kept as `~/ccrc.migrating` until a gate
+  passes), so a rollback to a kept version — and the gate-failure restore's arm 1 — is a flip with no download, and
+  `ccrc versions` lists and prunes the kept trees. A `server`/`both` Linux box's `ccrc-update-watchdog.timer`
   re-measures a self-update that died with its updater and rolls back ONLY a box that fails its health probe —
   a converged or healthy box has its stale report closed or left for the next tick, never reverted. Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**

@@ -486,6 +486,7 @@ box records the install as unsigned, which `ccrc version` says); extract, check 
 version; back up to `~/ccrc-backups/<ts>/` (coord.db via
 `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
 the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
+places the tree in a version directory of its own and flips `~/ccrc` to it — Versioned installs, below; it
 mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
 floor last); the health gate (below); the supervisor sweep behind its mandatory `KillMode=process` preflight;
 then the from→to report.
@@ -538,7 +539,8 @@ never completed: a `previous` already recorded is kept. After the install and be
 `ccrc.service` is active and its `/health` (at the configured server address, loopback by default) answers the staged
 `version`; on a fleet box `ccrc-agent.service` is active and stays up (on macOS, launchd's view of the same jobs). A
 gate that passes under a failing doctor is still exit 3. A gate that fails restores the box, and the run exits **4**:
-arm 2 re-installs `previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
+arm 1 flips `~/ccrc` back to a kept previous version (Versioned installs, below); failing that, arm 2 re-installs
+`previous`'s tag through a child `ccrc update --to <previous> --no-gate --from restore` that runs
 under the parent's lock, passing `--allow-unsigned` only when the replaced install was itself unsigned (a verified box
 whose previous release ships no bundle refuses arm 2 and prints the command to run by hand); the child exiting **3** (its
 own spine completed but ITS doctor FAILed) still counts as arm 2 restored, never a fall to arm 3 — arm 3 runs only when
@@ -553,7 +555,8 @@ the flags typed beside it, as a transient `systemd --user` unit and returns at o
 the `ccrc.service` restart it causes; `update.json` is its progress.
 
 **Rolling back, and the watchdog.** `ccrc rollback [--to vX.Y.Z] [--detach] [--from <who>]` takes the lock and
-re-installs `previous`'s tag, or the one named — which must be a published release (a `SHA256SUMS` that answers
+re-installs `previous`'s tag, or the one named — a version kept under `~/ccrc-versions` is flipped back to with no
+download (Versioned installs, below); any other must be a published release (a `SHA256SUMS` that answers
 404 is exit 2) — as a downgrade that leaves the floor where it is, then runs the gate, then the supervisor
 sweep behind the same `KillMode=process` preflight. A rollback whose gate fails is left for the operator at
 exit 1, never restored over, and an `untagged` previous build is refused by name (`--to` names one). On a
@@ -662,6 +665,42 @@ refuses a node whose `ccrc-caps` lacks `update-gate` at that moment, whatever th
 node lists no `detach` capability (`--detach` is Linux-only), so the console offers it no move and the dispatcher
 refuses one; `ccrc rollout` stays the path when the console itself is down.
 
+**Versioned installs, and rollback by flip.** A box keeps each release it installs as a tree of its own under
+`~/ccrc-versions/<name>/` — the release tag; `untagged-<the first twelve hex digits of its sha>` for a checkout that
+is its own repository's top level, or an unversioned build; `unstamped-<twelve random hex digits>` for a tree whose
+identity cannot be measured — and `~/ccrc` is a symlink to the one that runs, so the launcher, the units, the plist
+and doctor all resolve through it unchanged. An install places the new tree beside the running one, runs `npm ci`
+there, and only then points `~/ccrc` at it in one rename (GNU `ln -sfn` then `mv -fT`; on macOS python3's
+`os.replace`, so `ccrc install` there needs the Xcode Command Line Tools). A reinstall of the name already running
+writes in place, and a complete kept version run from its own directory copies nothing and runs no `npm ci`. A
+symlink or a non-directory standing at a version's name is refused before anything is written. Every completed
+install keeps a copy of the box's stamp and install record inside its version directory; a flip back restores both.
+A box whose `~/ccrc` is a real directory is migrated once: the new tree is placed fully, the old one is moved to
+`~/ccrc.migrating`, the link is placed, and `~/ccrc.migrating` is removed only after a gate passes — `ccrc update`'s
+or `ccrc rollback`'s health gate, or a plain `ccrc install`'s own doctor when that install can take
+`~/.ccrc/update.lock` itself (an update's staged install cannot, and leaves it to the update's gate). A staged spine
+of this layout that dies while `~/ccrc` is still the real directory replaced nothing: the run exits 1 and restores
+nothing. The first move onto this layout is made by a box's older updater: one that holds that lock has a gate that
+knows nothing of the migration, so the old tree outlives that run and goes at the next one, while one older than the
+lock leaves it to the staged install's own doctor; `--no-gate` keeps it too. A crash between the move and the link
+leaves `~/ccrc.migrating` and no `~/ccrc`, where the launcher cannot run: the placed version's own
+`bash ~/ccrc-versions/<name>/ccd/ccrc install` completes the link from `~/.ccrc/migrating-to` before it does
+anything else, and refuses, naming both by-hand remedies, when that record is missing or names no placed version.
+With the previous version kept, a failed gate's restore tries arm 1 first: it flips `~/ccrc` back, restores that
+version's stamp and record, re-runs its own install spine (the executables, hooks and units, with no download) and
+runs the gate once more, falling to arm 2 only when there is no kept version or that fails. `ccrc rollback` to a
+kept version makes the same flip, spine and gate, and asks the release host nothing: below the floor if need be, the
+floor itself never lowered, and exit 3 when the kept spine's doctor fails after the gate passes; a bare one checks
+`previous` against the layout before it trusts it. A staged release older than this layout is first given a
+directory named for its own tag to write into, and `~/ccrc` goes back to the version it named, with the record and
+caps the run cleared, when that spine dies before replacing anything. Arm 3's MIXED tree loses its kept record, so
+no flip returns to it. `ccrc versions` lists the kept trees (`*` marks the one `~/ccrc` points at). After an install
+or update whose gate passes, and by `ccrc versions --prune`, the trees nothing needs are removed, each by a rename
+to a dot-name first: never the one `~/ccrc` points at, `previous`, a tag this node's projection names, or a version
+a running unit's command resolves to, and beyond those the newest `CCRC_VERSIONS_KEEP` (default 3) complete trees
+stay. An input that cannot be read prunes nothing, and only `--prune` removes an incomplete tree. `deploy.sh` still
+pushes its tree through `~/ccrc`, into whichever version directory that points at.
+
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
 siblings are never touched). `ccrc logs [-f] [-n N]` is `journalctl --user` against this box's own
@@ -669,9 +708,10 @@ unit (`ccrc.service`, or `ccrc-agent.service` when the recorded role is `fleet`)
 takes the box off ccrc and leaves reinstall safe: it refuses while live sessions exist (unless
 `--force`), removes the units, ccrc's managed settings.json hook entries (per-file backup;
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
-inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
+inside `~/.cc-sessions` file-by-file, `~/ccrc`, every kept tree under `~/ccrc-versions` and a leftover
+`~/ccrc.migrating`, and the installed executables — and preserves
 `~/.ccrc` (less the node's install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`,
-`previous`, `install-step`, `update.json`, `update.lock`, `update-intent` — which leave with the
+`previous`, `install-step`, `update.json`, `update.lock`, `update-intent`, `migrating-to` — which leave with the
 tree), the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
 (never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
 (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
@@ -3377,7 +3417,10 @@ PWA raises its amber banner until the server lane runs. That is expected, not a 
 agent lane prints the same sentence as it goes — and the second deploy clears
 it.
 
-**Restore** (manual, from the target box — pick the `<ts>` to roll back to):
+**Restore** (manual, from the target box — pick the `<ts>` to roll back to). The first remedy is `ccrc rollback`:
+to a version still kept under `~/ccrc-versions` it is a flip with no download. The `cp -a` lines below write
+THROUGH `~/ccrc` into the version directory it points at, which then holds a MIXED tree under its release's name —
+remove that directory's `.ccrc-installed` afterwards, as arm 3 does, so no flip ever returns to it:
 
 ```bash
 # fleet host (agent target)
