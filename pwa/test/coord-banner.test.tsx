@@ -23,7 +23,8 @@ const makeStore = (): FleetStore => createFleetStore({
     close(): void {} }) as unknown as WebSocket,
 });
 
-const coord = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coord = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 describe('the coord banner', () => {
   it('renders NOTHING before any coord frame — absence is not "not paused"', () => {

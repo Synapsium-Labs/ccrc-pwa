@@ -25,8 +25,9 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent,
-  ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary, SessionStatus, SessionUsage, TaskProgress,
+  ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
+  MailGate, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary, SessionStatus,
+  SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -39,7 +40,8 @@ import { JournalMirror } from './coord/mirror.js';
 // a redeclaration (TS2451), and `rundefs.ts` explains on purpose why the two
 // literals exist. `single-definition.test.ts` pins both halves of that split.
 import {
-  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, askNudgeSubject, isAskNudgeMail, queueSystemMail,
+  COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, askNudgeSubject, isAskNudgeMail,
+  queueSystemMail,
 } from './coord/rundefs.js';
 import { readWorktreeRecords } from './coord/gitref.js';
 import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput } from './divergence.js';
@@ -761,6 +763,19 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
+  /** The reclaim attention list as `sweepChildReclaim` last derived it from
+   *  the lifecycle mirror (child-reclamation wave 4). `emitCoord` reads it on
+   *  every tick; the sweep's MIRROR DERIVATION is its ONLY writer, on its own
+   *  slower clock, so a frame never waits on a database read. A cache of that
+   *  derivation's result, never a memo of anything else: no executor answer
+   *  writes it (spec §5.9: "derived from the lifecycle mirror so a restart
+   *  does not lose it" — every terminal refusal reaches the mirror through
+   *  ccd's own journal line, `ws-reclaim`'s or the one `ws-audit --reclaim`
+   *  writes for a terminal verdict, and every failure through `ws-reclaim`'s
+   *  `_lc_fail`; the mirror is the ONLY source). `[]` until the first
+   *  sweep — which runs on the first tick after a restart, so the list is
+   *  rebuilt from the mirror within one tick rather than lost. */
+  private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -1683,12 +1698,17 @@ export class FleetWatcher {
    *  Byte-equality guarded exactly like `emitRuns` above. No `try`/`catch`:
    *  unlike `emitRuns` this touches no `node:sqlite` and no I/O — it is an
    *  array scan, a `JSON.stringify` and a `bus.emit`, and the bus's own
-   *  listeners are the two socket writers `emitRuns` already trusts. */
+   *  listeners are the two socket writers `emitRuns` already trusts. The
+   *  attention list is a cached field, not a read: this method still touches
+   *  no `node:sqlite` and no I/O. */
   private emitCoord(names: readonly string[] | null): void {
     const status: CoordStatus = names === null
-      ? { pause: 'unmeasurable', mail: 'unmeasurable' }
+      ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
+          childReclaimAttention: this.childReclaimAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
-          mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear' };
+          mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
+          reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
+          childReclaimAttention: this.childReclaimAttentionList };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;

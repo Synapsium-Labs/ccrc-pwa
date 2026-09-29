@@ -891,7 +891,7 @@ MSG
   - `CoordStatus` becomes `{ pause: MarkerState; mail: MarkerState; reclaim: MarkerState; childReclaimAttention: readonly ChildReclaimAttention[] }`.
   - `FleetWatcher`'s private `childReclaimAttentionList: readonly ChildReclaimAttention[]`, initialised `[]`; Task 8's mirror derivation is its only writer (contract §7 R5, §8 R5′: no in-memory memo feeds `CoordStatus` or the frame — this field caches the mirror derivation's last RESULT, terminal refusals and failures past the ceiling alike, and holds no fact the mirror does not; no executor answer ever writes it).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) `server/test/fleetws.test.ts`: bring the eight existing `coord` equalities to the widened shape, then add one case. The eight are the only `toEqual({ pause: … })` lines in the file:
 
@@ -951,7 +951,7 @@ describe("child-reclamation wave 4 — one 'reclaim-paused' literal", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/single-definition.test.ts
@@ -959,7 +959,7 @@ cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/single-def
 
 Expected: FAIL — SIX `fleetws` cases: the five existing cases that hold the eight rewritten equalities (`sends coord after hello/fleet/runs on connect`, `re-emits only on CHANGE`, `reports set for coordinator-paused and clear for mail-disabled independently`, `reports unmeasurable for BOTH markers`, `emits coord on the tick that FAILS SHUT`), plus the new case — each with `- Expected` carrying `reclaim` and `childReclaimAttention` and `+ Received` lacking both; `single-definition`'s two new cases (`expected [] to deeply equal [ 'server/src/coord/rundefs.ts' ]`, and `expected '…' to contain 'names.includes(RECLAIM_PAUSE_MARKER)'`). Every other `single-definition` case stays green.
 
-- [ ] **Step 3: The constant, and the one exclusion the kebab scanner needs**
+- [x] **Step 3: The constant, and the one exclusion the kebab scanner needs**
 
 In `server/src/coord/rundefs.ts`, directly after `export const COORDINATOR_PAUSE_MARKER = 'coordinator-paused';`:
 
@@ -990,7 +990,7 @@ In `server/test/mail-routes.test.ts`, `NOT_CODES`, directly after `'coordinator-
 
 If Task 1 Step 3 found a `'reclaim-paused'` literal in a wave-3 file, replace it there with `RECLAIM_PAUSE_MARKER`, imported from `./rundefs.js` (or `./coord/rundefs.js` from `server/src`).
 
-- [ ] **Step 4: The L0 types**
+- [x] **Step 4: The L0 types**
 
 In `shared/api.ts`, replace the one-line `export interface CoordStatus { pause: MarkerState; mail: MarkerState }` and its docstring with:
 
@@ -1045,7 +1045,7 @@ export interface CoordStatus {
 }
 ```
 
-- [ ] **Step 5: The frame**
+- [x] **Step 5: The frame**
 
 In `server/src/watch.ts`:
 
@@ -1082,7 +1082,7 @@ In `server/src/watch.ts`:
 
 …and its docstring's last sentence gains: "The attention list is a cached field, not a read: this method still touches no `node:sqlite` and no I/O."
 
-- [ ] **Step 6: The PWA fixtures that construct a `CoordStatus`**
+- [x] **Step 6: The PWA fixtures that construct a `CoordStatus`**
 
 `pwa/test/coord-banner.test.tsx`, the helper (line 26):
 
@@ -1108,7 +1108,7 @@ grep -c "reclaim: 'clear', childReclaimAttention: \[\]" pwa/test/abandon-sheet.t
 
 Expected: `1`, `2`, `2`. The `as unknown as CoordStatus` casts (`'quarantined'`) are deliberately untouched — they model a frame from a build this one does not know. `pwa/test/stores.test.ts` sends its frames as JSON strings and compares what it sent; it needs no edit.
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/fleetws.test.ts test/single-definition.test.ts test/mail-routes.test.ts test/typecheck-tests.test.ts
@@ -1117,7 +1117,7 @@ cd pwa && ./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run tes
 
 Expected: PASS; `tsc --noEmit` prints nothing. (`session-hook` is deliberately not in this list: Step 4's insertion has just moved README's `shared/api.ts` anchors, and Step 8 is where that red is paid.)
 
-- [ ] **Step 8: Pay the citation tax on `shared/api.ts` (S6-R11) — README by content, the debt census by measurement**
+- [x] **Step 8: Pay the citation tax on `shared/api.ts` (S6-R11) — README by content, the debt census by measurement**
 
 Step 4 inserted `ChildReclaimAttention` and three lines of `CoordStatus` ABOVE README's four `shared/api.ts` anchors (see Global Constraints), so `session-hook.test.ts`'s *README HAS ITS OWN CENSUS ENTRY* and *the citation debt moved* cases are red now. (This task's other cited file, `server/test/single-definition.test.ts`, takes its insertion BELOW the corpus's highest anchor into it — `:1303` — so it moves nothing; (c) below is the measurement, and a red naming `single-definition.test.ts` there means the insertion landed above `:1303` and must move down, never that a number is re-typed. Contract §7 R9.) This is wave 2's Task 5 Step 9 procedure, with this task's own `HEAD` (the commit before Step 4) as the base, because waves 2 and 3 have already re-anchored README once. Never by adding a line delta to a number.
 
@@ -1168,7 +1168,7 @@ Expected: *README HAS ITS OWN CENSUS ENTRY, and it is EMPTY* now PASSES. *the ci
 
 and set the sum's `.toBe(<n>)` to the received total. Re-run (c): Expected PASS. Any OTHER red in this file that names a `shared/api.ts` anchor is the same tax — re-measure it the same way and name it in the wave-done mail; never widen a rule to make it green. `session-hook` is a known load flake: a red that does NOT name `shared/api.ts` gets an isolated re-run before anything else.
 
-- [ ] **Step 9: Mutation check, then commit**
+- [x] **Step 9: Mutation check, then commit**
 
 | # | Edit | Command | Expected red |
 |---|---|---|---|

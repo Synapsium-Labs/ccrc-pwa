@@ -106,7 +106,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
             coordKickoffPendingSince: null }, ...over,
 });
 
-const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
