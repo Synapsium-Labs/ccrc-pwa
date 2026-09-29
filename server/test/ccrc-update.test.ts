@@ -3085,7 +3085,27 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
   const REVERTED_REPORT = (target: string): string =>
     `{"target":"${target}","phase":"reverted","startedAt":1,"updatedAt":2,"detail":"arm1: flipped back to v1.0.0; gate: fixture","from":"cli","pid":1}\n`;
   const RAISED_BY = (floor: string): string =>
-    ` — the last update, to ${floor}, failed its health gate and was restored, so the floor stands above the release this box runs`;
+    ` — the last update, to ${floor}, failed its health gate and was restored`;
+
+  // The shape a tail about the running release gets wrong: the update to the
+  // floor's OWN tag failed its gate and was restored onto that same tag (a
+  // `--force` reinstall of the floor's tag, arm 3 or arm 1 back to it), so
+  // the box runs the floor's tag — not a release below it. The clause is the
+  // ruled sentence exactly, and nothing more.
+  it('a same-tag restore (the box runs the floor\'s own tag): the clause names the restored update and claims nothing about where the box runs', () => {
+    const home = freshUpdateBox('ccrc-update-floor-same-tag-restore-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    writeFileSync(join(home, '.ccrc', 'update.json'),
+      REVERTED_REPORT('v3.0.0').replace('arm1: flipped back to v1.0.0', 'arm3: restored v3.0.0 (same build, not mixed)'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain(`${RAISED_BY('v3.0.0')} — moving down is a typed act: ccrc update --to v2.0.0 --downgrade`);
+    expect(r.stderr).toContain('the last update, to v3.0.0, failed its health gate and was restored — moving down');
+    expect(r.stderr).not.toContain('the floor stands above');
+    expect(r.stderr).not.toContain('above the release this box runs');
+  });
 
   it('END TO END: a real update whose gate failed and restored leaves the floor above the running release, and the next move below it is refused naming the last update, restored after its gate failed (C28\'s root)', () => {
     const home = onKeptV1('ccrc-update-floor-restored-');
@@ -3121,6 +3141,7 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0 \(\S+: the highest version this box completed an install of\)/);
     if (named) {
       expect(r.stderr).toContain(`${RAISED_BY('v3.0.0')} — moving down is a typed act: ccrc update --to v2.0.0 --downgrade`);
+      expect(r.stderr, 'the clause claims nothing about where the box runs').not.toContain('the floor stands above');
     } else {
       expect(r.stderr).not.toContain('failed its health gate and was restored');
       expect(r.stderr).toMatch(/the highest version this box completed an install of\) — moving down is a typed act: ccrc update --to v2\.0\.0 --downgrade\. Nothing on this box was changed/);

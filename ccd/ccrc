@@ -2144,9 +2144,12 @@ _ccrc_die() { local m="$*"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && m="$(_upd_redac
 #   * An entry is a command string, `eval`'d at exit (so a variable it names is
 #     read then, as `_upd_resolve`'s own trap always read `$UPD_STAGE`), and it
 #     is recorded with the pid of the shell that added it. `_exit_run` runs an
-#     entry only in THAT shell: a `$( )` subshell inherits the whole array and
-#     would otherwise `rm -rf` its parent's staging tree the moment it ended.
-#     A subshell that adds an entry of its own owns and runs it.
+#     entry only in THAT shell. The case arises only when a subshell ITSELF
+#     calls `_exit_add` (which arms the trap in that subshell): it has inherited
+#     the whole array and would otherwise run the parent's arms — `rm -rf` its
+#     staging tree — the moment it ended. The real instance is `cmd_rollout`'s
+#     `$( _upd_resolve … )`, whose subshell adds `_upd_resolve`'s staging arm.
+#     A subshell that adds an entry of its own owns and runs that one.
 #   * The same entry is never added twice (`_upd_phase` runs for every phase).
 #   * `trap` is re-armed on every add, so a later `trap - EXIT` (the install
 #     prompt's `stty` restore ends with one) cannot leave the chain unarmed for
@@ -11285,7 +11288,12 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   # carried this box's absolute home. Only the box that wrote the path knows
   # its own home (`_upd_redact` reads `$HOME`), so the substitution is made
   # here, not in `cmd_rollout`'s relay, which knows only the rollout machine's.
-  # Every other line of this transcript already spells the path `~/.ccrc/…`.
+  # ONLY THIS LINE is redacted here. Known lines of the relayed transcript that
+  # still print an absolute path, left alone in this round: `_inst_banner`'s
+  # `install: box: $HOME` and `install: tree: ${CCRC_HERE%/*}`, the closing
+  # `install: next:` / `install: PWA:` / `install: gate:` lines that name
+  # `$BOX_ENV_FILE`, and `_inst_node_id`'s `install: node-id:` line, which names
+  # `$BOX_NODE_ID_FILE`.
   echo "install: caps: ${cw[*]} (os $CCD_OS; $(_upd_redact "$BOX_CAPS_FILE") — what this install's ccrc can do, read by the server)"
 }
 
@@ -15834,12 +15842,16 @@ _upd_floor_check() {
   # that its gate failed and it was restored, so the operator sees why
   # `--downgrade` is being asked for. It does NOT say the update "raised" the
   # floor: when the floor already equalled that tag from an earlier install
-  # the update raised nothing, and the sentence has to stay true then too.
+  # the update raised nothing, and the sentence has to stay true then too. For
+  # the same reason it carries NO tail about where the box runs now: after a
+  # same-tag restore (floor v2.0.0, `update --to v2.0.0 --force` failed its
+  # gate and was restored) the box runs the floor's own tag, not a release
+  # below it. The clause is exactly what the report proves and no more.
   # Anything else, including an unreadable or absent report, names the floor
   # alone.
   local raised=""
   if [ "$UPD_LAST_PHASE" = reverted ] && [ "$UPD_LAST_TARGET" = "$floor" ]; then
-    raised=" — the last update, to $floor, failed its health gate and was restored, so the floor stands above the release this box runs"
+    raised=" — the last update, to $floor, failed its health gate and was restored"
   fi
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
@@ -16054,11 +16066,15 @@ _upd_asset_listed() {
   # detaches, under W5's `UPDATE_SPAWN_TIMEOUT_MS` (20 s) on that parent — and
   # the generic validator's ceiling of 3600 let an override of 25 through
   # silently, so a slow release host surfaced as W5's own `spawn-failed`
-  # timeout instead of this verb's named refusal. Capped here, and only here
-  # (`_upd_resolve`'s validation of the same knob keeps the generic ceiling:
-  # nothing spawns it under a deadline): a whole number from 1 to 18, two
-  # seconds under the 20 for the parent's own start-up and its refusal. An
-  # override above it WARNs, naming the variable, and falls back to 15.
+  # timeout instead of this verb's named refusal. The ceiling is applied at
+  # this call site only (`_upd_resolve`'s validation of the same knob keeps the
+  # generic one: nothing spawns it under a deadline): a whole number from 1 to
+  # 18, two seconds under the 20 for the parent's own start-up and its refusal.
+  # An override above it WARNs, naming the variable, and falls back to 15. The
+  # validator REWRITES the global, though, so once this ran the rest of the
+  # process — a later bundle fetch, the refusal sentences that name the bound —
+  # uses the corrected 15 too. That is deliberate: the sentences must name the
+  # bound that was actually applied.
   _upd_validate_timeout CCRC_RELEASE_PROBE_MAX_TIME 15 \
     "a whole number of seconds from 1 to 18 (the pre-detach check must answer inside W5's 20-second spawn deadline)" 18
   code="$(curl -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
