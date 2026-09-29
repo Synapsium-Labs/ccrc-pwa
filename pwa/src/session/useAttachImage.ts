@@ -5,7 +5,7 @@
 // that typed the upload's path straight into the textarea; the tray replaced
 // it — see git history around the attachment-tray feature for that path.)
 import { useEffect, useRef, useState } from 'react';
-import { toast } from '../components/Toast';
+import { toast } from '@ccrc/ui';
 import { api, apiErrorText, uploadErrorText } from '../lib/api';
 
 /** PNGs under this size upload untouched — lossless screenshots stay lossless. */

@@ -1,0 +1,29 @@
+{
+  // Emits `dist/` for ONE consumer: the /design-sync converter, which bundles a
+  // package's built entry into `window.CcrcUi` and reads its `.d.ts` tree for
+  // each component's prop contract.
+  //
+  // `pwa` does NOT read this. `package.json` `exports['.']` stays pointed at
+  // `./src/index.ts` on purpose — Tailwind's `@source` scans the `.tsx`, and
+  // pwa's vitest carries `server.deps.inline: ['@ccrc/ui']` so the source is
+  // what the 2280 tests resolve. Adding `dist/` in front of that would change
+  // what every test and the production build compile.
+  //
+  // `status-dot.tsx` type-imports `SessionBucket` from `../../../shared/api`,
+  // so tsc infers the repo root as rootDir and the tree lands at
+  // `dist/ui/src/**` beside `dist/shared/**`. That is the real dependency
+  // graph; the converter is pointed at the entry explicitly rather than
+  // flattened into a shape the imports don't have.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "allowImportingTsExtensions": false,
+    "rootDir": "..",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.stories.tsx"]
+}

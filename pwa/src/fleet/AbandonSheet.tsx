@@ -25,9 +25,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isRunState, type RunSummary } from '../../../shared/api';
 import { RUN_WORD } from './runWords';
-import { Sheet } from '../components/Sheet';
+import { Sheet, toast } from '@ccrc/ui';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../lib/api';
-import { toast } from '../components/Toast';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total

@@ -11,7 +11,7 @@
 // own — the design gate's stylesheet list is discovered from disk and pinned
 // exactly (pwa/test/contrast.test.ts), so a new file here is a test to update
 // for no reason when app.tsx already owns shell.css and mounts this beside
-// it. `.btn-primary` (primitives.css) is already in the bundle via ToastHost.
+// it. `.btn-primary` (styles/legacy.css) is already in the bundle via ToastHost.
 import type { ReactNode } from 'react';
 
 export function BlockScreen(): ReactNode {

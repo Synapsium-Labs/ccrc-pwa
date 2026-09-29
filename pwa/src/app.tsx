@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
-import { ToastHost } from './components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { useAuthLost } from './lib/auth';
 import { navigate, usePath } from './lib/router';

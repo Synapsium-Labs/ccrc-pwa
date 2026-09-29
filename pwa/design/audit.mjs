@@ -102,7 +102,7 @@
 //   * CSS the audit does not model at all: `@media`/`@supports` preludes (the
 //     inner rules ARE read, the condition is ignored), `!important` ordering
 //     across rules, inline `style` attributes, and anything a script sets.
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -137,9 +137,22 @@ function walkCss(dir, root, out) {
   return out;
 }
 
-/** Every stylesheet under src/, relative to the package root, sorted. */
+/** The design system's own package. The tokens and the primitives' styling
+ *  live there now, not here, and a gate that only walks this package would
+ *  measure the app's stylesheets against a palette it cannot see — which is
+ *  the "fresh unbound copy of the stylesheet" failure this file's own header
+ *  is about, arrived at by a directory move instead of a paste. */
+export const UI_ROOT = path.join(PWA_ROOT, '..', 'ui');
+
+/** Every stylesheet the app actually ships, relative to the package root,
+ *  sorted. That is BOTH packages: this one, and @ccrc/ui. ui's entries come
+ *  back spelled `../ui/src/...`, so `path.join(root, rel)` still round-trips
+ *  and every `where:` in a report stays a path a reader can open. */
 export function stylesheets(root = PWA_ROOT) {
-  return walkCss(path.join(root, 'src'), root, []).sort();
+  const ui = path.join(root, '..', 'ui', 'src');
+  const sheets = walkCss(path.join(root, 'src'), root, []);
+  if (existsSync(ui)) walkCss(ui, root, sheets);
+  return sheets.sort();
 }
 
 const readCss = (root, rel) => stripComments(readFileSync(path.join(root, rel), 'utf8'));
@@ -191,7 +204,8 @@ export const customProps = (body) =>
  *  under light is what makes `[data-theme='light']` resolve the way a browser
  *  resolves it. */
 export function loadThemes(root = PWA_ROOT) {
-  const tokens = readCss(root, 'src/styles/tokens.css');
+  // tokens.css lives in @ccrc/ui — it is the design system's, not the app's.
+  const tokens = readCss(root, '../ui/src/styles/tokens.css');
   const DARK = customProps(blockBody(tokens, ':root'));
   const LIGHT = { ...DARK, ...customProps(blockBody(tokens, "[data-theme='light']")) };
   return { DARK, LIGHT };
@@ -491,7 +505,7 @@ export const GROUNDS = {
   'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
   'chat.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
-  'primitives.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
+  'legacy.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
 };
 
 /** Rules exempt from the contrast audit, each with the reason. WCAG 1.4.3
@@ -504,13 +518,13 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   'chat.css .chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   'chat.css .send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
-  'primitives.css .btn-primary:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  'legacy.css .btn-primary:disabled': 'WCAG 1.4.3 exempts inactive controls',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that
   // override `color` DIRECTLY started being measured (final2-gates F1), and it
   // is exempt for the same clause, not a new judgement.
-  'primitives.css .btn-ghost:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is 2.85 dark / 2.63 light here and is documented sub-AA in tokens.css',
+  'legacy.css .btn-ghost:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is 2.85 dark / 2.63 light here and is documented sub-AA in tokens.css',
   'chat.css .attach-strip': "the ground is the user's own image, so no ratio is computable; the rule IS the mitigation (a scrim gradient under --ink-on-well)",
 };
 
@@ -826,7 +840,7 @@ export const OPACITY_REGISTRY = {
   "chat.css .attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',
   },
-  'primitives.css .dot--busy, .dot--attention 0.85': {
+  'legacy.css .dot--busy, .dot--attention 0.85': {
     pairs: [
       ['busy dot on the lamp well', 'var(--status-busy)', ['var(--bg-well)'], 3],
       ['attention dot on the lamp well', 'var(--status-attention)', ['var(--bg-well)'], 3],
@@ -876,9 +890,9 @@ export const OPACITY_REGISTRY = {
 // retuning the "glow means life" motion language in DIRECTION.md, which is a
 // design decision and not a defect fix.
 export const KEYFRAME_TROUGHS = {
-  'primitives.css dot-breathe 0.55': 'status lamps (.dot--busy, .dot--attention). Reduced motion: animation none, opacity 0.85 — registered and measured above',
-  'primitives.css skel-shimmer 1': 'a background-position shimmer; the stops set no opacity below 1',
-  'primitives.css toast-in 0': 'a one-shot entrance from opacity 0; the resting state is opacity 1',
+  'theme.css dot-breathe 0.55': 'status lamps (.dot--busy, .dot--attention). Reduced motion: animation none, opacity 0.85 — registered and measured above',
+  'theme.css skel-shimmer 1': 'a background-position shimmer; the stops set no opacity below 1',
+  'theme.css toast-in 0': 'a one-shot entrance from opacity 0; the resting state is opacity 1',
   'chat.css task-breathe 0.55': 'the running task mark (.task-mark--running). Reduced motion: animation none, opacity 0.85 — registered and measured above',
   'chat.css jump-in 0': 'a one-shot entrance for the jump-to-latest button; the resting state is opacity 1',
   'chat.css caret-blink 0': 'the terminal caret, a step-end blink between 1 and 0. A caret is a cursor, not content',

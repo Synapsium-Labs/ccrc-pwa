@@ -107,8 +107,7 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Dialog, HookAsk, HookAskQuestion } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
+import { Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import './chat.css';

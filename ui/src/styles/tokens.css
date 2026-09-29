@@ -205,28 +205,28 @@
      Any mono value that updates in place (elapsed clocks, percentages,
      durations) also gets font-variant-numeric: tabular-nums — readouts
      must never jitter sideways. */
-  --font-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
+  --family-ui:   system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --family-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Roboto Mono", "Liberation Mono", monospace;
 
-  --text-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
-  --text-xs:   12px;   /* timestamps, tool-card meta */
-  --text-sm:   13px;   /* chips, tool summaries, mono code */
-  --text-base: 15px;   /* chat body, buttons, dialog options */
-  --text-lg:   17px;   /* card titles (mono), sheet titles */
-  --text-xl:   20px;   /* screen titles */
-  --text-2xl:  24px;   /* fleet heading */
-  --text-input: 16px;  /* ≥16px so iOS Safari never zoom-jumps */
+  --fs-2xs:  11px;   /* eyebrows, limit labels, keycap legends */
+  --fs-xs:   12px;   /* timestamps, tool-card meta */
+  --fs-sm:   13px;   /* chips, tool summaries, mono code */
+  --fs-base: 15px;   /* chat body, buttons, dialog options */
+  --fs-lg:   17px;   /* card titles (mono), sheet titles */
+  --fs-xl:   20px;   /* screen titles */
+  --fs-2xl:  24px;   /* fleet heading */
+  --fs-input: 16px;  /* ≥16px so iOS Safari never zoom-jumps */
 
-  --leading-tight:  1.25;
-  --leading-normal: 1.5;
-  --leading-mono:   1.55;
-  --leading-prose:  1.6;    /* long-form assistant prose — looser than mono, distinct from code */
+  --lh-tight:  1.25;
+  --lh-normal: 1.5;
+  --lh-mono:   1.55;
+  --lh-prose:  1.6;    /* long-form assistant prose — looser than mono, distinct from code */
 
   --weight-regular:  400;
   --weight-medium:   500;
   --weight-semibold: 600;
 
-  --tracking-caps: 0.08em;  /* uppercase mono eyebrows/labels */
+  --ls-caps: 0.08em;  /* uppercase mono eyebrows/labels */
 
   /* ------------------------------------------------------------------ *
    *  SPACE, RADIUS, TOUCH, SIZE                                         *
@@ -259,8 +259,8 @@
    *  ELEVATION & GLOW                                                   *
    * ------------------------------------------------------------------ */
   /* Dark theme depth comes from layer + hairline, barely from shadow. */
-  --shadow-card:  0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
+  --elev-card:  0 1px 2px rgba(0, 0, 0, 0.3);
+  --elev-sheet: 0 -8px 40px rgba(0, 0, 0, 0.55);
 
   /* The signature: phosphor bloom. Two tight rings + one wide soft halo.
      Apply to a pseudo-element and animate ITS opacity (compositor-cheap),
@@ -287,9 +287,9 @@
   --dur-bar:   600ms;   /* limit-bar width changes */
   --dur-ping:  300ms;   /* one-shot expanding ring on dot state change */
 
-  --ease-swift:  cubic-bezier(0.2, 0, 0, 1);        /* everyday exits/moves */
-  --ease-spring: cubic-bezier(0.32, 1.25, 0.46, 1); /* sheets: small overshoot */
-  --ease-breathe: ease-in-out;
+  --curve-swift:  cubic-bezier(0.2, 0, 0, 1);        /* everyday exits/moves */
+  --curve-spring: cubic-bezier(0.32, 1.25, 0.46, 1); /* sheets: small overshoot */
+  --curve-breathe: ease-in-out;
 
   --breathe-period: 2600ms;  /* busy glow inhale/exhale (alternate) */
   --pulse-period:   1300ms;  /* attention pulse — twice the urgency of busy */
@@ -369,8 +369,8 @@
   --diff-del: #F08A78;  /*  7.40:1 on light-theme well */
 
   /* Light theme earns real shadows; glow dims to a halo (a lamp in daylight). */
-  --shadow-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
-  --shadow-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
+  --elev-card:  0 1px 3px rgba(26, 32, 27, 0.10), 0 1px 2px rgba(26, 32, 27, 0.06);
+  --elev-sheet: 0 -8px 40px rgba(26, 32, 27, 0.22);
 
   --glow-busy:
     0 0 0 1px   rgba(23, 138, 72, 0.35),

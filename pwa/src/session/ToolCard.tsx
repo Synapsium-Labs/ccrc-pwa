@@ -352,7 +352,7 @@ function GenericToolCard({
             initial={{ height: 0 }}
             animate={{ height: 'auto' }}
             exit={{ height: 0 }}
-            // 0.24s / [0.2,0,0,1] mirror --dur-base / --ease-swift (tokens.css)
+            // 0.24s / [0.2,0,0,1] mirror --dur-base / --curve-swift (tokens.css)
             transition={reduced ? { duration: 0 } : { duration: 0.24, ease: [0.2, 0, 0, 1] }}
           >
             <div className="tool-body">

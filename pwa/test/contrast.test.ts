@@ -84,7 +84,13 @@ afterEach(removeTmpFixtures);
  *  stylesheet, at the same relative paths (audit.mjs resolves the package root
  *  from import.meta.url, so the copy audits ITSELF, not the real tree). */
 function gateTree(): string {
-  const dir = mkTmp('contrast-');
+  // TWO packages now: the tokens and the primitives' styling live in @ccrc/ui,
+  // and stylesheets() spells those '../ui/src/...'. Joined onto a flat temp dir
+  // that climbs OUT of the fixture, so the copy has to reproduce the real
+  // sibling layout — <tmp>/pwa beside <tmp>/ui — and the gate runs in <tmp>/pwa
+  // exactly as it runs in the real tree.
+  const parent = mkTmp('contrast-');
+  const dir = path.join(parent, 'pwa');
   mkdirSync(path.join(dir, 'design'), { recursive: true });
   for (const f of ['audit.mjs', 'contrast-check.mjs']) {
     cpSync(path.join(ROOT, 'design', f), path.join(dir, 'design', f));
@@ -446,7 +452,7 @@ describe('the gate fails a mutated tree', () => {
   it('a token in tokens.css is retuned below the floor', () => {
     // Proves the gate PARSES tokens.css rather than carrying a copy of it:
     // there is no hex in design/ left to mutate.
-    expectFail('src/styles/tokens.css', (s) => s.replace('--ink-primary:   #ECF0EC', '--ink-primary:   #151815'));
+    expectFail('../ui/src/styles/tokens.css', (s) => s.replace('--ink-primary:   #ECF0EC', '--ink-primary:   #151815'));
   });
 
   it('a rule takes the finding-1 shape (paper ink on the dark well)', () => {
@@ -634,7 +640,7 @@ describe('the gate fails a mutated tree', () => {
   it('the live rule the MAJOR was found in is measured, in both themes', () => {
     // Not a mutation — a pin on the live tree, because the defect was that
     // NOTHING measured this rule. Both rows must exist and both must clear 4.5:
-    // the label is --text-2xs (11px) uppercase mono, so it is body text.
+    // the label is --fs-2xs (11px) uppercase mono, so it is body text.
     const rows = report.measured.filter((m) =>
       m.label.includes('chat.css .code-block-copy [as .code-block-copy:hover, .code-block-copy[data-copied]]'));
     expect(rows).toHaveLength(2);
@@ -739,17 +745,17 @@ describe('the gate fails a mutated tree', () => {
   });
 
   it('a registered fade is deepened past the floor of a pair it composites', () => {
-    const o = expectFail('src/components/primitives.css', (s) =>
+    const o = expectFail('src/styles/legacy.css', (s) =>
       s.replace('    opacity: 0.85;', '    opacity: 0.7;'));
-    expect(o).toMatch(/unregistered fade primitives\.css/);
+    expect(o).toMatch(/unregistered fade legacy\.css/);
   });
 
   it('an unregistered @keyframes opacity trough is introduced', () => {
     // The list of troughs was hand-typed and already wrong (dot-breathe 0.55
     // was missing from it), so the list is discovered and checked.
-    const o = expectFail('src/components/primitives.css', (s) =>
+    const o = expectFail('../ui/src/styles/theme.css', (s) =>
       s.replace('@keyframes skel-shimmer {', '@keyframes mutant-fade { from { opacity: 0.2; } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
-    expect(o).toMatch(/unregistered keyframe trough primitives\.css mutant-fade 0\.2/);
+    expect(o).toMatch(/unregistered keyframe trough theme\.css mutant-fade 0\.2/);
   });
 
   // ── the branches that say "the auditor could not measure this" ────────────
@@ -766,9 +772,9 @@ describe('the gate fails a mutated tree', () => {
   });
 
   it('a @keyframes stop the auditor cannot read as a number is a FAILURE, not a skip', () => {
-    const o = expectFail('src/components/primitives.css', (s) =>
+    const o = expectFail('../ui/src/styles/theme.css', (s) =>
       s.replace('@keyframes skel-shimmer {', '@keyframes mutant-var { from { opacity: var(--x); } to { opacity: 1; } }\n@keyframes skel-shimmer {'));
-    expect(o).toMatch(/@keyframes primitives\.css mutant-var has an opacity stop that is not a static value/);
+    expect(o).toMatch(/@keyframes theme\.css mutant-var has an opacity stop that is not a static value/);
   });
 
   it('a translucent background with no GROUNDS entry is a FAILURE, not a skip', () => {
@@ -856,7 +862,7 @@ describe('the gate fails a mutated tree', () => {
     // verify2-css P5: the 12% wash used to be written out in three stylesheets
     // and five test rows. Now tokens.css owns it and this pin binds the two
     // spellings of it together.
-    const o = expectFail('src/styles/tokens.css', (s) =>
+    const o = expectFail('../ui/src/styles/tokens.css', (s) =>
       s.replace('--status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 12%, var(--bg-surface))',
         '--status-dead-tint-solid: color-mix(in srgb, var(--status-dead) 20%, var(--bg-surface))'));
     expect(o).toMatch(/dead-tint-solid/);
@@ -879,7 +885,7 @@ describe('the gate fails a mutated tree', () => {
 
 // ── labelled token pairs the design system promises ─────────────────────────
 describe('token pairs the gate must keep measuring', () => {
-  // 11px text (--text-2xs) is body text, not a UI glyph: 4.5, not 3:1.
+  // 11px text (--fs-2xs) is body text, not a UI glyph: 4.5, not 3:1.
   it.each([
     'DARK  ask header chip / accent-tint',
     'LIGHT ask header chip / accent-tint',
@@ -1079,7 +1085,7 @@ describe('the auditor itself', () => {
   it('finds both theme blocks however the selectors are cased', () => {
     // blockBody used indexOf, so `:ROOT` — a selector browsers match — read as
     // "no :root block" and threw at gate time.
-    const tokens = readFileSync(path.join(ROOT, 'src/styles/tokens.css'), 'utf8')
+    const tokens = readFileSync(path.join(ROOT, '../ui/src/styles/tokens.css'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '');
     expect(blockBody(tokens.replace(':root {', ':ROOT {'), ':root')).toBe(blockBody(tokens, ':root'));
   });
@@ -1106,13 +1112,19 @@ describe('every stylesheet under src/ is audited', () => {
     // verify2-css P3: src/styles/base.css was missing from a hardcoded SHEETS
     // array, which exempted it from BOTH audits while the array looked
     // complete. A list of files is the same drift class as a list of colours.
+    // Both packages: the app's own stylesheets AND @ccrc/ui's. A gate that
+    // walked only this package would measure the app against a palette it
+    // could not see — the same "fresh unbound copy" failure, reached by moving
+    // a directory instead of pasting a table.
     expect(report.sheets).toEqual([
-      'src/components/primitives.css',
+      '../ui/src/styles/reset.css',
+      '../ui/src/styles/theme.css',
+      '../ui/src/styles/tokens.css',
       'src/fleet/fleet.css',
       'src/session/chat.css',
       'src/styles/base.css',
+      'src/styles/legacy.css',
       'src/styles/shell.css',
-      'src/styles/tokens.css',
     ]);
   });
 
@@ -1583,7 +1595,7 @@ describe('every @keyframes opacity trough is registered', () => {
     // working-dot .25, tool-breathe .55, task-breathe .55" and shipped that as
     // the complete set. dot-breathe 0.55 — the status lamps, the most visible
     // animation in the app — was missing from it. The set is discovered now.
-    expect(report.troughs.map((t) => t.key)).toContain('primitives.css dot-breathe 0.55');
+    expect(report.troughs.map((t) => t.key)).toContain('theme.css dot-breathe 0.55');
   });
 
   it('states the reduced-motion steady state for each looping trough', () => {

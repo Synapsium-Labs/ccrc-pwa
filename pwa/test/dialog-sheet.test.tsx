@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Dialog, HookAsk } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { DialogSheet } from '../src/session/DialogSheet';
 import { createSessionStore } from '../src/stores/session';

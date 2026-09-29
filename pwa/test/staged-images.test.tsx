@@ -3,7 +3,7 @@
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { useStagedImages } from '../src/session/useAttachImage';
 

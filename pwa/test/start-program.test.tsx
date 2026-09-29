@@ -47,7 +47,7 @@ import type {
 import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { missingPreconditions } from '../src/fleet/readinessWords';
 import { ApiError, api } from '../src/lib/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });

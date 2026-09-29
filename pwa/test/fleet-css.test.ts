@@ -116,19 +116,19 @@ describe('fleet density and alignment', () => {
     // .sess-line centres everything on the full two-line ~52px box, but the
     // label is only the TOP line — measured 8.5-9.25px apart live (the
     // user's sharpest complaint). align-self: start + a box the height of
-    // the label's own line (--text-base at --leading-tight) still lands
+    // the label's own line (--fs-base at --lh-tight) still lands
     // 4.125px high, because .sess-open centres its whole two-line content
     // block inside the tap target — margin-top makes up exactly that
     // slack, derived from the same tokens .sess-open's stack uses (CDP-
     // measured 0px gap after this fix, at both 1440 and 390).
     const rule = ruleFor('.sess-lamp');
     expect(rule).toContain('align-self: start');
-    expect(rule).toContain('height: calc(var(--text-base) * var(--leading-tight))');
+    expect(rule).toContain('height: calc(var(--fs-base) * var(--lh-tight))');
     expect(rule).toContain('display: grid');
     expect(rule).toContain('place-items: center');
     expect(rule).toContain('margin-top: calc(');
     expect(rule).toContain('var(--tap-min)');
-    expect(rule).toContain('var(--text-xs)');
+    expect(rule).toContain('var(--fs-xs)');
   });
 
   it('compensates the lamp for EVERY line that can push the stack past the floor', () => {
@@ -152,7 +152,7 @@ describe('fleet density and alignment', () => {
     // rows and for a row carrying both extra lines.
     const rule = ruleFor('.sess-line:has(.sess-subagent-list) .sess-lamp');
     expect(rule).toContain('max(0px');
-    expect(rule).toContain('var(--text-2xs)');
+    expect(rule).toContain('var(--fs-2xs)');
   });
 
   it('gives .proj-card-add and .sess-actions the same real-button treatment', () => {
@@ -267,7 +267,7 @@ describe('fleet density and alignment', () => {
       // `font: inherit` outranks `.sess-held`'s own `font-family` (0,1,1 beats
       // 0,1,0), so the mono face has to be restated after it or the cell
       // silently changes typeface the moment it becomes a door.
-      expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--font-mono)');
+      expect(declaredValues(css, 'button.sess-held', 'font-family')).toContain('var(--family-mono)');
       // `color` is deliberately NOT restated here — `.sess-held` answers for
       // it, and `.sess-line--active .sess-held` (0,2,0) still outranks this
       // rule on the selected slab. A copy would be one more place to forget.

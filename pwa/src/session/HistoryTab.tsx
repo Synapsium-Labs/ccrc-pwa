@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { LifecycleGap, LifecycleQueryResult, MirroredLifecycleEvent } from '../../../shared/api';
 import { lcRefusalWord } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import { api, apiErrorText } from '../lib/api';
 import { CORROBORATION_WORD, actWord, eventCorroboration, outcomeGlyph, outcomeWord } from './journalWords';
 import './chat.css';

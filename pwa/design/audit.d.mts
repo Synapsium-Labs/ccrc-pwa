@@ -90,6 +90,9 @@ export type OpacityEntry =
   | { pairs: readonly (readonly [string, string, readonly string[], number])[] };
 
 export const PWA_ROOT: string;
+/** The @ccrc/ui package root. tokens.css and the design system's own
+ *  stylesheets live there; `stylesheets()` walks both packages. */
+export const UI_ROOT: string;
 export const GROUNDS: Record<string, Ground>;
 export const SELF_GROUNDED_EXEMPT: Record<string, string>;
 export const INHERITED_GROUNDS: Record<string, Ground>;

@@ -11,7 +11,7 @@ import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
 import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
-import { toast } from '../components/Toast';
+import { toast } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';

@@ -22,7 +22,7 @@ import type { ReactNode } from 'react';
 import type { MarkerState } from '../../../shared/api';
 import { COORD_CONFIRM_MS, MARKER_GLYPH, MARKER_WORD, markerState } from './coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api, apiErrorText } from '../lib/api';
-import { toast } from '../components/Toast';
+import { toast } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 

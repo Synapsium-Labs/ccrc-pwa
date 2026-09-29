@@ -35,10 +35,10 @@
   border: none;
   background: none;
   border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  font: var(--weight-regular) 26px / 1 var(--family-ui);
   color: var(--ink-secondary);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .chat-back:active {
   transform: scale(0.88);
@@ -51,7 +51,7 @@
   gap: var(--sp-1);
 }
 .chat-title {
-  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -85,7 +85,7 @@
   height: 6px;
 }
 .chat-meta .status-line {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 .chat .status-line--busy {
@@ -113,12 +113,12 @@
   background: var(--bg-surface);
   border-radius: var(--r-full);
   padding: 3px 9px;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-secondary);
 }
 button.metachip {
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
 button.metachip:active {
   transform: scale(0.94);
@@ -126,7 +126,7 @@ button.metachip:active {
 }
 .metachip-glyph {
   flex: none;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   line-height: 1;
 }
 .metachip-text {
@@ -159,7 +159,7 @@ button.metachip:active {
   background: var(--accent-tint);
   border-radius: var(--r-full);
   padding: 1px 6px;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
 }
 
 /* Account chip — mono name first, hue second, against the screen-scoped
@@ -168,7 +168,7 @@ button.metachip:active {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   padding: var(--sp-1) 9px;
   border-radius: var(--r-full);
 }
@@ -190,7 +190,7 @@ button.metachip:active {
   color: var(--ink-tertiary);
   background: var(--bg-raised);
 }
-.chip--repo { font-family: var(--font-mono); }
+.chip--repo { font-family: var(--family-mono); }
 /* Keycaps — the machine's keys surfacing in the chrome (DIRECTION: the
    interrupt is "a keycap, not an icon"). Raised caps with a heavier bottom
    edge, mono legends, 44px targets; pressing compresses like a key. `esc`
@@ -202,15 +202,15 @@ button.metachip:active {
   min-height: var(--tap-min);
   display: grid;
   place-items: center;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-primary);
   background: var(--bg-raised);
   border: 1px solid var(--edge-strong);
   border-bottom-width: 2px;
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .chat-head .keycap:active:not(:disabled) {
   transform: translateY(1px);
@@ -225,8 +225,8 @@ button.metachip:active {
 /* The PR cap. It must NOT be the one sub-44px control in the header, so the
    min-width stays at the tap floor and only the inline padding tightens. */
 .keycap--pr { min-width: var(--tap-min); padding-inline: 6px; gap: 3px; }
-.keycap--pr .pr-legend { font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono); }
-.keycap--pr .pr-glyph  { font-size: var(--text-2xs); }
+.keycap--pr .pr-legend { font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono); }
+.keycap--pr .pr-glyph  { font-size: var(--fs-2xs); }
 .keycap--pr .pr-dot {
   width: 6px; height: 6px; border-radius: var(--r-full);
   border: 1px solid currentColor; background: currentColor;
@@ -246,12 +246,12 @@ button.metachip:active {
 .keycap--pr[data-checks='pending'] .pr-dot { color: var(--status-attention); }
 
 .pr-sheet { display: grid; gap: var(--sp-3); }
-.pr-lede { color: var(--ink-primary); font-size: var(--text-base); line-height: var(--leading-normal); }
-.pr-facts { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
-.pr-warn { color: var(--status-attention-text); font-size: var(--text-sm); }
+.pr-lede { color: var(--ink-primary); font-size: var(--fs-base); line-height: var(--lh-normal); }
+.pr-facts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pr-warn { color: var(--status-attention-text); font-size: var(--fs-sm); }
 .pr-title-input {
   width: 100%; min-height: var(--tap-min); padding: 0 var(--sp-2);
-  font-size: var(--text-input); color: var(--ink-primary);
+  font-size: var(--fs-input); color: var(--ink-primary);
   background: var(--bg-raised); border: 1px solid var(--edge-strong); border-radius: var(--r-sm);
 }
 /* A read-only preview, not an editor: a multi-line editor in a bottom sheet is
@@ -259,7 +259,7 @@ button.metachip:active {
    GitHub, one tap away via this sheet's own link. */
 .pr-body-preview {
   width: 100%; max-height: 40vh; overflow: auto; resize: none;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
   /* --ink-on-well, NOT --ink-secondary. Wells stay dark in the light theme
      (tokens.css: "deliberately dark in light theme"), so every ink tuned for
      paper dies on the glass: --ink-secondary is #4E5850 in light and measured
@@ -269,23 +269,23 @@ button.metachip:active {
   color: var(--ink-on-well); background: var(--bg-well);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-sm); padding: var(--sp-2);
 }
-.pr-check-names { color: var(--status-dead-text); font-size: var(--text-sm); word-break: break-word; }
-.pr-label { font-size: var(--text-xs); color: var(--ink-tertiary); }
-.pr-title { font-size: var(--text-base); color: var(--ink-primary); }
-.pr-checkline { font-size: var(--text-sm); color: var(--ink-secondary); }
-.pr-note { font-size: var(--text-sm); color: var(--ink-secondary); line-height: var(--leading-normal); }
+.pr-check-names { color: var(--status-dead-text); font-size: var(--fs-sm); word-break: break-word; }
+.pr-label { font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.pr-title { font-size: var(--fs-base); color: var(--ink-primary); }
+.pr-checkline { font-size: var(--fs-sm); color: var(--ink-secondary); }
+.pr-note { font-size: var(--fs-sm); color: var(--ink-secondary); line-height: var(--lh-normal); }
 
 .reap-sheet { display: grid; gap: var(--sp-3); }
 .reap-rows { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-2); }
-.reap-rows dt { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
-.reap-rows dd { font-size: var(--text-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
-.reap-note { font-size: var(--text-xs); color: var(--ink-secondary); }
+.reap-rows dt { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+.reap-rows dd { font-size: var(--fs-sm); color: var(--ink-primary); margin: 0; word-break: break-word; }
+.reap-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
 /* The refusal is the whole content when there is one: no button sits beside it,
    because there is no override. */
-.reap-refusal { color: var(--status-attention-text); font-size: var(--text-sm); line-height: var(--leading-normal); }
-.reap-sensitive { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
-.reap-size { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
-.reap-ignored { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+.reap-refusal { color: var(--status-attention-text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.reap-sensitive { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--status-dead-text); list-style: none; padding: 0; }
+.reap-size { display: block; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.reap-ignored { display: block; font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); word-break: break-word; }
 /* D4: nested checkouts, named — same look as `.reap-sensitive` (mono, xs,
    no bullets) since both are a plain list of paths, but ink-secondary rather
    than the danger color: a nested checkout is information, not a threat.
@@ -293,7 +293,7 @@ button.metachip:active {
    naming what happens to these checkouts), `.reap-children-list` carries the
    look the plain `<ul>` used to carry alone. */
 .reap-children { display: grid; gap: var(--sp-1); }
-.reap-children-list { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
+.reap-children-list { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); list-style: none; padding: 0; display: grid; gap: var(--sp-1); }
 .reap-child { word-break: break-word; }
 .reap-go { min-height: var(--tap-min); }
 
@@ -314,10 +314,10 @@ button.metachip:active {
   border-bottom: 1px solid var(--edge-subtle);
   background: none;
   text-align: left;
-  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .menu-item:active {
   transform: scale(0.97);
@@ -328,7 +328,7 @@ button.metachip:active {
 }
 .menu-hint {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .menu-item--danger .menu-label {
@@ -348,14 +348,14 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: var(--bg-raised);
   padding: var(--sp-2) var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
 }
 .chat-banner--offline {
   justify-content: center;
   min-height: var(--sp-8);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
 }
 .chat-banner--offline::before {
   content: '';
@@ -397,7 +397,7 @@ button.metachip:active {
   color: var(--status-attention-text);
 }
 .chat-banner--missing .banner-path {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-mono) var(--family-mono);
   color: var(--ink-secondary);
   overflow-wrap: anywhere;
 }
@@ -451,12 +451,12 @@ button.metachip:active {
    running — glow means life, here as everywhere. */
 .task-mark {
   flex: none;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .task-mark--running {
   color: var(--status-busy-text);
-  animation: task-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+  animation: task-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
 }
 @keyframes task-breathe {
   from { opacity: 0.55; }
@@ -469,11 +469,11 @@ button.metachip:active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
 }
 .task-count {
   flex: none;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
   background: var(--bg-raised);
@@ -482,13 +482,13 @@ button.metachip:active {
 }
 .task-chevron {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 
 .task-summary {
   padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -512,7 +512,7 @@ button.metachip:active {
   border: 0;
   text-align: left;
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   cursor: pointer;
 }
 .task-line:disabled {
@@ -524,7 +524,7 @@ button.metachip:active {
 .task-glyph {
   flex: none;
   width: 1em;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .task-subject {
@@ -549,7 +549,7 @@ button.metachip:active {
 
 .task-detail {
   padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
 }
 
@@ -557,7 +557,7 @@ button.metachip:active {
   padding: var(--sp-2) var(--sp-3);
   background: none;
   border: 0;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   cursor: pointer;
 }
@@ -619,7 +619,7 @@ button.metachip:active {
 
 .mail-strip .mail-strip-mark {
   flex: none;
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 
@@ -629,11 +629,11 @@ button.metachip:active {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui);
 }
 .mail-strip-count {
   flex: none;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
   background: var(--bg-raised);
@@ -642,13 +642,13 @@ button.metachip:active {
 }
 .mail-strip .mail-strip-chevron {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 
 .mail-strip .mail-strip-summary {
   padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-4));
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -668,7 +668,7 @@ button.metachip:active {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--sp-2);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }
 .mail-strip-row + .mail-strip-row {
   border-top: 1px solid var(--edge-subtle);
@@ -678,7 +678,7 @@ button.metachip:active {
   color: var(--ink-primary);
 }
 .mail-strip .mail-strip-kind {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-tertiary);
@@ -692,7 +692,7 @@ button.metachip:active {
    does not read as "still being delivered". */
 .mail-strip .mail-strip-abandoned {
   flex-basis: 100%;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--status-attention-text);
@@ -706,7 +706,7 @@ button.metachip:active {
    than stranding it in the uncovered census. */
 .mail-strip .mail-strip-blocked {
   flex-basis: 100%;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--status-attention-text);
@@ -716,7 +716,7 @@ button.metachip:active {
    count. */
 .mail-strip .mail-strip-blocked-mark {
   flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--status-attention-text);
@@ -732,21 +732,21 @@ button.metachip:active {
    reaches it through route 2b. */
 .mail-strip .mail-strip-held {
   flex-basis: 100%;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 /* The collapsed head's copy, `flex: none` beside the count — the
    `.mail-strip-blocked-mark` shape one rule up, in this line's own register. */
 .mail-strip .mail-strip-held-mark {
   flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .mail-strip .mail-strip-artifacts {
   flex-basis: 100%;
   margin: 0;
   padding: 0 0 0 var(--sp-4);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-tertiary);
 }
 
@@ -790,12 +790,12 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   padding: 0 var(--sp-4);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
   cursor: pointer;
-  animation: jump-in var(--dur-fast) var(--ease-swift);
-  transition: transform var(--dur-press) var(--ease-swift);
+  animation: jump-in var(--dur-fast) var(--curve-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .jump-latest:active {
   transform: translateX(-50%) scale(0.95);
@@ -813,16 +813,16 @@ button.metachip:active {
 .ts-divider {
   justify-self: center;
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-tertiary);
   padding: var(--sp-1) 0;
 }
 .sys-divider {
   justify-self: center;
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-tertiary);
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
@@ -850,8 +850,8 @@ button.metachip:active {
   background: var(--bg-raised);
   border-radius: var(--r-lg) var(--r-lg) var(--r-sm) var(--r-lg);
   padding: 10px 14px;
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -861,7 +861,7 @@ button.metachip:active {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -878,7 +878,7 @@ button.metachip:active {
 }
 .pending-error {
   justify-self: end;
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-ui);
   color: var(--status-dead-text);
   text-align: right;
   overflow-wrap: anywhere;
@@ -894,10 +894,10 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: transparent;
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   padding: 0 var(--sp-3);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .pending-actions button:active {
   transform: scale(0.97);
@@ -929,8 +929,8 @@ button.metachip:active {
   display: grid;
   grid-template-columns: minmax(0, 1fr);   /* 0 min: long tokens scroll, don't push */
   gap: var(--sp-3);
-  font-size: var(--text-base);
-  line-height: var(--leading-prose);
+  font-size: var(--fs-base);
+  line-height: var(--lh-prose);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
@@ -952,20 +952,20 @@ button.metachip:active {
 /* HEADINGS — true 4-step scale (was h1==h2, h3==h4), asymmetric top margin so a
    heading binds to what follows. */
 .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4 {
-  font-family: var(--font-ui);
+  font-family: var(--family-ui);
   font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
+  line-height: var(--lh-tight);
   color: var(--ink-primary);
 }
-.msg-assist h1 { font-size: var(--text-xl); margin-top: var(--sp-4); }
+.msg-assist h1 { font-size: var(--fs-xl); margin-top: var(--sp-4); }
 .msg-assist h2 {
-  font-size: var(--text-lg);
+  font-size: var(--fs-lg);
   margin-top: var(--sp-4);
   padding-bottom: var(--sp-1);
   border-bottom: 1px solid var(--edge-subtle);   /* hairline section rule */
 }
-.msg-assist h3 { font-size: var(--text-base); margin-top: var(--sp-3); }
-.msg-assist h4 { font-size: var(--text-sm); color: var(--ink-secondary); margin-top: var(--sp-3); }
+.msg-assist h3 { font-size: var(--fs-base); margin-top: var(--sp-3); }
+.msg-assist h4 { font-size: var(--fs-sm); color: var(--ink-secondary); margin-top: var(--sp-3); }
 
 /* EMPHASIS */
 .msg-assist strong { font-weight: var(--weight-semibold); color: var(--ink-primary); }
@@ -1000,7 +1000,7 @@ button.metachip:active {
 .msg-assist .task-list-item input[type='checkbox']:checked::after {
   content: '✓'; position: absolute; inset: 0;
   display: grid; place-items: center;
-  font: var(--weight-semibold) 11px / 1 var(--font-mono);
+  font: var(--weight-semibold) 11px / 1 var(--family-mono);
   color: var(--accent);
 }
 .msg-assist .task-list-item:has(input:checked) {   /* progressive; degrades to no-dim */
@@ -1040,7 +1040,7 @@ button.metachip:active {
 /* INLINE CODE — a defined chip (replaces the old .msg-assist code element rule).
    Explicit ink-primary keeps it legible inside lists. */
 .msg-assist .md-code {
-  font: var(--weight-regular) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / 1 var(--family-mono);
   color: var(--ink-primary);
   background: var(--bg-raised);
   border: 1px solid var(--edge-subtle);
@@ -1052,22 +1052,22 @@ button.metachip:active {
 .msg-assist .kbd-combo { display: inline-flex; align-items: center; gap: 3px; vertical-align: baseline; }
 .msg-assist kbd {
   display: inline-block; min-width: 1.5em; padding: 1px 6px;
-  font: var(--weight-medium) var(--text-xs) / 1.4 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1.4 var(--family-mono);
   text-align: center; color: var(--ink-primary);
   background: var(--bg-raised);
   border: 1px solid var(--edge-strong); border-bottom-width: 2px;
-  border-radius: var(--r-sm); box-shadow: var(--shadow-card);
+  border-radius: var(--r-sm); box-shadow: var(--elev-card);
 }
-.msg-assist .kbd-plus { font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono); color: var(--ink-tertiary); }
+.msg-assist .kbd-plus { font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono); color: var(--ink-tertiary); }
 
 /* CODE BLOCKS — wells, dark in both themes, scrolling inside the glass.
-   Kept on --leading-mono; excluded from the reading measure. */
+   Kept on --lh-mono; excluded from the reading measure. */
 .msg-assist pre {
   background: var(--bg-well);
   color: var(--ink-on-well);
   border-radius: var(--r-md);
   padding: 10px var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
   overflow-x: auto;
   max-height: var(--well-max);
   overflow-y: auto;
@@ -1095,8 +1095,8 @@ button.metachip:active {
   width: max-content; min-width: 100%;
   border-collapse: collapse;
   background: transparent;              /* let the wrap's shadows read through */
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
 }
 .msg-assist th, .msg-assist td {
   border: 1px solid var(--edge-subtle);
@@ -1106,8 +1106,8 @@ button.metachip:active {
 .msg-assist thead th {
   background: color-mix(in srgb, var(--ink-primary) 8%, transparent);
   color: var(--ink-primary);
-  font: var(--weight-semibold) var(--text-xs) / var(--leading-tight) var(--font-ui);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-semibold) var(--fs-xs) / var(--lh-tight) var(--family-ui);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   border-bottom: 2px solid var(--edge-strong);
 }
@@ -1133,8 +1133,8 @@ button.metachip:active {
 .msg-assist .callout > :last-child { margin-bottom: 0; }
 .msg-assist .callout strong { color: var(--ink-primary); }
 .msg-assist .callout::before {
-  font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-semibold) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--callout-hue);
 }
 .msg-assist .callout[data-callout='note']      { --callout-hue: var(--acct-blue);            --callout-tint: var(--acct-blue-tint); }
@@ -1166,18 +1166,18 @@ button.metachip:active {
   border-bottom: 1px solid var(--well-bar-hair);
 }
 .code-block-lang {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps); text-transform: uppercase;
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps); text-transform: uppercase;
   color: var(--syn-comment);
 }
 .code-block-copy {
   appearance: none; border: 1px solid transparent; border-radius: var(--r-sm);
   background: transparent; color: var(--ink-on-well);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps); text-transform: uppercase;
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps); text-transform: uppercase;
   padding: var(--sp-1) var(--sp-2); min-height: var(--sp-8);
   cursor: pointer; -webkit-tap-highlight-color: transparent;
-  transition: color var(--dur-fast) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
 /* --accent-on-well, not --accent: this label sits on the code well's bar, which
    is dark in BOTH themes, and the light-theme --accent (#0E7B3F) is tuned for
@@ -1234,7 +1234,7 @@ button.metachip:active {
   border: none;
   cursor: pointer;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
   text-align: left;
   -webkit-tap-highlight-color: transparent;
 }
@@ -1242,8 +1242,8 @@ button.metachip:active {
 .compaction-label { flex: 1; }
 .compaction-hint {
   color: var(--ink-tertiary);
-  font-size: var(--text-2xs);
-  letter-spacing: var(--tracking-caps);
+  font-size: var(--fs-2xs);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 .compaction-head:hover .compaction-hint { color: var(--accent); }
@@ -1269,7 +1269,7 @@ button.metachip:active {
    the line structure the pill destroyed. */
 .compaction-raw {
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1308,14 +1308,14 @@ button.metachip:active {
 .task-card-summary {
   flex: 1;
   min-width: 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
   overflow-wrap: anywhere;
 }
 .task-card-status {
   flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   color: var(--ink-tertiary);
   border: 1px solid var(--edge-subtle);
@@ -1331,8 +1331,8 @@ button.metachip:active {
   padding: 0;
   cursor: pointer;
   color: var(--ink-tertiary);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 .task-card-toggle:hover { color: var(--accent); }
@@ -1347,14 +1347,14 @@ button.metachip:active {
 }
 .task-card-field { display: grid; gap: 2px; min-width: 0; }
 .task-card-field dt {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
 .task-card-field dd {
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1390,9 +1390,9 @@ button.metachip:active {
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) 0;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
-  letter-spacing: var(--tracking-caps);
+  letter-spacing: var(--ls-caps);
 }
 .msg-working-glyph {
   color: var(--accent);
@@ -1485,7 +1485,7 @@ button.metachip:active {
 .tool-dot--run {
   background: var(--status-busy);
   box-shadow: var(--glow-dot-busy);
-  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+  animation: tool-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
 }
 @keyframes tool-breathe {
   from {
@@ -1497,13 +1497,13 @@ button.metachip:active {
 }
 .tool-name {
   flex: none;
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
   color: var(--ink-primary);
 }
 .tool-sum {
   flex: 1;
   min-width: 0;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   white-space: nowrap;
   overflow: hidden;
@@ -1511,15 +1511,15 @@ button.metachip:active {
 }
 .tool-dur {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
 .tool-chev {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
-  transition: transform var(--dur-base) var(--ease-swift);
+  transition: transform var(--dur-base) var(--curve-swift);
 }
 .tool-row[aria-expanded='true'] .tool-chev {
   transform: rotate(90deg);
@@ -1534,8 +1534,8 @@ button.metachip:active {
   gap: var(--sp-2);
 }
 .tool-eyebrow {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
@@ -1544,7 +1544,7 @@ button.metachip:active {
   color: var(--ink-on-well);
   border-radius: var(--r-md);
   padding: 10px var(--sp-3);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
   overflow-x: auto;
   max-height: var(--well-max);
   overflow-y: auto;
@@ -1557,7 +1557,7 @@ button.metachip:active {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1.5 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -1567,13 +1567,13 @@ button.metachip:active {
    glow, no animation, no box-shadow. */
 .tool-cut {
   margin-top: calc(var(--sp-1) * -1);
-  font: var(--weight-regular) var(--text-2xs) / 1.5 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1.5 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
 .exit-badge {
-  font: var(--weight-semibold) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-semibold) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--status-dead-text);
   background: var(--status-dead-tint);
   padding: 3px 7px;
@@ -1601,11 +1601,11 @@ button.metachip:active {
   gap: var(--sp-1) var(--sp-2);
 }
 .tool-ask-glyph {
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
 }
 .tool-ask-q {
-  font: var(--weight-medium) var(--text-base) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-normal) var(--family-ui);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
@@ -1620,7 +1620,7 @@ button.metachip:active {
      parsed answer is ever painted with it. */
   background: var(--accent-tint);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-mono) var(--family-mono);
   overflow-wrap: anywhere;
   /* Only the reader's own words land here now (the longest real one is 480
      chars of typed reply), but the chip caps and scrolls like a well rather
@@ -1653,8 +1653,8 @@ button.metachip:active {
 .tool-ask-outlabel {
   flex: 1;
   min-width: 0;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   color: var(--ink-tertiary);
 }
@@ -1680,8 +1680,8 @@ button.metachip:active {
   align-items: center;
   gap: var(--sp-2);
   margin: var(--sp-1) 0 0;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 .ask-state .ask-glyph {
@@ -1707,7 +1707,7 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
   letter-spacing: normal;
   text-transform: none;
   cursor: pointer;
@@ -1747,12 +1747,12 @@ button.metachip:active {
   flex-wrap: wrap;
   gap: var(--sp-2);
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-tight) var(--family-ui);
 }
 .mail-card .mail-card-glyph,
 .mail-card .mail-card-arrow {
   flex: none;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .mail-card .mail-card-sender {
@@ -1770,11 +1770,11 @@ button.metachip:active {
   flex-wrap: wrap;
   gap: var(--sp-2);
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }
 .mail-card .mail-card-kind {
   flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-tertiary);
@@ -1786,7 +1786,7 @@ button.metachip:active {
 }
 .mail-card .mail-card-run {
   flex: none;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -1800,7 +1800,7 @@ button.metachip:active {
   gap: var(--sp-1);
 }
 .mail-card .mail-card-artifact {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
 }
@@ -1834,7 +1834,7 @@ button.metachip:active {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-xl);
   padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4);
-  transition: border-color var(--dur-fast) var(--ease-swift);
+  transition: border-color var(--dur-fast) var(--curve-swift);
 }
 .inputbar:focus-within {
   border-color: var(--accent);
@@ -1843,7 +1843,7 @@ button.metachip:active {
   flex: none;
   /* Match the textarea's first-line box (size / leading / vertical padding) so
      the glyph sits on the text baseline instead of floating above it. */
-  font: var(--weight-semibold) var(--text-input) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-semibold) var(--fs-input) / var(--lh-normal) var(--family-mono);
   color: var(--accent);
   padding: 10px 0;
 }
@@ -1855,10 +1855,10 @@ button.metachip:active {
   outline: none;
   resize: none;
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
   padding: 10px 0;
   /* 1 → 6 lines, then inner scroll (6 × 16px × 1.5 = calc below). */
-  max-height: calc(var(--text-input) * 9);
+  max-height: calc(var(--fs-input) * 9);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1880,11 +1880,11 @@ button.metachip:active {
   background: none;
   border-radius: var(--r-full);
   color: var(--ink-secondary);
-  font: var(--weight-regular) 24px / 1 var(--font-ui);
+  font: var(--weight-regular) 24px / 1 var(--family-ui);
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .attach-btn:active:not(:disabled) {
   transform: scale(0.92);
@@ -1919,11 +1919,11 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--accent);
   color: var(--ink-on-accent);
-  font: var(--weight-semibold) 18px / 1 var(--font-ui);
+  font: var(--weight-semibold) 18px / 1 var(--family-ui);
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), background var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), background var(--dur-fast) var(--curve-swift);
 }
 .send-btn:active {
   transform: scale(0.92);
@@ -1945,8 +1945,8 @@ button.metachip:active {
 
 /* Draft-conflict sheet body. */
 .draft-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
 }
@@ -1968,9 +1968,9 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
 .draft-cancel:active {
   color: var(--ink-primary);
@@ -1996,10 +1996,10 @@ button.metachip:active {
   border-bottom: 1px solid var(--edge-subtle);
   background: none;
   text-align: left;
-  font: var(--weight-regular) var(--text-base) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .opt:active:not(:disabled) {
   transform: scale(0.97);
@@ -2035,7 +2035,7 @@ button.metachip:active {
 }
 .opt-glyph {
   width: 14px;
-  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
   color: var(--accent);
   flex: none;
 }
@@ -2043,7 +2043,7 @@ button.metachip:active {
 .opt-idx {
   width: 14px;
   text-align: center;
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   flex: none;
 }
@@ -2065,7 +2065,7 @@ button.metachip:active {
   display: block;
   margin-top: 2px;
   color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2077,8 +2077,8 @@ button.metachip:active {
   border-radius: var(--r-full);
   background: var(--accent-tint);
   color: var(--accent);
-  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1.4 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 /* An option's worked example, folded under its row (open on the preselected
@@ -2093,8 +2093,8 @@ button.metachip:active {
   background: none;
   padding: var(--sp-1) 0;
   color: var(--accent);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-align: left;
   cursor: pointer;
 }
@@ -2103,7 +2103,7 @@ button.metachip:active {
   overflow: auto;
   white-space: pre;               /* ASCII art scrolls; it must not reflow */
   overflow-wrap: normal;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-mono) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-mono) var(--family-mono);
 }
 /* The full question / preamble above the options. Scrolls if long so the
    options stay reachable. */
@@ -2111,13 +2111,13 @@ button.metachip:active {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   padding: var(--sp-1) var(--sp-1) var(--sp-3);
   max-height: 38vh;
   overflow-y: auto;
 }
 .opt-enter {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--accent);
   flex: none;
 }
@@ -2127,7 +2127,7 @@ button.metachip:active {
    joining it. Muted tertiary ink, not the accent: this is a fact about the
    lane, not a pending action. */
 .opt-inert {
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   flex: none;
 }
@@ -2139,17 +2139,17 @@ button.metachip:active {
    this rule instead of adding it to the uncovered census the way an
    unmeasurable `--status-*` token would. */
 .opt-degraded {
-  font: var(--weight-regular) var(--text-2xs) / 1.3 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1.3 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .opt-wait {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   color: var(--status-busy-text);
   flex: none;
 }
 .sheet-foot {
   text-align: center;
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
   padding-top: var(--sp-3);
 }
@@ -2174,7 +2174,7 @@ button.metachip:active {
      on a #141715 well — 1.09:1, i.e. black on black. What you have typed is
      invisible. --ink-on-well reads 15.52 / 13.98. */
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--text-base) / 1.3 var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / 1.3 var(--family-ui);
 }
 /* --syn-comment, not --ink-tertiary: the syntax palette is declared once in
    :root and never re-declared for light precisely because it renders on the
@@ -2190,9 +2190,9 @@ button.metachip:active {
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-ui);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift), border-color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift), border-color var(--dur-fast) var(--curve-swift);
 }
 .dlg-reply-send:disabled { color: var(--ink-tertiary); cursor: default; }
 .dlg-reply-send:not(:disabled):hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
@@ -2203,18 +2203,18 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
 .dlg-details-toggle:hover { color: var(--accent); }
 
 /* Unparsed dialog — the raw pane in a well plus the terminal escape hatch. */
 .dlg-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-3);
 }
@@ -2230,9 +2230,9 @@ button.metachip:active {
   border: none;
   background: none;
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-base) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-base) / 1 var(--family-ui);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
 .dlg-later:active {
   color: var(--ink-primary);
@@ -2258,8 +2258,8 @@ button.metachip:active {
 .ask-envelope-more-heading {
   margin: 0 0 var(--sp-2);
   color: var(--ink-tertiary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 
@@ -2291,16 +2291,16 @@ button.metachip:active {
   padding: var(--sp-8) var(--sp-4);
 }
 .chat-empty-mark {
-  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xl) / 1 var(--family-mono);
   color: var(--accent);
 }
 .chat-empty-title {
-  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 .chat-empty-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   max-width: 32ch;
 }
@@ -2363,8 +2363,8 @@ button.metachip:active {
   background: color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well));
 }
 .term-histbar-word {
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   white-space: nowrap;
 }
@@ -2381,12 +2381,12 @@ button.metachip:active {
   background: color-mix(in srgb, var(--bg-well) 78%, transparent);
 }
 .term-overlay-word {
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
 }
 .term-overlay--connecting .term-overlay-word {
-  animation: tool-breathe var(--breathe-period) var(--ease-breathe) infinite alternate;
+  animation: tool-breathe var(--breathe-period) var(--curve-breathe) infinite alternate;
 }
 .term-overlay-word--lost {
   color: var(--status-dead-text);
@@ -2440,15 +2440,15 @@ button.metachip:active {
   display: grid;
   place-items: center;
   padding: 0 var(--sp-2);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--ink-on-well);
   background: color-mix(in srgb, var(--ink-on-well) 9%, transparent);
   border: 1px solid color-mix(in srgb, var(--ink-on-well) 22%, transparent);
   border-bottom-width: 2px;
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .term-keys .keycap:active {
   transform: translateY(1px);
@@ -2531,7 +2531,7 @@ button.metachip:active {
   background: var(--bg-raised);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
 }
 .slash-item {
   display: flex;
@@ -2545,7 +2545,7 @@ button.metachip:active {
   border: none;
   border-radius: var(--r-md);
   cursor: pointer;
-  transition: background var(--dur-press) var(--ease-swift);
+  transition: background var(--dur-press) var(--curve-swift);
 }
 .slash-item:hover,
 .slash-item:focus-visible {
@@ -2557,13 +2557,13 @@ button.metachip:active {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
   color: var(--accent);
 }
 .slash-badge {
-  font-family: var(--font-ui);
-  font-size: var(--text-2xs);
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-sm);
@@ -2571,10 +2571,10 @@ button.metachip:active {
   line-height: 1.5;
 }
 .slash-desc {
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
+  font-family: var(--family-ui);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
-  line-height: var(--leading-tight);
+  line-height: var(--lh-tight);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2620,7 +2620,7 @@ button.metachip:active {
 /* A clip deleted off disk degrades to its filename, never a broken-image box. */
 .msg-attach-gone {
   display: block;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
   /* Third instance of the well trap: --ink-tertiary is paper ink and measures
      3.17:1 on the light-theme well. --syn-comment is the well's own muted ink
      (6.41 / 5.77) and keeps this quieter than --ink-on-well, which is what the
@@ -2685,7 +2685,7 @@ button.metachip:active {
   padding: 2px 4px;
   background: linear-gradient(transparent, rgba(4, 6, 5, 0.72));
   color: var(--ink-on-well);
-  font: var(--weight-regular) var(--text-2xs) / 1.2 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1.2 var(--family-mono);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -2725,7 +2725,7 @@ button.metachip:active {
   border: 1px solid var(--edge-strong);
   background: var(--bg-sheet);
   color: var(--ink-primary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   cursor: pointer;
   z-index: 2;
 }
@@ -2777,15 +2777,15 @@ button.metachip:active {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-2) 0; border-top: 1px solid var(--edge-subtle);
 }
-.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--text-xs); }
+.history-when { color: var(--ink-tertiary); font-variant-numeric: tabular-nums; font-size: var(--fs-xs); }
 .history-act { color: var(--ink-primary); }
 .history-verb { color: var(--ink-tertiary); }
-.history-outcome { color: var(--ink-secondary); font-size: var(--text-xs); }
-.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--font-mono); font-size: var(--text-xs); }
-.history-corr { color: var(--ink-tertiary); font-size: var(--text-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
+.history-outcome { color: var(--ink-secondary); font-size: var(--fs-xs); }
+.history-obs, .history-dec { flex-basis: 47%; color: var(--ink-secondary); font-family: var(--family-mono); font-size: var(--fs-xs); }
+.history-corr { color: var(--ink-tertiary); font-size: var(--fs-xs); border-radius: var(--r-sm); padding: 0 var(--sp-1); }
 /* `disagrees` in its own colour (spec §2) — the attention pair, because a
    provenance mismatch is a fact for a human to read, not an error state. */
 .history-corr[data-corr='disagrees'] { color: var(--status-attention-text); background: var(--status-attention-tint); }
-.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--text-xs); }
-.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--text-xs); }
+.history-refusal { flex-basis: 100%; color: var(--status-dead-text); font-size: var(--fs-xs); }
+.history-row--gap, .history-gap { color: var(--status-dead-text); font-size: var(--fs-xs); }
 .history-loading, .history-empty, .history-error { color: var(--ink-secondary); padding: var(--sp-3) 0; }

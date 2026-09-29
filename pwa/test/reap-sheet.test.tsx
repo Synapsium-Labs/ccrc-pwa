@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import type { FleetSession, WsAudit } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { ReapSheet } from '../src/session/ReapSheet';
 
 const audit = (over: Partial<WsAudit> = {}): WsAudit => ({

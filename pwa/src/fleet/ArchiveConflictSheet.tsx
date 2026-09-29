@@ -25,7 +25,7 @@
 // mean it".
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import { ApiError, UNSUPPORTED_VERB_TEXT, api } from '../lib/api';
 import './fleet.css';
 

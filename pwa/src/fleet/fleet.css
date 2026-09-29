@@ -25,7 +25,7 @@
   padding: var(--sp-1) var(--sp-1) 0;
 }
 .wordmark {
-  font: var(--weight-medium) var(--text-xl) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xl) / 1 var(--family-mono);
   color: var(--ink-primary);
 }
 .wordmark::before {
@@ -34,7 +34,7 @@
   margin-right: 0.4em;
 }
 .fleet-count {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -54,7 +54,7 @@
    viewport (369px with no count) rather than holding everything on one line, as
    this note assumes — see the override comment near `.settings-door` below.) */
 .pool-epoch-lag {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
   white-space: nowrap;
@@ -122,10 +122,10 @@
   background: none;
   cursor: pointer;
   padding: 4px;
-  font-size: var(--text-lg);
+  font-size: var(--fs-lg);
   line-height: 1;
   opacity: 0.55;
-  transition: opacity var(--dur-fast) var(--ease-swift), transform var(--dur-press) var(--ease-swift);
+  transition: opacity var(--dur-fast) var(--curve-swift), transform var(--dur-press) var(--curve-swift);
 }
 .bell--on {
   opacity: 1;
@@ -165,10 +165,10 @@
   color: var(--ink-primary);
   border-radius: var(--r-md);
   padding: var(--sp-1) var(--sp-3);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-ui);
 }
 .bucket-head .bucket-head-count {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -180,7 +180,7 @@
   color: var(--status-attention-text);
   border-radius: var(--r-full);
   padding: 0 6px;
-  font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
+  font: var(--weight-semibold) var(--fs-2xs) / 1.6 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 /* The chip's label doubles as the focus target after an ack (FleetScreen's
@@ -204,7 +204,7 @@
   border: 0;
   background: none;
   color: var(--accent);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-ui);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-ui);
   display: inline-grid;
   place-items: center;
   min-height: var(--sp-6);
@@ -274,8 +274,8 @@
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
 }
 .offline-banner::before {
   content: '';
@@ -307,7 +307,7 @@
   border: 1px solid var(--status-dead);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--status-dead-text);
 }
 .fleet-host-banner-msg {
@@ -329,8 +329,8 @@
   color: var(--status-attention-text);
 }
 .fleet-host-banner--warn code {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
 }
 
 /* BuildLine — the foot-of-screen one-liner (release/rollout design §6).
@@ -366,7 +366,7 @@
   border: 1px solid var(--status-attention);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--status-attention-text);
 }
 .substrate-banner-msg {
@@ -374,8 +374,8 @@
   min-width: 0;
 }
 .substrate-banner-reason {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
 }
 
 /* ------------------------------------------------------------------ *
@@ -388,9 +388,9 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
   padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
 }
 .notice-msg {
@@ -406,9 +406,9 @@
   background: none;
   border-radius: var(--r-sm);
   color: var(--ink-tertiary);
-  font: var(--weight-regular) var(--text-lg) / 1 var(--font-ui);
+  font: var(--weight-regular) var(--fs-lg) / 1 var(--family-ui);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .notice-x:active {
   transform: scale(0.88);
@@ -423,11 +423,11 @@
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--elev-card);
   padding: var(--sp-4);
   display: grid;
   gap: var(--sp-3);
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 /* Account chip — mono name first, hue second (colors arrive inline from
    lib/accounts.ts token names; a dead card drains its chip to gray). */
@@ -435,7 +435,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   padding: var(--sp-1) 9px;
   border-radius: var(--r-full);
 }
@@ -449,7 +449,7 @@
 /* Status line — mono readout beside the chip; tabular so ticking relative
    times never jitter sideways. */
 .status-line {
-  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 .status-line--busy {
@@ -476,16 +476,16 @@
   padding: var(--sp-12) var(--sp-4) var(--sp-8);
 }
 .first-run-mark {
-  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xl) / 1 var(--family-mono);
   color: var(--accent);
 }
 .first-run-title {
-  font: var(--weight-semibold) var(--text-lg) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-semibold) var(--fs-lg) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 .first-run-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   max-width: 30ch;
 }
@@ -509,12 +509,12 @@
   border-radius: var(--r-full);
   background: var(--accent);
   color: var(--ink-on-accent);
-  font: var(--weight-medium) var(--text-2xl) / 1 var(--font-ui);
-  box-shadow: var(--shadow-card);
+  font: var(--weight-medium) var(--fs-2xl) / 1 var(--family-ui);
+  box-shadow: var(--elev-card);
   display: grid;
   place-items: center;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .fab:active {
   transform: scale(0.94);
@@ -526,8 +526,8 @@
  *  option grammar: 52px hairline-separated, mono machine voice.       *
  * ------------------------------------------------------------------ */
 .sheet-copy {
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-4);
 }
@@ -563,15 +563,15 @@
   background: none;
   text-align: left;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .acct-list .acct-row:active {
   transform: scale(0.97);
 }
 .acct-suggested {
   flex: none;
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
-  letter-spacing: var(--tracking-caps);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
+  letter-spacing: var(--ls-caps);
   color: var(--accent);
   background: var(--accent-tint);
   border-radius: var(--r-full);
@@ -591,7 +591,7 @@
   grid-template-columns: 18px 1fr 34px;
   align-items: center;
   gap: var(--sp-1);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -599,7 +599,7 @@
   text-align: right;
 }
 .acct-unknown {
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-tertiary);
   text-align: right;
 }
@@ -609,7 +609,7 @@
    affordance. Same muted tertiary ink and mono 2xs as `.acct-unknown` above,
    which is the neighbour it shares the gauges column with. */
 .acct-condemned {
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-tertiary);
   text-align: right;
 }
@@ -624,14 +624,14 @@
    it should live meanwhile". Same treatment as `.proj-none`, the sibling
    already doing this for the project step of the very same sheet. */
 .acct-none {
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   padding: var(--sp-4) var(--sp-1);
 }
 .acct-chev {
   flex: none;
-  font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / 1 var(--family-ui);
   color: var(--ink-tertiary);
 }
 
@@ -644,10 +644,10 @@
   border: none;
   background: none;
   padding: 0;
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   color: var(--ink-secondary);
   cursor: pointer;
-  transition: color var(--dur-fast) var(--ease-swift);
+  transition: color var(--dur-fast) var(--curve-swift);
 }
 .acct-change:active {
   color: var(--ink-primary);
@@ -661,11 +661,11 @@
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
   padding: 0 var(--sp-3);
   margin-bottom: var(--sp-2);
   outline: none;
-  transition: border-color var(--dur-fast) var(--ease-swift);
+  transition: border-color var(--dur-fast) var(--curve-swift);
 }
 .proj-search:focus {
   border-color: var(--accent);
@@ -695,7 +695,7 @@
   background: none;
   text-align: left;
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .proj-row:active {
   transform: scale(0.97);
@@ -707,7 +707,7 @@
 }
 .proj-glyph {
   grid-row: span 2;
-  font: var(--weight-semibold) var(--text-base) / 1 var(--font-mono);
+  font: var(--weight-semibold) var(--fs-base) / 1 var(--family-mono);
   color: var(--accent);
 }
 .proj-name {
@@ -718,13 +718,13 @@
    * the name instead of under it, on exactly those servers. Pinning both to
    * column 2 makes the layout independent of whether the badge is there. */
   grid-column: 2;
-  font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
 /* F3 — the program-ready badge. `.proj-row` is `background: none`, so its
  * ground comes from `.sheet-panel` (`background: var(--bg-sheet)`, in
- * components/primitives.css). Naming that ancestor in the selector does NOT
+ * the Sheet primitive in @ccrc/ui). Naming that ancestor in the selector does NOT
  * ground it for the auditor: the descendant route resolves a ground only
  * against a SELF-GROUNDED host — one setting a colour AND a ground — and
  * `.sheet-panel` paints without setting a colour of its own. All four rules
@@ -737,7 +737,7 @@
   grid-row: 1 / span 2;
   justify-self: end;
   align-self: center;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
   color: var(--ink-tertiary);
   white-space: nowrap;
 }
@@ -746,7 +746,7 @@
  * carries the colour cue, and repeating it here would be two shouts. */
 .sheet-panel .proj-ready-why {
   grid-column: 2;
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
 }
@@ -755,14 +755,14 @@
 
 .proj-dir {
   grid-column: 2;   /* see .proj-name above */
-  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / var(--lh-tight) var(--family-mono);
   color: var(--ink-tertiary);
   overflow-wrap: anywhere;
 }
 .proj-none,
 .proj-error {
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
   color: var(--ink-secondary);
   padding: var(--sp-4) var(--sp-1);
 }
@@ -794,7 +794,7 @@
   gap: 2px;
 }
 .route-field-label {
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   color: var(--ink-tertiary);
 }
 .route-select {
@@ -804,7 +804,7 @@
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
   padding: 0 var(--sp-2);
 }
 .route-select:focus {
@@ -865,8 +865,8 @@
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 .acct-rows {
@@ -874,8 +874,8 @@
   gap: 1px;
 }
 .account-gauge-label {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   font-weight: var(--weight-semibold);
   line-height: 1.25;
 }
@@ -885,8 +885,8 @@
   align-items: center;
   gap: 5px;
   line-height: 1.15;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
 }
 .acct-win { color: var(--ink-tertiary); }
 .acct-meter {
@@ -899,11 +899,17 @@
   display: block;
   height: 100%;
   border-radius: var(--r-full);
-  background: var(--limit-ok, #3fb950);
-  transition: width var(--dur-base) var(--ease-swift);
+  background: var(--limit-ok);
+  transition: width var(--dur-base) var(--curve-swift);
 }
-.acct-meter[data-band='warn'] .acct-fill { background: var(--limit-warn, #d29922); }
-.acct-meter[data-band='crit'] .acct-fill { background: var(--limit-crit, #f85149); }
+/* --limit-critical, not --limit-crit: the band NAME is `crit` (limitBand) but
+   the token is spelled out. An undefined var() falls back silently, so the
+   misspelling shipped a hardcoded off-palette red that neither theme nor the
+   contrast gate could see — a var() fallback is invisible to design/audit.mjs
+   by construction. No fallback hexes here for the same reason: a fallback on a
+   token that exists is unreachable, and on one that does not it hides the bug. */
+.acct-meter[data-band='warn'] .acct-fill { background: var(--limit-warn); }
+.acct-meter[data-band='crit'] .acct-fill { background: var(--limit-critical); }
 .acct-meter[data-band='none'] .acct-fill { background: var(--edge-subtle); }
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
@@ -1092,8 +1098,8 @@
    .sess-line centres everything on the full two-line ~52px box, but the
    label is only the TOP line — measured 8.5-9.25px apart live, reading as
    low. Pin the lamp to the row's start (like .sess-actions below) and give
-   it a box exactly as tall as the label's own line box (--text-base at
-   --leading-tight, .sess-body's line-height), then centre the dot inside
+   it a box exactly as tall as the label's own line box (--fs-base at
+   --lh-tight, .sess-body's line-height), then centre the dot inside
    that box — measured this alone still lands 4.125px high, because
    .sess-body centres its whole two-line content block (label + its 2px
    gap + .sess-meta's own line) inside the --tap-min tap target, which
@@ -1116,7 +1122,7 @@
    that 4.125px and the dot reads ~4px low.
 
    Both selectors therefore share ONE variant below: the same formula with
-   a third line's height (--text-2xs at --leading-tight) and its own 2px
+   a third line's height (--fs-2xs at --lh-tight) and its own 2px
    gap folded in, wrapped in max(0px, …) rather than left to go negative
    (-3.75px today) — negative would push the dot ABOVE the label's line
    instead of just removing the non-existent slack, and the clamp is what
@@ -1139,18 +1145,18 @@
 .sess-lamp {
   grid-column: 1;
   align-self: start;
-  height: calc(var(--text-base) * var(--leading-tight));
+  height: calc(var(--fs-base) * var(--lh-tight));
   display: grid;
   place-items: center;
   margin-top: calc(
-    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+    (var(--tap-min) - (var(--fs-base) * var(--lh-tight)) - 2px - (var(--fs-xs) * var(--lh-tight))) / 2
   );
 }
 .sess-line:has(.sess-ask) .sess-lamp,
 .sess-line:has(.sess-subagent-list) .sess-lamp {
   margin-top: max(0px, calc(
-    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))
-      - 2px - (var(--text-2xs) * var(--leading-tight))) / 2
+    (var(--tap-min) - (var(--fs-base) * var(--lh-tight)) - 2px - (var(--fs-xs) * var(--lh-tight))
+      - 2px - (var(--fs-2xs) * var(--lh-tight))) / 2
   ));
 }
 
@@ -1172,7 +1178,7 @@
   min-width: 0;
   min-height: 44px;   /* thumb target: this block is what gets tapped */
   cursor: pointer;
-  line-height: var(--leading-tight);
+  line-height: var(--lh-tight);
 }
 
 /* Positioned WITH a z-index, for hit-testing rather than layout:
@@ -1258,7 +1264,7 @@
 .sess-meta {
   display: flex;
   align-items: center;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
   overflow: clip;
   overflow-clip-margin: 12px;
@@ -1277,7 +1283,7 @@
 .sess-state--exited  { color: var(--ink-secondary); }
 
 .sess-tally {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
 }
@@ -1286,7 +1292,7 @@
    quiet register as .sess-tally, no colour of its own (inherits .sess-meta's
    ink-secondary), so it needs no new contrast pair. */
 .sess-cleanup-fact {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
 }
@@ -1295,7 +1301,7 @@
    colour of its own (it inherits .sess-meta's ink-secondary), so it brings no
    new contrast pair with it. */
 .sess-graph {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
 }
@@ -1308,8 +1314,8 @@
    on .sess-open/.sess-actions too, and a cell that silently depended on
    preflight would be the odd one out).
 
-   THE HIT AREA, which the visible box cannot be. Inheriting --text-xs at
-   --leading-tight leaves a 15px-tall, ~22px-wide box for `⑂ 3` — the first
+   THE HIT AREA, which the visible box cannot be. Inheriting --fs-xs at
+   --lh-tight leaves a 15px-tall, ~22px-wide box for `⑂ 3` — the first
    row-level button in this file to ship under --tap-min, and the worst place
    for it: a thumb landing 3px low misses the button, hits .sess-body's click
    forwarder (guarded only by `closest('button')`) and NAVIGATES, so the
@@ -1329,7 +1335,7 @@
    formula (see the block above .sess-lamp) ~4px out on every row in the
    fleet, disclosure open or not. */
 .sess-subagents {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
   position: relative;
@@ -1346,11 +1352,11 @@
   position: absolute;
   /* Insets are NEGATIVE — the overlay grows out of a box smaller than the
      target on both axes. Height off the cell's own line box (the same
-     --text-xs × --leading-tight .sess-lamp's formula uses), so it tracks a
+     --fs-xs × --lh-tight .sess-lamp's formula uses), so it tracks a
      type-scale change instead of drifting; width off the cell's real width,
      which no token knows, hence `left`/`right` in terms of --tap-min. */
-  top: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2);
-  bottom: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2);
+  top: calc((var(--fs-xs) * var(--lh-tight) - var(--sp-6)) / 2);
+  bottom: calc((var(--fs-xs) * var(--lh-tight) - var(--sp-6)) / 2);
   left: calc((100% - var(--tap-min)) / 2);
   right: calc((100% - var(--tap-min)) / 2);
 }
@@ -1378,7 +1384,7 @@
   justify-content: space-between;
   gap: var(--sp-2);
   padding-left: var(--sp-4);
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 .sess-subagent-name {
@@ -1388,7 +1394,7 @@
   white-space: nowrap;
 }
 .sess-subagent-elapsed {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   flex: none;
 }
@@ -1402,7 +1408,7 @@
    same reasoning as .sess-warn/.sess-spawn: the only shrinkable cell in
    .sess-meta is .sess-held. */
 .sess-ctxpressure {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   flex: none;
   color: var(--status-attention-text);
 }
@@ -1436,7 +1442,7 @@
    is load-bearing: .sess-held is the only shrinkable cell in .sess-meta and
    §2.4 lengthens what it holds. */
 .sess-spawn {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   flex: none;
   color: var(--status-dead-text);
 }
@@ -1493,7 +1499,7 @@
 .sess-lifecycle,
 .sess-swapblocked,
 .sess-ask-state {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1518,8 +1524,8 @@
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
   white-space: nowrap;
 }
@@ -1527,7 +1533,7 @@
 /* A strand is deliberately louder than the neighbouring durable markers.
    Like them, it truncates while its title preserves the complete reason. */
 .sess-stranded {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1536,7 +1542,7 @@
 
 .sess-offpool {
   flex: none;
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   color: var(--status-attention-text);
 }
 
@@ -1565,8 +1571,8 @@
    than a near-miss. `.sess-open` is positioned with `z-index: 1` for exactly
    this overlap and keeps winning the strip they share. */
 button.sess-held {
-  padding: calc((var(--sp-6) - var(--text-xs) * var(--leading-tight)) / 2) 0;
-  margin: calc((var(--text-xs) * var(--leading-tight) - var(--sp-6)) / 2) 0;
+  padding: calc((var(--sp-6) - var(--fs-xs) * var(--lh-tight)) / 2) 0;
+  margin: calc((var(--fs-xs) * var(--lh-tight) - var(--sp-6)) / 2) 0;
   background: none;
   border: 0;
   /* `font: inherit` then the family again: the shorthand is what strips the UA
@@ -1578,13 +1584,13 @@ button.sess-held {
      both keep answering for it, and a copy here would be one more place to
      forget. */
   font: inherit;
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   text-align: left;
   cursor: pointer;
 }
 
 .sess-acct {
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1602,7 +1608,7 @@ button.sess-held {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 
@@ -1623,7 +1629,7 @@ button.sess-held {
   width: var(--sp-8);
   height: var(--sp-8);
   margin-top: calc(
-    (var(--tap-min) - (var(--text-base) * var(--leading-tight)) - 2px - (var(--text-xs) * var(--leading-tight))) / 2
+    (var(--tap-min) - (var(--fs-base) * var(--lh-tight)) - 2px - (var(--fs-xs) * var(--lh-tight))) / 2
   );
   padding: 0;
   background: var(--bg-raised);
@@ -1635,8 +1641,8 @@ button.sess-held {
 .sess-actions::before {
   content: '';
   position: absolute;
-  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
-     button's own 1px border eats into the box the absolutely-positioned
+  /* box-sizing: border-box (reset.css) means the button's own 1px border
+     eats into the box the absolutely-positioned
      ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
      each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
      not 44px. Subtracting the 2px border keeps the overlay at the real
@@ -1658,7 +1664,7 @@ button.sess-held {
 
 .sess-sheet-note {
   margin: 0;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
 }
 
@@ -1686,7 +1692,7 @@ button.sess-held {
   border-radius: var(--r-md);
   background: var(--bg-raised);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-normal) var(--family-ui);
   padding: 0 var(--sp-3);
   outline: none;
 }
@@ -1704,7 +1710,7 @@ button.sess-held {
    its failed-fetch text (--status-dead-text), so this needs no new pair. */
 .sess-hold-error {
   margin: 0;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--status-dead-text);
 }
 
@@ -1777,8 +1783,8 @@ button.sess-held {
 }
 
 .proj-card-count {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
@@ -1797,8 +1803,8 @@ button.sess-held {
    6.34:1 light). */
 .proj-card-busy {
   flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
   color: var(--status-busy-text);
 }
 
@@ -1817,8 +1823,8 @@ button.sess-held {
    coloured by account so the card and its lines share one identity language.
    `mixed` stays neutral: it names a disagreement, not an account. */
 .proj-card-pin {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   white-space: nowrap;
 }
 .proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
@@ -1831,9 +1837,9 @@ button.sess-held {
   padding: 0;
   background: none;
   border: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-tight);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-tight);
   white-space: nowrap;
   color: var(--ink-tertiary);
 }
@@ -1841,8 +1847,8 @@ button.proj-card-pool { cursor: pointer; }
 button.proj-card-pool::before {
   content: '';
   position: absolute;
-  top: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
-  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  top: calc((var(--fs-2xs) * var(--lh-tight) - var(--tap-min)) / 2);
+  bottom: calc((var(--fs-2xs) * var(--lh-tight) - var(--tap-min)) / 2);
   left: min(0px, calc((100% - var(--tap-min)) / 2));
   right: min(0px, calc((100% - var(--tap-min)) / 2));
 }
@@ -1906,8 +1912,8 @@ button.proj-card-pool::before {
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {
   flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   white-space: nowrap;
   color: var(--status-attention-text);
 }
@@ -1927,7 +1933,7 @@ button.proj-card-pool::before {
   background: var(--bg-raised);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   color: var(--ink-primary);
   text-align: left;
   cursor: pointer;
@@ -1946,15 +1952,15 @@ button.proj-card-pool::before {
   margin-top: var(--sp-3);
 }
 .pool-new-label {
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
 .pool-new-input {
   width: 100%;
   min-height: var(--tap-min);
   padding: 0 var(--sp-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-input);
+  font-family: var(--family-mono);
+  font-size: var(--fs-input);
   color: var(--ink-primary);
   background: var(--bg-raised);
   border: 1px solid var(--edge-strong);
@@ -1971,8 +1977,8 @@ button.proj-card-pool::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 
@@ -1986,8 +1992,8 @@ button.proj-card-pool::before {
   padding: 0;
   background: none;
   border: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
   text-align: left;
   cursor: pointer;
@@ -1996,7 +2002,7 @@ button.proj-card-pool::before {
 /* An unknown pool changes disclosure, not eligibility. */
 .pool-note {
   margin: 0;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
 
@@ -2022,8 +2028,8 @@ button.proj-card-pool::before {
 .proj-card-add::before {
   content: '';
   position: absolute;
-  /* box-sizing: border-box (tailwindcss preflight, base.css) means the
-     button's own 1px border eats into the box the absolutely-positioned
+  /* box-sizing: border-box (reset.css) means the button's own 1px border
+     eats into the box the absolutely-positioned
      ::before is inset FROM (the padding box, 2px smaller than --sp-8 on
      each axis) — the naive (--sp-8 - --tap-min)/2 measured a 42px hit area,
      not 44px. Subtracting the 2px border keeps the overlay at the real
@@ -2061,8 +2067,8 @@ button.proj-card-pool::before {
 .proj-nest-bracket {
   flex: none;
   align-self: center;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
 
@@ -2077,7 +2083,7 @@ button.proj-card-pool::before {
   gap: var(--sp-1);
   min-height: var(--tap-min);
   min-width: 0;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-secondary);
 }
 .proj-pending-glyph { flex: none; color: var(--ink-tertiary); }
@@ -2098,7 +2104,7 @@ button.proj-card-pool::before {
 .proj-pending-program { color: var(--ink-tertiary); }
 .proj-pending-elapsed {
   flex: none;
-  font-family: var(--font-mono);
+  font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
@@ -2114,7 +2120,7 @@ button.proj-card-pool::before {
   gap: var(--sp-1);
   min-width: 0;
   padding-left: var(--sp-3);
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 .proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
@@ -2136,7 +2142,7 @@ button.proj-card-pool::before {
   align-items: baseline;
   gap: var(--sp-1);
   min-width: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 .proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
@@ -2154,7 +2160,7 @@ button.proj-card-pool::before {
 }
 .proj-elsewhere-line {
   min-width: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 
@@ -2163,7 +2169,7 @@ button.proj-card-pool::before {
   display: flex; align-items: center; gap: var(--sp-1);
   min-height: var(--tap-min); width: 100%; padding: 0;
   background: none; border: 0; cursor: pointer; text-align: left;
-  font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary);
+  font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
 /* Archived rows read as past tense, but never so faint that the branch name
    stops being legible — this is the only route back to that transcript.
@@ -2198,18 +2204,18 @@ button.proj-card-pool::before {
 .fleet-archived-row {
   min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
   background: none; border: 0; cursor: pointer; text-align: left;
-  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary);
+  font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary);
 }
 .archive-screen { display: grid; gap: var(--sp-1); padding: var(--sp-2); }
-.archive-total { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.archive-total { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .archive-row {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: var(--sp-2); align-items: center; min-height: var(--tap-min);
   background: none; border: 0; cursor: pointer; text-align: left; color: var(--ink-primary);
 }
-.archive-project { font-size: var(--text-sm); color: var(--ink-secondary); }
-.archive-slug { font-family: var(--font-mono); font-size: var(--text-sm); }
-.archive-size { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary); }
+.archive-project { font-size: var(--fs-sm); color: var(--ink-secondary); }
+.archive-slug { font-family: var(--family-mono); font-size: var(--fs-sm); }
+.archive-size { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary); }
 .archive-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 
 /* — Task 6 (Build 3 PR G): AccountsScreen — */
@@ -2227,17 +2233,17 @@ button.proj-card-pool::before {
   border: none;
   background: none;
   border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  font: var(--weight-regular) 26px / 1 var(--family-ui);
   color: var(--ink-secondary);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .accounts-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .accounts-title {
-  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
 }
-.accounts-projection { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.accounts-projection { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .accounts-list { display: grid; gap: var(--sp-3); }
 .accounts-row {
   display: grid;
@@ -2248,7 +2254,7 @@ button.proj-card-pool::before {
   border-radius: var(--r-md);
 }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
-.accounts-disabled-note { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary); }
+.accounts-disabled-note { font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary); }
 /* A disabled lane greys the WHOLE row, not just its label: without this, a
    lane disabled while its 5h/7d telemetry sat at crit keeps a solid red bar
    forever (nothing runs there to refresh it), which reads as live pressure
@@ -2262,7 +2268,7 @@ button.proj-card-pool::before {
 /* Freshness ("last reported …") and the disabled note share the same muted
    tertiary ink already vetted elsewhere (.sess-held uses it identically) —
    no new token, no opacity fade to register with the contrast gate. */
-.accounts-fresh { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--ink-tertiary); margin-top: 2px; }
+.accounts-fresh { font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-tertiary); margin-top: 2px; }
 .accounts-sessions { display: flex; flex-wrap: wrap; gap: var(--sp-2); list-style: none; padding: 0; margin: 4px 0 0; }
 .accounts-session {
   min-height: var(--tap-min);
@@ -2270,8 +2276,8 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-full);
   background: none;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
   color: var(--ink-secondary);
   cursor: pointer;
 }
@@ -2299,13 +2305,13 @@ button.proj-card-pool::before {
 }
 .auth-block-head { display: flex; align-items: center; gap: var(--sp-2); }
 .auth-block-title {
-  font: var(--weight-semibold) var(--text-sm) / var(--leading-tight) var(--font-ui);
+  font: var(--weight-semibold) var(--fs-sm) / var(--lh-tight) var(--family-ui);
   color: var(--ink-primary);
 }
 /* "Passkeys" one level down — an eyebrow over the list it labels, in the same
    muted mono as `.accounts-fresh` right beside it. */
 .auth-block-sub {
-  font: var(--weight-medium) var(--text-2xs) / 1.25 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1.25 var(--family-mono);
   color: var(--ink-tertiary);
   letter-spacing: 0.04em;
   margin-top: 2px;
@@ -2326,7 +2332,7 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1.4 var(--family-mono);
   cursor: pointer;
 }
 
@@ -2340,16 +2346,16 @@ button.proj-card-pool::before {
   min-width: var(--tap-min); min-height: var(--tap-min);
   border: 0; border-radius: var(--r-sm);
   background: none; color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-base) / 1 var(--font-ui);
+  font: var(--weight-regular) var(--fs-base) / 1 var(--family-ui);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .mail-badge:active { transform: scale(0.88); color: var(--ink-primary); }
 .mail-badge[data-unread='true'] { color: var(--ink-primary); }
 .mail-badge-count {
   background: var(--status-attention-tint); color: var(--status-attention-text);
   border-radius: var(--r-full); padding: 0 6px;
-  font: var(--weight-semibold) var(--text-2xs) / 1.6 var(--font-mono);
+  font: var(--weight-semibold) var(--fs-2xs) / 1.6 var(--family-mono);
   font-variant-numeric: tabular-nums;
 }
 /* — The durable door to /accounts (D-161) —
@@ -2378,27 +2384,27 @@ button.proj-card-pool::before {
   min-height: var(--tap-min); padding: 0 var(--sp-1);
   border: 0; border-radius: var(--r-sm);
   background: none; color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .accounts-door:active { transform: scale(0.88); color: var(--ink-primary); }
 /* The glyph is decoration beside the word, so it is aria-hidden in the markup
    and sized in the UI font — the label is what carries the meaning. */
-.accounts-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+.accounts-door-glyph { font-family: var(--family-ui); font-size: var(--fs-xs); line-height: 1; }
 
 .mail-screen { display: grid; gap: var(--sp-2); padding: var(--sp-2); }
 .mail-head { display: flex; align-items: center; gap: var(--sp-2); }
 .mail-back {
   flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
   border: none; background: none; border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui); color: var(--ink-secondary); cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  font: var(--weight-regular) 26px / 1 var(--family-ui); color: var(--ink-secondary); cursor: pointer;
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .mail-back:active { transform: scale(0.88); color: var(--ink-primary); }
-.mail-title { font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono); color: var(--ink-primary); }
-.mail-note { font-size: var(--text-xs); color: var(--ink-secondary); }
-.mail-dropped { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
+.mail-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
+.mail-note { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.mail-dropped { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .mail-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .mail-list { display: grid; gap: var(--sp-1); }
 .mail-row {
@@ -2417,14 +2423,14 @@ button.proj-card-pool::before {
    exactly where MailScreen.tsx already renders them. */
 .mail-row .mail-kind {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
-  font: var(--weight-medium) var(--text-2xs) / 1.6 var(--font-mono); color: var(--ink-tertiary);
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); color: var(--ink-tertiary);
 }
-.mail-row-title { font-family: var(--font-mono); font-size: var(--text-sm); }
+.mail-row-title { font-family: var(--family-mono); font-size: var(--fs-sm); }
 .mail-row .mail-when {
-  font-family: var(--font-mono); font-size: var(--text-2xs);
+  font-family: var(--family-mono); font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
-.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
+.mail-row .mail-body { grid-column: 1 / -1; font-size: var(--fs-xs); color: var(--ink-secondary); }
 
 /* The programme filter and its headers. Chips take the same ground and the same
    inks the rest of this screen does — `--ink-secondary` for a chip that is off,
@@ -2447,13 +2453,13 @@ button.proj-card-pool::before {
   border-radius: var(--r-full);
   color: var(--ink-secondary);
   font: inherit;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
 }
 .mail-chip[data-on] { color: var(--ink-primary); }
 .mail-group-head {
   margin: 0;
   padding: var(--sp-2) var(--sp-3) var(--sp-1);
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-tertiary);
 }
 
@@ -2465,34 +2471,34 @@ button.proj-card-pool::before {
 .fleet-runs-row {
   min-height: var(--tap-min); width: 100%; padding: 0 var(--sp-2);
   background: none; border: 0; cursor: pointer; text-align: left;
-  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-tertiary);
+  font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-tertiary);
 }
 .runs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); }
 .runs-head { display: flex; align-items: center; gap: var(--sp-2); }
 .runs-back {
   flex: none; min-width: var(--tap-min); min-height: var(--tap-min);
   border: none; background: none; border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui); color: var(--ink-secondary); cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  font: var(--weight-regular) 26px / 1 var(--family-ui); color: var(--ink-secondary); cursor: pointer;
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .runs-back:active { transform: scale(0.88); color: var(--ink-primary); }
-.runs-title { font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono); color: var(--ink-primary); }
+.runs-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .runs-empty { padding: var(--sp-4); color: var(--ink-secondary); }
 .runs-group { display: grid; gap: var(--sp-1); }
 .runs-group-head {
   display: flex; align-items: baseline; gap: var(--sp-2);
   background: var(--bg-surface); color: var(--ink-primary);
   border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3);
-  font: var(--weight-medium) var(--text-xs) / 1.6 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1.6 var(--family-mono);
 }
-.runs-program { font-family: var(--font-mono); }
+.runs-program { font-family: var(--family-mono); }
 .runs-wave { font-variant-numeric: tabular-nums; color: var(--ink-tertiary); }
 .runs-list { display: grid; gap: var(--sp-1); }
 .run-row {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
   min-height: var(--tap-min); padding: 0 var(--sp-2);
   background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
-  font-family: var(--font-mono); font-size: var(--text-sm);
+  font-family: var(--family-mono); font-size: var(--fs-sm);
 }
 /* Scoped under `.run-row` (self-grounded, above) — same route-2b credit as
    the mail row's own descendants a few rules up (Task 8 fix round 1, finding
@@ -2517,8 +2523,8 @@ button.proj-card-pool::before {
   color: var(--ink-primary); font: inherit;
 }
 .run-row .run-glyph { color: var(--ink-tertiary); }
-.run-row .run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
-.run-ws { font-size: var(--text-sm); }
+.run-row .run-state { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.run-ws { font-size: var(--fs-sm); }
 /* F4 (cross-repo): which repo this run is in, and whether that is its
    programme's home. Scoped under `.run-row` — self-grounded above, background
    and colour both set — so these inherit the same recovered ground
@@ -2527,23 +2533,23 @@ button.proj-card-pool::before {
    context, present on every row, and must not compete with the workspace name);
    the marker takes `--ink-secondary`, one step up, because it is the rarer fact
    — and it is told apart by its GLYPH and its WORD, never by a hue. */
-.run-row .run-project { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+.run-row .run-project { font-size: var(--fs-2xs); color: var(--ink-tertiary); }
 .run-row .run-crossing {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
   min-width: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-secondary);
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
 .run-row .run-kind {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
   min-width: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--ink-secondary);
 }
 .run-row .run-kind-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
-  font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
+  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }
 /* Task 3 (spawn visibility): the dispatch window and the wedge. Scoped under
    `.run-row` — self-grounded above, background+color both set — so the
@@ -2559,7 +2565,7 @@ button.proj-card-pool::before {
 .run-row .run-dispatch {
   display: inline-flex; align-items: baseline; gap: var(--sp-1);
   min-width: 0;
-  font-size: var(--text-2xs); font-variant-numeric: tabular-nums;
+  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
 }
 .run-row .run-dispatch-glyph { color: var(--ink-tertiary); }
@@ -2588,7 +2594,7 @@ button.proj-card-pool::before {
   gap: var(--sp-2);
   min-width: 0;
   padding-bottom: var(--sp-1);
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--status-attention-text);
 }
@@ -2601,7 +2607,7 @@ button.proj-card-pool::before {
 .run-row .run-warn-glyph { color: var(--ink-tertiary); }
 
 .run-row .run-resumed {
-  font-size: var(--text-2xs); color: var(--ink-tertiary);
+  font-size: var(--fs-2xs); color: var(--ink-tertiary);
 }
 /* Task 12, spec §4.3, D-287: a SIBLING of `.run-open` inside `.run-row`'s
    own `<li>`, never a descendant of it — see RunsScreen.tsx's own comment on
@@ -2631,9 +2637,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-sm);
   color: var(--ink-tertiary);
-  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .run-row .run-abandon:active,
 .run-row .run-resume:active { transform: scale(0.94); color: var(--ink-secondary); }
@@ -2655,7 +2661,7 @@ button.proj-card-pool::before {
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 /* Same nested idiom as `.run-row .run-glyph` a few rules up, against the
@@ -2672,9 +2678,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .coord-toggle:active { transform: scale(0.96); }
 .coord-toggle:disabled { cursor: default; }
@@ -2701,7 +2707,7 @@ button.proj-card-pool::before {
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 
@@ -2723,10 +2729,10 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-primary);
-  /* `--text-input`, not `--text-2xs`: iOS Safari zooms the viewport on focus
+  /* `--fs-input`, not `--fs-2xs`: iOS Safari zooms the viewport on focus
      for any text entry under 16px, and this is the only text entry on the runs
      board. Every other input in the app is already on this token. */
-  font: var(--weight-regular) var(--text-input) / 1 var(--font-mono);
+  font: var(--weight-regular) var(--fs-input) / 1 var(--family-mono);
 }
 
 /* The reading an operator acts on: usage against the cap. Dimmer than the
@@ -2743,9 +2749,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 
 .caps-save:active { transform: scale(0.97); }
@@ -2754,7 +2760,7 @@ button.proj-card-pool::before {
 .caps-control .caps-note {
   flex-basis: 100%;
   margin: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--status-dead-text);
 }
 
@@ -2780,7 +2786,7 @@ button.proj-card-pool::before {
 .coord-banner .coord-error {
   flex-basis: 100%;
   margin: 0;
-  font-size: var(--text-2xs);
+  font-size: var(--fs-2xs);
   color: var(--status-dead-text);
 }
 
@@ -2797,7 +2803,7 @@ button.proj-card-pool::before {
    color: … }` selector it would file under `uncovered` (the exact defect
    `.coord-banner .coord-error`'s own docstring names and fixes, one
    component over). `.qc-consequence`/`.qc-actions`/`.btn-primary`/
-   `.btn-ghost` (primitives.css) are reused as-is for the consequence line
+   `.btn-ghost` (styles/legacy.css) are reused as-is for the consequence line
    and the two buttons — not reinvented, and already carry their own
    `var(--tap-min)` floor. */
 /* `.archive-conflict-sheet` (Build 8 Wave 2) is GROUPED with it rather than
@@ -2822,7 +2828,7 @@ button.proj-card-pool::before {
 .abandon-sheet .abandon-error,
 .archive-conflict-sheet .abandon-error {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }
 
@@ -2849,9 +2855,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .program-start-door:active { transform: scale(0.96); }
 
@@ -2876,7 +2882,7 @@ button.proj-card-pool::before {
 .program-start-sheet .program-start-ledger,
 .program-start-sheet .program-start-note {
   margin: 0;
-  font-size: var(--text-xs);
+  font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
 /* `--ink-secondary` on `--bg-surface` — 8.67:1 DARK / 7.41:1 LIGHT: the
@@ -2886,7 +2892,7 @@ button.proj-card-pool::before {
    this copy exists to avoid. */
 .program-start-sheet .program-start-timeout {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--fs-sm);
   color: var(--ink-secondary);
 }
 /* `--status-attention-text` on `--bg-surface` — 10.09:1 DARK / 5.92:1 LIGHT:
@@ -2894,7 +2900,7 @@ button.proj-card-pool::before {
    not a hard stop, so it does not share the refusal red below either. */
 .program-start-sheet .program-start-warn {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--fs-sm);
   color: var(--status-attention-text);
 }
 /* `--status-dead-text` on `--bg-surface` — the identical pre-measured pair
@@ -2908,7 +2914,7 @@ button.proj-card-pool::before {
 .program-start-sheet .program-start-refuse,
 .program-start-sheet .program-start-error {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }
 /* Same self-grounded pair as `.program-start-door` above — not reinvented. */
@@ -2920,9 +2926,9 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift);
 }
 .program-start-go:active:not(:disabled) { transform: scale(0.98); }
 .program-start-go:disabled { cursor: default; }
@@ -2949,11 +2955,11 @@ button.proj-card-pool::before {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle);
 }
-.hotfiles-holder { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); }
-.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--text-xs); }
+.hotfiles-holder { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.hotfiles-expiry { margin-left: auto; color: var(--ink-tertiary); font-size: var(--fs-xs); }
 .hotfiles-intent { flex-basis: 100%; color: var(--ink-primary); }
 .hotfiles-paths { list-style: none; margin: 0; padding: 0; flex-basis: 100%; }
-.hotfiles-path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-secondary); word-break: break-word; }
+.hotfiles-path { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); word-break: break-word; }
 
 /* — centralised update management W3: SettingsScreen (design 2026-09-20 §13) —
    The AccountsScreen skeleton, class for class. `.settings-screen` paints NO
@@ -2974,14 +2980,14 @@ button.proj-card-pool::before {
   border: none;
   background: none;
   border-radius: var(--r-sm);
-  font: var(--weight-regular) 26px / 1 var(--font-ui);
+  font: var(--weight-regular) 26px / 1 var(--family-ui);
   color: var(--ink-secondary);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .settings-back:active { transform: scale(0.88); color: var(--ink-primary); }
 .settings-title {
-  font: var(--weight-medium) var(--text-base) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono);
   color: var(--ink-primary);
 }
 /* — The door to /settings, in the fleet header beside `.accounts-door` —
@@ -2998,14 +3004,14 @@ button.proj-card-pool::before {
   min-height: var(--tap-min); padding: 0 var(--sp-1);
   border: 0; border-radius: var(--r-sm);
   background: none; color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   cursor: pointer;
-  transition: transform var(--dur-press) var(--ease-swift), color var(--dur-fast) var(--ease-swift);
+  transition: transform var(--dur-press) var(--curve-swift), color var(--dur-fast) var(--curve-swift);
 }
 .settings-door:active { transform: scale(0.88); color: var(--ink-primary); }
 /* The glyph is decoration beside the word — aria-hidden in the markup, sized
    in the UI font, as `.accounts-door-glyph` is. */
-.settings-door-glyph { font-family: var(--font-ui); font-size: var(--text-xs); line-height: 1; }
+.settings-door-glyph { font-family: var(--family-ui); font-size: var(--fs-xs); line-height: 1; }
 /* THE HEAD'S RIGHT GROUP WRAPS (D-3303). The width
    note above `.fleet-runs-line` is a Chromium measurement: the group's four
    steady-state items need 244px of min-content and have 294px at 390px, so
@@ -3044,7 +3050,7 @@ button.proj-card-pool::before {
   padding-top: var(--sp-3);
   border-top: 1px solid var(--edge-subtle);
 }
-.settings-section-title { font: var(--weight-semibold) var(--text-sm) / var(--leading-tight) var(--font-ui); }
+.settings-section-title { font: var(--weight-semibold) var(--fs-sm) / var(--lh-tight) var(--family-ui); }
 /* A fieldset's UA default is `min-inline-size: min-content`, which lets one
    long sentence push the page sideways on a phone; zero it like every grid
    child in this file. */
@@ -3052,7 +3058,7 @@ button.proj-card-pool::before {
 .settings-legend {
   padding: 0;
   margin-bottom: var(--sp-1);
-  font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-medium) var(--fs-xs) / var(--lh-tight) var(--family-mono);
 }
 .settings-option {
   display: flex;
@@ -3064,8 +3070,8 @@ button.proj-card-pool::before {
 }
 .settings-option input { flex: none; width: 18px; height: 18px; margin: 0; }
 .settings-fieldset:disabled .settings-option { cursor: default; }
-.settings-option-sentence { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
-.settings-note { font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--ink-secondary); }
+.settings-option-sentence { min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.settings-note { font-size: var(--fs-xs); line-height: var(--lh-normal); color: var(--ink-secondary); }
 /* `.btn-ghost` (primitives.css) supplies the tap floor, the border and the
    disabled ink; this only stops it filling the section's width. */
 .settings-section .settings-check { width: auto; justify-self: start; padding: 0 var(--sp-3); }
@@ -3074,7 +3080,7 @@ button.proj-card-pool::before {
    and an unreached catalogue borrows the attention amber BuildLine's warn
    side already uses. */
 .settings-catalogue {
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-secondary);
 }
 .settings-catalogue--amber { color: var(--status-attention-text); }
@@ -3098,15 +3104,15 @@ button.proj-card-pool::before {
   border-top: 1px solid var(--edge-subtle);
 }
 .settings-release-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
-.settings-release-tag { font: var(--weight-medium) var(--text-sm) / 1 var(--font-mono); }
-.settings-release-date { font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono); color: var(--ink-tertiary); }
+.settings-release-tag { font: var(--weight-medium) var(--fs-sm) / 1 var(--family-mono); }
+.settings-release-date { font: var(--weight-regular) var(--fs-xs) / 1 var(--family-mono); color: var(--ink-tertiary); }
 .settings-badge {
   padding: 2px var(--sp-2);
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-full);
   background: var(--bg-raised);
   color: var(--ink-secondary);
-  font: var(--weight-medium) var(--text-2xs) / 1.4 var(--font-mono);
+  font: var(--weight-medium) var(--fs-2xs) / 1.4 var(--family-mono);
   white-space: nowrap;
 }
 /* Each variant restates its ground: a variant selector names no painted
@@ -3116,7 +3122,7 @@ button.proj-card-pool::before {
 /* Green only for a MEASURED verdict — some node's provenance at this tag —
    never for `bundle listed`, which keeps the base badge's quiet ink. */
 .settings-badge--verified { background: var(--bg-raised); color: var(--status-busy-text); }
-.settings-release-refused { margin: 0; font-size: var(--text-xs); color: var(--status-attention-text); }
+.settings-release-refused { margin: 0; font-size: var(--fs-xs); color: var(--status-attention-text); }
 /* Notes are untrusted same-user text, rendered as ONE text child: wrapping
    keeps a long line or an unbroken URL inside the phone's width, and there is
    no markdown, HTML or link pass anywhere on this path. */
@@ -3126,7 +3132,7 @@ button.proj-card-pool::before {
   border-radius: var(--r-sm);
   background: var(--bg-surface);
   color: var(--ink-secondary);
-  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-xs) / var(--lh-normal) var(--family-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -3156,7 +3162,7 @@ button.proj-card-pool::before {
 }
 .settings-node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 /* A label is same-user-writable text: it may be long and unbroken. */
-.settings-node-label { font: var(--weight-medium) var(--text-sm) / var(--leading-tight) var(--font-ui); overflow-wrap: anywhere; }
+.settings-node-label { font: var(--weight-medium) var(--fs-sm) / var(--lh-tight) var(--family-ui); overflow-wrap: anywhere; }
 .settings-node-versions {
   display: flex;
   flex-wrap: wrap;
@@ -3164,7 +3170,7 @@ button.proj-card-pool::before {
   gap: var(--sp-2);
   min-width: 0;
   margin: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-tight) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-tight) var(--family-mono);
 }
 .settings-node-current { font-variant-numeric: tabular-nums; }
 /* Amber for a current the row cannot vouch for — unversioned, unverified,
@@ -3172,7 +3178,7 @@ button.proj-card-pool::before {
    same ink .build-line-side--warn uses for the same meaning. */
 .settings-node-current--amber { color: var(--status-attention-text); }
 .settings-node-desired { display: inline-flex; align-items: center; gap: var(--sp-1); }
-.settings-node-detail { margin: 0; font-size: var(--text-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+.settings-node-detail { margin: 0; font-size: var(--fs-xs); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 /* The three node buttons carry the `btn-ghost settings-move` pair: .btn-ghost
    (primitives.css) supplies the tap floor, the border and the disabled ink,
    and Task 8's compound .btn-ghost.settings-move already stops it filling the
@@ -3203,7 +3209,7 @@ button.proj-card-pool::before {
   border-radius: var(--r-md);
   background: var(--status-dead-tint-solid);
   color: var(--status-dead-text);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   overflow-wrap: anywhere;
 }
 .settings-bell-row {
@@ -3239,7 +3245,7 @@ button.proj-card-pool::before {
   border-radius: var(--r-md);
   background: var(--accent-tint);
   color: var(--ink-primary);
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-ui);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }
 .update-banner-msg {
   flex-basis: 100%;
@@ -3294,13 +3300,13 @@ button.proj-card-pool::before {
 }
 .update-move-sheet .update-move-node {
   min-width: 0;
-  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-mono);
   overflow-wrap: anywhere;
 }
 /* `--status-dead-text` on `--bg-surface`: the pair `.abandon-sheet
    .abandon-error` already measures (6.80:1 DARK / 5.73:1 LIGHT). */
 .update-move-sheet .update-move-error {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }

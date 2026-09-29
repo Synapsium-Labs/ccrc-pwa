@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { RunSummary } from '../../shared/api';
 import { AbandonSheet } from '../src/fleet/AbandonSheet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';

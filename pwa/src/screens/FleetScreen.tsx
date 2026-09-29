@@ -5,8 +5,7 @@
 // the NewSessionSheet.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { Skeleton, toast } from '@ccrc/ui';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';

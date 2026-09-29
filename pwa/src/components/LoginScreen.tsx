@@ -18,7 +18,7 @@
 // Styles live in styles/shell.css (`.login-screen`) beside `.block-screen`, not
 // in a stylesheet of their own: the design gate discovers its stylesheet list
 // from disk and pins it exactly (pwa/test/contrast.test.ts), so a new file here
-// would be a test to update for no reason. `.btn-primary` (primitives.css) is
+// would be a test to update for no reason. `.btn-primary` (styles/legacy.css) is
 // already in the bundle via ToastHost.
 import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';

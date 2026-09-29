@@ -8,7 +8,7 @@ import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { TEST_ROSTER } from './rosterFixture';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can

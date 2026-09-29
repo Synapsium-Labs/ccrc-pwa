@@ -1,0 +1,62 @@
+// Limits bar — two thin rows (5h / 7d), mono tabular readouts, fills banded to
+// the operator's routing policy: ok < 50, warn 50-75 ("prefer handoff"),
+// critical > 75 ("hand off everything spec-able"). An amber gauge is
+// actionable, not decorative. Width changes glide over --dur-bar.
+import { cva } from 'class-variance-authority';
+import type { ReactNode } from 'react';
+import { cn } from '../lib/cn';
+
+export type LimitBand = 'ok' | 'warn' | 'crit';
+
+/** Band for a usage percentage, per the routing policy in DIRECTION.md. */
+export function limitBand(pct: number): LimitBand {
+  if (pct > 75) return 'crit';
+  if (pct >= 50) return 'warn';
+  return 'ok';
+}
+
+const fillVariants = cva(
+  'limit-fill block h-full rounded-full transition-[width,background-color] duration-bar ease-swift motion-reduce:transition-none',
+  {
+    variants: {
+      band: {
+        ok: 'limit-fill--ok bg-limit-ok',
+        warn: 'limit-fill--warn bg-limit-warn',
+        crit: 'limit-fill--crit bg-limit-critical',
+      },
+    },
+    defaultVariants: { band: 'ok' },
+  },
+);
+
+function Row({ label, value }: { label: string; value: number | null }): ReactNode {
+  const pct = value === null ? null : Math.min(100, Math.max(0, value));
+  return (
+    <div className="limit-row grid grid-cols-[20px_1fr_40px] items-center gap-2 font-mono text-2xs font-regular leading-none tabular-nums text-ink-tertiary">
+      <span>{label}</span>
+      <span className="limit-track block h-1 overflow-hidden rounded-full bg-limit-track">
+        {pct !== null && (
+          <span className={fillVariants({ band: limitBand(pct) })} style={{ width: `${pct}%` }} />
+        )}
+      </span>
+      {/* An unmeasured lane reads em-dash, never 0% — "no window" and "an empty
+          window" are different facts and must not collapse to one glyph. */}
+      <span className="limit-pct text-right">{pct === null ? '—' : `${Math.round(pct)}%`}</span>
+    </div>
+  );
+}
+
+export interface LimitBarProps {
+  five: number | null;
+  seven: number | null;
+  className?: string;
+}
+
+export function LimitBar({ five, seven, className }: LimitBarProps): ReactNode {
+  return (
+    <div className={cn('limits grid gap-1.5', className)}>
+      <Row label="5h" value={five} />
+      <Row label="7d" value={seven} />
+    </div>
+  );
+}

@@ -15,11 +15,10 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
 import type { AccountPoolWire } from '../../../shared/poolrule';
-import { toast } from '../components/Toast';
-import { limitBand } from '../components/LimitBar';
-import { Skeleton } from '../components/Skeleton';
+import { Skeleton, toast } from '@ccrc/ui';
+import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { formatAge, formatReset } from '../fleet/formatReset';
+import { formatAge } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
@@ -183,26 +182,6 @@ function rowOrder(roster: readonly RosterWire[], accounts: readonly AccountUsage
   const order: string[] = rosterWrapperIds(roster);
   for (const a of accounts) if (!order.includes(a.wrapper)) order.push(a.wrapper);
   return order;
-}
-
-function Bar({ label, pct, resetAt, nowSec, rolledOver }: {
-  label: string; pct: number | null; resetAt: number | null; nowSec: number; rolledOver: boolean;
-}): ReactNode {
-  return (
-    <div className="acct-row">
-      <span className="acct-win">{label}</span>
-      <span className="acct-meter" data-band={pct === null ? 'none' : limitBand(pct)}>
-        <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
-      </span>
-      {/* The strip's exact three-way (AccountsStrip.tsx), never collapsed:
-          "reset" (inferred zero) ≠ measured "0%" ≠ "—" (never measured). This
-          screen never gates the row on `pct !== null` the way the strip does
-          for gpt's absent 5h window — every account gets both bars, always,
-          so an unmeasured window reads "—" instead of vanishing. */}
-      <span className="acct-pct">{rolledOver ? 'reset' : pct === null ? '—' : `${pct}%`}</span>
-      <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
-    </div>
-  );
 }
 
 export function AccountsScreen(): ReactNode {
@@ -409,8 +388,8 @@ export function AccountsScreen(): ReactNode {
               </div>
 
               <div className="acct-rows">
-                <Bar label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} />
-                <Bar label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} />
+                <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} />
+                <AccountMeterRow label="7d" pct={a?.seven ?? null} resetAt={a?.sevenResetAt ?? null} nowSec={nowSec} rolledOver={a?.sevenRolledOver ?? false} />
               </div>
 
               {/* Telemetry is a byproduct of a session rendering its

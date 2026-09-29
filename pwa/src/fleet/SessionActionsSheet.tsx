@@ -15,9 +15,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Sheet } from '../components/Sheet';
-import { toast } from '../components/Toast';
+import { QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
 
 /**

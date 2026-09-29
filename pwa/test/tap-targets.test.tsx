@@ -38,9 +38,12 @@ import { ReapSheet } from '../src/session/ReapSheet';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
+/** The design system's own stylesheets — tokens.css lives in @ccrc/ui now. */
+const readUi = (...seg: string[]): string =>
+  readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', ...seg), 'utf8');
 const fleetCss = read('fleet', 'fleet.css');
 const chatCss = read('session', 'chat.css');
-const tokensCss = read('styles', 'tokens.css');
+const tokensCss = readUi('styles', 'tokens.css');
 
 // Fix round 3, verifier P5. These three stylesheets belong to the ui-css lane
 // and are being edited in parallel with this file, so the scrape must survive

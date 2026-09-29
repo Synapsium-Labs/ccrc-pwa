@@ -175,7 +175,7 @@ const pairs = (T, name) => [
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
-  // (--text-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
+  // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
@@ -184,7 +184,7 @@ const pairs = (T, name) => [
   // light one is tuned for paper, so on a well — which is dark in BOTH themes —
   // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling
   // of the accent; both floors are the 4.5 body floor because the label is 11px
-  // (--text-2xs), not a glyph. Two grounds, because the affordance is on the
+  // (--fs-2xs), not a glyph. Two grounds, because the affordance is on the
   // BAR and the bar is on the well.
   [`${name} accent-on-well / well`, T.accentOnWell, T.well, 4.5],
   [`${name} accent focus ring / page (UI 3:1)`, T.accent, T.page, 3],

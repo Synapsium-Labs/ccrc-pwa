@@ -17,7 +17,7 @@ import type { ReactNode } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
@@ -177,7 +177,14 @@ const tokenValue = (name: string): string | undefined => {
  *  live one and the history one have to read as the same glass or scrolling
  *  back would look like leaving the session. */
 const glass = () => ({
-  fontFamily: tokenValue('--font-mono') ?? 'monospace',
+  // `--family-mono`, NOT `--font-mono`. Wave 1 renamed the six token families
+  // that collided with Tailwind v4's reserved namespaces, and `--font-*` is one
+  // of them: `--font-mono` now exists only inside theme.css's `@theme inline`
+  // block, which emits `var(--family-mono)` into utilities instead of defining
+  // `--font-mono` on :root. `tokenValue` returns undefined for a property that
+  // resolves to '', so the old name would silently fall through to the generic
+  // `monospace` here and the terminal would quietly lose its token stack.
+  fontFamily: tokenValue('--family-mono') ?? 'monospace',
   fontSize: 14,
   theme: {
     background: tokenValue('--bg-well'),

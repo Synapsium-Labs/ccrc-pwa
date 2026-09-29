@@ -4,7 +4,7 @@
 // (a context-window switch then surfaces its own confirm dialog through
 // DialogSheet).
 import type { ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import type { PickOption } from '../lib/models';
 import './chat.css';
 

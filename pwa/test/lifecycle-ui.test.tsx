@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';

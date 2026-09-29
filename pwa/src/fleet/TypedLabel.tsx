@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useReducedMotion } from 'framer-motion';
-import '../components/primitives.css';
 
 /** Per-character delay. EXPORTED so the test advances the clock by a multiple
  *  of it rather than re-guessing a literal that a tuning change would silently
@@ -30,7 +29,7 @@ export const TYPE_MS = 28;
  * would owe `contrast.test.ts`'s `KEYFRAME_TROUGHS` a registered opacity trough
  * — for a mark on screen for at most `text.length * TYPE_MS` ms. Its own
  * rendering is still a deliberate rule, not an inherited accident:
- * `.typed-caret` (`components/primitives.css`).
+ * `.typed-caret` (`styles/legacy.css`, loaded globally by base.css).
  *
  * ACCESSIBLE NAME: `aria-label` on the root carries the FULL target text from
  * the first frame; `shown` and the caret are `aria-hidden` underneath it. The

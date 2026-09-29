@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
 import { READER_MIN_COLS } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { createFleetStore } from '../src/stores/fleet';
 import { ApiError, type api } from '../src/lib/api';

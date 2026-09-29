@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import { fileURLToPath } from 'node:url';
 import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -6,6 +7,31 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vite.dev/config/
 export default defineConfig({
+  // ONE REACT, ALWAYS.
+  //
+  // @ccrc/ui is consumed as SOURCE from a sibling folder and keeps its own
+  // react/react-dom/vaul so Storybook can run standalone. Node resolves a bare
+  // import from the IMPORTER outward, so ui/src/primitives/sheet.tsx — and vaul
+  // and radix beneath it — all find ui/node_modules/react long before they
+  // reach this package. Two React instances (19.3.0 there, 19.2.7 here), and
+  // every hook the sheet calls throws "Invalid hook call".
+  //
+  // `dedupe` alone does NOT fix it: dedupe picks one copy among the candidates
+  // the resolver already offers, and ui's copy is simply found first. These
+  // aliases are absolute and unconditional, so there is only ever one
+  // candidate. vaul is aliased too — otherwise it loads from ui's tree and
+  // drags ui's radix, and therefore ui's react, back in behind it.
+  //
+  // react-dom is listed BEFORE react because vite matches alias keys by prefix
+  // in insertion order, and 'react-dom' starts with 'react'.
+  resolve: {
+    dedupe: ['react', 'react-dom', 'vaul'],
+    alias: {
+      'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
+      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
+      vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -89,5 +115,12 @@ export default defineConfig({
     // runtime, so without this the only thing that catches a revert is a
     // separate `tsc --noEmit` nobody is obliged to run.
     typecheck: { enabled: true },
+    // Vitest externalises anything under node_modules and lets NODE resolve it,
+    // which walks past `resolve.alias` entirely. vaul then loads
+    // ui/node_modules/react and every sheet test dies on a second React
+    // instance. Inlining routes both through vite's pipeline, where the alias
+    // above applies. The app BUILD never needed this — it bundles everything,
+    // so the alias already held there.
+    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui)\//, '@ccrc/ui'] } },
   },
 });

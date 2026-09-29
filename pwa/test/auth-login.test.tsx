@@ -23,7 +23,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { AUTH_VERDICTS, type AuthVerdict } from '../../shared/api';
 import { App } from '../src/app';
 import { LoginScreen, VERDICT_TEXT } from '../src/components/LoginScreen';
-import { ToastHost, toast } from '../src/components/Toast';
+import { ToastHost, toast } from '@ccrc/ui';
 import { ApiError, createApi } from '../src/lib/api';
 import {
   authLost, checkAuth, clearAuthLost, isAuthLost, onAuthRegained, raiseAuthLost,

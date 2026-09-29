@@ -7,9 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
-import { QuickConfirm } from '../components/QuickConfirm';
-import { Skeleton } from '../components/Skeleton';
-import { toast } from '../components/Toast';
+import { QuickConfirm, Skeleton, toast } from '@ccrc/ui';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { accountHue, accountLabel } from '../lib/accounts';
 import { api, ApiError, apiErrorText } from '../lib/api';

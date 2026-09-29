@@ -1,14 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { StatusDot } from '../src/components/StatusDot';
-import { LimitBar } from '../src/components/LimitBar';
-import { Skeleton } from '../src/components/Skeleton';
-import { Sheet } from '../src/components/Sheet';
-import { QuickConfirm } from '../src/components/QuickConfirm';
-import { toast, ToastHost } from '../src/components/Toast';
-import { declValue, ruleIn } from './cssRule';
+import { LimitBar, QuickConfirm, Sheet, Skeleton, StatusDot, ToastHost, toast } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself.
 afterEach(() => {
@@ -67,7 +59,7 @@ describe('StatusDot', () => {
   });
 
   it('pins the cleanup glyph to its TEXT presentation, so the lamp keeps its own colour', () => {
-    // U+267B has an emoji presentation and no coverage in the --font-mono
+    // U+267B has an emoji presentation and no coverage in the --family-mono
     // stack on Apple platforms, so the bare glyph falls back to Apple Color
     // Emoji — painting itself the emoji's green, ignoring --status-cleanup
     // and every ratio design/contrast-check.mjs measured for it, and reading
@@ -221,6 +213,8 @@ describe('Sheet', () => {
   // jsdom does no layout, so what follows can only be asserted against the
   // source — as the attach-tray CSS guards already do. The real geometry is
   // checked in Chromium; these keep the declarations from being dropped again.
+  // Since the Sheet moved to utility classes, "the source" is the class list
+  // rather than a rule in a stylesheet — see the note inside.
   //
   // Both surfaces render caller text: DialogSheet puts the real
   // AskUserQuestion in the title and its header chip in the eyebrow, and those
@@ -229,24 +223,32 @@ describe('Sheet', () => {
   // is clipped at the viewport edge, out of reach. Every other dynamic-text
   // surface in this codebase (.opt-label, .opt-desc, .well, .dlg-body) sets
   // `overflow-wrap: anywhere`.
-  describe('sheet header CSS guards', () => {
-    const css = readFileSync(
-      path.resolve(process.cwd(), 'src/components/primitives.css'),
-      'utf8',
-    );
-    // Shared rule reader (test/cssRule.ts), not a hand-rolled copy — fix round
-    // 4, controller item 1. The copy that used to live here was `^`-anchored
-    // with the `m` flag, so re-indenting primitives.css — a file this lane does
-    // not own — or grouping `.sheet-title` with a sibling selector turned these
-    // assertions into a thrown "" and a failure about nothing. `declValue`
-    // reads the DECLARATION, so it still fails when the value changes or the
-    // declaration is dropped, and it also catches a later override of the same
-    // property inside the same rule, which `toMatch` did not.
-    const rule = (selector: string): string => ruleIn(css, selector);
+  describe('sheet header guards', () => {
+    // WHAT CHANGED, AND WHAT IT COST. These two used to read primitives.css and
+    // assert the DECLARATIONS — `overflow-wrap: anywhere`, `max-height: 38vh`,
+    // `overflow-y: auto` — straight out of the stylesheet. The Sheet is styled
+    // with utility classes now, so there is no rule in any .css file to read:
+    // the class IS the declaration, and it only becomes CSS when Tailwind
+    // generates it at build time.
+    //
+    // So the guard asserts the classes are on the element. That is genuinely
+    // WEAKER than what it replaced, in one specific way worth naming: reading
+    // the rule also caught a LATER override of the same property inside it,
+    // and a class list cannot. It still fails if a class is dropped or
+    // renamed, which is the defect these were written for — a long
+    // AskUserQuestion running off a position:fixed panel with nothing to clip
+    // against, and a 600-char question pushing the option rows below the fold.
+    const open = (title: string, eyebrow?: string) =>
+      render(
+        <Sheet open title={title} eyebrow={eyebrow} onClose={() => {}}>
+          <p>body</p>
+        </Sheet>,
+      );
 
     it('lets a long unbroken token in the title and the eyebrow wrap', () => {
-      expect(declValue(rule('.sheet-title'), 'overflow-wrap')).toBe('anywhere');
-      expect(declValue(rule('.sheet-eyebrow'), 'overflow-wrap')).toBe('anywhere');
+      open('a/very/long/unbroken/path/that/cannot/break', 'claude is asking');
+      expect(document.querySelector('.sheet-title')).toHaveClass('[overflow-wrap:anywhere]');
+      expect(document.querySelector('.sheet-eyebrow')).toHaveClass('[overflow-wrap:anywhere]');
     });
 
     // The markup this replaced rendered the question in .dlg-body, capped at
@@ -255,9 +257,10 @@ describe('Sheet', () => {
     // rows below the fold on a phone — a 600-char question is ~430px of
     // heading. Short titles never reach the cap, so it stays invisible.
     it('caps the title with its own scroller, as .dlg-body was', () => {
-      const title = rule('.sheet-title');
-      expect(declValue(title, 'max-height')).toBe('38vh');
-      expect(declValue(title, 'overflow-y')).toBe('auto');
+      open('a question');
+      const title = document.querySelector('.sheet-title');
+      expect(title).toHaveClass('max-h-[38vh]');
+      expect(title).toHaveClass('overflow-y-auto');
     });
   });
 });

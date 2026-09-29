@@ -7,7 +7,7 @@
 // keeps its Retry/Discard).
 import { useEffect, useRef, useState } from 'react';
 import type { ClipboardEvent, KeyboardEvent, ReactNode } from 'react';
-import { Sheet } from '../components/Sheet';
+import { Sheet } from '@ccrc/ui';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { AttachButton } from './AttachButton';
 import { AttachTray } from './AttachTray';

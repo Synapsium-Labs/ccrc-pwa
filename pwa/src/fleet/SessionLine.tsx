@@ -26,7 +26,7 @@ import {
   type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
-import { StatusDot } from '../components/StatusDot';
+import { StatusDot } from '@ccrc/ui';
 import { elapsedWords } from '../lib/elapsed';
 import { useNow } from '../lib/useNow';
 import { humanBytes } from '../screens/ArchiveScreen';

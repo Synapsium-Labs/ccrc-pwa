@@ -14,8 +14,7 @@ import {
   substrateFault,
   type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
-import { Sheet } from '../components/Sheet';
-import { StatusDot } from '../components/StatusDot';
+import { Sheet, StatusDot } from '@ccrc/ui';
 import { accountLabel } from '../lib/accounts';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';

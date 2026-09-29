@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, PrState, PrView, RunSummary } from '../../shared/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { PrSheet } from '../src/session/PrSheet';
 import { checkPhrase, prSentence, tooltipSentence } from '../src/session/PrKeycap';
 import { ApiError, UNSUPPORTED_VERB_TEXT, type api } from '../src/lib/api';

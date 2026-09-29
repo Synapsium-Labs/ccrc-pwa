@@ -21,41 +21,12 @@
 import { useEffect, useState } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { AccountUsage, RosterWire } from '../../../shared/api';
-import { limitBand } from '../components/LimitBar';
 import { accountLabel, accountColorVar } from '../lib/accounts';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
-import { formatReset } from './formatReset';
+import { AccountMeterRow } from './AccountMeterRow';
 import './fleet.css';
-
-// One writer for the band thresholds — DIRECTION.md's `crit` is `> 75`, not
-// `>= 75` (LimitBar.tsx's `limitBand`, test-pinned). This used to carry its
-// own `>= 75` copy, so the same account rendered `crit` here and `warn` on
-// the limits bar at exactly 75. `null` ("no telemetry") has no equivalent in
-// limitBand, which is why it stays a local wrapper rather than a re-export.
-function band(pct: number | null): string {
-  return pct === null ? 'none' : limitBand(pct);
-}
-
-function LimitRow({ label, pct, resetAt, nowSec, rolledOver }: {
-  label: string; pct: number | null; resetAt: number | null; nowSec: number; rolledOver: boolean;
-}): ReactNode {
-  return (
-    <div className="acct-row">
-      <span className="acct-win">{label}</span>
-      <span className="acct-meter" data-band={band(pct)}>
-        <span className="acct-fill" style={{ width: `${Math.min(100, Math.max(0, pct ?? 0))}%` }} />
-      </span>
-      {/* "reset" rather than "0%": the window ended and nothing has measured the
-          new one yet, so the zero is inferred from the reset timestamp. A
-          measured zero — something ran and the account really is empty — still
-          reads 0%, and the two must not look the same. */}
-      <span className="acct-pct">{rolledOver ? 'reset' : pct === null ? '—' : `${pct}%`}</span>
-      <span className="acct-reset" title="time until this window resets">↻ {formatReset(resetAt, nowSec)}</span>
-    </div>
-  );
-}
 
 export function AccountsStrip(): ReactNode {
   const [accounts, setAccounts] = useState<AccountUsage[] | null>(null);
@@ -156,8 +127,8 @@ export function AccountsStrip(): ReactNode {
                 (a flex row); on mobile this stays a plain block under the label.
                 Only render a window that exists — gpt (Codex Pro) is weekly-only. */}
             <div className="acct-rows">
-              {a.five !== null && <LimitRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} />}
-              {a.seven !== null && <LimitRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} />}
+              {a.five !== null && <AccountMeterRow label="5h" pct={a.five} resetAt={a.fiveResetAt} nowSec={nowSec} rolledOver={a.fiveRolledOver} />}
+              {a.seven !== null && <AccountMeterRow label="7d" pct={a.seven} resetAt={a.sevenResetAt} nowSec={nowSec} rolledOver={a.sevenRolledOver} />}
             </div>
           </div>
         ))

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { FleetSession } from '../../shared/api';
-import { ToastHost } from '../src/components/Toast';
+import { ToastHost } from '@ccrc/ui';
 import { api, ApiError } from '../src/lib/api';
 import { SessionHeader, type SessionHeaderProps } from '../src/session/SessionHeader';
 import { SessionScreen, useKeyboardInsets } from '../src/screens/SessionScreen';
