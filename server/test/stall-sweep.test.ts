@@ -9,7 +9,7 @@
 // status), the newest mail to it at 21:19:17Z (#2510 answer), its main loop idle since 21:56:31Z, r1 due at
 // 23:56:31Z.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
@@ -27,6 +27,7 @@ import type { PushPayload } from '../src/push.js';
 import { WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { degradedReadIO } from './ioDoubles.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,21 +98,23 @@ const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
 
 const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
 
-interface Harness { home: string; calls: string[][]; run: Runner }
+/** `panes` is the scripted `list-panes` answer, mutable so a case can take the pane pid away and give it back. */
+interface Harness { home: string; calls: string[][]; run: Runner; panes: { code: number; stdout: string } }
 
 const harness = (): Harness => {
   const home = mkTmp('ccrc-stall-sweep-');
   // Empty but LISTABLE before priming, or `tick()` fails shut and never sets `primed` (mail-sweep.test.ts).
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const calls: string[][] = [];
+  const panes = { code: 0, stdout: `${PID}\n` };
   const run: Runner = async (_cmd, args) => {
     calls.push([...args]);
     if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { code: 0, stdout: `${PID}\n`, stderr: '' };
+    if (args[0] === 'list-panes') return { code: panes.code, stdout: panes.stdout, stderr: '' };
     if (args[0] === 'capture-pane') return { code: 0, stdout: '❯ \n', stderr: '' };
     return { code: 1, stdout: '', stderr: '' };
   };
-  return { home, calls, run };
+  return { home, calls, run, panes };
 };
 
 const primedWatcher = async (h: Harness, coord: CoordStore, over: Partial<Deps> = {}): Promise<FleetWatcher> => {
@@ -126,12 +129,13 @@ const pushSpy = (): { sent: PushPayload[]; push: { notify: (p: PushPayload) => P
   return { sent, push: { notify: async (p: PushPayload) => { sent.push(p); } } };
 };
 
-/** Primed on an EMPTY registry, then the worker is seeded (mail-sweep.test.ts's order). */
-const rig = async (): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; sent: PushPayload[] }> => {
+/** Primed on an EMPTY registry, then the worker is seeded (mail-sweep.test.ts's order). `over` reaches the
+ *  watcher's deps (an io double, say); the push spy is always the rig's own. */
+const rig = async (over: Partial<Deps> = {}): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; sent: PushPayload[] }> => {
   const h = harness();
   const coord = store(h.home);
   const { sent, push } = pushSpy();
-  const w = await primedWatcher(h, coord, { push: push as never });
+  const w = await primedWatcher(h, coord, { ...over, push: push as never });
   seedRegistry(h.home, WORKER);
   seedLiveState(h.home);
   return { h, coord, w, sent };
@@ -676,6 +680,119 @@ describe('sweepStalls: the inputs the lane measures itself', () => {
     expect(operatorMail(coord)).toEqual([]);          // quiet runs from the rejection
     at(R1_AT + STALL_QUIET_MS);
     await w.sweepStalls([fleetRow(WORKER)], LIVE);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+});
+
+describe('sweepStalls: fail-shut inputs (hold 1)', () => {
+  // Every input the verdict cannot measure holds the worker, and a hold writes NOTHING: no stall row, live or
+  // shadow, no mail and no push. Each case runs ARMED at the time a healthy worker draws its first notice, so a
+  // fold of the failed read into a healthy value shows as a real send. Each then heals the one fault and sweeps a
+  // minute later: the same worker DOES draw that notice, so the empty result above was the fault's hold and
+  // nothing else.
+  const nothingWritten = (coord: CoordStore, runId: number, sent: readonly PushPayload[]): void => {
+    expect(stallRows(coord, runId)).toEqual([]);
+    expect(operatorMail(coord)).toEqual([]);
+    expect(sent).toEqual([]);
+  };
+
+  it('no pane pid (tmux answers non-zero, then empty): held and nothing written; the pane back, r1 goes out', async () => {
+    const { h, coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    h.panes.code = 1;
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    h.panes.code = 0;
+    h.panes.stdout = '';
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    h.panes.stdout = `${PID}\n`;
+    at(R1_AT + 2 * STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('no live file for the pane pid (no-state): held and nothing written; the file back, r1 goes out', async () => {
+    const { h, coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    rmSync(path.join(h.home, '.claude', 'sessions', `${PID}.json`));
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    seedLiveState(h.home);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('an unrostered wrapper (no config dir): held and nothing written; a rostered wrapper, r1 goes out', async () => {
+    const { h, coord, w, sent } = await rig();
+    // The lane reads the wrapper off the tick's fleet row; the registry row says the same, for a coherent fixture.
+    writeFileSync(path.join(h.home, '.cc-sessions', `${WORKER}.wrapper`), 'demo-unrostered');
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER, { wrapper: 'demo-unrostered' })], ARMED);
+    nothingWritten(coord, runId, sent);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+  });
+
+  it('waiting, and the registry .uuid unreadable: held and nothing written; readable, the dialog-cap push goes out', async () => {
+    let broken = true;
+    const { h, coord, w, sent } = await rig({ io: degradedReadIO((p) => broken && p.endsWith(`${WORKER}.uuid`)) });
+    seedLiveState(h.home, { status: 'waiting' });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);                                        // 2 h of quiet: the dialog-cap is due
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    broken = false;
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('waiting, and .hookstate.json unreadable: held and nothing written; readable, the dialog-cap push goes out', async () => {
+    let broken = true;
+    const { h, coord, w, sent } = await rig({ io: degradedReadIO((p) => broken && p.endsWith(`${WORKER}.hookstate.json`)) });
+    seedLiveState(h.home, { status: 'waiting' });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    broken = false;
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('waiting, and the asks row unreadable: held and nothing written; readable, the dialog-cap push goes out', async () => {
+    const { h, coord, w, sent } = await rig();
+    seedLiveState(h.home, { status: 'waiting' });
+    const runId = seedRun(coord, { program: 'demo-program' });
+    vi.spyOn(coord, 'currentAskFor').mockReturnValueOnce({ ok: false, kind: 'ask-unreadable', detail: 'x' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, KEY)]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('idle, and the auto-continue read unreadable: held and nothing written; readable, r1 goes out', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    vi.spyOn(coord, 'autoContinueHeldUntil').mockReturnValueOnce({ ok: false, kind: 'delivery-unreadable', detail: 'x' });
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
+    nothingWritten(coord, runId, sent);
+    at(R1_AT + STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], ARMED);
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
   });
 });
