@@ -640,7 +640,7 @@ MSG
 - Consumes: the verb `reclaim-pause` and the token `reclaim-pause-v1` (Task 2).
 - Produces: `EXEC_WHITELIST.ccd` gains `['reclaim-pause', '--state']`; `REQUIRED_VERB_FLAG` gains `'reclaim-pause': '--state'`; `server/src/ccdargv.ts` gains `reclaimPause: (state: 'on' | 'off') => CcdArgv` and `export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';`. Task 6 consumes both server exports. **No `reclaimPauseSupported` wrapper**: Task 6 calls `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` at its own seam, where the mutation test can red on it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) Create `agent/test/types/bypasses/g14-reclaim-pause-without-state.ts`:
 
@@ -759,7 +759,7 @@ Extend that file's `ccdargv.js` import to add `RECLAIM_PAUSE_CAP` (keep every ex
 
 …and add `RECLAIM_PAUSE_CAP` to that file's `ccdargv.js` import.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd agent  && ./node_modules/.bin/vitest run test/whitelist-structural.test.ts
@@ -771,7 +771,7 @@ Expected failures:
 - server `whitelist-subset`: `has a sample for every CCD_ARGV entry` FAILS (`reclaimPause` in `SAMPLES`, absent from `CCD_ARGV`); `reclaim-pause is grantable ONLY with --state` FAILS on its FIRST assertion, before the builder is ever called — `exactly one reclaim-pause grant: expected 0 to be 1` (nothing is granted yet). Every other case passes.
 - server `capsupported`, `ccd-archive`: the FILES LOAD. Under vitest's module transform a named import the module does not export reads as `undefined`, never a collection error (measured at planning: `import { x, y }` from a module exporting only `x` gives `AssertionError: expected undefined to be 2`, `1 failed | 1 passed`). So `capsupported`'s new case fails on its first line, `expected undefined to be 'reclaim-pause-v1'`, and `ccd-archive`'s case that holds the `toContain` lines fails `expected [ …, 'reclaim-pause-v1' ] to include undefined` (Task 2 already put the string in the array). Every other case in both files passes.
 
-- [ ] **Step 3: Add the grant and the enrolment**
+- [x] **Step 3: Add the grant and the enrolment**
 
 In `agent/src/whitelist.ts`, `REQUIRED_VERB_FLAG`: add one line directly above `} as const;` — **APPEND, never rewrite the object from this plan** (it carries entries waves 1–3 and other programmes added; D-2776 records a rewrite that silently dropped a live enrolment):
 
@@ -797,7 +797,7 @@ In `EXEC_WHITELIST.ccd`, directly after the `['coord-pause', '--state'],` entry:
     ['reclaim-pause', '--state'],
 ```
 
-- [ ] **Step 4: Add the server-side builder and token — and NO wrapper**
+- [x] **Step 4: Add the server-side builder and token — and NO wrapper**
 
 In `server/src/ccdargv.ts`, inside `CCD_ARGV`, directly after the `coordPause` entry:
 
@@ -828,7 +828,7 @@ Directly after wave 3's `export const RECLAIM_CAP = 'reclaim-v1';` (and its docs
 export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd agent  && ./node_modules/.bin/vitest run test/whitelist-structural.test.ts test/whitelist.test.ts test/whitelist-noghosts.test.ts test/whitelist-prototype.test.ts test/exec.test.ts
@@ -837,7 +837,7 @@ cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts test/c
 
 Expected: PASS everywhere. (`typecheck-tests` is a known load flake — re-run it in isolation before calling it a break. `verb-gate.test.ts` is NOT in this list on purpose: no call site composes `reclaimPause` yet, so it has nothing to say until Task 6.)
 
-- [ ] **Step 6: Mutation check, then commit**
+- [x] **Step 6: Mutation check, then commit**
 
 | # | Edit | Command | Expected red |
 |---|---|---|---|

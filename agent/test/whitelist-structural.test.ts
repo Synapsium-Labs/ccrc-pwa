@@ -126,6 +126,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the child-reclaim verb granted without its confirmation token',
     codes: ['TS2322'],
   },
+  // CHILD RECLAMATION wave 4, g9's shape a fifth time: a two-token grant is
+  // only two tokens wide while its verb is ENROLLED in `REQUIRED_VERB_FLAG`.
+  'g14-reclaim-pause-without-state.ts': {
+    what: 'the reclaim kill-switch granted without the flag that is its whole argument surface',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {

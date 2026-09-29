@@ -76,6 +76,11 @@ export type RenameNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['ws-r
  *  of the positive control. `g12-win-size-without-session.ts` is the same
  *  mechanism from the other side. */
 export type WinSizeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['win-size'], '--session'>>;
+/** The reclaim kill-switch (child-reclamation wave 4). Deleting this ENROLMENT
+ *  turns `['reclaim-pause','--state']` into a bare `['reclaim-pause']` with every
+ *  subset test still green; asserted here, losing it stops this project
+ *  compiling. `g14-reclaim-pause-without-state.ts` is the other side. */
+export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['reclaim-pause'], '--state'>>;
 /** Child reclamation (wave 3). The destructive verb the server composes with no
  *  human in the path is enrolled on its confirmation token; losing the
  *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`

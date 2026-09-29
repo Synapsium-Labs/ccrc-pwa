@@ -11,7 +11,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, RECLAIM_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
+  ACTOR_FLAGS_CAP, CCD_ARGV, CHILD_ARGV_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, WIN_SIZE_CAP, capSupported, stopSurfaceSupported, verbSupported,
   deviceActor, type ActorFlags,
 } from '../src/ccdargv.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -99,6 +99,21 @@ describe('capSupported', () => {
     expect(capSupported(state(['win-size']), WIN_SIZE_CAP)).toBe(false);
     expect(capSupported(state([WIN_SIZE_CAP]), WIN_SIZE_CAP)).toBe(true);
     expect(verbSupported(state(null), ['win-size'])).toBe(true);
+  });
+
+  it('spells the reclaim-pause token exactly once in server/src, and reads it with the REFUSING default', () => {
+    // The other two spellings: ccd's own `echo reclaim-pause-v1` and
+    // `ccd-archive.test.ts`'s KNOWN_CAPABILITY_TOKENS, whose `toContain` holds
+    // all three equal. The scan proves it is reading files by finding the one.
+    expect(RECLAIM_PAUSE_CAP).toBe('reclaim-pause-v1');
+    expect(literalSpellings(RECLAIM_PAUSE_CAP)).toBe(1);
+    // THE POLARITY, asserted rather than left in a docstring: no evidence
+    // REFUSES, and the VERB's presence is not the TOKEN's presence.
+    expect(capSupported(state(null), RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(undefined, RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(state(['reclaim-pause']), RECLAIM_PAUSE_CAP)).toBe(false);
+    expect(capSupported(state([RECLAIM_PAUSE_CAP]), RECLAIM_PAUSE_CAP)).toBe(true);
+    expect(verbSupported(state(null), ['reclaim-pause'])).toBe(true);
   });
 
   it('spells the reclaim token exactly once in server/src, and it REFUSES on no evidence', () => {

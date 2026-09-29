@@ -451,6 +451,11 @@ export const CCD_ARGV = {
    *  the on|off vocabulary is ccd's — the mapping happens once, at the call
    *  site, so no route can invent a third word the verb would `die` on. */
   coordPause: (state: 'on' | 'off') => argv(['coord-pause', '--state', state]),
+  /** The reclaim kill-switch's writer (child-reclamation wave 4, spec §5.8) —
+   *  `coordPause`'s shape exactly: `state` is a two-member union, so the on|off
+   *  vocabulary is ccd's and no route can invent a third word the verb would
+   *  `die` on. The flag LEADS, where the agent's two-token grant expects it. */
+  reclaimPause: (state: 'on' | 'off') => argv(['reclaim-pause', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -759,6 +764,21 @@ export const WIN_SIZE_CAP = 'win-size-v1';
  *  failure the capability reader was built to prevent. A box without the token
  *  simply defers every child as `unsupported` — nothing is lost, nothing early. */
 export const RECLAIM_CAP = 'reclaim-v1';
+
+/** The `ccd caps` token that says this box has `ccd reclaim-pause` — the
+ *  writer of `$REG/reclaim-paused` (child-reclamation wave 4). Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  `echo reclaim-pause-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other two spellings, and that test's
+ *  `toContain` holds this one equal to them.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the route that composes
+ *  this verb answers 501 on a box that never advertised it, rather than
+ *  sending a verb an older ccd answers with its usage line — which the phone
+ *  would render as "the switch is broken" when the truth is "the fleet host is
+ *  older than this server". A note on the token, not a wrapper: the gate lives
+ *  at the route's own seam, where its mutation test reds on it. */
+export const RECLAIM_PAUSE_CAP = 'reclaim-pause-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
