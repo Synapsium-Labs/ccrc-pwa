@@ -11455,8 +11455,8 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
 # `_inst_version_name` makes them — the stamp's `version` when it has one, else
 # `untagged-<sha12>` — against `INST_TREE_NAME`. Only three names ever reach
 # this comparison, because it runs only on the two refusals above, which need a
-# source with no usable git and no `build.json` (a checkout or a release takes
-# `_inst_stamp`'s git arm or the shipped-stamp arm, and never gets here): the
+# source with no usable git and no `build.json` (a checkout whose git answers,
+# or a release, takes `_inst_stamp`'s git or shipped-stamp arm and never gets here): the
 # placed directory's own name (`_inst_version_name` rule 1, a tag or an
 # `untagged-<sha12>`); a migrated pre-versioned `~/ccrc`'s name, which rule 4
 # takes from the box's own stamp with this very expression, so it is always
@@ -11492,7 +11492,7 @@ _inst_stamp_unname() {   # [krc] — `_ver_kept`'s answer for the target, when t
     fi
   fi
   rm -f -- "$dest" \
-    || _ccrc_die "cannot remove the box's stamp $dest, which does not name the version this run moved \$HOME/ccrc to — it would be recorded as this install's"
+    || _ccrc_die "cannot remove the box's stamp $dest, which this run cannot vouch for as the version it moved \$HOME/ccrc to — it would be recorded as this install's"
   BOX_BUILD=()
   echo "install: stamp: removed the box's stamp ($what) — ccrc version will say unstamped"
   return 1
