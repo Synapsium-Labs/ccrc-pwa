@@ -355,6 +355,43 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     expect(dispatches()).toHaveLength(1);
     expect(authdead()).toBe('1757203200 auth-401');
   });
+  it('a rescue whose account credential changed after the pane was born marks nothing — the dying process read an older credential (D-3524)', () => {
+    // `TMUX_CREATED` defaults to 1, so the file written here (ctime now) is newer
+    // than the process: the 401 is a verdict about bytes no longer on disk. The
+    // session still leaves — only the marker is withheld.
+    seed(); writeTranscript([L.human(), AUTH()]);
+    fs.mkdirSync(path.join(h.home, '.cc-secrets'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-secrets', 'claude-oauth.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(authdead()).toBeNull();
+  });
+  it('CONTROL: a credential older than the pane is marked (D-3524)', () => {
+    seed();
+    fs.mkdirSync(path.join(h.home, '.cc-secrets'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-secrets', 'claude-oauth.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    const now = Math.floor(Date.now() / 1000);
+    writeTranscript([L.human(), JSON.stringify({ ...JSON.parse(AUTH()), timestamp: new Date((now + 60) * 1000).toISOString() })]);
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`, { TMUX_CREATED: String(now + 30) });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(authdead()).toMatch(/^\d+ rescue-401$/);
+  });
+  it('a lane with no secretsFile still marks when its `.credentials.json` changed after the pane was born — that file is not its credential (D-3524 round 1)', () => {
+    // `claude-b` declares no secretsFile (a login lane). Its config dir's
+    // `.credentials.json` changes for reasons that are not a re-login (7 of 17 on
+    // the fleet box within 0-3 h), so it names nothing: the rescue writes its
+    // marker exactly as D-3522 did, and the home arm keeps refusing the account.
+    seed();
+    h.sh(`_reg_set ${ID} wrapper claude-b; _reg_set ${ID} home claude-b`);
+    writeTranscript([L.human(), AUTH()]);
+    fs.mkdirSync(path.join(h.home, '.claude-b'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.claude-b', '.credentials.json'), '{}\n');   // ctime now; the pane was born at 1
+    h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    const f = path.join(h.home, '.cc-sessions', 'claude-b-authdead');
+    expect(fs.existsSync(f), 'the rescue marked the login lane').toBe(true);
+    expect(fs.readFileSync(f, 'utf8')).toMatch(/^\d+ rescue-401$/);
+  });
   it('a rate-limit rescue marks nothing — a limit is not a dead credential (D-3522)', () => {
     seed(); writeTranscript([L.banner()]);
     h.sh(`${STUBS(PROMPT)} _auto_swap_check ${ID}`);
@@ -374,7 +411,11 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
     const src = fs.readFileSync(CCD, 'utf8');
     expect(src).toContain(`tmux display-message -p -t "$(_tmux "$1")" '#{session_created}' 2>/dev/null`);
     expect(src).toContain('born=$(_pane_born "$id")');
-    expect(src).toContain('stuck "$(_pane_born "$id")"');
+    // The rescue's marker write reads the bound ONCE (D-3524) and hands the same
+    // value to the stuck scan and to the credential-change check, so the two can
+    // never disagree about which process wrote the 401.
+    expect(src).toContain('authborn=$(_pane_born "$id") && [[ "$(_transcript_limit_banner "$authf" stuck "$authborn"');
+    expect(src).toContain('! _authdead_cred_changed "$wrapper" "$authborn"');
     expect(src.match(/#\{session_created\}/g)).toHaveLength(1);
   });
   it('control: exhausted credit rescues nothing (D-3522)', () => {

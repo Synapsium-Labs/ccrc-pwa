@@ -780,19 +780,36 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
 // answer space against the roster. On an AGENT-FIRST wave the fleet box gets
 // new code first, so an emitter change shows up as an amber banner over a green
 // deploy.
+//
+// ONE FIELD NOW DOES, DELIBERATELY (D-3524): `exec.secretsFile` reaches bash as
+// `_ccrc_secrets_file`'s arms, because ccd's auth-dead marker expires once the
+// account's credential FILE changes and ccd has to be able to name that file.
+// So the enriched roster's upstream `secretsFile` — a §4.1 field — is now the
+// ONE difference between the two projections, and the pins below say exactly
+// that rather than being loosened to "some difference is fine": remove that one
+// arm and the bytes, and the digest, are equal again.
 describe('the new roster fields do not reach accounts.sh', () => {
-  it('an enriched roster and a plain one project to the SAME bytes', () => {
+  /** The single line the upstream's declared secrets file adds (D-3524). */
+  const UPSTREAM_SECRETS_ARM = `    one) printf '%s\\n' ".cc-secrets/one-oauth.env" ;;\n`;
+
+  it('an enriched roster and a plain one project to the SAME bytes, but for the upstream\'s secrets-file arm', () => {
     const enriched = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
     const plain = generateAccountsSh(parseRoster(PLAIN_ROSTER));
-    expect(enriched).toBe(plain);
+    expect(enriched).toContain(UPSTREAM_SECRETS_ARM);
+    expect(enriched.replace(UPSTREAM_SECRETS_ARM, '')).toBe(plain);
   });
 
-  it('…and to the same digest, which is the value the two boxes compare', () => {
+  it('…and to the same digest, but for that arm — which the two boxes now see, as they see a pool tag', () => {
     // `bodyDigest` over the marked text is what `ownRosterFp` is; comparing the
     // digests rather than only the strings states the property in the terms the
-    // divergence banner is computed in.
-    expect(bodyDigest(markGenerated(generateAccountsSh(parseRoster(ENRICHED_ROSTER)))))
-      .toBe(bodyDigest(markGenerated(generateAccountsSh(parseRoster(PLAIN_ROSTER)))));
+    // divergence banner is computed in. A secrets-file declaration made on one
+    // box's accounts.json and not the other's is now a visible divergence, the
+    // same trade `_ccrc_pool` made.
+    const enriched = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
+    const plain = generateAccountsSh(parseRoster(PLAIN_ROSTER));
+    expect(bodyDigest(markGenerated(enriched))).not.toBe(bodyDigest(markGenerated(plain)));
+    expect(bodyDigest(markGenerated(enriched.replace(UPSTREAM_SECRETS_ARM, ''))))
+      .toBe(bodyDigest(markGenerated(plain)));
   });
 
   it('the emitted bash never spells provider, baseUrl or models', () => {
@@ -803,10 +820,19 @@ describe('the new roster fields do not reach accounts.sh', () => {
     for (const token of ['provider', 'baseUrl', 'models', 'compatible', 'openrouter', '8642', 'vendor/']) {
       expect(sh, `accounts.sh must not carry ${token}`).not.toContain(token);
     }
-    // …and the secrets path is not in there either. It never was — the emitter
-    // has no `secretsFile` arm — but §4.1 makes the field legal on the upstream
-    // account for the first time, and `accounts.sh` is world-readable at 0644.
-    expect(sh).not.toContain('.cc-secrets');
+    // …and the secrets PATH appears only as `_ccrc_secrets_file`'s arms (D-3524),
+    // never anywhere else in the file. It was absent until then, and the note
+    // that stood here said `accounts.sh` is world-readable at 0644: what it
+    // carries is a HOME-relative path, never the file's contents, and the same
+    // path is already written into every generated wrapper (`shared/wrapper.mjs`'s
+    // `[ -r "$HOME/<path>" ] && . "$HOME/<path>"`).
+    const block = sh.slice(sh.indexOf('_ccrc_secrets_file() {'));
+    const arms = block.slice(0, block.indexOf('esac'));
+    expect(arms).toContain('.cc-secrets');
+    for (const line of sh.split('\n').filter((l) => l.includes('.cc-secrets'))) {
+      expect(arms, `a secrets path outside _ccrc_secrets_file: ${line}`).toContain(line);
+      expect(line).toMatch(/^ {4}[a-z0-9-]+\) printf '%s\\n' "[A-Za-z0-9._/-]+" ;;$/);
+    }
   });
 
   it('the equality is not vacuous: a difference the emitter DOES read moves the bytes', () => {

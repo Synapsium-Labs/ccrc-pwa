@@ -897,7 +897,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see), and the
 deploy generates it from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1082,10 +1082,12 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   every tagged account, so two boxes whose pools disagree read `divergent` and
   the banner's existing remedy is the right one. `hidden` is **outside** it:
   nothing in `accounts.sh` carries that key, so two copies that disagree about
-  `hidden` project byte-identical bash and report `agreed` — the same gap
-  `exec.secretsFile` and a `generated`/`external` `exec.kind` sit in (an
-  `upstream` flip is visible, because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s
-  wrapper check rather than the fingerprint is what catches those. Between the
+  `hidden` project byte-identical bash and report `agreed` — the same gap a
+  `generated`/`external` `exec.kind` sits in (an `upstream` flip is visible,
+  because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s wrapper check
+  rather than the fingerprint is what catches that. `exec.secretsFile` left that
+  gap with D-3524: `_ccrc_secrets_file` is emitted for every account that declares
+  one, so it is **inside** the digest, like `pool`. Between the
   two lanes of one agent-first deploy that changes pools, `divergent` is
   EXPECTED for the minutes in between, and the deploy says so as it runs.
 
@@ -1473,10 +1475,28 @@ The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
   this account. Same stand-downs, same cache. A rescue off such a 401 writes the account's auth-dead
   marker (`rescue-401`) unless one stands, and `_swap_target`'s "home recovered" arm no longer sends a
   session back to an auth-dead home; the candidate loop still ranks one last rather than never, so a
-  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer, and a
-  clean spawn on the account still clears it. A 403, exhausted credit (`billing_error`) and a 529 are
+  rescue always has somewhere to go. `ccd-account-health` clears the marker on a live answer; the next
+  point says what else ends it. A 403, exhausted credit (`billing_error`) and a 529 are
   not read. No pane reader was widened: `--resume` re-renders old API-error rows, which is what D-2364
   feared.
+- **The auth-dead marker lasts until the credential changes (D-3524).** A clean spawn is no evidence:
+  Claude Code 2.1.280 shows its prompt on a dead OAuth token, so the old rc-0 clear wiped a rescue's
+  fresh marker and the home arm sent the session back into the 401. The account's credential FILE
+  decides instead — the roster's `exec.secretsFile` (projected into `accounts.sh` as
+  `_ccrc_secrets_file`), else the upstream's `.cc-secrets/<id>-oauth.env`. Once its ctime is at or
+  after the marker's epoch, any ccd reader expires the marker, so a re-login revives the account at
+  the next placement or home decision with no spawn. A clean spawn clears the marker only then, or on
+  a lane whose credential ccd cannot name — any lane that declares no `secretsFile` (a login lane, an
+  external lane) or an older `accounts.sh`; a config dir's `.credentials.json` is never read, because
+  it changes without a re-login. A rescue writes none when the named file changed after the pane was
+  born. `ccd-account-health` measures only what its timer reaches (Linux, not a `server`-role box) whose
+  `telemetry: "anthropic"` credential identity is an OAuth setup token: an upstream lane's declared
+  `exec.secretsFile` (or its legacy `.cc-secrets/<id>-oauth.env`) and a generated Anthropic lane with a
+  declared setup-token file. API-key and login lanes are refused before a stale guessed OAuth file can
+  answer for them. On a lane it cannot measure but ccd can name (an API-key lane's
+  `<id>-<provider>.env`, any lane on macOS) the marker stands until that file is rewritten or an operator
+  `rm`; a probed account revived
+  with no local trace (a transient 401) keeps its marker until the probe's next live answer.
 - **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
   Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
 - **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses

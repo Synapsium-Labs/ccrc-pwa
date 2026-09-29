@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1c3cbb929dd0b9fd6d03f786e472b043ca6278cfac551a2db6fbd1de3a0ddbea
+# ccrc:generated 1 sha256=f63251272d0617a842867e2656b55ec7bfb80add4d81976ec9543db607245ce8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -223,9 +223,9 @@ _plat_ln_swap() {   # <target> <link> -> 0 iff <link> is now a symlink to <targe
   fi
 }
 
-# `stat -c` -> `stat -f`. Three format letters, three functions, because a
-# single `_plat_stat <fmt> <file>` would put the GNU spelling at every call
-# site and leave this block translating a string it did not choose.
+# `stat -c` -> `stat -f`, one function per format letter: a single `_plat_stat <fmt> <file>` would
+# put the GNU spelling at every call site and leave this block translating a string it did not choose.
+_plat_ctime() { if [ "$CCD_OS" = darwin ]; then stat -f %c "$@"; else stat -c %Z "$@"; fi; }   # <file> -> ctime, epoch seconds: what a restore cannot backdate (D-3524)
 _plat_mtime() {   # <file> -> mtime, epoch seconds
   if [ "$CCD_OS" = darwin ]; then stat -f %m "$@"; else stat -c %Y "$@"; fi
 }
@@ -1586,11 +1586,11 @@ _rc_enabled() {   # first line 'on' => sessions spawn with --remote-control.
 }
 
 _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: touch/rm $REG/<w>-disabled
-# The account-health probe's durable verdict, in the same `"<epoch> <reason>"`
-# format `swapblocked` uses. WRITTEN BY `ccd-account-health` (a sibling
-# executable, never this file — ccd makes no outbound network call, and adding
-# one would be a new dependency class); CLEARED by that probe on a 403, by a
-# successful spawn (`_spawn_settle`), and by an operator `rm`.
+# The auth-dead verdict, in `swapblocked`'s `"<epoch> <reason>"` format. WRITTEN BY
+# `ccd-account-health` on a 401 (ccd itself makes no outbound call) and by a rescue off
+# this process's own 401 (D-3522); CLEARED by that probe on a 403 and by an operator `rm`;
+# EXPIRED here once the account's credential file changes (`_authdead_cred_changed`,
+# D-3524), and at `_spawn_settle` rc 0 on that rule, or outright where ccd names none.
 #
 # DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob —
 # and since D-2605 that takes TWO clauses rather than one. `_reg_purge`,
@@ -1658,7 +1658,7 @@ _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands f
   # FIELD-path grammar — could not contain it.
   [[ -f "$f" && ! -L "$f" ]] || return 1
   t=$(cat "$f" 2>/dev/null); t="${t%% *}"
-  [[ "$t" =~ ^[0-9]+$ ]]
+  [[ "$t" =~ ^[0-9]+$ ]] && ! _authdead_expired "$1" "$t"   # D-3524: a verdict about a credential no longer on disk is not one
 }
 # THE GRAMMAR IS ASCII, AND `LC_ALL=C` IS WHAT MAKES IT SO (D-2522). `[a-z]`
 # in bash's `=~` is a COLLATION range, not a codepoint range: under
@@ -16342,8 +16342,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # so `_avail` passes a home whose credential is dead; the rescue that moved a
     # session OFF it would move it straight back after SWAP_COOLDOWN, and a
     # forced call would skip the candidate loop's rank-101 demotion by landing
-    # here first. `ccd-account-health` writes the marker on its own 401 and
-    # clears it on a live answer, so this holds exactly as long as it is true.
+    # here first. The probe clears the marker on a live answer, and `_authdead`
+    # expires it once a credential file ccd can name changes (D-3524) — no spawn.
     if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home"; then
@@ -17091,7 +17091,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   stay on your home account; leave only when home is at the rate ceiling (no headroom); return
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
-  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp
+  local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authtmp authborn
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
@@ -17584,11 +17584,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     # cannot probe — so without this a session rescued off a 401 went back to
     # it after SWAP_COOLDOWN. Re-measured, not read off the cached verdict: a
     # FRESH stuck-mode scan must name the 401 this pane's process wrote. Never
-    # over a standing marker (the probe re-stamps its own; readers see a boolean).
-    # The probe clears it on a live answer; a clean spawn still clears it too.
-    if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" \
-       && authf=$(_transcript_path "$id") \
-       && [[ "$(_transcript_limit_banner "$authf" stuck "$(_pane_born "$id")" | cut -f3)" == authentication_failed ]]; then
+    # over a standing marker (readers see a boolean), and NOT when the account's credential
+    # file changed at or after the pane was born: that 401 was about older bytes (D-3524).
+    if _is_valid_wrapper "$wrapper" && ! _authdead "$wrapper" && authf=$(_transcript_path "$id") \
+       && authborn=$(_pane_born "$id") && [[ "$(_transcript_limit_banner "$authf" stuck "$authborn" | cut -f3)" == authentication_failed ]] \
+       && ! _authdead_cred_changed "$wrapper" "$authborn"; then
       authtmp=$(mktemp "$REG/$wrapper-authdead.tmp.XXXXXX") \
         && printf '%s %s' "$now" rescue-401 > "$authtmp" && mv -f "$authtmp" "$REG/$wrapper-authdead" \
         || rm -f "$authtmp"
@@ -20408,16 +20408,16 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     # A revival supersedes an earlier deliberate stop (§4.1). `rm -f` on an absent file is a no-op,
     # so this is correct whether or not the .stopped stamp itself has landed yet.
     #
-    # AND THE AUTH-DEAD MARKER FOR THIS ACCOUNT, on rc 0 and only rc 0. A TUI
-    # that came up on `$wrapper` is proof that account's credential
-    # authenticates — a clearing owner beside the probe's own 403 and an operator
-    # `rm`; the probe's 401 and a rescue's (D-3522) write it. Deliberately NOT the
-    # `cmd_start` shape one screen down, which clears `swapblocked` on the
-    # ATTEMPT: a refused swap is a stale banner a human act supersedes, while
-    # this is a MEASUREMENT and erasing one without evidence is a guess. rc 2
-    # ("waiting for login") and rc 5 ("hard-blocked at startup … or lost auth")
-    # are the opposite of evidence and are pinned to keep the marker.
-    0) rm -f "$REG/$id.stopped" "$REG/$wrapper-authdead" ;;
+    # AND THE AUTH-DEAD MARKER, on rc 0 only — but no longer on rc 0 alone (D-3524).
+    # A TUI coming up is NOT proof the credential authenticates: 2.1.280 draws its
+    # prompt on a dead OAuth token (measured), so this used to wipe the marker a
+    # rescue had just written and send the rescued session back into the 401. The
+    # evidence is the credential FILE: `_authdead_clear_on_spawn` keeps the marker
+    # while that file predates it, and clears it when the file changed since or ccd
+    # cannot name one (the old rule, kept for a lane ccd cannot see). Unlike
+    # `cmd_start`'s `swapblocked` clear this is a MEASUREMENT; rc 2 ("waiting for
+    # login") and rc 5 ("… or lost auth") are the opposite of evidence and keep it.
+    0) rm -f "$REG/$id.stopped"; _authdead_clear_on_spawn "$wrapper" ;;
     # $id and $wrapper are only in scope HERE, not inside _accept_first_run_prompts (which knows
     # only the tmux name), so the operator-facing warnings — naming both, spec §5 — live on this
     # side of the return.
@@ -26641,6 +26641,126 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 # `server/test/wsaudit.test.ts` harvests the whole file, so its sentence is
 # found here all the same.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
+
+# ── THE AUTH-DEAD MARKER'S CREDENTIAL RULE (D-3524) ─────────────────────────
+# `$REG/<account>-authdead` is a verdict about ONE credential: the one the lane
+# had loaded when the probe or a rescue measured its 401. So the evidence that
+# ends it is the credential FILE changing, not a TUI coming up — 2.1.280 draws
+# its prompt on a dead OAuth token (measured 2026-09-28), which is how
+# `_spawn_settle`'s old rc-0 clear wiped a rescue's fresh marker and sent the
+# rescued session straight back into the 401, one bounce per wipe per session.
+#
+# CTIME, NEVER MTIME. Every re-login path ccrc knows rewrites the file with a
+# tmp + `mv -f` (`ccd-account-auth`'s `_auth_write_secret`, `ccrc account
+# credential`'s `_acct_write_secret`), which moves its ctime; a hand edit does;
+# and a restore from backup does too, while `cp -p` BACKDATES mtime (measured).
+# ctime cannot be set back, so "ctime at or after the verdict" never misses a
+# changed credential. A `chmod` also moves it: a false "changed" costs at most
+# the single bounce the old rule cost every time.
+#
+# The owners, whole: `ccd-account-health` writes on a 401 and clears on a live
+# 403; a rescue writes (D-3522); a credential change EXPIRES it at any reader
+# here and at rc 0; rc 0 on a lane ccd cannot name a credential for clears it
+# (the old rule — any lane whose roster declares no secrets file, a login lane or
+# an external one, and every lane under an accounts.sh from before
+# `_ccrc_secrets_file`); and an operator `rm`.
+#
+# WHICH LANES THE PROBE COVERS, exactly: `ccd-account-health` runs only where its
+# systemd timer does (Linux, any role but `server`; macOS has none), starts at
+# roster accounts with `telemetry: "anthropic"` and selects only OAuth credentials:
+# an upstream's declared `exec.secretsFile` or legacy `.cc-secrets/<id>-oauth.env`
+# fallback, or a declared generated Anthropic setup-token file. It REFUSES API-key,
+# login, external, Codex and malformed launcher shapes before a guessed OAuth file
+# can answer for them. So on a lane ccd can name that the probe cannot measure
+# (API-key anywhere; every lane on macOS), a marker stands until its file is rewritten
+# or an operator `rm` (an API-key 401 needs a new key); otherwise the next spawn ends it.
+# CARRIED: a probed account revived with no local trace (a transient API-side
+# 401) keeps its marker until the probe's next live answer. The keepalive's and
+# the server's readers of the marker do not expire it; they converge when a
+# reader here removes the file.
+
+_authdead_cred_src() {   # wrapper -> the absolute path of the file that lane's credential lives in; rc 1 = ccd cannot name one (D-3524)
+  # IN THIS ORDER, and never a glob over `.cc-secrets/<id>-*`: ids prefix one
+  # another on a real fleet (an `x` beside an `x-corp`), so a glob reads
+  # another account's file.
+  #   1. the roster's `exec.secretsFile`, projected as `_ccrc_secrets_file`;
+  #   2. the upstream's `<id>-oauth.env`, the legacy fallback `_ah_subjects`
+  #      selects only when that upstream has no declared `exec.secretsFile`;
+  #   3. otherwise nothing. An accounts.sh with no `_ccrc_secrets_file` cannot
+  #      say whether a secrets file was declared, so only rule 2 survives it.
+  # NEVER a config dir's `.credentials.json` (round 1 of D-3524). A lane that
+  # declares no secrets file — a login lane — keeps its login there, but that file
+  # changes without a re-login (7 of 17 on the fleet box had a ctime 0-3 h old,
+  # cause unmeasured), so judging by it skipped the rescue's marker and expired a
+  # standing one within hours: D-3522's loop, back. Such a lane is unnameable —
+  # the rescue marks as D-3522 did, rc 0 clears as §A.6 did, nothing expires here.
+  # A regular file and not a symlink, `_authdead`'s own rungs: a link would let
+  # any file re-date the verdict, and a FIFO is no credential. STAT'D BY THE
+  # CALLER, NEVER OPENED — the file holds a secret.
+  local w="$1" rel="" f=""
+  declare -F _ccrc_secrets_file >/dev/null 2>&1 && rel=$(_ccrc_secrets_file "$w" 2>/dev/null)
+  if [[ -n "$rel" ]]; then
+    f="$HOME/$rel"
+  elif [[ -n "$w" && "$w" == "${CCRC_UPSTREAM:-}" ]]; then
+    f="$HOME/.cc-secrets/$w-oauth.env"
+  fi
+  [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
+  printf '%s\n' "$f"
+}
+
+_authdead_cred_changed() {   # wrapper epoch -> 0 the lane's credential file changed at or after epoch | 1 it is older | 2 nobody can say (D-3524)
+  # 2 is: no nameable file, a failed `stat`, or an epoch or ctime that is not a
+  # plain number. `>=`, so a tie in the same second reads as changed and fails
+  # toward reviving the account — the old rule's direction, never a stuck one.
+  # Bounded to 18 digits and read base 10: the epoch is bytes off disk, and
+  # bash arithmetic would read a leading 0 as octal and wrap past 2^63.
+  local src ct
+  [[ "${2:-}" =~ ^[0-9]{1,18}$ ]] || return 2
+  src=$(_authdead_cred_src "$1") || return 2
+  ct=$(_plat_ctime "$src" 2>/dev/null) || return 2
+  [[ "$ct" =~ ^[0-9]{1,18}$ ]] || return 2
+  (( 10#$ct >= 10#$2 )) && return 0
+  return 1
+}
+
+_authdead_expired() {   # wrapper epoch -> success iff the lane's credential changed at or after the marker's epoch, having removed the marker. Silent. (D-3524)
+  # `_authdead`'s tail, so every ccd reader — the condemned placement tier, the
+  # home-recovered arm, rank 101, the rescue's own check — revives a re-logged-in
+  # account at its next decision, with no spawn and no probe.
+  #
+  # REMOVED ONLY WHILE IT IS STILL THE VERDICT THAT WAS JUDGED (round 1). Deciding
+  # forks for the source and for `stat` (~7 ms, the review measured at load ~37); the probe's
+  # `_ah_mark` and a rescue both `mv -f` a FRESH verdict onto this same path; one
+  # landing in that window was deleted by a remove-by-path, which then answered
+  # "not dead" about a credential just measured dead. So the first field is read
+  # again — a builtin, past the same `-f`/`! -L` rungs — and the file goes only
+  # while it still carries the epoch this decision was made on. Anything else (a
+  # newer epoch, a marker gone or no longer a regular file) answers "dead" for this
+  # one decision; the next read judges whatever stands then. STILL OPEN, smaller:
+  # a rename landing between that read and `rm`'s unlink — one fork and exec wide —
+  # is deleted all the same. A claim-by-rename would close it, at the price of an
+  # interval in which every other reader finds no marker at all.
+  local f="$REG/$1-authdead" now=""
+  _authdead_cred_changed "$1" "$2" || return 1
+  if [[ -f "$f" && ! -L "$f" ]]; then IFS= read -r now 2>/dev/null < "$f"; now="${now%% *}"; fi
+  [[ "$now" == "$2" ]] || return 1
+  rm -f -- "$f" 2>/dev/null
+  return 0
+}
+
+_authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the marker (D-3524)
+  # Clears unless the account's credential file PREDATES the marker (answer 1):
+  # then the TUI came up on the very credential measured dead, which is what
+  # 2.1.280 does. Answer 0 is a changed credential; answer 2 is a lane ccd cannot
+  # see, where the old rc-0 clear stands. An absent, malformed or non-regular
+  # marker has no epoch, answers 2, and is removed exactly as before; the epoch
+  # is read only past `_authdead`'s `-f`/`! -L` rungs, so a FIFO never blocks.
+  local f="$REG/$1-authdead" t=""
+  if [[ -f "$f" && ! -L "$f" ]]; then t=$(cat "$f" 2>/dev/null); t="${t%% *}"; fi
+  _authdead_cred_changed "$1" "$t"
+  [[ $? -eq 1 ]] && return 0
+  rm -f -- "$f"
+}
 
 # Guard so the script can be `source`d by tests without running a command.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
