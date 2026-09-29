@@ -167,8 +167,12 @@ function healthyBox(home: string): void {
     // Fix round 2 F4 (review 167): `--max-filesize` joins this list — a
     // TWO-ARG flag like its siblings. Left in the generic `-*) shift ;;`
     // fallback below, its numeric argument (never starting with `-`) would
-    // fall through to the `*) url="$1"` arm on the NEXT loop turn and
-    // silently replace `$url` with a byte count.
+    // fall through to the `*) url="$1"` arm on the NEXT loop turn and set
+    // `$url` to a byte count. That was never OBSERVABLE (review 173's T4,
+    // measured by the reviewer): the URL is the LAST argv word in every
+    // `_upd_resolve`/`_upd_fetch` call, so the loop's last turn always
+    // overwrote the count with the real URL. The edit is harmless and kept —
+    // it stops depending on that argv order.
     '    -H|--max-time|--max-filesize|--connect-timeout|--speed-limit|--speed-time) shift 2 ;;',
     '    -*) shift ;;',
     '    *) url="$1"; shift ;;',
@@ -4942,12 +4946,45 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(restoreChildArgv(home)).toBeNull();
     expect(r.stdout).not.toMatch(/REVERTED \(arm 2\)/);
     expect(r.stdout).toMatch(/^update: arm 2: no ~\/\.ccrc\/previous — the build this box ran before is not recorded — arm 3$/m);
-    expect(r.stdout).not.toMatch(/not mixed/);
+    // T1 (review 173): the old `not.toMatch(/not mixed/)` guarded nothing —
+    // the sentence it meant to keep out says "nothing is mixed", which that
+    // pattern never matched. Both spellings are the claim this case forbids.
+    expect(r.stdout).not.toMatch(/nothing is mixed|not mixed/);
     expect(r.stdout).not.toMatch(/deploy\.sh is the remedy/);
     expect(r.stdout).toMatch(
       /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the PRE-UPDATE tree, which may itself be MIXED\. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m);
     expect(String(lastReport(home)['detail'])).toBe(
       'arm3: restored v2.0.0 (pre-update tree, may be mixed); gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)');
+  });
+
+  // Review 173's F1r (W6 Task 8A; the coordinator's ruling: THE STAGED SHA
+  // DECIDES MIXED, whatever the record says). The reviewer's input: the stamp
+  // names v2.0.0 at sha A, there is no completed-install record, `previous`
+  // is absent or names v2.0.0, the v2.0.0 release stages sha B, and `update
+  // --to v2.0.0 --force` fails its gate. The staged install's wholesale
+  // copies (shared/, the tree's ccd/, node_modules, build.json) are sha B's
+  // while arm 3 copies back only the backup's `tree` rows — the tree IS mixed,
+  // and the verdict must say MIXED, never "may itself be MIXED".
+  it.each([
+    ['previous absent', null],
+    ['previous naming the target', 'v2.0.0\nbaselinesha\n'],
+  ] as const)('F1r: a same-tag rerun with NO completed record whose STAGED sha differs from the running stamp\'s is MIXED, never "may be mixed" — %s (review 173, D-3288 amended)', (_what, previous) => {
+    const home = freshUpdateBox('ccrc-update-restore-f1r-');
+    plantOldBox(home, { version: 'v2.0.0' });                   // stamp sha OLD_SHA, no record
+    if (previous !== null) writeFileSync(join(home, '.ccrc', 'previous'), previous);
+    // `stubTree`'s own sha (`newsha…`) is not OLD_SHA: sha B.
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the fixture has a completed record — the input is wrong').toBe(false);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): copied the pre-update backup back — the tree is MIXED \(new shared\/, ccd\/ and node_modules under the old dists\); the remedy is deploy\.sh\. Best effort\.$/m);
+    expect(r.stdout).not.toMatch(/may itself be MIXED|may be mixed|nothing is mixed|not mixed/i);
+    expect(String(lastReport(home)['detail'])).toBe('arm3: tree MIXED, deploy.sh is the remedy; gate: GET http://127.0.0.1:7788/health got no answer (curl exited 7)');
+    expect(lastReport(home)['phase']).toBe('reverted');
+    // `previous` is written by no branch of arm 3, and this run kept it as it was.
+    if (previous === null) expect(existsSync(join(home, '.ccrc', 'previous'))).toBe(false);
+    else expect(fileText(join(home, '.ccrc', 'previous'))).toBe(previous);
   });
 
   // Fix round 2, F2 input (a) (review 167; rulings item 1): a same-tag rerun
@@ -4982,7 +5019,11 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     // AND `download/v2.0.0` (arm 2's own bundle probe, `_upd_asset_listed
     // v2.0.0 …`, which is tag-scoped and never reads `latest`). Same tree,
     // no rebuild — `packRelease` only tars what `stubTree` already built.
-    const f2aTree = stubTree(home, { version: 'v2.0.0' });
+    // The STAGED sha equals the running stamp's (`selfConvergedTree`): a
+    // different one is MIXED since review 173's F1r (the staged sha decides),
+    // and this case pins the F1/F2 interaction on the same-sha, no-record
+    // verdict.
+    const f2aTree = selfConvergedTree(home, 'v2.0.0', OLD_SHA);
     packRelease(home, f2aTree, { tag: 'v2.0.0' });
     packRelease(home, f2aTree, { tag: 'v2.0.0', latest: false });
     writeFileSync(join(home, 'fixture-health-down'), 'yes\n');
@@ -4993,10 +5034,9 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(r.stdout).toMatch(
       /^update: arm 2: previous \(v2\.0\.0\) also names v2\.0\.0, the release that just failed its gate — re-installing it would not restore anything; arm 3$/m);
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(`v2.0.0\n${OLD_SHA}\n`);
-    // The F1/F2 interaction the reviewer flagged: this same-tag, no-record
-    // run also falls into arm 3's `same_tag` branch (`old_completed=0`), so
-    // it lands on F1's own "may be mixed" line, never "not mixed" and never
-    // `deploy.sh`.
+    // The F1/F2 interaction the reviewer flagged: this same-tag, same-sha,
+    // no-record run also falls into arm 3's `same_tag` branch, so it lands on
+    // F1's own "may be mixed" line, never "not mixed" and never `deploy.sh`.
     expect(r.stdout).toMatch(
       /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the PRE-UPDATE tree, which may itself be MIXED\. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m);
     expect(String(lastReport(home)['detail'])).toMatch(/^arm3: restored v2\.0\.0 \(pre-update tree, may be mixed\); gate: /);
@@ -5397,6 +5437,45 @@ describe('_upd_restore_copy (arm 3\'s per-row placement): the move-back is check
     expect(r.stdout).toMatch(/tree is MIXED AND 1 path\(s\) are MISSING/);
     expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
   });
+
+  // Review 173's T3: arm 3's three verdicts each have a MISSING-rows form, and
+  // only the MIXED one was pinned. One row forced to `_upd_restore_copy`'s
+  // rc 2, the arm called directly with each verdict's inputs — the same
+  // shadowing the B4 case above uses — and the sentence AND the report detail
+  // asserted for each.
+  const ARM3_SHA_A = 'a'.repeat(40);
+  const ARM3_SHA_B = 'b'.repeat(40);
+  it.each([
+    // [verdict, old_sha, staged sha, old_completed, stdout, detail]
+    ['same_tag (same sha, no record)', ARM3_SHA_A, ARM3_SHA_A, 0,
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again, the PRE-UPDATE tree, which may itself be MIXED, AND 1 path\(s\) are MISSING \(read the arm 3 lines above for where\)\. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m,
+      /^arm3: restored v2\.0\.0 \(pre-update tree, may be mixed\) with 1 path\(s\) MISSING \(1 of 1 rows could not be copied back\); gate: fixture reason$/],
+    ['same_build (same sha, completed record)', ARM3_SHA_A, ARM3_SHA_A, 1,
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — this box's tree is v2\.0\.0 again \(the SAME release that was running before this update; nothing is mixed\) AND 1 path\(s\) are MISSING \(read the arm 3 lines above for where\)\. Read 'ccrc doctor' for why the gate failed, or once fixed: ccrc update --to v2\.0\.0 --force\. Best effort\.$/m,
+      /^arm3: restored v2\.0\.0 \(same build, not mixed\) with 1 path\(s\) MISSING \(1 of 1 rows could not be copied back\); gate: fixture reason$/],
+    ['MIXED (a staged sha that differs, a completed record)', ARM3_SHA_A, ARM3_SHA_B, 1,
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — the tree is MIXED AND 1 path\(s\) are MISSING \(read the arm 3 lines above for where\); the remedy is deploy\.sh\. Best effort\.$/m,
+      /^arm3: tree MIXED with 1 path\(s\) MISSING, deploy\.sh is the remedy \(1 of 1 rows could not be copied back\); gate: fixture reason$/],
+    ['MIXED (a staged sha that differs, no record)', ARM3_SHA_A, ARM3_SHA_B, 0,
+      /^update: REVERTED \(arm 3\): copied the pre-update backup back — the tree is MIXED AND 1 path\(s\) are MISSING \(read the arm 3 lines above for where\); the remedy is deploy\.sh\. Best effort\.$/m,
+      /^arm3: tree MIXED with 1 path\(s\) MISSING, deploy\.sh is the remedy \(1 of 1 rows could not be copied back\); gate: fixture reason$/],
+  ] as const)('arm 3\'s MISSING-rows form of each verdict says what is true, in its sentence and in update.json: %s (review 173 T3, F1r)', (_verdict, oldSha, stagedSha, oldCompleted, line, detail) => {
+    const home = freshUpdateBox('ccrc-restore-arm3-missing-forms-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    mkdirSync(join(home, 'backups', 'live-row'), { recursive: true });
+    const r = sourcedCcrc(home, [
+      `_upd_backup_pairs() { printf 'tree\\t%s/live-row\\t%s\\n' "$HOME" 'live-row'; }`,
+      '_upd_restore_copy() { return 2; }',
+      'UPD_BACKUP_DIR="$HOME/backups"',
+      'UPD_VERSION=v2.0.0',
+      `UPD_STAGED_SHA=${stagedSha}`,
+      `_upd_restore_arm3 server "gate: fixture reason" v2.0.0 ${oldSha} ${oldCompleted}`,
+    ].join('\n'));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(line);
+    expect(String(lastReport(home)['detail'])).toMatch(detail);
+    expect(lastReport(home)['phase']).toBe('reverted');
+  });
 });
 
 describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
@@ -5677,9 +5756,12 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     // `_upd_resolve`'s own SHA256SUMS fetch, inside cmd_update — connect
     // bound plus a STALL bound (by class with the tarball fetch beside it in
     // the same recording), AND, since fix round 2 F4 (review 167), its OWN
-    // total `--max-time`/`--max-filesize` pair too — the two SHA256SUMS asks
-    // now carry the SAME flag classes, from two different call sites
-    // (`_upd_asset_listed`'s own knobs, `_upd_resolve`'s own).
+    // total `--max-time`/`--max-filesize` pair too. The two asks do NOT
+    // carry the same flag classes (review 173's T2): both carry the connect
+    // and total bounds, each from its own call site and knobs, but only
+    // `_upd_resolve`'s carries the stall pair and `--max-filesize` — the
+    // probe is a status question with no body to bound (`-o /dev/null`), the
+    // fetch reads SHA256SUMS' bytes. The assertions below pin exactly that.
     const sumsArgv = curlFullArgv(home).filter((l) => l.includes('/SHA256SUMS'));
     expect(sumsArgv.length, curlFullArgv(home).join('\n')).toBe(2);
     expect(sumsArgv[0]).toMatch(/--connect-timeout \d+/);

@@ -15178,20 +15178,25 @@ _upd_converged() {
 # is nothing for arm 2 to restore TO — and falls straight to arm 3, the
 # pre-update backup, which for a same-tag run whose staged sha equals the old
 # build's own AND whose `old_completed` was 1 IS that same release (D-3288,
-# review fix round 1 I3, NARROWED by fix round 2 F1); with `old_completed` 0,
-# arm 3 says only that the PRE-UPDATE tree came back, never `deploy.sh`'s MIXED
-# claim; with `old_completed` 1 and a DIFFERING sha (a PROVEN rebuild, not an
-# unproven tree) it still ends there. AMENDED AGAIN (fix round 2, F1+F2, review
-# 167, rulings item 1): the
-# I4 narrowing above left one case open — a same-tag rerun with NO completed
-# record still finds `previous` naming the exact tag that just failed
-# whenever this keep's own UNCONDITIONAL branch, or D-3254 (b)'s "keep
-# without a well-formed baseline", already left it pointing there (an
-# earlier still-open move, or a prior restore). `_upd_restore_arm2` now also
-# checks `$UPD_PREV_TAG` against `$UPD_VERSION` AFTER reading `previous` —
-# on top of, never instead of, the `old_completed`-keyed check above — so
-# arm 2 never hands its child the tag that just failed either way, whether
-# or not that running build's own install of it had completed.
+# review fix round 1 I3, NARROWED by fix round 2 F1); with the same sha and
+# `old_completed` 0, arm 3 says only that the PRE-UPDATE tree came back, never
+# `deploy.sh`'s MIXED claim; and a staged sha that DIFFERS from the stamp's is
+# MIXED whatever the record says (review 173's F1r, amending D-3288 in place
+# again). AMENDED AGAIN (fix round 2, F1+F2, review 167, rulings item 1;
+# scope corrected by review 173's P3): the I4 narrowing above left open a
+# same-tag rerun with NO completed record that still finds `previous` naming
+# the exact tag that just failed whenever this keep's own UNCONDITIONAL
+# branch, or D-3254 (b)'s "keep without a well-formed baseline", already left
+# it pointing there (an earlier still-open move, or a prior restore) — review
+# 167's F2 input (a). The same check ALSO closes F2 input (b), a
+# DIFFERENT-tag downgrade: the stamp reads v2.0.0 with no record, `previous`
+# names v1.0.0, and `update --to v1.0.0 --downgrade` keeps `previous` (D-3254
+# (b)) so that it names the target that just failed. `_upd_restore_arm2` now
+# checks `$UPD_PREV_TAG` against `$UPD_VERSION` AFTER reading `previous` — on
+# top of, never instead of, the `old_completed`-keyed check above — so arm 2
+# never hands its child the tag that just failed, whichever way `previous`
+# came to name it and whether or not the running build's own install of it
+# had completed.
 _upd_write_previous() {
   local line1="untagged" line2="unstamped" tmp="$BOX_PREVIOUS_FILE.tmp.$$" kept="none" why="" prc=0
   [[ "${1:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && line1="$1"
@@ -15861,19 +15866,24 @@ _upd_restore_arm2() {
     *) echo "update: arm 2: ~/.ccrc/previous is unreadable or malformed — arm 3"; return 1 ;;
   esac
   # Fix round 2, F1+F2 (review 167; rulings item 1), ALSO — the check above
-  # covers only the case `old_completed` itself proves; it left F2 open: a
-  # same-tag run with NO completed record (so the check above never fires)
-  # can still find `previous` naming the exact tag that just failed, because
-  # `_upd_write_previous`'s same-tag keep (D-3254 (a)) is UNCONDITIONAL and a
-  # DIFFERENT-tag run with no completed record keeps whatever `previous`
-  # already held (D-3254 (b)) — which an earlier still-open move, or a prior
-  # restore, may already have set to THIS run's own target. Either way, the
-  # tag arm 2 is about to hand its child (`$UPD_PREV_TAG`) is the tag that
-  # just failed its gate (`$UPD_VERSION`) — re-installing it would not
-  # restore anything, per C1 ("arm 2 never 'restores' to the tag whose
-  # install just failed"), so this checks it directly, AFTER the read above,
-  # off what THIS run's own `_upd_write_previous` actually left on disk —
-  # `with or without a completed record` (the coordinator's own words).
+  # covers only the case `old_completed` itself proves; it left F2 open, in
+  # TWO shapes. (a) A same-tag run with NO completed record (so the check
+  # above never fires) can still find `previous` naming the exact tag that
+  # just failed, because `_upd_write_previous`'s same-tag keep (D-3254 (a))
+  # is UNCONDITIONAL and a DIFFERENT-tag run with no completed record keeps
+  # whatever `previous` already held (D-3254 (b)) — which an earlier
+  # still-open move, or a prior restore, may already have set to THIS run's
+  # own target. (b) A different-tag DOWNGRADE with no record: the stamp reads
+  # v2.0.0, `previous` names v1.0.0, and `update --to v1.0.0 --downgrade`
+  # keeps `previous` by (b), so it names the target that just failed even
+  # though `old_version` and `UPD_VERSION` differ (review 173's P3: this
+  # comment once described only (a)). Either way, the tag arm 2 is about to
+  # hand its child (`$UPD_PREV_TAG`) is the tag that just failed its gate
+  # (`$UPD_VERSION`) — re-installing it would not restore anything, per C1
+  # ("arm 2 never 'restores' to the tag whose install just failed"), so this
+  # checks it directly, AFTER the read above, off what THIS run's own
+  # `_upd_write_previous` actually left on disk — `with or without a
+  # completed record` (the coordinator's own words).
   if [ "$UPD_PREV_TAG" = "$UPD_VERSION" ]; then
     echo "update: arm 2: previous ($UPD_PREV_TAG) also names $UPD_VERSION, the release that just failed its gate — re-installing it would not restore anything; arm 3"
     return 1
@@ -15940,44 +15950,59 @@ _upd_restore_arm2() {
 # coord.db), then restarts the role's main unit so it runs the copied-back
 # dists. The tree is usually MIXED: shared/, ccd/ and node_modules are the
 # new install's, the dists the old one's — and the remedy for that is
-# deploy.sh, which the sentence names. Review fix round 1 I3: the ONE
-# exception is a same-tag run (item 2) whose STAGED sha turned out equal to
-# the OLD (running) build's sha AND whose running build was itself a
-# COMPLETED install of that tag (`old_completed` — fix round 2, F1, review
-# 167: NARROWED here; I3 shipped this without it) — a genuine REPEAT, not a
-# rebuild under the same tag — where copying the old dists back over the new
-# shared/ccd/node_modules restores byte-identical content on every side, so
-# nothing is actually mixed. A same-tag run with NO completed record (arm 2
-# already ruled out restoring `previous` there — see its own header) still
-# reaches arm 3, but the backup it copies back is a snapshot of a tree that
-# may ITSELF have been half-installed before this run ever started — so arm
-# 3 says only that the PRE-UPDATE tree came back, not that nothing is mixed.
+# deploy.sh, which the sentence names.
+#
+# THE VERDICT IS THREE CASES, AND THE STAGED SHA DECIDES MIXED (fix round 2,
+# F1, review 167, and the coordinator's ruling on review 173's F1r, W6 Task 8A):
+#   - a staged sha that differs from the pre-update stamp's sha: MIXED, with
+#     or without a completed record. `_upd_backup_set`'s `tree` rows are all
+#     this arm copies back; `_inst_tree`'s wholesale copies (shared/, the
+#     tree's ccd/, node_modules, build.json) stay the new install's, so the
+#     backup disagrees with the staged content whether or not the record says
+#     the old build was ever whole. Same tag or not.
+#   - the same sha with a completed record (`old_completed`): the same build,
+#     not mixed — a genuine REPEAT, where copying the old dists back over the
+#     new shared/ccd/node_modules restores byte-identical content everywhere.
+#   - the same sha with no record: the PRE-UPDATE tree came back, which may
+#     itself have been half-installed before this run ever started.
+# The last two need a SAME-TAG run (`old_version` = `$UPD_VERSION`); a
+# different tag has no same sha to speak of.
+#
+# HOW A RUN REACHES ARM 3 (W6: arm 1 and arm 2 answer first). Arm 1 refuses
+# on a layout that is not versioned, a `previous` that is absent, untagged or
+# malformed, a `previous` naming the target, a same-tag run over a completed
+# install, or a previous version that is not kept complete — and arm 2 then
+# refuses or fails as its own header says. A same-tag run with no completed
+# record reaches arm 3 when `previous` is absent, untagged or malformed, when
+# `previous` names the target (arm 2's skip for the tag that just failed), or
+# when arm 2's child fails. It is NOT that arm 2 "ruled out restoring
+# `previous` there": arm 2 does restore `previous` in that case, and its
+# header and its pin say so. The one-time migration run and an unmigrated
+# layout still reach it too.
 _upd_restore_arm3() {
   local role="$1" reason="$2" old_version="${3:-}" old_sha="${4:-}" old_completed="${5:-0}"
   local class src name back main=ccrc.service n=0 bad=0 missing=0 rrc=0 crc2=0 note="" unrec=""
   [ "$role" = fleet ] && main=ccrc-agent.service
   # D-3288 (found in fix round 1, review 155 C1; AMENDED in place, fix round
-  # 2 F1, review 167 — see the plan's Deviations): a same-tag run
-  # (`old_version = $UPD_VERSION`) whose staged sha equals the OLD build's
-  # sha is a REPEAT of the exact release that was running, not a rebuild —
-  # UNLESS `old_completed` is 0, in which case the OLD build was never
-  # proven whole on that tag to begin with, so the tree the backup holds
-  # might already have been mixed before this run started; "not mixed" is
-  # then a claim arm 3 cannot make. `old_completed` is passed through from
-  # `_upd_restore` (round 1 stopped one call short of doing so — F1's own
-  # defect).
-  # `same_tag` (may-be-mixed, uncertain) fires ONLY when `old_completed=0`:
-  # a same-tag run whose running build WAS proven complete but whose staged
-  # sha DIFFERS is a genuine REBUILD, not an unproven tree — that case still
-  # takes the definite MIXED/deploy.sh branch below, exactly as round 1
-  # shipped it (a fixture pins this: `old_completed=1`, a DIFFERENT staged
-  # sha, still says MIXED).
+  # 2 F1, review 167, and again for review 173's F1r — see the plan's
+  # Deviations): the STAGED SHA decides MIXED, whatever the record says. A
+  # same-tag run (`old_version = $UPD_VERSION`) whose staged sha equals the
+  # OLD build's sha is a REPEAT of the release that was running, not a
+  # rebuild: with a completed record (`old_completed`) that is `same_build`
+  # (not mixed); with none it is `same_tag` (the pre-update tree, which may
+  # itself be mixed — the OLD build was never proven whole, so "not mixed"
+  # is a claim arm 3 cannot make). Any other run — a different tag, or a
+  # staged sha that differs from the stamp's, with or without a record — sets
+  # neither: the backup disagrees with the staged content, and that is real
+  # whether or not the old build was ever whole, so it takes the definite
+  # MIXED/deploy.sh branch below. An unmeasured sha on either side proves
+  # no sameness and reads the same way. `old_completed` is passed through
+  # from `_upd_restore` (round 1 stopped one call short of doing so).
   local same_build=0 same_tag=0
-  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ]; then
+  if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
+     && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
     if [ "$old_completed" -eq 1 ]; then
-      if [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
-        same_build=1
-      fi
+      same_build=1
     else
       same_tag=1
     fi
@@ -16076,13 +16101,15 @@ _upd_restore_arm3() {
       _upd_phase reverted "arm3: restored $UPD_VERSION (same build, not mixed) with $missing path(s) MISSING$note; $reason"
     fi
   elif [ "$same_tag" -eq 1 ]; then
-    # Fix round 2, F1 (review 167): the SAME tag came back, but `old_completed`
-    # or the staged sha (or both) do not prove it is the SAME build — so this
-    # is honest about what is actually known: the tree put back is the
-    # PRE-UPDATE tree, which may itself have been mixed (a prior spine that
-    # died half-way through installing this very tag, before this run ever
-    # started). Never `deploy.sh` here — that remedy is for a tree definitely
-    # mixed between two DIFFERENT tags, which this is not.
+    # The SAME tag AND the SAME sha came back, but no completed-install
+    # record proves that sha was ever a whole install — so this is honest
+    # about what is actually known: the tree put back is the PRE-UPDATE tree,
+    # which may itself have been mixed (a prior spine that died half-way
+    # through installing this very build, before this run ever started).
+    # Never `deploy.sh` here: nothing is KNOWN to be mixed — the staged
+    # content and the backup agree, so the one open question is the
+    # pre-update tree's own completeness, which a reinstall answers. (A
+    # staged sha that DIFFERS never reaches this branch; it is MIXED.)
     if [ "$missing" -eq 0 ]; then
       echo "update: REVERTED (arm 3): copied the pre-update backup back — this box's tree is $UPD_VERSION again, the PRE-UPDATE tree, which may itself be MIXED. Read 'ccrc doctor' for its state, or once healthy: ccrc update --to $UPD_VERSION --force. Best effort."
       _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed)$note; $reason"
@@ -16091,6 +16118,10 @@ _upd_restore_arm3() {
       _upd_phase reverted "arm3: restored $UPD_VERSION (pre-update tree, may be mixed) with $missing path(s) MISSING$note; $reason"
     fi
   elif [ "$missing" -eq 0 ]; then
+    # MIXED: the staged sha differs from the pre-update stamp's (or the run
+    # is another tag's), whatever the completed-install record says — the
+    # backup's `tree` rows are the old content, the wholesale copies the new,
+    # so the tree is mixed even for a same-tag REBUILD (review 173 F1r).
     echo "update: REVERTED (arm 3): copied the pre-update backup back — the tree is MIXED (new shared/, ccd/ and node_modules under the old dists); the remedy is deploy.sh. Best effort."
     _upd_phase reverted "arm3: tree MIXED, deploy.sh is the remedy$note; $reason"
   else
