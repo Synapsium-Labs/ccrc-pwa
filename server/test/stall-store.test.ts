@@ -75,7 +75,7 @@ const envelopeOf = (s: CoordStore, deliveryId: number): string =>
   (s.db.prepare('SELECT envelope FROM mail_deliveries WHERE id = ?').get(deliveryId) as { envelope: string }).envelope;
 
 describe('stallCandidates: the active runs that name a worker, all-or-failure (ยง4.2 Candidates)', () => {
-  const row = (id: number, o: { kind?: string; state: string; sessionId: string; dispatchedAt: number; wave: number }) => ({
+  const row = (id: number, o: { kind?: string; state: string; sessionId: string; dispatchedAt: number | null; wave: number }) => ({
     id, kind: o.kind ?? 'work', state: o.state, sessionId: o.sessionId, claimedBy: 'demo-coordinator',
     dispatchedAt: o.dispatchedAt, program: 'demo-program', wave: o.wave, waveOf: 9, project: 'demo',
     workspace: o.sessionId,
@@ -128,6 +128,17 @@ describe('stallCandidates: the active runs that name a worker, all-or-failure (ย
     s.db.prepare(`UPDATE runs SET ${column} = ? WHERE id = ?`).run(UNSAFE, bad);
     expect(s.stallCandidates()).toEqual({ ok: false, kind: 'run-unreadable', detail });
     expect(detail).not.toMatch(/[0-9]/);
+  });
+
+  it('a candidate whose dispatchedAt is NULL stays a candidate, with dispatchedAt: null, and never fails the read', () => {
+    const s = store();
+    const undated = seedRun(s, { sessionId: 'demo-undated', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    s.db.prepare('UPDATE runs SET dispatchedAt = NULL WHERE id = ?').run(undated);
+    const dated = seedRun(s, { sessionId: 'demo-dated', wave: 8, reach: 'working', at: DISPATCHED_AT });
+    expect(s.stallCandidates()).toEqual({ ok: true, runs: [
+      row(undated, { state: 'working', sessionId: 'demo-undated', dispatchedAt: null, wave: 7 }),
+      row(dated, { state: 'working', sessionId: 'demo-dated', dispatchedAt: DISPATCHED_AT, wave: 8 }),
+    ] });
   });
 
   it('a bad row the predicate does not select cannot fail the read', () => {
@@ -327,6 +338,29 @@ describe('insertStallObservation / recordStallObservation: the durable, deduped 
     expect(stallRows(s, 424_242)).toEqual([]);
   });
 
+  // D-3584 run-gone-includes-inactive: the lane awaits between its candidate read and
+  // its write, so a run that has left the active states in that window is gone too.
+  it('answers run-gone for a run that is no longer active (D-3584), and adds no row, from either writer', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    expect(s.recordStallObservation(run, stallDetail('live', 'quiet', 1, S4_STATUS_AT), S4_R1_AT).recorded).toBe(true);
+    expect(s.advance(run, 'awaiting-review', 'coordinator').ok).toBe(true);
+    const r2 = stallDetail('live', 'quiet', 2, S4_STATUS_AT);
+    expect(s.recordStallObservation(run, r2, S4_R1_AT + 3_600_000)).toEqual({ recorded: false, why: 'run-gone' });
+    expect(s.insertStallObservation(run, r2, S4_R1_AT + 3_600_000)).toEqual({ recorded: false, why: 'run-gone' });
+    expect(stallRows(s, run)).toHaveLength(1);
+  });
+
+  it('still records on a run in `unknown`, which is ACTIVE (D-3584 keeps the cap\'s safe direction)', () => {
+    const s = store();
+    const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
+    s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('unknown', run);
+    const r = s.recordStallObservation(run, stallDetail('live', 'quiet', 1, S4_STATUS_AT), S4_R1_AT);
+    if (!r.recorded) throw new Error(`not recorded: ${r.why}`);
+    expect(stallRows(s, run)).toEqual([{ id: r.eventId, at: S4_R1_AT, fromState: 'unknown', toState: 'unknown',
+      causedBy: 'operator', detail: stallDetail('live', 'quiet', 1, S4_STATUS_AT) }]);
+  });
+
   it('insertStallObservation opens NO transaction, so a caller\'s tx can hold it; recordStallObservation opens exactly one', () => {
     const s = store();
     const run = seedRun(s, { sessionId: 'demo-worker', wave: 7, reach: 'working', at: DISPATCHED_AT });
@@ -373,6 +407,10 @@ describe('insertSystemMailTx: queueSystemMail\'s body, extracted with no transac
                 subject: 'wave-brief', body: 'go' };
     expect(queueSystemMail(s, RUN_FIELDS, m).queued).toBe(true);
     expect(queueSystemMail(s, RUN_FIELDS, m)).toEqual({ queued: false });
+    // The ORDER: a declined mail never reaches BEGIN, so the same subject nested in a
+    // caller's tx answers `{queued:false}` and does NOT throw. A dedupe moved inside
+    // the tx would throw here, exactly as the new-subject call below does either way.
+    expect(tx(s.db, () => queueSystemMail(s, RUN_FIELDS, m))).toEqual({ queued: false });
     expect(() => tx(s.db, () => queueSystemMail(s, RUN_FIELDS, { ...m, subject: 'wave-done-rejected' })))
       .toThrow(/transaction/i);
     expect(count(s, 'mail')).toBe(1);
@@ -426,6 +464,19 @@ describe('queueStallNotice: the observation row and the mail, in ONE transaction
       .toEqual({ queued: false, why: 'run-gone' });
     expect(count(s, 'mail')).toBe(0);
     expect(stallRows(s, 424_242)).toEqual([]);
+  });
+
+  it('answers run-gone for a run that closed to `done` (D-3584), and writes neither a row, a mail nor a delivery', () => {
+    const s = store();
+    // A review run closes `working -> done` directly (`REVIEW_RUN_TRANSITIONS`), through the store's own writer.
+    const id = seedRun(s, { sessionId: 'demo-reviewer', wave: 9, reach: 'working', at: DISPATCHED_AT, kind: 'review' });
+    mailAt(s, { fromId: 'demo-reviewer', toId: 'coordinator', runId: id, kind: 'status', subject: 'progress', at: S4_STATUS_AT });
+    expect(s.advance(id, 'done', 'coordinator').ok).toBe(true);
+    const run = { id, program: 'demo-program', wave: 9, waveOf: 9 };
+    expect(queueStallNotice(s, run, { ...r1(id, 1), toId: 'demo-reviewer' })).toEqual({ queued: false, why: 'run-gone' });
+    expect(count(s, 'mail')).toBe(1);                    // only the worker's own status
+    expect(count(s, 'mail_deliveries')).toBe(0);
+    expect(stallRows(s, id)).toEqual([]);
   });
 
   it('rolls the observation row back when the mail write throws, so a failed send never burns its rung', () => {

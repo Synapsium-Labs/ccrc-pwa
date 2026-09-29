@@ -10,7 +10,7 @@ import type { CoordPlacementStamp } from './placement.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
 // the L1 `stall.ts` (the same port rule as `CoordPlacementStamp` above); the
 // reads below implement them.
-import type { StallMailRow, StallRunRow, StallWriteMiss } from './stall.js';
+import type { StallMailRow, StallReadFailure, StallRunRow, StallWriteMiss } from './stall.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -714,6 +714,10 @@ export type OpenSiblingsResult =
  *  NOT `recordRunEvent`'s `void`: that writer no-ops silently on an absent run,
  *  and a stall rung must tell "already recorded" (never send it again) from "the
  *  run is gone" (nothing left to watch) from "recorded now" (send it).
+ *  `run-gone` means the run is ABSENT or NO LONGER ACTIVE, an idle or terminal
+ *  state (D-3584 run-gone-includes-inactive): the spec's word meant absent only,
+ *  but a run that closed while the lane awaited is just as unwatchable, and a
+ *  row or mail written for it would outlive its close.
  *  `eventId` is the row's own `run_events.id`. */
 export type StallObservation =
   | { recorded: true; eventId: number }
@@ -2255,13 +2259,26 @@ export class CoordStore {
    * `(runId, detail)`, which is the dedupe that survives a restart: the ladder
    * reads its rung times back from these rows, never from memory.
    *
+   * `run-gone` covers a run that is absent or no longer active (D-3584, the
+   * comment in the body), so a close that landed after the lane's candidate read
+   * is never given a row or a mail.
+   *
    * OPENS NO TRANSACTION, so `queueStallNotice` (`rundefs.ts`) can hold this
    * row and its mail in ONE. `tx` is not re-entrant. A caller with no
    * transaction of its own uses `recordStallObservation` below, so the check and
    * the insert are never split by another writer.
    */
   insertStallObservation(runId: number, detail: string, at: number): StallObservation {
-    const run = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string } | undefined;
+    // D-3584 run-gone-includes-inactive: "gone" is absent OR no longer active. The
+    // lane awaits between `stallCandidates` and this write (the pane pid, the live
+    // file, `measureClaimant`), so a close can land in that window, and a stall mail
+    // queued after close's `cancelOutstandingDeliveries` would be delivered on a
+    // closed run (`dueDeliveries` does not filter on run state). The fragment is
+    // `stallCandidates`' own, so the candidate and the write cannot disagree about
+    // which states are live, and `unknown` still counts as active.
+    const run = this.db.prepare(
+      `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
+    ).get(runId) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -2926,7 +2943,7 @@ export class CoordStore {
    * unwatched with nothing said. The row shape is `StallRunRow`, declared by its
    * consumer (`stall.ts`).
    */
-  stallCandidates(): { ok: true; runs: StallRunRow[] } | { ok: false; kind: 'run-unreadable'; detail: string } {
+  stallCandidates(): { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
       'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
@@ -3832,7 +3849,7 @@ export class CoordStore {
    * caller took from `stallCandidates`' proven rows. `kind` is the raw column: the
    * verdict compares it with words, and an unnamed kind matches none of them.
    */
-  mailOnRuns(runIds: readonly number[]): { ok: true; mail: StallMailRow[] } | { ok: false; kind: 'mail-unreadable'; detail: string } {
+  mailOnRuns(runIds: readonly number[]): { ok: true; mail: StallMailRow[] } | { ok: false; kind: Extract<StallReadFailure, 'mail-unreadable'>; detail: string } {
     if (runIds.length === 0) return { ok: true, mail: [] };
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, CAST(at AS TEXT) AS atText, runId, fromId, toId, kind, subject ' +
@@ -4532,7 +4549,7 @@ export class CoordStore {
    * (D-2545), so an unrepresentable value answers in words rather than
    * throwing out of the lane.
    */
-  autoContinueHeldUntil(toId: string): { ok: true; until: number | null } | { ok: false; kind: 'delivery-unreadable'; detail: string } {
+  autoContinueHeldUntil(toId: string): { ok: true; until: number | null } | { ok: false; kind: Extract<StallReadFailure, 'delivery-unreadable'>; detail: string } {
     const row = this.db.prepare(
       'SELECT CAST(MAX(nextAttemptAt) AS TEXT) AS untilText FROM mail_deliveries ' +
       `WHERE toId = ? AND lastError = ? AND state IN ${OUTSTANDING_STATES_SQL}`,
