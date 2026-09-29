@@ -299,6 +299,11 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '  print)',
     '    lbl="${2##*/}"',
     '    if [ -f "$HOME/launchctl-loaded" ] && grep -q "^$lbl.plist$" "$HOME/launchctl-loaded"; then',
+    // F12: `fixture-launchctl-not-running` — the job is LOADED and the manager
+    // answers (rc 0), but it is not running: what launchd prints for a job
+    // that is waiting or has exited. `_svc_is_active` reads that as "no
+    // answer", never `inactive` (only rc 113 is that).
+    '      if [ -f "$HOME/fixture-launchctl-not-running" ]; then echo "	state = waiting"; exit 0; fi',
     '      echo "	state = running"',
     // The sweep's stay-up gate samples `pid = ` twice per kicked job; a
     // stable default is a job that stayed up, `fixture-pid-churn` a crash
@@ -9819,6 +9824,89 @@ describe('ccrc update and rollback: refused before anything moves — a ~/ccrc t
     expect(r.stdout).not.toContain('survived');
     expect(linkOf(home)).toBe(cur2);
     expect(readdirSync(join(home, 'ccrc-versions')).sort()).toEqual(['v2.0.0']);
+  });
+});
+
+// F4 and F12 (review 179, fix round 1 item 4): the Darwin arms a LINUX leg can
+// measure. `CCD_OS` is set from `$OSTYPE` at source time and is NOT read from
+// the environment, so every case here assigns it AFTER sourcing (`sourcedCcrc`'s
+// contract) — a whole-process run would need `OSTYPE=darwin…` instead. What is
+// real on that Linux box is only what the arm under test itself produces:
+// `updateEnv`'s python3 stub hands `import os` and the `os.replace` program to
+// the real interpreter (and RECORDS every argv it is asked, `python3-argv`),
+// so the Darwin flip really renames; other Darwin arms a forced run reaches
+// (`_plat_size`'s `stat -f %z`, `_plat_mtime`'s `stat -f %m`) are GNU `stat`'s
+// error, so no case asserts anything they produce. The `python3-argv` lines are
+// the evidence the Darwin arm ran at all: Linux flips by `mv -fT` and asks
+// python3 nothing.
+describe('the Darwin arms a Linux leg can measure: the flip gate and flip, and the loaded-not-running GC read (F4, F12)', () => {
+  const PY_PROBE = '-c import os';
+  const PY_REPLACE = '-c import os, sys; os.replace(sys.argv[1], sys.argv[2])';
+  const pyCalls = (home: string): string[] => (existsSync(join(home, 'python3-argv'))
+    ? fileText(join(home, 'python3-argv')).split('\n').filter((l) => l !== '') : []);
+
+  it('_ver_can_flip answers yes on macOS when python3 runs — the positive path of the gate (the probe RAN; Linux never asks)', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-canflip-');
+    const r = sourcedCcrc(home,
+      `for os in darwin linux; do ( CCD_OS=$os; rc=0; _ver_can_flip || rc=$?; printf '%s rc=%s why=[%s]\\n' "$os" "$rc" "$VER_WHY" ); done`);
+    expect(r.stdout.split('\n').filter((l) => / rc=/.test(l)), r.stderr).toEqual(['darwin rc=0 why=[]', 'linux rc=0 why=[]']);
+    expect(pyCalls(home), 'the Darwin probe did not run python3').toEqual([PY_PROBE]);
+  });
+
+  it('_ver_flip_back flips on macOS through os.replace: the link, the stamp and the record end on the kept version, and its own spine ran', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-flipback-');
+    plantW6Box(home, 'v2.0.0', V2_SHA, 'server');
+    const kept = keptVersion(home, 'v1.0.0', V1_SHA);
+    const r = sourcedCcrc(home,
+      `CCD_OS=darwin; rc=0; _ver_flip_back v1.0.0 server rollback || rc=$?; printf 'rc=%s why=[%s]\\n' "$rc" "$VER_WHY"`);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('rc=')), `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toEqual(['rc=0 why=[]']);
+    expect(linkOf(home), 'the flip did not happen').toBe(kept);
+    expect(fileText(join(home, '.ccrc', 'build.json'))).toBe(fileText(join(kept, '.ccrc-stamp.json')));
+    expect(fileText(join(home, '.ccrc', 'installed'))).toBe(fileText(join(kept, '.ccrc-installed')));
+    expect(existsSync(join(home, 'kept-spine-argv')), 'the kept spine did not run').toBe(true);
+    // The Darwin arm, not Linux's `mv -fT`: the probe, then the one rename.
+    const calls = pyCalls(home);
+    expect(calls[0]).toBe(PY_PROBE);
+    expect(calls.filter((c) => c.startsWith(`${PY_REPLACE} `)), calls.join('\n')).toHaveLength(1);
+  });
+
+  it("_upd_legacy_target's success path flips on macOS: ~/ccrc names the tag's directory, and the pointed-at version is never written", () => {
+    const home = freshUpdateBox('ccrc-update-darwin-legacy-');
+    const cur = plantW6Box(home, 'v2.0.0', V2_SHA);
+    const before = treeDigest(cur);
+    const r = sourcedCcrc(home, '_ver_layout; CCD_OS=darwin; rc=0; _upd_legacy_target v1.0.0 || rc=$?; printf "rc=%s\\n" "$rc"');
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('rc=')), `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toEqual(['rc=0']);
+    expect(linkOf(home)).toBe(join(home, 'ccrc-versions', 'v1.0.0'));
+    expect(readdirSync(join(home, 'ccrc-versions')).sort()).toEqual(['v1.0.0', 'v2.0.0']);
+    expect(treeDigest(cur), 'the version this run replaces was written').toEqual(before);
+    const calls = pyCalls(home);
+    expect(calls[0]).toBe(PY_PROBE);
+    expect(calls.filter((c) => c.startsWith(PY_REPLACE))).toHaveLength(1);
+  });
+
+  // F12. The fixture-path `launchctl` stub (which `_svc_launchctl` honours off
+  // /bin and /usr/bin) has a loaded-but-not-running arm, `fixture-launchctl-not-running`:
+  // rc 0 and `state = waiting`. That is "the manager did not say", and the GC read
+  // must stop on it — `_ver_running_names` is asked DIRECTLY, because a forced-Darwin
+  // whole prune stops earlier, in `_ver_list` on `_plat_mtime`'s `stat -f %m`, and
+  // would pass for that reason. The two controls in the same run keep the arm honest:
+  // a job nobody loaded (rc 113) is `inactive` and runs nothing (rc 0), and the
+  // loaded-not-running job is the only one that stops it.
+  it('the Darwin GC read stops on a job that is loaded but not running (rc 1, "no answer") — and reads a job that is not loaded (rc 113) as stopped', () => {
+    const home = freshUpdateBox('ccrc-update-darwin-notrunning-');
+    plantW6Box(home, 'v2.0.0', V2_SHA);
+    const probe = `CCD_OS=darwin; rc=0; _ver_running_names || rc=$?; printf 'rc=%s running=[%s] why=[%s]\\n' "$rc" "\${VER_RUNNING[*]}" "$VER_WHY"`;
+    // control: nothing is loaded — launchctl answers 113, a POSITIVE "no such job"
+    let r = sourcedCcrc(home, probe);
+    expect(r.stdout, r.stderr).toBe('rc=0 running=[] why=[]\n');
+    // the job is loaded, and the manager answers, but the job is not running
+    writeFileSync(join(home, 'launchctl-loaded'), 'app.ccrc.ccrc.plist\napp.ccrc.ccrc-agent.plist\n');
+    writeFileSync(join(home, 'fixture-launchctl-not-running'), 'yes\n');
+    r = sourcedCcrc(home, probe);
+    expect(r.stdout, r.stderr).toBe('rc=1 running=[] why=[the service manager did not say whether ccrc.service is running (no answer)]\n');
+    // and `_ver_protect`, which the prune calls, stops with the same reason
+    r = sourcedCcrc(home, `CCD_OS=darwin; rc=0; _ver_protect || rc=$?; printf 'rc=%s why=[%s]\\n' "$rc" "$VER_WHY"`);
+    expect(r.stdout, r.stderr).toBe('rc=1 why=[the service manager did not say whether ccrc.service is running (no answer)]\n');
   });
 });
 
