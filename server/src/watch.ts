@@ -12,7 +12,8 @@ import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
-import { liveSessionStatus, readLiveState } from './livestate.js';
+import { readLiveState } from './livestate.js';
+import { mailTurnIdle, mailTurnModeOf } from './turnidle.js';
 import { readHookState, type HookState } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { sendPrompt } from './inject/send.js';
@@ -352,6 +353,16 @@ const MAIL_BACKOFF_MAX_MS = PR_BACKOFF_MAX_MS;
  *  minutes against a reset that may be hours away: cheap re-reads, and the
  *  first sweep after the session resumes delivers. */
 const MAIL_ARMED_HOLD_MS = 300_000;
+
+/** Worker stall watch §4.1: how long a nudge is held when `sendPrompt` refused
+ *  it `turn-running`. The live word delivered it (`shell`), but the pane's last
+ *  8 rows showed `esc to interrupt`. Like `MAIL_ARMED_HOLD_MS`, this is not a
+ *  backoff step. The recipient is not failing, so the hold counts no attempt
+ *  and `MAIL_MAX_ATTEMPTS` cannot park it. Unlike that hold, the sender is not
+ *  told, because a running turn is not a blocked recipient. *Chosen*, 60 s: a
+ *  turn may end in seconds, while `MAIL_ARMED_HOLD_MS` is sized for a usage-limit
+ *  reset. */
+const MAIL_TURN_HOLD_MS = 60_000;
 
 /** The ceiling on successful, UNACKED replays (review finding 20) — see
  *  `MAIL_MAX_ATTEMPTS`'s own docstring for why that counter cannot serve
@@ -3154,6 +3165,11 @@ export class FleetWatcher {
     // Fail-shut: a registry we cannot list is a kill-switch we cannot read.
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
+    // The gate's mode comes from this SAME listing (worker stall watch §4.1,
+    // `turnidle.ts`). An unlistable registry has already returned above, so a
+    // mode is never read from a listing that failed: the strict marker fails
+    // shut at no extra cost.
+    const mode = mailTurnModeOf(listing);
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
@@ -3549,7 +3565,11 @@ export class FleetWatcher {
         const cfgDir = configDirFor(this.deps.cfg, identity.wrapper);
         if (!cfgDir) { gated(d, 'no-config-dir'); continue; }
         const live = await readLiveState(this.deps.io, cfgDir, pid);
-        if (!live || liveSessionStatus(live.status) !== 'idle') { gated(d, 'not-idle'); continue; }
+        // ONE decision for both gates (worker stall watch §4.1, `turnidle.ts`).
+        // `idle` delivers as before. So does `shell`, an idle main loop over
+        // background shell work, unless `$REG/mail-gate-strict` is listed. A
+        // null read is `not-idle`, as `!live` was.
+        const turn = mailTurnIdle(live, now, isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS, mode);
         // THE GATE TOKEN DOES NOT FORK, deliberately (D-1167). `MailGate`'s own
         // docstring sets the rule — one member per CONDITION, not per `continue`
         // — and `no-pane`/`no-config-dir` were split because an operator acts on
@@ -3560,8 +3580,12 @@ export class FleetWatcher {
         // `coord-not-quiet` member would cost a union entry, a total-map entry in
         // `shared/api.ts` and a phrase in `MailStrip.tsx` to record a distinction
         // nobody acts on.
-        if (live.statusUpdatedAt === null ||
-            now - live.statusUpdatedAt < (isCoordinator ? COORD_QUIET_MS : MAIL_QUIET_MS)) { gated(d, 'not-quiet'); continue; }
+        //
+        // Both tokens are spelled as LITERALS in a ternary on purpose. The D-792
+        // structure scan (`mail-sweep.test.ts`) counts a gate only where its name
+        // is written at the call, so `gated(d, turn.gate)` would leave both with
+        // no call site it can see.
+        if (!turn.deliver) { const notIdle = turn.gate === 'not-idle'; gated(d, notIdle ? 'not-idle' : 'not-quiet'); continue; }
 
         // `seen` is added only HERE, once every gate above has passed and the
         // send is actually about to be attempted — it means "one message per
@@ -3613,8 +3637,15 @@ export class FleetWatcher {
         // With no run event to read, nothing is passed and `sendPrompt`
         // refuses `draft-present` exactly as it does today.
         const ownStrandedClear = store.strandedClear(d.toId);
+        // `refuseIfTurnRunning` only when the live word that delivered is not
+        // `idle` (worker stall watch §4.1). It is a tripwire for a build where
+        // `shell` stopped meaning idle: the last 8 captured rows showing
+        // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
+        // where the line wraps, and on a `--remote-control` pane, which never
+        // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true });
+          { resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+            refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           store.markDelivered(d.id, now);
@@ -3708,6 +3739,17 @@ export class FleetWatcher {
               `mail-blocked-${d.id}`);
           }
           store.backOff(d.id, res.error, now + MAIL_ARMED_HOLD_MS, false);
+          continue;
+        }
+
+        if (res.error === 'turn-running') {
+          // Worker stall watch §4.1. The pane guard saw `esc to interrupt` and
+          // refused before any keystroke. This arm sits before the attempts
+          // ceiling, as the hold above does, because a running turn is not a
+          // failed send. There is NO `tellSender`: a running turn is not a
+          // blocked recipient, and the first sweep after the hold reads the
+          // live word again.
+          store.backOff(d.id, res.error, now + MAIL_TURN_HOLD_MS, false);
           continue;
         }
 
