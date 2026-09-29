@@ -1841,7 +1841,7 @@ MSG
   - `function childReclaimTerminalRefusal(row: ChildReclaimJournalRow, kindOf: (token: string) => ChildReclaimTokenKind | null): boolean` — the ONE reading of "this child is under a terminal refusal", shared by the attention list and the lane's terminal exclusion; `function childReclaimFailingPastCeiling(row: ChildReclaimJournalRow, nowMs: number): boolean`; `function childReclaimFailingSentence(word: string | null): string` — the server's sentence for a child listed for failing (contract §8 R20).
   - `interface ChildReclaimAttentionInput` (the mirror rows, the live registry map, the two lookups, the clock — and nothing else: contract §4 and §7 R5 derive the attention item from the lifecycle mirror ONLY, and every audit-time TERMINAL refusal reaches that mirror through wave 3's `verb ws-audit` line, Task 1 Step 3 fact 6) and `function childReclaimAttention(input: ChildReclaimAttentionInput): ChildReclaimAttention[]` — terminal refusals, and failures that have lasted the ceiling (contract §8 R20), of children whose registry row still exists and whose latest reclaim line ccd placed in time (a null `at` lists nothing, contract §8 R22′).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/test/child-reclaim-sweep-policy.test.ts`:
 
@@ -2233,13 +2233,13 @@ describe('childReclaimAttention', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test.ts`
 
 Expected: FAIL at collection — `Failed to load url ../src/childReclaimSweep.js` (the module does not exist); every case unrun.
 
-- [ ] **Step 3: Write the policy**
+- [x] **Step 3: Write the policy**
 
 Create `server/src/childReclaimSweep.ts`:
 
@@ -2608,7 +2608,7 @@ export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildRecla
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test.ts test/single-definition.test.ts test/typecheck-tests.test.ts
@@ -2616,7 +2616,7 @@ cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test
 
 Expected: PASS — `child-reclaim-sweep-policy` 44/44 (eighteen verdict cases, eleven memory/clock/backoff cases, six `childReclaimJournalRow` cases, nine attention cases); `single-definition` green (the file spells no guarded enumeration); `typecheck-tests` compiles the new test.
 
-- [ ] **Step 5: Mutation check, then commit**
+- [x] **Step 5: Mutation check, then commit**
 
 | # | Edit (in `server/src/childReclaimSweep.ts`) | Expected red (`cd server && ./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test.ts`) |
 |---|---|---|
