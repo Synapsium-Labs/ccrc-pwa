@@ -642,6 +642,13 @@ describe('the rejection table is total, in both directions', () => {
                               // maps it to a status and no client switches on it. Listed
                               // rather than merged, for the reason stated above — three
                               // vocabularies sharing one scanner stay three.
+      'auto-continue-armed',  // a `SendResult` error (`inject/send.ts`) again, the
+                              // `enter-ignored` shape: store.ts's
+                              // `AUTO_CONTINUE_ARMED_LAST_ERROR`, the `lastError` the
+                              // mail sweep's `backOff` stores and the stall watch's
+                              // `autoContinueHeldUntil` reads back (stall watch wave 1).
+                              // A send refusal passing through, not a mail refusal and
+                              // not a run refusal: nothing here maps it to a status.
       'session-gone',         // claims.ts `claimExpiry`'s `endedBy` values (Build 9 D12) —
       'hard-cap',             // stored forensics on a lapsed claim, never a refusal a
                               // caller switches on. `ClaimSummary.endedBy` is deliberately
