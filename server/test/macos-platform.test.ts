@@ -109,8 +109,11 @@ describe('no call site outside the platform block runs a GNU-only command bare',
   // ccrc (the shims legitimately spell both arms), and refuse the GNU-only
   // spellings the block exists to wrap.
   //
-  // `readlink -f` is deliberately NOT in the table: the tree's one live call
-  // site (cmd_swap) predates the port on both sides, and macOS ships
+  // `readlink -f` is deliberately NOT in the table: its live call sites (ccd's
+  // cmd_swap, which predates the port, and ccrc's own `_mem_apply`, the
+  // graphify-engine reads, `_inst_graph_always_on_off` and — since versioned
+  // installs — `_ver_running_names`, the GC's running-unit check, where an
+  // empty answer is read as unmeasured) all run on a macOS that ships
   // `readlink -f` from 12.3 — a floor the port accepts rather than shims.
   // `systemctl`/`journalctl` are not here either: the `_svc_` layer and the
   // doctor's remedy STRINGS spell them legitimately, and the doctor's
@@ -728,25 +731,36 @@ describe('_plat_ln_swap: one rename, both arms (W6 Task 1)', () => {
   });
 
   for (const os of ['linux', 'darwin'] as const) {
-    it(`refuses a real directory at <link> and touches nothing (${os} arm)`, () => {
-      const f = fixture();
-      try {
-        rmSync(f.link);
-        mkdirSync(f.link);
-        writeFileSync(path.join(f.link, 'LIVE'), 'pre-versioned tree');
-        const before = statSync(f.link).mtimeMs;
-        const r = swap(os, f);
-        expect(r.rc, 'a real directory is the migration\'s case, never the flip\'s').toBe(1);
-        expect(r.out).toBe('');
-        expect(r.calls, 'refused BEFORE anything is staged').toEqual([]);
-        expect(lstatSync(f.link).isDirectory()).toBe(true);
-        expect(readdirSync(f.link)).toEqual(['LIVE']);
-        expect(statSync(f.link).mtimeMs).toBe(before);
-        expect(lexists(`${f.link}.new`), 'nothing may be left staged').toBe(false);
-      } finally {
-        rmSync(f.d, { recursive: true, force: true });
-      }
-    });
+    for (const kind of ['directory', 'file'] as const) {
+      it(`refuses a real ${kind} at <link> and touches nothing (${os} arm)`, () => {
+        const f = fixture();
+        try {
+          rmSync(f.link);
+          if (kind === 'directory') {
+            mkdirSync(f.link);
+            writeFileSync(path.join(f.link, 'LIVE'), 'pre-versioned tree');
+          } else {
+            writeFileSync(f.link, 'not a tree');
+          }
+          const before = statSync(f.link).mtimeMs;
+          const r = swap(os, f);
+          expect(r.rc, 'a real directory is the migration\'s case, and a file nobody\'s — never the flip\'s').toBe(1);
+          expect(r.out).toBe('');
+          expect(r.calls, 'refused BEFORE anything is staged').toEqual([]);
+          if (kind === 'directory') {
+            expect(lstatSync(f.link).isDirectory()).toBe(true);
+            expect(readdirSync(f.link)).toEqual(['LIVE']);
+          } else {
+            expect(lstatSync(f.link).isFile()).toBe(true);
+            expect(readFileSync(f.link, 'utf8')).toBe('not a tree');
+          }
+          expect(statSync(f.link).mtimeMs).toBe(before);
+          expect(lexists(`${f.link}.new`), 'nothing may be left staged').toBe(false);
+        } finally {
+          rmSync(f.d, { recursive: true, force: true });
+        }
+      });
+    }
 
     for (const kind of ['file', 'directory'] as const) {
       it(`refuses a ${kind} at <link>.new, and leaves both names alone (${os} arm)`, () => {

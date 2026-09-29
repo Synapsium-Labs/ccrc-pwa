@@ -862,12 +862,15 @@ const UNIT_LINES =
   'claude-session@alpha.service loaded active running fixture supervisor\n'
   + 'claude-session@beta.service loaded active running fixture supervisor\n';
 
-/** A sorted recursive listing of `<home>` as `<relpath>\t<size>` lines —
+/** A sorted recursive listing of `<home>` as `<relpath>\t<sha256>` lines
+ *  (a regular file by its CONTENT digest, T2 of the final review: a size
+ *  line let a same-length rewrite — every record is `<sha>\n`, 41 bytes —
+ *  pass a "writes nothing" case) —
  *  the before/after snapshot the `--check` write-nothing case compares.
  *  A SYMLINK is recorded as `<relpath> -> <its value>` and not descended
  *  (W6 Task 7): on a versioned box `~/ccrc` is a link, and `lstat`'s size of
  *  a link is the length of its target, so a flip between two same-length
- *  names (`v9.9.1` → `v9.9.0`) left the old `<relpath>\t<size>` line
+ *  names (`v9.9.1` → `v9.9.0`) left the old size-only line
  *  byte-identical — measured. `~/ccrc-versions/` is a real directory under
  *  `<home>` and is walked on its own.
  *  `<home>/tmp/**` is the staging dir TMPDIR points at (update's own
@@ -884,7 +887,9 @@ function homeSnapshot(home: string): string[] {
       const p = join(d, e);
       const st = lstatSync(p);
       if (st.isSymbolicLink()) out.push(`${rel} -> ${readlinkSync(p)}`);
-      else if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); } else out.push(`${rel}\t${st.size}`);
+      else if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); }
+      else if (st.isFile()) out.push(`${rel}\t${sha256(p)}`);
+      else out.push(`${rel}\t(special file)`);
     }
   };
   walk(home, '');
@@ -2020,7 +2025,9 @@ describe('ccrc update: previous, and a spine that dies (design §10–§11; W4 T
     writeFileSync(join(home, 'fixture-install-step'), '_inst_node_id\n');
     const r = runUpdate(home);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_node_id, before _inst_tree: nothing was replaced; read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
+    expect(r.stderr).toMatch(/^ccrc: the staged install \(which ends with doctor\) exited 1 — spine died at _inst_node_id, before _inst_tree: nothing was replaced; put back as they were: completed-install record; read its lines above\. The backup taken BEFORE it ran is complete at \S+\/ccrc-backups\/\S+$/m);
+    // D-3462: the record this box carried is back — this death replaced nothing.
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'the cleared record was left removed').toBe(true);
     expect(report(home)).toMatchObject({ phase: 'failed', detail: 'spine died at _inst_node_id', target: 'v2.0.0' });
   });
 
@@ -2774,6 +2781,20 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     expect(r.code, r.stderr).toBe(1);
     expect(r.stdout.split('\n')[0]).toMatch(/^check: box=v9\.9\.1 sha=\S+ target=v9\.9\.2 (.* )?state=behind$/);
     expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  it('homeSnapshot records a regular file by its content digest: a rewrite to the same length is a difference (T2, final review)', () => {
+    // The size-only line was the link's twin: a record rewritten to another
+    // sha of the same length (`<sha>\n` is always 41 bytes) left the listing
+    // byte-identical, so a "writes nothing" case passed over a rewritten file.
+    const home = mkTmp('ccrc-update-snapshot-content-');
+    mkdirSync(join(home, '.ccrc'));
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'a'.repeat(40)}\n`);
+    const before = homeSnapshot(home);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'b'.repeat(40)}\n`);
+    expect(homeSnapshot(home)).not.toEqual(before);
+    writeFileSync(join(home, '.ccrc', 'installed'), `${'a'.repeat(40)}\n`);
+    expect(homeSnapshot(home), 'unchanged bytes read as unchanged').toEqual(before);
   });
 
   it('homeSnapshot records a link by its target: a flip between two same-length version names is a difference (W6 Task 7)', () => {
@@ -8839,7 +8860,12 @@ describe('ccrc update: restore arm 1 — a flip back to the kept previous versio
     // before the staged spine.
     writeFileSync(join(home, '.ccrc', 'previous'), `v1.0.0\n${V1_SHA}\n`);
     rmSync(join(home, '.ccrc', 'installed'));
+    // `sourcedCcrc` re-plants the poisoned `gh` (`updateEnv`), and a real kept
+    // spine ends with doctor: on the poison it FAILs, which is now (F9) part of
+    // what arm 1's line says. This case is about a CLEAN restore, so the doctor
+    // stubs `runUpdate` re-plants before every run are re-planted by the script.
     const r = sourcedCcrc(home, [
+      'cp "$HOME"/doctor-stubs/* "$HOME/.local/bin/"',
       'export PATH="$HOME/fail-bin:$PATH" CCRC_UPDATE_HEALTH_S=0',
       'UPD_VERSION=v2.0.0; UPD_REPORT_TARGET=v2.0.0; UPD_GATE_WHY="the first gate"',
       'rc=0; _upd_restore_arm1 "" "spine died at _inst_tree" v1.0.0 1 || rc=$?',
