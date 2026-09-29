@@ -75,6 +75,22 @@ exit 0
 `, { mode: 0o755 });
 }
 
+/** Atomically replace the user-owned roster immediately before or after the
+ *  real Node validator. This deterministically exercises both sides of the
+ *  validation/use gap without asking a scheduler to hit a timing window. */
+function replaceRosterWhenNodeRuns(next: unknown, when: 'before' | 'after'): void {
+  const bin = j('.local', 'bin');
+  const replacement = j('accounts-around-node.json');
+  const move = `${JSON.stringify(realBin('mv'))} ${JSON.stringify(replacement)} "$HOME/.ccrc/accounts.json"`;
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(replacement, JSON.stringify(next, null, 2));
+  fs.writeFileSync(path.join(bin, 'node'), `#!/bin/bash
+${when === 'before' ? `${move}\n` : ''}${JSON.stringify(realBin('node'))} "$@"
+rc=$?
+${when === 'after' ? `[ "$rc" -ne 0 ] || ${move}\n` : ''}exit "$rc"
+`, { mode: 0o755 });
+}
+
 const token = (id: string, value = 'sk-ant-oat01-FIXTURE'): void => {
   fs.mkdirSync(j('.cc-secrets'), { recursive: true });
   fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`),
@@ -398,6 +414,66 @@ describe('eligibility is roster-derived', () => {
     expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('uses the exact roster snapshot that passed whole-roster validation', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+    ] }));
+    const replacement = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] };
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+    replaceRosterWhenNodeRuns(replacement, 'after');
+
+    const r = run();
+
+    expect(r.status, r.stderr).toBe(0);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('validates the snapshot rather than a replacement roster path', () => {
+    const invalid = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] };
+    replaceRosterWhenNodeRuns(invalid, 'before');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    fs.writeFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'partial');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.existsSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'))).toBe(false);
   });
 
   it('an id carrying whitespace is ONE illegal id, never two legal ones', () => {
