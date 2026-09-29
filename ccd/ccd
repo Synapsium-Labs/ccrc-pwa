@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=e1578e8178fb6a3e6774ffefa0155f5ccce90aeff472a508a41d18128dadd560
+# ccrc:generated 1 sha256=ef09ef7477e85ed4dd1efd427d6eb909b67bbe65a0c007e7e2147dc4a24e93b0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -19515,12 +19515,33 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # anything minted.
 #
 # THREE ANSWERS, one line on stdout:
-#   rc 0  `free`                no refs/heads/ws/<slug>, nothing at all at $wt
-#                               (not even a dangling link), and $wt is not a
-#                               registered worktree of $main;
-#   rc 1  `taken <what>`        `branch ws/<slug>`, `path <wt>` or
-#                               `worktree <wt>` — the first one found;
-#   rc 2  `unmeasurable <why>`  git could not answer.
+#   rc 0  `free`                EVERY one of these holds: no branch
+#                               `refs/heads/ws/<slug>` (packed or loose,
+#                               `show-ref`); no branch `refs/heads/ws` itself;
+#                               no PACKED child ref under
+#                               `refs/heads/ws/<slug>/` (`for-each-ref`); no
+#                               loose ref/file/directory conflict at
+#                               `refs/heads/ws` or `refs/heads/ws/<slug>`;
+#                               nothing at all at $wt (not even a dangling
+#                               link); and $wt is not a registered worktree of
+#                               $main;
+#   rc 1  `taken <what>`        every shape below, the FIRST one found:
+#                                 `branch ws/<slug>`        the direct ref
+#                                 `branch ws`                a branch named
+#                                                            exactly `ws`,
+#                                                            packed or loose
+#                                 `branch ws/<slug>/<x>`    a PACKED child ref
+#                                                            (`for-each-ref`)
+#                                 `branch ws/<slug>/ (a directory holds its
+#                                   path)`                  a LOOSE child ref
+#                                                            git cannot list
+#                                 `path <wt>`                something at the
+#                                                            worktree path
+#                                 `worktree <wt>`            a registered
+#                                                            worktree whose
+#                                                            directory may be
+#                                                            gone
+#   rc 2  `unmeasurable <why>`  git, or the filesystem, could not answer.
 # The third must never fold into either of the others. Folded into `free`, it
 # retries into the very late death this exists to prevent; folded into
 # `taken`, it burns all sixty draws and blames the slug for a repository git
@@ -19533,8 +19554,8 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # anything under an unsearchable `refs/heads` or `refs/heads/ws`, and a
 # directory/file conflict — a `ws/<slug>/<x>` branch, or one named just `ws` —
 # every one of which `git worktree add -b ws/<slug>` then dies on. Only an
-# unreadable `packed-refs` reaches the rc 128 its `*)` arm catches. So rc 1 is
-# believed only after three more probes agree:
+# unreadable or corrupt `packed-refs` reaches the rc 128 its `*)` arm catches.
+# So rc 1 is believed only after three more probes agree:
 #   - `show-ref` on `refs/heads/ws` itself, and `for-each-ref` under
 #     `refs/heads/ws/<slug>/` — the conflicts git can READ, packed or loose;
 #   - the LOOSE PATHS under `--git-common-dir`: `refs` and `refs/heads` must
@@ -19546,9 +19567,12 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # A ref present only in `packed-refs` is already answered by `show-ref`. An
 # EMPTY directory at the ref path reads `taken` by ruling, though git itself
 # removes one and succeeds — measured; the stricter answer only skips a slug.
-# The loose probe assumes the files backend: a reftable repository's
-# `refs/heads` is no searchable directory, and it answers `unmeasurable` —
-# loud and closed, never free.
+# The loose probe assumes the files backend: a reftable repository has no
+# `refs/heads` DIRECTORY at all. An ABSENT `refs/heads` is narrower than
+# merely unsearchable — it is no evidence of a loose ref either way — and
+# answers `unmeasurable … refs/heads is absent`, never `free`: a reftable
+# repository and a corrupt one that lost the directory read the same, loud
+# and closed.
 #
 # THE REPOSITORY IS PROVED TO BE $main FIRST. git skips a `.git` it cannot read
 # and keeps discovering UPWARDS, so a broken $main inside another repository
@@ -19558,8 +19582,12 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # PATH IS `-e || -L`: `-e` follows a link, so a dangling one reads as absent
 # while `git worktree add` still refuses the path. An empty directory is
 # `taken` too, deliberately: ccd did not make it, so ccd cannot say whose it is.
-# And `-e` is false on EACCES as well as on absence, so when `$wt` does not stat
-# the directories above it must be searchable, or the answer is `unmeasurable`.
+# And `-e` is false on EACCES as well as on absence, so when `$wt` does not
+# stat, only TWO LEVELS are checked for searchability: $WORKTREES_ROOT
+# itself, and $WORKTREES_ROOT/<project>. Either unsearchable answers
+# `unmeasurable`. Anything ABOVE $WORKTREES_ROOT — its own parent
+# directories — is RESIDUAL: unprobed, assumed reachable, exactly as the
+# ws-add race below is.
 #
 # WORKTREE COMPARES RESOLVED PATHS. git prints every worktree path with its
 # symlinks collapsed ($HOME/worktrees -> /data/worktrees in production) while
@@ -19573,7 +19601,11 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
 # answer and `git worktree add` come a fetch and a mkdir — so `ws-rename`'s
 # `git branch -m`, any session's own git, or a ws-add under a second label on
 # the same repository can still take the ref in that window. git's own refusal
-# at `worktree add` is then the backstop, as it was before this existed.
+# at `worktree add` is then the backstop, as it was before this existed. A
+# STALE `refs/heads/ws/<slug>.lock` — left by an interrupted `git branch` or
+# `worktree add` — is residual too: no probe above names it, and
+# `git worktree add -b ws/<slug>` fails on it with git's own message telling
+# the operator to remove the lock, the same backstop as the race itself.
 _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <what>` | 2 `unmeasurable <why>`
   local main="$PROJECTS_ROOT/$1" wt="$WORKTREES_ROOT/$1/$2" top rc listing line rwt kid common d
   top=$(git -C "$main" rev-parse --show-toplevel 2>/dev/null) \
@@ -19597,9 +19629,19 @@ _ws_slug_git_state() {   # project slug -> one line + rc: 0 `free` | 1 `taken <w
   [[ -n "$kid" ]] && { echo "taken branch ${kid#refs/heads/}"; return 1; }
   common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
     || { echo "unmeasurable git rev-parse --git-common-dir failed in $main"; return 2; }
-  for d in "$common/refs" "$common/refs/heads"; do
-    [[ -d "$d" && -x "$d" ]] || { echo "unmeasurable cannot search $d"; return 2; }
-  done
+  [[ -d "$common/refs" && -x "$common/refs" ]] \
+    || { echo "unmeasurable cannot search $common/refs"; return 2; }
+  if [[ -d "$common/refs/heads" ]]; then
+    [[ -x "$common/refs/heads" ]] \
+      || { echo "unmeasurable cannot search $common/refs/heads"; return 2; }
+  else
+    # NARROWED (residue, review 142): absent is not merely unsearchable — a
+    # reftable repository never has this directory, and neither does one that
+    # lost it to corruption. Either way it is no evidence of a loose ref, so
+    # this still answers unmeasurable, never free.
+    echo "unmeasurable refs/heads is absent under $common — a reftable repository, or a corrupt one"
+    return 2
+  fi
   d="$common/refs/heads/ws"
   if [[ -e "$d" || -L "$d" ]]; then
     [[ -d "$d" ]] || { echo "taken branch ws"; return 1; }
