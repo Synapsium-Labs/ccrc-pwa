@@ -19,9 +19,10 @@ as such". They were right, and it was not one bug. A quarter of the live fleet w
 `cleanup` — rendered with the word **`merged`**, ranked *below idle*, and counted out of its
 project's busy total — while mid-turn, because the bucket ladder tested an archive marker that ccd
 never clears on a revive. Underneath that sat a second, opposite failure: Claude Code's own live
-status file wedges on `"shell"` when a turn ends on a Bash call, holding a finished session in
-`working` indefinitely (measured: 1 h 55 m on one session, reproduced independently on a second the
-same afternoon). Underneath *that*, a third: the file has grown a fourth status word, `waiting`,
+status file reads `"shell"` after a turn ends with a background shell still running, holding a
+finished session in `working` for as long as that shell lives (measured: 1 h 55 m on one session,
+reproduced independently on a second the same afternoon; read here at first as a wedge, corrected in
+§1.2). Underneath *that*, a third: the file has grown a fourth status word, `waiting`,
 which ccrc had never heard of and laundered into `busy`, so a session blocked on a human read as
 working. The repair is one conjunct, one arbitration rule, and one parsed field — 12 lines of logic
 across two files, no wire change, no new bucket token.
@@ -71,6 +72,15 @@ idle↔busy transitions, so this is a stuck value, not flapping.
 
 The trigger is ordinary: a turn whose last tool call was a Bash — including every
 `run_in_background` and every `until … sleep` poll, which are normal ccrc workflows.
+
+**Corrected 2026-09-29** (the worker stall watch design, `2026-09-29-worker-stall-watch-design.md`
+§3.1, confirmed in every installed Claude Code from 2.1.277 to 2.1.284): this is not a stuck value.
+Claude Code writes `busy` while the main query runs, and relabels an IDLE main loop `shell` while any
+background shell task — a `run_in_background` Bash, a shell Monitor — still runs; the file is rewritten
+only when the word changes. A foreground Bash call is part of the main query and reads `busy`. So the
+two sessions above had finished their turns with a background shell still alive, and the hook's `done`
+was right. The measurements stand; the reading "wedge" does not. From that design's wave 1 the mail
+gate delivers on `shell`.
 
 ### 1.3 Claude Code writes a fourth status
 

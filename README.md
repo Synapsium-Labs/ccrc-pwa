@@ -2295,7 +2295,7 @@ question | answer | status | artifact` — through `POST /api/mail`, attributed
 (`{fromId, fromUuid}` checked against the live registry: freshness, not
 forgery-proofness) and capped (an 8 KiB body, typed rejection codes, every
 rejection itself recorded, win or lose). A watcher lane (`MAIL_SWEEP_MS`,
-10 s) walks queued deliveries and, once a recipient has been idle-quiet for
+10 s) walks queued deliveries and, once a recipient has been turn-quiet for
 `MAIL_QUIET_MS` (60 s) with no dialog or ask pending — or `COORD_QUIET_MS`
 (15 s) when the recipient is a COORDINATOR, i.e. the `claimedBy` of a
 non-terminal run, which its own contract requires to be sitting idle at a wave
@@ -2304,7 +2304,18 @@ envelope through `sendPrompt`'s full proof discipline — never re-rendered,
 replayed verbatim on later sweeps (after a per-session `MAIL_COOLDOWN_MS`, or
 `COORD_COOLDOWN_MS` for a coordinator, and again every `MAIL_REPLAY_MS`) until
 the recipient POSTs
-`/api/mail/:id/ack`.
+`/api/mail/:id/ack`. Turn-quiet is `mailTurnIdle`'s reading
+(`server/src/turnidle.ts`) of the recipient's live status file: `idle`, and
+also `shell` — Claude Code relabels an IDLE main loop `shell` while a
+background shell or Monitor it started still runs, so a worker that ended its
+turn to wait on one gets its mail within a minute, where it used to be held
+for as long as that shell lived. `busy`, `waiting` and any word it does not
+know are held, as before. A `shell` delivery also refuses while the pane's
+last rows show `esc to interrupt` (`turn-running`: held for
+`MAIL_TURN_HOLD_MS`, 60 s, and never counted as an attempt) — a best-effort
+tripwire, blind on a `--remote-control` pane and below `READER_MIN_COLS`.
+`touch $REG/mail-gate-strict` on the fleet host restores the idle-only gate;
+`rm` it to go back.
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
 `/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
@@ -2399,6 +2410,41 @@ resume. Dispatch honours this marker too, not only `coordinator-paused` — it
 refuses outright (`409 refused:'mail-disabled'`) rather than resuming a
 worker and injecting `/clear` into a context whose wave brief would then sit
 held by the very kill-switch the operator just raised.
+
+**The stall watch.** A watcher lane, `sweepStalls` (every 60 s, its verdict the
+pure `server/src/coord/stall.ts`), looks at the worker of every active run. It
+reads whose turn it is from the newest mail between the worker and anyone but
+itself: the coordinator's after the worker's `question`, its `wave-done` or
+`review-done` claim, or a `re stall-check: waiting` reply, and after a
+coordinator mail whose subject begins `wait:`; the worker's otherwise. When the
+ball is the worker's and its main loop has sat `idle` or `shell` for 2 h with
+no mail either way, it mails the worker a `stall-check:` from `operator` (r1:
+recorded, not pushed), whose body carries its own reply protocol and says who
+is told next — no one, while escalation is unarmed; an hour on, with still no
+worker mail, a `stall:` mail to the coordinator (r2, pushed `⚠ stall`); an hour
+after that, one operator push, `⚠ stalled` (r3), which states when the check
+and the report went out and whether the coordinator has mailed the worker
+since. Each hour runs from the rung before. A worker that reads `busy` when a
+rung falls due defers it, and that rung's hour then runs again from the live
+file's next stamp; a restamp inside the hour (the worker's own turn after a
+notice) does not re-time it, and neither does mail — worker mail opens a new
+episode instead. r2 and r3 measure the silence from the worker's own last mail
+on the run, or from dispatch. A paused coordinator, a dead one or none at all
+skips r2, and r3 says which. It holds — sends nothing — on anything it could
+not measure (a live file with no timestamp included), a dead or restarting
+worker, an open question, a harness dialog (one `⚠ stalled … (dialog)` push
+after 2 h), a usage limit (one `⚠ limit` push after 12.5 h) and a `busy`
+worker. When the ball is the coordinator's it waits, and pushes `⚠ waiting`
+once after 30 h with no mail on the run. Every rung is written as a
+`run_events` observation row before it is sent, so a restart never sends one
+twice, and a run that has left the active states by then gets neither; the
+watch never closes, reclaims or re-dispatches anything. Three markers in
+`$REG` arm it, each touched and removed by hand on the fleet host and written
+by nothing in the tree: `stall-watch-disabled` stops the lane; with no
+`stall-watch-live` every rung is SHADOW (a `stall-shadow:` row and a
+`ccrc-server: stall-watch shadow` log line, nothing sent); `stall-watch-live`
+sends the notices addressed to the worker; `stall-watch-escalate` sends the
+coordinator mails and the operator pushes too.
 
 **The honest boundary.** The coordinator acts through this server's HTTP
 API — one recorded chokepoint for every irreversible act (dispatch, close,
@@ -3168,11 +3214,14 @@ untouched and still answers *what is staged on disk*, so `/archive`,
 
 **Two observers decide `working`, and the fresher one wins** (D-75). `status`
 comes from Claude Code's `sessions/<pid>.json`; `hookState` comes from
-`session-hook.sh`. Both fail, in opposite directions. The live file *wedges* —
-a turn whose last tool call was a Bash ends without Claude Code writing the
-transition back, leaving `"status":"shell"` forever (measured twice on one
-day; one session held it 1h55m while its hook had written `done` 5.7s after
-the file's last write). The live file is also blind to a session waiting on
+`session-hook.sh`. Both fail, in opposite directions. The live file *outlives
+the turn* on `shell` — Claude Code relabels an IDLE main loop `shell` while a
+background shell or Monitor it started still runs, so a turn that ended with
+one running reads `"status":"shell"` for as long as that shell lives (measured
+twice on one day; one session held it 1h55m while its hook had written `done`
+5.7s after the file's last write). That is a finished turn, not the wedge this
+paragraph once called it (the worker stall watch design's §3.1), and the mail
+gate delivers on it. The live file is also blind to a session waiting on
 subagents, and reads `idle` when it is missing, unreadable, or behind an
 unknown wrapper. So `sessionBucket` compares `hookUpdatedAt` against
 `statusUpdatedAt`: a newer hook `done` unseats a stale `busy` (except
@@ -3439,9 +3488,15 @@ Known real-format subtleties already encoded:
   Claude Code writes with `working: false` and a `waitingFor` reason beside it
   (`'sandbox request'`, `'input needed'`, `'dialog open'`, or the top dialog's
   own label). `liveSessionStatus` still collapses everything but `idle` to
-  `busy` on purpose — the mail gate, the archive-safety verdict and the session
-  socket all need a human-blocked session to read hands-off — and `waiting`
-  reaches the attention bucket through `dialogPending` instead. After an
+  `busy` on purpose — the fleet card and the session socket must never paint a
+  human-blocked session as at rest, and the interrupt route's `liveStatus`
+  reads the same collapse — and `waiting` reaches the attention bucket through
+  `dialogPending` instead. The mail gate no longer reads that collapse:
+  `mailTurnIdle` (`server/src/turnidle.ts`) takes the raw word, delivers on
+  `idle` and on `shell` (an idle main loop over a background shell), and holds
+  `waiting`, `busy` and any word it does not know. On a `shell` delivery its
+  `turnRunning` pane guard reads `esc to interrupt` anyway — a tripwire that is
+  blind on exactly the RC panes the bullet above names. After an
   upgrade, re-grep the bundle for `status:"` and check that no fifth word has
   appeared: a new one costs nothing to read as `busy`, but a new *rest*-like
   word read as work would wedge every affected row in `working`.
