@@ -13,7 +13,7 @@
 // outcome").
 //
 // This file also covers the coordinating re-read that sits BETWEEN the
-// sibling re-read and the pause read (spec §1, rules 3-4, "Manual cleanup
+// sibling re-read and the pause read (spec §1, rule 4, "Manual cleanup
 // should be reserved ONLY FOR COORDINATOR WORKSPACE CLEANUP") — a session
 // that has EVER coordinated a run, in any state, is never reclaimed
 // automatically, and it is checked before the pause so the more specific
@@ -64,9 +64,9 @@ const fixture = async (over: { visible?: boolean } = {}) => {
   for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `demo-a.${f}`), v);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
-  // The member set Task 1 Step 3 fact 2 recorded — the one the close route
-  // composes. The verbs are the ones wave 3's executor checks before it
-  // reaches the audit, as its own test's `CAPS` spells them: `ws-audit`
+  // The member set the close route composes. The verbs are the ones wave 3's
+  // executor checks before it reaches the audit, as its own test's `CAPS`
+  // spells them: `ws-audit`
   // (`verbSupported`, which REFUSES a verb a present list does not name),
   // `reclaim-v1` (`capSupported`), and `ws-reclaim` + `actor-flags-v1` (the
   // act and its dec). Without `ws-audit` the CONTROL below never sees an argv.
@@ -230,7 +230,7 @@ describe('reclaimChild — the coordinating re-read, before the pause', () => {
 // terminal runs included, so a bare `SELECT DISTINCT claimedBy` alone loses
 // the coordinator it just displaced the instant an heir takes the chair.
 // `childReclaimCoordinatorIds` unions in the `from` side of every
-// `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rules 3-4).
+// `reclaim:<from> -> <to>` row `reclaimProgram` writes (spec §1, rule 4).
 describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   const bareStore = (): CoordStore => {
     const home = mkTmp('ccrc-child-reclaim-coordinator-ids-');
@@ -260,9 +260,10 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   // reach `reclaimProgram` carrying whitespace or its own literal ` -> `. Each
   // case here round-trips exactly such a `from` through the real writer
   // (`coord.reclaimProgram`, never a hand-typed `run_events` row) and reads it
-  // back verbatim. `to` cannot carry the same hazard: the reclaim route trims
-  // it, and `reclaimRun` (`reclaim.ts`) then requires `readSessionRecord` to
-  // find it as a real, listed registry row before this UPDATE ever runs.
+  // back verbatim. `to` is narrower but not clean: the reclaim route trims it
+  // and `reclaimRun` (`reclaim.ts`) requires `<to>.uuid` in the registry
+  // listing, so it is never empty — but a filename may hold a space, a tab or
+  // a line feed; see the `to`-side cases below.
   it('round-trips a from with an inner space', () => {
     const coord = bareStore();
     const from = 'demo x';
@@ -296,9 +297,9 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
   // Bare `.` in JS does not match a LINE TERMINATOR (`\n`, `\r`, U+2028,
   // U+2029) without the `s` flag — a narrower gap in the same class as the
   // whitespace/arrow cases above: `POST /api/runs`'s own check is
-  // `claimedBy.trim() === ''`, which a value holding only a newline or
-  // carriage return still fails (it is non-empty after trimming), so none of
-  // those four bytes is refused either. Each case reads its `from` back
+  // `claimedBy.trim() === ''`, which refuses a value that is ONLY line
+  // terminators but not one holding a terminator beside other characters,
+  // so such a value reaches the writer. Each case reads its `from` back
   // VERBATIM through the real `reclaimProgram` writer, exactly as the
   // whitespace cases above do. The plain-space case ('demo x') is already
   // covered by "round-trips a from with an inner space" above and is not
@@ -333,6 +334,39 @@ describe('CoordStore.childReclaimCoordinatorIds — the displaced side', () => {
     expect(coord.reclaimProgram(opened.id, 'heir-leading-lf', Date.now(), null)).toMatchObject({ ok: true });
     expect(coord.childReclaimCoordinatorIds().has(from)).toBe(true);
   });
+
+  // An EMPTY `from`. `trim` does not strip NUL, so `POST /api/runs` accepts
+  // a `claimedBy` of `"\u0000"`; node:sqlite reads the stored value back
+  // truncated at the NUL, as `""`, so the writer emits `reclaim: -> <to>`.
+  // A `from` capture that needed one character threw on that row forever.
+  it('round-trips an EMPTY from — a NUL-leading claimedBy reads back as ""', () => {
+    const coord = bareStore();
+    const opened = coord.openRun({ program: 'w4-nul-from', title: 'w4-nul-from', project: 'demo',
+      wave: 1, waveOf: null, claimedBy: '\u0000' });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    expect(coord.reclaimProgram(opened.id, 'heir-nul', Date.now(), null)).toMatchObject({ ok: true });
+    let ids: ReadonlySet<string> | undefined;
+    expect(() => { ids = coord.childReclaimCoordinatorIds(); }).not.toThrow();
+    expect(ids!.has('')).toBe(true);
+    expect(ids!.has('heir-nul')).toBe(true);
+  });
+
+  // The `to` side. The reclaim door hands `reclaimProgram` a trimmed id whose
+  // `<to>.uuid` is in the registry listing — a filename, which may hold a
+  // space, a tab or a line feed. Each such `to` must still parse, and the
+  // `from` beside it must come back whole.
+  for (const [label, to] of [['a space', 'heir x'], ['a tab', 'heir\tx'], ['a line feed', 'heir\nx']] as const) {
+    it(`round-trips a to holding ${label}`, () => {
+      const coord = bareStore();
+      const opened = coord.openRun({ program: `w4-to-${label.replace(/ /g, '-')}`, title: 'w4-to-ws', project: 'demo',
+        wave: 1, waveOf: null, claimedBy: 'demo-a' });
+      if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+      expect(coord.reclaimProgram(opened.id, to, Date.now(), null)).toMatchObject({ ok: true });
+      const ids = coord.childReclaimCoordinatorIds();
+      expect(ids.has('demo-a')).toBe(true);
+      expect(ids.has(to)).toBe(true);
+    });
+  }
 
   it('a reclaim: row from the exact writer that does not parse THROWS, never drops silently', () => {
     const coord = bareStore();

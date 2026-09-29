@@ -1260,34 +1260,47 @@ class IntentJournalFault extends Error {
 /** The exact shape `reclaimProgram` writes for each run it displaces —
  *  `reclaim:<from> -> <to>` (below, `this.recordRunEvent(m.id, 'operator',
  *  \`reclaim:${m.claimedBy} -> ${to}\`, at)`, one call per row the UPDATE just
- *  rewrote). The two sides do NOT share a shape, and the pattern reads each
- *  as what it actually is rather than what a session id ideally would be:
- *  `from` is `runs.claimedBy` as `POST /api/runs` stored it, checked there
- *  only for "non-empty string" — untrimmed, no charset guard
- *  (`shared/api.ts`'s own `isSessionIdShape` doc says so: that check exists
- *  precisely because the route does not enforce it) — so `from` may carry
- *  internal whitespace, a trailing space, a LINE TERMINATOR, or even its own
- *  literal ` -> ` — `POST /api/runs`'s own check is `claimedBy.trim() === ''`,
- *  which a value holding only a newline or carriage return still fails, so
- *  none of those four bytes (`\n`, `\r`, U+2028, U+2029) is refused either —
- *  and the pattern below admits ALL of it via a greedy `(.+)` WITH THE `s`
- *  FLAG: bare `.` in JS matches everything but those four bytes, so without
- *  `s` a `from` holding one of them would still fail to parse, exactly the
- *  same fail-shut this fix exists to close for whitespace. `to` cannot carry
- *  any of it: `POST /api/runs/:id/reclaim` trims it (`routes.ts`,
- *  `body.claimedBy.trim()`) and `reclaimRun` (`reclaim.ts`) then requires
- *  `readSessionRecord` to find it as a real, listed registry row before this
- *  UPDATE ever runs — a registry id ccd mints or a human types by hand, never
- *  a value with a space or a line terminator in practice — so `(\S+)` for
- *  `to`, anchored at the END, is what makes the split land at the LAST
- *  literal ` -> ` in the string rather than the first: a `from` that happens
- *  to embed ` -> ` of its own does not fool it, and `\S` already excludes
- *  every line terminator on its own (no `s` flag needed on that side). A row
- *  that still fails this shape — a hand-written one that merely starts with
- *  the same prefix, or a future reword of the writer itself — THROWS at the
- *  one reader, `childReclaimCoordinatorIds`, below; it does not silently
- *  drop. */
-const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.+) -> (\S+)$/s;
+ *  rewrote). A row this pattern cannot read makes the one reader throw, and
+ *  `run_events` rows are never deleted, so one unreadable row stops every
+ *  automatic reclamation for good: the pattern must admit EVERY string the
+ *  writer can emit, and it reads each side as what can actually reach it
+ *  rather than what a session id ideally looks like.
+ *
+ *  `from` is `runs.claimedBy` as sqlite reads it back. `POST /api/runs`
+ *  checks it only with `claimedBy.trim() === ''` — no charset guard
+ *  (`shared/api.ts`'s `isSessionIdShape` exists precisely because the route
+ *  does not enforce one) — so `from` may carry internal or trailing
+ *  whitespace, a line terminator beside other characters (a value that is
+ *  ONLY whitespace or line terminators trims to `''` and is refused), or its
+ *  own literal ` -> `. It may also be EMPTY: `trim` does not strip NUL, so
+ *  `"\u0000"` and `"\u0000demo"` are accepted, and node:sqlite reads the
+ *  stored value back truncated at the NUL, as `""` — the writer then emits
+ *  `reclaim: -> <to>`. Hence `(.*)`, not `(.+)`, with the `s` flag, since
+ *  bare `.` in JS does not match `\n`, `\r`, U+2028 or U+2029. No NUL ever
+ *  reaches the detail itself: `from` is the truncated read-back.
+ *
+ *  `to` is never empty and holds no NUL or `/`: `POST /api/runs/:id/reclaim`
+ *  refuses a value that trims to `''` and passes the trimmed value on, and
+ *  `reclaimRun` (`reclaim.ts`) proceeds only once `readSessionRecord` finds
+ *  `<to>.uuid` in the registry directory's listing — a filename. But a
+ *  filename may hold a space, a tab or a line feed, so `to` may too, and a
+ *  hand-made registry row is enough to put one there. Hence `(.+)` with the
+ *  same `s` flag, not `(\S+)`.
+ *
+ *  The split lands at the LAST literal ` -> ` (the greedy `from` takes
+ *  everything it can, and `$` without the `m` flag matches only at the very
+ *  end of input), so a `from` embedding ` -> ` of its own is read whole. The
+ *  one string this still cannot split correctly is a `to` that itself
+ *  contains ` -> ` or starts with `-> `: the row parses, but the split lands
+ *  inside `to`, so the displaced coordinator is missing from the set the
+ *  reader returns. That is a misreading, not a throw, and no pattern can fix
+ *  it, because such a row is ambiguous as written.
+ *
+ *  A row that still fails this shape — a hand-written one that merely
+ *  starts with the same prefix, or a future reword of the writer itself —
+ *  THROWS at the one reader, `childReclaimCoordinatorIds`, below; it does
+ *  not silently drop. */
+const CHILD_RECLAIM_DISPLACED_DETAIL = /^reclaim:(.*) -> (.+)$/s;
 
 /**
  * Every read and every write of the coordination database, in one class, and
