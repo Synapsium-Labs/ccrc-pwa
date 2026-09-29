@@ -2906,6 +2906,39 @@ describe('CoordStore: openCoordinatorIds', () => {
   });
 });
 
+describe('CoordStore.childReclaimCoordinatorIds — the displacement-row selection is case-sensitive', () => {
+  // `reclaimProgram` writes its own displacement rows lower-case
+  // (`reclaim:<from> -> <to>`), and `childReclaimDisplacedCandidates`'s own
+  // `startsWith('reclaim:')` check is case-sensitive. An operator can write
+  // ANY text into a run's own trail by hand, so a row that merely starts with
+  // the same six letters in a different case must never be read as this
+  // writer's own — reading it that way would either add a session that never
+  // coordinated anything, or (worse) throw and stop the whole reclaim lane
+  // fleet-wide for a run event unrelated to reclamation.
+  it('an operator row `RECLAIM:x -> y` is neither added to the set nor makes the read throw', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'RECLAIM:x -> y');
+    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
+    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+  });
+
+  it('mixed case is refused too — `Reclaim:x -> y`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'Reclaim:x -> y');
+    expect(() => s.childReclaimCoordinatorIds()).not.toThrow();
+    expect(s.childReclaimCoordinatorIds()).not.toContain('x');
+  });
+
+  it('the CONTROL: a genuine lower-case `reclaim:x -> y` row does yield `x`', () => {
+    const s = store();
+    const r = openRun(s, { claimedBy: 'the-coordinator' }) as { id: number };
+    s.recordRunEvent(r.id, 'operator', 'reclaim:x -> y');
+    expect(s.childReclaimCoordinatorIds()).toContain('x');
+  });
+});
+
 describe('sessionProject — which repo a reused session belongs to', () => {
   it('answers the project of the FIRST run that ever named the session, and null for one no run has', () => {
     const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));

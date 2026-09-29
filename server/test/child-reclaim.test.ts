@@ -273,13 +273,13 @@ describe('parseChildReclaimResult', () => {
     expect(cutShort.kind === 'failed' ? cutShort.resume : 'not-resumable').toBe('resumable');
   });
 
-  // Wave 3's second fix round (A16 item 7): `probe-unmeasured` is the
-  // presence rungs' own in-lock tmux probe failing BEFORE any act — unlike
-  // every other post-start `{failed:…}` document, the destructive tail never
-  // started, so a retry has no breadcrumb to resume from and starts
-  // completely afresh — the SAME sentence an unrecognised refusal word
-  // already gets ('not-resumable'), never `resumable`'s "resumes where it
-  // stopped" promise.
+  // `probe-unmeasured` is the presence rungs' own in-lock tmux probe (spec
+  // §5.7's rungs 5/6) failing BEFORE any act — unlike every other post-start
+  // `{failed:…}` document, the destructive tail never started (spec §5.6:
+  // no breadcrumb can exist until it does), so a retry has nothing to resume
+  // from and starts completely afresh — the SAME sentence an unrecognised
+  // refusal word already gets ('not-resumable'), never `resumable`'s
+  // "resumes where it stopped" promise.
   it('maps the in-lock probe-unmeasured failure to not-resumable — a retry starts afresh, never resumable', () => {
     const out = parseChildReclaimResult(ID, JSON.stringify({ failed: 'probe-unmeasured', detail: 'tmux unreachable' }), '');
     expect(out).toEqual({ kind: 'failed', resume: 'not-resumable', detail: 'probe-unmeasured: tmux unreachable' });
@@ -287,6 +287,16 @@ describe('parseChildReclaimResult', () => {
     // narrow exception for this one word, not a wider default flip.
     const other = parseChildReclaimResult(ID, JSON.stringify({ failed: 'attic-pin-failed', detail: 'x' }), '');
     expect(other).toEqual({ kind: 'failed', resume: 'resumable', detail: 'attic-pin-failed: x' });
+  });
+
+  // Parity: the ONE word this file special-cases must still be the word ccd
+  // actually prints. A ccd rename would silently return this exception to
+  // ordinary `resumable` handling with no red anywhere else, because
+  // `parseChildReclaimResult` never fails to parse a `{failed:…}` document —
+  // it just stops recognising the special case.
+  it("the special-cased word is ccd's own — `_ws_reclaim_failed_json probe-unmeasured`", () => {
+    const ccd = readFileSync(CCD, 'utf8');
+    expect(ccd).toContain('_ws_reclaim_failed_json probe-unmeasured');
   });
 
   // Review 170 F20: a PRE-LOCK die of `cmd_ws_reclaim` — recognised POSITIVELY

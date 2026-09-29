@@ -2901,12 +2901,12 @@ export class CoordStore {
    *  each candidate's `state` itself. ALL-OR-FAILURE, `openRunsForSession`'s
    *  own rule: a partial candidate list is how a hold this build did write can
    *  read as one it never wrote. */
-  runsNamingSession(sessionId: string, excludeRunId?: number): RunsNamingSessionResult {
+  runsNamingSession(sessionId: string): RunsNamingSessionResult {
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state FROM runs ' +
-      'WHERE sessionId = ? AND id != ? ORDER BY id',
-    ).all(sessionId, excludeRunId ?? -1) as unknown as
+      'WHERE sessionId = ? ORDER BY id',
+    ).all(sessionId) as unknown as
       { idText: string; program: string; waveText: string; waveOfText: string | null;
         reviewsText: string | null; state: string }[];
     const runs: ChildReclaimNamingRow[] = [];
@@ -3027,7 +3027,7 @@ export class CoordStore {
       'SELECT DISTINCT claimedBy FROM runs WHERE claimedBy IS NOT NULL',
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy));
     // `substr(...) = 'reclaim:'`, never `LIKE 'reclaim:%'` (child-reclamation
-    // wave 4, controller carry): SQLite's `LIKE` is case-insensitive for ASCII
+    // wave 4): SQLite's `LIKE` is case-insensitive for ASCII
     // by default, so an unrelated OPERATOR note that merely starts
     // `RECLAIM:…` would have matched the old pattern and then reached
     // `childReclaimDisplacedCandidates`, whose own `startsWith('reclaim:')`
@@ -5082,8 +5082,10 @@ export class CoordStore {
    *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
    *  its own opening `create` in days of retried refusals, and the run-id fence
    *  needs that row for the LIFE of the workspace, not for as long as it fits
-   *  a page. Bounded to one ACT instead, so a long-refused child costs one
-   *  narrow index scan (`sessionId`, `act`), never the whole table — and never
+   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
+   *  so this still walks every row of the session (filtering `act` after the
+   *  index narrows to the session) rather than a narrower index on `act`
+   *  itself — a cost bound on the SESSION, not the whole table, and never
    *  the oldest `create` either, which would skip every recycled slug
    *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
    *  narrows "every create this session ever had" down to the CURRENT

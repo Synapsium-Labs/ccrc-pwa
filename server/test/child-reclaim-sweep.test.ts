@@ -1,17 +1,16 @@
 // The child-reclaim lane, wired (child-reclamation spec §5.7 "On the sweep",
-// as amended by the coordinator's rulings R-1 through R-12 and A10's per-task
-// amendments — the plan's own Task 8 code block PREDATES those and is
-// superseded wherever they differ). `child-reclaim-sweep-policy.test.ts` pins
+// §5.9 "What the operator sees"). `child-reclaim-sweep-policy.test.ts` pins
 // the L1 verdicts (`childReclaimSweepVerdict`, `childReclaimHoldRead`,
 // `childReclaimNextEntry`, `childReclaimDue`); what is only provable HERE is
 // what reaches the executor, when, how often, with which `deferExpired` and
-// `deferredSinceMs`, the fairness/in-flight bound (contract §8 R5a), the two
-// new store reads this lane composes (the hold candidates, the coordination
-// history, the birth fence), and that everything else reaches nothing.
+// `deferredSinceMs`, the fairness/in-flight bound, the two new store reads
+// this lane composes (the hold candidates, the coordination history, the
+// birth fence), and that everything else reaches nothing.
 //
-// PART 1 OF 2: the release job for a retired programme hold (contract §8 R1)
-// is NOT this file's — a `hold-retired` verdict is asserted here to take NO
-// action (no release, no reclaim), never to eventually release.
+// A `hold-retired` verdict (spec §5.7's "no hold" conjunct, a hold this build
+// proved was written by one of this child's own runs whose programme has
+// since retired) is asserted here to take NO action at all — no release, no
+// reclaim — exactly like any other ineligible verdict.
 //
 // The executor is stubbed at `Deps.childReclaimExec`, the ONE seam the
 // watcher calls through, so most cases assert on the requests themselves. The
@@ -51,7 +50,7 @@ const GEN = '1790000000000000000';
 interface FixtureOpts {
   /** false → the fleet host does not advertise `reclaim-v1`. */
   cap?: boolean;
-  /** false → the fleet host does not advertise `reclaim-pause-v1` (A10 item 2). */
+  /** false → the fleet host does not advertise `reclaim-pause-v1`. */
   pauseCap?: boolean;
   /** 'real' → no stub; the production path runs against the recording runner. */
   exec?: 'stub' | 'real';
@@ -85,8 +84,10 @@ const fixture = (opts: FixtureOpts = {}) => {
     // The verbs wave 3's executor checks before it reaches the audit — its own
     // test's `CAPS`: `ws-audit` (`verbSupported`, which REFUSES a verb a
     // present list does not name), `reclaim-v1` and `reclaim-pause-v1` (both
-    // `capSupported`, the lane's own gate, A10 item 2) and `ws-reclaim` +
-    // `actor-flags-v1` (the act and its dec).
+    // `capSupported`, the lane's own gate — spec §5.8, "the fourth [reader]
+    // is the one that matters", so BOTH tokens must be proven before an
+    // automatic reclaim ever runs) and `ws-reclaim` + `actor-flags-v1` (the
+    // act and its dec).
     fleetState: { connected: true, downSince: null, rosterFp: null, build: null,
       ccdVerbs: [
         'ws-audit', 'ws-reclaim',
@@ -311,7 +312,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.entryOf('demo-a')).toBeUndefined();
   });
 
-  it('a child that has EVER coordinated a run is never reclaimed automatically (contract §8 R5c)', async () => {
+  it('a child that has EVER coordinated a run is never reclaimed automatically', async () => {
     const f = fixture();
     const r1 = f.openRun();
     f.abandon(r1);
@@ -324,7 +325,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toEqual([]);
   });
 
-  it('the run-id fence: a marker naming a run opened well after the child\'s own birth is skipped, with one log line (contract §8 R5d)', async () => {
+  it('the run-id fence: a marker naming a run opened well after the child\'s own birth is skipped, with one log line', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = fixture();
     f.plant('demo-a');
@@ -372,7 +373,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.watcher.currentCoord()?.childReclaimAttention.map((a) => a.sessionId)).toEqual(['demo-b']);
   });
 
-  it('does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still REPORTS (A10 item 2)', async () => {
+  it('does nothing on a box that advertises reclaim-v1 but not reclaim-pause-v1, and still REPORTS', async () => {
     const f = fixture({ pauseCap: false });
     finishedChild(f);
     finishedChild(f, 'demo-b');
@@ -393,9 +394,11 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs]))
       .toEqual([[false, null], [false, deferredAt], [true, deferredAt]]);
     // Request 3 was LICENSED (`deferExpired: true`) and STILL came back
-    // presence-class: the episode RESTARTS at that request's own instant
-    // (`childReclaimNextEntry`'s own rule — R-4), rather than silently
-    // keeping the ceiling exhausted forever.
+    // presence-class: `childReclaimNextEntry`'s own rule (spec §5.7,
+    // "Presence, and its bound") RESTARTS the episode at that request's
+    // own instant, rather than silently keeping the ceiling exhausted
+    // forever — a licensed attempt that finds someone still there must get
+    // a fresh 15 minutes, not an immediate second bypass.
     expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: deferredAt, firstPresenceDeferredAt: f.now() });
   });
 
@@ -421,8 +424,9 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.advance(firstPresence + CHILD_RECLAIM_DEFER_CEILING_MS - f.now()); await f.pass();  // request 4: a ceiling of PRESENCE — LICENSED
     expect(f.requests.map((q) => [q.deferExpired, q.deferredSinceMs])).toEqual([
       [false, null], [false, firstDefer], [false, firstDefer], [true, firstDefer]]);
-    // Request 4 was licensed and still came back presence-class: R-4 restarts
-    // the episode at request 4's own instant.
+    // Request 4 was licensed and still came back presence-class:
+    // `childReclaimNextEntry`'s rule (spec §5.7) restarts the episode at
+    // request 4's own instant.
     expect(f.entryOf('demo-a')).toMatchObject({ firstDeferredAt: firstDefer, firstPresenceDeferredAt: f.now() });
   });
 
@@ -487,7 +491,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests).toHaveLength(3);
   });
 
-  it('two passes after a terminal refusal make no second request (contract §8 R5g)', async () => {
+  it('two passes after a terminal refusal make no second request', async () => {
     const f = fixture({ outcome: (req) => ({ kind: 'refused', sessionId: req.sessionId, runId: req.runId,
       token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), detail: '' }) });
     finishedChild(f);
@@ -497,7 +501,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests, 'a terminal refusal is not retried on the ordinary pass cadence').toHaveLength(1);
   });
 
-  it('a licensed request refused with no mirror line → the next request carries deferExpired: false (contract §8 R5g)', async () => {
+  it('a licensed request refused with no mirror line → the next request carries deferExpired: false', async () => {
     // The ceiling licensed a presence-class attempt; the box answered a
     // TERMINAL refusal instead — the presence episode's own clock is cleared
     // by ANY non-presence outcome, refusals included, so the entry a much
@@ -517,7 +521,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests[2]?.deferExpired, 'the refusal ended the presence episode; nothing is licensed again').toBe(false);
   });
 
-  it('an executor `failed` with no mirror line is retried with backoff and never listed (contract §8 R11)', async () => {
+  it('an executor `failed` with no mirror line is retried with backoff and never listed', async () => {
     const f = fixture({ outcome: (req) => ({ kind: 'failed', sessionId: req.sessionId, runId: req.runId,
       resume: 'not-resumable', detail: 'ws-audit --reclaim answered nothing readable' }) });
     finishedChild(f);
@@ -531,7 +535,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     expect(f.requests, 'a retryable failure keeps being retried').toHaveLength(2);
   });
 
-  describe('the in-flight bound (contract §8 R5a)', () => {
+  describe('the in-flight bound', () => {
     it('three finished children → one request, none while it is in flight, and the second after it settles', async () => {
       let release!: () => void;
       let calls = 0;
@@ -570,6 +574,35 @@ describe('sweepChildReclaim — what reaches the executor', () => {
       expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-b']);
     });
 
+    it('two NEVER-ASKED children: the one sighted EARLIER goes first, not the lower id', async () => {
+      // `lastAskedAt` ties (both null) fall through to `firstEligibleAt` — a
+      // steady supply of freshly-minted lower-id children must not starve an
+      // older never-asked one. `demo-z` sorts AFTER `demo-a` by id alone, so
+      // this only passes when the tie-break actually reaches `firstEligibleAt`.
+      let releaseBusy!: () => void;
+      const f = fixture({ outcome: (req) => (req.sessionId === 'demo-busy'
+        ? new Promise<ChildReclaimOutcome>((resolve) => {
+            releaseBusy = () => resolve({ kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 });
+          })
+        : { kind: 'reclaimed', sessionId: req.sessionId, runId: req.runId, wip: { kind: 'none' }, secretsDropped: 0 }) });
+      finishedChild(f, 'demo-busy');
+      await f.pass();                                            // demo-busy: first sighting
+      f.next();
+      const busyDispatch = f.pass();                              // dispatches demo-busy; occupies the one slot
+      await vi.waitFor(() => expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-busy']));
+      finishedChild(f, 'demo-z');
+      f.next(); await f.pass();                                  // demo-z: first sighting (slot still busy)
+      finishedChild(f, 'demo-a');
+      f.next(); await f.pass();                                  // demo-z: due (2nd sighting); demo-a: first sighting
+      expect(f.requests.map((q) => q.sessionId), 'slot still busy — neither z nor a dispatched yet').toEqual(['demo-busy']);
+      f.next(); await f.pass();                                  // demo-z AND demo-a both due now; slot still busy
+      expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-busy']);
+      releaseBusy();
+      await busyDispatch;                                        // demo-busy's in-flight bookkeeping is cleared
+      f.next(); await f.pass();                                  // the slot frees: demo-z (sighted first) goes before demo-a
+      expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-busy', 'demo-z']);
+    });
+
     it('a request that never settles: after CHILD_RECLAIM_STALL_MS, the next child is asked anyway', async () => {
       const f = fixture({ outcome: (req) => (req.sessionId === 'demo-a'
         ? new Promise<ChildReclaimOutcome>(() => { /* never resolves, deliberately */ })
@@ -588,6 +621,44 @@ describe('sweepChildReclaim — what reaches the executor', () => {
       expect(f.requests.map((q) => q.sessionId)).toEqual(['demo-a', 'demo-b']);
       void CHILD_RECLAIM_MAX_IN_FLIGHT;
     });
+  });
+});
+
+describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, not just one child', () => {
+  it('a throwing childReclaimCoordinatorIds read: no request to anyone, the entry is cleared, and a clean read needs two FRESH passes', async () => {
+    const f = fixture();
+    finishedChild(f);
+    await f.pass(); f.next();
+    // Sighted once already — the next ordinary pass would dispatch.
+    const spy = vi.spyOn(f.coord, 'childReclaimCoordinatorIds')
+      .mockImplementation(() => { throw new Error('coordination history unreadable'); });
+    await f.pass();
+    expect(f.requests).toEqual([]);
+    expect(f.entryOf('demo-a')).toBeUndefined();
+    spy.mockRestore();
+    f.next(); await f.pass();                                 // a first sighting again, not a second
+    expect(f.requests).toEqual([]);
+    f.next(); await f.pass();
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('a throwing mirror read: no request to anyone, and the attention list keeps its LAST value rather than going dark', async () => {
+    const f = fixture();
+    const runId = finishedChild(f);
+    f.journal('demo-a', 'refused', 'tree-unreadable');
+    await f.pass();
+    await f.watcher.tick();
+    const before = f.watcher.currentCoord()?.childReclaimAttention;
+    expect(before).toEqual([{
+      sessionId: 'demo-a', runId, token: 'tree-unreadable', sentence: refusalSentence('tree-unreadable'), at: T0,
+    }]);
+    const spy = vi.spyOn(f.coord, 'lifecycleFor')
+      .mockImplementation(() => { throw new Error('mirror unreadable'); });
+    f.next(); await f.pass();
+    expect(f.requests).toEqual([]);
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual(before);
+    spy.mockRestore();
   });
 });
 
@@ -727,7 +798,7 @@ describe('the attention list — derived from the mirror, carried on the coord f
     expect(f.watcher.currentCoord()?.childReclaimAttention).toEqual([]);
   });
 
-  it('survives its own create scrolling out of the 500-row window (A10 item 6)', async () => {
+  it('survives its own create scrolling out of the 500-row window', async () => {
     // WITHOUT the window/creates merge, the create row falls out of
     // `lifecycleFor`'s own 500-newest-row window, `childReclaimGeneration`
     // finds no evidence at all, and this terminal refusal — which IS still

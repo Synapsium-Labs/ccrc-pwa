@@ -126,20 +126,20 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  constant. */
 export const CHILD_RECLAIM_SWEEP_MS = 60_000;
 
-/** At most this many lane-asked reclaims outstanding at once (contract §8
- *  R5a). Close-path reclaims are not counted, and neither is the hold-release
- *  job (part 2): the bound is the LANE's own concurrency, not the fleet's —
- *  one destructive verb from this automatic trigger in flight at a time keeps
- *  a bad pass from asking the box for ten deletions before the first one has
- *  even answered. */
+/** At most this many lane-asked reclaims outstanding at once. Close-path
+ *  reclaims are not counted, and neither is a hold-release job: the bound is
+ *  the LANE's own concurrency, not the fleet's — one destructive verb from
+ *  this automatic trigger (spec §5.7, "On the sweep": no human is in this
+ *  path) in flight at a time keeps a bad pass from asking the box for ten
+ *  deletions before the first one has even answered. */
 export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
 
 /** A lane-asked reclaim that has not settled after this long stops counting
- *  against `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8 R5a) — twice
- *  `ws-reclaim`'s own remote budget (`ws-reap`'s four minutes, the same
- *  budget wave 3's executor composes its argv under), so a genuinely slow but
- *  live attempt gets a full budget's grace before the lane treats it as
- *  stuck. It STAYS in flight — nothing here cancels or forgets it — and is
+ *  against `CHILD_RECLAIM_MAX_IN_FLIGHT` — twice `ws-reclaim`'s own remote
+ *  budget (`ws-reap`'s four minutes, the same budget wave 3's executor
+ *  composes its argv under), so a genuinely slow but live attempt gets a full
+ *  budget's grace before the lane treats it as stuck. It STAYS in flight —
+ *  nothing here cancels or forgets it — and is
  *  logged once, not once a pass, so a fleet host that never answers does not
  *  fill the log forever. */
 export const CHILD_RECLAIM_STALL_MS = 480_000;
@@ -656,9 +656,9 @@ export class FleetWatcher {
   /** Children whose reclaim this lane has asked for and not heard back on. A
    *  pass never asks a child already in this set twice: the executor can hold
    *  a session's queue for minutes (`ws-reclaim`'s remote budget is
-   *  `ws-reap`'s). Bounded to `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8
-   *  R5a), except a dispatch that has run past `CHILD_RECLAIM_STALL_MS` —
-   *  `childReclaimInFlightSince` is what tells the two apart. */
+   *  `ws-reap`'s). Bounded to `CHILD_RECLAIM_MAX_IN_FLIGHT`, except a
+   *  dispatch that has run past `CHILD_RECLAIM_STALL_MS` — `childReclaimInFlightSince`
+   *  is what tells the two apart. */
   private childReclaimInFlight = new Set<string>();
   /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
    *  clock, and the reason a request that never settles stops holding the
@@ -2779,14 +2779,12 @@ export class FleetWatcher {
    * that reset eligibility would reset the clock with it, and the drawer's
    * `tmux attach` on a locked phone would wedge a child forever.
    *
-   * PART 1 OF 2. A `hold-retired` verdict (contract §8 R1) takes NO action
-   * here — the child is simply not asked, exactly like any other ineligible
-   * verdict — and carries no release job: that job (`releaseRetiredChildHold`,
-   * its own memory-entry accounting, its censuses) is wave 4's next part. The
-   * `!v.eligible` branch below already folds `why: 'hold-retired'` into the
-   * generic skip it is (its own `release` payload is simply unread), so
-   * adding the job later is a branch inserted ahead of that fallthrough, not
-   * a restructuring of it.
+   * A `hold-retired` verdict — a hold this build proved was written by one of
+   * this child's own runs, whose programme has since retired (spec §5.7's
+   * "no hold" conjunct) — takes NO action here: the child is simply not
+   * asked, exactly like any other ineligible verdict. The `!v.eligible`
+   * branch below folds `why: 'hold-retired'` into the generic skip it is;
+   * its `release` payload rides the verdict unread by this lane.
    *
    * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with
    * `void`.
@@ -2806,19 +2804,25 @@ export class FleetWatcher {
     // refusals or failing past the ceiling, and the report must not go dark
     // because the lane is idle. Per LISTED row whose id the mirror has a
     // `reclaim` row for: that session's history — `lifecycleCreatesFor`
-    // MERGED with the windowed `lifecycleFor` read (contract, A10 item 6),
-    // so a long-refused child's own opening `create` never drops off this
-    // list just because its window has scrolled past it — cut to its CURRENT
-    // workspace generation by the one fence (`at` = now; spec §5.6 — a
-    // refusal of an earlier workspace under a recycled slug is not this
-    // child's), then the LATEST reclaim event of that generation, of ANY
-    // outcome, `intent` included (an attempt in flight, or one that died
-    // mid-way, lists nothing), as the L1 input row.
+    // MERGED with the windowed `lifecycleFor` read, so a long-refused
+    // child's own opening `create` never drops off this list just because its
+    // window has scrolled past it — cut to its CURRENT workspace generation
+    // by the one fence (`at` = now; spec §5.6 — a refusal of an earlier
+    // workspace under a recycled slug is not this child's), then the LATEST
+    // reclaim event of that generation, of ANY outcome, `intent` included (an
+    // attempt in flight, or one that died mid-way, lists nothing), as the L1
+    // input row.
     //
-    // ONE STORE READ of every `claimedBy` per pass too (contract §8 R5c) — in
-    // the SAME try as the mirror read: a throw here proves as little about
-    // who has coordinated as a failed mirror read proves about who is
-    // terminal, so it fails the WHOLE pass shut exactly the same way.
+    // ONE STORE READ of every `claimedBy` per pass too — the sessions that
+    // have ever coordinated a run (spec §1 rule 4: manual cleanup is reserved
+    // for a coordinator's OWN workspace) — in the SAME try as the mirror
+    // read: a throw here proves as little about who has coordinated as a
+    // failed mirror read proves about who is terminal, so BOTH READS TOGETHER
+    // fail the WHOLE pass shut: an exception from either one is caught below,
+    // this pass makes NO reclaim decision for ANY child (the whole per-child
+    // loop is downstream of this try succeeding), and the twice-observed
+    // memory is dropped so nothing is asked on the strength of a partial
+    // measurement.
     let latest: ChildReclaimJournalRow[];
     let coordinating: ReadonlySet<string>;
     try {
@@ -2849,13 +2853,14 @@ export class FleetWatcher {
       latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
     });
 
-    // TWO — the switches (contract §8 R5b): BOTH caps must be advertised, not
-    // just `reclaim-v1` — a box that cannot answer `reclaim-pause` cannot be
-    // told to stop from the phone, so an automatic reclaim must never run
-    // there at all. No `reclaim-v1` on the fleet host means the executor
-    // would answer `unsupported` for every child every minute, each with a
-    // feed row; a raised `reclaim-paused` means stop. Either way the memory
-    // is dropped: "the switches read clear" is itself an eligibility
+    // TWO — the switches (spec §5.8, "the fourth [reader] is the one that
+    // matters" — the box itself, not merely the server): BOTH caps must be
+    // advertised, not just `reclaim-v1` — a box that cannot answer
+    // `reclaim-pause` cannot be told to stop from the phone, so an automatic
+    // reclaim must never run there at all. No `reclaim-v1` on the fleet host
+    // means the executor would answer `unsupported` for every child every
+    // minute, each with a feed row; a raised `reclaim-paused` means stop.
+    // Either way the memory is dropped: "the switches read clear" is itself an eligibility
     // conjunct, so a child needs two FRESH passes once a switch is lowered
     // (or the box gains the missing capability).
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
@@ -2865,7 +2870,7 @@ export class FleetWatcher {
     }
 
     // THREE — eligibility, per marked child, then GATHER the due ones, then
-    // dispatch at most `CHILD_RECLAIM_MAX_IN_FLIGHT` (contract §8 R5a). The
+    // dispatch at most `CHILD_RECLAIM_MAX_IN_FLIGHT`. The
     // TERMINAL set is the mirror's terminal refusals ONLY — never the
     // attention list, which also names children whose reclaim keeps FAILING
     // past the ceiling, and a failure is retried (backing off) for as long as
@@ -2886,18 +2891,30 @@ export class FleetWatcher {
     for (const r of records) {
       if (r.child.kind === 'none') continue;
       seen.add(r.id);
-      // R-5e: every default here is an UNMEASURED shape, never an optimistic
-      // "absent"/"zero" one — `child.kind !== 'child'` short-circuits
-      // `childReclaimSweepVerdict` long before any of these would be read
-      // (its own `child.kind` check comes first), so these values are never
-      // consulted for such a row; they exist only so a future change to that
-      // ordering fails SHUT rather than silently reading a stale success.
+      // Every default below is the UNMEASURED shape, never an optimistic
+      // "absent"/"zero" one, matching the fail-shut rule this whole lane
+      // holds to (spec §5.7: a minting run absent from the database, or an
+      // unreadable sibling list, answers ineligible, never "go" — the same
+      // direction applies to a value this pass has simply not READ yet).
+      // `child.kind !== 'child'` short-circuits `childReclaimSweepVerdict`
+      // long before any of these would be consulted for such a row (its own
+      // `child.kind` check comes first), so these defaults exist only so a
+      // future change to that ordering fails SHUT rather than silently
+      // reading a stale, permissive answer. `reviewedRun` in particular is
+      // NOT defaulted to `'not-a-review'` — that is a MEASURED fact (this
+      // run's `reviews` column read `null`), set explicitly once the minting
+      // run's row is actually read below, never assumed. `held` is `'none'`
+      // only when the row's own `held` text is genuinely null (itself a
+      // measured fact, read before this loop) — non-null text defaults to
+      // `'unmeasured'` until the DB reads below either confirm a match or run
+      // out without one.
       let mintingRun: ChildReclaimMintingRunRead = { ok: false, detail: 'not read: not a child marker' };
       let mintingRunFull: RunRow | null = null;
-      let reviewedRun: ChildReclaimReviewedRunRead = { kind: 'not-a-review' };
+      let reviewedRun: ChildReclaimReviewedRunRead = { kind: 'unreadable', detail: 'not read' };
       let reviewedId: number | null = null;
       let siblings: ChildReclaimSiblingsRead = { ok: false, detail: 'not read: not a child marker' };
-      let held: ChildReclaimHoldRead = { kind: 'none' };
+      let held: ChildReclaimHoldRead = r.held === null
+        ? { kind: 'none' } : { kind: 'unmeasured', reason: r.held.trim(), detail: 'not read' };
       let childBornAt: number | null = null;
       if (r.child.kind === 'child') {
         try {
@@ -2907,7 +2924,7 @@ export class FleetWatcher {
             ? { ok: true, run: run.run === null ? null : { state: run.run.state, sessionId: run.run.sessionId,
                 dispatchStartedAt: run.run.dispatchStartedAt, openedAt: run.run.openedAt } }
             : { ok: false, detail: run.detail };
-          // THE HOLD READ (contract §8 R1's first bullet): built from the
+          // THE HOLD READ (spec §5.7's "no hold" conjunct): built from the
           // row's own trimmed `held` text, the candidate runs a match might be
           // one of, and a lazy per-programme open-run count — each of the
           // latter two in its OWN try (both private helpers below), so a
@@ -2920,23 +2937,35 @@ export class FleetWatcher {
           // A REVIEW run's child waits on the run it reviewed (`runs.reviews`;
           // spec §5.7, "A review child is finished later than its own run"):
           // the reviewer's report lives in the child's clips while the
-          // coordinator still cites it. Three answers that are not "not a
-          // review", never folded into it.
-          if (mintingRunFull !== null && mintingRunFull.reviews !== null) {
-            reviewedId = mintingRunFull.reviews;
-            const reviewed = coord.run(reviewedId);
-            reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
-              : reviewed.run === null ? { kind: 'absent' }
-              : { kind: 'run', state: reviewed.run.state };
+          // coordinator still cites it. `reviewedRun` is set explicitly in
+          // EVERY branch below — never left at its unmeasured default — so
+          // "reviews nothing" is a MEASURED fact (`reviews === null`, read off
+          // this run's own row), the same as the three answers that are not it.
+          if (mintingRunFull !== null) {
+            if (mintingRunFull.reviews === null) {
+              reviewedRun = { kind: 'not-a-review' };
+            } else {
+              reviewedId = mintingRunFull.reviews;
+              const reviewed = coord.run(reviewedId);
+              reviewedRun = !reviewed.ok ? { kind: 'unreadable', detail: reviewed.detail }
+                : reviewed.run === null ? { kind: 'absent' }
+                : { kind: 'run', state: reviewed.run.state };
+            }
           }
           const sib = coord.openRunsForSession(r.id);
           siblings = sib.ok ? { ok: true, open: sib.siblings.length } : { ok: false, detail: sib.detail };
-          // THE RUN-ID FENCE (contract §8 R5d): the child's own birth is the
-          // OPENING `create` of its current generation — `lifecycleCreatesFor`
-          // is uncapped, so a failing child's `create` is findable for the
-          // life of the workspace, never just for as long as it fits a page
-          // (the birth fence's own reason `lifecycleCreatesFor` exists rather
-          // than reusing `lifecycleFor` here). `childReclaimGeneration` over a
+          // THE RUN-ID FENCE (spec §5.1: the marker's run id and the argv the
+          // server composed are the two authorities, and neither alone
+          // authorises anything): after a coordination-database loss,
+          // `reconstruct` mints fresh ids from 1, so a LOW id a marker names
+          // is not proof of that same correspondence — it could equally be a
+          // coincidence with a run this rebuilt database never actually
+          // minted this workspace with. The child's own birth is the OPENING
+          // `create` of its current generation — `lifecycleCreatesFor` is
+          // uncapped, so a failing child's `create` is findable for the life
+          // of the workspace, never just for as long as it fits a page (the
+          // birth fence's own reason `lifecycleCreatesFor` exists rather than
+          // reusing `lifecycleFor` here). `childReclaimGeneration` over a
           // CREATE-ONLY list answers a single-row slice whose one element IS
           // that opening row — a generation is a contiguous slice of ONE
           // array, so its first element, when the slice is non-empty, is
@@ -2972,19 +3001,24 @@ export class FleetWatcher {
       }
       if (this.childReclaimInFlight.has(r.id)) continue;
       // THE ONE "MAY I ASK AGAIN" QUESTION (`childReclaimDue`, L1): folds the
-      // failure backoff AND the terminal-refusal pacing (contract §8 R20,
-      // R5g) — L4 decides no pacing of its own.
+      // failure backoff (spec §5.9: "retries back off in between") AND the
+      // terminal-refusal pacing — L4 decides no pacing of its own.
       if (!childReclaimDue(entry, now, CHILD_RECLAIM_SWEEP_MS)) continue;
       due.push({ r, entry, runId: v.runId });
     }
 
-    // FOUR — the bound (contract §8 R5a). A dispatch that has not settled
-    // after `CHILD_RECLAIM_STALL_MS` stops counting against the bound (it
-    // stays in flight; nothing here cancels it) and is logged once. Due
-    // children are sorted `lastAskedAt` (never-asked first), then
-    // `firstEligibleAt`, then id, so a child that defers every pass cannot
-    // hog the one slot forever — the never-asked and the longest-waiting go
-    // first.
+    // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
+    // verbs in flight from this automatic trigger at once (spec §5.7, "On
+    // the sweep" — no human is in this path, so a bad pass must not be able
+    // to ask the box for ten deletions before the first one has even
+    // answered). A dispatch that has not settled after `CHILD_RECLAIM_STALL_MS`
+    // stops counting against the bound (it stays in flight; nothing here
+    // cancels it) and is logged once. Due children are sorted `lastAskedAt`
+    // (never-asked first), then `firstEligibleAt`, then id, so a child that
+    // defers every pass cannot hog the one slot forever — the never-asked and
+    // the longest-waiting go first, and among children tied on `lastAskedAt`
+    // (both never asked, or asked at the identical instant) the one sighted
+    // EARLIER still goes first rather than falling through to id order.
     let activeInFlight = 0;
     for (const [id, since] of this.childReclaimInFlightSince) {
       if (now - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
@@ -2999,11 +3033,16 @@ export class FleetWatcher {
     due.sort((a, b) => {
       const la = a.entry.lastAskedAt;
       const lb = b.entry.lastAskedAt;
-      if (la === null || lb === null) {
-        if (la === lb) return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
-        return la === null ? -1 : 1;
+      // `lastAskedAt` first, null (never asked) sorting before any instant —
+      // but ONLY when the two differ: two children tied on this key (both
+      // null, or asked at the identical instant) fall through to
+      // `firstEligibleAt` rather than straight to id, so a never-asked child
+      // sighted earlier is still asked before one sighted later.
+      if (la !== lb) {
+        if (la === null) return -1;
+        if (lb === null) return 1;
+        return la - lb;
       }
-      if (la !== lb) return la - lb;
       if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
       return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
     });
@@ -3062,16 +3101,18 @@ export class FleetWatcher {
     await Promise.all(acts);
   }
 
-  /** `ChildReclaimHoldCandidatesRead` for one child (contract §8 R1, "the
-   *  read"): every run naming this session, in ANY state
+  /** `ChildReclaimHoldCandidatesRead` for one child (spec §5.7's "no hold"
+   *  conjunct — a hold this build can PROVE was written by one of this
+   *  child's own runs protects only conditionally, everything else protects
+   *  unconditionally): every run naming this session, in ANY state
    *  (`CoordStore.runsNamingSession`), plus the MINTING RUN itself even when
    *  it names a DIFFERENT session — an orphan's own dispatch or non-final
    *  close may have written the hold this child still carries, and
    *  `runsNamingSession` alone cannot see that once the run has moved on to a
-   *  different session (Task 7 review's carried obligation). `runsNamingSession`'s
-   *  OWN try: a throw here is this READ's failure alone, answered
-   *  `unmeasured` by `childReclaimHoldRead` — which PROTECTS — never a throw
-   *  that discards the per-child reads around it. */
+   *  different session. `runsNamingSession`'s OWN try: a throw here is this
+   *  READ's failure alone, answered `unmeasured` by `childReclaimHoldRead` —
+   *  which PROTECTS — never a throw that discards the per-child reads
+   *  around it. */
   private childReclaimHoldCandidatesRead(
     coord: CoordStore, sessionId: string, mintingRunId: number, mintingRunFull: RunRow | null,
   ): ChildReclaimHoldCandidatesRead {
@@ -3092,8 +3133,9 @@ export class FleetWatcher {
     return { ok: true, candidates };
   }
 
-  /** `ChildReclaimHoldOpenRead` for one programme (contract §8 R1's second
-   *  bullet): `CoordStore.programOpenRunCount` throws bare, so this is its
+  /** `ChildReclaimHoldOpenRead` for one programme (spec §5.7's "no hold"
+   *  conjunct, the count that decides whether a PROVEN programme hold still
+   *  protects): `CoordStore.programOpenRunCount` throws bare, so this is its
    *  own try — called LAZILY by `childReclaimHoldRead`, only once a hold's
    *  text has PROVEN to match one of this child's own runs, so a programme
    *  whose hold does not match spends nothing here. */
@@ -3106,7 +3148,8 @@ export class FleetWatcher {
   }
 
   /** The generation input for the attention list and the terminal exclusion
-   *  ALONE (contract, A10 item 6): `lifecycleCreatesFor` (every `create` row,
+   *  ALONE (spec §5.9, "derived from the lifecycle mirror so a restart does
+   *  not lose it"): `lifecycleCreatesFor` (every `create` row,
    *  uncapped) merged with `lifecycleFor`'s own windowed read, so a
    *  long-refused child's own OPENING `create` stays findable however far it
    *  has scrolled past `LIFECYCLE_PAGE_MAX`. `lifecycleFor` answers this
@@ -3132,31 +3175,39 @@ export class FleetWatcher {
   }
 
   /** Absence is logged and skipped (spec §5.7) — ONCE per child per condition
-   *  per process. Two absences, two sentences: an absent MINTING run is never
-   *  eligible, because a lost or rebuilt database makes every child's minting
-   *  run absent at once; an absent REVIEWED run keeps a review child, because
-   *  a run the database does not hold is not proven terminal and the report
-   *  in the child's clips may still be cited. Every other skip is an ordinary
-   *  state of the world and says nothing (`minting-run-postdates-child` has
-   *  its OWN log, `childReclaimLogBirthSkip`, below — a different sentence
-   *  with different evidence to name). */
+   *  per process. Three conditions, three sentences: an absent MINTING run is
+   *  never eligible, because a lost or rebuilt database makes every child's
+   *  minting run absent at once; an absent REVIEWED run keeps a review child,
+   *  because a run the database does not hold is not proven terminal and the
+   *  report in the child's clips may still be cited; a child whose own birth
+   *  cannot be PLACED (no placed `create` row at all) cannot be proven to
+   *  match its marker's run id, so it is skipped rather than guessed at
+   *  (spec §5.1: the marker's run id and the argv the server composed are the
+   *  two authorities, and neither alone authorises anything). Every other
+   *  skip is an ordinary state of the world and says nothing
+   *  (`minting-run-postdates-child` has its OWN log, `childReclaimLogBirthSkip`,
+   *  below — a different sentence with different evidence to name). */
   private childReclaimLogAbsence(r: SessionRecord, why: ChildReclaimSweepSkip, reviewedId: number | null): void {
-    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent') return;
+    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced') return;
     const key = `${why} ${r.id}`;
     if (this.childReclaimAbsentLogged.has(key)) return;
     this.childReclaimAbsentLogged.add(key);
     const runId = r.child.kind === 'child' ? String(r.child.runId) : '?';
-    console.warn(why === 'minting-run-absent'
-      ? `ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`
-      : `ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+    if (why === 'minting-run-absent') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`);
+    } else if (why === 'reviewed-run-absent') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+    } else {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but the lifecycle mirror holds no placed 'create' row for it — its own birth cannot be placed, so the run-id fence cannot prove the marker's run minted this workspace; skipped until a placed create row appears (a workspace minted before the mirror existed, or whose create line carried no ccd clock)`);
+    }
   }
 
-  /** R-5d's own log line: once per child per process, naming both instants —
-   *  never re-logged for the same skip while this process runs. A minting run
-   *  opened AFTER this child's own birth (past the clock-skew allowance)
-   *  cannot be the run that minted THIS incarnation — run ids restart after a
-   *  coordination-database loss — and the two possible causes are named so an
-   *  operator does not have to guess which one applies. */
+  /** Once per child per process, naming both instants — never re-logged for
+   *  the same skip while this process runs. A minting run opened AFTER this
+   *  child's own birth (past the clock-skew allowance) cannot be the run that
+   *  minted THIS incarnation — run ids restart after a coordination-database
+   *  loss — and the two possible causes are named so an operator does not
+   *  have to guess which one applies. */
   private childReclaimLogBirthSkip(r: SessionRecord, openedAt: number, childBornAt: number): void {
     const key = `minting-run-postdates-child ${r.id}`;
     if (this.childReclaimAbsentLogged.has(key)) return;

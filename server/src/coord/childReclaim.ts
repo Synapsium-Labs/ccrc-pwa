@@ -151,8 +151,8 @@ export function childReclaimGeneration(
 }
 
 /** The LATEST `reclaim` event of a generation, of ANY outcome — `intent`
- *  included — or null when it holds none (child-reclamation wave 4, contract
- *  §8 R21). An `intent` newer than every outcome is an attempt in flight, or
+ *  included — or null when it holds none (child-reclamation wave 4). An
+ *  `intent` newer than every outcome is an attempt in flight, or
  *  one that died mid-way: what it will find is not known yet, so the
  *  attention list lists nothing for that child and the chip falls through to
  *  its row rule (spec §5.9 — a report of what stands, never of what an
@@ -236,8 +236,10 @@ export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
 }
 
 /** The ONE ccd `{failed:…}` word `parseChildReclaimResult` gives its own
- *  treatment (A16 item 7, wave 3's second fix round): the presence rungs' own
- *  in-lock tmux probe failing BEFORE any act, which — unlike every other
+ *  treatment: the presence rungs' own in-lock tmux probe (spec §5.7,
+ *  "Presence, and its bound" — rungs 5 and 6) failing BEFORE any act, which —
+ *  because no breadcrumb can exist yet at that point (spec §5.6, "The tail,
+ *  the breadcrumb and the resume") — unlike every other
  *  post-start failure word, free ccd text this file never compares against a
  *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
  *  `resumable`: nothing was left to resume from). Named so
@@ -647,7 +649,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      // Wave 3's second fix round (A16 item 7): `probe-unmeasured` is the
+      // `probe-unmeasured` (spec §5.7's presence rungs, §5.6's breadcrumb) is the
       // presence rungs' own in-lock tmux probe failing BEFORE any act — the
       // destructive tail never started, so unlike every other post-start
       // `{failed:…}` document there is no breadcrumb to resume from. A retry
