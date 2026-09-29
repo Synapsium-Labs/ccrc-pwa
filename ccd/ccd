@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7b1cf6c0a6e9a613bd755c29381c75e343f314d782851bd842e0b100a4b1f42c
+# ccrc:generated 1 sha256=946d675a7b292085c5127e01a6448a4e14f22525eb46939dc5cbe433bd8d7ffe
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -7515,11 +7515,11 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
       || _lc_refuse destroy "$id" foreign-worktree \
            "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)" \
            dec.reason "$reason"
-    # --porcelain counts untracked files, which is what `git worktree remove`
-    # itself objects to. Doing this after the kill would leave the uncommitted
-    # work intact but the session dead and out of supervision — and the refusal
-    # would be lying about it. A status we could not read is not a clean one
-    # (same rule as _ws_gc_dirty).
+    # --untracked-files=all counts untracked files even under a config of
+    # status.showUntrackedFiles=no, where `git worktree remove` deletes them
+    # (git 2.43). Doing this after the kill would leave the uncommitted work
+    # intact but the session dead and unsupervised — and the refusal lying
+    # about it. A status we could not read is not clean (as in _ws_gc_dirty).
     #
     # AND THE EXIT CODE IS ONLY HALF OF "COULD NOT READ" — final-round
     # verification P2. The integration-5 class was closed at `_ws_reap_eval`
@@ -7546,7 +7546,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     derrf=$(_plat_mktemp) || _lc_refuse destroy "$id" scratch-unwritable \
       "could not make a scratch file to read $workdir — nothing was touched" \
       dec.reason "$reason"
-    dirty=$(git -C "$workdir" status --porcelain 2>"$derrf"); drc=$?
+    dirty=$(git -C "$workdir" status --porcelain --untracked-files=all 2>"$derrf"); drc=$?
     derr=$(cat "$derrf" 2>/dev/null); rm -f "$derrf"
     { (( drc == 0 )) && [[ -z "$derr" ]]; } \
       || _lc_refuse destroy "$id" tree-unreadable \
@@ -11679,7 +11679,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
   baseShort="${base#origin/}"
   [[ -n "$project" && -n "$workdir" && -n "$branch" ]] \
     || { _reap_refuse incomplete-registry "project='$project' workdir='$workdir' branch='$branch'"; return 1; }
-  main="$PROJECTS_ROOT/$project"
+  main="$PROJECTS_ROOT/$project"; _ws_reap_leaf_ok "$workdir" "$id" || return 1   # a LEAF link refuses before any fork reads $workdir (WS-REAP'S MIRROR)
   if [[ ! -d "$workdir" ]]; then
     # A missing worktree is a refusal when the USER removed it and a resume
     # when WE did. The breadcrumb is what tells the two apart.
@@ -13328,19 +13328,19 @@ _ws_tombstone() {   # id clipsjson [reclaim-fragment: ws-reclaim's keys, ending 
   local tbranch="${REAP_BRANCH-}" tregbranch="${REAP_REGBRANCH-}"
   [[ -n "$tbranch" ]] || tbranch=$(_reg_get "$id" branch)
   [[ -n "$tregbranch" ]] || tregbranch=$(_reg_get "$id" branch)
-  local reflog="" transcript
-  [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(git -C "$(_reg_get "$id" workdir)" reflog show --all --format='%H %gs' 2>/dev/null | head -200)
+  local reflog="" transcript   # `reflog`: the workdir's HEAD and `tbranch` only, never `--all` (another branch's commits are not this cleanup's)
+  [[ -d "$(_reg_get "$id" workdir)" ]] && reflog=$(wd=$(_reg_get "$id" workdir); { git -C "$wd" reflog show --format='%H %gs' HEAD; git -C "$wd" reflog show --format='%H %gs' "refs/heads/$tbranch"; } 2>/dev/null | head -200)
   transcript=$(_transcript_path "$id") || transcript=""
   {
-    # `branch` IS THE BRANCH THIS CLEANUP IS ABOUT — `REAP_BRANCH`, i.e. git's
-    # worktree record — not the registry field it used to read. Under drift the
-    # two differ, and this document is the only thing that outlives the
-    # workspace: recording the registry's name here would name a branch that
-    # still exists while saying nothing about the one that was deleted, and the
-    # resume path (which reads its branch back out of this file) would then CAS
-    # the wrong ref and wedge every later attempt on `branch-moved`.
-    # `registryBranch` records the witness beside it — the name this cleanup
-    # LEFT ALONE — so the pair can never be reconstructed as one fact.
+    # `branch` IS THE BRANCH THIS CLEANUP DELETES (`REAP_BRANCH`): for ws-reap,
+    # git's worktree record; for ws-reclaim, the registry's — and there a HEAD
+    # that drifted onto another branch keeps that branch, recorded in
+    # `keptBranches` and never deleted. Each verb's resume reads `branch` back
+    # out of this file to CAS that ref, so naming any other branch here would
+    # CAS the wrong ref and wedge every later attempt. `registryBranch` is the
+    # witness beside it: for ws-reap the registry's name, which under drift is
+    # the branch it LEFT ALONE; for ws-reclaim it equals `branch`. The pair is
+    # never reconstructed as one fact.
     printf '{"id":%s,"project":%s,"workdir":%s,"branch":%s,"registryBranch":%s,"base":%s,"tip":%s,' \
       "$(_json_str "$id")" "$(_json_str "$(_reg_get "$id" project)")" \
       "$(_json_str "$(_reg_get "$id" workdir)")" "$(_json_str "$tbranch")" \
@@ -14493,9 +14493,9 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # never reach this far by accident.
   if [[ "$resumed" == "" || "$resumed" == children || "$resumed" == worktree ]]; then
     if [[ -d "$workdir" ]]; then
-      # No --force. On failure STOP: the session is already stopped and
-      # ws-restore recovers it, whereas losing the registry would not be
-      # recoverable.
+      # No --force, never through a link (re-tested here — a resume never ran
+      # `_ws_reap_eval`). On failure STOP: the session is already stopped and
+      # ws-restore recovers it; losing the registry would not be recoverable.
       #
       # THE TAIL BACKSTOP — the audit's `_ws_reap_eval` rung above proves no
       # nested checkout existed at CONSENT time, and this is the box-side
@@ -14536,7 +14536,7 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
       # actually gone and the breadcrumb still says `worktree`, which is a lie
       # in the one direction that matters.
       local wtout wtrc
-      wtout=$(git -C "$main" worktree remove "$workdir" 2>&1); wtrc=$?
+      if [[ -L "${workdir%"${workdir##*[!/]}"}" ]]; then wtout="$workdir is a symbolic link — ccd never follows a link to a tree it would delete"; wtrc=1; else wtout=$(git -C "$main" worktree remove "$workdir" 2>&1); wtrc=$?; fi
       if (( wtrc != 0 )); then
         printf '{"refused":"worktree-remove-failed","detail":%s,"paths":[]}\n' \
           "$(_json_str "$(printf '%s' "$wtout" | head -3)")"
@@ -14882,7 +14882,7 @@ _ws_gc_dirty() {   # workdir -> 0 when the tree has uncommitted OR untracked fil
     GC_DIRTY_WHY='no scratch file to capture git stderr, so the status was never read'
     return 0
   }
-  out=$(git -C "$1" status --porcelain 2>"$errf"); rc=$?
+  out=$(git -C "$1" status --porcelain --untracked-files=all 2>"$errf"); rc=$?   # `all` overrides status.showUntrackedFiles=no: untracked files are dirt whatever the config says
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   { (( rc == 0 )) && [[ -z "$err" ]]; } || {
     # First line only: git's diagnostic is one line per unreadable directory
@@ -26839,7 +26839,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # ── end child reclamation ─────────────────────────────────────────────── RECLAIM-END ──
 
 # ── ws-reap's mirror of a reclaim breadcrumb (spec 2026-09-22 §5.6) ─────── MIRROR-BEGIN ──
-
+_ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` breadcrumb, on stdout
   printf '{"refused":"reclaim-in-progress","detail":%s,"paths":[]}\n' \
     "$(_json_str "an interrupted reclamation of $1 stopped at its '${2#reclaim:}' step — ws-reap never finishes another verb's work")"
@@ -26847,25 +26847,25 @@ _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` br
 
 # WS-REAP'S MIRROR (spec 2026-09-22 §5.6; carried constraint 5). The one line
 # at the top of `_ws_reap_locked`'s resume fork calls `_ws_reclaim_mirror`
-# above: a `reclaim:<phase>` breadcrumb is ws-reclaim's interrupted work — it
-# never passed `archived`, and resuming it as a reap would finish a teardown
-# whose ladder asked a different question. So ws-reap refuses
-# `reclaim-in-progress` before it reads anything, and ws-reclaim refuses the
-# mirror (`reap-in-progress`). No journal emit here: the reap refusal emits
-# are pinned at exactly two.
+# above: a `reclaim:<phase>` breadcrumb is ws-reclaim's interrupted work, and
+# resuming it as a reap would finish a teardown whose ladder asked a different
+# question. So ws-reap refuses `reclaim-in-progress` before it reads anything,
+# and ws-reclaim refuses the mirror (`reap-in-progress`). And the LEAF-LINK
+# MIRROR of ws-reclaim's (spec §5.5): `_ws_reap_eval` calls `_ws_reap_leaf_ok`,
+# so a workdir that IS a link (trailing slashes stripped, so none can make `-L`
+# follow it; a linked ancestor stays legal) refuses `containment-unproven`. A
+# resume never runs the eval, and with the child's record gone git 2.43 follows
+# the link and removes the worktree it names, no --force (measured) — so
+# `_ws_reap_tail` re-tests `-L` at `git worktree remove` itself. No journal
+# emit here: the reap refusal emits are pinned at exactly two.
 #
-# WHY THIS IS ITS OWN MARKED BLOCK, and neither inside `_ws_reap_locked` nor
-# inside the RECLAIM region above. `_ws_reap_locked` sits above the frozen
-# citation corpus's anchors (`server/test/session-hook.test.ts`), where every
-# added line moves a citation, so it carries one line of code and a pointer.
-# `server/test/ccd-wsaudit-nonpoison.test.ts` counts the refusal words OUTSIDE
-# the RECLAIM region at a figure the same corpus quotes byte for byte, so the
-# literal cannot stand among ws-reap's own lines either — that test cuts this
-# block out exactly as it cuts the region. And the RECLAIM region's words are
-# ws-reclaim's alone (its header's fourteen, held equal to the server's map by
-# harvest), which `reclaim-in-progress` — ws-reap's answer — is not.
-# `server/test/wsaudit.test.ts` harvests the whole file, so its sentence is
-# found here all the same.
+# WHY ITS OWN MARKED BLOCK: `_ws_reap_locked` and `_ws_reap_eval` sit above the
+# frozen citation corpus's anchors (`server/test/session-hook.test.ts`), so each
+# carries one line and a pointer. `ccd-wsaudit-nonpoison.test.ts` counts refusal
+# words OUTSIDE the RECLAIM region at a figure that corpus quotes byte for byte,
+# so neither literal stands among ws-reap's lines — that test cuts this block
+# out as it cuts the region, whose words are ws-reclaim's alone (its header's
+# fourteen). `wsaudit.test.ts` harvests the whole file, so both words are found.
 # ── end ws-reap's mirror ─────────────────────────────────────────────────── MIRROR-END ──
 
 # Guard so the script can be `source`d by tests without running a command.

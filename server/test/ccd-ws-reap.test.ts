@@ -2858,3 +2858,76 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
     expect(h.reg('demo-quiet-basin', 'uuid'), 'and the registry row still stands').not.toBeNull();
   }, 60000);
 });
+
+describe('a symlinked workdir is never followed — ws-reap refuses the LEAF link, at consent and at the remove', () => {
+  const SIB_ID = 'demo-calm-mesa';
+
+  /** A second workspace of the same project — the SIBLING a link at the
+   *  archived workspace's path would lead ws-reap into. Clean, on its own
+   *  branch, registered in git and in the registry. */
+  const sibling = (): string => {
+    h.sh(`${WS_ADD} CCD_WS_SLUG=calm-mesa cmd_ws_add demo`);
+    return path.join(h.home, 'worktrees', 'demo', 'calm-mesa');
+  };
+
+  /** Everything of the sibling a reap could remove: its files, git's record of
+   *  it, its branch and its registry row. */
+  const expectSiblingIntact = (main: string, sib: string): void => {
+    expect(fs.existsSync(path.join(sib, 'README.md')), 'the sibling’s files survive').toBe(true);
+    expect(fs.lstatSync(sib).isDirectory(), 'the sibling is still a directory').toBe(true);
+    expect(h.git(main, 'worktree', 'list', '--porcelain').split('\n'), 'git’s record of the sibling survives')
+      .toContain(`worktree ${sib}`);
+    expect(h.git(main, 'branch', '--list', 'ws/calm-mesa'), 'the sibling’s branch survives').toContain('ws/calm-mesa');
+    expect(h.reg(SIB_ID, 'uuid'), 'the sibling’s registry row survives').not.toBeNull();
+  };
+
+  // `slash` spells the registry's workdir with trailing slashes: `-L` on
+  // `link/` follows the link, so the leaf test strips them first.
+  it.each(['', '/', '//'])('(a) an archived workspace whose workdir is a link to a sibling (registry spelling %j after the path): the audit says containment-unproven, and the reap leaves the sibling whole', (slash) => {
+    const { main, wt } = ready();
+    const sib = sibling();
+    const tok = tokenOf();
+    expect(tok, 'the CONTROL: before the link the workspace is reapable').toMatch(/^[0-9a-f]{64}$/);
+    fs.renameSync(wt, `${wt}.aside`);
+    fs.symlinkSync(sib, wt);
+    if (slash) h.sh(`_reg_set demo-quiet-basin workdir "${wt}${slash}"`);
+    const a = JSON.parse(h.sh(`${GH_STUB} ${ARCH} cmd_ws_audit --session demo-quiet-basin`));
+    expect(a.verdict).toBe('containment-unproven');
+    expect(a.detail).toContain('is a symbolic link');
+    expect(a.token, 'a refusal hands out no token').toBeUndefined();
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('containment-unproven');
+    expect(fs.lstatSync(wt).isSymbolicLink(), 'the link itself is left where it was').toBe(true);
+    expectSiblingIntact(main, sib);
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'a refusal at consent writes no breadcrumb').toBeNull();
+  }, 60000);
+
+  it.each(['', '/', '//'])('(b) a resume from `worktree` whose admin directory is gone and whose workdir is a link to a clean sibling (registry spelling %j after the path): worktree-remove-failed, the sibling whole', (slash) => {
+    // The resume path never calls `_ws_reap_eval`, so the consent-time refusal
+    // above cannot stand here; and with the child's record gone, git resolves
+    // the link and removes the worktree it names, no --force needed. The tail
+    // re-tests the leaf at the remove itself.
+    const { main, wt } = ready();
+    const sib = sibling();
+    const tok = tokenOf();
+    const tip = h.git(main, 'rev-parse', 'refs/heads/ws/quiet-basin');
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    expect(path.dirname(admin), 'the CONTROL: that is the child’s admin directory').toBe(path.join(main, '.git', 'worktrees'));
+    h.sh('_reg_set demo-quiet-basin reaping worktree');
+    fs.mkdirSync(path.join(h.home, '.cc-sessions', '.reaped'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.reaped', 'demo-quiet-basin.json'),
+      JSON.stringify({ id: 'demo-quiet-basin', project: 'demo', branch: 'ws/quiet-basin', tip, clips: [] }));
+    fs.rmSync(admin, { recursive: true, force: true });
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.symlinkSync(sib, wt);
+    if (slash) h.sh(`_reg_set demo-quiet-basin workdir "${wt}${slash}"`);
+    expect(h.git(main, 'worktree', 'list', '--porcelain').split('\n'), 'the CONTROL: git holds no record of the child')
+      .not.toContain(`worktree ${wt}`);
+    const o = refused(tok, wt, main);
+    expect(o.refused).toBe('worktree-remove-failed');
+    expect(o.detail).toContain('is a symbolic link');
+    expectSiblingIntact(main, sib);
+    expect(fs.lstatSync(wt).isSymbolicLink(), 'the link itself is left where it was').toBe(true);
+    expect(h.reg('demo-quiet-basin', 'reaping'), 'the breadcrumb is left exactly as found').toBe('worktree');
+  }, 60000);
+});

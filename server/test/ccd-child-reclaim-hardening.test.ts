@@ -7,7 +7,8 @@
 // reads it, the containment's inherited git variables, a workdir holding a
 // control character, the memo's scope, the absence walk's `dirname`, and the
 // shapes rung 9's row placement answers for a `//` spelling and an
-// unresolvable one. Every case builds its child in a fixture HOME.
+// unresolvable one. Last, the tombstone's `reflog` field, read from the child's
+// own HEAD and branch reflogs only. Every case builds its child in a fixture HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -617,4 +618,31 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     } finally { if (fs.existsSync(server)) fs.chmodSync(server, 0o755); }
     expect(fs.readFileSync(path.join(server, 'live.txt'), 'utf8')).toContain('uncommitted');
   }, 60_000);
+});
+
+describe('the tombstone’s `reflog` field reads the child’s own HEAD reflog and its branch’s — never `--all`', () => {
+  it('a commit only ANOTHER branch’s reflog names is not in the child’s tombstone; the child’s own commits are', () => {
+    const c = makeChild(h);
+    const tree = h.git(c.main, 'rev-parse', 'HEAD^{tree}');
+    const foreign = h.git(c.main, 'commit-tree', tree, '-p', 'HEAD', '-m', 'on another branch only');
+    h.git(c.main, 'update-ref', '--create-reflog', '-m', 'another branch', 'refs/heads/elsewhere', foreign);
+    expect(h.git(c.wt, 'reflog', 'show', '--all', '--format=%H').split('\n'),
+      'the CONTROL: `--all` from the child’s workdir names it').toContain(foreign);
+    // And a commit ONLY the workdir's HEAD reflog names — made detached, then left.
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    h.git(c.wt, 'commit', '-q', '--allow-empty', '-m', 'in the HEAD reflog only');
+    const headOnly = h.git(c.wt, 'rev-parse', 'HEAD');
+    h.git(c.wt, 'checkout', '-q', CHILD_BRANCH);
+    expect(h.git(c.main, 'reflog', 'show', '--format=%H', `refs/heads/${CHILD_BRANCH}`).split('\n'),
+      'the CONTROL: the branch reflog does not name it').not.toContain(headOnly);
+    const r = childReclaimVerb(h, evalOf(h).token);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout).reclaimed).toBe(CHILD_ID);
+    const tomb = JSON.parse(fs.readFileSync(path.join(h.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`), 'utf8')) as { reflog: string };
+    const named = tomb.reflog.split('\n').map((l) => l.split(' ')[0]);
+    expect(named, 'another branch’s commit is not this cleanup’s').not.toContain(foreign);
+    expect(named, 'the child’s own tip is named').toContain(c.tip);
+    expect(named, 'the workdir’s HEAD reflog is read').toContain(headOnly);
+    expect(tomb.reflog, 'the branch’s own reflog is read too — its creation entry').toMatch(/ branch: Created from /);
+  }, 90_000);
 });

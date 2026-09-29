@@ -918,6 +918,25 @@ describe('ws-rm', () => {
     expect(calls()).toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
   });
 
+  // `status.showUntrackedFiles=no` hides untracked files from a plain
+  // `status --porcelain` — and under it `git worktree remove` deletes them
+  // with no --force (git 2.43). So the dirty read says `--untracked-files=all`,
+  // and the config cannot make an untracked file read clean.
+  for (const configured of [true, false]) {
+    it(`refuses an untracked-only worktree ${configured ? 'UNDER status.showUntrackedFiles=no' : '— the control, without that config'}`, () => {
+      const wt = addOne();
+      if (configured) execFileSync('git', ['-C', main(), 'config', 'status.showUntrackedFiles', 'no']);
+      fs.writeFileSync(path.join(wt, 'notes.md'), 'draft\n');
+      expect(execFileSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' }).trim(),
+        'the CONTROL: what a plain status read says here').toBe(configured ? '' : '?? notes.md');
+      expect(() => sh(`${RM} cmd_ws_rm demo-quiet-mesa`)).toThrow(/uncommitted changes/);
+      expect(fs.readFileSync(path.join(wt, 'notes.md'), 'utf8')).toBe('draft\n');
+      expect(reg('demo-quiet-mesa', 'uuid')).not.toBeNull();
+      expect(branches('ws/quiet-mesa')).not.toBe('');
+      expect(calls(), 'nothing is torn down').toEqual(['tmux list-panes -a -F #{session_name} #{pane_pid}']);
+    });
+  }
+
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
   });
