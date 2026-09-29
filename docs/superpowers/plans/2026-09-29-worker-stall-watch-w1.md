@@ -210,6 +210,10 @@ Each departure from the spec's literal text, by number and slug:
   awaits between its candidate read and the notice (pane, live file, `measureClaimant`), and a close landing in that
   window would otherwise queue a stall mail on a closed run after close's `cancelOutstandingDeliveries` ran, which
   `dueDeliveries` would deliver. The spec's `run-gone` meant absent only.
+- **D-3585** `r2-keeps-a-missing-delivery-row` (Task 8, the implementer's departure, accepted): when the r1 check mail
+  has no delivery row, the lane passes `null` to `stallReportMail` instead of folding it to "not delivered, not acked".
+  The plan's `?? { deliveredAt: null, ackedAt: null }` narrowed a distinction it received (the adapter rule), and made
+  Task 6's "has no delivery row" sentence unreachable.
 
 ## File structure
 
