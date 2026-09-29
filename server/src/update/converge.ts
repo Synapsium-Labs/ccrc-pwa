@@ -204,7 +204,10 @@ async function localAnswer(deps: ConvergeDeps, move: DispatchMove): Promise<OpAn
   try {
     child = spawn(move.kind, move.target);
   } catch (e) {
-    return { kind: 'transport', why: 'other', message: e instanceof Error ? e.message : String(e) };
+    // A SYNCHRONOUS throw from the spawn — the argv builder's RangeError, or a relative or trailing-slash HOME — is a
+    // fault of this server that will not mend itself: a halting `spawn-failed` naming the throw (fix round 1 item 9).
+    // It is NOT the rejected-promise arm below, where a transient spawn error lands and the request simply stands.
+    return { kind: 'refused', err: 'spawn-failed', detail: e instanceof Error ? e.message : String(e) };
   }
   spawning.add(spawn);
   const clear = (): void => { spawning.delete(spawn); };
