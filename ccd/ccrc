@@ -12374,6 +12374,20 @@ _inst_wrappers() {
 # such a HOME now records `unsigned` instead of `verified` — the
 # fail-closed direction, so this is a missed optimisation, not a security
 # defect.
+# WHAT THIS ARM KEEPS OUT, AND WHAT IT DOES NOT (W6 Task 8A, review 167's F9 —
+# narrowed to what it measures): it keeps out a `CCRC_UPDATE_VERIFIED=1` with
+# NO legacy `ccrc … update` parent to explain it — a stale or copy-pasted
+# export reaching a bare `ccrc install`, a wrapper, or a `bash -c` string.
+# It does NOT keep out the same stale export reaching a genuine legacy
+# parent: a v0.0.4–v0.0.10 `ccrc update` never runs its spine under `env -u
+# CCRC_UPDATE_VERIFIED`, so a marker its caller's shell exported rides
+# through it exactly as one it set itself, and the parent's argv is the only
+# thing this arm reads — it cannot tell the two apart. That residue is
+# bounded by the population (boxes still running a release that old, once,
+# until their first update onto a build that sets `CCRC_UPDATE_SPINE`) and by
+# the attribution-not-authentication model above; it is recorded here rather
+# than closed, because closing it would mean refusing every legacy parent —
+# the very first update those boxes need — or reading the parent's own tree.
 _inst_legacy_verified_parent() {
   command -v ps >/dev/null 2>&1 || return 1
   local args=""
