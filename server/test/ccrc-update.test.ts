@@ -3731,6 +3731,37 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(callWithHome('https://h#a@b', '')).toBe('https://h#a@b');
   });
 
+  // W6 Task 8A, review 167's F5 (cosmetic): the boundary BEFORE HOME. The
+  // review's record of its three shapes is not in the tree, so these are the
+  // three ways a HOME that is a SUFFIX of a longer path is met, one per
+  // boundary AFTER it that already worked (`/`, `:`, end of string) — each
+  // used to become `/srv~…`. The controls are the boundaries BEFORE it that
+  // must keep redacting (start, a space, `=`, `:`, a quote, a `file://`).
+  it('_upd_redact: HOME is anchored to a path boundary BEFORE it too — `/srv/home/u/x` stays whole, and every real start-of-path still redacts (review 167 F5)', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const redactBlock = /^_upd_redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(redactBlock, 'ccd/ccrc has no _upd_redact block').not.toBeNull();
+    const call = (text: string): string => {
+      const p = spawnSync('bash', ['-c', [redactBlock![0], '_upd_redact "$1"'].join('\n'), '_', text],
+        { env: { HOME: '/home/u' }, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    // The three shapes: followed by '/', by ':', and by the end of the string.
+    expect(call('/srv/home/u/x')).toBe('/srv/home/u/x');
+    expect(call('/srv/home/u:/usr/bin')).toBe('/srv/home/u:/usr/bin');
+    expect(call('/srv/home/u')).toBe('/srv/home/u');
+    // And one HOME inside a longer path amid a real one: only the real one goes.
+    expect(call('/srv/home/u/x and /home/u/y')).toBe('/srv/home/u/x and ~/y');
+    // The boundaries before HOME that stay.
+    expect(call('/home/u/x')).toBe('~/x');
+    expect(call('cd /home/u/x')).toBe('cd ~/x');
+    expect(call('K=/home/u/x')).toBe('K=~/x');
+    expect(call('/usr/bin:/home/u/bin')).toBe('/usr/bin:~/bin');
+    expect(call('"/home/u/x"')).toBe('"~/x"');
+    expect(call('file:///home/u/x')).toBe('file://~/x');
+  });
+
   // Fix round 1 item 11 / review 155 C17: a CCRC_RELEASE_BASE_URL carrying
   // userinfo must not reach stdout, stderr or update.json — for `update`
   // AND for `rollback` (two different die sites: `_upd_resolve`'s

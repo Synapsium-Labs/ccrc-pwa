@@ -305,6 +305,36 @@ describe('ccd-update-sync: a transport failure writes nothing', () => {
 });
 
 describe('ccd-update-sync: no credential or absolute home path in a printed line (fix round 1 item 11 / review 155 C18)', () => {
+  // W6 Task 8A, review 167's F5: `redact`'s HOME rule is anchored BEFORE the
+  // home as well as after it, exactly as ccd/ccrc's `_upd_redact` is — and the
+  // two copies' HOME sections are byte-identical, so neither can drift.
+  it('redact: a HOME that is the suffix of a longer path stays whole (`/srv/home/u/x`), a real one still becomes ~, and the section equals _upd_redact\'s (review 167 F5)', () => {
+    const src = readFileSync(SYNC, 'utf8');
+    const block = /^redact\(\) \{[\s\S]*?\n\}$/m.exec(src);
+    expect(block, 'ccd-update-sync has no redact block').not.toBeNull();
+    const home = mkTmp('upd-sync-redact-unit-');
+    const call = (text: string, h: string): string => {
+      const env = ghContainedEnv(home, { HOME: h, PATH: process.env['PATH'] ?? '' }, { systemd: true, tmux: true });
+      const p = spawnSync('bash', ['-c', [block![0], 'redact "$1"'].join('\n'), '_', text], { env, encoding: 'utf8' });
+      expect(p.status, p.stderr).toBe(0);
+      return p.stdout;
+    };
+    expect(call('/srv/home/u/x', '/home/u')).toBe('/srv/home/u/x');
+    expect(call('/srv/home/u:/usr/bin', '/home/u')).toBe('/srv/home/u:/usr/bin');
+    expect(call('/srv/home/u', '/home/u')).toBe('/srv/home/u');
+    expect(call('cannot read /home/u/.ccrc/agent.env', '/home/u')).toBe('cannot read ~/.ccrc/agent.env');
+    expect(call('K=/home/u/x', '/home/u')).toBe('K=~/x');
+    expect(call('/home/u', '/home/u')).toBe('~');
+    expect(call('http://h/p', '/')).toBe('http://h/p');
+    const section = (text: string, fn: string): string => {
+      const i = text.indexOf('  local home="${HOME:-}"\n', text.indexOf(`${fn}() {`));
+      return text.slice(i, text.indexOf("  printf '%s' \"$s\"\n}", i));
+    };
+    const ccrcSrc = readFileSync(CCRC, 'utf8');
+    expect(section(src, 'redact').length, 'the HOME section was not found').toBeGreaterThan(200);
+    expect(section(src, 'redact')).toBe(section(ccrcSrc, '_upd_redact'));
+  });
+
   it('a CCRC_SERVER_URL carrying userinfo never reaches stderr on a curl failure (rc 6)', () => {
     const secret = 'hunter2';
     const home = box('upd-sync-redact-url-', { url: `http://alice:${secret}@nonexistent.invalid` });

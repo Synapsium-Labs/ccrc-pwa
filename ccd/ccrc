@@ -2054,14 +2054,34 @@ _upd_redact() {
   local home="${HOME:-}"
   home="${home%/}"
   if [ -n "$home" ]; then
-    s="${s//"$home"\//"~/"}"
-    local b
-    for b in ' ' $'\t' $'\n' '"' "'" ':' ')'; do
-      s="${s//"$home$b"/"~$b"}"
+    # W6 Task 8A, review 167's F5: the boundary BEFORE home is anchored too.
+    # A HOME of `/home/u` is a real match only where the character before it
+    # is no part of a longer path — the start of the string, whitespace, a
+    # quote or backtick, or one of `= : ( [ { , ; < > |`, or the `//` that
+    # ends a `file://` scheme — never a path character, so `/srv/home/u/x`
+    # is left whole instead of becoming `/srv~/x`. A bash glob has no
+    # lookbehind either, so each occurrence is walked in turn and the
+    # character before it read from the text already passed.
+    local seen="" out="" pre="" post="" before="" after="" left=0 right=0
+    while [[ "$s" == *"$home"* ]]; do
+      pre="${s%%"$home"*}"
+      post="${s#*"$home"}"
+      seen+="$pre"
+      before="${seen: -1}"
+      after="${post:0:1}"
+      left=0; right=0
+      case "$before" in
+        ''|' '|$'\t'|$'\n'|'"'|"'"|'`'|'='|':'|'('|'['|'{'|','|';'|'<'|'>'|'|') left=1 ;;
+        '/') case "$seen" in *://) left=1 ;; esac ;;
+      esac
+      case "$after" in
+        ''|'/'|' '|$'\t'|$'\n'|'"'|"'"|':'|')') right=1 ;;
+      esac
+      if [ "$left" -eq 1 ] && [ "$right" -eq 1 ]; then out+="${pre}~"; else out+="${pre}${home}"; fi
+      seen+="$home"
+      s="$post"
     done
-    case "$s" in
-      *"$home") s="${s%"$home"}~" ;;
-    esac
+    s="${out}${s}"
   fi
   printf '%s' "$s"
 }
