@@ -10532,42 +10532,57 @@ describe('ccrc versions, and the GC that never removes a needed version (W6 Task
       expect(r.stdout).toContain(`versions: could not remove $HOME/ccrc-versions/${dead[0]} (what an earlier prune left, already out of the version list) — it stays out of every listing`);
       expect(r.stdout).toMatch(/^versions: nothing to prune — /m);
       expect(versionDirs(home)).toContain(dead[0]);
+      // and through the empty-removal-set return: previous protects v1.0.1, v1.0.0 takes the one slot
+      const p = versionedBox('ccrc-versions-sweep-rc-protected-', ['v1.0.2', 'v1.0.1', 'v1.0.0']);
+      stopUnits(p);
+      plantPrevious(p, `v1.0.1\n${'c'.repeat(40)}\n`);
+      plantLeft(p, [dead[0]!]);
+      writeFileSync(join(p, 'doctor-stubs', 'rm'), fileText(join(home, 'doctor-stubs', 'rm')), { mode: 0o755 });
+      const q = runVersions(p, ['--prune'], { CCRC_VERSIONS_KEEP: '1' });
+      expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(1);
+      expect(q.stdout).toMatch(/^versions: nothing to prune — every kept tree is protected or among the newest 1$/m);
+      expect(versionDirs(p)).toContain(dead[0]);
     });
 
-    it('controls, each keeping the leftover: a live pid (another process\'s work in flight), a refused knob, and a dangling ~/ccrc (the foreign layout, which sweeps nothing)', () => {
-      // live pid — beside a dead one, which goes
-      let home = versionedBox('ccrc-versions-sweep-live-', ['v1.0.1', 'v1.0.0']);
+    it('control: a live pid is another process\'s work in flight and is never touched — beside a dead one, which goes', () => {
+      const home = versionedBox('ccrc-versions-sweep-live-', ['v1.0.1', 'v1.0.0']);
       stopUnits(home);
       plantLeft(home, [...dead, ...live]);
-      let r = runVersions(home, ['--prune']);
+      const r = runVersions(home, ['--prune']);
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       for (const d of dead) expect(r.stdout).toMatch(removedLine(d));
       for (const d of live) expect(r.stdout).not.toContain(d);
       expect(versionDirs(home)).toEqual([...live, 'v1.0.0', 'v1.0.1'].sort());
-      // a refused knob: nothing measured, nothing swept
-      home = versionedBox('ccrc-versions-sweep-knob-', ['v1.0.1', 'v1.0.0']);
+    });
+
+    it('control: a refused knob measures nothing and sweeps nothing', () => {
+      const home = versionedBox('ccrc-versions-sweep-knob-', ['v1.0.1', 'v1.0.0']);
       stopUnits(home);
       plantLeft(home, dead);
-      r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '99999999999999999999' });
+      const r = runVersions(home, ['--prune'], { CCRC_VERSIONS_KEEP: '99999999999999999999' });
       expect(r.code, r.stderr).toBe(1);
       const a = sourcedCcrc(home, 'CCRC_VERSIONS_KEEP=99999999999999999999; _ver_gc update auto; echo "rc=$?"');
       expect(a.stdout, a.stderr).toContain('rc=1');
       expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
-      // a dangling ~/ccrc reads foreign: the layout check comes first and sweeps nothing
-      home = versionedBox('ccrc-versions-sweep-dangling-', ['v1.0.1', 'v1.0.0']);
+    });
+
+    it('control: a dangling ~/ccrc reads foreign — the layout check comes first, and sweeps nothing', () => {
+      const home = versionedBox('ccrc-versions-sweep-dangling-', ['v1.0.1', 'v1.0.0']);
       stopUnits(home);
       plantLeft(home, dead);
       rmSync(join(home, 'ccrc'));
       symlinkSync(join(home, 'ccrc-versions', 'v9.9.9'), join(home, 'ccrc'));
-      r = runVersions(home, ['--prune']);
+      const r = runVersions(home, ['--prune']);
       expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
       expect(r.stdout).toMatch(/^versions: nothing to prune — \$HOME\/ccrc is not versioned \(foreign\)$/m);
       expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
-      // and a list-only run never sweeps
-      home = versionedBox('ccrc-versions-sweep-list-', ['v1.0.1', 'v1.0.0']);
+    });
+
+    it('control: a list-only run never sweeps', () => {
+      const home = versionedBox('ccrc-versions-sweep-list-', ['v1.0.1', 'v1.0.0']);
       stopUnits(home);
       plantLeft(home, dead);
-      r = runVersions(home, []);
+      const r = runVersions(home, []);
       expect(r.code, r.stderr).toBe(0);
       expect(versionDirs(home)).toEqual([...dead, 'v1.0.0', 'v1.0.1'].sort());
     });
