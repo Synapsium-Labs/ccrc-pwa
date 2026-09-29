@@ -643,7 +643,7 @@ reads the rows after every inventory sweep, every intent write and every request
 at a time across the fleet: fleet-role nodes before server-role ones, and the server node waits while any fleet
 node's request is outstanding. A fleet node is moved over the agent link by the `update` op, which only an agent
 that advertises it in its ready frame is ever sent (an older agent's node is refused `agent-predates-update-op`
-until that box is updated by hand). The agent answers `busy` while `~/.ccrc/update.json` reports a run in flight;
+until that box is updated by hand). The agent answers `busy` while a live run is in flight or the lock is held;
 otherwise it runs `~/.local/bin/ccrc update --to <tag> --detach --from pwa`, or `rollback` in place of `update` —
 two fixed argument lists with the tag the only word that varies, outside the exec whitelist — and answers
 `accepted` once the detaching parent has exited 0. The server node is spawned the same way on its own box, after
