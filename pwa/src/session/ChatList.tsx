@@ -5,7 +5,7 @@
 // wraps react-virtuoso (sticks to the bottom unless the reader scrolled up —
 // then a "jump to latest" pill); ChatListInner is the same renderer as a
 // plain list, exported for jsdom tests.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
@@ -16,6 +16,10 @@ import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
+import {
+  nominalLines, openingHeight, rememberModels, rememberedHeight, rememberedModels,
+  rowHeights, type HeightBucket, type RowSample, type RowShape,
+} from './itemHeight';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
 
@@ -477,6 +481,69 @@ export function ChatListInner({
   );
 }
 
+/** How many newly measured items are worth a write to storage. The callback
+ *  below fires on every scroll frame; this keeps that from becoming a
+ *  `localStorage` write on every scroll frame. */
+const PERSIST_EVERY = 25;
+
+/** Which sizing population a row belongs to. `message` splits by its event kind
+ *  because a user turn and an assistant turn are the two ends of the height
+ *  distribution, and lumping them is the whole reason one learned number could
+ *  not serve two session shapes. Every other member is its own `ChatItem` kind,
+ *  so a new kind is a compile error in `HeightBucket` rather than a row nobody
+ *  sized. */
+export function bucketOf(item: ChatItem): HeightBucket {
+  return item.kind === 'message' ? item.event.kind : item.kind;
+}
+
+/** The text that decides how tall a row renders — the predictor the learned
+ *  model is a line in. It is the row's OWN source text, which the list holds
+ *  before anything is rendered; that is the whole reason a per-row estimate is
+ *  possible at all.
+ *
+ *  A tool card reads its input even though it renders COLLAPSED and is a flat
+ *  62px whatever it holds. Nothing here needs to know that: a kind whose height
+ *  does not follow its text teaches a slope of zero, and `fitRowModel` learns
+ *  that from the measurements rather than being told it here. One less thing to
+ *  keep true when the card grows a preview. */
+export function textOf(item: ChatItem): string {
+  switch (item.kind) {
+    case 'divider': return item.label;
+    case 'message': return item.event.text;
+    case 'tool': return item.use.input;
+    case 'mail': return item.event.text;
+    case 'task': return item.event.text;
+    case 'pending': return item.send.text;
+    case 'working': return '';
+  }
+}
+
+/** What the list knows about a row before it has rendered one. */
+export function shapeOf(item: ChatItem): RowShape {
+  return { bucket: bucketOf(item), lines: nominalLines(textOf(item)) };
+}
+
+/** Virtuoso takes its seeded sizes as RUNS that share a size, so identical
+ *  neighbours — eighteen tool cards in a row — cost one entry, not eighteen. */
+export function sizeRanges(px: readonly number[]): { startIndex: number; endIndex: number; size: number }[] {
+  const out: { startIndex: number; endIndex: number; size: number }[] = [];
+  for (let i = 0; i < px.length; i += 1) {
+    const size = px[i] ?? 0;
+    const last = out[out.length - 1];
+    if (last !== undefined && last.size === size) last.endIndex = i;
+    else out.push({ startIndex: i, endIndex: i, size });
+  }
+  return out;
+}
+
+/** Open at the newest turn. A module constant, not a per-render object: the
+ *  prop is read once, and a fresh identity on every render is a needless
+ *  invitation for the list to re-run its initial positioning. `'LAST'` +
+ *  `align: 'end'` is virtuoso's own way to say "start at the bottom"; the
+ *  number this replaced said "put the last item at the TOP" and then leaned on
+ *  `alignToBottom` to undo it. */
+const OPEN_AT_NEWEST = { index: 'LAST', align: 'end' } as const;
+
 export function ChatList({
   id,
   events,
@@ -493,6 +560,91 @@ export function ChatList({
   );
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
+
+  // WHY A REF AND WHY READ ONCE. Virtuoso takes `defaultItemHeight` when it
+  // initialises; handing it a different number later changes nothing it reads
+  // and only invites it to redo its initial positioning. So the learned values
+  // are frozen for the life of this mount and the NEXT visit gets the benefit.
+  //
+  // THE BASELINE IS ALSO WHAT EVERY SAVE BLENDS FROM, which is what makes
+  // saving mid-visit idempotent instead of a second vote. Measured before the
+  // fix: a 200-item visit saved eight times and moved the estimate 94% of the
+  // way, so the number tracked the last session rather than the long run.
+  const baseline = useRef(rememberedModels()).current;
+  // EVERY ROW GETS ITS OWN ESTIMATE, from its own text. It can: the screen
+  // gates this list behind `loading`, so the backlog that carries the events
+  // has already arrived when we first render. This is what one number per kind
+  // could not do — the last fifty events are three dozen rows, eight of which
+  // carry three quarters of the height, and a mean of a kind describes none of
+  // its members.
+  //
+  // The third argument is what an UNMEASURED kind is worth at render time: the
+  // scalar the old single-number build left in this browser, or the shipped
+  // fallback. It makes the first visit after an upgrade no worse than before,
+  // and it is never written back — `rememberModels` takes a kind's first real
+  // fit whole rather than blending it against a guess.
+  const seeded = useRef<{ ranges: { startIndex: number; endIndex: number; size: number }[]; scrollTop: number } | null>(null);
+  const opening = useRef<number | null>(null);
+  if (opening.current === null) {
+    const shapes = items.map(shapeOf);
+    const guess = rememberedHeight();
+    const px = rowHeights(shapes, baseline, guess);
+    opening.current = openingHeight(shapes, baseline, guess);
+    // WHY SEED AT ALL, when `defaultItemHeight` already exists. That prop is
+    // ONE number for every row virtuoso has not measured, so it can be right
+    // when nothing is measured or right when half is, never both: open the
+    // list with the correct total and the moment the giants at the bottom are
+    // measured the remaining small rows are still priced at the mean, and the
+    // total swings the other way. Seeded sizes are a per-row PRIOR in
+    // virtuoso's own size tree, and real measurements land in the same stream
+    // and overwrite them.
+    //
+    // `scrollTop` is the bottom UNDER THIS MODEL, which is where
+    // `initialTopMostItemIndex` independently says to open. Virtuoso routes a
+    // restored snapshot through that same prop, so the two must agree or they
+    // would fight over the opening position; both say "the newest turn".
+    // A SEED MADE ENTIRELY OF GUESSES IS NOT INFORMATION, and seeding it is
+    // worse than not seeding at all. With nothing learned every row is priced
+    // at the same fallback, so the seed says only "thirty-five rows of 96px" —
+    // and by saying it before the first render it FREEZES that total in place
+    // of the one virtuoso would have reached by measuring the rows it shows.
+    // Measured in a browser on a cold profile: seeding there opened the list
+    // believing 3360px against a true 7201px (-53%), where not seeding opened
+    // at -8%. From the second visit, when the kinds carry real lines, seeding
+    // is what holds the total steady. So: seed when at least one kind on
+    // screen has been measured, and otherwise leave virtuoso to its own probe.
+    const anyLearned = shapes.some((r) => baseline[r.bucket] !== null);
+    seeded.current = px.length === 0 || !anyLearned ? null : {
+      ranges: sizeRanges(px),
+      scrollTop: px.reduce((a, b) => a + b, 0),
+    };
+  }
+  // Keyed by index, so an item that scrolls past twice is one sample, not two —
+  // averaging repeats would weight the estimate toward whatever the reader
+  // happens to be looking at. Last size wins: a card that expands is taller now
+  // and that is the truth about it. The bucket is recorded WITH the sample
+  // rather than looked up at save time: the row at an index can change while
+  // the reader sits there, and the sample belongs to what was measured.
+  const measured = useRef(new Map<number, { bucket: HeightBucket; sample: RowSample }>());
+  const persistedAt = useRef(0);
+
+  const persist = (): void => {
+    const byBucket = new Map<HeightBucket, RowSample[]>();
+    for (const { bucket, sample } of measured.current.values()) {
+      const list = byBucket.get(bucket);
+      if (list === undefined) byBucket.set(bucket, [sample]);
+      else list.push(sample);
+    }
+    // `fitRowModel` owns the rules that an unmeasured item is not a sample and
+    // that a batch which cannot see a slope keeps the one already learned.
+    rememberModels(byBucket, baseline);
+    persistedAt.current = measured.current.size;
+  };
+
+  // Leaving the session is the ordinary end of a visit, and the moment the
+  // sample is most complete. It is NOT the only one — a closed tab runs no
+  // cleanup — which is why the callback below also persists as it goes.
+  useEffect(() => () => { if (measured.current.size > 0) persist(); }, []);
 
   return (
     <div className="chat-list">
@@ -517,10 +669,50 @@ export function ChatList({
             </div>
           );
         }}
+        defaultItemHeight={opening.current}
+        // Per-row priors. A row that arrives LATER, while the session tails,
+        // is past the seeded range and falls back to `defaultItemHeight`.
+        {...(seeded.current === null ? {} : { restoreStateFrom: seeded.current })}
+        // The real pixel heights, straight from the component that measured
+        // them. This is the whole self-correction: what a chat item costs is a
+        // property of what this operator asks for, and no constant in a
+        // repository can know it.
+        itemsRendered={(rendered) => {
+          // No filtering here: `meanSize` owns the rule that an unmeasured
+          // item (virtuoso reports size 0) is not a sample, and restating it
+          // at the call site would be a second place for it to drift.
+          for (const item of rendered) {
+            const row = items[item.index];
+            if (row !== undefined) {
+              // The PREDICTOR is recorded beside the measurement, because the
+              // pair is the sample: a height means nothing to a line fit
+              // without the text length it was the height OF. Both are read
+              // from the row that was actually measured, not looked up at save
+              // time — the row at an index can change while the reader sits
+              // there.
+              const shape = shapeOf(row);
+              measured.current.set(item.index, {
+                bucket: shape.bucket,
+                sample: { lines: shape.lines, px: item.size },
+              });
+            }
+          }
+          if (measured.current.size - persistedAt.current >= PERSIST_EVERY) persist();
+        }}
+        // Render well beyond the viewport in both directions. Two properties,
+        // because they answer two different failures: the pixel budget covers
+        // ordinary scrolling, and the ITEM-COUNT floor covers the case
+        // virtuoso's own docs single out — "items with dynamic or very tall
+        // content, where the pixel-based `increaseViewportBy` may not be
+        // sufficient to prevent empty areas". A transcript whose items are
+        // markdown tables is exactly that case, and an empty area here is the
+        // whole chat going blank mid-scroll.
+        increaseViewportBy={{ top: 1200, bottom: 1200 }}
+        minOverscanItemCount={{ top: 4, bottom: 4 }}
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
         atBottomStateChange={setAtBottom}
-        initialTopMostItemIndex={Math.max(0, items.length - 1)}
+        initialTopMostItemIndex={OPEN_AT_NEWEST}
         alignToBottom
       />
       {!atBottom && (
