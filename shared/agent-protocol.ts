@@ -591,18 +591,22 @@ export function decideKilledSpawn(i: {
   else if (after.kind === 'unreadable') seen.push('update.json was unreadable after the stop');
   // "Changed" is only a fact when the snapshot was readable: an unreadable before compares with nothing.
   if (after.kind === 'bytes' && before.kind !== 'unreadable' && !unchanged) {
+    // The parent's OWN pid with another target is the parent's report for another move (arm B took our tag), never
+    // "not by the parent" — that sentence is for a pid that is not the parent's (or that could not be compared).
     seen.push(written === null ? 'update.json changed to something unparseable'
-      : `update.json changed, but not by the parent (pid ${written.pid ?? 'unknown'}, target ${written.target ?? 'none'})`);
+      : pid !== null && written.pid === pid
+        ? `update.json changed to the parent's report for another target (${written.target ?? 'none'})`
+        : `update.json changed, but not by the parent (pid ${written.pid ?? 'unknown'}, target ${written.target ?? 'none'})`);
   }
   if (after.kind === 'absent' && before.kind === 'bytes') seen.push('update.json was removed');
   if (warned) seen.push('the parent printed the update.json WARN');
   if (detached) seen.push("the parent printed 'detached'");
   if (stdout === null) seen.push('its stdout did not reach EOF');
-  // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease)
+  // One line within UPDATE_OP_DETAIL_MAX, and the ending (that it could not be attributed, and what happens to the lease, naming the move)
   // is never the part that is lost: reasons are taken whole, in order, while they fit, and the rest are counted.
   const head = 'the --detach parent was stopped at the bound; ';
-  const tail = ' - it could not be attributed; lease held until the report or deadline';
-  const budget = UPDATE_OP_DETAIL_MAX - head.length - tail.length;
+  const tail = ` - it could not be attributed; lease for ${tag} held until the report or deadline`;
+  const budget = Math.max(0, UPDATE_OP_DETAIL_MAX - head.length - tail.length);
   let taken = 0;
   let text = '';
   for (const reason of seen) {

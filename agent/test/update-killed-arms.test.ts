@@ -35,7 +35,7 @@ const armA = `the --detach parent was stopped at the ${BOUND} bound before it qu
 const armB = (pid: number): string =>
   `the --detach parent was stopped at the ${BOUND} bound after it queued ${TAG} (pid ${pid}); the run may have started, lease held`;
 const armD = (seen: string): string =>
-  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease held until the report or deadline`;
+  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease for ${TAG} held until the report or deadline`;
 
 const reportText = (o: Record<string, unknown> = {}): string => `${JSON.stringify({
   target: TAG, phase: 'queued', startedAt: 1790000000, updatedAt: 1790000001, detail: null, from: 'pwa', pid: 4242, ...o,
@@ -149,7 +149,7 @@ describe('the bound\'s arms against a recorder whose parent plants what a real o
       const { c } = await up({ before: TERMINAL_REPORT, during: (home) => writeFileSync(reportFile(home), reportText({ target: 'v0.0.11' })) });
       expect(await ask(c)).toEqual({
         t: 'res', id: 1, ok: true, accepted: true,
-        detail: armD('update.json changed, but not by the parent (pid 4242, target v0.0.11)'),
+        detail: armD("update.json changed to the parent's report for another target (v0.0.11)"),
       });
     });
 
@@ -198,7 +198,7 @@ describe('the bound\'s arms against a recorder whose parent plants what a real o
       });
       const res = await ask(c);
       expect(res.detail!.length).toBeLessThanOrEqual(200);
-      expect(res.detail!.endsWith('lease held until the report or deadline')).toBe(true);
+      expect(res.detail!.endsWith(`lease for ${TAG} held until the report or deadline`)).toBe(true);
       // Five reasons cannot all fit: the ones that do are whole, the rest are counted, and the ending is intact.
       expect(res.detail).toContain('(+');
       expect(res.detail).toMatch(/^[\x20-\x7e]+$/);

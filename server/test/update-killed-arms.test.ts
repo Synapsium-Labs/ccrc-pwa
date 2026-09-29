@@ -37,7 +37,7 @@ const armA = `the --detach parent was stopped at the ${BOUND} bound before it qu
 const armB = (pid: number, tag = TAG): string =>
   `the --detach parent was stopped at the ${BOUND} bound after it queued ${tag} (pid ${pid}); the run may have started, lease held`;
 const armD = (seen: string): string =>
-  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease held until the report or deadline`;
+  `the --detach parent was stopped at the bound; ${seen} - it could not be attributed; lease for ${TAG} held until the report or deadline`;
 const WARN_LINE = 'update: WARN: could not write ~/.ccrc/update.json (phase queued) — the console will not see this phase; the update continues\n';
 const DETACHED_LINE = "update: detached — 'update --to v0.0.10' runs as a transient systemd --user unit; its progress is ~/.ccrc/update.json\n";
 
@@ -78,14 +78,14 @@ describe('decideKilledSpawn — the arms, in order A, B, D (D-3400 amended, D-34
       arm: 'D', detail: armD(`update.json changed, but not by the parent (pid 777, target ${TAG})`),
     });
     expect(decide({ after: bytes(reportText({ target: 'v0.0.11' })) })).toEqual({
-      arm: 'D', detail: armD(`update.json changed, but not by the parent (pid ${FAKE_SPAWN_PID}, target v0.0.11)`),
+      arm: 'D', detail: armD("update.json changed to the parent's report for another target (v0.0.11)"),
     });
     expect(decide({ after: bytes(reportText()), pid: null }).arm).toBe('D');
     expect(decide({ after: bytes('not json\n') })).toEqual({ arm: 'D', detail: armD('update.json changed to something unparseable') });
     // A pid of 0 or a negative one is not a pid (`inFlightReport`'s rule): never a match.
     expect(decide({ after: bytes(reportText({ pid: 0 })), pid: 0 }).arm).toBe('D');
     expect(decide({ after: bytes(reportText({ target: null })) })).toEqual({
-      arm: 'D', detail: armD(`update.json changed, but not by the parent (pid ${FAKE_SPAWN_PID}, target none)`),
+      arm: 'D', detail: armD("update.json changed to the parent's report for another target (none)"),
     });
   });
 
@@ -112,8 +112,15 @@ describe('decideKilledSpawn — the arms, in order A, B, D (D-3400 amended, D-34
     expect(all.arm).toBe('D');
     expect(all.detail.length).toBeLessThanOrEqual(200);
     expect(all.detail).toMatch(/^[\x20-\x7e]+$/);
-    expect(all.detail.endsWith(' - it could not be attributed; lease held until the report or deadline')).toBe(true);
+    expect(all.detail.endsWith(` - it could not be attributed; lease for ${TAG} held until the report or deadline`)).toBe(true);
     expect(all.detail).toContain('(+');
+    // The lease's own tag rides the ending, whatever it is, and the longest tag the ingress admits still fits: the
+    // reasons give way (whole, then counted), never the tag or the words that say what happens to the lease.
+    const longTag = 'v99999999.99999999.99999999';
+    const longD = decide({ before: UNREADABLE, after: UNREADABLE, stdout: WARN_LINE + DETACHED_LINE, tag: longTag });
+    expect(longD.arm).toBe('D');
+    expect(longD.detail.length).toBeLessThanOrEqual(200);
+    expect(longD.detail.endsWith(` - it could not be attributed; lease for ${longTag} held until the report or deadline`)).toBe(true);
     const longB = decide({ after: bytes(reportText({ pid: 4294967295, target: 'v99999999.99999999.99999999' })), pid: 4294967295, tag: 'v99999999.99999999.99999999' });
     expect(longB.arm).toBe('B');
     expect(longB.detail.length).toBeLessThanOrEqual(200);
@@ -203,7 +210,7 @@ describe('the server role: arm A releases idle, B and D hold — each asserting 
   const D_CASES: readonly { name: string; before: string | null; during: string | null | 'dir'; stdout: string | null; pid?: number | null; seen: string }[] = [
     { name: 'unreadable after (a directory planted at the name)', before: TERMINAL_REPORT, during: 'dir', stdout: '', seen: 'update.json was unreadable after the stop' },
     { name: 'changed to ANOTHER pid', before: TERMINAL_REPORT, during: reportText({ pid: 777 }), stdout: '', seen: `update.json changed, but not by the parent (pid 777, target ${TAG})` },
-    { name: 'changed to ANOTHER tag', before: TERMINAL_REPORT, during: reportText({ target: 'v0.0.11' }), stdout: '', seen: `update.json changed, but not by the parent (pid ${FAKE_SPAWN_PID}, target v0.0.11)` },
+    { name: 'changed to ANOTHER tag', before: TERMINAL_REPORT, during: reportText({ target: 'v0.0.11' }), stdout: '', seen: "update.json changed to the parent's report for another target (v0.0.11)" },
     { name: 'the WARN line on stdout, report unchanged', before: TERMINAL_REPORT, during: null, stdout: WARN_LINE, seen: 'the parent printed the update.json WARN' },
     { name: 'the detached line on stdout, report unchanged', before: TERMINAL_REPORT, during: null, stdout: DETACHED_LINE, seen: "the parent printed 'detached'" },
     { name: 'stdout never reached EOF', before: TERMINAL_REPORT, during: null, stdout: null, seen: 'its stdout did not reach EOF' },
